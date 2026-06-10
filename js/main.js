@@ -838,6 +838,11 @@
       UI.$("crosshair-overlay").classList.add("hidden");
       UI.$("map-viewport").style.cursor = "grab";
 
+      // ⚠️ _resetPinForm이 pending-pin을 hidden 처리 + State.pending=null 로 만들므로
+      //    반드시 먼저 폼을 리셋한 뒤, 그 다음에 임시 핀을 표시/좌표 설정한다.
+      this._resetPinForm(false);
+      State.pending = pct; // resetPinForm이 지우므로 재설정
+
       const pp = UI.$("pending-pin");
       pp.style.left = pct.x + "%";
       pp.style.top  = pct.y + "%";
@@ -846,8 +851,6 @@
       // 지정한 위치로 줌인 (플라이투) — 정확한 위치 확인
       MapCtrl.flyTo(pct.x, pct.y, Math.max(State.zoom, 2.2));
 
-      this._resetPinForm(false);
-      State.pending = pct; // resetPinForm이 지우므로 재설정
       UI.$("section-pin-form").classList.remove("hidden");
       UI.$("input-pin-label").focus();
     },
