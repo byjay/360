@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>360° Location Viewer System — We:are Marine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: HOME
+════════════════════════════════════════════ -->
+<div id="screen-home" class="screen active">
+  <div class="home-bg"></div>
+  <div class="home-content">
+    <div class="home-brand">
+      <div class="home-badge">We:are · Marine Inspection</div>
+      <h1 class="home-title">360° Location<br>Viewer System</h1>
+      <p class="home-sub">GA DRAWING · PANORAMIC INTEGRATION</p>
+    </div>
+    <div class="mode-cards">
+      <div class="mode-card designer" data-mode="designer" tabindex="0" role="button">
+        <div class="card-icon">✏️</div>
+        <div class="card-badge">DESIGNER</div>
+        <div class="card-title">설계자 모드</div>
+        <div class="card-desc">PDF/이미지 도면 업로드 후<br>위치 포인트 배치 및<br>360° 이미지 URL 연결</div>
+      </div>
+      <div class="mode-card viewer" data-mode="viewer" tabindex="0" role="button">
+        <div class="card-icon">🔭</div>
+        <div class="card-badge">VIEWER</div>
+        <div class="card-title">뷰어 모드</div>
+        <div class="card-desc">배포된 도면에서<br>포인트 클릭으로<br>360° 현장 확인</div>
+      </div>
+    </div>
+    <button id="btn-zip-download" class="btn-zip">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      전체 소스 ZIP 다운로드
+    </button>
+    <div class="home-footer">POWERED BY We:are ENGINEERING PLATFORM</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: APP (designer / viewer)
+════════════════════════════════════════════ -->
+<div id="screen-app" class="screen">
+
+  <!-- Topbar -->
+  <header id="topbar" class="topbar">
+    <button id="btn-back" class="btn-icon" title="홈으로">←</button>
+    <div id="topbar-dot" class="topbar-dot"></div>
+    <span id="mode-label" class="mode-label">DESIGNER MODE</span>
+    <span class="topbar-sep">·</span>
+    <span id="file-name-label" class="file-name-label">도면 없음</span>
+
+    <!-- PDF pagination -->
+    <div id="pdf-pagination" class="pdf-pagination hidden">
+      <button id="btn-prev-page" class="btn-page">‹</button>
+      <span id="page-info" class="page-info">1 / 1</span>
+      <button id="btn-next-page" class="btn-page">›</button>
+    </div>
+
+    <div id="pin-count-badge" class="pin-count-badge hidden"></div>
+    <button id="btn-download-src" class="btn-dl-src" title="소스코드 ZIP 다운로드">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      소스 다운로드
+    </button>
+  </header>
+
+  <!-- Body -->
+  <div class="app-body">
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+
+      <!-- Upload -->
+      <div id="section-upload" class="sidebar-section">
+        <button id="btn-upload-drawing" class="btn-upload">+ 도면 업로드 (PDF/PNG/JPG)</button>
+        <input id="input-drawing" type="file" accept=".pdf,.png,.jpg,.jpeg" hidden />
+        <button id="btn-import-json" class="btn-upload secondary hidden">JSON 포인트 가져오기</button>
+        <input id="input-json" type="file" accept=".json" hidden />
+      </div>
+
+      <!-- Viewer: 배포본 로딩 상태 -->
+      <div id="section-viewer-load" class="sidebar-section hidden">
+        <div id="viewer-load-status" class="viewer-load-status">배포된 도면 확인 중...</div>
+        <button id="btn-reload-deploy" class="btn-upload secondary">↻ 최신 배포본 다시 불러오기</button>
+      </div>
+
+      <!-- Place pin (designer only) -->
+      <div id="section-place" class="sidebar-section hidden">
+        <button id="btn-place" class="btn-place">+ 위치 포인트 추가</button>
+        <p id="place-hint" class="place-hint hidden">도면 위 원하는 위치를 클릭하세요</p>
+      </div>
+
+      <!-- Pin form (designer only) -->
+      <div id="section-pin-form" class="sidebar-section hidden">
+        <div class="pin-form">
+          <div class="form-label">📍 새 포인트</div>
+          <div class="form-field">
+            <label>위치명</label>
+            <input id="input-pin-label" type="text" placeholder="예: No.5 Cargo Tank" autocomplete="off" />
+          </div>
+          <div class="form-field">
+            <label>360° 파일 (THETA 그림/영상)</label>
+            <button id="btn-pin-file" class="btn-file" type="button">📁 그림(.jpg) / 영상(.mp4) 선택</button>
+            <input id="input-pin-file" type="file" accept="image/*,video/mp4,video/webm,.mov" hidden />
+            <div id="pin-file-info" class="pin-file-info hidden"></div>
+          </div>
+          <div class="form-field hidden" id="field-pin-imgname">
+            <label>그림 저장 이름</label>
+            <input id="input-pin-imgname" type="text" placeholder="예: cargo_tank_no5_360" autocomplete="off" />
+          </div>
+          <div class="form-divider">— 또는 —</div>
+          <div class="form-field">
+            <label>360° 이미지/영상 URL (직접 입력)</label>
+            <input id="input-pin-url" type="url" placeholder="https://... (.jpg 또는 .mp4)" autocomplete="off" />
+          </div>
+          <div id="pin-upload-status" class="pin-upload-status hidden"></div>
+          <div class="form-actions">
+            <button id="btn-confirm-pin" class="btn-primary" disabled>☁ 저장 &amp; 업로드</button>
+            <button id="btn-cancel-pin" class="btn-ghost">취소</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Next point (designer, after save) -->
+      <div id="section-next-point" class="sidebar-section hidden">
+        <div id="pin-saved-msg" class="pin-saved-msg">✅ 포인트 저장 완료</div>
+        <button id="btn-next-point" class="btn-place">＋ 다음 포인트 지정</button>
+      </div>
+
+      <!-- Pin list -->
+      <div id="section-pin-list" class="sidebar-section pin-list-wrap">
+        <div id="pin-list" class="pin-list"></div>
+        <div id="pin-empty" class="pin-empty">포인트를 추가하세요</div>
+      </div>
+
+      <!-- Export (designer only) -->
+      <div id="section-export" class="sidebar-section hidden">
+        <button id="btn-deploy" class="btn-deploy">🚀 뷰어로 배포</button>
+        <button id="btn-export-json" class="btn-upload">↓ JSON 내보내기</button>
+        <p id="deploy-status" class="deploy-status hidden"></p>
+      </div>
+
+    </aside>
+
+    <!-- Map area -->
+    <main id="map-area" class="map-area">
+      <div id="drop-hint" class="drop-hint">
+        <div class="drop-icon">📄</div>
+        <div class="drop-text">도면을 업로드하세요</div>
+        <div class="drop-sub">PDF · PNG · JPG 지원</div>
+      </div>
+
+      <div id="pdf-loading" class="state-overlay hidden">
+        <div class="spinner"></div>
+        <span>PDF 렌더링 중...</span>
+      </div>
+
+      <div id="pdf-error" class="state-overlay hidden">
+        <div style="font-size:2rem">⚠️</div>
+        <div id="pdf-error-msg" class="error-msg"></div>
+      </div>
+
+      <!-- Map viewport (zoom/pan) -->
+      <div id="map-viewport" class="map-viewport hidden">
+        <div id="map-transform" class="map-transform">
+          <!-- PDF canvas injected here -->
+          <canvas id="pdf-canvas" class="pdf-canvas hidden"></canvas>
+          <!-- Image -->
+          <img id="map-image" class="map-image hidden" alt="도면" draggable="false" />
+          <!-- Pins layer -->
+          <div id="pins-layer" class="pins-layer"></div>
+          <!-- Pending pin pulse -->
+          <div id="pending-pin" class="pending-pin hidden"></div>
+        </div>
+      </div>
+
+      <!-- Placing crosshair overlay -->
+      <div id="crosshair-overlay" class="crosshair-overlay hidden">
+        <div class="crosshair-msg">도면 위 원하는 위치를 클릭하세요</div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     360° PANORAMA VIEWER OVERLAY
+════════════════════════════════════════════ -->
+<div id="pano-overlay" class="pano-overlay hidden">
+  <div id="pano-header" class="pano-header">
+    <div class="pano-brand">
+      <div class="pano-dot"></div>
+      <span id="pano-location-name" class="pano-location">—</span>
+    </div>
+    <button id="btn-pano-close" class="btn-pano-close">✕ 닫기</button>
+  </div>
+
+  <div id="pano-loading" class="pano-state">
+    <div class="spinner gold"></div>
+    <span>이미지 로딩 중...</span>
+  </div>
+
+  <div id="pano-error" class="pano-state hidden">
+    <div style="font-size:2.5rem">⚠️</div>
+    <div class="pano-error-msg">이미지를 불러올 수 없습니다</div>
+    <div id="pano-error-url" class="pano-error-url"></div>
+    <div class="pano-error-hint">CORS 정책 또는 잘못된 URL을 확인하세요</div>
+  </div>
+
+  <canvas id="pano-canvas" class="pano-canvas hidden"></canvas>
+
+  <div id="pano-controls" class="pano-controls hidden">
+    <button id="btn-pano-rotate"  class="btn-pano-ctrl" title="자동 회전 켜기/끄기">⟳ 자동회전</button>
+    <button id="btn-pano-zoomout" class="btn-pano-ctrl" title="줄임 아웃">－</button>
+    <button id="btn-pano-zoomin"  class="btn-pano-ctrl" title="줄임 인">＋</button>
+    <button id="btn-pano-reset"   class="btn-pano-ctrl" title="초기 시점">⌂ 초기시점</button>
+    <button id="btn-pano-full"    class="btn-pano-ctrl" title="전체화면">⛶ 전체화면</button>
+  </div>
+
+  <div id="pano-hint" class="pano-hint hidden">
+    <span>🖱 드래그: 시점 이동</span><span>⚙ 휠: 줌 조절</span><span>📱 스와이프: 이동</span>
+  </div>
+</div>
+
+<!-- PDF.js (fixed version — worker must match) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Three.js (WebGL 360° panorama — UMD build) -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<!-- JSZip for source download -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
