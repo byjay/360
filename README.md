@@ -77,6 +77,43 @@ const mesh     = new THREE.Mesh(geometry, material);
 
 ---
 
+## 🔧 백엔드 구현 (저장·배포 실동작) — 2026-06-10 추가
+
+> **중요**: 기존 코드는 `tables/*` RESTful 테이블 API에 의존하지만 **백엔드가 없어** 도면 저장·배포·뷰어 로드가 모두 실패했습니다(정적 서버가 존재하지 않는 경로에 HTML을 반환 → JSON 파싱 실패). 이를 해결하기 위해 **Hono + Cloudflare D1(SQLite)** 백엔드를 직접 구현했습니다.
+
+| 구성 | 내용 |
+|------|------|
+| 프레임워크 | **Hono** (Cloudflare Pages Functions) — `src/index.tsx` |
+| 데이터베이스 | **Cloudflare D1** (SQLite) — `migrations/0001_initial_schema.sql` |
+| 정적 서빙 | `public/`(index.html·css·js·images)을 Pages 자산으로 자동 서빙, 루트는 워커가 `ASSETS.fetch`로 폴백 |
+
+### 구현된 API 엔드포인트
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `POST` | `/tables/pano_images` | 360° 그림 업로드 → `{id,...}` 반환 |
+| `GET`  | `/tables/pano_images/:id` | 단건 조회(`image_data` 포함) |
+| `GET`  | `/tables/pano_images` | 목록(`?limit=`) |
+| `DELETE` | `/tables/pano_images/:id` | soft delete |
+| `POST` | `/tables/deployments` | 배포 생성 → `{id,...}` 반환 (**B1: 이 id가 공유 링크에 박힘**) |
+| `GET`  | `/tables/deployments/:id` | 특정 배포본 단건(B1 고정 공유) |
+| `GET`  | `/tables/deployments?limit=100` | 목록(`{data:[...]}`, `created_at DESC` 정렬) |
+| `DELETE` | `/tables/deployments/:id` | soft delete |
+
+### 로컬 실행 (D1 --local)
+```bash
+npm run build                       # vite build → dist/
+npm run db:migrate:local            # 로컬 SQLite에 스키마 적용
+pm2 start ecosystem.config.cjs      # wrangler pages dev dist --d1=webapp-production --local --port 3000
+# 또는: npm run dev:sandbox
+```
+> `npm run db:reset` — 로컬 DB 초기화 후 재마이그레이션
+
+### 전체 동작 흐름 (실제 검증 완료 ✅)
+1. **설계자**: 도면 업로드 → 핀 클릭 배치(핀에 위치 이름 풍선 표시) → 360° 그림 파일 선택 → **☁ 저장 & 업로드**(`pano_images`에 영구 저장) → **🚀 뷰어로 배포**(`deployments`에 스냅샷+핀 저장, `?mode=viewer&d=<id>` 링크 발급)
+2. **뷰어**: 링크 접속 → 배포 도면 자동 로드 → 도면 위 **핀 + 위치 이름 풍선** 표시 → 핀 클릭 → **360° 팝업 뷰어**(Ricoh THETA 방식 equirectangular, Three.js WebGL)에서 해당 위치 파노라마 재생
+
+---
+
 ## 데이터 모델 (RESTful Table API)
 
 ### `pano_images` — 360° 그림 클라우드 저장
