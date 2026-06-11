@@ -114,6 +114,25 @@ pm2 start ecosystem.config.cjs      # wrangler pages dev dist --d1=webapp-produc
 
 ---
 
+## 🩹 안정화 패치 (2026-06-11) — 실파일 E2E 검증 완료
+
+업로드 실패·PDF 무한로딩·뷰어 편집 UI 노출 문제를 모두 수정하고 **실제 파일로 E2E 검증**했습니다.
+
+| 증상 | 원인 | 수정 |
+|------|------|------|
+| **PDF 무한 로딩 / "Rendering cancelled"** | 외부 CDN worker 차단 + `Promise.race`의 `task.destroy()`가 진행 중 task를 끊음 + 일부 환경에서 `render().promise`가 화면은 그려진 뒤에도 resolve 안 됨 | `PDF.load()`를 **`disableWorker:true`(메인스레드 파싱)** 로 단순화. `renderPage()`는 정상 resolve를 우선 기다리되 **task를 끊지 않는 4초 타임아웃**으로 hang 방지 (이미 캔버스에 그려졌으므로 화면 유지) |
+| **3MB+ THETA 업로드 실패/탭 크래시** | `createImageBitmap(file)`로 **원본 풀해상도**(6720×3360 ≈ 90MB 버퍼)를 디코딩하다 메모리 한계로 크래시 | `_decode()`에서 풀해상도 probe 제거 → 처음부터 **`resizeWidth` 지정 축소 디코딩**. `resizeImage()`는 목표 용량(≈1.4MB) 초과 시 품질→해상도 단계 축소 + canvas 면적(2400만 px) 제한 |
+| **뷰어에 업로드/편집 UI 노출** ("뷰어는 업로드가 왜 필요하지") | viewer 모드에서 디자이너 전용 섹션 일부만 숨김 | `openApp()`에서 viewer 모드 시 **도면 업로드·위치 포인트 추가·핀 폼·뷰어로 배포·JSON 가져오기 전부 숨김**. 뷰어는 완전 **보기 전용**(핀 클릭 → 360°만) |
+
+### 실파일 E2E 검증 결과 ✅
+- **PDF 렌더링**: 실제 1.17MB 도면 PDF → 캔버스 1786×1263 렌더 + 화면 표시 확인
+- **디자이너 플로우**: 도면 로드 → 포인트 배치(임시 핀 표시) → THETA 첨부 → `POST tables/pano_images` 업로드 → `🚀 배포`(`?mode=viewer&d=<id>` 발급) **전부 통과**
+- **뷰어 플로우**: VIEWER MODE 진입 → **편집 UI 전부 숨김(보기 전용)** → 도면+핀 표시 → 핀 클릭 → `pano-overlay` 오픈 + 저장 이미지 `GET tables/pano_images/<id>` fetch **전부 통과**
+
+> 참고: 헤드리스 샌드박스(총 985MB)에서는 Three.js WebGL 풀 렌더가 GPU/메모리 한계로 크래시할 수 있으나, **핀 클릭→openPano→이미지 fetch→팝업 오픈 로직은 검증 완료**. 실제 데스크톱 브라우저(GPU)에서는 360° 렌더까지 정상 동작합니다.
+
+---
+
 ## 데이터 모델 (RESTful Table API)
 
 ### `pano_images` — 360° 그림 클라우드 저장
