@@ -69,7 +69,7 @@
   ══════════════════════════════════════════ */
   const PDF = {
     // 로컬 번들 worker 우선(외부 CDN worker가 차단/지연될 때 PDF가 무한 로딩되는 문제 방지)
-    WORKER_SRC: "vendor/pdf.worker.min.js",
+    WORKER_SRC: "/vendor/pdf.worker.min.js",
     WORKER_SRC_CDN: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
     ready: false,
 
@@ -87,37 +87,58 @@
       });
     },
 
+    useWorker: true, // 로컬 worker 사용 가능 여부 (실패 시 자동 false)
+
     _configWorker() {
       if (this.ready) return;
-      // disableWorker 모드(메인스레드 파싱)를 사용하므로 workerSrc 는 형식상만 설정.
-      try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = this.WORKER_SRC; } catch (e) {}
+      // 로컬 번들 worker 를 사용한다(백그라운드 파싱 → 빠르고 메인스레드 안 막힘).
+      // 로드 실패 시 load() 에서 disableWorker 로 자동 폴백한다.
+      try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = this.WORKER_SRC; }
+      catch (e) { this.useWorker = false; }
       this.ready = true;
     },
 
     async load(arrayBuffer) {
       const lib = await this.ensureLib();
-      // ⚠️ worker(blob/CDN) 사용 시 일부 환경에서 page.render().promise 가
-      //    화면은 그려지지만 resolve 되지 않고 hang 되는 문제가 있다.
-      //    도면 PDF(수 MB)는 메인스레드 파싱도 충분히 빠르므로 disableWorker 로 안정화한다.
+      const data = arrayBuffer.slice(0);
+      // 1차: worker 로 빠르게 파싱
+      if (this.useWorker) {
+        try {
+          const task = lib.getDocument({ data, disableWorker: false });
+          return await task.promise;
+        } catch (e) {
+          // worker 로드/실행 실패 → 메인스레드 파싱으로 폴백 (안정성 우선)
+          this.useWorker = false;
+        }
+      }
       const task = lib.getDocument({ data: arrayBuffer.slice(0), disableWorker: true });
-      // task.promise 만 await. destroy/race 로 진행 중 task 를 끊으면
-      // 이후 getPage/render 가 "Rendering cancelled" 로 실패하므로 절대 끊지 않는다.
       return await task.promise;
     },
 
     async renderPage(pdfDoc, pageNum, canvas, scale = 1.5) {
       const page = await pdfDoc.getPage(pageNum);
-      const vp   = page.getViewport({ scale });
-      canvas.width  = vp.width;
-      canvas.height = vp.height;
-      const task = page.render({ canvasContext: canvas.getContext("2d"), viewport: vp });
-      // ⚠️ 일부 환경에서 render().promise 가 화면은 그려진 뒤에도 resolve 되지 않고
-      //    hang 되는 경우가 있다. 이미 캔버스에 그려졌으므로, 정상 resolve 를 우선 기다리되
-      //    일정 시간 내 끝나지 않으면 task 를 끊지 않고(=화면 유지) 그대로 진행한다.
-      await Promise.race([
-        task.promise.catch(() => {}),
-        new Promise(res => setTimeout(res, 4000))
-      ]);
+      // 적응형 스케일: 너무 큰 캔버스는 렌더가 느리고 메모리를 많이 쓴다.
+      // 캔버스 최대 변을 2400px 로 제한해 큰 도면도 빠르고 안정적으로 그린다.
+      const base = page.getViewport({ scale: 1 });
+      const MAX_SIDE = 2400;
+      const fit = MAX_SIDE / Math.max(base.width, base.height);
+      const useScale = Math.min(scale, fit > 0 ? fit : scale);
+      const vp   = page.getViewport({ scale: useScale });
+      canvas.width  = Math.round(vp.width);
+      canvas.height = Math.round(vp.height);
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const task = page.render({ canvasContext: ctx, viewport: vp });
+      // worker 모드면 render().promise 가 정상 resolve 된다.
+      // 폴백(disableWorker) 환경에서만 드물게 hang 될 수 있으므로,
+      // worker 모드: 정상 await / 폴백 모드: 화면은 이미 그려졌으므로 비파괴 타임아웃 보호.
+      if (this.useWorker) {
+        await task.promise;
+      } else {
+        await Promise.race([
+          task.promise.catch(() => {}),
+          new Promise(res => setTimeout(res, 4000))
+        ]);
+      }
     },
 
     /** 전 페이지를 오프스크린 렌더 → JPEG dataURL 배열 (배포 스냅샷용) */
@@ -351,6 +372,7 @@
       img.crossOrigin = "anonymous";
       img.onload = () => {
         if (!this.open) return;
+        this.isVideo = false; // 정지 이미지 → 온디맨드 렌더
         if (this.texture) this.texture.dispose();
         this.texture = new THREE.Texture(img);
         this.texture.needsUpdate = true;
@@ -408,6 +430,7 @@
 
       video.addEventListener("loadeddata", () => {
         if (!this.open) return;
+        this.isVideo = true; // 영상 → 매 프레임 렌더
         if (this.texture) this.texture.dispose();
         this.texture = new THREE.VideoTexture(video);
         this.texture.minFilter = THREE.LinearFilter;
@@ -452,18 +475,25 @@
       this.renderer.setSize(W, H, false);
       this.camera.aspect = W / H;
       this.camera.updateProjectionMatrix();
+      this._invalidate();
     },
 
     _startLoop() {
       cancelAnimationFrame(this.rafId);
+      this._dirty = true; // 첫 프레임은 반드시 렌더
+      if (!this._tgt) this._tgt = new THREE.Vector3(); // 재사용(매 프레임 GC 방지)
       const loop = () => {
         if (!this.open) return;
-        if (this.S.autoRotate && !this.S.dragging) this.S.lon += 0.06;
-        this._renderFrame();
+        // 자동회전/영상은 매 프레임 갱신, 그 외엔 변경(_dirty) 있을 때만 렌더 → CPU/GPU 절약 = 빠름
+        if (this.S.autoRotate && !this.S.dragging) { this.S.lon += 0.06; this._dirty = true; }
+        if (this.isVideo) this._dirty = true;
+        if (this._dirty) { this._renderFrame(); this._dirty = false; }
         this.rafId = requestAnimationFrame(loop);
       };
       loop();
     },
+
+    _invalidate() { this._dirty = true; },
 
     _renderFrame() {
       if (!this.renderer) return;
@@ -471,21 +501,22 @@
       S.lat = Math.max(-85, Math.min(85, S.lat));
       const phi   = THREE.MathUtils.degToRad(90 - S.lat);
       const theta = THREE.MathUtils.degToRad(S.lon);
-      this.camera.target = new THREE.Vector3(
+      const t = this._tgt || (this._tgt = new THREE.Vector3());
+      t.set(
         500 * Math.sin(phi) * Math.cos(theta),
         500 * Math.cos(phi),
         500 * Math.sin(phi) * Math.sin(theta)
       );
-      this.camera.lookAt(this.camera.target);
+      this.camera.lookAt(t);
       this.camera.fov = S.fov;
       this.camera.updateProjectionMatrix();
       this.renderer.render(this.scene, this.camera);
     },
 
     /* ── 컨트롤 ── */
-    setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); },
-    resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; },
-    toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; return this.S.autoRotate; },
+    setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); this._invalidate(); },
+    resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; this._invalidate(); },
+    toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
     onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; },
     onPointerMove(x, y) {
@@ -494,6 +525,7 @@
       this.S.lon += (this.S.lx - x) * k;
       this.S.lat += (y - this.S.ly) * k;
       this.S.lx = x; this.S.ly = y;
+      this._invalidate();
     },
     onPointerUp() { this.S.dragging = false; },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
@@ -513,11 +545,21 @@
   const MapCtrl = {
     viewport: null, transform: null, _flyRaf: null,
 
-    init(viewport, transform) { this.viewport = viewport; this.transform = transform; },
+    init(viewport, transform) {
+      this.viewport = viewport; this.transform = transform;
+      // GPU 합성 힌트 → 패닝/줌/flyTo 가 부드럽고 빠르게 동작
+      try {
+        transform.style.willChange = "transform";
+        transform.style.transformOrigin = "0 0";
+        transform.style.backfaceVisibility = "hidden";
+      } catch (e) {}
+    },
 
     applyTransform() {
       const { x, y } = State.pan;
-      this.transform.style.transform = `translate(${x}px, ${y}px) scale(${State.zoom})`;
+      // translate3d 로 GPU 레이어 승격 (체감 속도 향상)
+      this.transform.style.transform =
+        `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})`;
     },
 
     viewportToPercent(clientX, clientY) {
@@ -668,7 +710,8 @@
             e.stopPropagation();
             App.deletePin(pin.id);
           });
-          item.addEventListener("click", () => App.focusPin(pin));
+          // 디자이너 모드에서도 미디어가 등록된 핀은 리스트 클릭 시 이동 후 360° 오픈
+          item.addEventListener("click", () => App.focusPin(pin, App.pinHasMedia(pin)));
         } else {
           item.innerHTML = `
             <div class="pin-num">${idx + 1}</div>
@@ -700,8 +743,11 @@
           <div class="pin-marker-bubble"><span>${idx + 1}</span></div>`;
         marker.addEventListener("click", e => {
           e.stopPropagation();
-          if (State.mode === "designer") App.setActivePin(pin.id);
-          else App.openPano(pin);
+          // 미디어(360° 사진/영상/URL)가 등록된 핀은 모드와 무관하게 클릭 즉시 360° 뷰어를 연다.
+          // 디자이너 모드에서 아직 미디어가 없는(작성 중) 핀만 편집(활성화)한다.
+          if (App.pinHasMedia(pin)) App.openPano(pin);
+          else if (State.mode === "designer") App.setActivePin(pin.id);
+          else App.openPano(pin); // 뷰어에서 미디어 없는 핀 → openPano가 안내 표시
         });
         layer.appendChild(marker);
       });
@@ -1220,7 +1266,8 @@
       UI.renderPinList();
       UI.renderPinsOnMap();
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2));
-      if (openAfter) setTimeout(() => this.openPano(pin), 800);
+      // flyTo 와 동시에 360° 로딩을 시작(병렬)해 체감 속도를 높인다. (지연 최소화)
+      if (openAfter) setTimeout(() => this.openPano(pin), 250);
     },
 
     deletePin(id) {
@@ -1230,6 +1277,11 @@
       if (State.activePin === id) State.activePin = null;
       UI.renderPinList();
       UI.renderPinsOnMap();
+    },
+
+    /** 핀에 360° 미디어(클라우드 이미지/로컬 영상/외부 URL)가 등록되어 있는가 */
+    pinHasMedia(pin) {
+      return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl));
     },
 
     /* ── 360° 팝업 열기 (클라우드 저장본 / 영상 / URL) ── */
