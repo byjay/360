@@ -1337,8 +1337,22 @@
 
         const viewerUrl = location.origin + location.pathname +
           "?mode=viewer" + (depId ? "&d=" + encodeURIComponent(depId) : "");
-        status.innerHTML = "✅ 배포 완료! (" + pagesData.length + "페이지 / " + State.pins.length + "핀)<br>뷰어 전용 링크:<br><a href='" + viewerUrl + "' target='_blank' style='color:#10b981'>" + viewerUrl + "</a>";
+        // [C-LOOP1 결함1] 공유가 목적인 시스템 → 원클릭 링크 복사 버튼 제공
+        status.innerHTML =
+          "✅ 배포 완료! (" + pagesData.length + "페이지 / " + State.pins.length + "핀)<br>" +
+          "뷰어 전용 링크:<br>" +
+          "<a id='deploy-link' href='" + viewerUrl + "' target='_blank' style='color:#10b981;word-break:break-all'>" + viewerUrl + "</a><br>" +
+          "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>📋 링크 복사</button>";
         status.classList.remove("hidden");
+        // 복사 버튼 핸들러 (clipboard API + execCommand 폴백)
+        const copyBtn = document.getElementById("btn-copy-link");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", async () => {
+            const ok = await App._copyToClipboard(viewerUrl);
+            copyBtn.textContent = ok ? "✅ 복사됨!" : "⚠ 복사 실패 — 링크를 길게 눌러 복사하세요";
+            setTimeout(() => { copyBtn.textContent = "📋 링크 복사"; }, 2200);
+          });
+        }
       } catch (e) {
         status.textContent = "❌ 배포 실패: " + e.message;
         status.classList.add("error");
@@ -1346,6 +1360,27 @@
       } finally {
         btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
       }
+    },
+
+    /* ── 클립보드 복사 (Clipboard API → execCommand 폴백) ── */
+    async _copyToClipboard(text) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (e) { /* 폴백으로 진행 */ }
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch (e) { return false; }
     },
 
     /* ── 뷰어: 최신 배포본 자동 로드 ── */
@@ -1410,7 +1445,14 @@
         imgEl.src = pages[0];
         imgEl.classList.remove("hidden");
 
-        statusEl.textContent = "✅ 배포본 로드 완료 (" + pages.length + "페이지 / " + State.pins.length + "개 포인트)";
+        // [C-LOOP1 결함2] 뷰어 첫 진입 어포던스 — 핀 클릭으로 360°가 열림을 명시
+        if (State.pins.length > 0) {
+          statusEl.innerHTML =
+            "✅ 로드 완료 (" + pages.length + "페이지 / " + State.pins.length + "개 포인트)<br>" +
+            "<span style='color:var(--green)'>📍 도면 위 번호 핀을 클릭하면 360° 파노라마가 열립니다.</span>";
+        } else {
+          statusEl.textContent = "✅ 배포본 로드 완료 (" + pages.length + "페이지 / 포인트 없음)";
+        }
         UI.renderPinList();
       } catch (e) {
         statusEl.textContent = "❌ 불러오기 실패: " + e.message;
