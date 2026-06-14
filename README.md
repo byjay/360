@@ -1,9 +1,38 @@
-# 360° Location Viewer System — We:are Marine (v3)
+# 360° Location Viewer System — SEASTAR Inc.
 
 > Ricoh THETA 호환 · Three.js WebGL 기반 GPU 파노라마 뷰어
+> **SEASTAR Inc.** — WORLD SHIPBUILDING & OFFSHORE DESIGN PROVIDER
 
 선박/시설 도면(PDF·이미지) 위에 위치 포인트(핀)를 배치하고, 핀마다 360° 파노라마
 이미지/영상을 연결해 현장을 탐색하는 정적 웹 시스템입니다.
+
+---
+
+## 🎨 SEASTAR 브랜딩 시스템 (2026-06-14)
+
+회사(SEASTAR Inc.) 로고와 테마색을 **설정값 하나로 주입**하는 화이트라벨 브랜딩을 적용했습니다.
+
+| 항목 | 내용 |
+|------|------|
+| **로고** | `public/images/logo.png` (SEASTAR 로고). 홈/상단바/파노라마 3곳 슬롯에 자동 표시. 다크 UI 가독성을 위해 **흰 라운드 박스** 위에 배치 |
+| **테마색** | SEASTAR 블루 `#1b75bb` 를 `--gold`/`--accent` 토큰에 주입 |
+| **텍스트 폴백** | 로고 이미지 로드 실패 시 **SEA(블루)+STAR(레드) 텍스트 워드마크**로 자동 폴백 → 파일이 없어도 UI 안전 |
+| **설정 방식** | `index.html` 의 `window.WM_BRAND = { logoUrl, company, companyShort, product, tagline, accent }` 한 곳만 수정하면 전체 브랜딩 교체 |
+| **검증** | Brand E2E 17개 항목 × 3회 전부 PASS |
+
+```js
+// public/index.html — 브랜딩 교체는 이 블록만 수정
+window.WM_BRAND = {
+  logoUrl:     "images/logo.png",   // 비우면 텍스트 워드마크 자동 표시
+  company:     "SEASTAR Inc.",
+  companyShort:"SEASTAR",
+  product:     "360° Location Viewer",
+  tagline:     "WORLD SHIPBUILDING & OFFSHORE DESIGN PROVIDER",
+  accent:      "#1b75bb"
+};
+```
+
+> 📊 경쟁사 분석·가격 비교·안정화 로드맵은 **[`REPORT_경쟁분석_가격_로드맵.md`](./REPORT_경쟁분석_가격_로드맵.md)** 참고.
 
 ---
 
