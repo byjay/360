@@ -8,7 +8,7 @@
  *  - 핀 저장/선택 시 해당 위치로 플라이투(줌인 이동) 애니메이션 + 핀 드롭 모션
  *  - PDF 멀티페이지: 핀에 page 기록, 배포 시 전 페이지 스냅샷, 뷰어에서 페이지 전환 지원
  *
- * 의존: PDF.js 3.11.174 / Three.js 0.147.0 / JSZip 3.10.1 (모두 CDN)
+ * 의존: PDF.js 3.11.174 / Three.js 0.147.0 (모두 CDN)
  */
 
 (function () {
@@ -1017,12 +1017,21 @@
       MapCtrl.init(UI.$("map-viewport"), UI.$("map-transform"));
       PanoViewer.init(UI.$("pano-canvas"));
       AllPins.init();
+      AdminGate.init();
     },
 
     /* ── Home ── */
     _bindHome() {
       document.querySelectorAll(".mode-card").forEach(card => {
-        const open = () => this.openApp(card.dataset.mode);
+        const open = () => {
+          const mode = card.dataset.mode;
+          // 설계자(디자이너) 모드는 관리자 인증을 통과해야 진입 가능. 일반인은 뷰어만.
+          if (mode === "designer" && !AdminGate.authed) {
+            AdminGate.request(() => this.openApp("designer"));
+            return;
+          }
+          this.openApp(mode);
+        };
         card.addEventListener("click", open);
         card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") open(); });
       });
@@ -1238,7 +1247,6 @@
       UI.$("btn-export-json").addEventListener("click", () => this._exportJson());
       UI.$("btn-deploy").addEventListener("click", () => this._deployToViewer());
       UI.$("btn-reload-deploy").addEventListener("click", () => this.loadLatestDeployment());
-      UI.$("btn-download-src").addEventListener("click", () => this._downloadSource());
     },
 
     _togglePlacing() {
@@ -2027,15 +2035,6 @@
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 1000);
     },
-
-    /* ── 소스코드 ZIP 다운로드 ── */
-    async _downloadSource() {
-      const btn = UI.$("btn-download-src");
-      btn.classList.add("loading");
-      try { await buildAndDownloadZip(); }
-      catch (err) { alert("다운로드 실패: " + err.message + "\n\n배포 환경(HTTP 서버)에서 실행해 주세요."); }
-      finally { btn.classList.remove("loading"); }
-    }
   };
 
   /* ══════════════════════════════════════════
@@ -2187,58 +2186,79 @@
   };
 
   /* ══════════════════════════════════════════
-     ZIP 다운로드 (공용)
+     ADMIN GATE — 설계자(DESIGNER) 모드 관리자 인증
+     · 일반인은 인증 없이 뷰어만 사용 가능
+     · 관리자 비밀번호를 통과해야 디자이너 기능 진입
+     · 비밀번호는 배포 시 ?admin=... 또는 window.WM_ADMIN_PIN 으로 교체 가능
   ══════════════════════════════════════════ */
-  async function buildAndDownloadZip() {
-    if (!window.JSZip) throw new Error("JSZip 라이브러리 로드 중입니다. 잠시 후 다시 시도하세요.");
-    const [html, css, js] = await Promise.all([
-      fetch("index.html").then(r => r.text()),
-      fetch("css/style.css").then(r => r.text()),
-      fetch("js/main.js").then(r => r.text())
-    ]);
-    const zip = new JSZip();
-    zip.file("index.html", html);
-    zip.folder("css").file("style.css", css);
-    zip.folder("js").file("main.js", js);
-    zip.file("README.md", [
-      "# 360° Location Viewer System — We:are Marine",
-      "",
-      "## 실행 방법 (로컬 웹서버 필요)",
-      "",
-      "### Python",
-      "```",
-      "python -m http.server 8080",
-      "# 브라우저에서 http://localhost:8080 접속",
-      "```",
-      "",
-      "### Node.js",
-      "```",
-      "npx serve .",
-      "```",
-      "",
-      "## 파일 구조",
-      "index.html     — 메인 HTML",
-      "css/style.css  — 스타일",
-      "js/main.js     — 앱 로직 (PDF.js + Three.js WebGL 파노라마)",
-      "",
-      "## 의존 라이브러리 (CDN, 인터넷 필요)",
-      "- PDF.js 3.11.174",
-      "- Three.js 0.147.0",
-      "- JSZip 3.10.1",
-      "- Google Fonts",
-      "",
-      "## 주의",
-      "클라우드 저장(테이블 API: tables/pano_images, tables/deployments)은",
-      "Genspark 배포 환경에서만 동작합니다. 로컬 실행 시 URL 방식 핀만 사용 가능."
-    ].join("\n"));
-    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "wemare-360-viewer.zip";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 1500);
-  }
+  const AdminGate = {
+    authed: false,
+    _pending: null,
+    // 기본 관리자 비밀번호. 운영 시 window.WM_ADMIN_PIN 으로 덮어쓸 수 있음.
+    get PIN() {
+      return (typeof window !== "undefined" && window.WM_ADMIN_PIN) || "wearemarine";
+    },
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      const ok     = $("admin-gate-ok");
+      const cancel = $("admin-gate-cancel");
+      const input  = $("admin-gate-input");
+      const backdrop = document.querySelector(".admin-gate-backdrop");
+      ok && ok.addEventListener("click", () => this._submit());
+      cancel && cancel.addEventListener("click", () => this.close());
+      backdrop && backdrop.addEventListener("click", () => this.close());
+      if (input) {
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); this._submit(); }
+          if (e.key === "Escape") { e.preventDefault(); this.close(); }
+        });
+        input.addEventListener("input", () => {
+          const err = document.getElementById("admin-gate-error");
+          if (err) err.classList.add("hidden");
+        });
+      }
+    },
+
+    /** 인증을 요청한다. 성공 시 onPass 콜백 실행. */
+    request(onPass) {
+      this._pending = onPass || null;
+      const gate = document.getElementById("admin-gate");
+      const input = document.getElementById("admin-gate-input");
+      const err = document.getElementById("admin-gate-error");
+      if (err) err.classList.add("hidden");
+      if (input) input.value = "";
+      gate.classList.remove("hidden");
+      requestAnimationFrame(() => gate.classList.add("on"));
+      setTimeout(() => input && input.focus(), 60);
+    },
+
+    _submit() {
+      const input = document.getElementById("admin-gate-input");
+      const err = document.getElementById("admin-gate-error");
+      const val = (input && input.value) || "";
+      if (val === this.PIN) {
+        this.authed = true;
+        const cb = this._pending;
+        this._pending = null;
+        // 인증 성공 시 디자이너 카드 잠금 해제 표시
+        document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.remove("locked"));
+        this.close(true);
+        if (typeof cb === "function") cb();
+      } else {
+        if (err) err.classList.remove("hidden");
+        if (input) { input.value = ""; input.focus(); }
+      }
+    },
+
+    close(passed) {
+      const gate = document.getElementById("admin-gate");
+      if (!gate) return;
+      gate.classList.remove("on");
+      setTimeout(() => gate.classList.add("hidden"), 200);
+      if (!passed) this._pending = null;
+    }
+  };
 
   /* ── 진입 ── */
   document.addEventListener("DOMContentLoaded", () => {
@@ -2246,7 +2266,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl,
+      State, App, AllPins, UI, MapCtrl, AdminGate,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);
@@ -2256,26 +2276,28 @@
     };
 
     const params  = new URLSearchParams(location.search);
+
+    // ?admin=<비밀번호> 로 들어오면 관리자 자동 인증(설계자 전용 링크).
+    const adminQ = params.get("admin");
+    if (adminQ && adminQ === AdminGate.PIN) {
+      AdminGate.authed = true;
+      document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.remove("locked"));
+    }
+
     const urlMode = params.get("mode");
     if (urlMode === "viewer") {
       State.viewerLocked = true;
       App.openApp("viewer");
+    } else if (urlMode === "designer") {
+      // 설계자 직접 진입도 인증 필요 (미인증이면 게이트, 인증되어 있으면 바로 진입)
+      if (AdminGate.authed) App.openApp("designer");
+      else AdminGate.request(() => App.openApp("designer"));
     }
 
     /* ── 360° 테스트 훅: ?demo360=<이미지URL> 로 파노라마 직접 오픈 ── */
     const demo = params.get("demo360");
     if (demo) {
       PanoViewer.loadMedia(decodeURIComponent(demo), "TEST PANORAMA");
-    }
-
-    const zipBtn = document.getElementById("btn-zip-download");
-    if (zipBtn) {
-      zipBtn.addEventListener("click", async () => {
-        zipBtn.classList.add("loading");
-        try { await buildAndDownloadZip(); }
-        catch (e) { alert("다운로드 실패: " + e.message); }
-        finally { zipBtn.classList.remove("loading"); }
-      });
     }
   });
 
