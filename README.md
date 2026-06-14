@@ -8,6 +8,42 @@
 
 ---
 
+## 💬 이슈 · 필드노트 협업 (핀별 코멘트·담당자·상태·완료체크) (2026-06-14)
+
+상용 현장 협업 툴(OpenSpace Field Notes 등)을 모방해, **핀(위치)마다 이슈/메모 스레드**를
+달고 담당자를 지정하며 상태(미해결·진행중·완료)를 추적하는 기능을 추가했습니다.
+배포본(deployment)과 독립된 별도 테이블(`pin_notes`)에 저장되어, 도면을 재배포해도 협업 이력이 유지됩니다.
+
+### 기능
+- 파노라마 뷰어 헤더의 **"이슈" 버튼** → 우측 슬라이드 패널에서 해당 핀의 이슈 스레드 확인/작성.
+- 노트 항목: 본문 · 작성자 · 담당자(선택) · 상태 뱃지(미해결/진행중/완료) · 작성시간(상대표시).
+- **상태 토글**: 권한자가 미해결 → 진행중 → 완료를 클릭 한 번으로 전환(완료 시 `resolved_at` 자동 기록).
+- **필터**: 전체 / 미해결 / 진행중 / 완료.
+- **핀 뱃지**: 핀 리스트와 도면 위 마커에 **미해결+진행중 건수**를 빨간 뱃지/점으로 표시 → 어디에 문제가 있는지 한눈에.
+- **익명 작성 허용**: 미로그인 현장 작업자도 작성자 이름만 입력해 이슈 등록 가능(빠른 현장 보고).
+- **권한**: 수정/삭제는 **작성자 본인(이메일 일치) 또는 설계자**만 가능(뷰어는 타인 노트 변경 불가).
+
+### API 엔드포인트
+| 메서드 | 경로 | 설명 | 권한 |
+|---|---|---|---|
+| GET | `/api/notes?deployment_id=&pin_id=&status=` | 핀별 노트 목록 | 공개 |
+| GET | `/api/notes/summary?deployment_id=` | 핀별 집계(`{pin_id:{total,open,progress,done}}`) | 공개 |
+| POST | `/api/notes` | 노트 생성(body 필수) | 익명 허용 |
+| PATCH | `/api/notes/:id` | 본문·상태·담당자 수정 | 작성자 본인 또는 설계자 |
+| DELETE | `/api/notes/:id` | 소프트 삭제 | 작성자 본인 또는 설계자 |
+
+### 데이터 모델 (`migrations/0003_pin_notes.sql`)
+`pin_notes`: id, deployment_id, pin_id, pin_label, body, status(open/progress/done),
+assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted.
+인덱스: (deployment_id,pin_id,deleted) / status / created_at.
+
+### ORCHESTRATOR E2E 교차검증 ✅ (20항목 ALL PASS ×3 · 콘솔 에러 0건)
+패널 열기·익명/설계자 작성·상태변경·필터·핀 뱃지(리스트/도면)·헤더 카운트·권한(뷰어 수정 차단)·삭제 검증.
+백엔드 권한 모델 curl 검증(타인 수정 403 · 익명 삭제 403 · 빈 body 400 · 완료 시 resolved_at) 통과.
+회귀(Demo 19·ProjectHub 18·Settings 28·Brand 17·Radar 20) 전부 PASS.
+
+---
+
 ## 🚪 첫 화면 = 프로젝트 선택 + 데모 즉시 체험 (2026-06-14)
 
 상용 툴(OpenSpace/Matterport)을 모방해 **접속 첫 화면을 프로젝트 선택 대시보드(ProjectHub)** 로 구성하고,

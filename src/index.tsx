@@ -444,6 +444,161 @@ app.delete('/tables/deployments/:id', async (c) => {
 })
 
 /* ════════════════════════════════════════════
+   pin_notes — 이슈/필드노트 협업 (핀 단위 코멘트 스레드)
+   · 조회: 누구나 (현장 열람)
+   · 작성: 누구나 (익명 가능 — 현장 협업), 로그인 시 작성자/역할 기록
+   · 수정/삭제/상태변경: 작성자(이메일 일치) 또는 디자이너
+════════════════════════════════════════════ */
+const VALID_STATUS = ['open', 'progress', 'done']
+
+function mapNote(r: any) {
+  return {
+    id: r.id,
+    deployment_id: r.deployment_id,
+    pin_id: r.pin_id,
+    pin_label: r.pin_label,
+    body: r.body,
+    status: r.status,
+    assignee: r.assignee,
+    author: r.author,
+    author_email: r.author_email,
+    author_role: r.author_role,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    resolved_at: r.resolved_at,
+  }
+}
+
+// 노트 목록 — deployment_id 필수, pin_id 선택, status 선택
+app.get('/api/notes', async (c) => {
+  const dep = c.req.query('deployment_id')
+  if (!dep) return c.json({ error: 'deployment_id required' }, 400)
+  const pin = c.req.query('pin_id')
+  const status = c.req.query('status')
+  const limit = Math.min(Number(c.req.query('limit') || 500), 2000)
+  let sql = 'SELECT * FROM pin_notes WHERE deleted = 0 AND deployment_id = ?'
+  const args: any[] = [dep]
+  if (pin) { sql += ' AND pin_id = ?'; args.push(pin) }
+  if (status && VALID_STATUS.includes(status)) { sql += ' AND status = ?'; args.push(status) }
+  sql += ' ORDER BY created_at ASC LIMIT ?'
+  args.push(limit)
+  const { results } = await c.env.DB.prepare(sql).bind(...args).all()
+  return c.json({ data: (results || []).map(mapNote), total: (results || []).length })
+})
+
+// 배포 단위 노트 요약(핀별 카운트/상태) — 도면 위 뱃지 표시용
+app.get('/api/notes/summary', async (c) => {
+  const dep = c.req.query('deployment_id')
+  if (!dep) return c.json({ error: 'deployment_id required' }, 400)
+  const { results } = await c.env.DB.prepare(
+    `SELECT pin_id,
+            COUNT(*) AS total,
+            SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open,
+            SUM(CASE WHEN status='progress' THEN 1 ELSE 0 END) AS progress,
+            SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done
+     FROM pin_notes WHERE deleted = 0 AND deployment_id = ?
+     GROUP BY pin_id`
+  ).bind(dep).all()
+  const map: any = {}
+  for (const r of (results || [])) {
+    map[(r as any).pin_id] = {
+      total: (r as any).total, open: (r as any).open,
+      progress: (r as any).progress, done: (r as any).done,
+    }
+  }
+  return c.json({ data: map })
+})
+
+// 노트 생성 — 누구나(익명 가능)
+app.post('/api/notes', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const deployment_id = String(body.deployment_id || '').trim()
+  const pin_id = String(body.pin_id || '').trim()
+  const text = String(body.body || '').trim()
+  if (!deployment_id || !pin_id) return c.json({ error: 'deployment_id, pin_id required' }, 400)
+  if (!text) return c.json({ error: 'body required' }, 400)
+  if (text.length > 4000) return c.json({ error: 'body too long' }, 400)
+  let status = String(body.status || 'open')
+  if (!VALID_STATUS.includes(status)) status = 'open'
+
+  // 로그인 사용자면 작성자 정보 기록
+  const user = await getUser(c)
+  const author = user ? (user.name || user.email) : (String(body.author || '').trim() || '익명')
+  const author_email = user ? user.email : null
+  const author_role = user ? (await isDesigner(c, user.email) ? (user.email === SUPER_ADMIN ? 'super' : 'designer') : 'viewer') : 'guest'
+
+  const id = genId('note')
+  const now = Date.now()
+  await c.env.DB.prepare(
+    `INSERT INTO pin_notes
+      (id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(
+    id, deployment_id, pin_id, String(body.pin_label || ''), text, status,
+    String(body.assignee || '') || null, author, author_email, author_role,
+    now, now, status === 'done' ? now : null
+  ).run()
+  return c.json(mapNote({
+    id, deployment_id, pin_id, pin_label: body.pin_label || '', body: text, status,
+    assignee: body.assignee || null, author, author_email, author_role,
+    created_at: now, updated_at: now, resolved_at: status === 'done' ? now : null,
+  }))
+})
+
+/** 노트 수정 권한: 작성자(이메일 일치) 또는 디자이너 */
+async function canEditNote(c: any, note: any): Promise<boolean> {
+  const user = await getUser(c)
+  if (!user) return false  // 익명 노트는 디자이너만 수정 가능
+  if (await isDesigner(c, user.email)) return true
+  return note.author_email && note.author_email === user.email
+}
+
+// 노트 수정(내용/상태/담당자)
+app.patch('/api/notes/:id', async (c) => {
+  const id = c.req.param('id')
+  const note = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!note) return c.json({ error: 'not found' }, 404)
+  if (!(await canEditNote(c, note))) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+
+  const fields: string[] = []
+  const args: any[] = []
+  const now = Date.now()
+  if (typeof body.body === 'string') {
+    const t = body.body.trim()
+    if (!t) return c.json({ error: 'body required' }, 400)
+    if (t.length > 4000) return c.json({ error: 'body too long' }, 400)
+    fields.push('body = ?'); args.push(t)
+  }
+  if (typeof body.status === 'string' && VALID_STATUS.includes(body.status)) {
+    fields.push('status = ?'); args.push(body.status)
+    fields.push('resolved_at = ?'); args.push(body.status === 'done' ? now : null)
+  }
+  if (typeof body.assignee === 'string') {
+    fields.push('assignee = ?'); args.push(body.assignee.trim() || null)
+  }
+  if (fields.length === 0) return c.json({ error: 'nothing to update' }, 400)
+  fields.push('updated_at = ?'); args.push(now)
+  args.push(id)
+  await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ?`).bind(...args).run()
+  const updated = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ?').bind(id).first()
+  return c.json(mapNote(updated))
+})
+
+// 노트 삭제(soft)
+app.delete('/api/notes/:id', async (c) => {
+  const id = c.req.param('id')
+  const note = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!note) return c.json({ error: 'not found' }, 404)
+  if (!(await canEditNote(c, note))) return c.json({ error: 'forbidden' }, 403)
+  await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ?')
+    .bind(Date.now(), id).run()
+  return c.json({ success: true })
+})
+
+/* ════════════════════════════════════════════
    정적 파일 서빙 — Cloudflare Pages 자산에 위임
    (css/js/images/static/index.html 은 _routes.json exclude로 자동 서빙되며,
     여기 도달하는 경로는 루트('/') 또는 알 수 없는 경로 → index.html 반환)
