@@ -7,6 +7,52 @@
 
 ---
 
+## 🧭 레이더 미니맵 + 핀 간 이동 핫스팟 (2026-06-14)
+
+동종 상용 도구(OpenSpace·HoloBuilder·3DVista 등) 분석 결과를 반영해, **파노라마를 보는 동안
+"지금 내가 도면 어디에서, 어느 방향을 보고 있는지"** 를 직관적으로 알 수 있게 했습니다.
+
+| 기능 | 출처/벤치마크 | 구현 |
+|------|---------------|------|
+| **레이더 미니맵** | 3DVista *radar* | 파노라마 좌하단에 현재 페이지 도면 썸네일 + 같은 페이지 핀들을 점으로 표시. 현재 핀은 금색 강조 |
+| **시야 부채꼴(cone)** | 3DVista radar | Three.js 카메라 yaw(`lon`)에 맞춰 현재 핀 위에 **부채꼴이 실시간 회전** → 보고 있는 방향 표시 |
+| **핀 간 이동 핫스팟** | OpenSpace/3DVista 탐색 | 파노라마 하단 **이전/다음 포인트** 버튼 + `N / M` 인덱스. 같은 페이지의 콘텐츠 핀들 사이를 점프 |
+| **레이더 점 클릭 이동** | — | 미니맵의 다른 핀 점을 클릭하면 그 파노라마로 바로 전환 |
+| **키보드 탐색** | — | 파노라마 열린 상태에서 **← / →** 로 이전/다음 포인트 이동 (Esc 닫기) |
+
+- 부채꼴 방향은 카메라 yaw 기반의 **상대 지표**입니다(파노라마별 절대 방위 보정값은 미입력 시 도면 12시 기준).
+- 핀이 1개뿐이면 네비게이션 바는 자동 숨김, 레이더는 표시됩니다.
+- **ORCHESTRATOR E2E 3회 교차검증 ✅ (20/20 ALL PASS ×3 · 콘솔 에러 0건)**
+
+---
+
+## 🔐 구글 로그인 + 슈퍼관리자 디자이너 지정 + 설정창(A안) (2026-06-14)
+
+PIN 기반 관리자 인증을 **구글 계정 로그인**으로 교체하고, UX를 **"접속=뷰어 / ⚙️ 설정창에서 편집 전환"** 으로 재구성했습니다.
+
+| 요청 | 구현 |
+|------|------|
+| 구글 이메일 로그인 | Google Identity Services(GIS) 프런트 + **서버측 JWT 검증**(Web Crypto RS256, JWKS) |
+| 슈퍼관리자 = `designssir@gmail.com` | `SUPER_ADMIN` 상수. 항상 디자이너 권한 + 디자이너 지정 관리 |
+| 슈퍼관리자가 디자이너 지정 | `designers` 테이블(D1) CRUD — **슈퍼관리자만** 추가/삭제 |
+| 로그인=디자이너 / 미접속=뷰어 | `/api/auth/me` 역할 판정: `super` / `designer` / `viewer` |
+| **A안: 접속=바로 뷰어** | DOMContentLoaded에서 `App.openApp("viewer")` 자동 진입(홈 스킵) |
+| **편집=설정창처럼** | topbar **⚙️ 설정 버튼** → 설정 패널 → 구글 로그인 → 디자이너면 **「편집 모드로 전환」**, 편집 중엔 **「뷰어로」** 버튼 |
+| 프로젝트 + 데크(선박 층) | `projects` / `decks` 테이블 + 사이드바 관리 UI (디자이너 전용) |
+
+- **OAuth Client ID는 플레이스홀더(`GOOGLE_CLIENT_ID`)** 상태입니다. 실제 ID 입력 전까지 로그인 버튼은 "미설정" 안내를 표시합니다(아래 *Google OAuth 설정* 참고).
+- **ORCHESTRATOR E2E 3회 교차검증 ✅ (27/27 ALL PASS ×3 · 콘솔 에러 0건)**
+
+### Google OAuth Client ID 설정 방법
+1. [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services → Credentials**
+2. **Create Credentials → OAuth client ID → Web application**
+3. **Authorized JavaScript origins** 에 배포 도메인 추가 (예: `https://your-app.pages.dev`, 로컬 테스트는 `http://localhost:3000`)
+4. 발급된 **Client ID** 를 `public/index.html`(및 루트 `index.html`)의
+   `window.WM_GOOGLE_CLIENT_ID = "GOOGLE_CLIENT_ID";` 값으로 교체 → `npm run build` 후 배포
+5. 슈퍼관리자 `designssir@gmail.com` 로 로그인 → 설정창에서 디자이너 이메일을 지정
+
+---
+
 ## 🔒 소스 다운로드 제거 + 관리자 전용 설계자 모드 (2026-06-14)
 
 배포본 보안 정책을 반영했습니다. **소스 다운로드 기능/버튼을 완전히 제거**하고,

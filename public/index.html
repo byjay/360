@@ -7,6 +7,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>
+    /* ───────────────────────────────────────────────
+       Google OAuth 클라이언트 ID (설정 필요)
+       · Google Cloud Console에서 발급한 "웹 애플리케이션" 클라이언트 ID로 교체하세요.
+       · 형식: xxxxxxxx-xxxx.apps.googleusercontent.com
+       · 승인된 JavaScript 원본에 이 사이트 주소를 등록해야 합니다.
+    ─────────────────────────────────────────────── */
+    window.WM_GOOGLE_CLIENT_ID = "GOOGLE_CLIENT_ID";  // ← 여기를 교체
+  </script>
 </head>
 <body>
 
@@ -15,6 +26,29 @@
 ════════════════════════════════════════════ -->
 <div id="screen-home" class="screen active">
   <div class="home-bg"></div>
+
+  <!-- 상단 인증 바: 구글 로그인 / 사용자 배지 -->
+  <div class="home-authbar">
+    <div id="auth-signed-out" class="auth-signed-out">
+      <span class="auth-hint">설계자 기능은 로그인이 필요합니다</span>
+      <div id="google-signin-btn" class="google-signin-btn"></div>
+    </div>
+    <div id="auth-signed-in" class="auth-signed-in hidden">
+      <div class="user-badge">
+        <img id="user-avatar" class="user-avatar" alt="" />
+        <div class="user-meta">
+          <span id="user-name" class="user-name"></span>
+          <span id="user-role" class="user-role"></span>
+        </div>
+      </div>
+      <button id="btn-manage-designers" class="btn-manage hidden" type="button" title="디자이너 지정 관리">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        디자이너 관리
+      </button>
+      <button id="btn-signout" class="btn-signout" type="button">로그아웃</button>
+    </div>
+  </div>
+
   <div class="home-content">
     <div class="home-brand">
       <div class="home-badge">We:are · Marine Inspection</div>
@@ -22,14 +56,14 @@
       <p class="home-sub">GA DRAWING · PANORAMIC INTEGRATION</p>
     </div>
     <div class="mode-cards">
-      <div class="mode-card designer locked" data-mode="designer" tabindex="0" role="button" title="관리자 전용 — 인증 필요">
+      <div class="mode-card designer locked" data-mode="designer" tabindex="0" role="button" title="구글 로그인 — 디자이너 권한 필요">
         <div class="card-lock" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </div>
         <div class="card-icon">✏️</div>
         <div class="card-badge">DESIGNER</div>
         <div class="card-title">설계자 모드</div>
-        <div class="card-desc">관리자 인증 후<br>도면 업로드·포인트 배치 및<br>360° 이미지 연결</div>
+        <div class="card-desc">구글 로그인(디자이너) 후<br>프로젝트·데크 생성 및<br>도면·360° 포인트 배치</div>
       </div>
       <div class="mode-card viewer" data-mode="viewer" tabindex="0" role="button">
         <div class="card-icon">🔭</div>
@@ -41,23 +75,6 @@
     <div class="home-footer">POWERED BY We:are ENGINEERING PLATFORM</div>
   </div>
 
-  <!-- 관리자 인증 모달 (설계자 모드 진입 시) -->
-  <div id="admin-gate" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="admin-gate-title">
-    <div class="admin-gate-backdrop"></div>
-    <div class="admin-gate-card">
-      <div class="admin-gate-ico" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      </div>
-      <h2 id="admin-gate-title" class="admin-gate-title">관리자 인증</h2>
-      <p class="admin-gate-sub">설계자(DESIGNER) 기능은 관리자만 사용할 수 있습니다.<br>관리자 비밀번호를 입력하세요.</p>
-      <input id="admin-gate-input" class="admin-gate-input" type="password" inputmode="numeric" autocomplete="off" placeholder="관리자 비밀번호" aria-label="관리자 비밀번호" />
-      <div id="admin-gate-error" class="admin-gate-error hidden">비밀번호가 올바르지 않습니다.</div>
-      <div class="admin-gate-actions">
-        <button id="admin-gate-cancel" class="admin-gate-btn ghost" type="button">취소</button>
-        <button id="admin-gate-ok" class="admin-gate-btn primary" type="button">인증</button>
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- ═══════════════════════════════════════════
@@ -99,6 +116,18 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
       <span>전체 핀</span>
     </button>
+
+    <!-- 뷰어 → 편집 모드 전환(편집 모드일 때 표시) -->
+    <button id="btn-exit-edit" class="btn-exit-edit hidden" type="button" title="뷰어로 돌아가기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 3 3 8 8 8"/></svg>
+      <span>뷰어로</span>
+    </button>
+
+    <!-- 설정(⚙️) — 로그인/편집 전환/디자이너 관리 진입 -->
+    <button id="btn-settings" class="btn-settings" type="button" title="설정 (로그인·편집 모드)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>설정</span>
+    </button>
   </header>
 
   <!-- Body -->
@@ -106,6 +135,29 @@
 
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar">
+
+      <!-- 프로젝트 / 데크(선박 층) 관리 (designer only) -->
+      <div id="section-projects" class="sidebar-section hidden">
+        <div class="sidebar-section-head">
+          <span class="sidebar-section-title">📁 프로젝트</span>
+          <button id="btn-new-project" class="btn-mini" type="button" title="프로젝트 생성">+ 생성</button>
+        </div>
+        <select id="project-select" class="project-select" aria-label="프로젝트 선택">
+          <option value="">— 프로젝트 선택 —</option>
+        </select>
+        <div id="project-actions" class="project-actions hidden">
+          <button id="btn-delete-project" class="btn-mini danger" type="button" title="프로젝트 삭제">프로젝트 삭제</button>
+        </div>
+
+        <div id="decks-block" class="decks-block hidden">
+          <div class="sidebar-section-head">
+            <span class="sidebar-section-title">🛳️ 데크 (선박 층)</span>
+            <button id="btn-new-deck" class="btn-mini" type="button" title="데크 생성">+ 생성</button>
+          </div>
+          <div id="decks-list" class="decks-list"></div>
+          <div id="decks-empty" class="decks-empty">데크가 없습니다. + 생성으로 추가하세요.</div>
+        </div>
+      </div>
 
       <!-- Upload -->
       <div id="section-upload" class="sidebar-section">
@@ -351,6 +403,34 @@
     </button>
   </div>
 
+  <!-- 레이더 미니맵 — 도면 위 핀 위치 + 현재 시야 방향(부채꼴). 3DVista radar 참고 -->
+  <div id="pano-radar" class="pano-radar hidden" title="현재 위치 · 시야 방향">
+    <div class="pano-radar-head">
+      <span class="pano-radar-title">위치</span>
+      <span id="pano-radar-page" class="pano-radar-page"></span>
+    </div>
+    <div id="pano-radar-stage" class="pano-radar-stage">
+      <img id="pano-radar-map" class="pano-radar-map" alt="" />
+      <div id="pano-radar-pins" class="pano-radar-pins"></div>
+      <!-- 현재 핀의 시야 부채꼴 -->
+      <div id="pano-radar-cone" class="pano-radar-cone">
+        <div class="pano-radar-fan"></div>
+        <div class="pano-radar-dot"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 핀 간 이동 (이전/다음) — OpenSpace/3DVista 탐색 핫스팟 참고 -->
+  <div id="pano-nav" class="pano-nav hidden">
+    <button id="btn-pano-prev" class="btn-pano-nav" type="button" title="이전 포인트 (←)" aria-label="이전 포인트">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div id="pano-nav-label" class="pano-nav-label">1 / 1</div>
+    <button id="btn-pano-next" class="btn-pano-nav" type="button" title="다음 포인트 (→)" aria-label="다음 포인트">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
+
   <div id="pano-hint" class="pano-hint hidden">
     <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>드래그: 시점 이동</span>
     <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>휠: 줌 조절</span>
@@ -363,5 +443,103 @@
 <!-- Three.js (WebGL 360° panorama — UMD build) -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="js/main.js"></script>
+<!-- ═══ 전역 오버레이 모달 (화면 전환과 무관하게 동작) ═══ -->
+  <!-- 로그인 안내 모달 (디자이너 모드 진입 시 미로그인/권한없음) -->
+  <div id="login-gate" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="login-gate-title">
+    <div class="admin-gate-backdrop"></div>
+    <div class="admin-gate-card">
+      <div class="admin-gate-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h2 id="login-gate-title" class="admin-gate-title">설계자 로그인</h2>
+      <p id="login-gate-sub" class="admin-gate-sub">설계자(DESIGNER) 기능은 <b>디자이너로 지정된 구글 계정</b>만 사용할 수 있습니다.<br>구글 계정으로 로그인하세요.</p>
+      <div id="login-gate-signin" class="login-gate-signin"></div>
+      <div id="login-gate-error" class="admin-gate-error hidden">이 계정은 디자이너 권한이 없습니다. 슈퍼관리자에게 지정을 요청하세요.</div>
+      <div class="admin-gate-actions">
+        <button id="login-gate-cancel" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 디자이너 지정 관리 (슈퍼관리자 전용) -->
+  <div id="designers-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="designers-modal-title">
+    <div class="admin-gate-backdrop" data-close="designers"></div>
+    <div class="admin-gate-card wide">
+      <h2 id="designers-modal-title" class="admin-gate-title">디자이너 지정 관리</h2>
+      <p class="admin-gate-sub">디자이너로 지정할 <b>구글 이메일</b>을 추가/삭제합니다.<br>슈퍼관리자(<span id="super-admin-email"></span>)는 항상 디자이너입니다.</p>
+      <div class="designer-add">
+        <input id="designer-email-input" class="admin-gate-input" type="email" autocomplete="off" placeholder="designer@gmail.com" aria-label="디자이너 이메일" />
+        <button id="designer-add-btn" class="admin-gate-btn primary" type="button">추가</button>
+      </div>
+      <div id="designer-add-error" class="admin-gate-error hidden"></div>
+      <div id="designers-list" class="designers-list"></div>
+      <div class="admin-gate-actions">
+        <button id="designers-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 범용 입력 모달 (프로젝트/데크 생성) -->
+  <div id="prompt-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
+    <div class="admin-gate-backdrop" data-close="prompt"></div>
+    <div class="admin-gate-card">
+      <h2 id="prompt-modal-title" class="admin-gate-title">입력</h2>
+      <p id="prompt-modal-sub" class="admin-gate-sub"></p>
+      <input id="prompt-modal-input" class="admin-gate-input" type="text" autocomplete="off" />
+      <input id="prompt-modal-input2" class="admin-gate-input hidden" type="text" inputmode="numeric" placeholder="층 번호(선택, 정렬용)" style="margin-top:10px" />
+      <div id="prompt-modal-error" class="admin-gate-error hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="prompt-modal-cancel" class="admin-gate-btn ghost" type="button">취소</button>
+        <button id="prompt-modal-ok" class="admin-gate-btn primary" type="button">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설정 패널 — 로그인 / 편집 모드 전환 / 디자이너 관리 -->
+  <div id="settings-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="admin-gate-backdrop" data-close="settings"></div>
+    <div class="admin-gate-card">
+      <div class="settings-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </div>
+      <h2 id="settings-title" class="admin-gate-title">설정</h2>
+
+      <!-- 미로그인 -->
+      <div id="settings-loggedout" class="settings-block">
+        <p class="admin-gate-sub">편집(설계자) 기능은 <b>디자이너로 지정된 구글 계정</b>만 사용할 수 있습니다.<br>구글 계정으로 로그인하세요. 로그인하지 않아도 뷰어는 그대로 사용됩니다.</p>
+        <div id="settings-signin" class="login-gate-signin"></div>
+        <div id="settings-noclient" class="admin-gate-error hidden">구글 로그인이 아직 설정되지 않았습니다(관리자 클라이언트 ID 필요).</div>
+      </div>
+
+      <!-- 로그인됨 -->
+      <div id="settings-loggedin" class="settings-block hidden">
+        <div class="settings-user">
+          <img id="settings-avatar" class="user-avatar" alt="" />
+          <div class="user-meta">
+            <span id="settings-name" class="user-name"></span>
+            <span id="settings-role" class="user-role"></span>
+            <span id="settings-email" class="settings-email"></span>
+          </div>
+        </div>
+
+        <div id="settings-designer-actions" class="settings-actions hidden">
+          <button id="btn-go-edit" class="admin-gate-btn primary full" type="button">✏️ 편집 모드로 전환</button>
+        </div>
+        <div id="settings-viewer-note" class="settings-note hidden">
+          이 계정은 <b>디자이너 권한이 없습니다</b>. 편집하려면 슈퍼관리자에게 디자이너 지정을 요청하세요.
+        </div>
+        <div id="settings-super-actions" class="settings-actions hidden">
+          <button id="btn-open-designers" class="admin-gate-btn ghost full" type="button">👥 디자이너 지정 관리</button>
+        </div>
+
+        <button id="btn-settings-signout" class="btn-signout full" type="button">로그아웃</button>
+      </div>
+
+      <div class="admin-gate-actions">
+        <button id="settings-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

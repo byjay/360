@@ -281,6 +281,147 @@ html, body {
 }
 .admin-gate-btn.primary:hover { background: rgba(245,158,11,.28); transform: translateY(-1px); }
 .admin-gate-btn:active { transform: translateY(0); }
+.admin-gate-card.wide { width: min(480px, 92vw); }
+.admin-gate-btn.full { width: 100%; flex: none; margin-top: 4px; }
+
+/* ── topbar 설정/전환 버튼 ── */
+.btn-settings, .btn-exit-edit {
+  display: flex; align-items: center; gap: 6px; margin-left: 8px;
+  padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  font-size: 11px; letter-spacing: .5px; font-family: var(--font-mono);
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.btn-settings { background: rgba(148,163,184,.1); border: 1px solid var(--border); color: #cbd5e1; }
+.btn-settings:hover { background: rgba(148,163,184,.22); border-color: #94a3b8; color: #fff; transform: translateY(-1px); }
+.btn-settings svg { width: 14px; height: 14px; }
+.btn-exit-edit { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.4); color: #10b981; }
+.btn-exit-edit:hover { background: rgba(16,185,129,.24); transform: translateY(-1px); }
+.btn-exit-edit svg { width: 13px; height: 13px; }
+.btn-exit-edit.hidden, .btn-settings.hidden { display: none; }
+
+/* ── 설정 패널 ── */
+.settings-ico {
+  width: 46px; height: 46px; margin: 0 auto 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: #cbd5e1; background: rgba(148,163,184,.12);
+  border: 1px solid var(--border); border-radius: 12px;
+}
+.settings-ico svg { width: 24px; height: 24px; }
+.settings-block.hidden { display: none; }
+.settings-user {
+  display: flex; align-items: center; gap: 12px; text-align: left;
+  padding: 12px; margin-bottom: 14px;
+  background: rgba(2,6,23,.5); border: 1px solid var(--border); border-radius: 10px;
+}
+.settings-user .user-avatar { width: 42px; height: 42px; }
+.settings-email { color: var(--text2); font-size: 10.5px; font-family: var(--font-mono); margin-top: 2px; word-break: break-all; }
+.settings-actions { margin-bottom: 10px; }
+.settings-actions.hidden { display: none; }
+.settings-note {
+  padding: 11px 13px; margin-bottom: 12px; text-align: left;
+  background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3);
+  border-radius: 8px; color: #fcd34d; font-size: 11px; line-height: 1.6; font-family: var(--font-mono);
+}
+.settings-note.hidden { display: none; }
+.btn-signout.full { width: 100%; justify-content: center; margin-top: 6px; }
+
+/* ── 홈 인증 바 (구글 로그인 / 사용자 배지) ── */
+.home-authbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+  display: flex; justify-content: flex-end; align-items: center;
+  padding: 14px 18px; gap: 12px;
+}
+.auth-signed-out, .auth-signed-in {
+  display: flex; align-items: center; gap: 12px;
+}
+.auth-signed-out.hidden, .auth-signed-in.hidden { display: none; }
+.auth-hint { color: var(--text2); font-size: 11px; font-family: var(--font-mono); }
+.google-signin-btn { min-height: 32px; }
+.user-badge {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 12px 5px 6px;
+  background: rgba(15,23,42,.6); border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.user-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: #334155; }
+.user-meta { display: flex; flex-direction: column; line-height: 1.25; }
+.user-name { color: #fff; font-size: 12px; font-weight: 600; font-family: var(--font-ui); }
+.user-role { font-size: 9.5px; letter-spacing: .5px; font-family: var(--font-mono); }
+.user-role.role-super { color: var(--gold); }
+.user-role.role-designer { color: #38bdf8; }
+.user-role.role-viewer { color: var(--text2); }
+.btn-manage, .btn-signout {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border-radius: 8px; cursor: pointer;
+  font-size: 11px; letter-spacing: .5px; font-family: var(--font-mono);
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.btn-manage { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); color: var(--gold); }
+.btn-manage:hover { background: rgba(245,158,11,.24); transform: translateY(-1px); }
+.btn-manage svg { width: 13px; height: 13px; }
+.btn-manage.hidden { display: none; }
+.btn-signout { background: transparent; border: 1px solid var(--border); color: var(--text2); }
+.btn-signout:hover { border-color: #94a3b8; color: #fff; }
+.login-gate-signin { display: flex; justify-content: center; margin: 6px 0 4px; min-height: 40px; }
+
+/* ── 디자이너 지정 관리 목록 ── */
+.designer-add { display: flex; gap: 8px; margin-bottom: 6px; }
+.designer-add .admin-gate-input { text-align: left; letter-spacing: 0; flex: 1; }
+.designer-add .admin-gate-btn { flex: 0 0 auto; width: auto; padding: 10px 16px; }
+.designers-list { max-height: 240px; overflow-y: auto; margin: 8px 0; text-align: left; }
+.designers-loading, .designers-empty { color: var(--text2); font-size: 11px; font-family: var(--font-mono); padding: 12px 4px; text-align: center; }
+.designer-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px; margin-bottom: 6px;
+  background: rgba(2,6,23,.5); border: 1px solid var(--border); border-radius: 8px;
+}
+.designer-email { color: #e2e8f0; font-size: 12px; font-family: var(--font-mono); word-break: break-all; }
+.designer-del {
+  flex: 0 0 auto; width: 24px; height: 24px; margin-left: 8px;
+  background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.4);
+  color: #f87171; border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.designer-del:hover { background: rgba(239,68,68,.25); }
+
+/* ── 프로젝트 / 데크 사이드바 ── */
+.sidebar-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sidebar-section-title { color: #cbd5e1; font-size: 12px; font-weight: 600; font-family: var(--font-ui); }
+.btn-mini {
+  padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  font-size: 10.5px; letter-spacing: .5px; font-family: var(--font-mono);
+  background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.4); color: #38bdf8;
+  transition: background .15s, transform .1s;
+}
+.btn-mini:hover { background: rgba(56,189,248,.24); transform: translateY(-1px); }
+.btn-mini.danger { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.4); color: #f87171; }
+.btn-mini.danger:hover { background: rgba(239,68,68,.22); }
+.project-select {
+  width: 100%; box-sizing: border-box; padding: 9px 11px;
+  background: rgba(2,6,23,.6); border: 1px solid var(--border); border-radius: 8px;
+  color: #fff; font-size: 12px; font-family: var(--font-ui); cursor: pointer; outline: none;
+}
+.project-select:focus { border-color: #38bdf8; }
+.project-actions { margin-top: 8px; }
+.project-actions.hidden, .decks-block.hidden { display: none; }
+.decks-block { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.decks-list { display: flex; flex-direction: column; gap: 6px; }
+.decks-empty { color: var(--text2); font-size: 10.5px; font-family: var(--font-mono); padding: 6px 2px; }
+.decks-empty.hidden { display: none; }
+.deck-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px;
+  background: rgba(2,6,23,.5); border: 1px solid var(--border);
+  transition: border-color .15s, background .15s;
+}
+.deck-row.active { border-color: #38bdf8; background: rgba(56,189,248,.1); }
+.deck-lvl { flex: 0 0 auto; font-size: 9.5px; padding: 2px 6px; border-radius: 5px; background: rgba(56,189,248,.18); color: #38bdf8; font-family: var(--font-mono); }
+.deck-name { flex: 1; color: #e2e8f0; font-size: 12px; font-family: var(--font-ui); cursor: pointer; }
+.deck-del {
+  flex: 0 0 auto; width: 22px; height: 22px;
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.35);
+  color: #f87171; border-radius: 5px; cursor: pointer; font-size: 11px;
+}
+.deck-del:hover { background: rgba(239,68,68,.25); }
 
 /* ═══════════════════════════════════════════════════════
    APP — BODY
@@ -603,6 +744,75 @@ html, body {
 }
 .pano-canvas.hidden { display: none !important; }
 .pano-canvas:active { cursor: grabbing; }
+
+/* ── 레이더 미니맵 (도면 위 위치 + 시야 부채꼴) ── */
+.pano-radar {
+  position: absolute; left: 18px; bottom: 18px; z-index: 12;
+  width: 188px;
+  background: rgba(10,16,32,.78);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(245,158,11,.28);
+  border-radius: 10px; padding: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.45);
+}
+.pano-radar.hidden { display: none !important; }
+.pano-radar-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 6px; }
+.pano-radar-title { font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; color: var(--gold); text-transform: uppercase; }
+.pano-radar-page { font-family: var(--font-mono); font-size: 10px; color: rgba(226,232,240,.55); }
+.pano-radar-stage {
+  position: relative; width: 100%; border-radius: 6px; overflow: hidden;
+  background: #0b1120; line-height: 0;
+}
+.pano-radar-map { width: 100%; display: block; opacity: .9; }
+.pano-radar-pins { position: absolute; inset: 0; }
+.pano-radar-pin {
+  position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px;
+  border-radius: 50%; background: rgba(148,163,184,.85);
+  border: 1px solid rgba(15,23,42,.8); cursor: pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+.pano-radar-pin:hover { transform: scale(1.4); background: #fff; }
+.pano-radar-pin.current { background: var(--gold); width: 10px; height: 10px; margin: -5px 0 0 -5px; box-shadow: 0 0 0 3px rgba(245,158,11,.25); }
+/* 시야 부채꼴 — 현재 핀 중심으로 회전 */
+.pano-radar-cone { position: absolute; width: 0; height: 0; pointer-events: none; }
+.pano-radar-fan {
+  position: absolute; left: 50%; top: 50%;
+  width: 54px; height: 54px; margin: -27px 0 0 -27px;
+  /* 위쪽(12시)을 향해 펼쳐지는 부채꼴. 컨테이너 회전으로 방향 제어 */
+  background: conic-gradient(from -35deg, rgba(245,158,11,.42), rgba(245,158,11,.05) 70deg, transparent 70deg);
+  border-radius: 50%;
+  transform-origin: 50% 50%;
+}
+.pano-radar-dot {
+  position: absolute; left: 50%; top: 50%;
+  width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%; background: var(--gold);
+  box-shadow: 0 0 8px rgba(245,158,11,.9);
+}
+
+/* ── 핀 간 이동 (이전/다음) ── */
+.pano-nav {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; z-index: 12;
+  background: rgba(10,16,32,.78);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,.1); border-radius: 999px;
+  padding: 6px 10px; box-shadow: 0 10px 30px rgba(0,0,0,.4);
+}
+.pano-nav.hidden { display: none !important; }
+.btn-pano-nav {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #e2e8f0; cursor: pointer; transition: background .12s, transform .12s;
+}
+.btn-pano-nav svg { width: 18px; height: 18px; }
+.btn-pano-nav:hover:not(:disabled) { background: rgba(245,158,11,.22); border-color: rgba(245,158,11,.5); transform: translateY(-1px); }
+.btn-pano-nav:disabled { opacity: .3; cursor: default; }
+.pano-nav-label { font-family: var(--font-mono); font-size: 12px; color: rgba(226,232,240,.85); min-width: 44px; text-align: center; }
+
+/* 레이더와 nav가 겹치지 않도록 hint는 nav 위로 살짝 */
+.pano-overlay:has(#pano-nav:not(.hidden)) .pano-hint { bottom: 64px; }
 
 .pano-hint {
   position: absolute; bottom: 18px; left: 50%;

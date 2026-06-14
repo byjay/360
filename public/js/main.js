@@ -399,7 +399,7 @@
   const PanoViewer = {
     S: { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false },
     renderer: null, scene: null, camera: null, mesh: null, texture: null,
-    videoEl: null, rafId: null, canvas: null, open: false,
+    videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
 
     init(canvas) { this.canvas = canvas; },
 
@@ -588,6 +588,8 @@
       this.camera.fov = S.fov;
       this.camera.updateProjectionMatrix();
       this.renderer.render(this.scene, this.camera);
+      // 레이더 부채꼴을 현재 시야(yaw=lon)에 맞춰 회전
+      Radar.spin(S.lon, S.fov);
     },
 
     /* ── 컨트롤 ── */
@@ -609,13 +611,133 @@
 
     close() {
       this.open = false;
+      this._currentPin = null;
       cancelAnimationFrame(this.rafId);
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
       const ip = document.getElementById("pano-info-panel");
       if (ip) { ip.classList.add("hidden"); ip.innerHTML = ""; }
+      Radar.hide();
+      PanoNav.hide();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }
+  };
+
+  /* ══════════════════════════════════════════
+     RADAR — 파노라마 내 도면 미니맵 + 시야 부채꼴 (3DVista radar 참고)
+  ══════════════════════════════════════════ */
+  const Radar = {
+    _pin: null,
+
+    /** 현재 핀 기준으로 미니맵(도면 썸네일+핀들) 렌더 */
+    update(pin) {
+      this._pin = pin;
+      const box = document.getElementById("pano-radar");
+      if (!box) return;
+      // 현재 페이지의 도면 이미지 소스 확보 (뷰어/디자이너 공통)
+      const mapSrc = this._currentMapSrc();
+      if (!mapSrc) { this.hide(); return; }
+
+      const page = pin.page || 1;
+      const imgEl = document.getElementById("pano-radar-map");
+      if (imgEl && imgEl.src !== mapSrc) imgEl.src = mapSrc;
+      const pageEl = document.getElementById("pano-radar-page");
+      if (pageEl) pageEl.textContent = "p." + page;
+
+      // 같은 페이지의 핀들을 점으로 표시
+      const pinsLayer = document.getElementById("pano-radar-pins");
+      if (pinsLayer) {
+        pinsLayer.innerHTML = "";
+        (State.pins || []).filter(p => (p.page || 1) === page).forEach(p => {
+          const dot = document.createElement("div");
+          dot.className = "pano-radar-pin" + (p.id === pin.id ? " current" : "");
+          dot.style.left = p.x + "%";
+          dot.style.top  = p.y + "%";
+          dot.title = p.label || "";
+          dot.addEventListener("click", (e) => { e.stopPropagation(); if (p.id !== pin.id && App.pinHasContent(p)) App.openPano(p); });
+          pinsLayer.appendChild(dot);
+        });
+      }
+      // 시야 부채꼴을 현재 핀 위치로 이동
+      const cone = document.getElementById("pano-radar-cone");
+      if (cone) { cone.style.left = pin.x + "%"; cone.style.top = pin.y + "%"; }
+
+      box.classList.remove("hidden");
+    },
+
+    /** 시야 방향(yaw=lon) + FOV에 맞춰 부채꼴 회전/너비 */
+    spin(lon, fov) {
+      const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
+      if (!fan) return;
+      // lon(deg): 0 = +Z 방향. 도면 위 "위(12시)"를 기준으로 회전시킨다.
+      // conic-gradient가 -35°~+35°(약 70°) 부채꼴이므로 회전만 적용.
+      fan.style.transform = "rotate(" + (lon) + "deg)";
+    },
+
+    /** 현재 표시 중인 도면(페이지) 이미지 src */
+    _currentMapSrc() {
+      // 뷰어 모드: 배포본 페이지 이미지
+      if (State.mode === "viewer" && State.viewerPages && State.viewerPages.length) {
+        const idx = (State.pdfPage || 1) - 1;
+        return State.viewerPages[idx] || State.viewerPages[0] || null;
+      }
+      // 디자이너 모드: 이미지 도면이면 그대로
+      const mapImg = document.getElementById("map-image");
+      if (mapImg && !mapImg.classList.contains("hidden") && mapImg.src) return mapImg.src;
+      // PDF 캔버스 → dataURL 캐시 (한 번만 생성)
+      const pdfCanvas = document.getElementById("pdf-canvas");
+      if (pdfCanvas && !pdfCanvas.classList.contains("hidden")) {
+        try {
+          const key = "p" + (State.pdfPage || 1);
+          this._pdfCache = this._pdfCache || {};
+          if (!this._pdfCache[key]) this._pdfCache[key] = pdfCanvas.toDataURL("image/jpeg", 0.6);
+          return this._pdfCache[key];
+        } catch (e) { return null; }
+      }
+      return null;
+    },
+
+    hide() { const b = document.getElementById("pano-radar"); if (b) b.classList.add("hidden"); }
+  };
+
+  /* ══════════════════════════════════════════
+     PANO NAV — 파노라마 내 이전/다음 포인트 이동 (탐색 핫스팟)
+  ══════════════════════════════════════════ */
+  const PanoNav = {
+    _list: [], _idx: -1,
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("btn-pano-prev") && $("btn-pano-prev").addEventListener("click", () => this.go(-1));
+      $("btn-pano-next") && $("btn-pano-next").addEventListener("click", () => this.go(1));
+    },
+
+    /** 현재 핀 기준으로 같은 페이지의 "콘텐츠 있는" 핀 목록 + 위치 갱신 */
+    update(pin) {
+      const page = pin.page || 1;
+      this._list = (State.pins || [])
+        .filter(p => (p.page || 1) === page && App.pinHasContent(p));
+      this._idx = this._list.findIndex(p => p.id === pin.id);
+      const box = document.getElementById("pano-nav");
+      if (!box) return;
+      if (this._list.length <= 1) { box.classList.add("hidden"); return; }
+      box.classList.remove("hidden");
+      const label = document.getElementById("pano-nav-label");
+      if (label) label.textContent = (this._idx + 1) + " / " + this._list.length;
+      const prev = document.getElementById("btn-pano-prev");
+      const next = document.getElementById("btn-pano-next");
+      if (prev) prev.disabled = this._idx <= 0;
+      if (next) next.disabled = this._idx >= this._list.length - 1;
+    },
+
+    go(delta) {
+      const ni = this._idx + delta;
+      if (ni < 0 || ni >= this._list.length) return;
+      const target = this._list[ni];
+      if (target) App.openPano(target);
+    },
+
+    hide() { const b = document.getElementById("pano-nav"); if (b) b.classList.add("hidden"); }
   };
 
   /* ══════════════════════════════════════════
@@ -1017,7 +1139,12 @@
       MapCtrl.init(UI.$("map-viewport"), UI.$("map-transform"));
       PanoViewer.init(UI.$("pano-canvas"));
       AllPins.init();
-      AdminGate.init();
+      Auth.init();
+      Settings.init();
+      Designers.init();
+      Prompt.init();
+      Projects.init();
+      PanoNav.init();
     },
 
     /* ── Home ── */
@@ -1025,9 +1152,9 @@
       document.querySelectorAll(".mode-card").forEach(card => {
         const open = () => {
           const mode = card.dataset.mode;
-          // 설계자(디자이너) 모드는 관리자 인증을 통과해야 진입 가능. 일반인은 뷰어만.
-          if (mode === "designer" && !AdminGate.authed) {
-            AdminGate.request(() => this.openApp("designer"));
+          // 설계자(디자이너) 모드는 구글 로그인 + 디자이너 권한 필요. 일반인은 뷰어만.
+          if (mode === "designer") {
+            Auth.requireDesigner(() => this.openApp("designer"));
             return;
           }
           this.openApp(mode);
@@ -1049,6 +1176,7 @@
 
       // ── 뷰어는 "보기 전용". 업로드/편집/배포 관련 UI는 모두 숨긴다. ──
       //  (사용자 요청: "뷰어는 업로드가 왜 필요하지. 뷰어만 완벽하게 되게 만들어")
+      UI.toggle("section-projects",  isDesigner);   // 프로젝트/데크 관리
       UI.toggle("section-upload",    isDesigner);   // 도면 업로드
       UI.toggle("section-place",     isDesigner);   // 위치 포인트 추가
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
@@ -1056,6 +1184,8 @@
       UI.toggle("section-next-point", false);
       UI.toggle("btn-import-json",   false);        // JSON 가져오기 — 뷰어/디자이너 모두 숨김
       UI.toggle("section-viewer-load", !isDesigner); // 뷰어 로드 상태 표시
+
+      if (isDesigner) Projects.load();              // 프로젝트 목록 로드
 
       if (!isDesigner) {
         // 뷰어 전용 링크(?mode=viewer)로 진입한 경우 홈 버튼도 숨긴다.
@@ -1068,8 +1198,27 @@
         ? "포인트를 추가하세요"
         : "배포된 포인트를 불러오는 중...";
 
+      // ── A안 topbar 버튼 ──
+      // ⚙️ 설정 버튼은 항상 노출(로그인·편집 전환 진입점)
+      const btnSettings = UI.$("btn-settings");
+      if (btnSettings) btnSettings.classList.remove("hidden");
+      // "뷰어로" 버튼은 편집(designer) 모드에서만
+      const btnExit = UI.$("btn-exit-edit");
+      if (btnExit) btnExit.classList.toggle("hidden", !isDesigner);
+      // 홈으로(←) 버튼: A안에서는 접속=바로 뷰어이므로 일반 뷰어 진입 시 숨김.
+      //   편집 모드에서는 "뷰어로" 버튼으로 빠져나가므로 ← 도 숨긴다.
+      const btnBack = UI.$("btn-back");
+      if (btnBack) btnBack.style.display = "none";
+
       UI.showScreen("screen-app");
       if (!isDesigner) this.loadLatestDeployment();
+    },
+
+    /** 편집(designer) 모드 → 뷰어 모드로 전환 (A안: 홈으로 안 가고 뷰어 화면 유지) */
+    exitEdit() {
+      // 디자이너 편집 UI 정리 후 뷰어로 재진입
+      PanoViewer.close();
+      this.openApp("viewer");
     },
 
     /* ── Topbar ── */
@@ -1455,8 +1604,12 @@
 
       document.addEventListener("keydown", e => {
         if (e.key === "Escape" && PanoViewer.open) { PanoViewer.close(); return; }
-        // 파노라마 열려있거나 입력 중이면 페이지 단축키 무시
-        if (PanoViewer.open) return;
+        // 파노라마가 열려 있을 때: ← / → 로 이전/다음 포인트 이동
+        if (PanoViewer.open) {
+          if (e.key === "ArrowLeft")  { e.preventDefault(); PanoNav.go(-1); }
+          else if (e.key === "ArrowRight") { e.preventDefault(); PanoNav.go(1); }
+          return;
+        }
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         // 회전 단축키 (Shift+←/→) — 도면이 로드돼 있으면 페이지 수와 무관하게 동작
@@ -1784,6 +1937,12 @@
 
     /* ── 360° 팝업 열기 (클라우드 저장본 / 영상 / URL) ── */
     async openPano(pin) {
+      // 현재 핀 기록 + 레이더/네비게이션 갱신 (3DVista radar · 핀 이동 핫스팟)
+      State.activePin = pin.id;
+      PanoViewer._currentPin = pin;
+      Radar.update(pin);
+      PanoNav.update(pin);
+
       // 노트/첨부만 있고 360° 미디어가 없는 정보 포인트 → 정보 패널만 표시
       if (!this.pinHasMedia(pin) && this.pinHasInfo(pin)) {
         const $ = id => document.getElementById(id);
@@ -2186,78 +2345,522 @@
   };
 
   /* ══════════════════════════════════════════
-     ADMIN GATE — 설계자(DESIGNER) 모드 관리자 인증
-     · 일반인은 인증 없이 뷰어만 사용 가능
-     · 관리자 비밀번호를 통과해야 디자이너 기능 진입
-     · 비밀번호는 배포 시 ?admin=... 또는 window.WM_ADMIN_PIN 으로 교체 가능
+     AUTH — Google Identity 로그인 + 권한(슈퍼관리자/디자이너/뷰어)
+     · 일반인(미로그인/권한없음) = 뷰어만
+     · 디자이너로 지정된 구글 계정 = 설계자 기능
+     · 슈퍼관리자(designssir@gmail.com) = 디자이너 지정 + 모든 권한
   ══════════════════════════════════════════ */
-  const AdminGate = {
-    authed: false,
-    _pending: null,
-    // 기본 관리자 비밀번호. 운영 시 window.WM_ADMIN_PIN 으로 덮어쓸 수 있음.
-    get PIN() {
-      return (typeof window !== "undefined" && window.WM_ADMIN_PIN) || "wearemarine";
+  const Auth = {
+    idToken: null,
+    user: null,           // { email, name, picture, role }
+    role: "viewer",       // 'super' | 'designer' | 'viewer'
+    _pendingDesigner: null,
+    _gsiInited: false,
+
+    get clientId() {
+      const id = (typeof window !== "undefined" && window.WM_GOOGLE_CLIENT_ID) || "";
+      return id && id !== "GOOGLE_CLIENT_ID" ? id : "";
     },
+    get isDesigner() { return this.role === "super" || this.role === "designer"; },
+    get isSuper() { return this.role === "super"; },
 
     init() {
       const $ = (id) => document.getElementById(id);
-      const ok     = $("admin-gate-ok");
-      const cancel = $("admin-gate-cancel");
-      const input  = $("admin-gate-input");
-      const backdrop = document.querySelector(".admin-gate-backdrop");
-      ok && ok.addEventListener("click", () => this._submit());
-      cancel && cancel.addEventListener("click", () => this.close());
-      backdrop && backdrop.addEventListener("click", () => this.close());
-      if (input) {
-        input.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") { e.preventDefault(); this._submit(); }
-          if (e.key === "Escape") { e.preventDefault(); this.close(); }
-        });
-        input.addEventListener("input", () => {
-          const err = document.getElementById("admin-gate-error");
-          if (err) err.classList.add("hidden");
-        });
+      // 로그아웃
+      $("btn-signout") && $("btn-signout").addEventListener("click", () => this.signOut());
+      // 디자이너 관리(슈퍼)
+      $("btn-manage-designers") && $("btn-manage-designers").addEventListener("click", () => Designers.open());
+      // 로그인 게이트 닫기
+      $("login-gate-cancel") && $("login-gate-cancel").addEventListener("click", () => this._closeGate());
+      const gb = document.querySelector("#login-gate .admin-gate-backdrop");
+      gb && gb.addEventListener("click", () => this._closeGate());
+
+      // 저장된 토큰 복원
+      try {
+        const saved = sessionStorage.getItem("wm_id_token");
+        if (saved) { this.idToken = saved; }
+      } catch (e) {}
+
+      this._initGsi();
+      // 복원된 토큰으로 권한 재확인
+      if (this.idToken) this.refresh();
+    },
+
+    _initGsi() {
+      if (this._gsiInited) return;
+      if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+        // GIS 스크립트 로딩 대기
+        setTimeout(() => this._initGsi(), 300);
+        return;
+      }
+      if (!this.clientId) {
+        // 클라이언트 ID 미설정 — 버튼 자리에 안내
+        const hint = document.querySelector(".auth-hint");
+        if (hint) hint.textContent = "구글 로그인 미설정 (관리자가 클라이언트 ID 설정 필요)";
+        return;
+      }
+      this._gsiInited = true;
+      window.google.accounts.id.initialize({
+        client_id: this.clientId,
+        callback: (resp) => this._onCredential(resp),
+        auto_select: false,
+      });
+      this._renderButtons();
+    },
+
+    _renderButtons() {
+      const g = window.google.accounts.id;
+      const b1 = document.getElementById("google-signin-btn");
+      const b2 = document.getElementById("login-gate-signin");
+      const b3 = document.getElementById("settings-signin");
+      if (b1) { b1.innerHTML = ""; g.renderButton(b1, { theme: "filled_blue", size: "medium", text: "signin_with", shape: "pill" }); }
+      if (b2) { b2.innerHTML = ""; g.renderButton(b2, { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" }); }
+      if (b3) { b3.innerHTML = ""; g.renderButton(b3, { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" }); }
+    },
+
+    async _onCredential(resp) {
+      if (!resp || !resp.credential) return;
+      this.idToken = resp.credential;
+      try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
+      await this.refresh();
+      // 디자이너 모드 진입을 기다리던 경우 처리
+      if (this._pendingDesigner) {
+        const cb = this._pendingDesigner;
+        this._pendingDesigner = null;
+        if (this.isDesigner) { this._closeGate(); cb(); }
+        else this._showGateError();
       }
     },
 
-    /** 인증을 요청한다. 성공 시 onPass 콜백 실행. */
-    request(onPass) {
-      this._pending = onPass || null;
-      const gate = document.getElementById("admin-gate");
-      const input = document.getElementById("admin-gate-input");
-      const err = document.getElementById("admin-gate-error");
+    /** 인증 헤더 (API 호출용) */
+    headers(extra) {
+      const h = Object.assign({ "Content-Type": "application/json" }, extra || {});
+      if (this.idToken) h["Authorization"] = "Bearer " + this.idToken;
+      return h;
+    },
+
+    /** 서버에 권한 확인 → UI 갱신 */
+    async refresh() {
+      let data = { authenticated: false, role: "viewer" };
+      try {
+        const r = await fetch("/api/auth/me", { headers: this.headers() });
+        data = await r.json();
+      } catch (e) {}
+      if (data.authenticated) {
+        this.user = { email: data.email, name: data.name, picture: data.picture, role: data.role };
+        this.role = data.role;
+      } else {
+        this.user = null; this.role = "viewer"; this.idToken = null;
+        try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
+      }
+      this._applyUi();
+      return this.role;
+    },
+
+    _applyUi() {
+      const $ = (id) => document.getElementById(id);
+      const signedIn  = $("auth-signed-in");
+      const signedOut = $("auth-signed-out");
+      if (this.user) {
+        signedIn && signedIn.classList.remove("hidden");
+        signedOut && signedOut.classList.add("hidden");
+        $("user-name") && ($("user-name").textContent = this.user.name || this.user.email);
+        const roleEl = $("user-role");
+        if (roleEl) {
+          roleEl.textContent = this.role === "super" ? "슈퍼관리자" : this.role === "designer" ? "디자이너" : "뷰어";
+          roleEl.className = "user-role role-" + this.role;
+        }
+        const av = $("user-avatar");
+        if (av) { if (this.user.picture) { av.src = this.user.picture; av.style.display = ""; } else av.style.display = "none"; }
+        $("btn-manage-designers") && $("btn-manage-designers").classList.toggle("hidden", !this.isSuper);
+      } else {
+        signedIn && signedIn.classList.add("hidden");
+        signedOut && signedOut.classList.remove("hidden");
+      }
+      // 디자이너 카드 잠금 표시
+      document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.toggle("locked", !this.isDesigner));
+      // 설정 패널이 열려 있으면 권한에 맞춰 다시 렌더
+      if (typeof Settings !== "undefined" && Settings._isOpen) Settings.render();
+    },
+
+    /** 디자이너 진입 요청. 권한 있으면 콜백 즉시, 없으면 로그인 게이트. */
+    requireDesigner(onPass) {
+      if (this.isDesigner) { onPass(); return; }
+      this._pendingDesigner = onPass;
+      this._openGate();
+    },
+
+    _openGate() {
+      const gate = document.getElementById("login-gate");
+      const err = document.getElementById("login-gate-error");
       if (err) err.classList.add("hidden");
-      if (input) input.value = "";
       gate.classList.remove("hidden");
       requestAnimationFrame(() => gate.classList.add("on"));
-      setTimeout(() => input && input.focus(), 60);
+      // 게이트 안 버튼 렌더 (로그인은 됐지만 권한 없는 경우엔 안내)
+      if (this._gsiInited) this._renderButtons();
+      if (this.user && !this.isDesigner) this._showGateError();
     },
-
-    _submit() {
-      const input = document.getElementById("admin-gate-input");
-      const err = document.getElementById("admin-gate-error");
-      const val = (input && input.value) || "";
-      if (val === this.PIN) {
-        this.authed = true;
-        const cb = this._pending;
-        this._pending = null;
-        // 인증 성공 시 디자이너 카드 잠금 해제 표시
-        document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.remove("locked"));
-        this.close(true);
-        if (typeof cb === "function") cb();
-      } else {
-        if (err) err.classList.remove("hidden");
-        if (input) { input.value = ""; input.focus(); }
-      }
+    _showGateError() {
+      const err = document.getElementById("login-gate-error");
+      if (err) err.classList.remove("hidden");
     },
-
-    close(passed) {
-      const gate = document.getElementById("admin-gate");
+    _closeGate() {
+      const gate = document.getElementById("login-gate");
       if (!gate) return;
       gate.classList.remove("on");
       setTimeout(() => gate.classList.add("hidden"), 200);
-      if (!passed) this._pending = null;
+      this._pendingDesigner = null;
+    },
+
+    signOut() {
+      try {
+        if (window.google && window.google.accounts && window.google.accounts.id)
+          window.google.accounts.id.disableAutoSelect();
+      } catch (e) {}
+      this.idToken = null; this.user = null; this.role = "viewer";
+      try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
+      this._applyUi();
+      // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
+      if (State.mode === "designer") {
+        App.exitEdit();
+      }
     }
+  };
+
+  /* ══════════════════════════════════════════
+     SETTINGS — 설정 패널 (A안: 접속=뷰어, ⚙️ 설정 → 로그인 → 편집)
+  ══════════════════════════════════════════ */
+  const Settings = {
+    _isOpen: false,
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      // ⚙️ 설정 버튼 → 패널 열기
+      $("btn-settings") && $("btn-settings").addEventListener("click", () => this.open());
+      // 닫기
+      $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
+      const bd = document.querySelector('#settings-modal .admin-gate-backdrop');
+      bd && bd.addEventListener("click", () => this.close());
+      // 편집 모드로 전환
+      $("btn-go-edit") && $("btn-go-edit").addEventListener("click", () => {
+        if (!Auth.isDesigner) return;
+        this.close();
+        App.openApp("designer");
+      });
+      // 디자이너 지정 관리(슈퍼)
+      $("btn-open-designers") && $("btn-open-designers").addEventListener("click", () => {
+        if (!Auth.isSuper) return;
+        Designers.open();
+      });
+      // 설정 패널 내 로그아웃
+      $("btn-settings-signout") && $("btn-settings-signout").addEventListener("click", () => {
+        Auth.signOut();
+        this.render();
+      });
+      // topbar "뷰어로" 버튼 → 편집 모드 종료
+      $("btn-exit-edit") && $("btn-exit-edit").addEventListener("click", () => App.exitEdit());
+    },
+
+    open() {
+      const m = document.getElementById("settings-modal");
+      if (!m) return;
+      this._isOpen = true;
+      this.render();
+      m.classList.remove("hidden");
+      requestAnimationFrame(() => m.classList.add("on"));
+      // GIS 버튼이 아직 렌더 안됐으면 렌더 시도
+      if (Auth._gsiInited) Auth._renderButtons();
+      else Auth._initGsi();
+    },
+
+    close() {
+      const m = document.getElementById("settings-modal");
+      if (!m) return;
+      this._isOpen = false;
+      m.classList.remove("on");
+      setTimeout(() => m.classList.add("hidden"), 200);
+    },
+
+    /** 로그인 상태/권한에 따라 설정 패널 내용 토글 */
+    render() {
+      const $ = (id) => document.getElementById(id);
+      const out = $("settings-loggedout");
+      const inn = $("settings-loggedin");
+      if (Auth.user) {
+        // 로그인됨
+        out && out.classList.add("hidden");
+        inn && inn.classList.remove("hidden");
+        $("settings-name") && ($("settings-name").textContent = Auth.user.name || Auth.user.email);
+        $("settings-email") && ($("settings-email").textContent = Auth.user.email || "");
+        const roleEl = $("settings-role");
+        if (roleEl) {
+          roleEl.textContent = Auth.role === "super" ? "슈퍼관리자" : Auth.role === "designer" ? "디자이너" : "뷰어";
+          roleEl.className = "user-role role-" + Auth.role;
+        }
+        const av = $("settings-avatar");
+        if (av) { if (Auth.user.picture) { av.src = Auth.user.picture; av.style.display = ""; } else av.style.display = "none"; }
+        // 권한별 액션
+        $("settings-designer-actions") && $("settings-designer-actions").classList.toggle("hidden", !Auth.isDesigner);
+        $("settings-viewer-note")      && $("settings-viewer-note").classList.toggle("hidden", Auth.isDesigner);
+        $("settings-super-actions")    && $("settings-super-actions").classList.toggle("hidden", !Auth.isSuper);
+      } else {
+        // 미로그인 — 구글 로그인 안내
+        out && out.classList.remove("hidden");
+        inn && inn.classList.add("hidden");
+        // 클라이언트 ID 미설정 안내
+        const noclient = $("settings-noclient");
+        if (noclient) noclient.classList.toggle("hidden", !!Auth.clientId);
+        if (Auth._gsiInited) Auth._renderButtons();
+      }
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     DESIGNERS — 디자이너 지정 관리 (슈퍼관리자 전용)
+  ══════════════════════════════════════════ */
+  const Designers = {
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("designers-close") && $("designers-close").addEventListener("click", () => this.close());
+      const bd = document.querySelector('#designers-modal .admin-gate-backdrop');
+      bd && bd.addEventListener("click", () => this.close());
+      $("designer-add-btn") && $("designer-add-btn").addEventListener("click", () => this.add());
+      const inp = $("designer-email-input");
+      if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.add(); } });
+    },
+    async open() {
+      if (!Auth.isSuper) return;
+      const sa = document.getElementById("super-admin-email");
+      if (sa) sa.textContent = Auth.user ? Auth.user.email : "designssir@gmail.com";
+      document.getElementById("designers-modal").classList.remove("hidden");
+      requestAnimationFrame(() => document.getElementById("designers-modal").classList.add("on"));
+      await this.render();
+    },
+    close() {
+      const m = document.getElementById("designers-modal");
+      m.classList.remove("on");
+      setTimeout(() => m.classList.add("hidden"), 200);
+    },
+    async render() {
+      const listEl = document.getElementById("designers-list");
+      listEl.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
+      try {
+        const r = await fetch("/api/designers", { headers: Auth.headers() });
+        if (!r.ok) throw new Error("forbidden");
+        const { data } = await r.json();
+        if (!data || !data.length) { listEl.innerHTML = '<div class="designers-empty">지정된 디자이너가 없습니다.</div>'; return; }
+        listEl.innerHTML = "";
+        data.forEach((d) => {
+          const row = document.createElement("div");
+          row.className = "designer-row";
+          row.innerHTML = `<span class="designer-email">${d.email}</span>
+            <button class="designer-del" data-email="${encodeURIComponent(d.email)}" title="삭제">✕</button>`;
+          row.querySelector(".designer-del").addEventListener("click", () => this.remove(d.email));
+          listEl.appendChild(row);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<div class="designers-empty">목록을 불러올 수 없습니다(권한 필요).</div>';
+      }
+    },
+    async add() {
+      const inp = document.getElementById("designer-email-input");
+      const err = document.getElementById("designer-add-error");
+      err.classList.add("hidden");
+      const email = (inp.value || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { err.textContent = "올바른 이메일을 입력하세요."; err.classList.remove("hidden"); return; }
+      try {
+        const r = await fetch("/api/designers", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ email }) });
+        const j = await r.json();
+        if (!r.ok) { err.textContent = j.error || "추가 실패"; err.classList.remove("hidden"); return; }
+        inp.value = "";
+        await this.render();
+      } catch (e) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); }
+    },
+    async remove(email) {
+      if (!confirm(email + " 의 디자이너 권한을 해제할까요?")) return;
+      try {
+        await fetch("/api/designers/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
+        await this.render();
+      } catch (e) {}
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     PROMPT — 범용 입력 모달 (프로젝트/데크 생성)
+  ══════════════════════════════════════════ */
+  const Prompt = {
+    _resolve: null,
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("prompt-modal-ok") && $("prompt-modal-ok").addEventListener("click", () => this._submit());
+      $("prompt-modal-cancel") && $("prompt-modal-cancel").addEventListener("click", () => this._close(null));
+      const bd = document.querySelector('#prompt-modal .admin-gate-backdrop');
+      bd && bd.addEventListener("click", () => this._close(null));
+      const inp = $("prompt-modal-input");
+      if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this._submit(); } if (e.key === "Escape") this._close(null); });
+    },
+    /** opts: { title, sub, placeholder, second } → Promise<string|{value,second}|null> */
+    ask(opts) {
+      return new Promise((resolve) => {
+        this._resolve = resolve;
+        document.getElementById("prompt-modal-title").textContent = opts.title || "입력";
+        document.getElementById("prompt-modal-sub").textContent = opts.sub || "";
+        const inp = document.getElementById("prompt-modal-input");
+        inp.value = ""; inp.placeholder = opts.placeholder || "";
+        const inp2 = document.getElementById("prompt-modal-input2");
+        inp2.value = "";
+        inp2.classList.toggle("hidden", !opts.second);
+        document.getElementById("prompt-modal-error").classList.add("hidden");
+        const m = document.getElementById("prompt-modal");
+        m.classList.remove("hidden");
+        requestAnimationFrame(() => m.classList.add("on"));
+        setTimeout(() => inp.focus(), 60);
+      });
+    },
+    _submit() {
+      const inp = document.getElementById("prompt-modal-input");
+      const inp2 = document.getElementById("prompt-modal-input2");
+      const err = document.getElementById("prompt-modal-error");
+      const val = (inp.value || "").trim();
+      if (!val) { err.textContent = "값을 입력하세요."; err.classList.remove("hidden"); return; }
+      const second = inp2.classList.contains("hidden") ? undefined : (inp2.value || "").trim();
+      this._close({ value: val, second });
+    },
+    _close(result) {
+      const m = document.getElementById("prompt-modal");
+      m.classList.remove("on");
+      setTimeout(() => m.classList.add("hidden"), 200);
+      const r = this._resolve; this._resolve = null;
+      if (r) r(result);
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     PROJECTS — 프로젝트 + 데크(선박 층) 관리 (디자이너)
+  ══════════════════════════════════════════ */
+  const Projects = {
+    list: [],
+    decks: [],
+    currentProject: null,
+    currentDeck: null,
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("btn-new-project") && $("btn-new-project").addEventListener("click", () => this.createProject());
+      $("btn-delete-project") && $("btn-delete-project").addEventListener("click", () => this.deleteProject());
+      $("btn-new-deck") && $("btn-new-deck").addEventListener("click", () => this.createDeck());
+      const sel = $("project-select");
+      if (sel) sel.addEventListener("change", () => this.selectProject(sel.value));
+    },
+
+    /** 디자이너 진입 시 호출 */
+    async load() {
+      try {
+        const r = await fetch("/api/projects");
+        const { data } = await r.json();
+        this.list = data || [];
+      } catch (e) { this.list = []; }
+      this._renderSelect();
+    },
+
+    _renderSelect() {
+      const sel = document.getElementById("project-select");
+      if (!sel) return;
+      const keep = this.currentProject ? this.currentProject.id : "";
+      sel.innerHTML = '<option value="">— 프로젝트 선택 —</option>' +
+        this.list.map((p) => `<option value="${p.id}">${this._esc(p.name)}</option>`).join("");
+      sel.value = keep && this.list.some((p) => p.id === keep) ? keep : "";
+      document.getElementById("project-actions").classList.toggle("hidden", !sel.value);
+      document.getElementById("decks-block").classList.toggle("hidden", !sel.value);
+    },
+
+    async createProject() {
+      if (!Auth.isDesigner) return;
+      const res = await Prompt.ask({ title: "프로젝트 생성", sub: "새 프로젝트 이름을 입력하세요 (예: ○○호 검사)", placeholder: "프로젝트 이름" });
+      if (!res) return;
+      try {
+        const r = await fetch("/api/projects", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ name: res.value }) });
+        const p = await r.json();
+        if (!r.ok) { alert(p.error || "생성 실패(권한 필요)"); return; }
+        await this.load();
+        document.getElementById("project-select").value = p.id;
+        await this.selectProject(p.id);
+      } catch (e) { alert("네트워크 오류"); }
+    },
+
+    async deleteProject() {
+      if (!this.currentProject) return;
+      if (!confirm(`'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
+      try {
+        await fetch("/api/projects/" + this.currentProject.id, { method: "DELETE", headers: Auth.headers() });
+        this.currentProject = null; this.currentDeck = null; this.decks = [];
+        await this.load();
+        this._renderDecks();
+      } catch (e) {}
+    },
+
+    async selectProject(id) {
+      this.currentProject = this.list.find((p) => p.id === id) || null;
+      document.getElementById("project-actions").classList.toggle("hidden", !this.currentProject);
+      document.getElementById("decks-block").classList.toggle("hidden", !this.currentProject);
+      if (!this.currentProject) { this.decks = []; this._renderDecks(); return; }
+      await this.loadDecks();
+    },
+
+    async loadDecks() {
+      try {
+        const r = await fetch("/api/projects/" + this.currentProject.id + "/decks");
+        const { data } = await r.json();
+        this.decks = data || [];
+      } catch (e) { this.decks = []; }
+      this._renderDecks();
+    },
+
+    async createDeck() {
+      if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return; }
+      const res = await Prompt.ask({ title: "데크(선박 층) 생성", sub: "데크 이름을 입력하세요 (예: Main Deck, 2nd Deck, Engine Deck)", placeholder: "데크 이름", second: true });
+      if (!res) return;
+      const level = res.second && /^\d+$/.test(res.second) ? Number(res.second) : null;
+      try {
+        const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
+          method: "POST", headers: Auth.headers(),
+          body: JSON.stringify({ name: res.value, level_no: level })
+        });
+        const d = await r.json();
+        if (!r.ok) { alert(d.error || "생성 실패(권한 필요)"); return; }
+        await this.loadDecks();
+      } catch (e) { alert("네트워크 오류"); }
+    },
+
+    async deleteDeck(id, name) {
+      if (!confirm(`데크 '${name}' 를 삭제할까요?`)) return;
+      try {
+        await fetch("/api/decks/" + id, { method: "DELETE", headers: Auth.headers() });
+        if (this.currentDeck && this.currentDeck.id === id) this.currentDeck = null;
+        await this.loadDecks();
+      } catch (e) {}
+    },
+
+    _renderDecks() {
+      const listEl = document.getElementById("decks-list");
+      const emptyEl = document.getElementById("decks-empty");
+      if (!listEl) return;
+      listEl.innerHTML = "";
+      if (!this.decks.length) { emptyEl.classList.remove("hidden"); return; }
+      emptyEl.classList.add("hidden");
+      this.decks.forEach((d) => {
+        const row = document.createElement("div");
+        row.className = "deck-row" + (this.currentDeck && this.currentDeck.id === d.id ? " active" : "");
+        const lvl = (d.level_no || d.level_no === 0) ? `<span class="deck-lvl">L${d.level_no}</span>` : "";
+        row.innerHTML = `${lvl}<span class="deck-name">${this._esc(d.name)}</span>
+          <button class="deck-del" title="삭제">✕</button>`;
+        row.querySelector(".deck-name").addEventListener("click", () => { this.currentDeck = d; this._renderDecks(); });
+        row.querySelector(".deck-del").addEventListener("click", (e) => { e.stopPropagation(); this.deleteDeck(d.id, d.name); });
+        listEl.appendChild(row);
+      });
+    },
+
+    _esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   };
 
   /* ── 진입 ── */
@@ -2266,7 +2869,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, AdminGate,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, Prompt, PanoViewer, Radar, PanoNav,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);
@@ -2276,22 +2879,17 @@
     };
 
     const params  = new URLSearchParams(location.search);
-
-    // ?admin=<비밀번호> 로 들어오면 관리자 자동 인증(설계자 전용 링크).
-    const adminQ = params.get("admin");
-    if (adminQ && adminQ === AdminGate.PIN) {
-      AdminGate.authed = true;
-      document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.remove("locked"));
-    }
-
     const urlMode = params.get("mode");
     if (urlMode === "viewer") {
       State.viewerLocked = true;
       App.openApp("viewer");
     } else if (urlMode === "designer") {
-      // 설계자 직접 진입도 인증 필요 (미인증이면 게이트, 인증되어 있으면 바로 진입)
-      if (AdminGate.authed) App.openApp("designer");
-      else AdminGate.request(() => App.openApp("designer"));
+      // 설계자 직접 진입도 로그인+디자이너 권한 필요
+      Auth.requireDesigner(() => App.openApp("designer"));
+    } else {
+      // ── A안: 접속 = 바로 뷰어 화면 (홈 화면 스킵) ──
+      //   편집(설계자) 모드는 topbar ⚙️ 설정 버튼 → 구글 로그인 → 디자이너면 전환
+      App.openApp("viewer");
     }
 
     /* ── 360° 테스트 훅: ?demo360=<이미지URL> 로 파노라마 직접 오픈 ── */
