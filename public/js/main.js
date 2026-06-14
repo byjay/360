@@ -39,12 +39,14 @@
     pdfDoc:      null,
     pdfPage:     1,
     pdfPages:    0,
+    pdfRotation: 0,         // 0 | 90 | 180 | 270 (PDF.js 내장 회전)
     viewerPages: null,      // 뷰어 모드: 배포본 페이지 dataURL 배열
     pins:        [],        // {id,x,y,page,label,imageUrl?,imageId?,imageName?}
     placing:     false,
     pending:     null,      // { x, y }
     pendingFile: null,      // 선택된 360° 그림/영상 파일
     pendingIsVideo: false,
+    pendingDocs: [],        // 첨부 문서 후보 [{tempId, file, name, size, kind, status, docId}]
     activePin:   null,
     zoom:        1,
     pan:         { x: 0, y: 0 },
@@ -57,9 +59,10 @@
       _revokeAllVideoBlobs(); // [B5] 영상 핀 blob URL 일괄 해제
       this.fileType = null; this.fileName = null;
       this.fileData = null; this.pdfDoc = null;
-      this.pdfPage = 1; this.pdfPages = 0; this.viewerPages = null;
+      this.pdfPage = 1; this.pdfPages = 0; this.pdfRotation = 0; this.viewerPages = null;
       this.pins = []; this.placing = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
+      this.pendingDocs = [];
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };
     }
   };
@@ -115,15 +118,17 @@
       return await task.promise;
     },
 
-    async renderPage(pdfDoc, pageNum, canvas, scale = 1.5) {
+    async renderPage(pdfDoc, pageNum, canvas, scale = 1.5, rotation = 0) {
       const page = await pdfDoc.getPage(pageNum);
       // 적응형 스케일: 너무 큰 캔버스는 렌더가 느리고 메모리를 많이 쓴다.
       // 캔버스 최대 변을 2400px 로 제한해 큰 도면도 빠르고 안정적으로 그린다.
-      const base = page.getViewport({ scale: 1 });
+      // 회전은 PDF.js 내장 getViewport({rotation}) 으로 처리 (페이지 자체 회전값과 합산).
+      const rot = ((page.rotate || 0) + (rotation || 0)) % 360;
+      const base = page.getViewport({ scale: 1, rotation: rot });
       const MAX_SIDE = 2400;
       const fit = MAX_SIDE / Math.max(base.width, base.height);
       const useScale = Math.min(scale, fit > 0 ? fit : scale);
-      const vp   = page.getViewport({ scale: useScale });
+      const vp   = page.getViewport({ scale: useScale, rotation: rot });
       canvas.width  = Math.round(vp.width);
       canvas.height = Math.round(vp.height);
       const ctx = canvas.getContext("2d", { alpha: false });
@@ -313,8 +318,80 @@
       if (!rec.image_data) throw new Error("이미지 데이터가 비어 있습니다");
       this._cache[id] = rec.image_data;
       return rec.image_data;
+    },
+
+    /* ── 첨부 문서(PDF/Word 등) — pano_images 테이블을 범용 dataURL 저장소로 재사용 ── */
+    /** 단일 첨부 최대 용량(원본 바이트). D1 안전 한도 내. */
+    MAX_DOC_BYTES: 3 * 1024 * 1024, // 3MB (base64 환산 ≈4MB)
+
+    /** File → base64 dataURL (그대로, 무손실) */
+    fileToDataURL(file) {
+      return new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload  = () => res(r.result);
+        r.onerror = () => rej(new Error("파일 읽기 실패"));
+        r.readAsDataURL(file);
+      });
+    },
+
+    /** 문서 업로드 → docId 반환. name 에 표시명 그대로 저장. */
+    async uploadDoc(name, dataURL) {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 60000);
+      let res;
+      try {
+        res = await fetch("tables/pano_images", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "[doc] " + name, image_data: dataURL }),
+          signal: ctrl.signal
+        });
+      } catch (e) {
+        clearTimeout(to);
+        if (e.name === "AbortError") throw new Error("업로드 시간 초과(파일이 큽니다)");
+        throw new Error("네트워크 오류: " + (e.message || e));
+      }
+      clearTimeout(to);
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.text()).slice(0, 120); } catch (e) {}
+        throw new Error("문서 저장 실패 (HTTP " + res.status + (detail ? " · " + detail : "") + ")");
+      }
+      const rec = await res.json();
+      if (!rec || !rec.id) throw new Error("서버가 문서 ID를 반환하지 않았습니다");
+      this._cache[rec.id] = dataURL; // 즉시 다운로드 캐시
+      return rec.id;
+    },
+
+    /** docId → dataURL */
+    async fetchDoc(id) {
+      if (this._cache[id]) return this._cache[id];
+      const res = await fetch("tables/pano_images/" + encodeURIComponent(id));
+      if (!res.ok) throw new Error("첨부 문서를 불러올 수 없습니다 (HTTP " + res.status + ")");
+      const rec = await res.json();
+      if (!rec.image_data) throw new Error("문서 데이터가 비어 있습니다");
+      this._cache[id] = rec.image_data;
+      return rec.image_data;
     }
   };
+
+  /* 파일 종류 헬퍼 — 아이콘/라벨용 */
+  function docKind(nameOrMime) {
+    const s = (nameOrMime || "").toLowerCase();
+    if (/\.pdf|pdf/.test(s)) return { type: "pdf", label: "PDF", color: "#f87171" };
+    if (/\.docx?|word|officedocument\.wordprocessing|msword/.test(s)) return { type: "word", label: "WORD", color: "#60a5fa" };
+    if (/\.xlsx?|sheet|excel/.test(s)) return { type: "excel", label: "XLS", color: "#34d399" };
+    if (/\.pptx?|presentation|powerpoint/.test(s)) return { type: "ppt", label: "PPT", color: "#fb923c" };
+    if (/\.txt|text\/plain/.test(s)) return { type: "txt", label: "TXT", color: "#cbd5e1" };
+    if (/\.(png|jpe?g|gif|webp|bmp)|^image\//.test(s)) return { type: "img", label: "IMG", color: "#a78bfa" };
+    return { type: "file", label: "FILE", color: "#94a3b8" };
+  }
+  function fmtBytes(n) {
+    if (!n) return "";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
 
   /* ══════════════════════════════════════════
      PANO VIEWER  — Three.js WebGL (고속)
@@ -535,6 +612,8 @@
       cancelAnimationFrame(this.rafId);
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
+      const ip = document.getElementById("pano-info-panel");
+      if (ip) { ip.classList.add("hidden"); ip.innerHTML = ""; }
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }
   };
@@ -557,9 +636,88 @@
 
     applyTransform() {
       const { x, y } = State.pan;
+      // 이미지/뷰어(스냅샷) 모드에서는 CSS rotate 로 회전(디자이너 PDF 는 캔버스 재렌더로 처리하므로 0).
+      const cssRot = (State.mode !== "viewer" && State.fileType === "pdf") ? 0 : (State.pdfRotation || 0);
+      const rot = cssRot ? ` rotate(${cssRot}deg)` : "";
       // translate3d 로 GPU 레이어 승격 (체감 속도 향상)
       this.transform.style.transform =
-        `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})`;
+        `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})${rot}`;
+      this._updateZoomLabel();
+    },
+
+    _updateZoomLabel() {
+      const el = document.getElementById("zoom-level");
+      if (el) el.textContent = Math.round(State.zoom * 100) + "%";
+    },
+
+    /** 도면 콘텐츠의 실제 픽셀 크기 (canvas 또는 image) */
+    _contentSize() {
+      const cv = document.getElementById("pdf-canvas");
+      const img = document.getElementById("map-image");
+      if (cv && !cv.classList.contains("hidden") && cv.width)
+        return { w: cv.width, h: cv.height };
+      if (img && !img.classList.contains("hidden") && img.naturalWidth)
+        return { w: img.naturalWidth, h: img.naturalHeight };
+      return null;
+    },
+
+    /** 뷰포트 중심 기준으로 배율 변경 (부드러운 줌) */
+    zoomBy(factor, cx, cy) {
+      this.cancelFly();
+      const rect = this.viewport.getBoundingClientRect();
+      const mx = (cx != null ? cx : rect.left + rect.width / 2) - rect.left;
+      const my = (cy != null ? cy : rect.top + rect.height / 2) - rect.top;
+      const newZoom = Math.max(0.2, Math.min(8, State.zoom * factor));
+      const f = newZoom / State.zoom;
+      State.pan.x = mx - f * (mx - State.pan.x);
+      State.pan.y = my - f * (my - State.pan.y);
+      State.zoom = newZoom;
+      this.applyTransform();
+    },
+
+    /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록 */
+    fit() {
+      this.cancelFly();
+      const size = this._contentSize();
+      if (!size) return;
+      const vw = this.viewport.clientWidth;
+      const vh = this.viewport.clientHeight;
+      const pad = 0.92; // 여백
+      const z = Math.min(vw / size.w, vh / size.h) * pad;
+      this._animateTo({
+        z,
+        x: (vw - size.w * z) / 2,
+        y: (vh - size.h * z) / 2
+      });
+    },
+
+    /** 실제 크기 (1:1, 100%) — 중앙 정렬 */
+    actualSize() {
+      this.cancelFly();
+      const size = this._contentSize();
+      if (!size) return;
+      const vw = this.viewport.clientWidth;
+      const vh = this.viewport.clientHeight;
+      this._animateTo({ z: 1, x: (vw - size.w) / 2, y: (vh - size.h) / 2 });
+    },
+
+    /** pan/zoom 목표값으로 부드럽게 이동 */
+    _animateTo(to, duration = 380) {
+      const from = { x: State.pan.x, y: State.pan.y, z: State.zoom };
+      const t0 = performance.now();
+      const ease = t => 1 - Math.pow(1 - t, 3);
+      this.cancelFly();
+      const step = now => {
+        const t = Math.min(1, (now - t0) / duration);
+        const k = ease(t);
+        State.pan.x = from.x + (to.x - from.x) * k;
+        State.pan.y = from.y + (to.y - from.y) * k;
+        State.zoom  = from.z + (to.z - from.z) * k;
+        this.applyTransform();
+        if (t < 1) this._flyRaf = requestAnimationFrame(step);
+        else this._flyRaf = null;
+      };
+      this._flyRaf = requestAnimationFrame(step);
     },
 
     viewportToPercent(clientX, clientY) {
@@ -697,12 +855,18 @@
         item.dataset.id = pin.id;
         const pageTag = (totalPages > 1) ? ` · P${pin.page || 1}` : "";
         const cloudTag = pin.imageId ? " ☁" : "";
+        // 노트/첨부 메타 아이콘
+        const noteIco = pin.note ? `<svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>` : "";
+        const attCount = pin.attachments ? pin.attachments.length : 0;
+        const attIco = attCount ? `<svg viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>` : "";
+        const metaIcons = (noteIco || attIco)
+          ? `<span class="pin-meta-icons">${noteIco}${attIco}${attCount > 1 ? attCount : ""}</span>` : "";
 
         if (State.mode === "designer") {
           item.innerHTML = `
             <div class="pin-num">${idx + 1}</div>
             <div class="pin-info">
-              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}</div>
+              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}</div>
               <div class="pin-coords">${pin.x.toFixed(1)}%, ${pin.y.toFixed(1)}%${pageTag}</div>
             </div>
             <button class="pin-del" data-id="${pin.id}" title="삭제">✕</button>`;
@@ -710,13 +874,13 @@
             e.stopPropagation();
             App.deletePin(pin.id);
           });
-          // 디자이너 모드에서도 미디어가 등록된 핀은 리스트 클릭 시 이동 후 360° 오픈
-          item.addEventListener("click", () => App.focusPin(pin, App.pinHasMedia(pin)));
+          // 디자이너 모드에서도 콘텐츠(미디어/노트/첨부)가 있는 핀은 리스트 클릭 시 이동 후 오픈
+          item.addEventListener("click", () => App.focusPin(pin, App.pinHasContent(pin)));
         } else {
           item.innerHTML = `
             <div class="pin-num">${idx + 1}</div>
             <div class="pin-info">
-              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}</div>
+              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}</div>
               <div class="pin-coords">${pin.x.toFixed(1)}%, ${pin.y.toFixed(1)}%${pageTag}</div>
             </div>
             <span class="pin-arrow">▶</span>`;
@@ -738,14 +902,22 @@
         marker.style.left = pin.x + "%";
         marker.style.top  = pin.y + "%";
         marker.dataset.id = pin.id;
+        const hasContent = App.pinHasContent(pin);
         marker.innerHTML = `
           <div class="pin-marker-label">${this.escapeHtml(pin.label)}</div>
-          <div class="pin-marker-bubble"><span>${idx + 1}</span></div>`;
+          ${hasContent ? '<div class="pin-pulse"></div>' : ''}
+          <div class="pin-pin">
+            <svg viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">
+              <path class="pin-pin-fill" d="M17 1C8.7 1 2 7.7 2 16c0 9.5 12.2 24.4 14.1 26.6.5.5 1.3.5 1.8 0C19.8 40.4 32 25.5 32 16 32 7.7 25.3 1 17 1z"/>
+              <circle cx="17" cy="16" r="11" fill="rgba(0,0,0,.18)"/>
+            </svg>
+            <span class="pin-pin-num">${idx + 1}</span>
+          </div>`;
         marker.addEventListener("click", e => {
           e.stopPropagation();
-          // 미디어(360° 사진/영상/URL)가 등록된 핀은 모드와 무관하게 클릭 즉시 360° 뷰어를 연다.
-          // 디자이너 모드에서 아직 미디어가 없는(작성 중) 핀만 편집(활성화)한다.
-          if (App.pinHasMedia(pin)) App.openPano(pin);
+          // 콘텐츠(360° 사진/영상/URL/노트/첨부)가 등록된 핀은 모드와 무관하게 클릭 즉시 오픈한다.
+          // 디자이너 모드에서 아직 콘텐츠가 없는(작성 중) 핀만 편집(활성화)한다.
+          if (App.pinHasContent(pin)) App.openPano(pin);
           else if (State.mode === "designer") App.setActivePin(pin.id);
           else App.openPano(pin); // 뷰어에서 미디어 없는 핀 → openPano가 안내 표시
         });
@@ -758,12 +930,74 @@
         ? State.viewerPages.length : State.pdfPages;
       if (total > 1) {
         this.$("pdf-pagination").classList.remove("hidden");
-        this.text("page-info", `${State.pdfPage} / ${total}`);
-        this.$("btn-prev-page").disabled = State.pdfPage <= 1;
-        this.$("btn-next-page").disabled = State.pdfPage >= total;
+        const jump = this.$("input-page-jump");
+        if (jump && document.activeElement !== jump) jump.value = State.pdfPage;
+        this.text("page-total", "/ " + total);
+        this.$("btn-first-page").disabled = State.pdfPage <= 1;
+        this.$("btn-prev-page").disabled  = State.pdfPage <= 1;
+        this.$("btn-next-page").disabled  = State.pdfPage >= total;
+        this.$("btn-last-page").disabled  = State.pdfPage >= total;
       } else {
         this.$("pdf-pagination").classList.add("hidden");
       }
+    },
+
+    /** 회전 각도 라벨 + 버튼 노출 (도면 로드 시에만 표시) */
+    updateRotationLabel() {
+      const grp = this.$("rotate-group");
+      if (!grp) return;
+      const hasDoc = !!(State.fileType && (State.pdfDoc || State.imageUrl || State.viewerPages));
+      grp.classList.toggle("hidden", !hasDoc);
+      const lbl = this.$("rotate-level");
+      if (lbl) lbl.textContent = (State.pdfRotation || 0) + "°";
+    },
+
+    /** 멀티페이지 PDF 썸네일 스트립 (디자이너 PDF 전용) */
+    async renderPdfThumbs() {
+      const strip = this.$("pdf-thumb-strip");
+      if (!strip) return;
+      // 디자이너 PDF + 2페이지 이상에서만 표시
+      const show = State.mode === "designer" && State.fileType === "pdf"
+        && State.pdfDoc && State.pdfPages > 1;
+      strip.classList.toggle("hidden", !show);
+      if (!show) { strip.innerHTML = ""; return; }
+
+      // 최초 1회만 썸네일 캐시 생성 (페이지 전환 시 재생성 방지)
+      if (this._thumbDocId !== State.pdfDoc || strip.childElementCount !== State.pdfPages) {
+        this._thumbDocId = State.pdfDoc;
+        strip.innerHTML = "";
+        for (let p = 1; p <= State.pdfPages; p++) {
+          const item = document.createElement("button");
+          item.className = "pdf-thumb-item";
+          item.dataset.page = p;
+          item.title = p + " 페이지";
+          item.innerHTML =
+            `<canvas class="pdf-thumb-canvas"></canvas><span class="pdf-thumb-no">${p}</span>`;
+          item.addEventListener("click", () => App._gotoPage(p));
+          strip.appendChild(item);
+          // 작은 썸네일 렌더 (비차단, 순차)
+          this._renderThumbInto(item.querySelector("canvas"), p);
+        }
+      }
+      // 현재 페이지 하이라이트
+      Array.from(strip.children).forEach((el) => {
+        const active = Number(el.dataset.page) === State.pdfPage;
+        el.classList.toggle("active", active);
+        if (active) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
+    },
+
+    async _renderThumbInto(canvas, pageNum) {
+      try {
+        const page = await State.pdfDoc.getPage(pageNum);
+        const rot = ((page.rotate || 0) + (State.pdfRotation || 0)) % 360;
+        const base = page.getViewport({ scale: 1, rotation: rot });
+        const scale = 120 / Math.max(base.width, base.height); // 최대 변 120px
+        const vp = page.getViewport({ scale, rotation: rot });
+        canvas.width = Math.round(vp.width);
+        canvas.height = Math.round(vp.height);
+        await page.render({ canvasContext: canvas.getContext("2d", { alpha: false }), viewport: vp }).promise;
+      } catch (e) { /* 썸네일 실패는 무시 */ }
     }
   };
 
@@ -852,23 +1086,80 @@
 
       UI.$("btn-prev-page").addEventListener("click", () => this._changePage(-1));
       UI.$("btn-next-page").addEventListener("click", () => this._changePage(1));
+      UI.$("btn-first-page").addEventListener("click", () => this._gotoPage(1));
+      UI.$("btn-last-page").addEventListener("click", () => this._gotoPage(this._totalPages()));
+
+      // 페이지 직접 입력 (점프)
+      const jump = UI.$("input-page-jump");
+      const doJump = () => {
+        const n = parseInt(jump.value, 10);
+        if (!isNaN(n)) this._gotoPage(n);
+        else jump.value = State.pdfPage;
+      };
+      jump.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); jump.blur(); } });
+      jump.addEventListener("blur", doJump);
+      jump.addEventListener("focus", () => jump.select());
     },
 
-    async _changePage(dir) {
-      const total = State.mode === "viewer" && State.viewerPages
+    _totalPages() {
+      return State.mode === "viewer" && State.viewerPages
         ? State.viewerPages.length : State.pdfPages;
-      const next = State.pdfPage + dir;
-      if (next < 1 || next > total) return;
-      State.pdfPage = next;
+    },
 
-      if (State.mode === "viewer" && State.viewerPages) {
-        // 뷰어: 페이지 이미지 교체
-        const imgEl = UI.$("map-image");
-        imgEl.onload = () => { this._showMapViewport(); };
-        imgEl.src = State.viewerPages[next - 1];
-        UI.updatePdfPagination();
+    _changePage(dir) { return this._gotoPage(State.pdfPage + dir); },
+
+    /** 도면 90° 회전 (PDF: 내장 getViewport 재렌더 / 이미지·뷰어: CSS transform) */
+    async _rotatePdf(deg) {
+      State.pdfRotation = (((State.pdfRotation + deg) % 360) + 360) % 360;
+      if (State.mode !== "viewer" && State.fileType === "pdf" && State.pdfDoc) {
+        // 디자이너 PDF: 캔버스를 회전값으로 다시 렌더 (핀 좌표는 비율 기준이라 그대로 유지)
+        if (this._pageRendering) { this._pendingRotate = true; return; }
+        this._pageRendering = true;
+        try { await this._renderPdfPage(); }
+        finally {
+          this._pageRendering = false;
+          if (this._pendingRotate) { this._pendingRotate = false; this._renderPdfPage(); }
+        }
       } else {
-        await this._renderPdfPage();
+        // 이미지 또는 뷰어(스냅샷 이미지): map-image 를 CSS 로 회전
+        MapCtrl.applyTransform();
+      }
+      UI.updateRotationLabel();
+    },
+
+    /** 절대 페이지로 이동 (범위 클램프 + 렌더 중복 가드) */
+    async _gotoPage(target) {
+      const total = this._totalPages();
+      if (total <= 1) return;
+      const next = Math.max(1, Math.min(total, target | 0));
+      if (next === State.pdfPage) { UI.updatePdfPagination(); return; }
+      if (this._pageRendering) { this._pendingPage = next; return; } // 중복 렌더 방지
+      State.pdfPage = next;
+      UI.updatePdfPagination(); // 페이지 번호/버튼 상태 즉시 반영 (렌더 완료 전에도)
+      this._pageRendering = true;
+      try {
+        if (State.mode === "viewer" && State.viewerPages) {
+          const imgEl = UI.$("map-image");
+          await new Promise((res) => {
+            imgEl.onload = () => res();
+            imgEl.onerror = () => res();
+            imgEl.src = State.viewerPages[next - 1];
+          });
+          this._showMapViewport();
+        } else {
+          await this._renderPdfPage();
+        }
+      } catch (e) {
+        console.warn("페이지 전환 실패:", e);
+      } finally {
+        this._pageRendering = false;
+        // 전환 중 들어온 마지막 요청 처리
+        if (this._pendingPage != null && this._pendingPage !== State.pdfPage) {
+          const p = this._pendingPage; this._pendingPage = null;
+          this._gotoPage(p);
+        } else {
+          this._pendingPage = null;
+        }
       }
     },
 
@@ -928,7 +1219,16 @@
         this._updateConfirmEnabled();
       });
 
+      // 핀 폼: 첨부 문서 선택 (PDF/Word 등 — 다중)
+      UI.$("btn-pin-doc").addEventListener("click", () => UI.$("input-pin-doc").click());
+      UI.$("input-pin-doc").addEventListener("change", e => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        files.forEach(f => this._addPendingDoc(f));
+      });
+
       UI.$("input-pin-url").addEventListener("input", () => this._updateConfirmEnabled());
+      UI.$("input-pin-note").addEventListener("input", () => this._updateConfirmEnabled());
       UI.$("btn-confirm-pin").addEventListener("click", () => this._confirmPin());
       UI.$("btn-cancel-pin").addEventListener("click", () => this._resetPinForm(true));
 
@@ -954,17 +1254,65 @@
     _updateConfirmEnabled() {
       const hasFile = !!State.pendingFile;
       const hasUrl  = !!UI.val("input-pin-url").trim();
-      UI.$("btn-confirm-pin").disabled = !(hasFile || hasUrl);
+      const hasNote = !!UI.val("input-pin-note").trim();
+      const hasDoc  = State.pendingDocs.length > 0;
+      // 360° 미디어가 없어도 노트나 첨부 문서만 있으면 저장 가능 (정보 포인트)
+      UI.$("btn-confirm-pin").disabled = !(hasFile || hasUrl || hasNote || hasDoc);
+    },
+
+    /** 첨부 문서 후보 추가 + 검증 */
+    _addPendingDoc(file) {
+      if (!file) return;
+      if (file.size > Cloud.MAX_DOC_BYTES) {
+        alert(`"${file.name}" 은 너무 큽니다 (${fmtBytes(file.size)}). 최대 ${fmtBytes(Cloud.MAX_DOC_BYTES)} 까지 첨부할 수 있습니다.`);
+        return;
+      }
+      // 중복(같은 이름+크기) 방지
+      if (State.pendingDocs.some(d => d.name === file.name && d.size === file.size)) return;
+      const kind = docKind(file.type || file.name);
+      State.pendingDocs.push({
+        tempId: "d" + Date.now() + Math.random().toString(36).slice(2, 6),
+        file, name: file.name, size: file.size, kind, status: "ready"
+      });
+      this._renderPendingDocs();
+      this._updateConfirmEnabled();
+    },
+
+    _removePendingDoc(tempId) {
+      State.pendingDocs = State.pendingDocs.filter(d => d.tempId !== tempId);
+      this._renderPendingDocs();
+      this._updateConfirmEnabled();
+    },
+
+    _renderPendingDocs() {
+      const wrap = UI.$("pin-doc-list");
+      wrap.innerHTML = "";
+      State.pendingDocs.forEach(d => {
+        const chip = document.createElement("div");
+        chip.className = "pin-doc-chip";
+        chip.innerHTML = `
+          <span class="pin-doc-badge" style="background:${d.kind.color}">${d.kind.label}</span>
+          <div class="pin-doc-meta">
+            <div class="pin-doc-name">${UI.escapeHtml(d.name)}</div>
+            <div class="pin-doc-size">${fmtBytes(d.size)}</div>
+          </div>
+          <button class="pin-doc-remove" title="제거" aria-label="제거">✕</button>`;
+        chip.querySelector(".pin-doc-remove").addEventListener("click", () => this._removePendingDoc(d.tempId));
+        wrap.appendChild(chip);
+      });
     },
 
     _resetPinForm(hideForm) {
       State.pending = null;
       State.pendingFile = null;
       State.pendingIsVideo = false;
+      State.pendingDocs = [];
       UI.$("pending-pin").classList.add("hidden");
       UI.clearVal("input-pin-label");
       UI.clearVal("input-pin-url");
       UI.clearVal("input-pin-imgname");
+      UI.clearVal("input-pin-note");
+      UI.$("pin-doc-list").innerHTML = "";
       UI.$("pin-file-info").classList.add("hidden");
       UI.$("pin-file-info").textContent = "";
       UI.hide("field-pin-imgname");
@@ -1004,6 +1352,24 @@
         e.preventDefault();
       }, { passive: false });
       vp.addEventListener("touchend", () => { lastTouch = null; });
+
+      // 더블클릭으로 클릭 지점 중심 줌인
+      vp.addEventListener("dblclick", e => {
+        if (State.placing) return;
+        MapCtrl.zoomBy(1.6, e.clientX, e.clientY);
+      });
+
+      // 플로팅 네비게이션 툴바 (Bluebeam 스타일 — 확대/축소/맞춤/실제크기)
+      const bind = (id, fn) => { const el = UI.$(id); if (el) el.addEventListener("click", fn); };
+      bind("btn-zoom-in",  () => MapCtrl.zoomBy(1.25));
+      bind("btn-zoom-out", () => MapCtrl.zoomBy(0.8));
+      bind("btn-fit",      () => MapCtrl.fit());
+      bind("btn-actual",   () => MapCtrl.actualSize());
+      bind("zoom-level",   () => MapCtrl.actualSize());
+      // 회전 (PDF.js 내장 getViewport({rotation}) 활용)
+      bind("btn-rotate-cw",  () => this._rotatePdf(90));
+      bind("btn-rotate-ccw", () => this._rotatePdf(-90));
+      bind("rotate-level",   () => { State.pdfRotation = 0; this._rotatePdf(0); });
     },
 
     _handlePlaceClick(e) {
@@ -1077,7 +1443,23 @@
       });
 
       document.addEventListener("keydown", e => {
-        if (e.key === "Escape" && PanoViewer.open) PanoViewer.close();
+        if (e.key === "Escape" && PanoViewer.open) { PanoViewer.close(); return; }
+        // 파노라마 열려있거나 입력 중이면 페이지 단축키 무시
+        if (PanoViewer.open) return;
+        const tag = (e.target && e.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        // 회전 단축키 (Shift+←/→) — 도면이 로드돼 있으면 페이지 수와 무관하게 동작
+        const rotGroup = UI.$("rotate-group");
+        const canRotate = rotGroup && !rotGroup.classList.contains("hidden");
+        if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+          if (canRotate) { e.preventDefault(); this._rotatePdf(e.key === "ArrowRight" ? 90 : -90); }
+          return;
+        }
+        if (UI.$("pdf-pagination").classList.contains("hidden")) return;
+        if (e.key === "ArrowLeft")      { e.preventDefault(); this._changePage(-1); }
+        else if (e.key === "ArrowRight"){ e.preventDefault(); this._changePage(1); }
+        else if (e.key === "Home")      { e.preventDefault(); this._gotoPage(1); }
+        else if (e.key === "End")       { e.preventDefault(); this._gotoPage(this._totalPages()); }
       });
     },
 
@@ -1142,11 +1524,12 @@
 
     async _renderPdfPage() {
       const canvas = UI.$("pdf-canvas");
-      await PDF.renderPage(State.pdfDoc, State.pdfPage, canvas);
+      await PDF.renderPage(State.pdfDoc, State.pdfPage, canvas, 1.5, State.pdfRotation);
       UI.updatePdfPagination();
       State.pan = { x: 0, y: 0 }; State.zoom = 1;
       MapCtrl.applyTransform();
       UI.renderPinsOnMap();
+      UI.renderPdfThumbs();
     },
 
     _showMapViewport() {
@@ -1154,8 +1537,11 @@
       State.zoom = 1;
       MapCtrl.applyTransform();
       UI.$("map-viewport").classList.remove("hidden");
+      const nav = UI.$("nav-toolbar"); if (nav) nav.classList.remove("hidden");
       UI.renderPinsOnMap();
       UI.updatePdfPagination();
+      UI.updateRotationLabel();
+      UI.renderPdfThumbs();
     },
 
     _readAsArrayBuffer(file) {
@@ -1172,13 +1558,16 @@
       if (!State.pending) return;
       const label = UI.val("input-pin-label").trim() || `위치 ${State.pins.length + 1}`;
       const url   = UI.val("input-pin-url").trim();
+      const note  = UI.val("input-pin-note").trim();
       const file  = State.pendingFile;
-      if (!file && !url) return;
+      const docs  = State.pendingDocs.slice();
+      // 360° 미디어·노트·첨부 중 최소 하나는 있어야 저장
+      if (!file && !url && !note && docs.length === 0) return;
 
       const btn    = UI.$("btn-confirm-pin");
       const status = UI.$("pin-upload-status");
       btn.disabled = true;
-      btn.textContent = file ? "☁ 업로드 중..." : "저장 중...";
+      btn.textContent = (file || docs.length) ? "☁ 업로드 중..." : "저장 중...";
 
       const pin = {
         id:    Date.now(),
@@ -1187,6 +1576,7 @@
         page:  State.pdfPage,
         label
       };
+      if (note) pin.note = note;
 
       try {
         if (file && State.pendingIsVideo) {
@@ -1210,10 +1600,26 @@
           pin.imageId   = imageId;
           pin.imageName = imgName;
           Cloud._cache[imageId] = dataURL; // 즉시 미리보기용 캐시
-        } else {
+        } else if (url) {
           // URL 직접 입력 (이미지 또는 영상 자동 판별)
           pin.imageUrl = url;
           if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) pin.isVideo = true;
+        }
+
+        // ── 첨부 문서 업로드 (PDF/Word 등) ──
+        if (docs.length) {
+          pin.attachments = [];
+          for (let i = 0; i < docs.length; i++) {
+            const d = docs[i];
+            status.textContent = `📎 첨부 업로드 중... (${i + 1}/${docs.length}) ${d.name}`;
+            status.classList.remove("hidden", "error");
+            const dataURL = await Cloud.fileToDataURL(d.file);
+            const docId   = await Cloud.uploadDoc(d.name, dataURL);
+            pin.attachments.push({
+              id: d.tempId, name: d.name, size: d.size,
+              type: d.kind.type, docId
+            });
+          }
         }
       } catch (e) {
         status.textContent = "❌ 업로드 실패: " + e.message;
@@ -1235,9 +1641,14 @@
 
       // 다음 포인트 연속 배치 안내
       let savedNote = "✅ '" + label + "' 저장 완료";
-      if (pin.imageId)        savedNote += " (☁ 클라우드 업로드됨)";
-      else if (pin.isVideo && pin.videoUrl) savedNote += " (🎬 영상 — 로컬 미리보기, 배포 시 URL 권장)";
-      else if (pin.isVideo)   savedNote += " (🎬 360° 영상)";
+      const tags = [];
+      if (pin.imageId)        tags.push("☁ 360° 그림");
+      else if (pin.isVideo && pin.videoUrl) tags.push("🎬 영상(로컬)");
+      else if (pin.isVideo)   tags.push("🎬 360° 영상");
+      else if (pin.imageUrl)  tags.push("🔗 URL");
+      if (pin.note)           tags.push("📝 노트");
+      if (pin.attachments && pin.attachments.length) tags.push("📎 첨부 " + pin.attachments.length);
+      if (tags.length) savedNote += " (" + tags.join(" · ") + ")";
       UI.text("pin-saved-msg", savedNote);
       UI.show("section-next-point");
     },
@@ -1284,8 +1695,99 @@
       return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl));
     },
 
+    /** 핀에 노트 또는 첨부가 있는가 */
+    pinHasInfo(pin) {
+      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length)));
+    },
+
+    /** 핀에 클릭 시 보여줄 콘텐츠(미디어 또는 정보)가 있는가 */
+    pinHasContent(pin) {
+      return this.pinHasMedia(pin) || this.pinHasInfo(pin);
+    },
+
+    /** 360° 오버레이 안에 노트/첨부 정보 패널 렌더 */
+    _renderPanoInfoPanel(pin) {
+      const panel = document.getElementById("pano-info-panel");
+      if (!panel) return;
+      if (!this.pinHasInfo(pin)) { panel.classList.add("hidden"); panel.innerHTML = ""; return; }
+
+      const dlIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+      let html = `
+        <div class="pano-info-title">
+          <span>📋 ${UI.escapeHtml(pin.label)}</span>
+          <button class="pano-info-close" id="pano-info-close" title="닫기" aria-label="닫기">✕</button>
+        </div>`;
+      if (pin.note) html += `<div class="pano-note-text">${UI.escapeHtml(pin.note)}</div>`;
+      if (pin.attachments && pin.attachments.length) {
+        html += `<div class="pano-attach-head">첨부 문서 ${pin.attachments.length}</div>`;
+        pin.attachments.forEach((a, i) => {
+          const k = docKind(a.type || a.name);
+          html += `
+            <div class="pano-attach-item" data-attach-idx="${i}" title="클릭하여 열기/다운로드">
+              <span class="pin-doc-badge" style="background:${k.color}">${k.label}</span>
+              <span class="pano-attach-name">${UI.escapeHtml(a.name)}</span>
+              <span class="pano-attach-dl">${dlIcon}</span>
+            </div>`;
+        });
+      }
+      panel.innerHTML = html;
+      panel.classList.remove("hidden");
+      const closeBtn = document.getElementById("pano-info-close");
+      if (closeBtn) closeBtn.addEventListener("click", () => panel.classList.add("hidden"));
+      panel.querySelectorAll(".pano-attach-item").forEach(el => {
+        el.addEventListener("click", () => {
+          const idx = parseInt(el.dataset.attachIdx, 10);
+          this._openAttachment(pin.attachments[idx], el);
+        });
+      });
+    },
+
+    /** 첨부 문서 열기/다운로드 */
+    async _openAttachment(att, el) {
+      if (!att || !att.docId) return;
+      const nameEl = el ? el.querySelector(".pano-attach-name") : null;
+      const orig = nameEl ? nameEl.textContent : "";
+      if (nameEl) nameEl.textContent = "불러오는 중...";
+      try {
+        const dataURL = await Cloud.fetchDoc(att.docId);
+        // dataURL → Blob → 다운로드 (브라우저가 처리할 수 없는 형식도 안전하게 저장)
+        const blob = await (await fetch(dataURL)).blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = att.name || "attachment";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // PDF/이미지는 새 탭 미리보기도 함께 제공
+        if (/pdf|img|image/.test(att.type || "") || /\.pdf$|\.(png|jpe?g|gif|webp)$/i.test(att.name || "")) {
+          window.open(blobUrl, "_blank");
+        }
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      } catch (e) {
+        alert("첨부를 불러올 수 없습니다: " + (e.message || e));
+      } finally {
+        if (nameEl) nameEl.textContent = orig;
+      }
+    },
+
     /* ── 360° 팝업 열기 (클라우드 저장본 / 영상 / URL) ── */
     async openPano(pin) {
+      // 노트/첨부만 있고 360° 미디어가 없는 정보 포인트 → 정보 패널만 표시
+      if (!this.pinHasMedia(pin) && this.pinHasInfo(pin)) {
+        const $ = id => document.getElementById(id);
+        $("pano-location-name").textContent = "📋 " + pin.label;
+        $("pano-loading").classList.add("hidden");
+        $("pano-error").classList.add("hidden");
+        $("pano-canvas").classList.add("hidden");
+        $("pano-hint").classList.add("hidden");
+        $("pano-controls").classList.add("hidden");
+        $("pano-overlay").classList.remove("hidden");
+        PanoViewer.open = true;
+        this._renderPanoInfoPanel(pin);
+        return;
+      }
+      this._renderPanoInfoPanel(pin); // 미디어와 함께 노트/첨부도 표시
       // 1) 로컬 영상 blob
       if (pin.videoUrl) { PanoViewer.loadVideo(pin.videoUrl, pin.label); return; }
       // 2) 클라우드 저장 이미지

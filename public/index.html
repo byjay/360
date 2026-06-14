@@ -58,9 +58,23 @@
 
     <!-- PDF pagination -->
     <div id="pdf-pagination" class="pdf-pagination hidden">
-      <button id="btn-prev-page" class="btn-page">‹</button>
-      <span id="page-info" class="page-info">1 / 1</span>
-      <button id="btn-next-page" class="btn-page">›</button>
+      <button id="btn-first-page" class="btn-page" title="첫 페이지 (Home)" aria-label="첫 페이지">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+      </button>
+      <button id="btn-prev-page" class="btn-page" title="이전 페이지 (←)" aria-label="이전">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="page-jump">
+        <input id="input-page-jump" class="page-jump-input" type="text" inputmode="numeric" value="1" aria-label="페이지 번호" />
+        <span class="page-total" id="page-total">/ 1</span>
+      </span>
+      <button id="btn-next-page" class="btn-page" title="다음 페이지 (→)" aria-label="다음">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <button id="btn-last-page" class="btn-page" title="마지막 페이지 (End)" aria-label="마지막">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+      </button>
+      <span id="page-info" class="page-info hidden">1 / 1</span>
     </div>
 
     <div id="pin-count-badge" class="pin-count-badge hidden"></div>
@@ -119,6 +133,21 @@
             <label>360° 이미지/영상 URL (직접 입력)</label>
             <input id="input-pin-url" type="url" placeholder="https://... (.jpg 또는 .mp4)" autocomplete="off" />
           </div>
+
+          <!-- ── 노트 (텍스트 메모) ── -->
+          <div class="form-field">
+            <label>📝 노트 (선택)</label>
+            <textarea id="input-pin-note" class="pin-note-input" rows="3" placeholder="이 포인트에 대한 메모·점검 사항·설명을 입력하세요" autocomplete="off"></textarea>
+          </div>
+
+          <!-- ── 첨부 문서 (PDF/Word 등) ── -->
+          <div class="form-field">
+            <label>📎 첨부 문서 (PDF · Word 등, 최대 3MB)</label>
+            <button id="btn-pin-doc" class="btn-file secondary" type="button">＋ 문서 첨부</button>
+            <input id="input-pin-doc" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden multiple />
+            <div id="pin-doc-list" class="pin-doc-list"></div>
+          </div>
+
           <div id="pin-upload-status" class="pin-upload-status hidden"></div>
           <div class="form-actions">
             <button id="btn-confirm-pin" class="btn-primary" disabled>☁ 저장 &amp; 업로드</button>
@@ -180,9 +209,40 @@
         </div>
       </div>
 
+      <!-- 멀티페이지 PDF 썸네일 스트립 (디자이너 PDF 전용) -->
+      <div id="pdf-thumb-strip" class="pdf-thumb-strip hidden"></div>
+
       <!-- Placing crosshair overlay -->
       <div id="crosshair-overlay" class="crosshair-overlay hidden">
         <div class="crosshair-msg">도면 위 원하는 위치를 클릭하세요</div>
+      </div>
+
+      <!-- ── 플로팅 네비게이션 툴바 (전문 도면뷰어 스타일) ── -->
+      <div id="nav-toolbar" class="nav-toolbar hidden">
+        <button id="btn-zoom-in" class="nav-btn" title="확대 (＋)" aria-label="확대">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <div id="zoom-level" class="zoom-level" title="현재 배율 · 클릭 시 100%">100%</div>
+        <button id="btn-zoom-out" class="nav-btn" title="축소 (－)" aria-label="축소">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <div class="nav-sep"></div>
+        <button id="btn-fit" class="nav-btn" title="화면 맞춤 (F)" aria-label="화면 맞춤">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg>
+        </button>
+        <button id="btn-actual" class="nav-btn" title="실제 크기 (1)" aria-label="실제 크기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="16" font-size="9" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="700">1:1</text></svg>
+        </button>
+        <div id="rotate-group" class="rotate-group hidden">
+          <div class="nav-sep"></div>
+          <button id="btn-rotate-ccw" class="nav-btn" title="왼쪽 회전 (Shift+←)" aria-label="왼쪽 회전">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>
+          </button>
+          <div id="rotate-level" class="rotate-level" title="회전 각도">0°</div>
+          <button id="btn-rotate-cw" class="nav-btn" title="오른쪽 회전 (Shift+→)" aria-label="오른쪽 회전">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 4 21 9 16 9"/></svg>
+          </button>
+        </div>
       </div>
     </main>
   </div>
@@ -197,16 +257,19 @@
       <div class="pano-dot"></div>
       <span id="pano-location-name" class="pano-location">—</span>
     </div>
-    <button id="btn-pano-close" class="btn-pano-close">✕ 닫기</button>
+    <button id="btn-pano-close" class="btn-pano-close" title="뷰어 닫기 (Esc)" aria-label="닫기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      <span>닫기</span>
+    </button>
   </div>
 
   <div id="pano-loading" class="pano-state">
     <div class="spinner gold"></div>
-    <span>이미지 로딩 중...</span>
+    <span>360° 파노라마 로딩 중...</span>
   </div>
 
   <div id="pano-error" class="pano-state hidden">
-    <div style="font-size:2.5rem">⚠️</div>
+    <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--gold)"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
     <div class="pano-error-msg">이미지를 불러올 수 없습니다</div>
     <div id="pano-error-url" class="pano-error-url"></div>
     <div class="pano-error-hint">CORS 정책 또는 잘못된 URL을 확인하세요</div>
@@ -214,16 +277,36 @@
 
   <canvas id="pano-canvas" class="pano-canvas hidden"></canvas>
 
+  <!-- 노트 · 첨부 문서 정보 패널 -->
+  <div id="pano-info-panel" class="pano-info-panel hidden"></div>
+
   <div id="pano-controls" class="pano-controls hidden">
-    <button id="btn-pano-rotate"  class="btn-pano-ctrl" title="자동 회전 켜기/끄기">⟳ 자동회전</button>
-    <button id="btn-pano-zoomout" class="btn-pano-ctrl" title="줄임 아웃">－</button>
-    <button id="btn-pano-zoomin"  class="btn-pano-ctrl" title="줄임 인">＋</button>
-    <button id="btn-pano-reset"   class="btn-pano-ctrl" title="초기 시점">⌂ 초기시점</button>
-    <button id="btn-pano-full"    class="btn-pano-ctrl" title="전체화면">⛶ 전체화면</button>
+    <button id="btn-pano-rotate"  class="btn-pano-ctrl" title="자동 회전 켜기/끄기" aria-label="자동 회전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
+      <span>자동회전</span>
+    </button>
+    <div class="pano-ctrl-sep"></div>
+    <button id="btn-pano-zoomout" class="btn-pano-ctrl icon-only" title="축소" aria-label="축소">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <button id="btn-pano-zoomin"  class="btn-pano-ctrl icon-only" title="확대" aria-label="확대">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <div class="pano-ctrl-sep"></div>
+    <button id="btn-pano-reset"   class="btn-pano-ctrl" title="초기 시점으로" aria-label="초기 시점">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><polyline points="3 3 3 8 8 8"/></svg>
+      <span>초기시점</span>
+    </button>
+    <button id="btn-pano-full"    class="btn-pano-ctrl" title="전체화면" aria-label="전체화면">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      <span>전체화면</span>
+    </button>
   </div>
 
   <div id="pano-hint" class="pano-hint hidden">
-    <span>🖱 드래그: 시점 이동</span><span>⚙ 휠: 줌 조절</span><span>📱 스와이프: 이동</span>
+    <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>드래그: 시점 이동</span>
+    <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>휠: 줌 조절</span>
+    <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>스와이프: 이동</span>
   </div>
 </div>
 

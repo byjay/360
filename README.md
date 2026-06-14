@@ -7,6 +7,38 @@
 
 ---
 
+## 🧭 전문 PDF/360 뷰어화 — PDF.js 활용도 검토 · 회전 · 썸네일 · 노트/첨부 (2026-06-14)
+
+ORCHESTRATOR_v2 방법론(A 현황분석·B 벤치마크·C 판정·D 역검증·E 서명)으로 **"PDF.js 오픈소스 기능을 제대로 쓰고 있나, 너무 어렵게 가는 건 아닌가"** 를 구성 검토하고, 진짜 전문 뷰어처럼 비주얼/프레임을 정돈했습니다.
+
+### A. PDF.js 활용도 ORCHESTRATOR 판정
+| PDF.js 내장 레이어 | 본 시스템(도면+핀 오버레이) 적합성 | 결론 |
+|------|------|------|
+| **core display layer**(getDocument→getPage→render) | 현재 사용. 핀을 도면 위 절대좌표로 올리는 데 정확·경량 | ✅ 정답 아키텍처 (과설계 아님) |
+| 텍스트 레이어(선택/검색) | DOM 텍스트 레이어가 **핀 오버레이와 충돌**, 도면은 텍스트 추출 가치 낮음 | ❌ 미채택(정당) |
+| 주석(annotation) 레이어 | **핀 시스템이 곧 주석 시스템** — 이중화 | ❌ 미채택(정당) |
+| **회전** `getViewport({rotation})` | 두 줄짜리 내장. 도면 가로/세로 보정에 유용 | ✅ **채택** |
+| **썸네일 스트립** | 멀티페이지 도면 탐색의 전문 뷰어 필수 UX | ✅ **채택** |
+| 내장 viewer.html | 핀/360 연동 불가(별도 iframe) | ❌ 비양립(정당) |
+
+> **판정:** "core display layer만 사용"은 핀-오버레이 도면 뷰어에 **올바른 설계**이며 과하게 어렵게 간 것이 아니다. 다만 전문 뷰어 체감을 위해 **내장 회전 + 썸네일 스트립**을 추가하는 것이 정확한 방향.
+
+### 추가된 기능
+| 기능 | 구현 |
+|------|------|
+| **PDF 페이지 회전** | PDF.js 내장 `getViewport({ rotation })` 으로 캔버스 재렌더(디자이너 PDF) / 이미지·뷰어 스냅샷은 CSS `rotate`. 90° 단위, nav-toolbar 회전 버튼 + 각도 라벨(클릭 시 0° 리셋) + **단축키 Shift+←/→**. 페이지 자체 회전값(`page.rotate`)과 합산 처리 |
+| **멀티페이지 썸네일 스트립** | 좌측 플로팅 패널에 전 페이지 120px 썸네일 렌더, **클릭 점프 + 현재 페이지 골드 하이라이트 + 자동 스크롤**. 2페이지 이상 디자이너 PDF에서만 노출, 1회 캐시 |
+| **핀 노트(텍스트) 편집** | 핀 폼에 노트 textarea. 저장 시 `pin.note` 보존, 뷰어 정보 패널에 표시 |
+| **핀 첨부 문서**(PDF/Word/Excel/PPT/TXT) | `pano_images` 저장소를 dataURL 범용 문서 스토어로 재사용(`"[doc] "` 프리픽스). 핀당 다중 첨부, 종류별 배지, 뷰어에서 다운로드/새 탭 미리보기 |
+
+### ORCHESTRATOR E2E 교차검증 ✅ (15항목 ALL PASS, 콘솔 에러 0건)
+- **페이지 컨트롤**: 3페이지 색채움 PDF → P1 빨강·P3 파랑 **픽셀 검증**, 썸네일 클릭 점프·1페이지 복귀 ✅
+- **썸네일 스트립**: 노출(3개)·활성 하이라이트(active=3) ✅
+- **회전**: 라벨 90°·캔버스 w/h 스왑(918×1188→1188×918)·360° 원복 0°·치수 원복·라벨 클릭 리셋 ✅
+- **회귀**: 노트/첨부 함수(`_confirmPin`/`_renderPanoInfoPanel`/`_openAttachment`/`uploadDoc`/`_addPendingDoc`) 빌드 정상 포함, 콘솔 에러 0 ✅
+
+---
+
 ## ⚡ 인터랙션·속도·PDF 안정성 개선 (2026-06-13)
 
 사용자 요청 3건을 반영했습니다.
@@ -187,7 +219,7 @@ ORCHESTRATOR_v2 방법론(A작성·B반박·C판정·D역검증·E서명)으로 
 | title / file_name | text | 도면 제목/원본 파일명 |
 | drawing_data | text | 1페이지 스냅샷(레거시 호환) |
 | pages_data | rich_text | 전 페이지 스냅샷 dataURL 배열(JSON) |
-| pins | text | 핀 배열 JSON `[{id,x,y,page,label,imageId?,imageUrl?,isVideo?,localOnly?}]` (배포 시 로컬 영상 `videoUrl`은 제거되고 `localOnly:true`로 마킹) |
+| pins | text | 핀 배열 JSON `[{id,x,y,page,label,imageId?,imageUrl?,isVideo?,localOnly?,note?,attachments?}]` (배포 시 로컬 영상 `videoUrl`은 제거되고 `localOnly:true`로 마킹). `note`=텍스트 메모, `attachments`=`[{id,name,size,type,docId}]`(첨부 바이너리는 `pano_images`에 docId로 저장) |
 
 ---
 
