@@ -2649,6 +2649,13 @@
       const gb = document.querySelector("#login-gate .admin-gate-backdrop");
       gb && gb.addEventListener("click", () => this._closeGate());
 
+      // ── 데모 진입 (구글 로그인 없이 바로 체험) ──
+      // 허브 인증바
+      $("hub-btn-demo-designer") && $("hub-btn-demo-designer").addEventListener("click", () => this.demoLogin("designer"));
+      $("hub-btn-demo-viewer")   && $("hub-btn-demo-viewer").addEventListener("click", () => this.demoLogin("viewer"));
+      // 로그인 게이트 내 데모(설계자)
+      $("login-gate-demo") && $("login-gate-demo").addEventListener("click", () => this.demoLogin("designer"));
+
       // 저장된 토큰 복원
       try {
         const saved = sessionStorage.getItem("wm_id_token");
@@ -2743,6 +2750,8 @@
       if (typeof Settings !== "undefined" && Settings._isOpen) Settings.render();
       // 프로젝트 허브가 보이는 중이면 +새프로젝트/편집 버튼 갱신
       if (typeof ProjectHub !== "undefined") ProjectHub.refreshIfVisible();
+      // 데모 모드 배지 동기화
+      if (this._showDemoBadge) this._showDemoBadge();
     },
 
     _applyUiTo(pfx) {
@@ -2803,6 +2812,39 @@
       this._pendingDesigner = null;
     },
 
+    /** 데모 진입 — 구글 로그인 없이 바로 권한 부여(서버가 demo 토큰 인식).
+     *  role: 'designer' | 'viewer' */
+    async demoLogin(role) {
+      this.idToken = role === "designer" ? "demo-designer" : "demo-viewer";
+      try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
+      await this.refresh();  // 서버가 demo 토큰을 검증해 role/user 세팅
+      this._closeGate();
+      // 디자이너 진입을 기다리던 콜백이 있으면 실행
+      if (this._pendingDesigner) {
+        const cb = this._pendingDesigner;
+        this._pendingDesigner = null;
+        if (this.isDesigner) cb();
+      }
+      // 데모 모드 안내 배지 표시
+      this._showDemoBadge();
+    },
+
+    /** 데모 모드 안내 배지(허브 상단) */
+    _showDemoBadge() {
+      if (!this.user || !this.user.email || this.user.email.indexOf("demo.") !== 0) {
+        // 데모가 아니면 배지 제거
+        const ex = document.getElementById("demo-mode-badge");
+        if (ex) ex.remove();
+        return;
+      }
+      if (document.getElementById("demo-mode-badge")) return;
+      const b = document.createElement("div");
+      b.id = "demo-mode-badge";
+      b.className = "demo-mode-badge";
+      b.innerHTML = '<span class="demo-dot"></span>데모 모드 — 구글 로그인 없이 체험 중';
+      document.body.appendChild(b);
+    },
+
     signOut() {
       try {
         if (window.google && window.google.accounts && window.google.accounts.id)
@@ -2811,6 +2853,7 @@
       this.idToken = null; this.user = null; this.role = "viewer";
       try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
       this._applyUi();
+      this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
       if (State.mode === "designer") {
         App.exitEdit();

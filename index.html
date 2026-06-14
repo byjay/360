@@ -52,6 +52,13 @@
     <div id="hub-auth-signed-out" class="auth-signed-out">
       <span class="auth-hint">설계자 기능은 로그인이 필요합니다</span>
       <div id="hub-google-signin-btn" class="google-signin-btn"></div>
+      <button id="hub-btn-demo-designer" class="btn-demo btn-demo-designer" type="button" title="구글 로그인 없이 설계자 권한으로 바로 체험">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        설계자 체험
+      </button>
+      <button id="hub-btn-demo-viewer" class="btn-demo btn-demo-viewer" type="button" title="로그인 없이 열람자로 둘러보기">
+        둘러보기
+      </button>
     </div>
     <div id="hub-auth-signed-in" class="auth-signed-in hidden">
       <div class="user-badge">
@@ -531,6 +538,13 @@
       <p id="login-gate-sub" class="admin-gate-sub">설계자(DESIGNER) 기능은 <b>디자이너로 지정된 구글 계정</b>만 사용할 수 있습니다.<br>구글 계정으로 로그인하세요.</p>
       <div id="login-gate-signin" class="login-gate-signin"></div>
       <div id="login-gate-error" class="admin-gate-error hidden">이 계정은 디자이너 권한이 없습니다. 슈퍼관리자에게 지정을 요청하세요.</div>
+      <div class="login-gate-demo">
+        <div class="login-gate-or"><span>또는</span></div>
+        <button id="login-gate-demo" class="btn-demo btn-demo-designer wide" type="button" title="구글 로그인 없이 설계자 권한으로 바로 체험">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          로그인 없이 설계자로 체험하기
+        </button>
+      </div>
       <div class="admin-gate-actions">
         <button id="login-gate-cancel" class="admin-gate-btn ghost" type="button">닫기</button>
       </div>

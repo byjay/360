@@ -19,6 +19,24 @@ app.use('/api/*', cors())
 ════════════════════════════════════════════ */
 const SUPER_ADMIN = 'designssir@gmail.com'
 
+/* ── 데모 진입(구글 로그인 없이 바로 테스트) ──
+ * 구글 OAuth 클라이언트 ID가 아직 없거나, 빠른 시연이 필요할 때 사용.
+ * 클라이언트가 보내는 'Bearer demo-designer' / 'Bearer demo-viewer' 토큰을 인식한다.
+ * - demo-designer : 디자이너 권한(프로젝트 생성/삭제까지 테스트 가능)
+ * - demo-viewer   : 뷰어 권한(열람만)
+ * 운영에서 끄려면 DEMO_LOGIN_ENABLED = false 로 변경. */
+const DEMO_LOGIN_ENABLED = true
+const DEMO_DESIGNER = { email: 'demo.designer@seastargo.com', name: '데모 설계자', picture: '', role: 'designer' as const }
+const DEMO_VIEWER = { email: 'demo.viewer@seastargo.com', name: '데모 열람자', picture: '', role: 'viewer' as const }
+
+/** 데모 토큰이면 가짜 사용자 반환, 아니면 null */
+function demoUserFromToken(token: string): any | null {
+  if (!DEMO_LOGIN_ENABLED) return null
+  if (token === 'demo-designer') return { ...DEMO_DESIGNER, _demo: true }
+  if (token === 'demo-viewer') return { ...DEMO_VIEWER, _demo: true }
+  return null
+}
+
 // 구글 공개키 캐시 (JWKS)
 let _googleKeys: { keys: any[]; exp: number } | null = null
 
@@ -89,6 +107,9 @@ async function getUser(c: any): Promise<any | null> {
   const auth = c.req.header('Authorization') || ''
   const m = auth.match(/^Bearer\s+(.+)$/i)
   if (!m) return null
+  // 데모 토큰 우선 처리 (구글 로그인 없이 바로 진입/테스트)
+  const demo = demoUserFromToken(m[1])
+  if (demo) return demo
   const payload = await verifyGoogleToken(m[1])
   if (!payload) return null
   return { email: String(payload.email).toLowerCase(), name: payload.name || '', picture: payload.picture || '' }
@@ -96,6 +117,7 @@ async function getUser(c: any): Promise<any | null> {
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
   if (email === SUPER_ADMIN) return true
+  if (DEMO_LOGIN_ENABLED && email === DEMO_DESIGNER.email) return true
   const row = await c.env.DB.prepare(
     'SELECT email FROM designers WHERE email = ? AND deleted = 0'
   ).bind(email).first()
@@ -114,12 +136,12 @@ app.get('/api/auth/me', async (c) => {
   if (!user) return c.json({ authenticated: false, role: 'viewer' })
   const designer = await isDesigner(c, user.email)
   const role = roleOf(user.email, designer)
-  // 로그인 시 디자이너의 표시 이름 갱신(존재 시)
-  if (role === 'designer') {
+  // 로그인 시 디자이너의 표시 이름 갱신(존재 시, 데모 계정 제외)
+  if (role === 'designer' && !user._demo) {
     await c.env.DB.prepare('UPDATE designers SET name = ?, updated_at = ? WHERE email = ?')
       .bind(user.name, Date.now(), user.email).run()
   }
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role })
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo })
 })
 
 /* ════════════════════════════════════════════
