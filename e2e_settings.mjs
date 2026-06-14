@@ -38,18 +38,29 @@ const vis = (page, sel) => page.evaluate((s) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     page.on('pageerror', e => results.push(`  ⚠️ pageerror: ${e.message}`));
 
-    // ── 1) 평범한 접속 → 자동 뷰어 진입 ──
+    // ── 1) 접속 → 첫 화면 = 프로젝트 허브 → 카드 클릭 → 뷰어 진입 ──
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(800);
+    await page.waitForFunction(() => window.__wm && window.__wm.ProjectHub && window.__wm.ProjectHub._loaded, { timeout: 10000 });
+    await page.waitForTimeout(300);
 
-    const appShown = await page.evaluate(() => {
-      const s = document.getElementById('screen-app');
-      return s && s.classList.contains('active');
+    const hubShown = await page.evaluate(() =>
+      document.getElementById('screen-projects').classList.contains('active'));
+    check('접속 첫 화면 = 프로젝트 허브', hubShown);
+
+    // 카드가 없으면 허브에서 직접 뷰어 진입(빈 상태 대비), 있으면 첫 카드 클릭
+    await page.evaluate(() => {
+      const card = document.querySelector('#hub-grid .hub-card:not(.hub-card-add)');
+      if (card) card.click();
+      else window.__wm.App.openApp('viewer');
     });
-    check('접속 즉시 screen-app 활성(홈 스킵)', appShown);
+    await page.waitForTimeout(500);
+
+    const appShown = await page.evaluate(() =>
+      document.getElementById('screen-app').classList.contains('active'));
+    check('카드 클릭 → screen-app 진입', appShown);
 
     const mode = await page.evaluate(() => window.__wm && window.__wm.State && window.__wm.State.mode);
-    check('자동 진입 모드 = viewer', mode === 'viewer', `mode=${mode}`);
+    check('미로그인 진입 모드 = viewer', mode === 'viewer', `mode=${mode}`);
 
     const modeLabel = await page.evaluate(() => { const e = document.getElementById('mode-label'); return e ? e.textContent : ''; });
     check('mode-label = VIEWER MODE', /VIEWER/.test(modeLabel), modeLabel);
@@ -57,8 +68,8 @@ const vis = (page, sel) => page.evaluate((s) => {
     // ── 2) topbar 버튼 가시성 ──
     check('⚙️ 설정 버튼 노출', await vis(page, '#btn-settings'));
     check('"뷰어로" 버튼 숨김(뷰어 모드)', !(await vis(page, '#btn-exit-edit')));
-    const backHidden = await page.evaluate(() => { const b = document.getElementById('btn-back'); return b && getComputedStyle(b).display === 'none'; });
-    check('← 홈 버튼 숨김', backHidden);
+    // ← 버튼: 프로젝트 허브 복귀용으로 표시(잠금 링크 아님)
+    check('← 허브 복귀 버튼 노출', await vis(page, '#btn-back'));
 
     // ── 3) 설정 패널 열기 (미로그인) ──
     await clickEv(page, '#btn-settings');

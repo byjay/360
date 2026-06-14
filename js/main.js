@@ -53,6 +53,8 @@
     panDragging: false,
     panStart:    { mx: 0, my: 0, px: 0, py: 0 },
     viewerLocked: false,
+    currentProjectId: null,
+    currentProjectName: null,
 
     reset() {
       if (this.imageUrl) { URL.revokeObjectURL(this.imageUrl); this.imageUrl = null; }
@@ -1126,6 +1128,168 @@
   };
 
   /* ══════════════════════════════════════════
+     PROJECT HUB  ── 첫 화면 = 프로젝트 선택 대시보드 (상용툴 모방)
+       · 로그인 안 함/뷰어: 카드 클릭 → 뷰어로 해당 프로젝트 열람
+       · 디자이너/슈퍼: "+새 프로젝트" + 카드 편집/삭제, 카드 클릭 → 디자이너 작업
+  ══════════════════════════════════════════ */
+  const ProjectHub = {
+    list: [],
+    _loaded: false,
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("hub-btn-new") && $("hub-btn-new").addEventListener("click", () => this.createProject());
+      // hub 인증바 버튼들 (홈 인증바와 동일 동작)
+      $("hub-btn-signout") && $("hub-btn-signout").addEventListener("click", () => Auth.signOut());
+      $("hub-btn-manage-designers") && $("hub-btn-manage-designers").addEventListener("click", () => Designers.open());
+    },
+
+    /** 화면 진입 시 호출 — 목록 로드 + 렌더 */
+    async open() {
+      UI.showScreen("screen-projects");
+      Auth._applyUi();          // 인증바 상태 동기화 (hub 슬롯 포함)
+      Auth._renderHubSignin();  // 미로그인 시 hub 로그인 버튼 렌더
+      await this.load();
+    },
+
+    async load() {
+      try {
+        const r = await fetch("/api/projects");
+        const { data } = await r.json();
+        this.list = data || [];
+      } catch (e) { this.list = []; }
+      this._loaded = true;
+      this.render();
+    },
+
+    /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
+    refreshIfVisible() {
+      const sc = document.getElementById("screen-projects");
+      if (sc && sc.classList.contains("active")) {
+        this.render();
+        Auth._renderHubSignin();
+      }
+    },
+
+    render() {
+      const grid  = document.getElementById("hub-grid");
+      const empty = document.getElementById("hub-empty");
+      const btnNew = document.getElementById("hub-btn-new");
+      const emptyHint = document.getElementById("hub-empty-hint");
+      if (!grid) return;
+
+      const isDesigner = Auth.isDesigner;
+      // +새 프로젝트 버튼: 디자이너만
+      if (btnNew) btnNew.classList.toggle("hidden", !isDesigner);
+
+      grid.innerHTML = "";
+
+      if (!this.list.length) {
+        empty && empty.classList.remove("hidden");
+        if (emptyHint) emptyHint.textContent = isDesigner
+          ? "우측 상단 '+ 새 프로젝트'로 첫 프로젝트를 만들어 보세요."
+          : "설계자로 로그인하면 새 프로젝트를 만들 수 있습니다.";
+        return;
+      }
+      empty && empty.classList.add("hidden");
+
+      this.list.forEach((p) => {
+        const card = document.createElement("div");
+        card.className = "hub-card";
+        card.setAttribute("role", "listitem");
+        card.tabIndex = 0;
+        const deckTxt = (p.deck_count != null) ? (p.deck_count + " decks") : "";
+        const dateTxt = this._fmtDate(p.created_at);
+        card.innerHTML =
+          '<div class="hub-card-thumb"><span class="hub-card-thumb-ico">🚢</span></div>' +
+          '<div class="hub-card-body">' +
+            '<div class="hub-card-name">' + UI.escapeHtml(p.name) + '</div>' +
+            '<div class="hub-card-meta">' +
+              (deckTxt ? '<span class="hub-card-decks">' + deckTxt + '</span>' : '') +
+              (dateTxt ? '<span class="hub-card-date">' + dateTxt + '</span>' : '') +
+            '</div>' +
+          '</div>' +
+          (isDesigner
+            ? '<div class="hub-card-actions">' +
+                '<button class="hub-card-act hub-card-del" title="삭제" data-act="del">🗑</button>' +
+              '</div>'
+            : '');
+
+        // 카드 클릭 → 진입
+        card.addEventListener("click", (e) => {
+          if (e.target.closest("[data-act]")) return; // 액션 버튼은 제외
+          this.openProject(p);
+        });
+        card.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.openProject(p); }
+        });
+        // 삭제 버튼
+        const del = card.querySelector('[data-act="del"]');
+        if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
+
+        grid.appendChild(card);
+      });
+
+      // 디자이너면 "+새 프로젝트" 카드도 그리드 맨 앞에 추가
+      if (isDesigner) {
+        const add = document.createElement("div");
+        add.className = "hub-card hub-card-add";
+        add.tabIndex = 0;
+        add.setAttribute("role", "listitem");
+        add.innerHTML = '<div class="hub-card-add-plus">+</div><div class="hub-card-add-label">새 프로젝트</div>';
+        const go = () => this.createProject();
+        add.addEventListener("click", go);
+        add.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+        grid.insertBefore(add, grid.firstChild);
+      }
+    },
+
+    /** 프로젝트 진입: 디자이너면 편집, 아니면 뷰어 */
+    openProject(p) {
+      // 선택 프로젝트를 Projects 모듈과 공유 (작업화면 사이드바 동기화용)
+      Projects.list = this.list;
+      Projects.currentProject = p;
+      State.currentProjectId = p.id;
+      State.currentProjectName = p.name;
+      if (Auth.isDesigner) {
+        App.openApp("designer", { project: p });
+      } else {
+        App.openApp("viewer", { project: p });
+      }
+    },
+
+    async createProject() {
+      if (!Auth.isDesigner) { Auth.requireDesigner(() => this.createProject()); return; }
+      const res = await Prompt.ask({ title: "프로젝트 생성", sub: "새 프로젝트 이름을 입력하세요 (예: ○○호 검사)", placeholder: "프로젝트 이름" });
+      if (!res || !res.value) return;
+      try {
+        const r = await fetch("/api/projects", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ name: res.value }) });
+        const p = await r.json();
+        if (!r.ok) { alert(p.error || "생성 실패(권한 필요)"); return; }
+        await this.load();
+      } catch (e) { alert("네트워크 오류"); }
+    },
+
+    async deleteProject(p) {
+      if (!Auth.isDesigner) return;
+      if (!confirm("'" + p.name + "' 프로젝트와 모든 데크를 삭제할까요?")) return;
+      try {
+        await fetch("/api/projects/" + p.id, { method: "DELETE", headers: Auth.headers() });
+        await this.load();
+      } catch (e) {}
+    },
+
+    _fmtDate(v) {
+      if (v == null) return "";
+      const n = (typeof v === "number") ? v : Date.parse(v);
+      if (!Number.isFinite(n)) return "";
+      const d = new Date(n);
+      const p = (x) => String(x).padStart(2, "0");
+      return d.getFullYear() + "." + p(d.getMonth() + 1) + "." + p(d.getDate());
+    }
+  };
+
+  /* ══════════════════════════════════════════
      BRAND  ── 회사 로고·테마 주입 (window.WM_BRAND)
   ══════════════════════════════════════════ */
   const Brand = {
@@ -1151,10 +1315,11 @@
         } catch (e) { /* noop */ }
       }
 
-      // 2) 로고 슬롯 채우기 (home / topbar / pano)
+      // 2) 로고 슬롯 채우기 (home / topbar / pano / hub)
       this._fillLogo("brand-logo-home", "home");
       this._fillLogo("brand-logo-top",  "top");
       this._fillLogo("brand-logo-pano", "pano");
+      this._fillLogo("hub-brand-logo",  "top");
 
       // 3) 텍스트 슬롯
       this._setText("home-badge",  this.cfg.company);
@@ -1244,6 +1409,7 @@
       Designers.init();
       Prompt.init();
       Projects.init();
+      ProjectHub.init();
       PanoNav.init();
     },
 
@@ -1264,8 +1430,9 @@
       });
     },
 
-    openApp(mode) {
+    openApp(mode, opts) {
       State.mode = mode;
+      opts = opts || {};
       const isDesigner = mode === "designer";
       document.documentElement.style.setProperty("--accent", isDesigner ? "var(--gold)" : "var(--green)");
       UI.$("topbar").style.borderBottomColor = isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)";
@@ -1305,10 +1472,16 @@
       // "뷰어로" 버튼은 편집(designer) 모드에서만
       const btnExit = UI.$("btn-exit-edit");
       if (btnExit) btnExit.classList.toggle("hidden", !isDesigner);
-      // 홈으로(←) 버튼: A안에서는 접속=바로 뷰어이므로 일반 뷰어 진입 시 숨김.
-      //   편집 모드에서는 "뷰어로" 버튼으로 빠져나가므로 ← 도 숨긴다.
+      // ←(뒤로) 버튼: 프로젝트 허브로 돌아가기 (뷰어 전용 잠금 링크에서는 숨김)
       const btnBack = UI.$("btn-back");
-      if (btnBack) btnBack.style.display = "none";
+      if (btnBack) btnBack.style.display = State.viewerLocked ? "none" : "";
+
+      // 진입한 프로젝트명을 topbar에 표시 (있을 때)
+      if (opts.project && opts.project.name) {
+        UI.text("file-name-label", opts.project.name);
+        State.currentProjectId = opts.project.id;
+        State.currentProjectName = opts.project.name;
+      }
 
       UI.showScreen("screen-app");
       if (!isDesigner) this.loadLatestDeployment();
@@ -1326,7 +1499,8 @@
       UI.$("btn-back").addEventListener("click", () => {
         State.reset();
         PanoViewer.close();
-        UI.showScreen("screen-home");
+        // 첫 화면 = 프로젝트 허브로 복귀
+        ProjectHub.open();
         UI.$("map-viewport").classList.add("hidden");
         UI.$("drop-hint").classList.remove("hidden");
         UI.$("pdf-error").classList.add("hidden");
@@ -2516,6 +2690,7 @@
       if (b1) { b1.innerHTML = ""; g.renderButton(b1, { theme: "filled_blue", size: "medium", text: "signin_with", shape: "pill" }); }
       if (b2) { b2.innerHTML = ""; g.renderButton(b2, { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" }); }
       if (b3) { b3.innerHTML = ""; g.renderButton(b3, { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" }); }
+      this._renderHubSignin();
     },
 
     async _onCredential(resp) {
@@ -2558,7 +2733,20 @@
     },
 
     _applyUi() {
-      const $ = (id) => document.getElementById(id);
+      // 홈 인증바 + 프로젝트 허브 인증바 모두 갱신
+      this._applyUiTo("");      // home: auth-signed-in / user-name ...
+      this._applyUiTo("hub-");  // hub:  hub-auth-signed-in / hub-user-name ...
+
+      // 디자이너 카드 잠금 표시
+      document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.toggle("locked", !this.isDesigner));
+      // 설정 패널이 열려 있으면 권한에 맞춰 다시 렌더
+      if (typeof Settings !== "undefined" && Settings._isOpen) Settings.render();
+      // 프로젝트 허브가 보이는 중이면 +새프로젝트/편집 버튼 갱신
+      if (typeof ProjectHub !== "undefined") ProjectHub.refreshIfVisible();
+    },
+
+    _applyUiTo(pfx) {
+      const $ = (id) => document.getElementById(pfx + id);
       const signedIn  = $("auth-signed-in");
       const signedOut = $("auth-signed-out");
       if (this.user) {
@@ -2577,10 +2765,13 @@
         signedIn && signedIn.classList.add("hidden");
         signedOut && signedOut.classList.remove("hidden");
       }
-      // 디자이너 카드 잠금 표시
-      document.querySelectorAll(".mode-card.designer").forEach((c) => c.classList.toggle("locked", !this.isDesigner));
-      // 설정 패널이 열려 있으면 권한에 맞춰 다시 렌더
-      if (typeof Settings !== "undefined" && Settings._isOpen) Settings.render();
+    },
+
+    /** 프로젝트 허브의 구글 로그인 버튼 렌더 */
+    _renderHubSignin() {
+      if (!this._gsiInited || !window.google || !window.google.accounts) return;
+      const b = document.getElementById("hub-google-signin-btn");
+      if (b) { b.innerHTML = ""; window.google.accounts.id.renderButton(b, { theme: "filled_blue", size: "medium", text: "signin_with", shape: "pill" }); }
     },
 
     /** 디자이너 진입 요청. 권한 있으면 콜백 즉시, 없으면 로그인 게이트. */
@@ -2969,7 +3160,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, Prompt, PanoViewer, Radar, PanoNav, Brand,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);
@@ -2980,16 +3171,19 @@
 
     const params  = new URLSearchParams(location.search);
     const urlMode = params.get("mode");
-    if (urlMode === "viewer") {
+    const depId   = params.get("d");
+    if (urlMode === "viewer" || depId) {
+      // 배포 링크(?mode=viewer / ?d=배포ID) — 특정 배포본 바로 뷰어 (허브 스킵)
       State.viewerLocked = true;
       App.openApp("viewer");
     } else if (urlMode === "designer") {
-      // 설계자 직접 진입도 로그인+디자이너 권한 필요
-      Auth.requireDesigner(() => App.openApp("designer"));
+      // 설계자 직접 진입 — 로그인+디자이너 권한 필요, 통과 시 프로젝트 허브로
+      Auth.requireDesigner(() => ProjectHub.open());
+      ProjectHub.open();
     } else {
-      // ── A안: 접속 = 바로 뷰어 화면 (홈 화면 스킵) ──
-      //   편집(설계자) 모드는 topbar ⚙️ 설정 버튼 → 구글 로그인 → 디자이너면 전환
-      App.openApp("viewer");
+      // ── 첫 화면 = 프로젝트 선택 대시보드 (상용툴 모방) ──
+      //   카드 클릭 → (디자이너)편집 / (그 외)뷰어. 디자이너는 +새 프로젝트.
+      ProjectHub.open();
     }
 
     /* ── 360° 테스트 훅: ?demo360=<이미지URL> 로 파노라마 직접 오픈 ── */
