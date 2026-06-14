@@ -78,6 +78,10 @@
     </div>
 
     <div id="pin-count-badge" class="pin-count-badge hidden"></div>
+    <button id="btn-all-pins" class="btn-allpins hidden" title="전체 핀 리스트 보기 (P)" aria-label="전체 핀 리스트">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
+      <span>전체 핀</span>
+    </button>
     <button id="btn-download-src" class="btn-dl-src" title="소스코드 ZIP 다운로드">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       소스 다운로드
@@ -246,6 +250,37 @@
       </div>
     </main>
   </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     ALL-PINS DRAWER (전체 핀 리스트 보기)
+════════════════════════════════════════════ -->
+<div id="allpins-drawer" class="allpins-drawer hidden">
+  <div id="allpins-backdrop" class="allpins-backdrop"></div>
+  <aside class="allpins-panel" role="dialog" aria-label="전체 핀 리스트">
+    <header class="allpins-head">
+      <div class="allpins-title">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        <span>전체 포인트</span>
+        <span id="allpins-count" class="allpins-count">0</span>
+      </div>
+      <button id="btn-allpins-close" class="btn-allpins-close" title="닫기 (Esc)" aria-label="닫기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
+    </header>
+    <div class="allpins-tools">
+      <div class="allpins-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input id="allpins-search-input" type="text" placeholder="이름으로 검색..." autocomplete="off" />
+      </div>
+      <div class="allpins-sort">
+        <button class="allpins-sort-btn active" data-sort="page" title="페이지·번호순">번호순</button>
+        <button class="allpins-sort-btn" data-sort="name" title="이름(가나다)순">이름순</button>
+      </div>
+    </div>
+    <div id="allpins-list" class="allpins-list"></div>
+    <div id="allpins-empty" class="allpins-empty hidden">표시할 포인트가 없습니다</div>
+  </aside>
 </div>
 
 <!-- ═══════════════════════════════════════════

@@ -838,6 +838,7 @@
         empty.classList.remove("hidden");
         badge.classList.add("hidden");
         this.hide("section-export");
+        if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
         return;
       }
       empty.classList.add("hidden");
@@ -888,6 +889,7 @@
         }
         list.appendChild(item);
       });
+      if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
     },
 
     renderPinsOnMap(dropPinId) {
@@ -907,9 +909,9 @@
           <div class="pin-marker-label">${this.escapeHtml(pin.label)}</div>
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
-            <svg viewBox="0 0 34 44" xmlns="http://www.w3.org/2000/svg">
-              <path class="pin-pin-fill" d="M17 1C8.7 1 2 7.7 2 16c0 9.5 12.2 24.4 14.1 26.6.5.5 1.3.5 1.8 0C19.8 40.4 32 25.5 32 16 32 7.7 25.3 1 17 1z"/>
-              <circle cx="17" cy="16" r="11" fill="rgba(0,0,0,.18)"/>
+            <svg viewBox="0 0 34 45" xmlns="http://www.w3.org/2000/svg">
+              <path class="pin-pin-fill" d="M17 1.5C9.27 1.5 3 7.77 3 15.5c0 8.9 11.2 23.3 13.3 26.04a2.1 2.1 0 0 0 3.4 0C22.8 38.8 31 26 31 15.5 31 7.77 24.73 1.5 17 1.5z"/>
+              <circle class="pin-pin-hole" cx="17" cy="15.5" r="6.2"/>
             </svg>
             <span class="pin-pin-num">${idx + 1}</span>
           </div>`;
@@ -1014,6 +1016,7 @@
       this._bindPano();
       MapCtrl.init(UI.$("map-viewport"), UI.$("map-transform"));
       PanoViewer.init(UI.$("pano-canvas"));
+      AllPins.init();
     },
 
     /* ── Home ── */
@@ -2036,6 +2039,154 @@
   };
 
   /* ══════════════════════════════════════════
+     ALL-PINS DRAWER — 전체 핀 리스트 보기
+     · 모든 페이지의 핀을 이름/번호순으로 한눈에
+     · 검색, 360°/문서 미리보기 썸네일, 클릭 시 페이지 구분 없이 줌인+360° 오픈
+  ══════════════════════════════════════════ */
+  const AllPins = {
+    open: false,
+    sort: "page",     // 'page' | 'name'
+    query: "",
+    _thumbCache: {},  // imageId → dataURL (썸네일 1회 fetch 캐시)
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("btn-all-pins") && $("btn-all-pins").addEventListener("click", () => this.toggle());
+      $("btn-allpins-close") && $("btn-allpins-close").addEventListener("click", () => this.hide());
+      $("allpins-backdrop") && $("allpins-backdrop").addEventListener("click", () => this.hide());
+      const search = $("allpins-search-input");
+      if (search) search.addEventListener("input", () => { this.query = search.value.trim().toLowerCase(); this.render(); });
+      document.querySelectorAll(".allpins-sort-btn").forEach((b) => {
+        b.addEventListener("click", () => {
+          this.sort = b.dataset.sort;
+          document.querySelectorAll(".allpins-sort-btn").forEach((x) => x.classList.toggle("active", x === b));
+          this.render();
+        });
+      });
+      // 단축키 P 로 토글 (입력 중/파노라마 열림 제외)
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && this.open) { this.hide(); return; }
+        const tag = (e.target && e.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (PanoViewer.open) return;
+        if ((e.key === "p" || e.key === "P") && State.pins.length) { e.preventDefault(); this.toggle(); }
+      });
+    },
+
+    /** 핀이 있을 때만 topbar 버튼 노출 */
+    syncButton() {
+      const btn = document.getElementById("btn-all-pins");
+      if (!btn) return;
+      btn.classList.toggle("hidden", !State.pins.length);
+    },
+
+    toggle() { this.open ? this.hide() : this.show(); },
+
+    show() {
+      if (!State.pins.length) return;
+      this.open = true;
+      document.getElementById("allpins-drawer").classList.remove("hidden");
+      requestAnimationFrame(() => document.getElementById("allpins-drawer").classList.add("on"));
+      this.render();
+    },
+
+    hide() {
+      this.open = false;
+      const d = document.getElementById("allpins-drawer");
+      d.classList.remove("on");
+      setTimeout(() => { if (!this.open) d.classList.add("hidden"); }, 220);
+    },
+
+    _kindBadge(pin) {
+      if (pin.isVideo || (pin.imageUrl && /\.(mp4|webm|mov)(\?|$)/i.test(pin.imageUrl)))
+        return { ico: "🎬", cls: "video", txt: "360° 영상" };
+      if (pin.imageId || pin.imageUrl) return { ico: "🌐", cls: "pano", txt: "360° 파노라마" };
+      if (pin.attachments && pin.attachments.length) return { ico: "📎", cls: "doc", txt: pin.attachments.length + "개 첨부" };
+      if (pin.note) return { ico: "📝", cls: "note", txt: "노트" };
+      return { ico: "📍", cls: "empty", txt: "콘텐츠 없음" };
+    },
+
+    _sorted() {
+      const arr = State.pins.map((p, i) => ({ pin: p, idx: i }));
+      if (this.query) {
+        arr.splice(0, arr.length, ...arr.filter((o) =>
+          (o.pin.label || "").toLowerCase().includes(this.query)));
+      }
+      if (this.sort === "name") {
+        arr.sort((a, b) => (a.pin.label || "").localeCompare(b.pin.label || "", "ko"));
+      } else {
+        arr.sort((a, b) => ((a.pin.page || 1) - (b.pin.page || 1)) || (a.idx - b.idx));
+      }
+      return arr;
+    },
+
+    render() {
+      if (!this.open) return;
+      const listEl = document.getElementById("allpins-list");
+      const emptyEl = document.getElementById("allpins-empty");
+      const countEl = document.getElementById("allpins-count");
+      if (countEl) countEl.textContent = State.pins.length;
+      const rows = this._sorted();
+      listEl.innerHTML = "";
+      if (!rows.length) { emptyEl.classList.remove("hidden"); return; }
+      emptyEl.classList.add("hidden");
+
+      const totalPages = State.mode === "viewer"
+        ? (State.viewerPages ? State.viewerPages.length : 1) : State.pdfPages;
+
+      rows.forEach(({ pin, idx }) => {
+        const badge = this._kindBadge(pin);
+        const hasMedia = App.pinHasContent(pin);
+        const pageTag = totalPages > 1 ? `P${pin.page || 1}` : "";
+        const row = document.createElement("button");
+        row.className = "allpins-item" + (State.activePin === pin.id ? " active" : "");
+        row.dataset.id = pin.id;
+        row.innerHTML = `
+          <span class="allpins-thumb ${badge.cls}" data-imgid="${pin.imageId || ""}">
+            <span class="allpins-thumb-ico">${badge.ico}</span>
+            <span class="allpins-thumb-no">${idx + 1}</span>
+          </span>
+          <span class="allpins-meta">
+            <span class="allpins-name">${UI.escapeHtml(pin.label || "(이름 없음)")}</span>
+            <span class="allpins-sub">
+              <span class="allpins-kind ${badge.cls}">${badge.txt}</span>
+              ${pageTag ? `<span class="allpins-page">${pageTag}</span>` : ""}
+            </span>
+          </span>
+          <span class="allpins-go" title="이동 + 보기">
+            ${hasMedia
+              ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/></svg>'
+              : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>'}
+          </span>`;
+        row.addEventListener("click", () => this._goto(pin));
+        listEl.appendChild(row);
+
+        // 360° 그림 썸네일 비동기 로드 (캐시)
+        if (pin.imageId) this._loadThumb(row.querySelector(".allpins-thumb"), pin.imageId);
+      });
+    },
+
+    async _loadThumb(thumbEl, imageId) {
+      try {
+        let url = this._thumbCache[imageId] || (Cloud._cache && Cloud._cache[imageId]);
+        if (!url) { url = await Cloud.fetchImage(imageId); this._thumbCache[imageId] = url; }
+        if (!url || !thumbEl) return;
+        thumbEl.style.backgroundImage = `url("${url}")`;
+        thumbEl.classList.add("has-img");
+      } catch (e) { /* 썸네일 실패 무시 */ }
+    },
+
+    /** 페이지 구분 없이 해당 포인트로 이동(줌인) + 콘텐츠 있으면 360°/정보 함께 오픈 */
+    async _goto(pin) {
+      const hasContent = App.pinHasContent(pin);
+      // 1) 먼저 도면을 해당 포인트로 이동(페이지 전환 포함)시켜 결과를 확정한 뒤
+      await App.focusPin(pin, hasContent);
+      // 2) 드로어를 닫는다 (이동 결과가 보이도록). 콘텐츠 없으면 닫고 도면만 보여줌.
+      this.hide();
+    }
+  };
+
+  /* ══════════════════════════════════════════
      ZIP 다운로드 (공용)
   ══════════════════════════════════════════ */
   async function buildAndDownloadZip() {
@@ -2092,6 +2243,17 @@
   /* ── 진입 ── */
   document.addEventListener("DOMContentLoaded", () => {
     App.init();
+
+    // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
+    window.__wm = {
+      State, App, AllPins, UI, MapCtrl,
+      addPin(p) {
+        const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
+        State.pins.push(pin);
+        UI.renderPinList(); UI.renderPinsOnMap();
+        return pin.id;
+      }
+    };
 
     const params  = new URLSearchParams(location.search);
     const urlMode = params.get("mode");
