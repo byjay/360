@@ -981,7 +981,27 @@
         ? (State.viewerPages ? State.viewerPages.length : 1)
         : State.pdfPages;
 
-      State.pins.forEach((pin, idx) => {
+      // 다중 페이지 도면: 현재 페이지의 핀만 목록에 표시(페이지별 완벽 구분)
+      const curPage = State.pdfPage || 1;
+      const isMulti = totalPages > 1;
+      const visiblePins = isMulti
+        ? State.pins.filter(p => (p.page || 1) === curPage)
+        : State.pins;
+
+      // 현재 페이지에 핀이 없으면 안내(다른 페이지에 핀이 있을 수 있음)
+      if (isMulti && visiblePins.length === 0) {
+        const other = State.pins.length;
+        empty.classList.remove("hidden");
+        const et = empty.querySelector(".pin-empty-sub") || empty;
+        list.innerHTML = `<p class="pin-empty-page">현재 페이지(P${curPage})에 등록된 포인트가 없습니다.${other ? ` 다른 페이지에 ${other}개의 포인트가 있습니다.` : ""}</p>`;
+        badge.textContent = State.pins.length + " PINS";
+        badge.classList.remove("hidden");
+        if (State.mode === "designer") this.show("section-export");
+        if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
+        return;
+      }
+
+      visiblePins.forEach((pin, idx) => {
         const item = document.createElement("div");
         item.className = "pin-item" + (State.activePin === pin.id ? " active" : "");
         item.dataset.id = pin.id;
@@ -1031,8 +1051,10 @@
       const layer = this.$("pins-layer");
       layer.innerHTML = "";
       const curPage = State.pdfPage;
-      State.pins.forEach((pin, idx) => {
+      let pageIdx = 0; // 페이지별 1부터 시작하는 번호
+      State.pins.forEach((pin) => {
         if ((pin.page || 1) !== curPage) return; // 현재 페이지 핀만
+        pageIdx++;
         const marker = document.createElement("div");
         marker.className = "pin-marker" + (pin.id === dropPinId ? " drop" : "")
           + (State.activePin === pin.id ? " focused" : "");
@@ -1043,15 +1065,17 @@
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
+        // 핀 끝이 뾰족한 진짜 "버블/말풍선" 형태 — 머리는 둥근 버블, 꼬리는 정확한 위치를 가리킴
         marker.innerHTML = `
           <div class="pin-marker-label">${this.escapeHtml(pin.label)}</div>
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
-            <svg viewBox="0 0 34 45" xmlns="http://www.w3.org/2000/svg">
-              <path class="pin-pin-fill" d="M17 1.5C9.27 1.5 3 7.77 3 15.5c0 8.9 11.2 23.3 13.3 26.04a2.1 2.1 0 0 0 3.4 0C22.8 38.8 31 26 31 15.5 31 7.77 24.73 1.5 17 1.5z"/>
-              <circle class="pin-pin-hole" cx="17" cy="15.5" r="6.2"/>
+            <svg viewBox="0 0 36 48" xmlns="http://www.w3.org/2000/svg">
+              <defs><filter id="pinshadow" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="1.4" stdDeviation="1.6" flood-color="rgba(0,0,0,.45)"/></filter></defs>
+              <path class="pin-pin-fill" filter="url(#pinshadow)" d="M18 2C10.27 2 4 8.06 4 15.5c0 5.2 3.3 10 7.4 13.9 2.5 2.4 4.7 5.6 5.7 9.2.2.8 1.6.8 1.8 0 1-3.6 3.2-6.8 5.7-9.2C28.7 25.5 32 20.7 32 15.5 32 8.06 25.73 2 18 2z"/>
+              <circle class="pin-pin-hole" cx="18" cy="15.5" r="6.6"/>
             </svg>
-            <span class="pin-pin-num">${idx + 1}</span>
+            <span class="pin-pin-num">${pageIdx}</span>
             ${issueDot}
           </div>`;
         marker.addEventListener("click", e => {
@@ -1824,103 +1848,259 @@
   ══════════════════════════════════════════ */
   const ZONE_COLORS = ["#f59e0b", "#3b82f6", "#10b981", "#ef4444", "#a855f7", "#06b6d4"];
   const Zones = {
-    _drag: null,        // {sx,sy} 시작 % 좌표
+    _drag: null,        // {sx,sy} 시작 % 좌표 (rect/circle 드래그)
     _active: null,      // 현재 하이라이트된 zone id
+    _shape: "rect",     // 현재 그리기 도형: rect | circle | poly
+    _poly: null,        // 다각형 그리는 중 점 배열 [{x,y}...]
 
     _newId() { return "zone_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); },
 
     init() {
       const $ = (id) => document.getElementById(id);
+      // 도형 도구 버튼 (사각형/원형/다각형)
+      ["rect", "circle", "poly"].forEach(sh => {
+        const b = $("btn-zone-" + sh);
+        if (b) b.addEventListener("click", () => this.pickShape(sh));
+      });
+      // 레거시 단일 버튼 호환
       $("btn-zone") && $("btn-zone").addEventListener("click", () => this.toggleDraw());
+      // 다각형: 더블클릭/Enter 로 완료
+      const vp = $("map-viewport");
+      if (vp) vp.addEventListener("dblclick", (e) => { if (State.drawingZone && this._shape === "poly" && this._poly && this._poly.length >= 3) { e.preventDefault(); this._finishPoly(); } });
+      document.addEventListener("keydown", (e) => {
+        if (!State.drawingZone) return;
+        if (e.key === "Enter" && this._shape === "poly" && this._poly && this._poly.length >= 3) { e.preventDefault(); this._finishPoly(); }
+        if (e.key === "Escape") { this._cancelDraw(); }
+      });
     },
 
     isDesigner() { return !!(typeof Auth !== "undefined" && Auth.isDesigner); },
 
-    toggleDraw() {
+    /** 도형 선택 → 그리기 모드 토글 */
+    pickShape(shape) {
       if (!this.isDesigner()) return;
-      State.drawingZone = !State.drawingZone;
+      // 같은 도형 다시 누르면 끄기
+      if (State.drawingZone && this._shape === shape) { this._cancelDraw(); return; }
+      this._shape = shape;
+      this._poly = null;
+      if (!State.drawingZone) State.drawingZone = true;
       // 핀 배치 모드와 상호 배타
+      if (State.placing) {
+        State.placing = false;
+        UI.$("btn-place") && UI.$("btn-place").classList.remove("active");
+        UI.$("place-hint") && UI.$("place-hint").classList.add("hidden");
+        UI.$("crosshair-overlay") && UI.$("crosshair-overlay").classList.add("hidden");
+      }
+      this._syncToolUi();
+    },
+
+    /** 레거시 toggle (뷰어 차단/기본 rect) */
+    toggleDraw() {
+      if (!this.isDesigner()) { State.drawingZone = false; return; }
+      State.drawingZone = !State.drawingZone;
+      this._poly = null;
       if (State.drawingZone && State.placing) {
         State.placing = false;
         UI.$("btn-place") && UI.$("btn-place").classList.remove("active");
         UI.$("place-hint") && UI.$("place-hint").classList.add("hidden");
         UI.$("crosshair-overlay") && UI.$("crosshair-overlay").classList.add("hidden");
       }
+      this._syncToolUi();
+    },
+
+    _cancelDraw() {
+      State.drawingZone = false;
+      this._poly = null; this._drag = null;
+      this._clearDraft();
+      this._syncToolUi();
+    },
+
+    _syncToolUi() {
+      ["rect", "circle", "poly"].forEach(sh => {
+        const b = UI.$("btn-zone-" + sh);
+        if (b) b.classList.toggle("active", State.drawingZone && this._shape === sh);
+      });
       const btn = UI.$("btn-zone");
       if (btn) btn.classList.toggle("active", State.drawingZone);
       const hint = UI.$("zone-hint");
-      if (hint) hint.classList.toggle("hidden", !State.drawingZone);
+      if (hint) hint.classList.toggle("hidden", !(State.drawingZone && this._shape !== "poly"));
+      const ph = UI.$("zone-poly-hint");
+      if (ph) ph.classList.toggle("hidden", !(State.drawingZone && this._shape === "poly"));
       const vp = UI.$("map-viewport");
       if (vp) vp.style.cursor = State.drawingZone ? "crosshair" : "grab";
+      this._renderDraft();
     },
 
-    /* ── 그리기 (마우스/터치) ── */
+    /* ── 드래그 그리기 (rect/circle) ── */
     onDrawStart(clientX, clientY) {
       if (!State.drawingZone) return false;
       const pct = MapCtrl.viewportToPercent(clientX, clientY);
       if (!pct) return false;
-      this._drag = { sx: pct.x, sy: pct.y };
-      const draft = UI.$("zone-draft");
-      if (draft) {
-        draft.classList.remove("hidden");
-        draft.style.left = pct.x + "%"; draft.style.top = pct.y + "%";
-        draft.style.width = "0%"; draft.style.height = "0%";
+      if (this._shape === "poly") {
+        // 다각형: 클릭마다 점 추가 (시작점 근처 클릭 시 닫기)
+        this._poly = this._poly || [];
+        if (this._poly.length >= 3) {
+          const s = this._poly[0];
+          if (Math.hypot(pct.x - s.x, pct.y - s.y) < 2.2) { this._finishPoly(); return true; }
+        }
+        this._poly.push({ x: +pct.x.toFixed(3), y: +pct.y.toFixed(3) });
+        this._renderDraft();
+        return true;
       }
+      this._drag = { sx: pct.x, sy: pct.y, cx: pct.x, cy: pct.y };
+      this._renderDraft();
       return true;
     },
     onDrawMove(clientX, clientY) {
-      if (!this._drag) return;
       const pct = MapCtrl.viewportToPercent(clientX, clientY);
       if (!pct) return;
-      const x = Math.min(this._drag.sx, pct.x), y = Math.min(this._drag.sy, pct.y);
-      const w = Math.abs(pct.x - this._drag.sx), h = Math.abs(pct.y - this._drag.sy);
-      const draft = UI.$("zone-draft");
-      if (draft) {
-        draft.style.left = x + "%"; draft.style.top = y + "%";
-        draft.style.width = w + "%"; draft.style.height = h + "%";
-      }
+      if (this._shape === "poly") { this._polyCursor = { x: pct.x, y: pct.y }; this._renderDraft(); return; }
+      if (!this._drag) return;
+      this._drag.cx = pct.x; this._drag.cy = pct.y;
+      this._renderDraft();
     },
     async onDrawEnd(clientX, clientY) {
+      if (this._shape === "poly") return; // 다각형은 클릭 누적 방식
       if (!this._drag) return;
       const pct = MapCtrl.viewportToPercent(clientX, clientY);
       const start = this._drag; this._drag = null;
-      const draft = UI.$("zone-draft");
-      if (draft) draft.classList.add("hidden");
+      this._clearDraft();
       if (!pct) return;
       const x = Math.min(start.sx, pct.x), y = Math.min(start.sy, pct.y);
       const w = Math.abs(pct.x - start.sx), h = Math.abs(pct.y - start.sy);
-      // 너무 작은 영역 무시(오클릭 방지)
-      if (w < 1.5 || h < 1.5) { this.toggleDraw(); return; }
-      let label = "";
-      if (typeof Prompt !== "undefined" && Prompt.ask) {
-        try { const r = await Prompt.ask({ title: "영역 이름", placeholder: "예: 1번 화물창 / 엔진룸 구역", value: "구역 " + (State.zones.filter(z => (z.page||1)===(State.pdfPage||1)).length + 1) }); if (r && r.value != null) label = r.value; else { this.toggleDraw(); return; } }
-        catch (e) { this.toggleDraw(); return; }
+      if (w < 1.5 || h < 1.5) { this._cancelDraw(); return; } // 너무 작은 영역 무시
+      let geom;
+      if (this._shape === "circle") {
+        const cx = (start.sx + pct.x) / 2, cy = (start.sy + pct.y) / 2;
+        const r = Math.max(w, h) / 2;
+        geom = { shape: "circle", cx: +cx.toFixed(3), cy: +cy.toFixed(3), r: +r.toFixed(3) };
       } else {
-        label = prompt("영역 이름", "구역 " + (State.zones.length + 1)) || "";
-        if (!label) { this.toggleDraw(); return; }
+        geom = { shape: "rect", x: +x.toFixed(3), y: +y.toFixed(3), w: +w.toFixed(3), h: +h.toFixed(3) };
+      }
+      await this._commitZone(geom);
+    },
+
+    /** 다각형 완료 → 닫힌 구역으로 저장 */
+    async _finishPoly() {
+      const pts = (this._poly || []).map(p => ({ x: +p.x.toFixed(3), y: +p.y.toFixed(3) }));
+      this._poly = null; this._polyCursor = null;
+      this._clearDraft();
+      if (pts.length < 3) { this._cancelDraw(); return; }
+      await this._commitZone({ shape: "poly", points: pts });
+    },
+
+    /** 도형 → 라벨 입력 → zone 객체 생성/저장 (공통) */
+    async _commitZone(geom) {
+      let label = "";
+      const defLabel = "구역 " + (State.zones.filter(z => (z.page||1)===(State.pdfPage||1)).length + 1);
+      if (typeof Prompt !== "undefined" && Prompt.ask) {
+        try { const r = await Prompt.ask({ title: "영역 이름", placeholder: "예: 1번 화물창 / 엔진룸 구역" }); if (r && r.value != null && r.value !== "") label = r.value; else if (r && r.value === "") label = defLabel; else { this._cancelDraw(); return; } }
+        catch (e) { this._cancelDraw(); return; }
+      } else {
+        label = prompt("영역 이름", defLabel) || "";
+        if (!label) { this._cancelDraw(); return; }
       }
       const color = ZONE_COLORS[State.zones.length % ZONE_COLORS.length];
-      const zone = {
+      const bb = this._bbox(geom);
+      const zone = Object.assign({
         id: this._newId(), page: State.pdfPage || 1,
-        x: +x.toFixed(3), y: +y.toFixed(3), w: +w.toFixed(3), h: +h.toFixed(3),
-        label: label || ("구역 " + (State.zones.length + 1)), color, pinIds: [], note: "",
-      };
-      // 영역 내부에 들어오는 핀 자동 연결
+        label: label || defLabel, color, pinIds: [], note: "",
+        x: bb.x, y: bb.y, w: bb.w, h: bb.h, // 항상 바운딩 박스 보관(검색/플라이 호환)
+      }, geom);
       zone.pinIds = (State.pins || []).filter(p => (p.page||1) === zone.page && this._contains(zone, p.x, p.y)).map(p => p.id);
       State.zones.push(zone);
-      this.toggleDraw();
+      this._cancelDraw();
       this.render();
       this.renderList();
     },
 
-    _contains(z, x, y) { return x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h; },
+    /** 도형의 바운딩 박스(%) 계산 */
+    _bbox(g) {
+      if (g.shape === "circle") return { x: +(g.cx - g.r).toFixed(3), y: +(g.cy - g.r).toFixed(3), w: +(g.r * 2).toFixed(3), h: +(g.r * 2).toFixed(3) };
+      if (g.shape === "poly") {
+        const xs = g.points.map(p => p.x), ys = g.points.map(p => p.y);
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        return { x: +minX.toFixed(3), y: +minY.toFixed(3), w: +(Math.max(...xs) - minX).toFixed(3), h: +(Math.max(...ys) - minY).toFixed(3) };
+      }
+      return { x: g.x, y: g.y, w: g.w, h: g.h };
+    },
 
-    /* ── 렌더: 도면 위 영역 박스 ── */
+    /** 점(x,y%)이 영역(도형) 내부인지 — rect/circle/poly 각각 정확 판정 */
+    _contains(z, x, y) {
+      if (z.shape === "circle") return Math.hypot(x - z.cx, y - z.cy) <= z.r;
+      if (z.shape === "poly" && Array.isArray(z.points)) {
+        let inside = false; const pts = z.points;
+        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+          const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+          if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-9) + xi)) inside = !inside;
+        }
+        return inside;
+      }
+      return x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h;
+    },
+
+    /* ── 그리기 미리보기(SVG draft) ── */
+    _clearDraft() {
+      this._polyCursor = null;
+      const svg = document.getElementById("zones-svg");
+      if (svg) { const d = svg.querySelector(".zone-draft-svg"); if (d) d.remove(); }
+      const legacy = document.getElementById("zone-draft");
+      if (legacy) { legacy.classList.add("hidden"); }
+    },
+    _renderDraft() {
+      const svg = document.getElementById("zones-svg");
+      if (!svg) return;
+      let d = svg.querySelector(".zone-draft-svg");
+      if (d) d.remove();
+      if (!State.drawingZone) return;
+      d = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      d.setAttribute("class", "zone-draft-svg");
+      let inner = "";
+      if (this._shape === "rect" && this._drag) {
+        const x = Math.min(this._drag.sx, this._drag.cx), y = Math.min(this._drag.sy, this._drag.cy);
+        const w = Math.abs(this._drag.cx - this._drag.sx), h = Math.abs(this._drag.cy - this._drag.sy);
+        inner = `<rect x="${x}" y="${y}" width="${w}" height="${h}" class="zd-shape"/>`;
+      } else if (this._shape === "circle" && this._drag) {
+        const cx = (this._drag.sx + this._drag.cx) / 2, cy = (this._drag.sy + this._drag.cy) / 2;
+        const r = Math.max(Math.abs(this._drag.cx - this._drag.sx), Math.abs(this._drag.cy - this._drag.sy)) / 2;
+        inner = `<ellipse cx="${cx}" cy="${cy}" rx="${r}" ry="${r}" class="zd-shape"/>`;
+      } else if (this._shape === "poly" && this._poly && this._poly.length) {
+        const live = this._polyCursor ? this._poly.concat([this._polyCursor]) : this._poly;
+        const pts = live.map(p => `${p.x},${p.y}`).join(" ");
+        inner = `<polyline points="${pts}" class="zd-line"/>` +
+          this._poly.map((p, i) => `<circle cx="${p.x}" cy="${p.y}" r="${i === 0 ? 1.3 : 0.9}" class="zd-dot${i === 0 ? " first" : ""}"/>`).join("");
+      }
+      d.innerHTML = inner;
+      svg.appendChild(d);
+    },
+
+    _shapeLabel(z) { return z.shape === "circle" ? "원형" : z.shape === "poly" ? "다각형" : "사각형"; },
+    _shapeIcon(z) {
+      const c = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+      if (z.shape === "circle") return `<svg viewBox="0 0 24 24" ${c}><circle cx="12" cy="12" r="8.5"/></svg>`;
+      if (z.shape === "poly") return `<svg viewBox="0 0 24 24" ${c}><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg>`;
+      return `<svg viewBox="0 0 24 24" ${c}><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg>`;
+    },
+
+    /* ── 렌더: 도면 위 영역 (SVG 도형 + HTML 라벨/삭제) ── */
     render() {
-      const layer = document.getElementById("zones-layer");
-      if (!layer) return;
       const page = State.pdfPage || 1;
       const zones = (State.zones || []).filter(z => (z.page || 1) === page);
+      const svg = document.getElementById("zones-svg");
+      const layer = document.getElementById("zones-layer");
+      if (!svg || !layer) return;
+
+      // 1) SVG 도형(채움+테두리)
+      const draft = svg.querySelector(".zone-draft-svg");
+      svg.innerHTML = zones.map(z => {
+        const a = z.id === this._active ? " active" : "";
+        if (z.shape === "circle") return `<ellipse data-zone="${z.id}" class="zone-shape${a}" cx="${z.cx}" cy="${z.cy}" rx="${z.r}" ry="${z.r}" style="--zc:${z.color}"/>`;
+        if (z.shape === "poly") return `<polygon data-zone="${z.id}" class="zone-shape${a}" points="${(z.points||[]).map(p=>p.x+","+p.y).join(" ")}" style="--zc:${z.color}"/>`;
+        return `<rect data-zone="${z.id}" class="zone-shape${a}" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="0.6" style="--zc:${z.color}"/>`;
+      }).join("");
+      if (draft) svg.appendChild(draft);
+
+      // 2) HTML 라벨/삭제 버튼 (바운딩 박스 좌상단)
       layer.innerHTML = zones.map(z => {
         const isActive = z.id === this._active;
         const cnt = (z.pinIds || []).length;
@@ -1930,12 +2110,19 @@
             ${this.isDesigner() ? `<button class="zone-box-del" data-zdel="${z.id}" title="영역 삭제" aria-label="영역 삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>` : ""}
           </div>`;
       }).join("");
-      // 이벤트
+
+      // 이벤트 — SVG 도형 + HTML 박스
+      svg.querySelectorAll(".zone-shape").forEach(el => {
+        const id = el.getAttribute("data-zone");
+        el.addEventListener("mouseenter", () => this.highlight(id));
+        el.addEventListener("mouseleave", () => this.highlight(null));
+        el.addEventListener("click", () => this.focus(id));
+      });
       layer.querySelectorAll(".zone-box").forEach(el => {
         const id = el.dataset.zone;
         el.addEventListener("mouseenter", () => this.highlight(id));
         el.addEventListener("mouseleave", () => this.highlight(null));
-        el.addEventListener("click", (e) => { if (e.target.dataset.zdel) return; this.focus(id); });
+        el.addEventListener("click", (e) => { if (e.target.closest("[data-zdel]")) return; this.focus(id); });
       });
       layer.querySelectorAll("[data-zdel]").forEach(b => {
         b.addEventListener("click", (e) => { e.stopPropagation(); this.remove(b.dataset.zdel); });
@@ -1952,13 +2139,14 @@
       if (cntEl) cntEl.textContent = zones.length;
       if (sec) sec.classList.toggle("hidden", zones.length === 0 && !this.isDesigner());
       if (zones.length === 0) {
-        list.innerHTML = `<p class="zone-empty">${this.isDesigner() ? "‘▦ 영역 지정’으로 구역을 그려보세요." : "지정된 영역이 없습니다."}</p>`;
+        list.innerHTML = `<p class="zone-empty">${this.isDesigner() ? "위 ‘영역 지정 도구’(사각형·원형·선)로 구역을 그려보세요." : "지정된 영역이 없습니다."}</p>`;
         return;
       }
       list.innerHTML = zones.map(z => {
         const cnt = (z.pinIds || []).length;
         return `<div class="zone-item" data-zone="${z.id}">
             <span class="zone-item-color" style="background:${z.color}"></span>
+            <span class="zone-item-shape" title="${this._shapeLabel(z)}">${this._shapeIcon(z)}</span>
             <span class="zone-item-label">${UI.escapeHtml(z.label)}</span>
             <span class="zone-item-page">p.${z.page || 1}</span>
             <span class="zone-item-cnt" title="연결된 핀"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>${cnt}</span>
@@ -1975,7 +2163,11 @@
     /** 영역 + 내부 핀 하이라이트 */
     highlight(id) {
       this._active = id;
-      // 영역 박스
+      // SVG 도형
+      document.querySelectorAll("#zones-svg .zone-shape").forEach(el => {
+        el.classList.toggle("active", el.getAttribute("data-zone") === id);
+      });
+      // 영역 박스(라벨)
       document.querySelectorAll("#zones-layer .zone-box").forEach(el => {
         el.classList.toggle("active", el.dataset.zone === id);
       });
@@ -2524,7 +2716,7 @@
         MapCtrl.handlePanStart(e);
       });
       window.addEventListener("mousemove", e => {
-        if (State.drawingZone && Zones._drag) { Zones.onDrawMove(e.clientX, e.clientY); return; }
+        if (State.drawingZone && (Zones._drag || Zones._shape === "poly")) { Zones.onDrawMove(e.clientX, e.clientY); return; }
         MapCtrl.handlePanMove(e);
       });
       window.addEventListener("mouseup",   e => {
@@ -2731,6 +2923,7 @@
       State.pan = { x: 0, y: 0 }; State.zoom = 1;
       MapCtrl.applyTransform();
       UI.renderPinsOnMap();
+      UI.renderPinList();      // 페이지 전환 시 현재 페이지 핀 목록 갱신
       UI.renderPdfThumbs();
     },
 
@@ -2741,6 +2934,7 @@
       UI.$("map-viewport").classList.remove("hidden");
       const nav = UI.$("nav-toolbar"); if (nav) nav.classList.remove("hidden");
       UI.renderPinsOnMap();
+      UI.renderPinList();      // 현재 페이지 핀 목록 갱신
       UI.updatePdfPagination();
       UI.updateRotationLabel();
       UI.renderPdfThumbs();

@@ -1270,6 +1270,7 @@ html, body {
 .pin-marker:hover .pin-pin { transform: scale(1.18); }
 .pin-marker.focused .pin-pin { transform: scale(1.22); }
 .pin-pin svg { width: 34px; height: 45px; display: block; overflow: visible; }
+.pin-empty-page { font-size: 12.5px; color: rgba(226,232,240,.55); padding: 14px 6px; margin: 0; line-height: 1.6; text-align: center; }
 .pin-pin-fill {
   fill: var(--accent);
   stroke: #fff; stroke-width: 1.4;
@@ -1835,17 +1836,48 @@ html, body {
 
 /* ══════════ 영역(Zone) 하이라이트 ══════════ */
 .zones-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+/* SVG 도형 오버레이 — 도면 전체를 덮고 % 좌표(viewBox 0~100)로 그림 */
+.zones-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.zone-shape {
+  pointer-events: auto; cursor: pointer;
+  fill: color-mix(in srgb, var(--zc, #f59e0b) 14%, transparent);
+  stroke: var(--zc, #f59e0b); stroke-width: 0.5; vector-effect: non-scaling-stroke;
+  transition: fill .15s;
+}
+.zone-shape { stroke-width: 2px; }   /* non-scaling: 화면상 2px 고정 */
+.zone-shape:hover, .zone-shape.active {
+  fill: color-mix(in srgb, var(--zc, #f59e0b) 30%, transparent);
+  stroke-width: 3px; filter: drop-shadow(0 4px 10px rgba(0,0,0,.35));
+}
+/* 그리기 미리보기 */
+.zone-draft-svg .zd-shape { fill: color-mix(in srgb, var(--accent) 16%, transparent); stroke: var(--accent); stroke-width: 2px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.zone-draft-svg .zd-line { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: var(--accent); stroke-width: 2px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.zone-draft-svg .zd-dot { fill: var(--accent); }
+.zone-draft-svg .zd-dot.first { fill: #fff; stroke: var(--accent); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+/* 라벨 박스 — 도형 위 좌상단(테두리 없음, SVG가 도형 담당) */
 .zone-box {
-  position: absolute; pointer-events: auto; cursor: pointer;
-  border: 2px solid var(--zc, #f59e0b);
-  background: color-mix(in srgb, var(--zc, #f59e0b) 10%, transparent);
-  border-radius: 4px; transition: background .15s, box-shadow .15s;
+  position: absolute; pointer-events: none; cursor: pointer;
+  border: none; background: transparent;
 }
-.zone-box:hover, .zone-box.active {
-  background: color-mix(in srgb, var(--zc, #f59e0b) 26%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--zc, #f59e0b) 60%, transparent), 0 6px 20px rgba(0,0,0,.3);
-  z-index: 3;
+.zone-box-label, .zone-box-del { pointer-events: auto; }
+.zone-box.active .zone-box-label { box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,.4); }
+/* 영역 지정 도구 바 */
+.zone-tools-label { font-size: 11px; font-weight: 700; color: rgba(226,232,240,.6); margin: 10px 0 6px; letter-spacing: .02em; }
+.zone-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.zone-tool {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 9px 4px; border-radius: 9px; cursor: pointer;
+  font-size: 11px; font-weight: 700; color: #cbd5e1;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12); transition: .15s;
 }
+.zone-tool svg { width: 20px; height: 20px; }
+.zone-tool:hover { background: rgba(255,255,255,.1); border-color: var(--accent); color: #fff; }
+.zone-tool.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent); color: #fff; box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.zone-item-shape { display: inline-flex; align-items: center; color: rgba(226,232,240,.6); }
+.zone-item-shape svg { width: 13px; height: 13px; }
 .zone-box-label {
   position: absolute; top: -1px; left: -1px;
   background: var(--zc, #f59e0b); color: #0b1220; font-size: 11px; font-weight: 800;
