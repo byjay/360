@@ -103,3 +103,28 @@ flutter build ios --release   # macOS + Xcode 필요
 
 ---
 © SEASTAR Inc. (씨스타) — Busan Shipbuilding & Offshore Design
+
+---
+
+## 📦 APK 만들기 (3가지 방법)
+
+### 방법 A — GitHub Actions 자동 빌드 (권장, 설치 불필요)
+1. 이 프로젝트를 GitHub 저장소에 푸시 (전체 프로젝트의 `mobile/seastar_viewer` 포함)
+2. GitHub → **Actions** 탭 → `Build SEASTAR APK` → **Run workflow**
+3. 빌드 완료 후 실행 화면 하단 **Artifacts → seastar-viewer-apk** 다운로드 → `app-release.apk`
+
+### 방법 B — 로컬 PC에서 빌드
+```bash
+# Flutter SDK 설치 후 (https://docs.flutter.dev/get-started/install)
+cd mobile/seastar_viewer
+flutter pub get
+flutter build apk --release
+# 결과: build/app/outputs/flutter-apk/app-release.apk
+```
+
+### 방법 C — 디버그 APK (빠른 테스트)
+```bash
+flutter build apk --debug
+```
+
+> ⚠️ 빌드 전 `lib/config.dart` 의 `kApiBaseUrl` 을 실제 배포 도메인으로 변경하세요.
