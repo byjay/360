@@ -476,3 +476,48 @@ README.md       — 이 파일
 - Three.js GPU 파노라마 / 영상 / 클라우드 업로드 / 플라이투 / 연속 배치 구현
 - 수정 로직 단위 테스트(B1/B2/B4 URL·정렬·blob 제거) **전 케이스 통과**
 - 정적 서버 구동 + PlaywrightConsoleCapture(홈 / `?mode=viewer&d=...`) — **콘솔 에러 0건**
+
+---
+
+## 🆕 2026-06-15 업데이트 — ezPDF 툴바 · 메뉴 슬림화 · 슈퍼관리자 로그
+
+### ① ezPDF 스타일 상단 PDF 툴바 (`#pdf-toolbar`)
+도면 작업뷰 진입 시 상용 PDF 뷰어(ezPDF)와 동일한 **상단 가로 툴바**가 표시됩니다.
+- 페이지 썸네일 · 처음/이전/다음/마지막 · 페이지 직접 입력
+- 줌 아웃/줌 레벨(클릭=1:1)/줌 인 · 맞춤 · 1:1 · 회전(±90°) · 3D(아이소) 토글
+- 우측: **포인트** 마킹 버튼(디자이너 전용)
+- 기존 플로팅 `nav-toolbar`는 비활성화하고 상단 툴바로 일원화
+
+### ② 디자이너 메뉴 슬림/심플화
+- 사이드바 폭 240→212px, 등록/리스트/영역도구 버튼·행을 컴팩트화
+- 점선 업로드 버튼 → 실선(심플), 핀/영역/데크 목록 행 높이 축소
+
+### ③ 슈퍼관리자 활동 로그 관리 ⭐
+모든 주요 액션을 기록하고 슈퍼관리자가 검색·필터·삭제·정리합니다.
+
+**기록 대상**: `auth.login`, `access.approve`, `access.reject`, `project.create`, `project.delete`, `deployment.create` (IP·User-Agent 포함)
+
+**API (슈퍼관리자 전용, 미인증 403)**
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/activity-logs?q=&action=&limit=&offset=` | 로그 목록(검색·필터·페이지네이션) |
+| GET | `/api/activity-logs/actions` | 액션 종류별 카운트(필터 UI용) |
+| DELETE | `/api/activity-logs/:id` | 단건 삭제(soft delete) |
+| DELETE | `/api/activity-logs?all=1` 또는 `?before=<ms>` | 일괄 정리 |
+
+**UI**: 설정 → "접근 권한 관리" 모달의 **활동 로그** 탭 (검색창·액션 드롭다운·정리·더보기·역할 배지·한글 액션 라벨)
+
+**데이터 모델** (`migrations/0006_activity_log.sql`)
+```
+activity_log(id, ts, actor_email, actor_role, action, target_type, target_id, detail, ip, ua, deleted)
+```
+
+### ④ 포인트 생성/이동/삭제 (검증 완료)
+드래그 이동(클릭/이동 5px 임계 구분) · 확인 다이얼로그 삭제 · 자동저장 · 토스트.
+E2E: 생성 3개→마커/목록 3, 이동 좌표 반영, 삭제 후 2개 — **전 케이스 통과**.
+
+### 데모 토큰
+- `demo-designer` / `demo-viewer` / **`demo-super`**(신규, 로그 관리 시연용)
+
+### 향후 (사용자 요청 "나중에")
+- ⬜ 전 사용자 Google 로그인 (현재 데모 토큰 + Google OAuth 병행)
