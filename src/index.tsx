@@ -325,6 +325,7 @@ function mapDeployment(r: any) {
     drawing_data: r.drawing_data,
     pages_data: r.pages_data,
     pins: r.pins,
+    zones: r.zones || '[]',
     created_at: r.created_at,
     updated_at: r.updated_at,
     deleted: !!r.deleted
@@ -416,8 +417,8 @@ app.post('/tables/deployments', async (c) => {
   const id = genId('dep')
   const now = Date.now()
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
   ).bind(
     id,
     body.title || '',
@@ -425,13 +426,14 @@ app.post('/tables/deployments', async (c) => {
     body.drawing_data || null,
     body.pages_data || null,
     body.pins || '[]',
+    body.zones || '[]',
     now, now
   ).run()
 
   return c.json(mapDeployment({
     id, title: body.title || '', file_name: body.file_name || '',
     drawing_data: body.drawing_data || null, pages_data: body.pages_data || null,
-    pins: body.pins || '[]', created_at: now, updated_at: now, deleted: 0
+    pins: body.pins || '[]', zones: body.zones || '[]', created_at: now, updated_at: now, deleted: 0
   }))
 })
 

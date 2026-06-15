@@ -42,7 +42,9 @@
     pdfRotation: 0,         // 0 | 90 | 180 | 270 (PDF.js 내장 회전)
     viewerPages: null,      // 뷰어 모드: 배포본 페이지 dataURL 배열
     pins:        [],        // {id,x,y,page,label,imageUrl?,imageId?,imageName?}
+    zones:       [],        // {id,page,x,y,w,h,label,color,pinIds[],note} 영역(%) 줌무관
     placing:     false,
+    drawingZone: false,     // 영역 그리기 모드
     pending:     null,      // { x, y }
     pendingFile: null,      // 선택된 360° 그림/영상 파일
     pendingIsVideo: false,
@@ -64,7 +66,7 @@
       this.fileType = null; this.fileName = null;
       this.fileData = null; this.pdfDoc = null;
       this.pdfPage = 1; this.pdfPages = 0; this.pdfRotation = 0; this.viewerPages = null;
-      this.pins = []; this.placing = false; this.pending = null;
+      this.pins = []; this.zones = []; this.placing = false; this.drawingZone = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };
@@ -622,6 +624,8 @@
       const ip = document.getElementById("pano-info-panel");
       if (ip) { ip.classList.add("hidden"); ip.innerHTML = ""; }
       if (typeof Notes !== "undefined") Notes.closePanel();  // 노트 패널 함께 닫기
+      if (typeof TimeLapse !== "undefined") TimeLapse.hide();
+      if (typeof Compare !== "undefined") Compare.close();
       Radar.hide();
       PanoNav.hide();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -1060,6 +1064,7 @@
         });
         layer.appendChild(marker);
       });
+      if (typeof Zones !== "undefined") Zones.render();
     },
 
     updatePdfPagination() {
@@ -1535,6 +1540,509 @@
   };
 
   /* ══════════════════════════════════════════
+     TIMELAPSE ── 같은 위치의 시점별(전/후) 파노라마 비교
+        · 핀.timeline[] = [{id,label,imageId|imageUrl,isVideo,capturedAt}]
+        · timeline 없으면 현재 단일 파노라마를 1개 시점으로 취급
+        · 시점 전환 시 카메라 각도(lon/lat/fov) 유지 → 정확한 전/후 비교
+        · 분할비교: 좌=선택 시점, 우=최신, 슬라이더로 경계 이동
+  ══════════════════════════════════════════ */
+  const TimeLapse = {
+    _pin: null,
+    _shots: [],       // 정규화된 시점 배열 (오래된 → 최신)
+    _idx: 0,          // 현재 표시 중인 시점 index
+    _busy: false,
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("btn-tl-prev") && $("btn-tl-prev").addEventListener("click", () => this.step(-1));
+      $("btn-tl-next") && $("btn-tl-next").addEventListener("click", () => this.step(1));
+      $("btn-tl-compare") && $("btn-tl-compare").addEventListener("click", () => Compare.open());
+    },
+
+    /** 핀의 timeline을 정규화 (단일 파노라마 fallback 포함) */
+    _normalize(pin) {
+      const out = [];
+      if (Array.isArray(pin.timeline) && pin.timeline.length) {
+        pin.timeline.forEach((t, i) => {
+          if (!t) return;
+          out.push({
+            id: t.id || ("tl" + i),
+            label: t.label || ("시점 " + (i + 1)),
+            imageId: t.imageId || null,
+            imageUrl: t.imageUrl || null,
+            isVideo: !!t.isVideo,
+            capturedAt: t.capturedAt || null,
+          });
+        });
+      }
+      // 현재 핀의 기본 파노라마를 "최신" 시점으로 합류(이미 timeline에 동일 소스가 없을 때만)
+      const baseSrc = pin.imageId || pin.imageUrl || pin.videoUrl;
+      if (baseSrc) {
+        const dup = out.some((s) => (s.imageId && s.imageId === pin.imageId) || (s.imageUrl && s.imageUrl === pin.imageUrl));
+        if (!dup) {
+          out.push({
+            id: "current",
+            label: out.length ? "현재" : (pin.label || "현재"),
+            imageId: pin.imageId || null,
+            imageUrl: pin.imageUrl || null,
+            isVideo: !!(pin.videoUrl || pin.isVideo),
+            videoUrl: pin.videoUrl || null,
+            capturedAt: pin.capturedAt || null,
+          });
+        }
+      }
+      // 정렬: capturedAt 있는 것 우선 시간순, 없으면 입력 순서 유지(최신은 끝)
+      return out;
+    },
+
+    /** 파노라마 열릴 때 호출 — 시점 바 구성 */
+    setPin(pin) {
+      this._pin = pin || null;
+      this._shots = pin ? this._normalize(pin) : [];
+      this._idx = Math.max(0, this._shots.length - 1); // 기본 = 최신
+      this._renderBar();
+    },
+
+    _renderBar() {
+      const bar = document.getElementById("pano-timeline");
+      if (!bar) return;
+      // 시점 2개 이상일 때만 표시
+      if (this._shots.length < 2) { bar.classList.add("hidden"); return; }
+      bar.classList.remove("hidden");
+      const cur = document.getElementById("tl-current");
+      if (cur) cur.textContent = (this._idx + 1) + " / " + this._shots.length;
+      this.render();
+    },
+
+    render() {
+      const wrap = document.getElementById("tl-chips");
+      if (!wrap) return;
+      wrap.innerHTML = this._shots.map((s, i) => {
+        const active = i === this._idx ? " active" : "";
+        const latest = i === this._shots.length - 1 ? '<span class="tl-chip-tag">최신</span>' : "";
+        const sub = s.capturedAt ? `<span class="tl-chip-date">${this._fmtDate(s.capturedAt)}</span>` : "";
+        return `<button class="tl-chip${active}" data-i="${i}" title="${UI.escapeHtml(s.label)}">
+          <span class="tl-chip-label">${UI.escapeHtml(s.label)}</span>${sub}${latest}
+        </button>`;
+      }).join("");
+      wrap.querySelectorAll(".tl-chip").forEach((b) => {
+        b.addEventListener("click", () => this.goto(parseInt(b.dataset.i, 10)));
+      });
+    },
+
+    step(delta) {
+      const n = this._shots.length;
+      if (n < 2) return;
+      let i = this._idx + delta;
+      if (i < 0) i = 0; if (i > n - 1) i = n - 1;
+      if (i !== this._idx) this.goto(i);
+    },
+
+    /** 시점 전환 — 카메라 각도 유지하며 소스 교체 */
+    async goto(i) {
+      if (this._busy) return;
+      const n = this._shots.length;
+      if (i < 0 || i >= n || i === this._idx) return;
+      const shot = this._shots[i];
+      this._idx = i;
+      this._busy = true;
+      // 현재 카메라 각도 보존
+      const cam = { lon: PanoViewer.S.lon, lat: PanoViewer.S.lat, fov: PanoViewer.S.fov };
+      try {
+        const src = await this._resolveSrc(shot);
+        if (src == null) { this._busy = false; return; }
+        await this._loadKeepingCamera(src, shot, cam);
+      } catch (e) {
+        if (typeof console !== "undefined") console.warn("timelapse goto fail", e);
+      }
+      this._busy = false;
+      this._renderBar();
+    },
+
+    /** 시점 소스 해석 (클라우드 이미지 → dataURL, URL → 그대로) */
+    async _resolveSrc(shot) {
+      if (shot.videoUrl) return { src: shot.videoUrl, isVideo: true };
+      if (shot.imageId) {
+        const dataURL = await Cloud.fetchImage(shot.imageId);
+        return { src: dataURL, isVideo: false };
+      }
+      if (shot.imageUrl) return { src: shot.imageUrl, isVideo: !!shot.isVideo };
+      return null;
+    },
+
+    _loadKeepingCamera(resolved, shot, cam) {
+      return new Promise((resolve) => {
+        const name = (this._pin ? (this._pin.label || "") : "") + " · " + shot.label;
+        if (resolved.isVideo) {
+          PanoViewer.loadVideo(resolved.src, name);
+          // 비디오는 즉시 각도 복원 시도
+          setTimeout(() => { Object.assign(PanoViewer.S, cam); PanoViewer._invalidate && PanoViewer._invalidate(); resolve(); }, 50);
+          return;
+        }
+        PanoViewer.load(resolved.src, name);
+        // load는 img.onload 후 S를 리셋하므로, 다음 틱에 각도 복원
+        setTimeout(() => {
+          Object.assign(PanoViewer.S, cam);
+          PanoViewer._invalidate && PanoViewer._invalidate();
+          resolve();
+        }, 60);
+      });
+    },
+
+    currentShot() { return this._shots[this._idx] || null; },
+    latestShot()  { return this._shots[this._shots.length - 1] || null; },
+    hasMultiple() { return this._shots.length >= 2; },
+
+    hide() {
+      const bar = document.getElementById("pano-timeline");
+      if (bar) bar.classList.add("hidden");
+    },
+
+    _fmtDate(v) {
+      const n = (typeof v === "number") ? v : Date.parse(v);
+      if (!Number.isFinite(n)) return String(v);
+      const d = new Date(n);
+      const p = (x) => String(x).padStart(2, "0");
+      return (d.getFullYear() + "").slice(2) + "." + p(d.getMonth() + 1) + "." + p(d.getDate());
+    },
+  };
+
+  /* ══════════════════════════════════════════
+     COMPARE ── 전/후 분할 비교(좌=선택시점, 우=최신) + 슬라이더
+        · 2개 정적 이미지를 canvas로 그려 클립 경계 이동
+        · 같은 위치를 한 화면에서 직접 대조 (OpenSpace/Matterport 비교 모방)
+  ══════════════════════════════════════════ */
+  const Compare = {
+    _a: null, _b: null, _ratio: 0.5, _dragging: false, _busy: false,
+
+    async open() {
+      if (this._busy) return;
+      if (!TimeLapse.hasMultiple()) { return; }
+      const a = TimeLapse.currentShot();      // 선택 시점(과거)
+      const b = TimeLapse.latestShot();       // 최신
+      if (!a || !b) return;
+      this._busy = true;
+      try {
+        const ra = await TimeLapse._resolveSrc(a);
+        const rb = await TimeLapse._resolveSrc(b);
+        if (!ra || !rb || ra.isVideo || rb.isVideo) { this._busy = false; this._toast("정적 이미지 시점만 분할 비교할 수 있습니다."); return; }
+        const [ia, ib] = await Promise.all([this._loadImg(ra.src), this._loadImg(rb.src)]);
+        this._a = ia; this._b = ib;
+        const ov = document.getElementById("pano-compare");
+        ov.classList.remove("hidden");
+        document.getElementById("cmp-label-a").textContent = a.label;
+        document.getElementById("cmp-label-b").textContent = b.label;
+        this._ratio = 0.5;
+        this._bind();
+        this._resizeAndDraw();
+      } catch (e) {
+        this._toast("이미지를 불러올 수 없습니다.");
+      }
+      this._busy = false;
+    },
+
+    _loadImg(src) {
+      return new Promise((res, rej) => {
+        const im = new Image(); im.crossOrigin = "anonymous";
+        im.onload = () => res(im); im.onerror = rej; im.src = src;
+      });
+    },
+
+    _bind() {
+      if (this._bound) return; this._bound = true;
+      const div = document.getElementById("cmp-divider");
+      const ov = document.getElementById("pano-compare");
+      const closeBtn = document.getElementById("btn-cmp-close");
+      const onMove = (clientX) => {
+        const r = ov.getBoundingClientRect();
+        let ratio = (clientX - r.left) / r.width;
+        ratio = Math.max(0.02, Math.min(0.98, ratio));
+        this._ratio = ratio; this._applyClip();
+      };
+      div.addEventListener("pointerdown", (e) => { this._dragging = true; div.setPointerCapture(e.pointerId); });
+      window.addEventListener("pointermove", (e) => { if (this._dragging) onMove(e.clientX); });
+      window.addEventListener("pointerup", () => { this._dragging = false; });
+      ov.addEventListener("click", (e) => { if (e.target === ov) onMove(e.clientX); });
+      closeBtn && closeBtn.addEventListener("click", () => this.close());
+      window.addEventListener("resize", () => { if (!document.getElementById("pano-compare").classList.contains("hidden")) this._resizeAndDraw(); });
+    },
+
+    _resizeAndDraw() {
+      const ov = document.getElementById("pano-compare");
+      const w = ov.clientWidth, h = ov.clientHeight;
+      ["cmp-canvas-a", "cmp-canvas-b"].forEach((id) => {
+        const c = document.getElementById(id);
+        c.width = w; c.height = h;
+      });
+      this._drawCover(document.getElementById("cmp-canvas-a"), this._a);
+      this._drawCover(document.getElementById("cmp-canvas-b"), this._b);
+      this._applyClip();
+    },
+
+    /** equirectangular 이미지를 화면에 cover로 중앙 표시(중앙 시야 미리보기) */
+    _drawCover(canvas, img) {
+      if (!canvas || !img) return;
+      const ctx = canvas.getContext("2d");
+      const cw = canvas.width, ch = canvas.height;
+      ctx.clearRect(0, 0, cw, ch);
+      const ir = img.width / img.height, cr = cw / ch;
+      let dw, dh, dx, dy;
+      if (ir > cr) { dh = ch; dw = ch * ir; dx = (cw - dw) / 2; dy = 0; }
+      else { dw = cw; dh = cw / ir; dx = 0; dy = (ch - dh) / 2; }
+      ctx.drawImage(img, dx, dy, dw, dh);
+    },
+
+    _applyClip() {
+      const clip = document.getElementById("cmp-clip");
+      const div = document.getElementById("cmp-divider");
+      const pct = (this._ratio * 100).toFixed(2) + "%";
+      // 우측(B=최신)을 ratio 우측만 보이게: clip-path 사용
+      clip.style.clipPath = `inset(0 0 0 ${pct})`;
+      div.style.left = pct;
+    },
+
+    close() {
+      const ov = document.getElementById("pano-compare");
+      if (ov) ov.classList.add("hidden");
+      this._a = this._b = null;
+    },
+
+    _toast(msg) {
+      // 간단 안내 (이미 Prompt 모듈이 있으면 사용, 없으면 alert 대체 최소화)
+      const ov = document.getElementById("pano-compare");
+      if (ov && !ov.classList.contains("hidden")) return;
+      try { console.info(msg); } catch (e) {}
+    },
+  };
+
+  /* ══════════════════════════════════════════
+     ZONES ── 도면 영역(구역) 지정 + 하이라이트
+        · zone = {id,page,x,y,w,h,label,color,pinIds[],note} (좌표 % → 줌/팬 무관)
+        · 설계자: 드래그로 사각형 그리기(줌 상태에서도 viewportToPercent 사용)
+        · 뷰어/설계자: 영역 호버/클릭 → 하이라이트, 내부 핀 강조
+        · 배포 스냅샷(deployment.zones)에 저장
+  ══════════════════════════════════════════ */
+  const ZONE_COLORS = ["#f59e0b", "#3b82f6", "#10b981", "#ef4444", "#a855f7", "#06b6d4"];
+  const Zones = {
+    _drag: null,        // {sx,sy} 시작 % 좌표
+    _active: null,      // 현재 하이라이트된 zone id
+
+    _newId() { return "zone_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); },
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("btn-zone") && $("btn-zone").addEventListener("click", () => this.toggleDraw());
+    },
+
+    isDesigner() { return !!(typeof Auth !== "undefined" && Auth.isDesigner); },
+
+    toggleDraw() {
+      if (!this.isDesigner()) return;
+      State.drawingZone = !State.drawingZone;
+      // 핀 배치 모드와 상호 배타
+      if (State.drawingZone && State.placing) {
+        State.placing = false;
+        UI.$("btn-place") && UI.$("btn-place").classList.remove("active");
+        UI.$("place-hint") && UI.$("place-hint").classList.add("hidden");
+        UI.$("crosshair-overlay") && UI.$("crosshair-overlay").classList.add("hidden");
+      }
+      const btn = UI.$("btn-zone");
+      if (btn) btn.classList.toggle("active", State.drawingZone);
+      const hint = UI.$("zone-hint");
+      if (hint) hint.classList.toggle("hidden", !State.drawingZone);
+      const vp = UI.$("map-viewport");
+      if (vp) vp.style.cursor = State.drawingZone ? "crosshair" : "grab";
+    },
+
+    /* ── 그리기 (마우스/터치) ── */
+    onDrawStart(clientX, clientY) {
+      if (!State.drawingZone) return false;
+      const pct = MapCtrl.viewportToPercent(clientX, clientY);
+      if (!pct) return false;
+      this._drag = { sx: pct.x, sy: pct.y };
+      const draft = UI.$("zone-draft");
+      if (draft) {
+        draft.classList.remove("hidden");
+        draft.style.left = pct.x + "%"; draft.style.top = pct.y + "%";
+        draft.style.width = "0%"; draft.style.height = "0%";
+      }
+      return true;
+    },
+    onDrawMove(clientX, clientY) {
+      if (!this._drag) return;
+      const pct = MapCtrl.viewportToPercent(clientX, clientY);
+      if (!pct) return;
+      const x = Math.min(this._drag.sx, pct.x), y = Math.min(this._drag.sy, pct.y);
+      const w = Math.abs(pct.x - this._drag.sx), h = Math.abs(pct.y - this._drag.sy);
+      const draft = UI.$("zone-draft");
+      if (draft) {
+        draft.style.left = x + "%"; draft.style.top = y + "%";
+        draft.style.width = w + "%"; draft.style.height = h + "%";
+      }
+    },
+    async onDrawEnd(clientX, clientY) {
+      if (!this._drag) return;
+      const pct = MapCtrl.viewportToPercent(clientX, clientY);
+      const start = this._drag; this._drag = null;
+      const draft = UI.$("zone-draft");
+      if (draft) draft.classList.add("hidden");
+      if (!pct) return;
+      const x = Math.min(start.sx, pct.x), y = Math.min(start.sy, pct.y);
+      const w = Math.abs(pct.x - start.sx), h = Math.abs(pct.y - start.sy);
+      // 너무 작은 영역 무시(오클릭 방지)
+      if (w < 1.5 || h < 1.5) { this.toggleDraw(); return; }
+      let label = "";
+      if (typeof Prompt !== "undefined" && Prompt.ask) {
+        try { const r = await Prompt.ask({ title: "영역 이름", placeholder: "예: 1번 화물창 / 엔진룸 구역", value: "구역 " + (State.zones.filter(z => (z.page||1)===(State.pdfPage||1)).length + 1) }); if (r && r.value != null) label = r.value; else { this.toggleDraw(); return; } }
+        catch (e) { this.toggleDraw(); return; }
+      } else {
+        label = prompt("영역 이름", "구역 " + (State.zones.length + 1)) || "";
+        if (!label) { this.toggleDraw(); return; }
+      }
+      const color = ZONE_COLORS[State.zones.length % ZONE_COLORS.length];
+      const zone = {
+        id: this._newId(), page: State.pdfPage || 1,
+        x: +x.toFixed(3), y: +y.toFixed(3), w: +w.toFixed(3), h: +h.toFixed(3),
+        label: label || ("구역 " + (State.zones.length + 1)), color, pinIds: [], note: "",
+      };
+      // 영역 내부에 들어오는 핀 자동 연결
+      zone.pinIds = (State.pins || []).filter(p => (p.page||1) === zone.page && this._contains(zone, p.x, p.y)).map(p => p.id);
+      State.zones.push(zone);
+      this.toggleDraw();
+      this.render();
+      this.renderList();
+    },
+
+    _contains(z, x, y) { return x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h; },
+
+    /* ── 렌더: 도면 위 영역 박스 ── */
+    render() {
+      const layer = document.getElementById("zones-layer");
+      if (!layer) return;
+      const page = State.pdfPage || 1;
+      const zones = (State.zones || []).filter(z => (z.page || 1) === page);
+      layer.innerHTML = zones.map(z => {
+        const isActive = z.id === this._active;
+        const cnt = (z.pinIds || []).length;
+        return `<div class="zone-box${isActive ? " active" : ""}" data-zone="${z.id}"
+            style="left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%;--zc:${z.color}">
+            <div class="zone-box-label">${UI.escapeHtml(z.label)}${cnt ? ` <span class="zone-box-cnt">${cnt}</span>` : ""}</div>
+            ${this.isDesigner() ? `<button class="zone-box-del" data-zdel="${z.id}" title="영역 삭제" aria-label="영역 삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>` : ""}
+          </div>`;
+      }).join("");
+      // 이벤트
+      layer.querySelectorAll(".zone-box").forEach(el => {
+        const id = el.dataset.zone;
+        el.addEventListener("mouseenter", () => this.highlight(id));
+        el.addEventListener("mouseleave", () => this.highlight(null));
+        el.addEventListener("click", (e) => { if (e.target.dataset.zdel) return; this.focus(id); });
+      });
+      layer.querySelectorAll("[data-zdel]").forEach(b => {
+        b.addEventListener("click", (e) => { e.stopPropagation(); this.remove(b.dataset.zdel); });
+      });
+    },
+
+    /* ── 사이드바 목록 ── */
+    renderList() {
+      const sec = document.getElementById("section-zones");
+      const list = document.getElementById("zone-list");
+      const cntEl = document.getElementById("zone-count");
+      if (!list) return;
+      const zones = State.zones || [];
+      if (cntEl) cntEl.textContent = zones.length;
+      if (sec) sec.classList.toggle("hidden", zones.length === 0 && !this.isDesigner());
+      if (zones.length === 0) {
+        list.innerHTML = `<p class="zone-empty">${this.isDesigner() ? "‘▦ 영역 지정’으로 구역을 그려보세요." : "지정된 영역이 없습니다."}</p>`;
+        return;
+      }
+      list.innerHTML = zones.map(z => {
+        const cnt = (z.pinIds || []).length;
+        return `<div class="zone-item" data-zone="${z.id}">
+            <span class="zone-item-color" style="background:${z.color}"></span>
+            <span class="zone-item-label">${UI.escapeHtml(z.label)}</span>
+            <span class="zone-item-page">p.${z.page || 1}</span>
+            <span class="zone-item-cnt" title="연결된 핀"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>${cnt}</span>
+          </div>`;
+      }).join("");
+      list.querySelectorAll(".zone-item").forEach(el => {
+        const id = el.dataset.zone;
+        el.addEventListener("mouseenter", () => this.highlight(id));
+        el.addEventListener("mouseleave", () => this.highlight(null));
+        el.addEventListener("click", () => this.focus(id));
+      });
+    },
+
+    /** 영역 + 내부 핀 하이라이트 */
+    highlight(id) {
+      this._active = id;
+      // 영역 박스
+      document.querySelectorAll("#zones-layer .zone-box").forEach(el => {
+        el.classList.toggle("active", el.dataset.zone === id);
+      });
+      // 사이드바 항목
+      document.querySelectorAll("#zone-list .zone-item").forEach(el => {
+        el.classList.toggle("active", el.dataset.zone === id);
+      });
+      // 내부 핀 강조
+      const zone = id ? (State.zones || []).find(z => z.id === id) : null;
+      const ids = zone ? new Set(zone.pinIds || []) : new Set();
+      document.querySelectorAll("#pins-layer .pin-marker").forEach(el => {
+        const pid = el.dataset.pinId || el.dataset.id;
+        el.classList.toggle("zone-dim", !!id && !ids.has(pid));
+        el.classList.toggle("zone-hot", !!id && ids.has(pid));
+      });
+    },
+
+    /** 영역으로 화면 이동(플라이) + 일시 하이라이트 */
+    focus(id) {
+      const zone = (State.zones || []).find(z => z.id === id);
+      if (!zone) return;
+      // 다른 페이지면 페이지 전환 후 이동
+      if ((zone.page || 1) !== (State.pdfPage || 1) && typeof App !== "undefined" && App._gotoPage) {
+        Promise.resolve(App._gotoPage(zone.page)).then(() => {
+          this.render();
+          setTimeout(() => { this._flyToZone(zone); this.highlight(id); }, 60);
+        });
+        return;
+      }
+      this._flyToZone(zone);
+      this.highlight(id);
+    },
+    _flyToZone(zone) {
+      const cx = zone.x + zone.w / 2, cy = zone.y + zone.h / 2;
+      // 영역 크기에 맞춰 줌 (작은 영역일수록 더 확대)
+      const span = Math.max(zone.w, zone.h);
+      const z = Math.max(1, Math.min(4.5, 60 / Math.max(span, 8)));
+      if (MapCtrl.flyTo) MapCtrl.flyTo(cx, cy, z, 650);
+    },
+
+    remove(id) {
+      if (!this.isDesigner()) return;
+      const z = (State.zones || []).find(x => x.id === id);
+      if (!z) return;
+      if (!confirm(`영역 “${z.label}”을(를) 삭제할까요?`)) return;
+      State.zones = (State.zones || []).filter(x => x.id !== id);
+      if (this._active === id) this._active = null;
+      this.render();
+      this.renderList();
+    },
+
+    /** 핀 추가/이동 후 영역-핀 연결 갱신 */
+    refreshPinLinks() {
+      (State.zones || []).forEach(z => {
+        z.pinIds = (State.pins || []).filter(p => (p.page||1) === (z.page||1) && this._contains(z, p.x, p.y)).map(p => p.id);
+      });
+    },
+
+    serialize() { return JSON.stringify(State.zones || []); },
+    load(arr) {
+      State.zones = Array.isArray(arr) ? arr : [];
+      this.render();
+      this.renderList();
+    },
+  };
+
+  /* ══════════════════════════════════════════
      BRAND  ── 회사 로고·테마 주입 (window.WM_BRAND)
   ══════════════════════════════════════════ */
   const Brand = {
@@ -1657,6 +2165,8 @@
       ProjectHub.init();
       PanoNav.init();
       Notes.init();
+      TimeLapse.init();
+      Zones.init();
     },
 
     /* ── Home ── */
@@ -1692,6 +2202,7 @@
       UI.toggle("section-projects",  isDesigner);   // 프로젝트/데크 관리
       UI.toggle("section-upload",    isDesigner);   // 도면 업로드
       UI.toggle("section-place",     isDesigner);   // 위치 포인트 추가
+      if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
       UI.toggle("section-pin-form",  false);        // 핀 입력 폼 (항상 숨김으로 시작)
       UI.toggle("section-next-point", false);
@@ -2009,10 +2520,17 @@
 
       vp.addEventListener("mousedown", e => {
         if (State.placing) { this._handlePlaceClick(e); return; }
+        if (State.drawingZone) { if (Zones.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         MapCtrl.handlePanStart(e);
       });
-      window.addEventListener("mousemove", e => MapCtrl.handlePanMove(e));
-      window.addEventListener("mouseup",   () => MapCtrl.handlePanEnd());
+      window.addEventListener("mousemove", e => {
+        if (State.drawingZone && Zones._drag) { Zones.onDrawMove(e.clientX, e.clientY); return; }
+        MapCtrl.handlePanMove(e);
+      });
+      window.addEventListener("mouseup",   e => {
+        if (State.drawingZone && Zones._drag) { Zones.onDrawEnd(e.clientX, e.clientY); return; }
+        MapCtrl.handlePanEnd();
+      });
 
       let lastTouch = null;
       vp.addEventListener("touchstart", e => {
@@ -2316,6 +2834,7 @@
 
       State.pins.push(pin);
       State.activePin = pin.id;
+      if (typeof Zones !== "undefined") Zones.refreshPinLinks(); // 영역-핀 연결 갱신
       this._resetPinForm(true);
       btn.textContent = "☁ 저장 & 업로드";
 
@@ -2463,6 +2982,7 @@
       Radar.update(pin);
       PanoNav.update(pin);
       if (typeof Notes !== "undefined") Notes.setPin(pin);  // 이슈/노트 패널 핀 연결
+      if (typeof TimeLapse !== "undefined") TimeLapse.setPin(pin);  // 타임랩스 시점 바
 
       // 노트/첨부만 있고 360° 미디어가 없는 정보 포인트 → 정보 패널만 표시
       if (!this.pinHasMedia(pin) && this.pinHasInfo(pin)) {
@@ -2572,7 +3092,8 @@
             file_name:    State.fileName || "",
             drawing_data: pagesData[0],
             pages_data:   JSON.stringify(pagesData),
-            pins:         JSON.stringify(deployablePins)
+            pins:         JSON.stringify(deployablePins),
+            zones:        (typeof Zones !== "undefined") ? Zones.serialize() : "[]"
           })
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
@@ -2681,12 +3202,15 @@
 
         try { State.pins = JSON.parse(latest.pins || "[]"); }
         catch { State.pins = []; }
+        try { State.zones = JSON.parse(latest.zones || "[]"); }
+        catch { State.zones = []; }
 
         const imgEl = UI.$("map-image");
         imgEl.onload = () => {
           this._showMapViewport();
           UI.renderPinList();
           UI.renderPinsOnMap();
+          if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }  // 영역 표시
           if (typeof Notes !== "undefined") Notes.loadSummary();  // 핀별 이슈 카운트
         };
         imgEl.src = pages[0];
@@ -3452,7 +3976,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);
