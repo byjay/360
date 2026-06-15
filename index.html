@@ -563,6 +563,48 @@
         </div>
         <div id="inspector-body" class="inspector-body"><!-- 동적 --></div>
       </aside>
+
+      <!-- ═══════════════════════════════════════════
+           PIN GRID (오른쪽 엑셀형 포인트 리스트)
+           현재 PDF 페이지의 포인터(핀)를 표 형식으로 표시.
+           행 클릭 → 해당 PDF 페이지 이동 + 핀 포커스 + 360° 뷰어 자동 실행
+      ════════════════════════════════════════════ -->
+      <aside id="pin-grid-panel" class="pin-grid-panel hidden" aria-label="포인트 리스트(엑셀)">
+        <div class="pin-grid-head">
+          <div class="pin-grid-head-left">
+            <i class="fa-solid fa-table-list"></i>
+            <span class="pin-grid-title">포인트 리스트</span>
+            <span id="pin-grid-page-badge" class="pin-grid-page-badge">P1</span>
+            <span id="pin-grid-count" class="pin-grid-count">0</span>
+          </div>
+          <div class="pin-grid-head-acts">
+            <button id="pin-grid-csv" class="pin-grid-iconbtn" type="button" title="CSV 내보내기" aria-label="CSV 내보내기"><i class="fa-solid fa-file-csv"></i></button>
+            <button id="pin-grid-toggle" class="pin-grid-iconbtn" type="button" title="패널 접기/펴기" aria-label="패널 접기"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="pin-grid-search-wrap">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="pin-grid-search" class="pin-grid-search" type="text" placeholder="포인트 이름 검색…" autocomplete="off" />
+        </div>
+        <div class="pin-grid-scroll">
+          <table class="pin-grid-table">
+            <thead>
+              <tr>
+                <th class="pgt-no">#</th>
+                <th class="pgt-name">이름</th>
+                <th class="pgt-page">P</th>
+                <th class="pgt-coord">좌표 (X%, Y%)</th>
+                <th class="pgt-360">360°</th>
+              </tr>
+            </thead>
+            <tbody id="pin-grid-body"><!-- 동적 --></tbody>
+          </table>
+          <div id="pin-grid-empty" class="pin-grid-empty hidden">현재 페이지에 등록된 포인트가 없습니다.</div>
+        </div>
+      </aside>
+      <button id="pin-grid-reopen" class="pin-grid-reopen hidden" type="button" title="포인트 리스트 열기" aria-label="포인트 리스트 열기">
+        <i class="fa-solid fa-table-list"></i>
+      </button>
     </main>
   </div>
 </div>
@@ -856,7 +898,7 @@
 
       <div class="signin-footer">
         <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
-        Contact Admin (<span class="signin-admin-mail">designsir102@gmail.com</span>)
+        Contact Admin (<span class="signin-admin-mail">designssir@gmail.com</span>)
       </div>
 
       <button id="login-gate-cancel" class="signin-cancel" type="button">닫기</button>
@@ -880,7 +922,7 @@
         </svg>
       </div>
       <h2 id="access-gate-title" class="access-gate-title">Request Access</h2>
-      <div id="access-gate-email" class="access-gate-email">designsir102@gmail.com</div>
+      <div id="access-gate-email" class="access-gate-email">designssir@gmail.com</div>
       <p class="access-gate-sub">Access will be granted after administrator review.</p>
 
       <!-- 신청 폼 -->
@@ -905,7 +947,7 @@
         <div class="access-field">
           <div class="access-input readonly">
             <svg class="access-mail-ico" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
-            <span id="ar-email-readonly" class="access-readonly-text">designsir102@gmail.com</span>
+            <span id="ar-email-readonly" class="access-readonly-text">designssir@gmail.com</span>
           </div>
         </div>
 

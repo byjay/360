@@ -1,7 +1,7 @@
 # SEASTAR · Firebase 세팅 가이드 (본인 Google ID로 데이터 저장)
 
 ## 1. Firebase 프로젝트 만들기 (5분)
-1. https://console.firebase.google.com → 본인 Google 계정(`designsir102@gmail.com`)으로 로그인
+1. https://console.firebase.google.com → 본인 Google 계정(`designssir@gmail.com`)으로 로그인
 2. **프로젝트 추가** → 이름 `seastar-viewer`
 3. ⚙️ 프로젝트 설정 → **내 앱** → 웹앱(`</>`) 등록
 4. 표시되는 `firebaseConfig` 값을 `public/js/firebase-config.js` 의 `FIREBASE_CONFIG` 에 붙여넣기
@@ -24,7 +24,7 @@ service cloud.firestore {
     }
     // super-admin 전용 로그
     match /activity_log/{doc} {
-      allow read, write: if request.auth.token.email == "designsir102@gmail.com";
+      allow read, write: if request.auth.token.email == "designssir@gmail.com";
     }
   }
 }

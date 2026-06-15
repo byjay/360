@@ -24,7 +24,7 @@ window.FIREBASE_CONFIG = {
 };
 
 /* 본인 Google 계정 이메일 (super-admin) — 비워두면 백엔드 SUPER_ADMIN 사용 */
-window.FIREBASE_OWNER_EMAIL = "designsir102@gmail.com";
+window.FIREBASE_OWNER_EMAIL = "designssir@gmail.com";
 
 /* Firebase 사용 여부 자동 판정 (placeholder 가 남아있으면 비활성) */
 window.FIREBASE_ENABLED = !String(window.FIREBASE_CONFIG.apiKey).startsWith("YOUR_");

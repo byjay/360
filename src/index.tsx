@@ -21,7 +21,7 @@ app.use('/api/*', cors())
 ════════════════════════════════════════════ */
 /** 슈퍼관리자 이메일 — 환경변수 SUPER_ADMIN_EMAIL 우선, 없으면 기본값(하위호환).
  *  운영 배포 시: wrangler.jsonc vars 또는 `wrangler pages secret put SUPER_ADMIN_EMAIL` 권장. */
-const SUPER_ADMIN_FALLBACK = 'designsir102@gmail.com'
+const SUPER_ADMIN_FALLBACK = 'designssir@gmail.com'
 const SUPER_ADMIN = SUPER_ADMIN_FALLBACK // 모듈 레벨 데모/문서용 기본값
 function superAdmin(c: any): string {
   const v = c?.env?.SUPER_ADMIN_EMAIL
