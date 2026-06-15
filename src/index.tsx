@@ -29,11 +29,14 @@ const DEMO_LOGIN_ENABLED = true
 const DEMO_DESIGNER = { email: 'demo.designer@seastargo.com', name: '데모 설계자', picture: '', role: 'designer' as const }
 const DEMO_VIEWER = { email: 'demo.viewer@seastargo.com', name: '데모 열람자', picture: '', role: 'viewer' as const }
 
+const DEMO_SUPER = { email: SUPER_ADMIN, name: '데모 슈퍼관리자', picture: '', role: 'super' as const }
+
 /** 데모 토큰이면 가짜 사용자 반환, 아니면 null */
 function demoUserFromToken(token: string): any | null {
   if (!DEMO_LOGIN_ENABLED) return null
   if (token === 'demo-designer') return { ...DEMO_DESIGNER, _demo: true }
   if (token === 'demo-viewer') return { ...DEMO_VIEWER, _demo: true }
+  if (token === 'demo-super') return { ...DEMO_SUPER, _demo: true }
   return null
 }
 
@@ -149,8 +152,51 @@ app.get('/api/auth/me', async (c) => {
     ).bind(user.email).first().catch(() => null)
     if (rr) request_status = rr.status
   }
+  // 실제 로그인(데모 제외)만 로그 기록
+  if (!user._demo) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role } })
   return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, request_status, super_admin: SUPER_ADMIN })
 })
+
+/* ════════════════════════════════════════════
+   활동 로그 — 슈퍼관리자가 모든 기록을 관리
+════════════════════════════════════════════ */
+function genLogId(): string {
+  return 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)
+}
+
+/**
+ * 주요 액션을 activity_log 에 기록한다.
+ * 실패해도 본 요청 흐름을 막지 않도록 항상 try/catch 로 감싼다.
+ */
+async function logActivity(
+  c: any,
+  action: string,
+  opts: { actor?: any; targetType?: string; targetId?: string; detail?: any } = {}
+): Promise<void> {
+  try {
+    const actor = opts.actor ?? (await getUser(c).catch(() => null))
+    let role = 'guest'
+    if (actor) {
+      role = actor.email === SUPER_ADMIN
+        ? 'super'
+        : (await isDesigner(c, actor.email).catch(() => false)) ? 'designer' : 'viewer'
+    }
+    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || ''
+    const ua = (c.req.header('User-Agent') || '').slice(0, 180)
+    const detail = opts.detail == null
+      ? null
+      : (typeof opts.detail === 'string' ? opts.detail : JSON.stringify(opts.detail))
+    await c.env.DB.prepare(
+      `INSERT INTO activity_log (id, ts, actor_email, actor_role, action, target_type, target_id, detail, ip, ua, deleted)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).bind(
+      genLogId(), Date.now(), actor?.email || null, role,
+      action, opts.targetType || null, opts.targetId || null, detail, ip, ua
+    ).run()
+  } catch (e) {
+    // 로깅 실패는 무시(테이블 미생성 환경 등)
+  }
+}
 
 /* ════════════════════════════════════════════
    designers — 디자이너 지정(슈퍼관리자 전용)
@@ -285,6 +331,7 @@ app.post('/api/access-requests/:id/approve', async (c) => {
   await c.env.DB.prepare(
     "UPDATE access_requests SET status = 'approved', reviewed_by = ?, updated_at = ? WHERE id = ?"
   ).bind(su.email, now, id).run()
+  await logActivity(c, 'access.approve', { actor: su, targetType: 'designer', targetId: row.email })
   return c.json({ success: true, email: row.email })
 })
 
@@ -297,6 +344,89 @@ app.post('/api/access-requests/:id/reject', async (c) => {
   await c.env.DB.prepare(
     "UPDATE access_requests SET status = 'rejected', reviewed_by = ?, updated_at = ? WHERE id = ?"
   ).bind(su.email, now, id).run()
+  await logActivity(c, 'access.reject', { actor: su, targetType: 'access_request', targetId: id })
+  return c.json({ success: true })
+})
+
+/* ════════════════════════════════════════════
+   activity_log — 슈퍼관리자 전용 로그 관리
+════════════════════════════════════════════ */
+function mapLog(r: any) {
+  return {
+    id: r.id, ts: r.ts, actor_email: r.actor_email, actor_role: r.actor_role,
+    action: r.action, target_type: r.target_type, target_id: r.target_id,
+    detail: r.detail, ip: r.ip, ua: r.ua,
+  }
+}
+
+// 로그 목록 조회 (슈퍼관리자 전용) — 필터: action, actor, q(검색), 페이지네이션 limit/offset
+app.get('/api/activity-logs', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const action = c.req.query('action') || ''
+  const actor  = c.req.query('actor') || ''
+  const q      = c.req.query('q') || ''
+  const limit  = Math.min(parseInt(c.req.query('limit') || '100', 10) || 100, 500)
+  const offset = parseInt(c.req.query('offset') || '0', 10) || 0
+
+  const where: string[] = ['deleted = 0']
+  const args: any[] = []
+  if (action) { where.push('action = ?'); args.push(action) }
+  if (actor)  { where.push('actor_email = ?'); args.push(actor) }
+  if (q) {
+    where.push('(action LIKE ? OR actor_email LIKE ? OR target_type LIKE ? OR target_id LIKE ? OR detail LIKE ?)')
+    const like = `%${q}%`; args.push(like, like, like, like, like)
+  }
+  const whereSql = where.join(' AND ')
+
+  let total = 0
+  try {
+    const cnt: any = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM activity_log WHERE ${whereSql}`).bind(...args).first()
+    total = cnt?.n || 0
+    const { results } = await c.env.DB.prepare(
+      `SELECT * FROM activity_log WHERE ${whereSql} ORDER BY ts DESC LIMIT ? OFFSET ?`
+    ).bind(...args, limit, offset).all()
+    return c.json({ data: (results || []).map(mapLog), total, limit, offset })
+  } catch (e) {
+    // 테이블 미생성 등 → 빈 결과 반환(마이그레이션 적용 전)
+    return c.json({ data: [], total: 0, limit, offset, note: 'activity_log not ready' })
+  }
+})
+
+// 로그 액션 종류 요약(필터 UI용)
+app.get('/api/activity-logs/actions', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  try {
+    const { results } = await c.env.DB.prepare(
+      'SELECT action, COUNT(*) AS n FROM activity_log WHERE deleted = 0 GROUP BY action ORDER BY n DESC'
+    ).all()
+    return c.json({ data: results || [] })
+  } catch { return c.json({ data: [] }) }
+})
+
+// 로그 단건 삭제 (슈퍼관리자 전용, soft delete)
+app.delete('/api/activity-logs/:id', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  await c.env.DB.prepare('UPDATE activity_log SET deleted = 1 WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// 로그 일괄 정리 (슈퍼관리자 전용) — before(ms) 이전 또는 전체 비우기(?all=1)
+app.delete('/api/activity-logs', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const all = c.req.query('all') === '1'
+  const before = parseInt(c.req.query('before') || '0', 10) || 0
+  if (all) {
+    await c.env.DB.prepare('UPDATE activity_log SET deleted = 1 WHERE deleted = 0').run()
+  } else if (before > 0) {
+    await c.env.DB.prepare('UPDATE activity_log SET deleted = 1 WHERE ts < ? AND deleted = 0').bind(before).run()
+  } else {
+    return c.json({ error: 'specify all=1 or before=<ms>' }, 400)
+  }
   return c.json({ success: true })
 })
 
@@ -340,6 +470,7 @@ app.post('/api/projects', async (c) => {
     `INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted)
      VALUES (?, ?, ?, ?, ?, ?, 0)`
   ).bind(id, name, body.description || '', user.email, now, now).run()
+  await logActivity(c, 'project.create', { actor: user, targetType: 'project', targetId: id, detail: { name } })
   return c.json(mapProject({ id, name, description: body.description || '', owner: user.email, created_at: now, updated_at: now }))
 })
 
@@ -351,6 +482,7 @@ app.delete('/api/projects/:id', async (c) => {
   const now = Date.now()
   await c.env.DB.prepare('UPDATE projects SET deleted = 1, updated_at = ? WHERE id = ?').bind(now, id).run()
   await c.env.DB.prepare('UPDATE decks SET deleted = 1, updated_at = ? WHERE project_id = ?').bind(now, id).run()
+  await logActivity(c, 'project.delete', { actor: user, targetType: 'project', targetId: id })
   return c.json({ success: true })
 })
 
@@ -541,6 +673,10 @@ app.post('/tables/deployments', async (c) => {
     body.zones || '[]',
     now, now
   ).run()
+
+  let pinCount = 0
+  try { pinCount = Array.isArray(JSON.parse(body.pins || '[]')) ? JSON.parse(body.pins || '[]').length : 0 } catch {}
+  await logActivity(c, 'deployment.create', { targetType: 'deployment', targetId: id, detail: { title: body.title || '', file_name: body.file_name || '', pins: pinCount } })
 
   return c.json(mapDeployment({
     id, title: body.title || '', file_name: body.file_name || '',

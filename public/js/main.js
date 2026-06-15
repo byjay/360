@@ -5333,7 +5333,7 @@
     /** 데모 진입 — 구글 로그인 없이 바로 권한 부여(서버가 demo 토큰 인식).
      *  role: 'designer' | 'viewer' */
     async demoLogin(role) {
-      this.idToken = role === "designer" ? "demo-designer" : "demo-viewer";
+      this.idToken = role === "super" ? "demo-super" : (role === "designer" ? "demo-designer" : "demo-viewer");
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
       await this.refresh();  // 서버가 demo 토큰을 검증해 role/user 세팅
       this._closeGate();
@@ -5485,6 +5485,15 @@
       // 탭 전환
       $("adm-tab-designers") && $("adm-tab-designers").addEventListener("click", () => this.switchTab("designers"));
       $("adm-tab-requests") && $("adm-tab-requests").addEventListener("click", () => this.switchTab("requests"));
+      $("adm-tab-logs") && $("adm-tab-logs").addEventListener("click", () => this.switchTab("logs"));
+      // 로그 도구
+      $("log-refresh") && $("log-refresh").addEventListener("click", () => this.loadLogs(true));
+      $("log-more") && $("log-more").addEventListener("click", () => this.loadLogs(false));
+      $("log-purge") && $("log-purge").addEventListener("click", () => this.purgeLogs());
+      const _ls = $("log-search");
+      if (_ls) _ls.addEventListener("input", () => { clearTimeout(this._logT); this._logT = setTimeout(() => this.loadLogs(true), 280); });
+      const _lf = $("log-action-filter");
+      if (_lf) _lf.addEventListener("change", () => this.loadLogs(true));
       // 상태 필터
       document.querySelectorAll("#adm-panel-requests .adm-filter-item").forEach((b) => {
         b.addEventListener("click", () => {
@@ -5496,16 +5505,16 @@
     },
     switchTab(tab) {
       this._tab = tab;
-      const isD = tab === "designers";
-      const td = document.getElementById("adm-tab-designers");
-      const tr = document.getElementById("adm-tab-requests");
-      td && td.classList.toggle("active", isD);
-      tr && tr.classList.toggle("active", !isD);
-      const pd = document.getElementById("adm-panel-designers");
-      const pr = document.getElementById("adm-panel-requests");
-      pd && pd.classList.toggle("hidden", !isD);
-      pr && pr.classList.toggle("hidden", isD);
-      if (!isD) this.loadRequests();
+      const tabs = { designers: "adm-tab-designers", requests: "adm-tab-requests", logs: "adm-tab-logs" };
+      const panels = { designers: "adm-panel-designers", requests: "adm-panel-requests", logs: "adm-panel-logs" };
+      Object.keys(tabs).forEach((k) => {
+        const tEl = document.getElementById(tabs[k]);
+        const pEl = document.getElementById(panels[k]);
+        if (tEl) tEl.classList.toggle("active", k === tab);
+        if (pEl) pEl.classList.toggle("hidden", k !== tab);
+      });
+      if (tab === "requests") this.loadRequests();
+      if (tab === "logs") { this.loadLogActions(); this.loadLogs(true); }
     },
     async open() {
       if (!Auth.isSuper) return;
@@ -5651,6 +5660,106 @@
         Prompt.toast("처리되었습니다");
         await this.loadRequests();
         await this.render();
+      } catch (e) { Prompt.toast("네트워크 오류"); }
+    },
+
+    /* ── 활동 로그(슈퍼관리자 전용) ── */
+    _logOffset: 0,
+    _logActionLabel(a) {
+      const m = {
+        "auth.login": "로그인", "access.approve": "신청 승인", "access.reject": "신청 거절/회수",
+        "project.create": "프로젝트 생성", "project.delete": "프로젝트 삭제",
+        "deployment.create": "배포(저장)",
+      };
+      return m[a] || a;
+    },
+    _fmtTime(ts) {
+      try {
+        const d = new Date(ts);
+        const p = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      } catch (e) { return String(ts); }
+    },
+    async loadLogActions() {
+      const sel = document.getElementById("log-action-filter");
+      if (!sel) return;
+      try {
+        const r = await fetch("/api/activity-logs/actions", { headers: Auth.headers() });
+        if (!r.ok) return;
+        const { data } = await r.json();
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">모든 액션</option>';
+        (data || []).forEach((row) => {
+          const o = document.createElement("option");
+          o.value = row.action;
+          o.textContent = `${this._logActionLabel(row.action)} (${row.n})`;
+          sel.appendChild(o);
+        });
+        sel.value = cur;
+      } catch (e) {}
+    },
+    async loadLogs(reset) {
+      const listEl = document.getElementById("log-list");
+      if (!listEl) return;
+      if (reset) { this._logOffset = 0; listEl.innerHTML = '<div class="log-empty">불러오는 중…</div>'; }
+      const q = (document.getElementById("log-search") || {}).value || "";
+      const action = (document.getElementById("log-action-filter") || {}).value || "";
+      const limit = 80;
+      const params = new URLSearchParams({ limit: String(limit), offset: String(this._logOffset) });
+      if (q) params.set("q", q);
+      if (action) params.set("action", action);
+      try {
+        const r = await fetch("/api/activity-logs?" + params.toString(), { headers: Auth.headers() });
+        if (!r.ok) { listEl.innerHTML = '<div class="log-empty">로그를 불러올 수 없습니다(권한 필요).</div>'; return; }
+        const j = await r.json();
+        const rows = j.data || [];
+        const totalEl = document.getElementById("log-total");
+        if (totalEl) totalEl.textContent = (j.total || 0) + "건";
+        if (reset) listEl.innerHTML = "";
+        if (!rows.length && reset) {
+          listEl.innerHTML = '<div class="log-empty"><i class="fa-regular fa-folder-open"></i><span>기록이 없습니다.</span></div>';
+        } else {
+          rows.forEach((it) => listEl.appendChild(this._logRow(it)));
+        }
+        this._logOffset += rows.length;
+        const moreWrap = document.getElementById("log-more-wrap");
+        if (moreWrap) moreWrap.classList.toggle("hidden", this._logOffset >= (j.total || 0));
+      } catch (e) {
+        listEl.innerHTML = '<div class="log-empty">네트워크 오류</div>';
+      }
+    },
+    _logRow(it) {
+      const row = document.createElement("div");
+      row.className = "log-row role-" + (it.actor_role || "guest");
+      const actor = it.actor_email || "(게스트)";
+      const target = [it.target_type, it.target_id].filter(Boolean).join(" · ") || "—";
+      let detail = "";
+      if (it.detail) { try { detail = JSON.stringify(JSON.parse(it.detail)); } catch (e) { detail = it.detail; } }
+      row.innerHTML = `
+        <span class="log-col-time">${UI.escapeHtml(this._fmtTime(it.ts))}</span>
+        <span class="log-col-actor">
+          <span class="log-role-badge ${UI.escapeHtml(it.actor_role || "guest")}">${UI.escapeHtml(it.actor_role || "guest")}</span>
+          <span class="log-actor-email">${UI.escapeHtml(actor)}</span>
+        </span>
+        <span class="log-col-action"><span class="log-action-badge">${UI.escapeHtml(this._logActionLabel(it.action))}</span></span>
+        <span class="log-col-target" title="${UI.escapeHtml(detail)}">${UI.escapeHtml(target)}</span>
+        <span class="log-col-act"><button class="log-del-btn" title="이 기록 삭제"><i class="fa-solid fa-xmark"></i></button></span>
+      `;
+      row.querySelector(".log-del-btn").addEventListener("click", () => this.deleteLog(it.id, row));
+      return row;
+    },
+    async deleteLog(id, rowEl) {
+      try {
+        const r = await fetch("/api/activity-logs/" + encodeURIComponent(id), { method: "DELETE", headers: Auth.headers() });
+        if (r.ok && rowEl) rowEl.remove();
+      } catch (e) {}
+    },
+    async purgeLogs() {
+      if (!confirm("모든 활동 로그를 비울까요? (되돌릴 수 없습니다)")) return;
+      try {
+        const r = await fetch("/api/activity-logs?all=1", { method: "DELETE", headers: Auth.headers() });
+        if (r.ok) { Prompt.toast("로그를 정리했습니다"); this.loadLogActions(); this.loadLogs(true); }
+        else Prompt.toast("정리 실패");
       } catch (e) { Prompt.toast("네트워크 오류"); }
     }
   };

@@ -934,6 +934,9 @@
         <button id="adm-tab-requests" class="adm-tab" type="button" role="tab">
           <i class="fa-solid fa-inbox"></i> 사용 신청 <span id="adm-req-badge" class="adm-req-badge hidden">0</span>
         </button>
+        <button id="adm-tab-logs" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-clock-rotate-left"></i> 활동 로그
+        </button>
       </nav>
 
       <!-- 패널: 디자이너 관리 -->
@@ -974,6 +977,31 @@
             </div>
             <div id="adm-req-list" class="adm-req-list"></div>
           </div>
+        </div>
+      </section>
+
+      <!-- 패널: 활동 로그 (슈퍼관리자 전용 — 모든 기록 관리) -->
+      <section id="adm-panel-logs" class="adm-panel hidden">
+        <div class="log-toolbar">
+          <input id="log-search" class="log-search" type="text" placeholder="검색(액션·이메일·대상)…" aria-label="로그 검색" />
+          <select id="log-action-filter" class="log-action-filter" aria-label="액션 필터">
+            <option value="">모든 액션</option>
+          </select>
+          <button id="log-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+          <span class="log-flex"></span>
+          <span id="log-total" class="log-total">0건</span>
+          <button id="log-purge" class="admin-gate-btn danger" type="button" title="로그 비우기"><i class="fa-solid fa-trash-can"></i> 정리</button>
+        </div>
+        <div class="log-grid-head">
+          <span class="log-col-time">시각</span>
+          <span class="log-col-actor">행위자</span>
+          <span class="log-col-action">액션</span>
+          <span class="log-col-target">대상</span>
+          <span class="log-col-act"></span>
+        </div>
+        <div id="log-list" class="log-list"></div>
+        <div id="log-more-wrap" class="log-more-wrap hidden">
+          <button id="log-more" class="admin-gate-btn ghost" type="button">더 보기</button>
         </div>
       </section>
 

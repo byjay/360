@@ -2869,6 +2869,64 @@ html, body {
   .sidebar { width: 180px; }
 }
 
+/* ════════════════ 활동 로그 패널(슈퍼관리자) ════════════════ */
+.log-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.log-search {
+  flex: 1 1 200px; min-width: 160px; padding: 8px 11px; font-size: 12.5px;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+}
+.log-search:focus { outline: none; border-color: var(--gold); }
+.log-action-filter {
+  padding: 8px 10px; font-size: 12px; background: var(--bg3);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text); cursor: pointer;
+}
+.log-flex { flex: 1 1 auto; }
+.log-total { font-size: 12px; color: var(--text2); font-family: var(--font-mono); }
+.admin-gate-btn.danger { background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.4); color: #f87171; }
+.admin-gate-btn.danger:hover { background: rgba(239,68,68,.22); }
+
+.log-grid-head, .log-row {
+  display: grid; grid-template-columns: 158px 1.4fr 1fr 1.3fr 34px;
+  align-items: center; gap: 8px; padding: 8px 10px;
+}
+.log-grid-head {
+  font-size: 11px; font-weight: 700; color: var(--text2); text-transform: uppercase;
+  letter-spacing: .4px; border-bottom: 1px solid var(--border);
+}
+.log-list { max-height: 52vh; overflow-y: auto; }
+.log-row {
+  font-size: 12.5px; border-bottom: 1px solid rgba(148,163,184,.1);
+  transition: background .12s;
+}
+.log-row:hover { background: rgba(148,163,184,.06); }
+.log-col-time { font-family: var(--font-mono); font-size: 11.5px; color: var(--text2); }
+.log-col-actor { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.log-actor-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-role-badge {
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase; padding: 2px 6px;
+  border-radius: 5px; letter-spacing: .3px; flex: 0 0 auto;
+}
+.log-role-badge.super    { background: rgba(245,158,11,.18); color: #fbbf24; }
+.log-role-badge.designer { background: rgba(56,189,248,.18); color: #38bdf8; }
+.log-role-badge.viewer   { background: rgba(16,185,129,.16); color: #34d399; }
+.log-role-badge.guest    { background: rgba(148,163,184,.16); color: #94a3b8; }
+.log-action-badge {
+  font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 6px;
+  background: rgba(148,163,184,.12); color: var(--text);
+}
+.log-col-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); font-size: 11.5px; }
+.log-del-btn {
+  width: 24px; height: 24px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--text2); cursor: pointer; transition: all .12s;
+}
+.log-del-btn:hover { background: rgba(239,68,68,.16); color: #f87171; }
+.log-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 36px 12px; color: var(--text2); font-size: 13px;
+}
+.log-empty i { font-size: 22px; opacity: .5; }
+.log-more-wrap { text-align: center; padding: 10px 0 2px; }
+
 /* ════════════════ FLS 포인트 클라우드 듀얼 뷰어 ════════════════ */
 /* 360 파노라마와 나란히: with-fls 일 때 360 캔버스를 왼쪽 절반으로 */
 .pano-overlay.with-fls .pano-canvas { width: 60% !important; left: 0; }
