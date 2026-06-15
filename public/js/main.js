@@ -50,6 +50,7 @@
     pendingFile: null,      // 선택된 360° 그림/영상 파일
     pendingIsVideo: false,
     pendingDocs: [],        // 첨부 문서 후보 [{tempId, file, name, size, kind, status, docId}]
+    pendingFls:  null,      // 첨부된 3D 포인트클라우드 { localId, name, size }
     editingPinId: null,     // 기존 포인트 편집 중인 id (null=신규)
     movingPinId: null,      // 드래그로 위치 이동 중인 포인트 id
     autoSaveDepId: null,    // 자동 저장된 배포본(작업본) id — 도면 업로드 즉시 생성
@@ -74,6 +75,7 @@
       this.pins = []; this.zones = []; this.placing = false; this.drawingZone = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
+      this.pendingFls = null;
       this.editingPinId = null; this.movingPinId = null;
       this.autoSaveDepId = null; this.autoSaving = false;
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };
@@ -131,26 +133,69 @@
       return await task.promise;
     },
 
+    /* ── 동적 고해상도 렌더링 상태 (벡터 PDF 화질 보존의 핵심) ──
+       PDF 는 벡터이므로, "보이는 줌 배율"에 맞춰 그 배율로 다시 래스터화하면
+       확대해도 원도면 화질이 그대로 유지된다. CSS transform: scale() 로만 키우면
+       이미 그려진 비트맵을 늘리는 것이라 깨진다 → 이를 방지하기 위해
+       캔버스를 줌에 비례한 해상도로 재렌더하고, CSS 는 "렌더 배율 대비 보정"만 한다. */
+    _renderState: {
+      pdfDoc: null, pageNum: 0, rotation: 0,
+      renderScale: 0,        // 현재 캔버스가 래스터화된 PDF 스케일 (CSS 1배 기준 픽셀/포인트)
+      baseCssScale: 1,       // 캔버스가 표현하는 "논리적(=화면 1배)" 크기 기준 스케일
+      task: null,            // 진행 중인 render task (취소용)
+      pending: null          // 디바운스 타이머
+    },
+
+    /** PDF.js 권장 렌더 한계(메모리/캔버스 면적). 모바일/저사양도 안전한 상한. */
+    MAX_CANVAS_PX: 16777216,   // 4096×4096 ≈ 캔버스 최대 픽셀 (Safari 제한 고려)
+    MAX_SIDE_HARD: 8192,       // 한 변 하드 상한
+
     async renderPage(pdfDoc, pageNum, canvas, scale = 1.5, rotation = 0) {
       const page = await pdfDoc.getPage(pageNum);
-      // 적응형 스케일: 너무 큰 캔버스는 렌더가 느리고 메모리를 많이 쓴다.
-      // 캔버스 최대 변을 2400px 로 제한해 큰 도면도 빠르고 안정적으로 그린다.
-      // 회전은 PDF.js 내장 getViewport({rotation}) 으로 처리 (페이지 자체 회전값과 합산).
       const rot = ((page.rotate || 0) + (rotation || 0)) % 360;
       const base = page.getViewport({ scale: 1, rotation: rot });
-      const MAX_SIDE = 2400;
-      const fit = MAX_SIDE / Math.max(base.width, base.height);
-      const useScale = Math.min(scale, fit > 0 ? fit : scale);
-      const vp   = page.getViewport({ scale: useScale, rotation: rot });
+      // 초기 렌더는 "화면 1배(=CSS 100%)" 에 맞는 해상도로 그린다.
+      // baseCssScale: 도면 1포인트가 화면 몇 px 로 보이는가 (디자이너 첫 표시 기준).
+      // 여기서는 캔버스의 CSS 폭 = base.width 로 두고, 줌은 별도로 처리한다.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // 논리(=화면 1배) CSS 크기는 PDF 1포인트 = 1px 로 고정한다.
+      // → map-transform/pins-layer 레이아웃 크기가 줌 재렌더와 무관하게 불변(핀 % 좌표 정합 보장).
+      const baseCss = 1;
+      canvas.style.width  = Math.round(base.width  * baseCss) + "px";
+      canvas.style.height = Math.round(base.height * baseCss) + "px";
+      this._renderState.pdfDoc = pdfDoc;
+      this._renderState.pageNum = pageNum;
+      this._renderState.rotation = rotation;
+      this._renderState.baseCssScale = baseCss;
+      // 첫 렌더 해상도: 초기 화질 확보를 위해 scale(권장 1.5)×dpr 로 미리 선명하게.
+      // 이후 줌인하면 requestZoomRerender 가 더 높은 해상도로 재래스터화한다.
+      const initRender = Math.max(1, scale) * dpr;
+      await this._rasterize(page, canvas, initRender, rot, baseCss);
+    },
+
+    /** 실제 캔버스 래스터화 (renderScale = PDF 포인트당 캔버스 픽셀) */
+    async _rasterize(page, canvas, renderScale, rot, cssScale) {
+      // 캔버스 면적/변 상한으로 클램프 (안정성)
+      const baseVp = page.getViewport({ scale: 1, rotation: rot });
+      let rs = renderScale;
+      const maxBySide = this.MAX_SIDE_HARD / Math.max(baseVp.width, baseVp.height);
+      const maxByArea = Math.sqrt(this.MAX_CANVAS_PX / (baseVp.width * baseVp.height));
+      rs = Math.min(rs, maxBySide, maxByArea);
+      rs = Math.max(rs, 0.1);
+      const vp = page.getViewport({ scale: rs, rotation: rot });
+      const ctx = canvas.getContext("2d", { alpha: false });
+      // 진행 중 task 취소 (줌 연타 시 누적 방지)
+      try { if (this._renderState.task) this._renderState.task.cancel(); } catch (e) {}
       canvas.width  = Math.round(vp.width);
       canvas.height = Math.round(vp.height);
-      const ctx = canvas.getContext("2d", { alpha: false });
+      // CSS 크기 = 논리 크기(cssScale 기준). 캔버스 내부 픽셀이 더 많으므로 선명.
+      canvas.style.width  = Math.round(baseVp.width  * cssScale) + "px";
+      canvas.style.height = Math.round(baseVp.height * cssScale) + "px";
       const task = page.render({ canvasContext: ctx, viewport: vp });
-      // worker 모드면 render().promise 가 정상 resolve 된다.
-      // 폴백(disableWorker) 환경에서만 드물게 hang 될 수 있으므로,
-      // worker 모드: 정상 await / 폴백 모드: 화면은 이미 그려졌으므로 비파괴 타임아웃 보호.
+      this._renderState.task = task;
+      this._renderState.renderScale = rs;
       if (this.useWorker) {
-        await task.promise;
+        try { await task.promise; } catch (e) { /* cancel 등 무시 */ }
       } else {
         await Promise.race([
           task.promise.catch(() => {}),
@@ -159,18 +204,57 @@
       }
     },
 
-    /** 전 페이지를 오프스크린 렌더 → JPEG dataURL 배열 (배포 스냅샷용) */
-    async snapshotAllPages(pdfDoc, maxDim = 2000, quality = 0.75) {
+    /** 줌 변경 시 호출 — 현재 줌에 맞는 해상도로 PDF 재래스터화(디바운스).
+     *  zoom = MapCtrl 의 State.zoom (CSS transform 배율). */
+    requestZoomRerender(zoom) {
+      const st = this._renderState;
+      if (!st.pdfDoc) return;
+      const canvas = document.getElementById("pdf-canvas");
+      if (!canvas || canvas.classList.contains("hidden")) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // 목표 렌더 스케일 = 논리스케일 × 줌 × dpr.
+      // 즉 화면에 실제로 보이는 픽셀 밀도만큼 PDF 를 다시 그린다 → 항상 선명.
+      const target = st.baseCssScale * Math.max(1, zoom) * dpr;
+      // 이미 충분히 높은 해상도면(목표가 현재의 1.15배 미만) 재렌더 생략
+      if (target <= st.renderScale * 1.15) return;
+      clearTimeout(st.pending);
+      st.pending = setTimeout(async () => {
+        try {
+          const page = await st.pdfDoc.getPage(st.pageNum);
+          const rot = ((page.rotate || 0) + (st.rotation || 0)) % 360;
+          await this._rasterize(page, canvas, target, rot, st.baseCssScale);
+        } catch (e) {}
+      }, 140);
+    },
+
+    /** 전 페이지를 오프스크린 렌더 → 고화질 이미지 dataURL 배열 (배포 스냅샷용).
+     *  뷰어에서 확대해도 선명하도록 해상도를 충분히 높게 잡되(maxDim 4096),
+     *  엔지니어링 도면(선/텍스트 위주)은 PNG 가 JPEG보다 선명하고 용량도 작은 경우가 많아
+     *  PNG/JPEG 중 더 작은 쪽을 자동 선택한다. 너무 크면 단계적으로 해상도를 낮춰 D1 저장 안정성 확보. */
+    async snapshotAllPages(pdfDoc, maxDim = 4096, quality = 0.92) {
       const out = [];
+      const SOFT_LIMIT = 2_600_000; // dataURL 문자수 상한 (≈2MB) — 초과 시 해상도 자동 강등
       for (let p = 1; p <= pdfDoc.numPages; p++) {
         const page = await pdfDoc.getPage(p);
         const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(maxDim / Math.max(base.width, base.height), 2);
-        const vp = page.getViewport({ scale });
-        const cv = document.createElement("canvas");
-        cv.width = vp.width; cv.height = vp.height;
-        await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
-        out.push(cv.toDataURL("image/jpeg", quality));
+        let dim = maxDim, q = quality, data = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const scale = Math.min(dim / Math.max(base.width, base.height), 4);
+          const vp = page.getViewport({ scale });
+          const cv = document.createElement("canvas");
+          cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+          const ctx = cv.getContext("2d", { alpha: false });
+          ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
+          await page.render({ canvasContext: ctx, viewport: vp }).promise;
+          // 선화 도면은 PNG 가 더 선명/경량인 경우가 많음 → PNG·JPEG 중 작은 쪽 채택
+          const png = cv.toDataURL("image/png");
+          const jpg = cv.toDataURL("image/jpeg", q);
+          data = (png.length <= jpg.length) ? png : jpg;
+          if (data.length <= SOFT_LIMIT || dim <= 1600) break;
+          // 용량 초과 → 해상도/품질 강등 후 재시도
+          dim = Math.round(dim * 0.8); q = Math.max(0.8, q - 0.04);
+        }
+        out.push(data);
       }
       return out;
     }
@@ -780,6 +864,9 @@
       if (typeof Notes !== "undefined") Notes.closePanel();  // 노트 패널 함께 닫기
       if (typeof TimeLapse !== "undefined") TimeLapse.hide();
       if (typeof Compare !== "undefined") Compare.close();
+      if (typeof FLS !== "undefined") FLS.close();  // FLS 3D 패널 함께 닫기
+      const ov2 = document.getElementById("pano-overlay");
+      if (ov2) ov2.classList.remove("with-fls");
       Radar.hide();
       PanoNav.hide();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -904,6 +991,418 @@
   };
 
   /* ══════════════════════════════════════════
+     FLS — FARO 포인트 클라우드(LiDAR) 직접 로드/표출 (Three.js)
+       · 표준 포맷(.ply/.pcd/.xyz/.pts/.las/.laz) → 브라우저에서 100% 직접 파싱·렌더
+       · .fls(FARO 독점) → 헤더 best-effort + 변환 안내 (FARO SCENE → e57/las)
+       · 360 파노라마와 나란히(split) 표시. 안정성 최우선: 점 개수 상한·다운샘플.
+  ══════════════════════════════════════════ */
+  const FLS = {
+    MAX_POINTS: 1_800_000,     // 렌더 안정 상한 (초과 시 균등 다운샘플)
+    renderer: null, scene: null, camera: null, points: null,
+    _raf: null, _drag: null, _rot: { theta: 0.6, phi: 1.1, r: 3 },
+    _target: { x: 0, y: 0, z: 0 }, _inited: false, _ro: null,
+
+    SUPPORTED: ["ply", "pcd", "xyz", "pts", "asc", "txt", "las", "laz", "fls", "e57"],
+
+    extOf(name) { return (name || "").split(".").pop().toLowerCase(); },
+    isSupported(name) { return this.SUPPORTED.includes(this.extOf(name)); },
+
+    _el(id) { return document.getElementById(id); },
+    _show(which) {
+      ["fls-loading", "fls-empty", "fls-error", "fls-stats"].forEach(id => {
+        const e = this._el(id); if (e) e.classList.add("hidden");
+      });
+      const t = this._el(which); if (t) t.classList.remove("hidden");
+    },
+
+    /** 3D 패널 표시/숨김 */
+    showPane(show) {
+      const p = this._el("fls-pane");
+      if (!p) return;
+      p.classList.toggle("hidden", !show);
+      if (show) {
+        this._ensureRenderer();
+        setTimeout(() => this._resize(), 30);
+      }
+    },
+
+    /** 핀에 연결된 포인트클라우드가 있으면 로드. 없으면 empty 패널. */
+    async openForPin(pin) {
+      this.showPane(true);
+      const src = pin && (pin.flsUrl || pin.fls);
+      const name = pin && (pin.flsName || pin.flsUrl || "");
+      const localData = pin && pin.flsLocalId ? Cloud._cache && Cloud._cache["fls:" + pin.flsLocalId] : null;
+      if (!src && !localData) { this._show("fls-empty"); return; }
+      try {
+        this._show("fls-loading");
+        let buf;
+        if (localData) { buf = localData; }
+        else {
+          const res = await fetch(src);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          buf = await res.arrayBuffer();
+        }
+        await this.loadBuffer(buf, name || src);
+      } catch (e) {
+        this._showError("로드 실패", e.message || String(e));
+      }
+    },
+
+    _showError(t, h) {
+      this._show("fls-error");
+      const et = this._el("fls-error-t"), eh = this._el("fls-error-h");
+      if (et) et.textContent = t;
+      if (eh) eh.textContent = h || "";
+    },
+
+    /** ArrayBuffer + 파일명 → 파싱 후 렌더 */
+    async loadBuffer(buf, name) {
+      const ext = this.extOf(name);
+      const badge = this._el("fls-fmt-badge");
+      if (badge) badge.textContent = ext ? ("." + ext) : "";
+      let parsed = null;
+      try {
+        if (ext === "ply") parsed = this._parsePLY(buf);
+        else if (ext === "pcd") parsed = this._parsePCD(buf);
+        else if (["xyz", "pts", "asc", "txt"].includes(ext)) parsed = this._parseXYZ(buf);
+        else if (ext === "las" || ext === "laz") parsed = this._parseLAS(buf, ext);
+        else if (ext === "fls" || ext === "e57") parsed = this._parseFLS(buf, ext);
+        else parsed = this._sniff(buf);
+      } catch (e) {
+        return this._showError("파싱 실패", (e && e.message) || "지원되지 않는 형식일 수 있습니다.");
+      }
+      if (!parsed || !parsed.count) {
+        if (ext === "fls") {
+          return this._showError(
+            ".fls 원본은 브라우저 직접 파싱이 제한됩니다",
+            "FARO SCENE에서 .e57 또는 .las/.laz 로 내보낸 뒤 첨부하면 바로 표시됩니다. (이 시스템은 .e57/.las/.laz/.ply/.pcd/.xyz/.pts 직접 로드를 지원)"
+          );
+        }
+        return this._showError("표시할 점이 없습니다", "파일이 비었거나 좌표 데이터를 찾지 못했습니다.");
+      }
+      this._render(parsed);
+    },
+
+    /* ── 파서들 (positions: Float32Array[xyz*n], colors: Float32Array|null) ── */
+
+    _decim(posArr, colArr) {
+      // 점 개수 상한 초과 시 균등 다운샘플 (안정성)
+      const n = posArr.length / 3;
+      if (n <= this.MAX_POINTS) return { positions: posArr, colors: colArr, count: n };
+      const step = n / this.MAX_POINTS;
+      const outN = Math.floor(this.MAX_POINTS);
+      const pos = new Float32Array(outN * 3);
+      const col = colArr ? new Float32Array(outN * 3) : null;
+      for (let i = 0; i < outN; i++) {
+        const si = Math.floor(i * step);
+        pos[i * 3] = posArr[si * 3]; pos[i * 3 + 1] = posArr[si * 3 + 1]; pos[i * 3 + 2] = posArr[si * 3 + 2];
+        if (col) { col[i * 3] = colArr[si * 3]; col[i * 3 + 1] = colArr[si * 3 + 1]; col[i * 3 + 2] = colArr[si * 3 + 2]; }
+      }
+      return { positions: pos, colors: col, count: outN };
+    },
+
+    _parseXYZ(buf) {
+      const txt = new TextDecoder().decode(buf);
+      const lines = txt.split(/\r?\n/);
+      const pos = [], col = [];
+      let hasColor = false;
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i].trim();
+        if (!l || l[0] === "#" || /[a-df-zA-DF-Z]/.test(l[0])) continue; // 헤더/주석 스킵 (e는 지수표기 허용)
+        const t = l.split(/[\s,;]+/).map(Number);
+        if (t.length < 3 || !isFinite(t[0]) || !isFinite(t[1]) || !isFinite(t[2])) continue;
+        pos.push(t[0], t[1], t[2]);
+        if (t.length >= 6) {
+          hasColor = true;
+          // 색이 0~255 면 정규화
+          const r = t[3] > 1 ? t[3] / 255 : t[3], g = t[4] > 1 ? t[4] / 255 : t[4], b = t[5] > 1 ? t[5] / 255 : t[5];
+          col.push(r, g, b);
+        } else col.push(0.7, 0.8, 0.95);
+      }
+      return this._decim(new Float32Array(pos), hasColor ? new Float32Array(col) : null);
+    },
+
+    _parsePCD(buf) {
+      // ASCII PCD 우선 지원 (binary 는 best-effort)
+      const head = new TextDecoder().decode(buf.slice(0, 2048));
+      const fieldsM = head.match(/FIELDS (.+)/i);
+      const dataM = head.match(/DATA (\w+)/i);
+      const pointsM = head.match(/POINTS (\d+)/i);
+      const fields = fieldsM ? fieldsM[1].trim().split(/\s+/) : ["x", "y", "z"];
+      const xi = fields.indexOf("x"), yi = fields.indexOf("y"), zi = fields.indexOf("z");
+      const rgbi = fields.findIndex(f => /rgb/i.test(f));
+      const dataType = dataM ? dataM[1].toLowerCase() : "ascii";
+      const headerEnd = head.indexOf("DATA");
+      const bodyStart = buf.bytelength ? 0 : 0;
+      if (dataType === "ascii") {
+        const fullTxt = new TextDecoder().decode(buf);
+        const after = fullTxt.slice(fullTxt.indexOf("DATA ascii") + 10);
+        const lines = after.split(/\r?\n/);
+        const pos = [], col = [];
+        for (const ln of lines) {
+          const l = ln.trim(); if (!l) continue;
+          const t = l.split(/\s+/).map(Number);
+          if (t.length <= Math.max(xi, yi, zi)) continue;
+          if (!isFinite(t[xi])) continue;
+          pos.push(t[xi], t[yi], t[zi]);
+          if (rgbi >= 0 && isFinite(t[rgbi])) {
+            const v = t[rgbi] >>> 0;
+            col.push(((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255);
+          } else col.push(0.7, 0.8, 0.95);
+        }
+        return this._decim(new Float32Array(pos), rgbi >= 0 ? new Float32Array(col) : null);
+      }
+      // binary PCD: best-effort — 안내로 폴백
+      throw new Error("바이너리 PCD는 ASCII PCD로 변환 후 사용하세요.");
+    },
+
+    _parsePLY(buf) {
+      const bytes = new Uint8Array(buf);
+      // 헤더 끝(end_header) 찾기
+      const headTxt = new TextDecoder().decode(buf.slice(0, 4096));
+      const endIdx = headTxt.indexOf("end_header");
+      if (endIdx < 0) throw new Error("PLY 헤더 없음");
+      const headerStr = headTxt.slice(0, endIdx);
+      const isAscii = /format\s+ascii/i.test(headerStr);
+      const isLE = /format\s+binary_little_endian/i.test(headerStr);
+      const vMatch = headerStr.match(/element vertex (\d+)/i);
+      const vCount = vMatch ? parseInt(vMatch[1], 10) : 0;
+      // 속성 파싱
+      const props = [];
+      headerStr.split(/\r?\n/).forEach(l => {
+        const m = l.trim().match(/^property\s+(\w+)\s+(\w+)/i);
+        if (m) props.push({ type: m[1].toLowerCase(), name: m[2].toLowerCase() });
+      });
+      const dataOffset = (new TextEncoder().encode(headTxt.slice(0, endIdx + "end_header".length))).length
+        + (headTxt[endIdx + 10] === "\r" ? 2 : 1);
+      const pos = new Float32Array(vCount * 3);
+      const hasColor = props.some(p => /red|green|blue/.test(p.name));
+      const col = hasColor ? new Float32Array(vCount * 3) : null;
+      if (isAscii) {
+        const fullTxt = new TextDecoder().decode(buf);
+        const after = fullTxt.slice(fullTxt.indexOf("end_header") + 10).replace(/^\s+/, "");
+        const lines = after.split(/\r?\n/);
+        const xi = props.findIndex(p => p.name === "x"), yi = props.findIndex(p => p.name === "y"), zi = props.findIndex(p => p.name === "z");
+        const ri = props.findIndex(p => p.name === "red"), gi = props.findIndex(p => p.name === "green"), bi = props.findIndex(p => p.name === "blue");
+        let k = 0;
+        for (let i = 0; i < lines.length && k < vCount; i++) {
+          const t = lines[i].trim().split(/\s+/).map(Number);
+          if (t.length < props.length) continue;
+          pos[k * 3] = t[xi]; pos[k * 3 + 1] = t[yi]; pos[k * 3 + 2] = t[zi];
+          if (col) { col[k * 3] = (t[ri] || 0) / 255; col[k * 3 + 1] = (t[gi] || 0) / 255; col[k * 3 + 2] = (t[bi] || 0) / 255; }
+          k++;
+        }
+        return this._decim(pos.subarray(0, k * 3), col ? col.subarray(0, k * 3) : null);
+      }
+      // binary_little_endian
+      const dv = new DataView(buf);
+      const sizeOf = { char: 1, uchar: 1, int8: 1, uint8: 1, short: 2, ushort: 2, int16: 2, uint16: 2, int: 4, uint: 4, int32: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
+      const readers = props.map(p => ({ name: p.name, size: sizeOf[p.type] || 4, type: p.type }));
+      const stride = readers.reduce((s, r) => s + r.size, 0);
+      let off = dataOffset;
+      const le = isLE !== false;
+      const readVal = (o, r) => {
+        switch (r.type) {
+          case "float": case "float32": return dv.getFloat32(o, le);
+          case "double": case "float64": return dv.getFloat64(o, le);
+          case "uchar": case "uint8": return dv.getUint8(o);
+          case "char": case "int8": return dv.getInt8(o);
+          case "ushort": case "uint16": return dv.getUint16(o, le);
+          case "short": case "int16": return dv.getInt16(o, le);
+          case "uint": case "uint32": return dv.getUint32(o, le);
+          default: return dv.getInt32(o, le);
+        }
+      };
+      for (let i = 0; i < vCount && off + stride <= buf.byteLength; i++) {
+        let o = off;
+        for (const r of readers) {
+          const v = readVal(o, r);
+          if (r.name === "x") pos[i * 3] = v;
+          else if (r.name === "y") pos[i * 3 + 1] = v;
+          else if (r.name === "z") pos[i * 3 + 2] = v;
+          else if (col && r.name === "red") col[i * 3] = v / 255;
+          else if (col && r.name === "green") col[i * 3 + 1] = v / 255;
+          else if (col && r.name === "blue") col[i * 3 + 2] = v / 255;
+          o += r.size;
+        }
+        off += stride;
+      }
+      return this._decim(pos, col);
+    },
+
+    _parseLAS(buf, ext) {
+      if (ext === "laz") throw new Error("LAZ(압축)는 LAS로 풀어 첨부하거나 e57/ply를 사용하세요.");
+      const dv = new DataView(buf);
+      // LAS 헤더: signature 'LASF'
+      const sig = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+      if (sig !== "LASF") throw new Error("유효한 LAS 파일이 아닙니다.");
+      const pointDataOffset = dv.getUint32(96, true);
+      const pointFormat = dv.getUint8(104);
+      const pointLength = dv.getUint16(105, true);
+      let numPoints = dv.getUint32(107, true);
+      if (!numPoints) { // LAS 1.4 legacy 0 → extended
+        try { numPoints = Number(dv.getBigUint64(247, true)); } catch (e) {}
+      }
+      const sx = dv.getFloat64(131, true), sy = dv.getFloat64(139, true), sz = dv.getFloat64(147, true);
+      const ox = dv.getFloat64(155, true), oy = dv.getFloat64(163, true), oz = dv.getFloat64(171, true);
+      const hasColor = pointFormat === 2 || pointFormat === 3 || pointFormat === 5 || pointFormat === 7 || pointFormat === 8 || pointFormat === 10;
+      const colorOffsetMap = { 2: 20, 3: 28, 5: 28, 7: 30, 8: 30, 10: 30 };
+      const n = Math.min(numPoints, this.MAX_POINTS * 2);
+      const pos = new Float32Array(n * 3);
+      const col = hasColor ? new Float32Array(n * 3) : null;
+      let off = pointDataOffset, k = 0;
+      for (let i = 0; i < numPoints && off + pointLength <= buf.byteLength && k < n; i++, off += pointLength) {
+        const X = dv.getInt32(off, true), Y = dv.getInt32(off + 4, true), Z = dv.getInt32(off + 8, true);
+        pos[k * 3] = X * sx + ox; pos[k * 3 + 1] = Y * sy + oy; pos[k * 3 + 2] = Z * sz + oz;
+        if (col) {
+          const co = off + (colorOffsetMap[pointFormat] || 20);
+          col[k * 3] = dv.getUint16(co, true) / 65535;
+          col[k * 3 + 1] = dv.getUint16(co + 2, true) / 65535;
+          col[k * 3 + 2] = dv.getUint16(co + 4, true) / 65535;
+        }
+        k++;
+      }
+      return this._decim(pos.subarray(0, k * 3), col ? col.subarray(0, k * 3) : null);
+    },
+
+    _parseFLS(buf, ext) {
+      // FARO .fls 는 독점 포맷. e57 도 컨테이너가 복잡(XML+binary)해 안정 파싱이 어려움.
+      // 일부 e57 은 단순 구조라 sniff 로 점이 잡히는 경우도 있으나, 신뢰성을 위해
+      // 직접 파싱 실패 시 변환 안내로 폴백한다(loadBuffer 가 처리).
+      return this._sniff(buf);
+    },
+
+    _sniff(buf) {
+      // 텍스트면 XYZ 시도
+      try {
+        const head = new TextDecoder().decode(buf.slice(0, 256));
+        if (/^[\s\d.\-eE,;]+$/.test(head.replace(/\r?\n/g, " ").slice(0, 80))) {
+          return this._parseXYZ(buf);
+        }
+      } catch (e) {}
+      return { positions: new Float32Array(0), colors: null, count: 0 };
+    },
+
+    /* ── Three.js 렌더링 ── */
+    _ensureRenderer() {
+      if (this._inited) return;
+      const canvas = this._el("fls-canvas");
+      if (!canvas || typeof THREE === "undefined") return;
+      this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false });
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      this.scene = new THREE.Scene();
+      this.scene.background = new THREE.Color(0x0a1422);
+      this.camera = new THREE.PerspectiveCamera(60, 1, 0.01, 100000);
+      const grid = new THREE.GridHelper(10, 20, 0x1b75bb, 0x16324d);
+      grid.material.opacity = 0.25; grid.material.transparent = true;
+      this.scene.add(grid);
+      this._bindControls(canvas);
+      this._inited = true;
+      // 반응형 리사이즈
+      try {
+        this._ro = new ResizeObserver(() => this._resize());
+        this._ro.observe(this._el("fls-stage"));
+      } catch (e) {}
+      this._loop();
+    },
+
+    _render(parsed) {
+      this._ensureRenderer();
+      if (!this.scene) { this._showError("WebGL 미지원", "이 브라우저에서 3D 렌더링을 사용할 수 없습니다."); return; }
+      // 기존 points 제거
+      if (this.points) { this.scene.remove(this.points); this.points.geometry.dispose(); this.points.material.dispose(); this.points = null; }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(parsed.positions, 3));
+      let mat;
+      if (parsed.colors) {
+        geo.setAttribute("color", new THREE.BufferAttribute(parsed.colors, 3));
+        mat = new THREE.PointsMaterial({ size: 0.02, vertexColors: true, sizeAttenuation: true });
+      } else {
+        mat = new THREE.PointsMaterial({ size: 0.02, color: 0x8ec5ff, sizeAttenuation: true });
+      }
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      const cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2;
+      const size = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1;
+      // 점 크기를 모델 스케일에 맞춤
+      mat.size = size / 600;
+      this.points = new THREE.Points(geo, mat);
+      this.scene.add(this.points);
+      this._target = { x: cx, y: cy, z: cz };
+      this._rot = { theta: 0.7, phi: 1.05, r: size * 1.6 };
+      this._show("fls-stats");
+      const stats = this._el("fls-stats");
+      if (stats) stats.textContent = parsed.count.toLocaleString() + " pts";
+      this._resize();
+    },
+
+    _bindControls(canvas) {
+      const down = e => {
+        const p = e.touches ? e.touches[0] : e;
+        this._drag = { x: p.clientX, y: p.clientY, theta: this._rot.theta, phi: this._rot.phi };
+      };
+      const move = e => {
+        if (!this._drag) return;
+        const p = e.touches ? e.touches[0] : e;
+        const dx = p.clientX - this._drag.x, dy = p.clientY - this._drag.y;
+        this._rot.theta = this._drag.theta - dx * 0.005;
+        this._rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, this._drag.phi - dy * 0.005));
+      };
+      const up = () => { this._drag = null; };
+      canvas.addEventListener("mousedown", down);
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+      canvas.addEventListener("touchstart", down, { passive: true });
+      canvas.addEventListener("touchmove", e => { move(e); }, { passive: true });
+      canvas.addEventListener("touchend", up);
+      canvas.addEventListener("wheel", e => {
+        e.preventDefault();
+        this._rot.r *= (1 + (e.deltaY > 0 ? 0.1 : -0.1));
+        this._rot.r = Math.max(0.01, this._rot.r);
+      }, { passive: false });
+      const rb = this._el("btn-fls-reset");
+      if (rb) rb.addEventListener("click", () => {
+        if (this.points) { const bb = this.points.geometry.boundingBox; const s = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1; this._rot = { theta: 0.7, phi: 1.05, r: s * 1.6 }; }
+      });
+      const cb = this._el("btn-fls-collapse");
+      if (cb) cb.addEventListener("click", () => {
+        const pane = this._el("fls-pane");
+        if (pane) { pane.classList.toggle("fls-collapsed"); setTimeout(() => this._resize(), 260); }
+      });
+    },
+
+    _resize() {
+      if (!this.renderer) return;
+      const stage = this._el("fls-stage");
+      if (!stage) return;
+      const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+      this.renderer.setSize(w, h, false);
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+    },
+
+    _loop() {
+      const tick = () => {
+        this._raf = requestAnimationFrame(tick);
+        if (!this.renderer || !this.scene) return;
+        const pane = this._el("fls-pane");
+        if (!pane || pane.classList.contains("hidden")) return;
+        const { theta, phi, r } = this._rot;
+        this.camera.position.set(
+          this._target.x + r * Math.sin(phi) * Math.cos(theta),
+          this._target.y + r * Math.cos(phi),
+          this._target.z + r * Math.sin(phi) * Math.sin(theta)
+        );
+        this.camera.lookAt(this._target.x, this._target.y, this._target.z);
+        this.renderer.render(this.scene, this.camera);
+      };
+      this._raf = requestAnimationFrame(tick);
+    },
+
+    close() { this.showPane(false); }
+  };
+
+  /* ══════════════════════════════════════════
      MAP CTRL  — 줌/패닝 + 좌표 변환 + 플라이투
   ══════════════════════════════════════════ */
   const MapCtrl = {
@@ -930,6 +1429,12 @@
       this.transform.style.transform =
         `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})${iso}${rot}`;
       this._updateZoomLabel();
+      // ── 벡터 PDF 화질 보존: 줌이 오르면 그 배율로 PDF 를 다시 래스터화 ──
+      // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
+      if (State.mode !== "viewer" && State.fileType === "pdf" && State.pdfDoc
+          && typeof PDF !== "undefined" && PDF.requestZoomRerender) {
+        PDF.requestZoomRerender(State.zoom);
+      }
     },
 
     /** ISO 3D 뷰 토글 — 평면 ↔ 아이소메트릭 입체 회전 (부드러운 전환) */
@@ -959,12 +1464,18 @@
       if (el) el.textContent = Math.round(State.zoom * 100) + "%";
     },
 
-    /** 도면 콘텐츠의 실제 픽셀 크기 (canvas 또는 image) */
+    /** 도면 콘텐츠의 "논리(CSS) 크기" — 줌/팬 계산용.
+     *  PDF 캔버스는 내부 픽셀(width)이 dpr·줌에 따라 달라지므로,
+     *  레이아웃상 차지하는 CSS 크기(style.width/offsetWidth)를 기준으로 한다. */
     _contentSize() {
       const cv = document.getElementById("pdf-canvas");
       const img = document.getElementById("map-image");
-      if (cv && !cv.classList.contains("hidden") && cv.width)
-        return { w: cv.width, h: cv.height };
+      if (cv && !cv.classList.contains("hidden") && cv.width) {
+        // CSS 크기 우선(고해상도 재렌더와 무관하게 일정). 미설정 시 픽셀 폴백.
+        const w = parseFloat(cv.style.width)  || cv.offsetWidth  || cv.width;
+        const h = parseFloat(cv.style.height) || cv.offsetHeight || cv.height;
+        return { w, h };
+      }
       if (img && !img.classList.contains("hidden") && img.naturalWidth)
         return { w: img.naturalWidth, h: img.naturalHeight };
       return null;
@@ -3095,6 +3606,36 @@
         files.forEach(f => this._addPendingDoc(f));
       });
 
+      // 핀 폼: 3D 포인트 클라우드(FLS/E57/LAS/PLY 등) 첨부
+      const flsBtn = UI.$("btn-pin-fls");
+      if (flsBtn) flsBtn.addEventListener("click", () => UI.$("input-pin-fls").click());
+      const flsInput = UI.$("input-pin-fls");
+      if (flsInput) flsInput.addEventListener("change", async e => {
+        const f = e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        if (typeof FLS !== "undefined" && !FLS.isSupported(f.name)) {
+          Prompt.toast && Prompt.toast("지원 형식: .fls .e57 .las .laz .ply .pcd .xyz .pts");
+        }
+        try {
+          const ab = await this._readAsArrayBuffer(f);
+          // 로컬 캐시에 보관(즉시 미리보기/저장은 배포 시 처리)
+          const lid = "f" + Date.now() + Math.random().toString(36).slice(2, 6);
+          Cloud._cache = Cloud._cache || {};
+          Cloud._cache["fls:" + lid] = ab;
+          State.pendingFls = { localId: lid, name: f.name, size: f.size };
+          const info = UI.$("pin-file-info");
+          if (info) {
+            const prev = info.classList.contains("hidden") ? "" : info.textContent + "  ·  ";
+            info.textContent = prev + "🧊 " + f.name + " (" + (f.size / 1024 / 1024).toFixed(1) + " MB)";
+            info.classList.remove("hidden");
+          }
+          this._updateConfirmEnabled();
+        } catch (err) {
+          Prompt.toast && Prompt.toast("3D 파일 읽기 실패: " + (err.message || err));
+        }
+      });
+
       UI.$("input-pin-url").addEventListener("input", () => this._updateConfirmEnabled());
       UI.$("input-pin-note").addEventListener("input", () => this._updateConfirmEnabled());
       UI.$("btn-confirm-pin").addEventListener("click", () => this._confirmPin());
@@ -3168,8 +3709,9 @@
       const hasUrl  = !!UI.val("input-pin-url").trim();
       const hasNote = !!UI.val("input-pin-note").trim();
       const hasDoc  = State.pendingDocs.length > 0;
-      // 360° 미디어가 없어도 노트나 첨부 문서만 있으면 저장 가능 (정보 포인트)
-      UI.$("btn-confirm-pin").disabled = !(hasFile || hasUrl || hasNote || hasDoc);
+      const hasFls  = !!State.pendingFls;
+      // 360° 미디어가 없어도 노트/문서/3D 데이터만 있어도 저장 가능 (정보 포인트)
+      UI.$("btn-confirm-pin").disabled = !(hasFile || hasUrl || hasNote || hasDoc || hasFls);
     },
 
     /** 첨부 문서 후보 추가 + 검증 */
@@ -3219,6 +3761,7 @@
       State.pendingFile = null;
       State.pendingIsVideo = false;
       State.pendingDocs = [];
+      State.pendingFls = null;
       UI.$("pending-pin").classList.add("hidden");
       UI.clearVal("input-pin-label");
       UI.clearVal("input-pin-url");
@@ -3590,6 +4133,16 @@
             pin.attachments.push(att);
           }
         }
+
+        // ── 3D 포인트 클라우드(FLS/E57/LAS/PLY) 연결 ──
+        // 현 세션에선 로컬 캐시(Cloud._cache['fls:'+id])로 즉시 표출.
+        // 용량이 큰 3D 원본은 D1에 통째로 넣지 않고 메타만 보관(배포 후 URL 연결 권장).
+        if (State.pendingFls) {
+          pin.flsLocalId = State.pendingFls.localId;
+          pin.flsName    = State.pendingFls.name;
+          pin.flsSize    = State.pendingFls.size;
+          pin.has3D      = true;
+        }
       } catch (e) {
         status.textContent = "❌ 업로드 실패: " + e.message;
         status.classList.add("error");
@@ -3626,6 +4179,7 @@
       else if (pin.isVideo)   tags.push("🎬 360° 영상");
       else if (pin.imageUrl)  tags.push("🔗 URL");
       if (pin.note)           tags.push("📝 노트");
+      if (pin.has3D)          tags.push("🧊 3D 클라우드");
       if (pin.attachments && pin.attachments.length) tags.push("📎 첨부 " + pin.attachments.length);
       if (tags.length) savedNote += " (" + tags.join(" · ") + ")";
       UI.text("pin-saved-msg", savedNote);
@@ -3776,9 +4330,9 @@
       return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl || pin.pendingOpId));
     },
 
-    /** 핀에 노트 또는 첨부가 있는가 */
+    /** 핀에 노트/첨부/3D 포인트클라우드가 있는가 */
     pinHasInfo(pin) {
-      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length)));
+      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length) || pin.has3D || pin.flsLocalId || pin.flsUrl));
     },
 
     /** 핀에 클릭 시 보여줄 콘텐츠(미디어 또는 정보)가 있는가 */
@@ -3859,6 +4413,13 @@
       PanoViewer._currentPin = pin;
       Radar.update(pin);
       PanoNav.update(pin);
+      // FLS 포인트 클라우드가 연결된 핀이면 3D 뷰어를 360과 나란히 표시
+      if (typeof FLS !== "undefined") {
+        const hasFls = !!(pin && (pin.flsUrl || pin.fls || pin.flsLocalId));
+        const ov = document.getElementById("pano-overlay");
+        if (ov) ov.classList.toggle("with-fls", hasFls);
+        if (hasFls) FLS.openForPin(pin); else FLS.showPane(false);
+      }
       if (typeof Notes !== "undefined") Notes.setPin(pin);  // 이슈/노트 패널 핀 연결
       if (typeof TimeLapse !== "undefined") TimeLapse.setPin(pin);  // 타임랩스 시점 바
 
@@ -5232,7 +5793,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, SyncQueue, Cloud,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, SyncQueue, Cloud, PDF, FLS,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);
