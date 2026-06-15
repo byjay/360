@@ -8,6 +8,29 @@
 
 ---
 
+## 🆕 PDF 벡터 무손실 줌 + 3D 포인트클라우드 듀얼뷰어 + 모바일 앱 (2026-06-15)
+
+### 1) PDF 벡터 무손실 줌 (ezPDF 수준 선명도)
+- pdf.js 렌더링을 **동적 고해상도 재렌더** 방식으로 개선. 확대해도 도면이 깨지지 않고
+  원본 해상도 선명도를 유지합니다(CSS 스케일 줌이 아닌 실제 캔버스 재래스터화).
+- `UI.requestZoomRerender(zoom)`: 140ms 디바운스 후 `baseCssScale × max(1,zoom) × dpr`로
+  목표 해상도가 현재보다 15% 이상 커질 때만 재렌더 → 성능/메모리 안정.
+- 캔버스 안정성: `MAX_CANVAS_PX=16,777,216`, `MAX_SIDE_HARD=8192`로 클램프.
+- 논리(CSS) 크기는 PDF point=1px로 고정 → **핀 % 좌표 정렬 불변**.
+
+### 2) FLS / 3D 포인트클라우드 듀얼뷰어 (Three.js)
+- 핀에 3D 스캔 데이터를 첨부 → 360 파노라마와 **나란히(좌 60% / 우 40%)** 표시.
+- 지원 포맷(직접 로드): **PLY**(ascii/binary), **PCD**(ascii), **XYZ/PTS/ASC**(텍스트),
+  **LAS**(binary, 색상 포함). `.fls`(FARO 독점)·`.laz`는 변환 안내 제공.
+- 최대 180만 포인트 균일 다운샘플, 오빗 컨트롤(드래그·휠·터치), 자동 카메라 피팅.
+
+### 3) Flutter 모바일 연동 앱 (`/mobile/seastar_viewer`)
+- 동일 REST API 사용. 배포본 목록 → 도면 핀치줌+핀 → 핀 탭 → 360 파노라마 뷰어.
+- `flutter create . --platforms=android,ios && flutter pub get && flutter build apk`로 빌드.
+- `lib/config.dart`의 `kApiBaseUrl`만 운영 도메인으로 교체하면 됩니다.
+
+---
+
 ## 💬 이슈 · 필드노트 협업 (핀별 코멘트·담당자·상태·완료체크) (2026-06-14)
 
 상용 현장 협업 툴(OpenSpace Field Notes 등)을 모방해, **핀(위치)마다 이슈/메모 스레드**를
