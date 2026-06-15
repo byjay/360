@@ -116,21 +116,52 @@
       this.ready = true;
     },
 
+    /** 타임아웃 경쟁: worker 파싱이 멈춰도(무한 로딩 방지) 일정 시간 후 폴백/실패 처리 */
+    _withTimeout(promise, ms, onTimeoutCleanup) {
+      return new Promise((resolve, reject) => {
+        let done = false;
+        const t = setTimeout(() => {
+          if (done) return;
+          done = true;
+          try { if (onTimeoutCleanup) onTimeoutCleanup(); } catch (e) {}
+          reject(new Error("__PDF_TIMEOUT__"));
+        }, ms);
+        promise.then(
+          v => { if (done) return; done = true; clearTimeout(t); resolve(v); },
+          e => { if (done) return; done = true; clearTimeout(t); reject(e); }
+        );
+      });
+    },
+
     async load(arrayBuffer) {
       const lib = await this.ensureLib();
-      const data = arrayBuffer.slice(0);
-      // 1차: worker 로 빠르게 파싱
+      // 1차: worker 로 파싱 시도하되 2.5초 내 응답 없으면 즉시 메인스레드로 폴백.
+      //      (일부 환경에서 worker 가 응답 없이 멈춰 "PDF 렌더링 중..." 이 오래 떠 있는 문제 방지)
       if (this.useWorker) {
+        let task = null;
         try {
-          const task = lib.getDocument({ data, disableWorker: false });
-          return await task.promise;
+          task = lib.getDocument({ data: arrayBuffer.slice(0), disableWorker: false });
+          return await this._withTimeout(task.promise, 2500, () => {
+            try { task && task.destroy && task.destroy(); } catch (e) {}
+          });
         } catch (e) {
-          // worker 로드/실행 실패 → 메인스레드 파싱으로 폴백 (안정성 우선)
+          // worker 가 느리거나(timeout) 실패 → 세션 내내 메인스레드 파싱 사용(다시 안 기다림)
           this.useWorker = false;
+          try { task && task.destroy && task.destroy(); } catch (e2) {}
         }
       }
-      const task = lib.getDocument({ data: arrayBuffer.slice(0), disableWorker: true });
-      return await task.promise;
+      // 2차: 메인스레드 파싱 (worker 없이). 20초 타임아웃으로 무한 로딩 차단.
+      const task2 = lib.getDocument({ data: arrayBuffer.slice(0), disableWorker: true });
+      try {
+        return await this._withTimeout(task2.promise, 20000, () => {
+          try { task2 && task2.destroy && task2.destroy(); } catch (e) {}
+        });
+      } catch (e) {
+        if (e && e.message === "__PDF_TIMEOUT__") {
+          throw new Error("PDF 파싱 시간 초과 — 파일이 너무 크거나 손상되었을 수 있습니다.");
+        }
+        throw e;
+      }
     },
 
     /* ── 동적 고해상도 렌더링 상태 (벡터 PDF 화질 보존의 핵심) ──
@@ -3731,6 +3762,9 @@
         this._loadDrawing(f);
       });
 
+      // ── 드래그 앤 드롭 업로드: 도면 영역에 PDF/이미지를 끌어다 놓으면 즉시 로드 ──
+      this._bindDragDrop();
+
       UI.$("btn-import-json").addEventListener("click", () => UI.$("input-json").click());
       UI.$("input-json").addEventListener("change", e => {
         const f = e.target.files[0]; if (!f) return;
@@ -4148,6 +4182,54 @@
     },
 
     /* ── Drawing Load ── */
+    /** 드래그 앤 드롭으로 도면 업로드 (디자이너 모드 전용) */
+    _bindDragDrop() {
+      const zone = UI.$("map-area");
+      if (!zone || zone.dataset.dropBound) return;
+      zone.dataset.dropBound = "1";
+      const accept = (f) => {
+        if (!f) return false;
+        const n = (f.name || "").toLowerCase();
+        return f.type === "application/pdf" || f.type.startsWith("image/") ||
+               /\.(pdf|png|jpe?g)$/i.test(n);
+      };
+      const setOver = (on) => {
+        const hint = UI.$("drop-hint");
+        if (hint) hint.classList.toggle("dragover", on);
+        zone.classList.toggle("drop-active", on);
+      };
+      ["dragenter", "dragover"].forEach(ev =>
+        zone.addEventListener(ev, (e) => {
+          if (State.mode !== "designer") return;
+          e.preventDefault(); e.stopPropagation();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+          setOver(true);
+        })
+      );
+      ["dragleave", "dragend"].forEach(ev =>
+        zone.addEventListener(ev, (e) => {
+          e.preventDefault(); e.stopPropagation();
+          // 영역을 완전히 벗어났을 때만 해제
+          if (ev === "dragleave" && zone.contains(e.relatedTarget)) return;
+          setOver(false);
+        })
+      );
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        setOver(false);
+        if (State.mode !== "designer") {
+          if (typeof Prompt !== "undefined") Prompt.toast("ℹ️ 도면 업로드는 디자이너 모드에서만 가능합니다.");
+          return;
+        }
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!accept(f)) {
+          if (typeof Prompt !== "undefined") Prompt.toast("⚠️ PDF · PNG · JPG 파일만 업로드할 수 있습니다.");
+          return;
+        }
+        this._loadDrawing(f);
+      });
+    },
+
     async _loadDrawing(file) {
       State.reset();
       State.fileName = file.name;
