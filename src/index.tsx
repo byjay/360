@@ -4,6 +4,7 @@ import { cors } from 'hono/cors'
 type Bindings = {
   DB: D1Database
   R2?: R2Bucket
+  SUPER_ADMIN_EMAIL?: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
 }
 
@@ -18,7 +19,14 @@ app.use('/api/*', cors())
    · 디자이너:   designers 테이블에 등록된 이메일
    · 그 외:      뷰어
 ════════════════════════════════════════════ */
-const SUPER_ADMIN = 'designsir102@gmail.com'
+/** 슈퍼관리자 이메일 — 환경변수 SUPER_ADMIN_EMAIL 우선, 없으면 기본값(하위호환).
+ *  운영 배포 시: wrangler.jsonc vars 또는 `wrangler pages secret put SUPER_ADMIN_EMAIL` 권장. */
+const SUPER_ADMIN_FALLBACK = 'designsir102@gmail.com'
+const SUPER_ADMIN = SUPER_ADMIN_FALLBACK // 모듈 레벨 데모/문서용 기본값
+function superAdmin(c: any): string {
+  const v = c?.env?.SUPER_ADMIN_EMAIL
+  return (typeof v === 'string' && v.includes('@')) ? v.trim().toLowerCase() : SUPER_ADMIN_FALLBACK
+}
 
 /* ── 데모 진입(구글 로그인 없이 바로 테스트) ──
  * 구글 OAuth 클라이언트 ID가 아직 없거나, 빠른 시연이 필요할 때 사용.
@@ -120,7 +128,7 @@ async function getUser(c: any): Promise<any | null> {
 }
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
-  if (email === SUPER_ADMIN) return true
+  if (email === superAdmin(c)) return true
   if (DEMO_LOGIN_ENABLED && email === DEMO_DESIGNER.email) return true
   const row = await c.env.DB.prepare(
     'SELECT email FROM designers WHERE email = ? AND deleted = 0'
@@ -128,8 +136,8 @@ async function isDesigner(c: any, email: string): Promise<boolean> {
   return !!row
 }
 
-function roleOf(email: string, designer: boolean): 'super' | 'designer' | 'viewer' {
-  if (email === SUPER_ADMIN) return 'super'
+function roleOf(c: any, email: string, designer: boolean): 'super' | 'designer' | 'viewer' {
+  if (email === superAdmin(c)) return 'super'
   if (designer) return 'designer'
   return 'viewer'
 }
@@ -139,7 +147,7 @@ app.get('/api/auth/me', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ authenticated: false, role: 'viewer' })
   const designer = await isDesigner(c, user.email)
-  const role = roleOf(user.email, designer)
+  const role = roleOf(c, user.email, designer)
   // 로그인 시 디자이너의 표시 이름 갱신(존재 시, 데모 계정 제외)
   if (role === 'designer' && !user._demo) {
     await c.env.DB.prepare('UPDATE designers SET name = ?, updated_at = ? WHERE email = ?')
@@ -155,7 +163,7 @@ app.get('/api/auth/me', async (c) => {
   }
   // 실제 로그인(데모 제외)만 로그 기록
   if (!user._demo) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role } })
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, request_status, super_admin: SUPER_ADMIN })
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, request_status, super_admin: superAdmin(c) })
 })
 
 /* ════════════════════════════════════════════
@@ -178,7 +186,7 @@ async function logActivity(
     const actor = opts.actor ?? (await getUser(c).catch(() => null))
     let role = 'guest'
     if (actor) {
-      role = actor.email === SUPER_ADMIN
+      role = actor.email === superAdmin(c)
         ? 'super'
         : (await isDesigner(c, actor.email).catch(() => false)) ? 'designer' : 'viewer'
     }
@@ -204,17 +212,17 @@ async function logActivity(
 ════════════════════════════════════════════ */
 async function requireSuper(c: any): Promise<any | null> {
   const user = await getUser(c)
-  if (!user || user.email !== SUPER_ADMIN) return null
+  if (!user || user.email !== superAdmin(c)) return null
   return user
 }
 
 app.get('/api/designers', async (c) => {
   const user = await getUser(c)
-  if (!user || user.email !== SUPER_ADMIN) return c.json({ error: 'forbidden' }, 403)
+  if (!user || user.email !== superAdmin(c)) return c.json({ error: 'forbidden' }, 403)
   const { results } = await c.env.DB.prepare(
     'SELECT email, name, added_by, created_at FROM designers WHERE deleted = 0 ORDER BY created_at DESC'
   ).all()
-  return c.json({ data: results || [], super_admin: SUPER_ADMIN })
+  return c.json({ data: results || [], super_admin: superAdmin(c) })
 })
 
 app.post('/api/designers', async (c) => {
@@ -224,7 +232,7 @@ app.post('/api/designers', async (c) => {
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const email = String(body.email || '').trim().toLowerCase()
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: 'invalid email' }, 400)
-  if (email === SUPER_ADMIN) return c.json({ error: 'super admin is always designer' }, 400)
+  if (email === superAdmin(c)) return c.json({ error: 'super admin is always designer' }, 400)
   const now = Date.now()
   await c.env.DB.prepare(
     `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted)
@@ -600,6 +608,8 @@ app.get('/tables/pano_images/:id', async (c) => {
 
 // 생성 (업로드)
 app.post('/tables/pano_images', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   if (!body || !body.image_data) return c.json({ error: 'image_data required' }, 400)
@@ -625,8 +635,10 @@ app.post('/tables/pano_images', async (c) => {
   }))
 })
 
-// 삭제 (soft delete)
+// 삭제 (soft delete) — 디자이너 이상
 app.delete('/tables/pano_images/:id', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const id = c.req.param('id')
   await c.env.DB.prepare('UPDATE pano_images SET deleted = 1, updated_at = ? WHERE id = ?')
     .bind(Date.now(), id).run()
@@ -644,8 +656,10 @@ app.get('/api/r2/status', (c) => {
   return c.json({ enabled: !!c.env.R2, bucket: 'seastar-assets' })
 })
 
-// 업로드 (raw body) — Content-Type 헤더로 MIME 결정
+// 업로드 (raw body) — Content-Type 헤더로 MIME 결정 · 디자이너 이상
 app.put('/api/r2/upload', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   if (!c.env.R2) return c.json({ error: 'R2 미구성 (wrangler.jsonc r2_buckets 확인)' }, 501)
   const ct = c.req.header('Content-Type') || 'application/octet-stream'
   const ext = ct.includes('png') ? 'png' : ct.includes('jpeg') || ct.includes('jpg') ? 'jpg'
@@ -671,6 +685,8 @@ app.get('/api/r2/object/*', async (c) => {
 
 // 삭제 (디자이너 이상)
 app.delete('/api/r2/object/*', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   if (!c.env.R2) return c.json({ error: 'R2 미구성' }, 501)
   const key = c.req.path.replace('/api/r2/object/', '')
   await c.env.R2.delete(key)
@@ -698,8 +714,10 @@ app.get('/tables/deployments/:id', async (c) => {
   return c.json(mapDeployment(row))
 })
 
-// 생성 (배포)
+// 생성 (배포) — 디자이너 이상
 app.post('/tables/deployments', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
 
@@ -733,6 +751,8 @@ app.post('/tables/deployments', async (c) => {
 // 갱신 (자동 저장 — 도면 업로드 즉시 생성된 배포본을 핀/영역 변경 시 갱신)
 //  PATCH/PUT 모두 허용. 전달된 필드만 부분 갱신.
 const updateDeployment = async (c: any) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const id = c.req.param('id')
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
@@ -758,8 +778,10 @@ const updateDeployment = async (c: any) => {
 app.patch('/tables/deployments/:id', updateDeployment)
 app.put('/tables/deployments/:id', updateDeployment)
 
-// 삭제 (soft delete)
+// 삭제 (soft delete) — 디자이너 이상
 app.delete('/tables/deployments/:id', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const id = c.req.param('id')
   await c.env.DB.prepare('UPDATE deployments SET deleted = 1, updated_at = ? WHERE id = ?')
     .bind(Date.now(), id).run()
@@ -774,6 +796,8 @@ app.delete('/tables/deployments/:id', async (c) => {
    · 부분 실패를 허용(개별 결과 보고)하여 재시도 시 멱등성 확보
 ════════════════════════════════════════════ */
 app.post('/api/sync/batch', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const ops = Array.isArray(body?.ops) ? body.ops : []
@@ -884,7 +908,7 @@ app.post('/api/notes', async (c) => {
   const user = await getUser(c)
   const author = user ? (user.name || user.email) : (String(body.author || '').trim() || '익명')
   const author_email = user ? user.email : null
-  const author_role = user ? (await isDesigner(c, user.email) ? (user.email === SUPER_ADMIN ? 'super' : 'designer') : 'viewer') : 'guest'
+  const author_role = user ? (await isDesigner(c, user.email) ? (user.email === superAdmin(c) ? 'super' : 'designer') : 'viewer') : 'guest'
 
   const id = genId('note')
   const now = Date.now()

@@ -382,9 +382,9 @@
       const to = setTimeout(() => ctrl.abort(), 60000); // 최대 60초
       let res;
       try {
-        res = await fetch("tables/pano_images", {
+        res = await fetch("/tables/pano_images", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: Auth.headers(),
           body: JSON.stringify({ name, image_data: dataURL, width, height }),
           signal: ctrl.signal
         });
@@ -409,7 +409,7 @@
     _cache: {},
     async fetchImage(id) {
       if (this._cache[id]) return this._cache[id];
-      const res = await fetch("tables/pano_images/" + encodeURIComponent(id));
+      const res = await fetch("/tables/pano_images/" + encodeURIComponent(id));
       if (!res.ok) throw new Error("저장된 이미지를 불러올 수 없습니다 (HTTP " + res.status + ")");
       const rec = await res.json();
       if (!rec.image_data) throw new Error("이미지 데이터가 비어 있습니다");
@@ -437,9 +437,9 @@
       const to = setTimeout(() => ctrl.abort(), 60000);
       let res;
       try {
-        res = await fetch("tables/pano_images", {
+        res = await fetch("/tables/pano_images", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: Auth.headers(),
           body: JSON.stringify({ name: "[doc] " + name, image_data: dataURL }),
           signal: ctrl.signal
         });
@@ -463,7 +463,7 @@
     /** docId → dataURL */
     async fetchDoc(id) {
       if (this._cache[id]) return this._cache[id];
-      const res = await fetch("tables/pano_images/" + encodeURIComponent(id));
+      const res = await fetch("/tables/pano_images/" + encodeURIComponent(id));
       if (!res.ok) throw new Error("첨부 문서를 불러올 수 없습니다 (HTTP " + res.status + ")");
       const rec = await res.json();
       if (!rec.image_data) throw new Error("문서 데이터가 비어 있습니다");
@@ -587,9 +587,9 @@
           }));
           let res;
           try {
-            res = await fetch("api/sync/batch", {
+            res = await fetch("/api/sync/batch", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: Auth.headers(),
               body: JSON.stringify({ ops: batch })
             });
           } catch (e) { failed += batch.length; break; } // 네트워크 단절 → 다음 online 때 재시도
@@ -4620,9 +4620,9 @@
         const pages = await this._snapshotPages();
         if (!pages.length) { this._setSaveIndicator("error"); return; }
         const body = this._buildSavePayload(pages);
-        const res = await fetch("tables/deployments", {
+        const res = await fetch("/tables/deployments", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: Auth.headers(),
           body: JSON.stringify(body)
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
@@ -4650,9 +4650,9 @@
           const includePages = !!opts.withPages;
           const pages = includePages ? await this._snapshotPages() : null;
           const body = this._buildSavePayload(pages);
-          const res = await fetch("tables/deployments/" + encodeURIComponent(State.autoSaveDepId), {
+          const res = await fetch("/tables/deployments/" + encodeURIComponent(State.autoSaveDepId), {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
+            headers: Auth.headers(),
             body: JSON.stringify(body)
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
@@ -4725,9 +4725,9 @@
         return q;
       });
       try {
-        const res = await fetch("tables/deployments", {
+        const res = await fetch("/tables/deployments", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: Auth.headers(),
           body: JSON.stringify({
             title:        State.fileName || "도면",
             file_name:    State.fileName || "",
@@ -4802,13 +4802,13 @@
         let latest = null;
 
         if (wantId) {
-          const r1 = await fetch("tables/deployments/" + encodeURIComponent(wantId));
+          const r1 = await fetch("/tables/deployments/" + encodeURIComponent(wantId));
           if (r1.ok) latest = await r1.json();
         }
 
         // 없거나 실패 시 최신 배포본으로 폴백
         if (!latest) {
-          const res = await fetch("tables/deployments?limit=100");
+          const res = await fetch("/tables/deployments?limit=100");
           if (!res.ok) throw new Error("HTTP " + res.status);
           const json = await res.json();
           const rows = (json.data || []).filter(r => (r.drawing_data || r.pages_data) && !r.deleted);

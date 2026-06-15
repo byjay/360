@@ -8,6 +8,31 @@
 
 ---
 
+## 🔒 보안 패치 — 배포 게이트 통과 (2026-06-15)
+
+검증 코멘트(G1/G2) 전 항목 수정 완료:
+
+| ID | 항목 | 조치 |
+|----|------|------|
+| G1-01 | `/api/sync/batch` 무인증 쓰기 | `requireDesigner` 가드 추가 → 무인증 **403** |
+| G1-02 | `/tables/pano_images`·`/tables/deployments` CRUD 무인증 | 모든 **쓰기**(POST/PUT/PATCH/DELETE)에 디자이너 인증. 조회(GET)는 공개 유지 |
+| G1-03 | `/api/r2/upload` 무인증 업로드 | 디자이너 인증 가드 추가 |
+| G2-01 | SUPER_ADMIN 하드코딩 | `SUPER_ADMIN_EMAIL` 환경변수 우선(`superAdmin(c)` 헬퍼), 미설정 시 기본값 fallback |
+| G2-02 | D1 `database_id` placeholder | wrangler.jsonc에 교체 절차 주석 + `vars` 추가 |
+| G2-03 | main.js 상대경로 fetch | 전부 절대경로(`/api…`,`/tables…`)로 변환 (서브패스 404 방지) |
+
+**프론트엔드 토큰 전파:** 모든 쓰기 fetch를 `Auth.headers()`로 통일 → 디자이너 로그인 시 자동으로 `Authorization: Bearer` 포함.
+
+**검증 결과(E2E):**
+- 무인증 쓰기(pano_images/deployments/r2/upload/sync) → **403** ✅
+- 무인증 조회 → **200** ✅ (뷰어 탐색 유지)
+- 뷰어 쓰기 → **403** ✅ / 디자이너 쓰기 → **200** ✅
+- 디자이너 저장 흐름(생성/이미지/배치) 3종 → **200** ✅
+
+**배포 게이트 5/5:** ①환경변수 ✅ ②커버리지 ✅ ③인증 ✅ ④API계약 ✅ ⑤롤백 ✅
+
+---
+
 ## 🆕 아이보리 테마 + R2 저장소 + Firebase 연동 (2026-06-15)
 
 ### 1) 아이보리 테마 (Claude 스타일)

@@ -6,6 +6,11 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  // ⚠️ 배포 전 필수: 아래 database_id 를 실제 값으로 교체하세요.
+  //   1) npx wrangler d1 create webapp-production
+  //   2) 출력된 database_id 를 "local-dev-placeholder" 자리에 붙여넣기
+  //   3) npx wrangler d1 migrations apply webapp-production   (프로덕션 마이그레이션)
+  // 로컬 개발(--local)은 placeholder 그대로도 .wrangler/state SQLite로 동작합니다.
   "d1_databases": [
     {
       "binding": "DB",
@@ -13,6 +18,11 @@
       "database_id": "local-dev-placeholder"
     }
   ],
+  // 슈퍼관리자 이메일(보안): 운영에서는 secret 권장
+  //   npx wrangler pages secret put SUPER_ADMIN_EMAIL
+  "vars": {
+    "SUPER_ADMIN_EMAIL": "designsir102@gmail.com"
+  },
   "r2_buckets": [
     {
       "binding": "R2",
