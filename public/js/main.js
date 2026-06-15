@@ -1460,8 +1460,11 @@
     },
 
     _updateZoomLabel() {
+      const pct = Math.round(State.zoom * 100) + "%";
       const el = document.getElementById("zoom-level");
-      if (el) el.textContent = Math.round(State.zoom * 100) + "%";
+      if (el) el.textContent = pct;
+      const tb = document.getElementById("tb-zoom-level");
+      if (tb) tb.textContent = pct;
     },
 
     /** 도면 콘텐츠의 "논리(CSS) 크기" — 줌/팬 계산용.
@@ -1883,6 +1886,28 @@
       } else {
         this.$("pdf-pagination").classList.add("hidden");
       }
+      // 새 ezPDF 툴바 페이지 동기화 (단일 페이지도 1/1 표시)
+      const tbInput = this.$("tb-page-input");
+      if (tbInput && document.activeElement !== tbInput) tbInput.value = State.pdfPage;
+      this.text("tb-page-total", "/ " + (total || 1));
+      const setDis = (id, v) => { const el = this.$(id); if (el) el.disabled = v; };
+      setDis("tb-first", State.pdfPage <= 1);
+      setDis("tb-prev",  State.pdfPage <= 1);
+      setDis("tb-next",  State.pdfPage >= (total || 1));
+      setDis("tb-last",  State.pdfPage >= (total || 1));
+    },
+
+    /** 좌측 썸네일 도킹 패널 토글 (ezPDF 스타일) */
+    toggleThumbPanel(force) {
+      const strip = this.$("pdf-thumb-strip");
+      const btn = this.$("tb-thumbs");
+      if (!strip) return;
+      const willHide = (typeof force === "boolean") ? !force : !strip.classList.contains("hidden");
+      strip.classList.toggle("hidden", willHide);
+      strip.classList.toggle("docked", !willHide);
+      document.body.classList.toggle("thumbs-open", !willHide);
+      if (btn) btn.classList.toggle("active", !willHide);
+      if (!willHide && typeof this.renderPdfThumbs === "function") this.renderPdfThumbs();
     },
 
     /** 회전 각도 라벨 + 버튼 노출 (도면 로드 시에만 표시) */
@@ -3449,6 +3474,7 @@
         UI.$("drop-hint").classList.remove("hidden");
         UI.$("pdf-error").classList.add("hidden");
         UI.$("pdf-pagination").classList.add("hidden");
+        { const tb = UI.$("pdf-toolbar"); if (tb) tb.classList.add("hidden"); UI.toggleThumbPanel(false); }
         UI.$("pin-count-badge").classList.add("hidden");
         UI.$("pins-layer").innerHTML = "";
         UI.$("pin-list").innerHTML = "";
@@ -3836,6 +3862,37 @@
       bind("btn-rotate-cw",  () => this._rotatePdf(90));
       bind("btn-rotate-ccw", () => this._rotatePdf(-90));
       bind("rotate-level",   () => { State.pdfRotation = 0; this._rotatePdf(0); });
+
+      // ═══ ezPDF 스타일 상단 도구 툴바 (동일 핸들러 재사용) ═══
+      bind("tb-zoom-in",   () => MapCtrl.zoomBy(1.25));
+      bind("tb-zoom-out",  () => MapCtrl.zoomBy(0.8));
+      bind("tb-zoom-level",() => MapCtrl.actualSize());
+      bind("tb-fit",       () => MapCtrl.fit());
+      bind("tb-actual",    () => MapCtrl.actualSize());
+      bind("tb-iso",       () => MapCtrl.toggleIso());
+      bind("tb-rotate-cw", () => this._rotatePdf(90));
+      bind("tb-rotate-ccw",() => this._rotatePdf(-90));
+      // 페이지 이동
+      bind("tb-first", () => this._gotoPage(1));
+      bind("tb-prev",  () => this._changePage(-1));
+      bind("tb-next",  () => this._changePage(1));
+      bind("tb-last",  () => this._gotoPage(this._totalPages()));
+      // 썸네일 패널 토글
+      bind("tb-thumbs", () => UI.toggleThumbPanel());
+      // 포인트 마킹 — 기존 마킹 버튼(btn-place) 위임
+      bind("tb-mark", () => { const b = UI.$("btn-place"); if (b) b.click(); });
+      // 페이지 직접 입력
+      const tbJump = UI.$("tb-page-input");
+      if (tbJump) {
+        const doTbJump = () => {
+          const n = parseInt(tbJump.value, 10);
+          if (!isNaN(n)) this._gotoPage(n);
+          else tbJump.value = State.pdfPage;
+        };
+        tbJump.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); tbJump.blur(); } });
+        tbJump.addEventListener("blur", doTbJump);
+        tbJump.addEventListener("focus", () => tbJump.select());
+      }
     },
 
     _handlePlaceClick(e) {
@@ -4012,6 +4069,11 @@
       MapCtrl.applyTransform();
       UI.$("map-viewport").classList.remove("hidden");
       const nav = UI.$("nav-toolbar"); if (nav) nav.classList.remove("hidden");
+      // ezPDF 스타일 상단 도구 툴바 표시 + 마킹 버튼(설계자 전용)
+      const tb = UI.$("pdf-toolbar");
+      if (tb) tb.classList.remove("hidden");
+      const tbMark = UI.$("tb-mark");
+      if (tbMark) tbMark.classList.toggle("hidden", State.mode !== "designer");
       UI.renderPinsOnMap();
       UI.renderPinList();      // 현재 페이지 핀 목록 갱신
       UI.updatePdfPagination();

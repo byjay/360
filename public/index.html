@@ -229,6 +229,77 @@
     </button>
   </header>
 
+  <!-- ═══ ezPDF 스타일 도구 툴바 (가로 일렬) — 도면 로드 시 표시 ═══ -->
+  <div id="pdf-toolbar" class="pdf-toolbar hidden" role="toolbar" aria-label="PDF 도구">
+    <!-- 썸네일 패널 토글 -->
+    <button id="tb-thumbs" class="tb-btn" title="페이지 썸네일 (T)" aria-label="썸네일 패널">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 페이지 이동 -->
+    <button id="tb-first" class="tb-btn" title="첫 페이지 (Home)" aria-label="첫 페이지">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+    </button>
+    <button id="tb-prev" class="tb-btn" title="이전 페이지 (←)" aria-label="이전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <span class="tb-page">
+      <input id="tb-page-input" class="tb-page-input" type="text" inputmode="numeric" value="1" aria-label="페이지 번호" />
+      <span id="tb-page-total" class="tb-page-total">/ 1</span>
+    </span>
+    <button id="tb-next" class="tb-btn" title="다음 페이지 (→)" aria-label="다음">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <button id="tb-last" class="tb-btn" title="마지막 페이지 (End)" aria-label="마지막">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 줌 -->
+    <button id="tb-zoom-out" class="tb-btn" title="축소 (－)" aria-label="축소">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <button id="tb-zoom-level" class="tb-zoom-level" title="현재 배율 · 클릭 시 100%">100%</button>
+    <button id="tb-zoom-in" class="tb-btn" title="확대 (＋)" aria-label="확대">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 맞춤 / 실제크기 -->
+    <button id="tb-fit" class="tb-btn tb-btn-wide" title="화면 맞춤 (F)" aria-label="화면 맞춤">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg>
+      <span class="tb-label">맞춤</span>
+    </button>
+    <button id="tb-actual" class="tb-btn tb-btn-wide" title="실제 크기 (1)" aria-label="실제 크기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="16" font-size="9" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="700">1:1</text></svg>
+      <span class="tb-label">1:1</span>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 회전 -->
+    <button id="tb-rotate-ccw" class="tb-btn" title="왼쪽 회전 (Shift+←)" aria-label="왼쪽 회전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>
+    </button>
+    <button id="tb-rotate-cw" class="tb-btn" title="오른쪽 회전 (Shift+→)" aria-label="오른쪽 회전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 4 21 9 16 9"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- ISO 3D 뷰 -->
+    <button id="tb-iso" class="tb-btn" title="ISO 3D 뷰 (평면 ↔ 입체)" aria-label="ISO 3D 뷰">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5L12 2z"/><path d="M2 7.5V16l10 5.5V13" opacity=".85"/><path d="M22 7.5V16l-10 5.5" opacity=".55"/></svg>
+    </button>
+
+    <span class="tb-flex"></span>
+
+    <!-- 우측: 포인트 마킹 (설계자 전용) -->
+    <button id="tb-mark" class="tb-btn tb-btn-accent hidden" title="포인트 마킹 (M)" aria-label="포인트 마킹">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span class="tb-label">포인트</span>
+    </button>
+  </div>
+
   <!-- Body -->
   <div class="app-body">
 
