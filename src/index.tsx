@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 
 type Bindings = {
   DB: D1Database
+  R2?: R2Bucket
   ASSETS: { fetch: (req: Request) => Promise<Response> }
 }
 
@@ -630,6 +631,50 @@ app.delete('/tables/pano_images/:id', async (c) => {
   await c.env.DB.prepare('UPDATE pano_images SET deleted = 1, updated_at = ? WHERE id = ?')
     .bind(Date.now(), id).run()
   return c.json({ success: true })
+})
+
+/* ════════════════════════════════════════════
+   R2 객체 저장소 — 대용량 이미지/도면 바이너리
+   · D1(base64)는 소형, R2는 원본 대용량을 권장
+   · 키 형식: assets/<timestamp>-<rand>.<ext>
+════════════════════════════════════════════ */
+
+// R2 사용 가능 여부
+app.get('/api/r2/status', (c) => {
+  return c.json({ enabled: !!c.env.R2, bucket: 'seastar-assets' })
+})
+
+// 업로드 (raw body) — Content-Type 헤더로 MIME 결정
+app.put('/api/r2/upload', async (c) => {
+  if (!c.env.R2) return c.json({ error: 'R2 미구성 (wrangler.jsonc r2_buckets 확인)' }, 501)
+  const ct = c.req.header('Content-Type') || 'application/octet-stream'
+  const ext = ct.includes('png') ? 'png' : ct.includes('jpeg') || ct.includes('jpg') ? 'jpg'
+    : ct.includes('webp') ? 'webp' : ct.includes('pdf') ? 'pdf' : 'bin'
+  const key = `assets/${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${ext}`
+  const body = await c.req.arrayBuffer()
+  await c.env.R2.put(key, body, { httpMetadata: { contentType: ct } })
+  return c.json({ key, url: `/api/r2/object/${key}`, size: body.byteLength, contentType: ct })
+})
+
+// 다운로드 — /api/r2/object/assets/xxxx.png
+app.get('/api/r2/object/*', async (c) => {
+  if (!c.env.R2) return c.json({ error: 'R2 미구성' }, 501)
+  const key = c.req.path.replace('/api/r2/object/', '')
+  const obj = await c.env.R2.get(key)
+  if (!obj) return c.notFound()
+  const headers = new Headers()
+  headers.set('Content-Type', obj.httpMetadata?.contentType || 'application/octet-stream')
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  headers.set('ETag', obj.httpEtag)
+  return new Response(obj.body, { headers })
+})
+
+// 삭제 (디자이너 이상)
+app.delete('/api/r2/object/*', async (c) => {
+  if (!c.env.R2) return c.json({ error: 'R2 미구성' }, 501)
+  const key = c.req.path.replace('/api/r2/object/', '')
+  await c.env.R2.delete(key)
+  return c.json({ success: true, key })
 })
 
 /* ════════════════════════════════════════════

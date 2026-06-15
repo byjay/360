@@ -8,6 +8,27 @@
 
 ---
 
+## 🆕 아이보리 테마 + R2 저장소 + Firebase 연동 (2026-06-15)
+
+### 1) 아이보리 테마 (Claude 스타일)
+- 전체 UI를 다크 → **따뜻한 아이보리/크림 톤**으로 전환 (`#f5f1e8` 배경, 다크 텍스트).
+- `:root` 변수 + 하드코딩 색상(헥스/rgba) 230여 건 일괄 매핑. 토픽바·사이드바·PDF 툴바·모달·입력·핀·로그 패널 전부 밝은 톤으로 가독성 확보.
+- 도면 뷰포트는 **밝은 블루프린트 그리드**(회크림 바탕)로 변경. 360° 파노라마 뷰어는 의도적으로 검정 유지.
+
+### 2) Cloudflare R2 객체 저장소 준비
+- `wrangler.jsonc` 에 `r2_buckets` 바인딩(`R2` → `seastar-assets`) 추가.
+- API: `GET /api/r2/status`, `PUT /api/r2/upload`(raw body), `GET|DELETE /api/r2/object/*`.
+- 대용량 도면/파노라마 원본 저장용. D1(base64 소형)과 병행.
+- **생성 명령(배포 시 1회):** `npx wrangler r2 bucket create seastar-assets`
+
+### 3) Firebase 연동 (본인 Google ID로 저장)
+- `public/js/firebase-config.js` 에 본인 콘솔값만 채우면 자동 활성화(`FIREBASE_ENABLED`).
+- `public/js/firebase-init.js` → 전역 `SeaFirebase` API(Google 로그인 / Firestore 저장·조회 / Storage 업로드).
+- 세팅 가이드: **`firebase/SETUP.md`** (프로젝트 생성·Auth·Firestore·보안 규칙 5분 절차).
+- 미설정 시 안전하게 no-op → Cloudflare D1/R2 백엔드만 사용.
+
+---
+
 ## 🆕 PDF 벡터 무손실 줌 + 3D 포인트클라우드 듀얼뷰어 + 모바일 앱 (2026-06-15)
 
 ### 1) PDF 벡터 무손실 줌 (ezPDF 수준 선명도)
