@@ -17,7 +17,7 @@ app.use('/api/*', cors())
    · 디자이너:   designers 테이블에 등록된 이메일
    · 그 외:      뷰어
 ════════════════════════════════════════════ */
-const SUPER_ADMIN = 'designssir@gmail.com'
+const SUPER_ADMIN = 'designsir102@gmail.com'
 
 /* ── 데모 진입(구글 로그인 없이 바로 테스트) ──
  * 구글 OAuth 클라이언트 ID가 아직 없거나, 빠른 시연이 필요할 때 사용.
@@ -141,7 +141,15 @@ app.get('/api/auth/me', async (c) => {
     await c.env.DB.prepare('UPDATE designers SET name = ?, updated_at = ? WHERE email = ?')
       .bind(user.name, Date.now(), user.email).run()
   }
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo })
+  // 권한 없는(viewer) 로그인 사용자의 사용 신청 상태 동봉
+  let request_status: string | null = null
+  if (role === 'viewer' && !user._demo) {
+    const rr: any = await c.env.DB.prepare(
+      'SELECT status FROM access_requests WHERE email = ? AND deleted = 0 ORDER BY created_at DESC LIMIT 1'
+    ).bind(user.email).first().catch(() => null)
+    if (rr) request_status = rr.status
+  }
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, request_status, super_admin: SUPER_ADMIN })
 })
 
 /* ════════════════════════════════════════════
@@ -185,6 +193,110 @@ app.delete('/api/designers/:email', async (c) => {
   const email = decodeURIComponent(c.req.param('email')).toLowerCase()
   await c.env.DB.prepare('UPDATE designers SET deleted = 1, updated_at = ? WHERE email = ?')
     .bind(Date.now(), email).run()
+  return c.json({ success: true })
+})
+
+/* ════════════════════════════════════════════
+   access_requests — 사용 신청(Request Access)
+   · 권한 없는 로그인 사용자가 설계자 권한을 신청
+   · 슈퍼관리자가 목록 확인 → 승인 시 designers 등록
+════════════════════════════════════════════ */
+function genReqId(): string {
+  return 'req_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36)
+}
+
+function mapRequest(r: any) {
+  return {
+    id: r.id, email: r.email, name: r.name, company: r.company, country: r.country,
+    phone: r.phone, message: r.message, status: r.status, reviewed_by: r.reviewed_by,
+    created_at: r.created_at, updated_at: r.updated_at,
+  }
+}
+
+// 신청 접수 — 로그인한(구글 인증된) 사용자만, 본인 이메일로
+app.post('/api/access-requests', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  // 이미 디자이너면 신청 불필요
+  if (await isDesigner(c, user.email)) return c.json({ error: 'already designer', already: true }, 400)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const name = String(body.name || user.name || '').trim()
+  const company = String(body.company || '').trim()
+  const country = String(body.country || '').trim()
+  const phone = String(body.phone || '').trim()
+  const message = String(body.message || '').trim()
+  if (!name) return c.json({ error: 'name required' }, 400)
+  const now = Date.now()
+  // 같은 이메일의 pending 신청이 있으면 갱신, 없으면 새로 생성
+  const existing: any = await c.env.DB.prepare(
+    "SELECT * FROM access_requests WHERE email = ? AND status = 'pending' AND deleted = 0 ORDER BY created_at DESC LIMIT 1"
+  ).bind(user.email).first()
+  if (existing) {
+    await c.env.DB.prepare(
+      'UPDATE access_requests SET name=?, company=?, country=?, phone=?, message=?, updated_at=? WHERE id=?'
+    ).bind(name, company, country, phone, message, now, existing.id).run()
+    return c.json({ success: true, id: existing.id, status: 'pending', updated: true })
+  }
+  const id = genReqId()
+  await c.env.DB.prepare(
+    `INSERT INTO access_requests (id, email, name, company, country, phone, message, status, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0)`
+  ).bind(id, user.email, name, company, country, phone, message, now, now).run()
+  return c.json({ success: true, id, status: 'pending' })
+})
+
+// 내 신청 상태 조회 (로그인 사용자)
+app.get('/api/access-requests/me', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ authenticated: false })
+  const row: any = await c.env.DB.prepare(
+    'SELECT * FROM access_requests WHERE email = ? AND deleted = 0 ORDER BY created_at DESC LIMIT 1'
+  ).bind(user.email).first()
+  return c.json({ authenticated: true, request: row ? mapRequest(row) : null })
+})
+
+// 신청 목록 (슈퍼관리자 전용)
+app.get('/api/access-requests', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const status = c.req.query('status')
+  const sql = status
+    ? 'SELECT * FROM access_requests WHERE status = ? AND deleted = 0 ORDER BY created_at DESC'
+    : 'SELECT * FROM access_requests WHERE deleted = 0 ORDER BY created_at DESC'
+  const stmt = status ? c.env.DB.prepare(sql).bind(status) : c.env.DB.prepare(sql)
+  const { results } = await stmt.all()
+  return c.json({ data: (results || []).map(mapRequest) })
+})
+
+// 신청 승인 → designers 등록 (슈퍼관리자 전용)
+app.post('/api/access-requests/:id/approve', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  const row: any = await c.env.DB.prepare('SELECT * FROM access_requests WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  const now = Date.now()
+  await c.env.DB.prepare(
+    `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, 0)
+     ON CONFLICT(email) DO UPDATE SET deleted = 0, added_by = excluded.added_by, updated_at = excluded.updated_at`
+  ).bind(row.email, row.name || '', su.email, now, now).run()
+  await c.env.DB.prepare(
+    "UPDATE access_requests SET status = 'approved', reviewed_by = ?, updated_at = ? WHERE id = ?"
+  ).bind(su.email, now, id).run()
+  return c.json({ success: true, email: row.email })
+})
+
+// 신청 거절 (슈퍼관리자 전용)
+app.post('/api/access-requests/:id/reject', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  const now = Date.now()
+  await c.env.DB.prepare(
+    "UPDATE access_requests SET status = 'rejected', reviewed_by = ?, updated_at = ? WHERE id = ?"
+  ).bind(su.email, now, id).run()
   return c.json({ success: true })
 })
 
@@ -436,6 +548,34 @@ app.post('/tables/deployments', async (c) => {
     pins: body.pins || '[]', zones: body.zones || '[]', created_at: now, updated_at: now, deleted: 0
   }))
 })
+
+// 갱신 (자동 저장 — 도면 업로드 즉시 생성된 배포본을 핀/영역 변경 시 갱신)
+//  PATCH/PUT 모두 허용. 전달된 필드만 부분 갱신.
+const updateDeployment = async (c: any) => {
+  const id = c.req.param('id')
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const existing = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!existing) return c.json({ error: 'not found' }, 404)
+  const now = Date.now()
+  const merged = {
+    title:        body.title        != null ? body.title        : existing.title,
+    file_name:    body.file_name     != null ? body.file_name    : existing.file_name,
+    drawing_data: body.drawing_data  != null ? body.drawing_data : existing.drawing_data,
+    pages_data:   body.pages_data    != null ? body.pages_data   : existing.pages_data,
+    pins:         body.pins          != null ? body.pins         : existing.pins,
+    zones:        body.zones         != null ? body.zones        : existing.zones,
+  }
+  await c.env.DB.prepare(
+    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, updated_at=? WHERE id=?`
+  ).bind(
+    merged.title, merged.file_name, merged.drawing_data, merged.pages_data,
+    merged.pins, merged.zones, now, id
+  ).run()
+  return c.json(mapDeployment(Object.assign({}, existing, merged, { id, updated_at: now })))
+}
+app.patch('/tables/deployments/:id', updateDeployment)
+app.put('/tables/deployments/:id', updateDeployment)
 
 // 삭제 (soft delete)
 app.delete('/tables/deployments/:id', async (c) => {

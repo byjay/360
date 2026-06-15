@@ -52,6 +52,8 @@
     pendingDocs: [],        // 첨부 문서 후보 [{tempId, file, name, size, kind, status, docId}]
     editingPinId: null,     // 기존 포인트 편집 중인 id (null=신규)
     movingPinId: null,      // 드래그로 위치 이동 중인 포인트 id
+    autoSaveDepId: null,    // 자동 저장된 배포본(작업본) id — 도면 업로드 즉시 생성
+    autoSaving: false,      // 자동 저장 진행 중 플래그
     activePin:   null,
     zoom:        1,
     pan:         { x: 0, y: 0 },
@@ -73,6 +75,7 @@
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
       this.editingPinId = null; this.movingPinId = null;
+      this.autoSaveDepId = null; this.autoSaving = false;
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };
     }
   };
@@ -1300,6 +1303,7 @@
               UI.renderPinList();
               if (typeof Zones !== "undefined") Zones.render();
               Prompt.toast("📍 '" + pin.label + "' 위치 이동됨");
+              App._autoSave();
             }
           };
           const onDown = (ev) => {
@@ -2275,6 +2279,7 @@
       this._cancelDraw();
       this.render();
       this.renderList();
+      if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
 
     /** 도형의 바운딩 박스(%) 계산 */
@@ -2480,6 +2485,7 @@
       if (this._active === id) this._active = null;
       this.render();
       this.renderList();
+      if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
 
     /** 핀 추가/이동 후 영역-핀 연결 갱신 */
@@ -3258,6 +3264,11 @@
       UI.updatePdfPagination();
       UI.updateRotationLabel();
       UI.renderPdfThumbs();
+      // 도면이 화면에 표시되면 버튼 없이 즉시 자동 저장(배포본 생성)
+      if (State.mode === "designer" && !State.autoSaveDepId) {
+        // 이미지의 경우 naturalWidth 가 확정된 직후이므로 약간 지연 후 스냅샷
+        setTimeout(() => this._createInitialSave(), 150);
+      }
     },
 
     _readAsArrayBuffer(file) {
@@ -3390,6 +3401,7 @@
       UI.renderPinList();
       UI.renderPinsOnMap(wasEditing ? null : pin.id); // 신규만 드롭 애니메이션
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 500);
+      this._autoSave(); // 버튼 없이 즉시 서버 저장
 
       // 편집 완료면 별도 안내만, 신규면 다음 포인트 연속 배치 안내
       if (wasEditing) {
@@ -3507,6 +3519,7 @@
       UI.renderPinList();
       UI.renderPinsOnMap();
       Prompt.toast("🗑️ '" + removed.label + "' 삭제됨");
+      this._autoSave();
     },
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */
@@ -3709,6 +3722,116 @@
     },
 
     /* ── 배포 (설계자 → 뷰어) ── */
+    /* ── 자동 저장 (버튼 없이 즉시 저장) ──
+       도면 업로드 즉시 배포본(작업본)을 생성하고, 핀·영역 변경 시 디바운스 갱신한다.
+       사용자가 "배포" 버튼을 누르지 않아도 도면과 작업 내용이 서버에 보존된다. */
+    _buildSavePayload(pagesData) {
+      const deployablePins = State.pins.map(p => {
+        const q = Object.assign({}, p);
+        if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
+        return q;
+      });
+      const body = {
+        title:     State.fileName || "도면",
+        file_name: State.fileName || "",
+        pins:      JSON.stringify(deployablePins),
+        zones:     (typeof Zones !== "undefined") ? Zones.serialize() : "[]"
+      };
+      if (pagesData && pagesData.length) {
+        body.drawing_data = pagesData[0];
+        body.pages_data   = JSON.stringify(pagesData);
+      }
+      return body;
+    },
+
+    async _snapshotPages() {
+      if (State.fileType === "pdf" && State.pdfDoc) {
+        return await PDF.snapshotAllPages(State.pdfDoc);
+      } else if (State.fileType === "image") {
+        const imgEl = UI.$("map-image");
+        if (!imgEl || !imgEl.naturalWidth) return [];
+        const off = document.createElement("canvas");
+        const maxDim = 2000;
+        const ratio = Math.min(1, maxDim / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
+        off.width  = Math.round(imgEl.naturalWidth * ratio);
+        off.height = Math.round(imgEl.naturalHeight * ratio);
+        off.getContext("2d").drawImage(imgEl, 0, 0, off.width, off.height);
+        return [off.toDataURL("image/jpeg", 0.8)];
+      }
+      return [];
+    },
+
+    _setSaveIndicator(stateStr) {
+      // stateStr: 'saving' | 'saved' | 'error' | 'offline'
+      const el = UI.$("autosave-indicator");
+      if (!el) return;
+      el.classList.remove("hidden", "saving", "saved", "error", "offline");
+      el.classList.add(stateStr);
+      const map = {
+        saving:  "저장 중…",
+        saved:   "자동 저장됨",
+        error:   "저장 실패 — 재시도",
+        offline: "오프라인 — 로컬 보관"
+      };
+      const t = UI.$("autosave-text");
+      if (t) t.textContent = map[stateStr] || "";
+    },
+
+    /** 도면 업로드 직후 1회: 배포본 생성(도면 스냅샷 포함) */
+    async _createInitialSave() {
+      if (State.mode !== "designer") return;
+      if (State.autoSaveDepId) return; // 이미 생성됨
+      if (!State.fileType) return;
+      try {
+        this._setSaveIndicator("saving");
+        const pages = await this._snapshotPages();
+        if (!pages.length) { this._setSaveIndicator("error"); return; }
+        const body = this._buildSavePayload(pages);
+        const res = await fetch("tables/deployments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const rec = await res.json();
+        State.autoSaveDepId = (rec && rec.id) ? rec.id : null;
+        State.currentDeploymentId = State.autoSaveDepId;
+        this._setSaveIndicator("saved");
+      } catch (e) {
+        this._setSaveIndicator(navigator.onLine ? "error" : "offline");
+      }
+    },
+
+    /** 핀/영역 변경 시 디바운스 자동 저장 (도면 스냅샷은 보통 변경 안 되므로 생략) */
+    _autoSave(opts) {
+      if (State.mode !== "designer") return;
+      opts = opts || {};
+      clearTimeout(this._autoSaveTimer);
+      this._autoSaveTimer = setTimeout(async () => {
+        if (this.autoSaving) { this._autoSave(opts); return; } // 진행 중이면 잠시 후 재시도
+        // 배포본이 아직 없으면 먼저 생성
+        if (!State.autoSaveDepId) { await this._createInitialSave(); if (!State.autoSaveDepId) return; }
+        this.autoSaving = true;
+        try {
+          this._setSaveIndicator("saving");
+          const includePages = !!opts.withPages;
+          const pages = includePages ? await this._snapshotPages() : null;
+          const body = this._buildSavePayload(pages);
+          const res = await fetch("tables/deployments/" + encodeURIComponent(State.autoSaveDepId), {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          this._setSaveIndicator("saved");
+        } catch (e) {
+          this._setSaveIndicator(navigator.onLine ? "error" : "offline");
+        } finally {
+          this.autoSaving = false;
+        }
+      }, opts.now ? 0 : 700);
+    },
+
     async _deployToViewer() {
       const btn    = UI.$("btn-deploy");
       const status = UI.$("deploy-status");
@@ -4113,6 +4236,22 @@
       $("hub-btn-demo-viewer")   && $("hub-btn-demo-viewer").addEventListener("click", () => this.demoLogin("viewer"));
       // 로그인 게이트 내 데모(설계자)
       $("login-gate-demo") && $("login-gate-demo").addEventListener("click", () => this.demoLogin("designer"));
+      // 구글 로그인 폴백 버튼(클라이언트 ID 미설정 시 안내)
+      $("login-gate-google-fallback") && $("login-gate-google-fallback").addEventListener("click", () => {
+        if (!this.clientId) {
+          Prompt && Prompt.toast && Prompt.toast("구글 로그인은 관리자 설정(클라이언트 ID) 후 사용할 수 있어요. 우선 체험으로 진행하세요.", 3200);
+        }
+      });
+      $("login-gate-learn") && $("login-gate-learn").addEventListener("click", () => {
+        Prompt && Prompt.toast && Prompt.toast("SEASTAR 360° Viewer — 도면 위 360° 파노라마 위치 점검 시스템", 3000);
+      });
+
+      // ── 사용 신청(Request Access) 게이트 ──
+      $("access-gate-cancel") && $("access-gate-cancel").addEventListener("click", () => this._closeAccessGate());
+      const ab = document.querySelector("#access-gate .access-gate-backdrop");
+      ab && ab.addEventListener("click", () => this._closeAccessGate());
+      const af = $("access-gate-form");
+      af && af.addEventListener("submit", (e) => { e.preventDefault(); this._submitAccessRequest(); });
 
       // 저장된 토큰 복원
       try {
@@ -4166,9 +4305,12 @@
       // 디자이너 모드 진입을 기다리던 경우 처리
       if (this._pendingDesigner) {
         const cb = this._pendingDesigner;
-        this._pendingDesigner = null;
-        if (this.isDesigner) { this._closeGate(); cb(); }
-        else this._showGateError();
+        if (this.isDesigner) { this._pendingDesigner = null; this._closeGate(); cb(); }
+        else {
+          // 권한 없는 계정 → 반드시 권한없음/사용신청 페이지로 연결 (Genspark 모방)
+          this._closeGate();
+          this._openAccessGate();
+        }
       }
     },
 
@@ -4187,8 +4329,9 @@
         data = await r.json();
       } catch (e) {}
       if (data.authenticated) {
-        this.user = { email: data.email, name: data.name, picture: data.picture, role: data.role };
+        this.user = { email: data.email, name: data.name, picture: data.picture, role: data.role, request_status: data.request_status || null };
         this.role = data.role;
+        this.superAdmin = data.super_admin || this.superAdmin;
       } else {
         this.user = null; this.role = "viewer"; this.idToken = null;
         try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
@@ -4249,6 +4392,8 @@
     },
 
     _openGate() {
+      // 이미 로그인했지만 권한이 없는 계정이면 → 바로 사용신청(권한없음) 게이트로
+      if (this.user && !this.isDesigner) { this._openAccessGate(); return; }
       const gate = document.getElementById("login-gate");
       const err = document.getElementById("login-gate-error");
       if (err) err.classList.add("hidden");
@@ -4256,11 +4401,92 @@
       requestAnimationFrame(() => gate.classList.add("on"));
       // 게이트 안 버튼 렌더 (로그인은 됐지만 권한 없는 경우엔 안내)
       if (this._gsiInited) this._renderButtons();
-      if (this.user && !this.isDesigner) this._showGateError();
+      // 구글 클라이언트 ID가 있으면 폴백 버튼 숨김(실제 GIS 버튼 사용)
+      const fb = document.getElementById("login-gate-google-fallback");
+      if (fb) fb.classList.toggle("hidden", !!this.clientId);
     },
     _showGateError() {
       const err = document.getElementById("login-gate-error");
       if (err) err.classList.remove("hidden");
+    },
+
+    /* ── 권한 없음 / 사용 신청(Request Access) 게이트 ── */
+    _openAccessGate() {
+      const gate = document.getElementById("access-gate");
+      if (!gate) return;
+      // 본인 이메일 표시
+      const email = (this.user && this.user.email) || "";
+      const emEl = document.getElementById("access-gate-email");
+      const roEl = document.getElementById("ar-email-readonly");
+      if (emEl) emEl.textContent = email || "로그인 계정";
+      if (roEl) roEl.textContent = email || "—";
+      // 이름 기본값
+      const nameEl = document.getElementById("ar-name");
+      if (nameEl && !nameEl.value) nameEl.value = (this.user && this.user.name) || "";
+      // 메시지 초기화
+      const errEl = document.getElementById("access-gate-error");
+      const okEl = document.getElementById("access-gate-success");
+      if (errEl) errEl.classList.add("hidden");
+      if (okEl) okEl.classList.add("hidden");
+      // 이미 신청한 상태면 안내
+      const status = this.user && this.user.request_status;
+      const submitLabel = document.getElementById("ar-submit-label");
+      if (status === "pending" && okEl && submitLabel) {
+        okEl.textContent = "이미 신청이 접수되었습니다. 관리자 승인을 기다려 주세요.";
+        okEl.classList.remove("hidden");
+        submitLabel.textContent = "신청 내용 수정";
+      } else if (submitLabel) {
+        submitLabel.textContent = "Submit Request";
+      }
+      gate.classList.remove("hidden");
+      requestAnimationFrame(() => gate.classList.add("on"));
+    },
+    _closeAccessGate() {
+      const gate = document.getElementById("access-gate");
+      if (!gate) return;
+      gate.classList.remove("on");
+      setTimeout(() => gate.classList.add("hidden"), 200);
+      this._pendingDesigner = null;
+    },
+    async _submitAccessRequest() {
+      const $ = (id) => document.getElementById(id);
+      const errEl = $("access-gate-error");
+      const okEl = $("access-gate-success");
+      const btn = $("ar-submit");
+      if (errEl) errEl.classList.add("hidden");
+      if (okEl) okEl.classList.add("hidden");
+      const name = ($("ar-name").value || "").trim();
+      const company = ($("ar-company").value || "").trim();
+      const country = ($("ar-country").value || "").trim();
+      const phone = ($("ar-phone").value || "").trim();
+      if (!name || !company || !country || !phone) {
+        if (errEl) { errEl.textContent = "모든 필수 항목(*)을 입력해 주세요."; errEl.classList.remove("hidden"); }
+        return;
+      }
+      if (!this.idToken) {
+        if (errEl) { errEl.textContent = "구글 로그인 후 신청할 수 있습니다."; errEl.classList.remove("hidden"); }
+        return;
+      }
+      if (btn) { btn.disabled = true; btn.classList.add("loading"); }
+      try {
+        const res = await fetch("/api/access-requests", {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify({ name, company, country, phone }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+        if (okEl) {
+          okEl.textContent = "✅ 사용 신청이 접수되었습니다. 관리자(" + (this.user && this.user.email ? "" : "") + "admin) 승인 후 설계자 기능을 사용할 수 있습니다.";
+          okEl.classList.remove("hidden");
+        }
+        if (this.user) this.user.request_status = "pending";
+        Prompt && Prompt.toast && Prompt.toast("📩 사용 신청이 관리자에게 전달되었습니다.", 2800);
+      } catch (e) {
+        if (errEl) { errEl.textContent = "신청 실패: " + (e && e.message ? e.message : "네트워크 오류"); errEl.classList.remove("hidden"); }
+      } finally {
+        if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
+      }
     },
     _closeGate() {
       const gate = document.getElementById("login-gate");

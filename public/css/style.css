@@ -2234,3 +2234,187 @@ html, body {
   .pin-form-float.pf-in { animation: pfSheet .3s cubic-bezier(.2,.9,.25,1); }
   @keyframes pfSheet { 0% { transform: translateY(100%); } 100% { transform: translateY(0); } }
 }
+
+/* ── 자동 저장 표시기 (버튼 없이 즉시 저장) ── */
+.autosave-indicator {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 8px; padding: 3px 10px;
+  border-radius: 999px; font-size: 11px; font-weight: 600;
+  font-family: var(--font-ui);
+  border: 1px solid var(--border2); background: rgba(8,13,24,.5);
+  color: var(--text2); white-space: nowrap;
+}
+.autosave-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); flex: none; }
+.autosave-indicator.saving { color: #93c5fd; border-color: rgba(59,130,246,.4); }
+.autosave-indicator.saving .autosave-dot { background: #3b82f6; animation: asPulse 1s ease-in-out infinite; }
+.autosave-indicator.saved { color: var(--green); border-color: rgba(16,185,129,.35); }
+.autosave-indicator.saved .autosave-dot { background: var(--green); box-shadow: 0 0 6px rgba(16,185,129,.6); }
+.autosave-indicator.error { color: var(--red); border-color: rgba(248,113,113,.45); }
+.autosave-indicator.error .autosave-dot { background: var(--red); }
+.autosave-indicator.offline { color: var(--gold); border-color: rgba(245,158,11,.4); }
+.autosave-indicator.offline .autosave-dot { background: var(--gold); }
+@keyframes asPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ════════════════════════════════════════════════════════════
+   SIGN-IN GATE — SECMS 스타일 설계자 로그인 (구글 로그인 모방)
+════════════════════════════════════════════════════════════ */
+.signin-gate {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; opacity: 0; transition: opacity .22s ease;
+}
+.signin-gate.on { opacity: 1; }
+.signin-gate.hidden { display: none; }
+.signin-gate-backdrop {
+  position: absolute; inset: 0;
+  background: radial-gradient(120% 120% at 50% 0%, rgba(15,23,42,.86), rgba(8,12,24,.94));
+  backdrop-filter: blur(6px);
+}
+.signin-gate-card {
+  position: relative; width: min(380px, 94vw);
+  background: linear-gradient(180deg, #141c30 0%, #0f1626 100%);
+  border: 1px solid rgba(56,189,248,.16);
+  border-radius: 20px; padding: 30px 28px 22px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
+  transform: translateY(10px) scale(.985); transition: transform .24s cubic-bezier(.2,.9,.3,1.2);
+  text-align: center;
+}
+.signin-gate.on .signin-gate-card { transform: translateY(0) scale(1); }
+.signin-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 18px; }
+.signin-brand-mark {
+  width: 38px; height: 38px; border-radius: 11px;
+  background: linear-gradient(135deg, rgba(56,189,248,.18), rgba(56,189,248,.05));
+  border: 1px solid rgba(56,189,248,.3);
+  display: flex; align-items: center; justify-content: center;
+}
+.signin-brand-mark svg { width: 22px; height: 22px; }
+.signin-brand-name { color: #cbd5e1; font-size: 14px; letter-spacing: .04em; }
+.signin-brand-name b { color: #38bdf8; font-weight: 700; }
+.signin-title { color: #e2e8f0; font-size: 19px; font-weight: 700; margin: 4px 0 6px; }
+.signin-sub { margin: 0 0 18px; font-size: 13px; }
+.signin-request-link { color: #38bdf8; cursor: default; }
+.signin-gsi { display: flex; justify-content: center; margin-bottom: 8px; }
+.signin-gsi:empty { display: none; }
+
+.signin-google-btn {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: #fff; color: #1f2937; border: none; border-radius: 11px;
+  padding: 11px 14px; font-size: 14px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25); transition: transform .12s, box-shadow .12s;
+}
+.signin-google-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,.32); }
+.signin-google-btn.hidden { display: none; }
+.signin-google-btn .g-logo { width: 19px; height: 19px; }
+
+.signin-learn-btn {
+  width: 100%; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: #1a2238; color: #cbd5e1; border: 1px solid rgba(148,163,184,.18); border-radius: 11px;
+  padding: 11px 14px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background .15s;
+}
+.signin-learn-btn:hover { background: #212c47; }
+.signin-learn-btn svg { width: 16px; height: 16px; opacity: .8; }
+.signin-learn-btn .arr { margin-left: 2px; opacity: .85; }
+
+.signin-error {
+  margin: 12px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 12.5px;
+  color: #fca5a5; background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.25);
+}
+.signin-error.hidden { display: none; }
+
+.signin-or {
+  display: flex; align-items: center; gap: 12px; margin: 18px 2px 14px;
+  color: #64748b; font-size: 11px; letter-spacing: .14em; font-weight: 600;
+}
+.signin-or::before, .signin-or::after { content: ""; flex: 1; height: 1px; background: rgba(148,163,184,.14); }
+
+.signin-invite-btn {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: linear-gradient(135deg, #059669, #10b981); color: #fff; border: none; border-radius: 11px;
+  padding: 11px 14px; font-size: 13.5px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(16,185,129,.32); transition: transform .12s, box-shadow .12s;
+}
+.signin-invite-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(16,185,129,.4); }
+.signin-invite-btn svg { width: 17px; height: 17px; }
+
+.signin-footer {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  margin: 18px 0 4px; color: #94a3b8; font-size: 12px;
+}
+.signin-footer svg { width: 15px; height: 15px; }
+.signin-admin-mail { color: #cbd5e1; }
+.signin-cancel {
+  margin-top: 12px; background: none; border: none; color: #64748b; font-size: 13px;
+  cursor: pointer; padding: 6px 12px; transition: color .15s;
+}
+.signin-cancel:hover { color: #cbd5e1; }
+
+/* ════════════════════════════════════════════════════════════
+   ACCESS GATE — 권한 없음 / 사용 신청(Request Access) — Genspark 모방
+════════════════════════════════════════════════════════════ */
+.access-gate {
+  position: fixed; inset: 0; z-index: 1300;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; opacity: 0; transition: opacity .22s ease; overflow-y: auto;
+}
+.access-gate.on { opacity: 1; }
+.access-gate.hidden { display: none; }
+.access-gate-backdrop {
+  position: absolute; inset: 0;
+  background: radial-gradient(130% 130% at 50% 0%, rgba(11,17,32,.9), rgba(5,8,16,.97));
+  backdrop-filter: blur(7px);
+}
+.access-gate-card {
+  position: relative; width: min(360px, 94vw);
+  margin: auto;
+  background: linear-gradient(180deg, #0d1426 0%, #0a1020 100%);
+  border: 1px solid rgba(56,189,248,.12);
+  border-radius: 18px; padding: 28px 26px 18px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.65);
+  transform: translateY(12px) scale(.98); transition: transform .24s cubic-bezier(.2,.9,.3,1.2);
+  text-align: center;
+}
+.access-gate.on .access-gate-card { transform: translateY(0) scale(1); }
+.access-gate-lock { display: flex; justify-content: center; margin-bottom: 8px; }
+.access-gate-lock svg { width: 44px; height: 44px; filter: drop-shadow(0 4px 10px rgba(245,158,11,.3)); }
+.access-gate-title { color: #94a3b8; font-size: 20px; font-weight: 700; margin: 6px 0 8px; letter-spacing: .01em; }
+.access-gate-email { color: #38bdf8; font-size: 14px; font-weight: 600; margin-bottom: 6px; word-break: break-all; }
+.access-gate-sub { color: #e2e8f0; font-size: 13px; margin: 0 0 20px; opacity: .9; }
+
+.access-form { text-align: left; }
+.access-field { display: block; margin-bottom: 14px; }
+.access-label { display: block; color: #e2e8f0; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+.access-label .req { color: #ef4444; font-style: normal; margin-left: 2px; }
+.access-input {
+  width: 100%; box-sizing: border-box;
+  background: #fff; color: #1f2937; border: 1px solid rgba(255,255,255,.1); border-radius: 9px;
+  padding: 11px 13px; font-size: 14px; outline: none; transition: box-shadow .15s, border-color .15s;
+  display: flex; align-items: center; gap: 8px;
+}
+.access-input::placeholder { color: #9ca3af; }
+.access-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,.22); }
+.access-input.readonly { background: #eef1f6; cursor: not-allowed; }
+.access-mail-ico { width: 17px; height: 17px; flex: none; }
+.access-readonly-text { color: #6b7280; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.access-error, .access-success {
+  margin: 0 0 12px; padding: 9px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.5;
+}
+.access-error { color: #fca5a5; background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.25); }
+.access-success { color: #86efac; background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.28); }
+.access-error.hidden, .access-success.hidden { display: none; }
+
+.access-submit {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: linear-gradient(135deg, #1e293b, #16223b); color: #cbd5e1;
+  border: 1px solid rgba(148,163,184,.2); border-radius: 11px;
+  padding: 13px 14px; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  margin-top: 4px; transition: background .15s, transform .12s;
+}
+.access-submit:hover { background: linear-gradient(135deg, #243049, #1c2a46); transform: translateY(-1px); }
+.access-submit:disabled, .access-submit.loading { opacity: .6; cursor: progress; }
+.access-submit svg { width: 18px; height: 18px; }
+.access-cancel {
+  width: 100%; margin-top: 12px; background: none; border: none; color: #94a3b8;
+  font-size: 13.5px; cursor: pointer; padding: 6px; transition: color .15s;
+}
+.access-cancel:hover { color: #e2e8f0; }
