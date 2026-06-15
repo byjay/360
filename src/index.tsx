@@ -446,6 +446,41 @@ app.delete('/tables/deployments/:id', async (c) => {
 })
 
 /* ════════════════════════════════════════════
+   배치 동기화 — 오프라인 큐 일괄 업로드 (스마트폰 현장 → 인터넷 복구 시)
+   POST /api/sync/batch
+   body: { ops: [ { opId, kind:'image'|'doc', name, image_data, width?, height? }, ... ] }
+   · 각 op 를 pano_images 에 저장하고, 클라이언트 임시 id(opId) → 서버 id 매핑을 반환
+   · 부분 실패를 허용(개별 결과 보고)하여 재시도 시 멱등성 확보
+════════════════════════════════════════════ */
+app.post('/api/sync/batch', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const ops = Array.isArray(body?.ops) ? body.ops : []
+  if (ops.length === 0) return c.json({ ok: true, results: [] })
+
+  const results: any[] = []
+  for (const op of ops) {
+    try {
+      if (!op || !op.image_data) {
+        results.push({ opId: op?.opId, ok: false, error: 'image_data required' })
+        continue
+      }
+      const id = genId('img')
+      const now = Date.now()
+      const name = (op.kind === 'doc' ? '[doc] ' : '') + (op.name || '')
+      await c.env.DB.prepare(
+        `INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
+      ).bind(id, name, op.image_data, op.width || null, op.height || null, now, now).run()
+      results.push({ opId: op.opId, ok: true, id })
+    } catch (e: any) {
+      results.push({ opId: op?.opId, ok: false, error: String(e?.message || e) })
+    }
+  }
+  return c.json({ ok: true, results })
+})
+
+/* ════════════════════════════════════════════
    pin_notes — 이슈/필드노트 협업 (핀 단위 코멘트 스레드)
    · 조회: 누구나 (현장 열람)
    · 작성: 누구나 (익명 가능 — 현장 협업), 로그인 시 작성자/역할 기록

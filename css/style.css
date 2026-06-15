@@ -225,6 +225,42 @@ html, body {
   border-bottom: 1px solid var(--border2);
 }
 .hub-card-thumb-ico { font-size: 38px; filter: drop-shadow(0 3px 8px rgba(0,0,0,.4)); }
+.hub-card-thumb { position: relative; overflow: hidden; }
+/* 블루프린트 격자 배경 */
+.hub-thumb-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--accent) 12%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent) 1px, transparent 1px);
+  background-size: 16px 16px;
+  opacity: .35;
+  mask-image: radial-gradient(ellipse at 50% 60%, #000 35%, transparent 85%);
+}
+/* 스캔 라인 (천천히 위→아래 흐름) */
+.hub-thumb-scan {
+  position: absolute; left: 0; right: 0; height: 26px; top: -26px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 30%, transparent), transparent);
+  animation: hubScan 4.5s linear infinite;
+  pointer-events: none;
+}
+@keyframes hubScan { 0% { top: -26px; } 100% { top: 110px; } }
+/* 선박 와이어프레임 */
+.hub-thumb-ship {
+  position: relative; z-index: 1;
+  width: 78px; height: auto;
+  color: color-mix(in srgb, var(--accent) 88%, #fff);
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.5));
+  transition: transform .35s ease;
+}
+.hub-card:hover .hub-thumb-ship { transform: translateY(-2px) scale(1.04); }
+/* 도면 코드 라벨 */
+.hub-thumb-code {
+  position: absolute; bottom: 7px; left: 10px; z-index: 2;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.5px;
+  color: color-mix(in srgb, var(--accent) 80%, #fff);
+  background: rgba(8,13,24,.55); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  padding: 1px 6px; border-radius: 4px;
+}
 .hub-card-body { padding: 14px 16px 16px; }
 .hub-card-name {
   font-family: var(--font-ui); font-weight: 700; color: #fff;
@@ -783,6 +819,101 @@ html, body {
 }
 .btn-primary:disabled { background: var(--border2); color: var(--text3); cursor: default; opacity: 1; }
 .btn-primary:not(:disabled):hover { opacity: .85; }
+
+/* ══════════════════════════════════════════
+   컴팩트 핀 폼 (아이콘 + 주소창)
+══════════════════════════════════════════ */
+.pin-form.compact { gap: 7px; }
+.pin-form.compact .pf-head {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.pin-form.compact .pf-title {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  color: var(--accent); text-transform: none;
+}
+.pin-form.compact .pf-title svg { width: 14px; height: 14px; }
+.pf-close {
+  width: 22px; height: 22px; border-radius: 6px;
+  border: 1px solid var(--border2); background: transparent;
+  color: var(--text2); cursor: pointer; font-size: 12px; line-height: 1;
+  transition: all .15s;
+}
+.pf-close:hover { background: rgba(239,68,68,.12); border-color: #ef4444; color: #ef4444; }
+
+/* 주소창 (위치명) */
+.pf-addr {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 9px; padding: 7px 10px; transition: border-color .15s, box-shadow .15s;
+}
+.pf-addr:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+.pf-addr-ico { width: 15px; height: 15px; color: var(--text2); flex: none; }
+.pf-addr input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: #e5e7eb; font-size: 12.5px; padding: 0;
+}
+.pf-addr input::placeholder { color: var(--text2); }
+
+/* 아이콘 툴바 */
+.pf-tools {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px;
+}
+.pf-tool {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 7px 2px; border: 1px solid var(--border2); border-radius: 9px;
+  background: var(--bg3); color: var(--text2); cursor: pointer;
+  font-size: 9.5px; font-weight: 600; transition: all .15s;
+}
+.pf-tool svg { width: 17px; height: 17px; }
+.pf-tool:hover { border-color: var(--accent); color: #e5e7eb; background: color-mix(in srgb, var(--accent) 8%, var(--bg3)); }
+.pf-tool.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg3)); }
+
+/* 접이식 필드 */
+.pf-collapse { display: block; }
+.pf-collapse.hidden { display: none; }
+.pf-collapse input,
+.pf-collapse textarea {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 8px; color: #e5e7eb; font-size: 12px; padding: 7px 9px;
+  outline: none; font-family: inherit; box-sizing: border-box;
+}
+.pf-collapse input:focus, .pf-collapse textarea:focus { border-color: var(--accent); }
+.pf-collapse textarea { resize: vertical; }
+
+/* 저장 버튼 (즉시 저장) */
+.pf-save {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; padding: 11px 0; margin-top: 2px;
+  background: var(--accent); border: none; border-radius: 10px;
+  color: #051018; font-size: 13px; font-weight: 800; cursor: pointer;
+  transition: opacity .15s, transform .08s;
+}
+.pf-save svg { width: 17px; height: 17px; }
+.pf-save:disabled { background: var(--border2); color: var(--text3); cursor: default; }
+.pf-save:not(:disabled):hover { opacity: .9; }
+.pf-save:not(:disabled):active { transform: scale(.985); }
+
+/* ══════════════════════════════════════════
+   동기화 상태 배지 (topbar)
+══════════════════════════════════════════ */
+.sync-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 8px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border2); background: var(--bg3);
+  color: var(--text2); cursor: pointer; font-size: 11px; font-weight: 600;
+  font-family: var(--font-mono); transition: all .2s;
+}
+.sync-badge .sync-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #22c55e; flex: none;
+}
+.sync-badge.online  { border-color: rgba(34,197,94,.4);  color: #4ade80; }
+.sync-badge.online  .sync-dot { background: #22c55e; }
+.sync-badge.offline { border-color: rgba(148,163,184,.4); color: #94a3b8; }
+.sync-badge.offline .sync-dot { background: #94a3b8; animation: none; }
+.sync-badge.pending { border-color: rgba(245,158,11,.5); color: #fbbf24; }
+.sync-badge.pending .sync-dot { background: #f59e0b; animation: syncpulse 1.1s ease-in-out infinite; }
+@keyframes syncpulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.7); } }
 .btn-ghost {
   padding: 7px 12px;
   background: var(--bg3); border: 1px solid var(--border2);
@@ -838,13 +969,19 @@ html, body {
   color: var(--text); font-size: 11px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pin-coords { color: var(--text3); font-size: 9px; margin-top: 1px; }
-.pin-del {
-  background: none; border: none; color: var(--text3);
-  cursor: pointer; font-size: 13px; padding: 2px; line-height: 1;
-  transition: color .15s;
+.pin-coords { color: var(--text3); font-size: 9px; margin-top: 1px; font-family: var(--font-mono); }
+/* 포인트 액션(수정/삭제) — hover 시 노출 */
+.pin-acts { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity .14s; }
+.pin-item:hover .pin-acts, .pin-item.active .pin-acts { opacity: 1; }
+.pin-act {
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  background: rgba(8,13,24,.5); border: 1px solid var(--border2);
+  color: var(--text2); display: flex; align-items: center; justify-content: center;
+  transition: background .14s, color .14s, border-color .14s;
 }
-.pin-del:hover { color: var(--red); }
+.pin-act svg { width: 14px; height: 14px; }
+.pin-edit:hover { background: color-mix(in srgb, var(--accent) 14%, var(--bg3)); border-color: var(--accent); color: var(--accent); }
+.pin-del:hover { background: rgba(248,113,113,.14); border-color: rgba(248,113,113,.55); color: var(--red); }
 .pin-arrow { color: var(--gold); font-size: 14px; }
 .pin-empty {
   color: var(--text4); font-size: 10px;
@@ -894,10 +1031,31 @@ html, body {
   background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px, 100% 100%;
 }
 .map-viewport:active { cursor: grabbing; }
+/* ISO 3D 뷰 — 원근 투영 + 도면 부양감(엔지니어링 아이소메트릭) */
+.map-viewport {
+  perspective: 2600px;
+  perspective-origin: 50% 42%;
+}
+.map-viewport.iso-active {
+  background-image:
+    linear-gradient(rgba(91,170,255,.10) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(91,170,255,.10) 1px, transparent 1px),
+    linear-gradient(rgba(91,170,255,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(91,170,255,.04) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 45%, rgba(27,117,187,.30) 0%, transparent 72%);
+}
 .map-transform {
   position: absolute;
   transform-origin: 0 0;
+  transform-style: preserve-3d;
   will-change: transform;
+}
+.map-viewport.iso-active .map-transform {
+  filter: drop-shadow(0 60px 60px rgba(0,0,0,.6));
+}
+.map-viewport.iso-active .pdf-canvas,
+.map-viewport.iso-active .map-image {
+  box-shadow: 0 0 0 1px rgba(91,170,255,.4), 0 40px 80px rgba(0,0,0,.55);
 }
 .pdf-canvas  { display: block; }
 .map-image   { display: block; max-width: none; user-select: none; }
@@ -1149,6 +1307,12 @@ html, body {
 .nav-btn:hover { background: rgba(255,255,255,.07); color: var(--text); }
 .nav-btn:active { transform: scale(.92); }
 .nav-btn.accent { color: var(--accent); }
+.nav-btn.active {
+  color: #5baaff;
+  background: rgba(91,170,255,.15);
+  box-shadow: inset 0 0 0 1px rgba(91,170,255,.5), 0 0 14px rgba(91,170,255,.25);
+}
+.nav-btn-iso.active svg { filter: drop-shadow(0 0 4px rgba(91,170,255,.7)); }
 .zoom-level {
   font-family: var(--font-mono);
   font-size: 11px; letter-spacing: .5px;
@@ -1945,3 +2109,128 @@ html, body {
 .zone-box-del svg { width: 13px; height: 13px; display: block; }
 .zone-item-cnt { display: inline-flex; align-items: center; gap: 3px; }
 .zone-item-cnt svg { width: 12px; height: 12px; flex: 0 0 auto; opacity: .75; }
+
+/* ════════════════════════════════════════════════
+   PRO POLISH v3 — 플로팅 포인트 편집 패널 · 토스트 · 사이드바 정제
+   (도면 등록 후 기본 작업 패널이 항상 유지되도록 폼을 도면 위 부동 패널로 분리)
+   ════════════════════════════════════════════════ */
+
+/* 사이드바 섹션 헤더(포인트 목록) */
+.pin-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.pin-list-title { display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+.pin-list-title svg { width: 14px; height: 14px; opacity: .8; }
+
+/* 섹션 타이틀 라벨 통일감 */
+.zone-tools-label, .zone-list-title, .pin-list-title {
+  font-family: var(--font-ui);
+}
+
+/* ── 플로팅 포인트 편집 패널 ── */
+.pin-form-float {
+  position: absolute;
+  top: 16px; right: 16px;
+  width: 312px; max-width: calc(100% - 32px);
+  z-index: 60;
+  background: linear-gradient(165deg, rgba(13,20,37,.97), rgba(10,16,32,.98));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border2));
+  border-radius: 14px;
+  box-shadow:
+    0 24px 60px rgba(0,0,0,.55),
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
+    inset 0 1px 0 rgba(255,255,255,.04);
+  padding: 14px;
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+.pin-form-float::before {
+  /* 상단 액센트 라인 */
+  content: ""; position: absolute; top: 0; left: 14px; right: 14px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  border-radius: 2px; opacity: .85;
+}
+.pin-form-float.pf-in { animation: pfPop .28s cubic-bezier(.2,.9,.25,1.2); }
+@keyframes pfPop {
+  0%   { opacity: 0; transform: translateY(-8px) scale(.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 편집 헤더의 좌표/모드 표시 */
+.pin-form.compact .pf-head { padding-bottom: 9px; margin-bottom: 1px; border-bottom: 1px solid var(--border2); }
+.pin-form.compact .pf-title { letter-spacing: .3px; font-size: 12.5px; font-weight: 700; color: #f1f5f9; }
+
+/* ── 진지한 사이드바 정제: 섹션 구분/여백/타이포 ── */
+.sidebar {
+  background: linear-gradient(180deg, var(--bg2), var(--bg));
+}
+.sidebar-section { padding: 12px 12px; gap: 8px; }
+.sidebar-section.pin-list-wrap { padding: 10px 12px; }
+
+/* 업로드/배치/배포 버튼 — 더 묵직하고 전문적으로 */
+.btn-upload, .btn-place, .btn-deploy {
+  border-radius: 8px;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  transition: background .16s, border-color .16s, box-shadow .16s, transform .1s;
+}
+.btn-place {
+  background: linear-gradient(160deg, var(--bg3), var(--bg2));
+}
+.btn-place:hover:not(.active) {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent), 0 6px 16px rgba(0,0,0,.3);
+}
+.btn-place.active { box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 50%, transparent); }
+
+/* 핀 아이템 — 카드형 정제 */
+.pin-item {
+  padding: 9px 10px; border-radius: 9px;
+  background: linear-gradient(160deg, var(--bg3), var(--bg2));
+  border: 1px solid var(--border2);
+}
+.pin-item:hover { transform: translateX(2px); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.pin-item.active { box-shadow: inset 3px 0 0 var(--accent); }
+.pin-num {
+  width: 24px; height: 24px;
+  background: linear-gradient(150deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #000));
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 35%, transparent);
+  font-size: 10px;
+}
+.pin-name { font-weight: 600; }
+
+/* 영역/구역 도구 — 정렬 정제 */
+.zone-tools-label { font-size: 10px; letter-spacing: .6px; text-transform: uppercase; color: var(--text2); margin-top: 4px; }
+
+/* 드래그 가능한 마커 표시 */
+.pin-marker.draggable .pin-pin { cursor: grab; }
+.pin-marker.draggable.moving { z-index: 200; }
+.pin-marker.draggable.moving .pin-pin { cursor: grabbing; filter: drop-shadow(0 6px 12px rgba(0,0,0,.5)); transform: scale(1.12); }
+.pin-marker.draggable.moving .pin-marker-label { opacity: .5; }
+
+/* ── 토스트 ── */
+.wm-toast-host {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  z-index: 9999; display: flex; flex-direction: column; gap: 8px; align-items: center;
+  pointer-events: none;
+}
+.wm-toast {
+  background: linear-gradient(165deg, rgba(13,20,37,.98), rgba(10,16,32,.99));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border2));
+  color: #e8eef7; font-size: 12.5px; font-weight: 600;
+  padding: 10px 16px; border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.5), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+  opacity: 0; transform: translateY(10px) scale(.96);
+  transition: opacity .26s, transform .26s;
+  max-width: 78vw; text-align: center;
+}
+.wm-toast.on { opacity: 1; transform: translateY(0) scale(1); }
+
+/* 모바일: 플로팅 폼을 하단 시트 형태로 */
+@media (max-width: 720px) {
+  .pin-form-float {
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: 100%; max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    border-left: none; border-right: none; border-bottom: none;
+  }
+  .pin-form-float.pf-in { animation: pfSheet .3s cubic-bezier(.2,.9,.25,1); }
+  @keyframes pfSheet { 0% { transform: translateY(100%); } 100% { transform: translateY(0); } }
+}

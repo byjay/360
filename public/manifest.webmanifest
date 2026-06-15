@@ -1,0 +1,25 @@
+{
+  "name": "360° Location Viewer — SEASTAR",
+  "short_name": "360 Viewer",
+  "description": "도면 360° 위치 뷰어 — 현장 오프라인 핀 등록 지원",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    {
+      "src": "images/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "images/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

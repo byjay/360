@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>360° Location Viewer System — We:are Marine</title>
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
@@ -193,6 +198,12 @@
       <span id="page-info" class="page-info hidden">1 / 1</span>
     </div>
 
+    <!-- 동기화 상태 배지 (오프라인 큐 / 온라인 업로드) -->
+    <button id="sync-badge" class="sync-badge hidden" type="button" title="동기화 상태 — 클릭 시 지금 동기화">
+      <span id="sync-dot" class="sync-dot"></span>
+      <span id="sync-text" class="sync-text">온라인</span>
+    </button>
+
     <div id="pin-count-badge" class="pin-count-badge hidden"></div>
     <button id="btn-all-pins" class="btn-allpins hidden" title="전체 핀 리스트 보기 (P)" aria-label="전체 핀 리스트">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
@@ -290,60 +301,20 @@
         <div id="zone-list" class="zone-list"></div>
       </div>
 
-      <!-- Pin form (designer only) -->
-      <div id="section-pin-form" class="sidebar-section hidden">
-        <div class="pin-form">
-          <div class="form-label">📍 새 포인트</div>
-          <div class="form-field">
-            <label>위치명</label>
-            <input id="input-pin-label" type="text" placeholder="예: No.5 Cargo Tank" autocomplete="off" />
-          </div>
-          <div class="form-field">
-            <label>360° 파일 (THETA 그림/영상)</label>
-            <button id="btn-pin-file" class="btn-file" type="button">📁 그림(.jpg) / 영상(.mp4) 선택</button>
-            <input id="input-pin-file" type="file" accept="image/*,video/mp4,video/webm,.mov" hidden />
-            <div id="pin-file-info" class="pin-file-info hidden"></div>
-          </div>
-          <div class="form-field hidden" id="field-pin-imgname">
-            <label>그림 저장 이름</label>
-            <input id="input-pin-imgname" type="text" placeholder="예: cargo_tank_no5_360" autocomplete="off" />
-          </div>
-          <div class="form-divider">— 또는 —</div>
-          <div class="form-field">
-            <label>360° 이미지/영상 URL (직접 입력)</label>
-            <input id="input-pin-url" type="url" placeholder="https://... (.jpg 또는 .mp4)" autocomplete="off" />
-          </div>
-
-          <!-- ── 노트 (텍스트 메모) ── -->
-          <div class="form-field">
-            <label>📝 노트 (선택)</label>
-            <textarea id="input-pin-note" class="pin-note-input" rows="3" placeholder="이 포인트에 대한 메모·점검 사항·설명을 입력하세요" autocomplete="off"></textarea>
-          </div>
-
-          <!-- ── 첨부 문서 (PDF/Word 등) ── -->
-          <div class="form-field">
-            <label>📎 첨부 문서 (PDF · Word 등, 최대 3MB)</label>
-            <button id="btn-pin-doc" class="btn-file secondary" type="button">＋ 문서 첨부</button>
-            <input id="input-pin-doc" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden multiple />
-            <div id="pin-doc-list" class="pin-doc-list"></div>
-          </div>
-
-          <div id="pin-upload-status" class="pin-upload-status hidden"></div>
-          <div class="form-actions">
-            <button id="btn-confirm-pin" class="btn-primary" disabled>☁ 저장 &amp; 업로드</button>
-            <button id="btn-cancel-pin" class="btn-ghost">취소</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Next point (designer, after save) -->
+      <!-- 다음 포인트 안내 (저장 후, section-place 아래 인라인) -->
       <div id="section-next-point" class="sidebar-section hidden">
         <div id="pin-saved-msg" class="pin-saved-msg">✅ 포인트 저장 완료</div>
         <button id="btn-next-point" class="btn-place">＋ 다음 포인트 지정</button>
       </div>
 
-      <!-- Pin list -->
+      <!-- Pin list (포인트 목록 — 항상 표시) -->
       <div id="section-pin-list" class="sidebar-section pin-list-wrap">
+        <div class="pin-list-head">
+          <span class="form-label pin-list-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.4"/></svg>
+            포인트 목록
+          </span>
+        </div>
         <div id="pin-list" class="pin-list"></div>
         <div id="pin-empty" class="pin-empty">포인트를 추가하세요</div>
       </div>
@@ -403,6 +374,67 @@
         <div class="crosshair-msg">도면 위 원하는 위치를 클릭하세요</div>
       </div>
 
+      <!-- ── 포인트 편집 플로팅 패널 (도면 위 부동 — 사이드바를 가리지 않음) ── -->
+      <div id="section-pin-form" class="pin-form-float hidden" aria-label="포인트 편집">
+        <div class="pin-form compact">
+          <!-- 헤더: 새 포인트 + 닫기 -->
+          <div class="pf-head">
+            <span class="pf-title"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg> <span id="pf-title-text">새 포인트</span></span>
+            <button id="btn-cancel-pin" class="pf-close" type="button" title="취소" aria-label="취소">✕</button>
+          </div>
+
+          <!-- 위치명 주소창 -->
+          <div class="pf-addr">
+            <svg class="pf-addr-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="input-pin-label" type="text" placeholder="위치명 (예: No.5 Cargo Tank)" autocomplete="off" />
+          </div>
+
+          <!-- 아이콘 툴바: 사진/영상 · 문서 · 노트 · URL -->
+          <div class="pf-tools" role="group" aria-label="첨부 도구">
+            <button id="btn-pin-file" class="pf-tool" type="button" title="360° 사진/영상 업로드">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/><path d="M8 5l1.2-2h5.6L16 5"/></svg>
+              <span>사진</span>
+            </button>
+            <button id="btn-pin-doc" class="pf-tool" type="button" title="문서 첨부 (PDF·Word)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6" opacity=".6"/></svg>
+              <span>문서</span>
+            </button>
+            <button id="btn-pin-note-toggle" class="pf-tool" type="button" title="노트 메모">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+              <span>노트</span>
+            </button>
+            <button id="btn-pin-url-toggle" class="pf-tool" type="button" title="URL 직접 입력">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+              <span>URL</span>
+            </button>
+          </div>
+
+          <input id="input-pin-file" type="file" accept="image/*,video/mp4,video/webm,.mov" hidden />
+          <input id="input-pin-doc" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden multiple />
+
+          <!-- 선택 파일 정보 / 첨부 칩 / 접이식 필드 -->
+          <div id="pin-file-info" class="pin-file-info hidden"></div>
+          <div id="field-pin-imgname" class="pf-collapse hidden">
+            <input id="input-pin-imgname" type="text" placeholder="그림 저장 이름 (예: cargo_tank_no5_360)" autocomplete="off" />
+          </div>
+          <div id="field-pin-url" class="pf-collapse hidden">
+            <input id="input-pin-url" type="url" placeholder="https://... (.jpg 또는 .mp4)" autocomplete="off" />
+          </div>
+          <div id="field-pin-note" class="pf-collapse hidden">
+            <textarea id="input-pin-note" class="pin-note-input" rows="2" placeholder="메모·점검 사항·설명" autocomplete="off"></textarea>
+          </div>
+          <div id="pin-doc-list" class="pin-doc-list"></div>
+
+          <div id="pin-upload-status" class="pin-upload-status hidden"></div>
+
+          <!-- 즉시 저장 버튼 (사진 업로드 후 바로) -->
+          <button id="btn-confirm-pin" class="pf-save" type="button" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+            <span id="pf-save-label">저장하기</span>
+          </button>
+        </div>
+      </div>
+
       <!-- ── 플로팅 네비게이션 툴바 (전문 도면뷰어 스타일) ── -->
       <div id="nav-toolbar" class="nav-toolbar hidden">
         <button id="btn-zoom-in" class="nav-btn" title="확대 (＋)" aria-label="확대">
@@ -418,6 +450,11 @@
         </button>
         <button id="btn-actual" class="nav-btn" title="실제 크기 (1)" aria-label="실제 크기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="16" font-size="9" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="700">1:1</text></svg>
+        </button>
+        <div class="nav-sep"></div>
+        <!-- ISO 3D 아이소메트릭 뷰 토글 -->
+        <button id="btn-iso" class="nav-btn nav-btn-iso" title="ISO 3D 뷰 (평면 ↔ 입체 회전)" aria-label="ISO 3D 뷰">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5L12 2z"/><path d="M2 7.5V16l10 5.5V13" opacity=".85"/><path d="M22 7.5V16l-10 5.5" opacity=".55"/></svg>
         </button>
         <div id="rotate-group" class="rotate-group hidden">
           <div class="nav-sep"></div>
@@ -637,6 +674,14 @@
 <!-- Three.js (WebGL 360° panorama — UMD build) -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="js/main.js"></script>
+<!-- Service Worker 등록 (PWA 오프라인 앱 셸) -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* 등록 실패 무시 */ });
+    });
+  }
+</script>
 <!-- ═══ 전역 오버레이 모달 (화면 전환과 무관하게 동작) ═══ -->
   <!-- 로그인 안내 모달 (디자이너 모드 진입 시 미로그인/권한없음) -->
   <div id="login-gate" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="login-gate-title">
