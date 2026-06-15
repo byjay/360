@@ -1424,36 +1424,65 @@ html, body {
   transition: filter .18s, z-index 0s;
   filter: drop-shadow(0 3px 5px rgba(0,0,0,.45));
 }
-.pin-marker:hover { z-index: 20; filter: drop-shadow(0 5px 9px rgba(0,0,0,.6)); }
+.pin-marker:hover { z-index: 20; filter: drop-shadow(0 4px 6px rgba(0,0,0,.6)); }
 .pin-pin {
   position: relative;
-  width: 34px; height: 45px;
+  width: 18px; height: 26px;     /* 절반 크기 */
   transform-origin: 50% 100%;
   transition: transform .18s cubic-bezier(.34,1.56,.64,1);
 }
-.pin-marker:hover .pin-pin { transform: scale(1.18); }
-.pin-marker.focused .pin-pin { transform: scale(1.22); }
-.pin-pin svg { width: 34px; height: 45px; display: block; overflow: visible; }
+.pin-marker:hover .pin-pin { transform: scale(1.22); }
+.pin-marker.focused .pin-pin { transform: scale(1.28); }
+.pin-pin svg { width: 18px; height: 26px; display: block; overflow: visible; }
 .pin-empty-page { font-size: 12.5px; color: rgba(226,232,240,.55); padding: 14px 6px; margin: 0; line-height: 1.6; text-align: center; }
 .pin-pin-fill {
   fill: var(--accent);
-  stroke: #fff; stroke-width: 1.4;
+  stroke: #fff; stroke-width: 1.3;
   paint-order: stroke;
 }
 .pin-marker.focused .pin-pin-fill { fill: #fff; stroke: var(--accent); }
-.pin-pin-hole { fill: var(--bg); }
-.pin-marker.focused .pin-pin-hole { fill: var(--accent); }
 .pin-pin-num {
   position: absolute;
-  top: 8px; left: 50%;
+  top: 4px; left: 50%;
   transform: translateX(-50%);
   font-family: var(--font-ui);
-  font-weight: 800; font-size: 11px;
+  font-weight: 800; font-size: 9px;
   color: #fff;
   line-height: 1; pointer-events: none;
-  text-shadow: 0 1px 1px rgba(0,0,0,.3);
+  text-shadow: 0 1px 1px rgba(0,0,0,.35);
 }
 .pin-marker.focused .pin-pin-num { color: var(--bg); text-shadow: none; }
+
+/* ── 핀 액션 아이콘 바 (디자이너: 선택 시 표시) ── */
+.pin-actions {
+  position: absolute;
+  bottom: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%) translateY(6px) scale(.92);
+  display: flex; gap: 3px; padding: 3px;
+  background: rgba(13,20,37,.97);
+  border: 1px solid var(--border2);
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  opacity: 0; pointer-events: none;
+  transition: opacity .16s, transform .16s;
+  z-index: 30;
+}
+.pin-marker.focused .pin-actions {
+  opacity: 1; pointer-events: all;
+  transform: translateX(-50%) translateY(0) scale(1);
+}
+.pin-marker.focused .pin-marker-label { display: none; } /* 액션바와 겹침 방지 */
+.pin-act {
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer; flex: 0 0 auto;
+  display: grid; place-items: center; font-size: 11px;
+  color: #cbd5e1; background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08); transition: all .13s;
+}
+.pin-act:hover { transform: translateY(-1px); }
+.pin-act-view:hover { color: #fff; background: color-mix(in srgb, var(--accent) 55%, transparent); border-color: var(--accent); }
+.pin-act-move:hover { color: #fff; background: rgba(59,130,246,.4); border-color: #3b82f6; }
+.pin-act-edit:hover { color: #fff; background: rgba(245,158,11,.4); border-color: #f59e0b; }
+.pin-act-del:hover  { color: #fff; background: rgba(239,68,68,.4); border-color: #ef4444; }
 /* hover 시 라벨 말풍선 */
 .pin-marker-label {
   position: absolute;
@@ -1477,8 +1506,8 @@ html, body {
 /* 미디어 보유 핀 펄스 링 */
 .pin-pulse {
   position: absolute;
-  left: 50%; top: 15px;
-  width: 14px; height: 14px;
+  left: 50%; top: 8px;
+  width: 9px; height: 9px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--accent);
@@ -1605,12 +1634,12 @@ html, body {
 }
 /* 도면 마커 위 이슈 카운트 */
 .pin-marker-issue {
-  position: absolute; top: -6px; right: -6px; z-index: 4;
-  min-width: 16px; height: 16px; padding: 0 4px;
+  position: absolute; top: -4px; right: -5px; z-index: 4;
+  min-width: 12px; height: 12px; padding: 0 3px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 999px; background: #ef4444; color: #fff;
-  font-size: 9.5px; font-weight: 800; font-family: var(--font-mono); line-height: 1;
-  border: 1.5px solid #0b1220; box-shadow: 0 1px 5px rgba(239,68,68,.6);
+  font-size: 8px; font-weight: 800; font-family: var(--font-mono); line-height: 1;
+  border: 1.5px solid #0b1220; box-shadow: 0 1px 4px rgba(239,68,68,.6);
 }
 
 /* 파노라마 헤더 액션 묶음 */
@@ -2418,3 +2447,379 @@ html, body {
   font-size: 13.5px; cursor: pointer; padding: 6px; transition: color .15s;
 }
 .access-cancel:hover { color: #e2e8f0; }
+
+/* ══════════════════════════════════════════════════════════════
+   CAD INSPECTOR  ── 우측 슬라이드 상세 패널 (3D/CAD 스타일)
+   구역(ZONE)·포인트(POINT)의 좌표·치수·연결정보를 표시
+══════════════════════════════════════════════════════════════ */
+.inspector {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 340px; max-width: 86vw; z-index: 40;
+  display: flex; flex-direction: column;
+  background:
+    linear-gradient(180deg, rgba(13,20,37,.97), rgba(8,13,24,.99));
+  border-left: 1px solid color-mix(in srgb, var(--accent) 38%, #0d1425);
+  box-shadow: -18px 0 48px rgba(0,0,0,.55),
+              inset 1px 0 0 color-mix(in srgb, var(--accent) 22%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  transform: translateX(108%);
+  transition: transform .26s cubic-bezier(.22,.61,.36,1);
+  overflow: hidden;
+}
+.inspector::before {
+  /* CAD 격자 텍스처 오버레이 */
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(180deg, transparent, #000 18%, #000 100%);
+}
+.inspector.hidden { display: none; }
+.inspector.on { transform: translateX(0); }
+
+.inspector-head {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 14px 13px; flex: 0 0 auto;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 24%, #11182b);
+  background: linear-gradient(180deg, rgba(255,255,255,.04), transparent);
+}
+.inspector-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.inspector-kind {
+  flex: 0 0 auto; font-size: 9.5px; font-weight: 800; letter-spacing: 1.6px;
+  padding: 4px 8px; border-radius: 5px; text-transform: uppercase;
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+.inspector-kind.kind-zone {
+  color: #fde68a; background: rgba(245,158,11,.14);
+  border: 1px solid rgba(245,158,11,.4);
+}
+.inspector-kind.kind-pin {
+  color: #7dd3fc; background: rgba(56,189,248,.14);
+  border: 1px solid rgba(56,189,248,.42);
+}
+.inspector-title {
+  flex: 1; min-width: 0; font-size: 15px; font-weight: 700; color: #f1f5f9;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.inspector-close {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 7px; cursor: pointer;
+  display: grid; place-items: center; font-size: 18px; line-height: 1;
+  color: #94a3b8; background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08); transition: all .15s;
+}
+.inspector-close:hover { color: #fff; background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.5); }
+
+.inspector-body {
+  position: relative; z-index: 1;
+  flex: 1 1 auto; overflow-y: auto; padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* 상단 형태/페이지 배지 행 */
+.insp-swatch-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 12px; border-radius: 9px;
+  background: linear-gradient(150deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+  border: 1px solid rgba(255,255,255,.07);
+}
+.insp-swatch {
+  width: 18px; height: 18px; border-radius: 5px; flex: 0 0 auto;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.3), 0 0 10px currentColor;
+}
+.insp-pin-ico {
+  width: 22px; height: 22px; flex: 0 0 auto; color: #64748b;
+  display: grid; place-items: center;
+}
+.insp-pin-ico svg { width: 20px; height: 20px; }
+.insp-pin-ico.ok { color: #38bdf8; filter: drop-shadow(0 0 6px rgba(56,189,248,.6)); }
+.insp-shape-name {
+  flex: 1; font-size: 12.5px; font-weight: 600; color: #cbd5e1;
+  font-family: "SF Mono", ui-monospace, monospace; letter-spacing: .3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.insp-page-badge {
+  flex: 0 0 auto; font-size: 9px; font-weight: 700; letter-spacing: 1px;
+  color: #93c5fd; padding: 3px 7px; border-radius: 5px;
+  background: rgba(59,130,246,.12); border: 1px solid rgba(59,130,246,.32);
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+
+/* 섹션 */
+.insp-section {
+  border: 1px solid rgba(255,255,255,.06); border-radius: 9px;
+  background: rgba(255,255,255,.018); overflow: hidden;
+}
+.insp-section-h {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; font-size: 10.5px; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: color-mix(in srgb, var(--accent) 85%, #fff);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent);
+  border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.insp-unit { font-size: 9px; font-weight: 500; letter-spacing: .5px; color: #64748b; text-transform: none; }
+.insp-count {
+  margin-left: auto; font-size: 10px; font-weight: 800; color: #0b1220;
+  background: color-mix(in srgb, var(--accent) 90%, #fff); border-radius: 20px;
+  min-width: 18px; height: 16px; padding: 0 6px; display: grid; place-items: center;
+}
+
+/* 좌표·치수 그리드 (CAD 데이터 그리드 느낌) */
+.insp-metrics {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+  background: rgba(255,255,255,.05); padding: 1px;
+}
+.insp-metric {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; background: var(--bg2);
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+.insp-metric.wide { grid-column: 1 / -1; }
+.m-k { font-size: 10px; font-weight: 700; letter-spacing: .5px; color: #64748b; text-transform: uppercase; }
+.m-v { font-size: 12.5px; font-weight: 600; color: #e2e8f0; text-align: right; }
+
+/* 연결 포인트 리스트 */
+.insp-pinlist { display: flex; flex-direction: column; padding: 6px; gap: 4px; }
+.insp-pinrow {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 7px 9px; border-radius: 7px; cursor: pointer;
+  background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.05);
+  color: #cbd5e1; transition: all .14s;
+}
+.insp-pinrow:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  transform: translateX(2px);
+}
+.insp-pinrow-no {
+  flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px;
+  display: grid; place-items: center; font-size: 10.5px; font-weight: 800;
+  color: #0b1220; background: color-mix(in srgb, var(--accent) 88%, #fff);
+}
+.insp-pinrow-label { flex: 1; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-pinrow-tag {
+  flex: 0 0 auto; font-size: 8.5px; font-weight: 800; letter-spacing: .5px;
+  color: #7dd3fc; padding: 2px 6px; border-radius: 4px;
+  background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.32);
+}
+.insp-pinrow svg { width: 14px; height: 14px; flex: 0 0 auto; color: #475569; }
+.insp-empty { padding: 14px 12px; font-size: 12px; color: #64748b; text-align: center; }
+
+.insp-note {
+  padding: 10px 12px; font-size: 12.5px; line-height: 1.55; color: #cbd5e1;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* 첨부 자료 */
+.insp-docs { display: flex; flex-direction: column; gap: 4px; padding: 8px; }
+.insp-doc {
+  font-size: 12px; color: #cbd5e1; padding: 6px 9px; border-radius: 6px;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+}
+
+/* 액션 버튼 행 */
+.insp-actions {
+  display: flex; flex-wrap: wrap; gap: 7px; margin-top: 2px;
+  padding-top: 4px;
+}
+.insp-btn {
+  flex: 1 1 auto; min-width: 88px; padding: 9px 12px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 700; cursor: pointer; transition: all .15s;
+  border: 1px solid transparent;
+}
+.insp-btn.primary {
+  color: #0b1220; background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 78%, #000));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.insp-btn.primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.insp-btn.ghost {
+  color: #cbd5e1; background: rgba(255,255,255,.04); border-color: rgba(255,255,255,.1);
+}
+.insp-btn.ghost:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.2); color: #fff; }
+.insp-btn.danger {
+  color: #fca5a5; background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.32);
+}
+.insp-btn.danger:hover { background: rgba(239,68,68,.2); border-color: rgba(239,68,68,.55); color: #fff; }
+
+/* 구역 리스트 항목 화살표 */
+.zone-item-arrow {
+  width: 15px; height: 15px; flex: 0 0 auto; color: #475569;
+  transition: transform .15s, color .15s;
+}
+.zone-item:hover .zone-item-arrow { color: var(--accent); transform: translateX(2px); }
+
+@media (max-width: 720px) {
+  .inspector { width: 100%; max-width: 100%; border-left: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ADMIN 모달 — 탭 + 사용신청 데이터그리드 (CABLE 관리 그리드 스타일)
+══════════════════════════════════════════════════════════════ */
+.admin-gate-card.wide { max-width: 760px; width: 94vw; }
+
+.adm-tabs {
+  display: flex; gap: 4px; margin: 4px 0 16px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.adm-tab {
+  display: flex; align-items: center; gap: 7px; padding: 10px 16px;
+  font-size: 13px; font-weight: 700; color: #94a3b8; cursor: pointer;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: all .15s;
+}
+.adm-tab:hover { color: #cbd5e1; }
+.adm-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.adm-tab i { font-size: 12px; }
+.adm-req-badge {
+  font-size: 10px; font-weight: 800; color: #fff; background: #ef4444;
+  border-radius: 20px; min-width: 17px; height: 17px; padding: 0 5px;
+  display: inline-grid; place-items: center;
+}
+
+.adm-panel.hidden { display: none; }
+
+/* 그리드 레이아웃: 좌측 필터 레일 + 메인 표 */
+.adm-grid {
+  display: grid; grid-template-columns: 168px 1fr; gap: 0;
+  border: 1px solid rgba(255,255,255,.08); border-radius: 10px; overflow: hidden;
+  background: var(--bg2); min-height: 320px;
+}
+.adm-filter-rail {
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 8px;
+  background: linear-gradient(180deg, rgba(255,255,255,.025), transparent);
+  border-right: 1px solid rgba(255,255,255,.07);
+}
+.adm-filter-h {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+  color: #64748b; padding: 4px 10px 8px;
+}
+.adm-filter-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+  color: #94a3b8; background: none; border: none; cursor: pointer; transition: all .14s;
+}
+.adm-filter-item:hover { background: rgba(255,255,255,.04); color: #e2e8f0; }
+.adm-filter-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: #fff;
+}
+.adm-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.adm-dot.pending { background: #f59e0b; }
+.adm-dot.approved { background: #22c55e; }
+.adm-dot.rejected { background: #ef4444; }
+.adm-dot.all { background: #64748b; }
+.adm-filter-cnt {
+  margin-left: auto; font-size: 10.5px; font-weight: 800; color: #cbd5e1;
+  background: rgba(255,255,255,.07); border-radius: 20px; min-width: 20px;
+  padding: 1px 6px; text-align: center;
+}
+
+.adm-grid-main { display: flex; flex-direction: column; min-width: 0; }
+.adm-grid-head, .adm-req-row {
+  display: grid;
+  grid-template-columns: 1.7fr 1.3fr 1fr .9fr 80px;
+  align-items: center; gap: 8px;
+}
+.adm-grid-head {
+  padding: 10px 14px; font-size: 9.5px; font-weight: 800; letter-spacing: .8px;
+  text-transform: uppercase; color: #64748b;
+  background: rgba(255,255,255,.03); border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.adm-req-list { flex: 1; overflow-y: auto; max-height: 360px; }
+.adm-req-row {
+  padding: 10px 14px; font-size: 12.5px; color: #cbd5e1;
+  border-bottom: 1px solid rgba(255,255,255,.04); transition: background .12s;
+}
+.adm-req-row:hover { background: rgba(255,255,255,.03); }
+.adm-req-row .adm-col-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.adm-avatar {
+  width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
+  display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #0b1220;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #fff));
+}
+.adm-name-block { display: flex; flex-direction: column; min-width: 0; }
+.adm-name { font-weight: 700; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-email { font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-col-company { display: flex; flex-direction: column; min-width: 0; }
+.adm-company { font-weight: 600; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-country { font-size: 11px; color: #64748b; }
+.adm-col-contact { font-family: "SF Mono", ui-monospace, monospace; font-size: 11.5px; color: #cbd5e1; }
+.adm-badge {
+  font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 20px; white-space: nowrap;
+}
+.adm-badge.pending { color: #fbbf24; background: rgba(245,158,11,.14); border: 1px solid rgba(245,158,11,.35); }
+.adm-badge.approved { color: #4ade80; background: rgba(34,197,94,.14); border: 1px solid rgba(34,197,94,.35); }
+.adm-badge.rejected { color: #f87171; background: rgba(239,68,68,.14); border: 1px solid rgba(239,68,68,.35); }
+.adm-col-act { display: flex; gap: 6px; justify-content: flex-end; }
+.adm-act-btn {
+  width: 30px; height: 30px; border-radius: 7px; cursor: pointer; flex: 0 0 auto;
+  display: grid; place-items: center; font-size: 12px; transition: all .14s; border: 1px solid transparent;
+}
+.adm-act-btn.approve { color: #4ade80; background: rgba(34,197,94,.1); border-color: rgba(34,197,94,.3); }
+.adm-act-btn.approve:hover { background: rgba(34,197,94,.25); color: #fff; }
+.adm-act-btn.reject { color: #f87171; background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.3); }
+.adm-act-btn.reject:hover { background: rgba(239,68,68,.25); color: #fff; }
+.adm-req-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 50px 20px; color: #475569; font-size: 13px;
+}
+.adm-req-empty i { font-size: 30px; opacity: .5; }
+
+@media (max-width: 640px) {
+  .adm-grid { grid-template-columns: 1fr; }
+  .adm-filter-rail { flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .adm-filter-h { width: 100%; }
+  .adm-grid-head { display: none; }
+  .adm-req-row { grid-template-columns: 1fr auto; gap: 6px; }
+  .adm-col-company, .adm-col-contact { grid-column: 1 / -1; padding-left: 39px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   COMPACT OPERATIONS — CABLE 관리 프로그램풍 조밀 운영 메뉴
+   (사이드바/버튼/섹션을 더 컴팩트하게 — 전역 오버라이드, 파일 끝)
+══════════════════════════════════════════════════════════════ */
+.sidebar { width: 224px; }
+.sidebar-section { padding: 9px 10px; gap: 5px; }
+.sidebar-section.pin-list-wrap { padding: 7px 9px; }
+.sidebar-section-head { margin-bottom: 5px; }
+.sidebar-section-title {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .4px;
+  text-transform: uppercase; color: #94a3b8;
+}
+.btn-mini {
+  padding: 3px 9px; font-size: 10.5px; border-radius: 6px;
+}
+/* 액션 버튼 컴팩트화 + 아이콘+텍스트 일관 */
+.btn-upload, .btn-place, .btn-deploy {
+  padding: 8px 10px !important; font-size: 11.5px !important;
+  letter-spacing: .3px !important; border-radius: 7px !important;
+  font-family: var(--font-ui) !important; font-weight: 700 !important;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn-export-json, .btn-import-json { font-size: 11px !important; }
+/* 영역 도구 컴팩트 */
+.zone-tools { gap: 5px; }
+.zone-tool { padding: 7px 4px; border-radius: 7px; font-size: 10px; }
+.zone-tool svg { width: 17px; height: 17px; }
+.zone-tools-label { font-size: 9.5px; letter-spacing: .6px; color: #64748b; text-transform: uppercase; margin-top: 2px; }
+
+/* 데크 목록 / 영역 목록 / 핀 목록 — 행 높이 조밀하게 */
+.decks-list { gap: 3px; }
+.deck-item, .zone-item, .pin-item {
+  padding: 6px 9px !important; border-radius: 7px !important;
+  font-size: 12px !important;
+}
+.zone-list, .pin-list { gap: 3px; }
+
+/* 상단 헤더 — 컴팩트 운영 툴바 느낌 (높이/버튼 축소) */
+.btn-settings, .btn-allpins, .btn-exit-edit {
+  padding: 6px 10px !important; font-size: 11.5px !important; border-radius: 7px !important;
+}
+.btn-page { width: 26px; height: 26px; }
+
+/* 프로젝트 선택 드롭다운 컴팩트 */
+.project-select { padding: 7px 9px; font-size: 12px; border-radius: 7px; }
+
+/* 핀 폼 플로팅 패널 — 살짝 컴팩트 */
+.pin-form-float { font-size: 12.5px; }

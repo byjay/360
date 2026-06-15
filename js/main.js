@@ -1219,8 +1219,12 @@
             e.stopPropagation();
             App.deletePin(pin.id);
           });
-          // 디자이너 모드에서도 콘텐츠(미디어/노트/첨부)가 있는 핀은 리스트 클릭 시 이동 후 오픈
-          item.addEventListener("click", () => App.focusPin(pin, App.pinHasContent(pin)));
+          // 디자이너 모드: 콘텐츠 있는 핀은 이동+오픈, 없는 핀은 CAD 인스펙터 상세 표시
+          item.addEventListener("click", () => {
+            if (App.pinHasContent(pin)) App.focusPin(pin, true);
+            else if (typeof Inspector !== "undefined") { App.focusPin(pin, false); Inspector.showPin(pin); }
+            else App.focusPin(pin, false);
+          });
         } else {
           item.innerHTML = `
             <div class="pin-num">${idx + 1}</div>
@@ -1254,18 +1258,25 @@
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
-        // 핀 끝이 뾰족한 진짜 "버블/말풍선" 형태 — 머리는 둥근 버블, 꼬리는 정확한 위치를 가리킴
+        if (hasContent) marker.classList.add("has-content");
+        // ── 컴팩트 핀: 작고 끝이 뾰족, 머리에는 1자리 숫자만. 라벨은 호버/포커스 시만.
+        const numTxt = pageIdx > 9 ? "9" : String(pageIdx); // 머리는 1자리만 (10+는 9로 압축 표기)
         marker.innerHTML = `
           <div class="pin-marker-label">${this.escapeHtml(pin.label)}</div>
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
-            <svg viewBox="0 0 36 48" xmlns="http://www.w3.org/2000/svg">
-              <defs><filter id="pinshadow" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="1.4" stdDeviation="1.6" flood-color="rgba(0,0,0,.45)"/></filter></defs>
-              <path class="pin-pin-fill" filter="url(#pinshadow)" d="M18 2C10.27 2 4 8.06 4 15.5c0 5.2 3.3 10 7.4 13.9 2.5 2.4 4.7 5.6 5.7 9.2.2.8 1.6.8 1.8 0 1-3.6 3.2-6.8 5.7-9.2C28.7 25.5 32 20.7 32 15.5 32 8.06 25.73 2 18 2z"/>
-              <circle class="pin-pin-hole" cx="18" cy="15.5" r="6.6"/>
+            <svg viewBox="0 0 24 34" xmlns="http://www.w3.org/2000/svg">
+              <defs><filter id="pinshadow" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="1" stdDeviation="1.1" flood-color="rgba(0,0,0,.5)"/></filter></defs>
+              <path class="pin-pin-fill" filter="url(#pinshadow)" d="M12 1C6.2 1 1.5 5.6 1.5 11.2c0 6.6 8.4 19.4 9.5 21 .35.5 1.6.5 1.95 0 1.1-1.6 9.55-14.4 9.55-21C22.5 5.6 17.8 1 12 1z"/>
             </svg>
-            <span class="pin-pin-num">${pageIdx}</span>
+            <span class="pin-pin-num">${numTxt}</span>
             ${issueDot}
+          </div>
+          <div class="pin-actions">
+            ${hasContent ? '<button class="pin-act pin-act-view" data-act="view" title="360° 보기"><i class="fa-solid fa-panorama"></i></button>' : ''}
+            <button class="pin-act pin-act-move" data-act="move" title="이동(드래그)"><i class="fa-solid fa-up-down-left-right"></i></button>
+            <button class="pin-act pin-act-edit" data-act="edit" title="수정"><i class="fa-solid fa-pen"></i></button>
+            <button class="pin-act pin-act-del" data-act="del" title="삭제"><i class="fa-solid fa-trash"></i></button>
           </div>`;
         // ── 디자이너: 포인터 드래그로 핀 위치 이동 (click 과 구분: 이동 임계값) ──
         if (State.mode === "designer") {
@@ -1321,8 +1332,19 @@
           marker.addEventListener("click", e => {
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
-            if (App.pinHasContent(pin)) App.openPano(pin);
-            else App.setActivePin(pin.id);
+            // 디자이너: 클릭 시 바로 사진 X → 핀 선택(액션 아이콘 표시)
+            App.setActivePin(pin.id);
+          });
+          // 액션 아이콘 바인딩 (보기/이동/수정/삭제)
+          marker.querySelectorAll(".pin-act").forEach(btn => {
+            btn.addEventListener("click", ev => {
+              ev.stopPropagation();
+              const act = btn.dataset.act;
+              if (act === "view") App.openPano(pin);
+              else if (act === "move") Prompt.toast("핀을 드래그하여 위치를 옮기세요");
+              else if (act === "edit") App.editPin(pin.id);
+              else if (act === "del") App.deletePin(pin.id);
+            });
           });
         } else {
           marker.addEventListener("click", e => {
@@ -2390,7 +2412,7 @@
         const id = el.dataset.zone;
         el.addEventListener("mouseenter", () => this.highlight(id));
         el.addEventListener("mouseleave", () => this.highlight(null));
-        el.addEventListener("click", (e) => { if (e.target.closest("[data-zdel]")) return; this.focus(id); });
+        el.addEventListener("click", (e) => { if (e.target.closest("[data-zdel]")) return; this.inspect(id); });
       });
       layer.querySelectorAll("[data-zdel]").forEach(b => {
         b.addEventListener("click", (e) => { e.stopPropagation(); this.remove(b.dataset.zdel); });
@@ -2418,13 +2440,14 @@
             <span class="zone-item-label">${UI.escapeHtml(z.label)}</span>
             <span class="zone-item-page">p.${z.page || 1}</span>
             <span class="zone-item-cnt" title="연결된 핀"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>${cnt}</span>
+            <span class="zone-item-arrow" title="상세 정보"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></span>
           </div>`;
       }).join("");
       list.querySelectorAll(".zone-item").forEach(el => {
         const id = el.dataset.zone;
         el.addEventListener("mouseenter", () => this.highlight(id));
         el.addEventListener("mouseleave", () => this.highlight(null));
-        el.addEventListener("click", () => this.focus(id));
+        el.addEventListener("click", () => this.inspect(id));
       });
     },
 
@@ -2495,11 +2518,197 @@
       });
     },
 
+    /* ── CAD 인스펙터: 구역 상세 ── */
+    inspect(id) {
+      const z = (State.zones || []).find(x => x.id === id);
+      if (!z) return;
+      this.focus(id);
+      Inspector.showZone(z);
+    },
+
     serialize() { return JSON.stringify(State.zones || []); },
     load(arr) {
       State.zones = Array.isArray(arr) ? arr : [];
       this.render();
       this.renderList();
+    },
+  };
+
+  /* ══════════════════════════════════════════
+     INSPECTOR — CAD/3D 스타일 우측 상세 패널(구역/포인트)
+  ══════════════════════════════════════════ */
+  const Inspector = {
+    _kind: null, _id: null,
+
+    _open() {
+      const el = document.getElementById("inspector");
+      if (!el) return;
+      el.classList.remove("hidden");
+      requestAnimationFrame(() => el.classList.add("on"));
+    },
+    close() {
+      const el = document.getElementById("inspector");
+      if (!el) return;
+      el.classList.remove("on");
+      setTimeout(() => el.classList.add("hidden"), 220);
+      this._kind = null; this._id = null;
+      if (typeof Zones !== "undefined") Zones.highlight(null);
+    },
+    init() {
+      const c = document.getElementById("inspector-close");
+      if (c) c.addEventListener("click", () => this.close());
+    },
+
+    _fmt(n) { return (Math.round((n || 0) * 10) / 10).toFixed(1); },
+    _shapeName(z) {
+      if (z.shape === "circle") return "원형 (CIRCLE)";
+      if (z.shape === "poly") return "다각형 (POLYGON)";
+      return "사각형 (RECT)";
+    },
+    _area(z) {
+      // % 기준 근사 면적
+      if (z.shape === "circle") {
+        const r = Math.max(z.w, z.h) / 2;
+        return Math.PI * r * r;
+      }
+      if (z.shape === "poly" && Array.isArray(z.points) && z.points.length > 2) {
+        let a = 0; const p = z.points;
+        for (let i = 0, n = p.length; i < n; i++) {
+          const j = (i + 1) % n;
+          a += p[i].x * p[j].y - p[j].x * p[i].y;
+        }
+        return Math.abs(a) / 2;
+      }
+      return (z.w || 0) * (z.h || 0);
+    },
+
+    showZone(z) {
+      this._kind = "zone"; this._id = z.id;
+      const kindEl = document.getElementById("inspector-kind");
+      const titleEl = document.getElementById("inspector-title");
+      const body = document.getElementById("inspector-body");
+      if (kindEl) { kindEl.textContent = "ZONE"; kindEl.className = "inspector-kind kind-zone"; }
+      if (titleEl) titleEl.textContent = z.label || "(이름 없음)";
+
+      const pins = (State.pins || []).filter(p => (z.pinIds || []).includes(p.id));
+      const cx = z.x + (z.w || 0) / 2, cy = z.y + (z.h || 0) / 2;
+      const designer = (typeof Auth !== "undefined" && Auth.isDesigner);
+
+      const pinRows = pins.length
+        ? pins.map((p, i) => `<button class="insp-pinrow" data-pin="${p.id}">
+              <span class="insp-pinrow-no">${i + 1}</span>
+              <span class="insp-pinrow-label">${UI.escapeHtml(p.label || "포인트")}</span>
+              ${p.imageId || p.url || (p.attachments && p.attachments.length) ? '<span class="insp-pinrow-tag">360°</span>' : ''}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+           </button>`).join("")
+        : `<div class="insp-empty">이 구역에 연결된 포인트가 없습니다.</div>`;
+
+      body.innerHTML = `
+        <div class="insp-swatch-row">
+          <span class="insp-swatch" style="background:${z.color}"></span>
+          <span class="insp-shape-name">${this._shapeName(z)}</span>
+          <span class="insp-page-badge">PAGE ${z.page || 1}</span>
+        </div>
+
+        <div class="insp-section">
+          <div class="insp-section-h">좌표 · 치수 <span class="insp-unit">(도면 % 기준)</span></div>
+          <div class="insp-metrics">
+            <div class="insp-metric"><span class="m-k">X</span><span class="m-v">${this._fmt(z.x)}%</span></div>
+            <div class="insp-metric"><span class="m-k">Y</span><span class="m-v">${this._fmt(z.y)}%</span></div>
+            <div class="insp-metric"><span class="m-k">W</span><span class="m-v">${this._fmt(z.w)}%</span></div>
+            <div class="insp-metric"><span class="m-k">H</span><span class="m-v">${this._fmt(z.h)}%</span></div>
+            <div class="insp-metric"><span class="m-k">중심</span><span class="m-v">${this._fmt(cx)} , ${this._fmt(cy)}</span></div>
+            <div class="insp-metric"><span class="m-k">면적</span><span class="m-v">${this._fmt(this._area(z))}%²</span></div>
+          </div>
+        </div>
+
+        <div class="insp-section">
+          <div class="insp-section-h">연결 포인트 <span class="insp-count">${pins.length}</span></div>
+          <div class="insp-pinlist">${pinRows}</div>
+        </div>
+
+        ${z.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(z.note)}</div></div>` : ""}
+
+        <div class="insp-actions">
+          <button class="insp-btn primary" data-act="fly">화면 이동</button>
+          ${designer ? `<button class="insp-btn ghost" data-act="rename">이름 변경</button>
+          <button class="insp-btn danger" data-act="del">구역 삭제</button>` : ""}
+        </div>
+      `;
+
+      // 핀 행 클릭 → 핀 인스펙터
+      body.querySelectorAll(".insp-pinrow").forEach(b => {
+        b.addEventListener("click", () => {
+          const p = (State.pins || []).find(x => x.id === b.dataset.pin);
+          if (p) this.showPin(p);
+        });
+      });
+      // 액션
+      body.querySelectorAll(".insp-btn").forEach(b => {
+        b.addEventListener("click", () => {
+          const act = b.dataset.act;
+          if (act === "fly") Zones.focus(z.id);
+          else if (act === "del") { Zones.remove(z.id); this.close(); }
+          else if (act === "rename") {
+            const nv = prompt("구역 이름", z.label || "");
+            if (nv != null) { z.label = nv.trim() || z.label; Zones.render(); Zones.renderList(); this.showZone(z); if (App._autoSave) App._autoSave(); }
+          }
+        });
+      });
+      this._open();
+    },
+
+    showPin(p) {
+      this._kind = "pin"; this._id = p.id;
+      const kindEl = document.getElementById("inspector-kind");
+      const titleEl = document.getElementById("inspector-title");
+      const body = document.getElementById("inspector-body");
+      if (kindEl) { kindEl.textContent = "POINT"; kindEl.className = "inspector-kind kind-pin"; }
+      if (titleEl) titleEl.textContent = p.label || "포인트";
+
+      const designer = (typeof Auth !== "undefined" && Auth.isDesigner);
+      const has360 = !!(p.imageId || (p.attachments && p.attachments.length));
+      const inZone = (State.zones || []).find(z => (z.pinIds || []).includes(p.id));
+      const docs = (p.attachments || []).filter(a => a && a.type !== "pano");
+
+      body.innerHTML = `
+        <div class="insp-swatch-row">
+          <span class="insp-pin-ico ${has360 ? 'ok' : ''}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.4"/></svg>
+          </span>
+          <span class="insp-shape-name">${has360 ? "360° 파노라마 등록됨" : "파노라마 미등록"}</span>
+          <span class="insp-page-badge">PAGE ${p.page || 1}</span>
+        </div>
+
+        <div class="insp-section">
+          <div class="insp-section-h">위치 <span class="insp-unit">(도면 % 기준)</span></div>
+          <div class="insp-metrics">
+            <div class="insp-metric"><span class="m-k">X</span><span class="m-v">${this._fmt(p.x)}%</span></div>
+            <div class="insp-metric"><span class="m-k">Y</span><span class="m-v">${this._fmt(p.y)}%</span></div>
+            <div class="insp-metric wide"><span class="m-k">소속 구역</span><span class="m-v">${inZone ? UI.escapeHtml(inZone.label) : "—"}</span></div>
+          </div>
+        </div>
+
+        ${p.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(p.note)}</div></div>` : ""}
+        ${docs.length ? `<div class="insp-section"><div class="insp-section-h">첨부 자료 <span class="insp-count">${docs.length}</span></div><div class="insp-docs">${docs.map(d => `<span class="insp-doc">📎 ${UI.escapeHtml(d.name || "자료")}</span>`).join("")}</div></div>` : ""}
+
+        <div class="insp-actions">
+          ${has360 ? `<button class="insp-btn primary" data-act="open">360° 열기</button>` : ""}
+          <button class="insp-btn ghost" data-act="fly">화면 이동</button>
+          ${designer ? `<button class="insp-btn ghost" data-act="edit">수정</button>
+          <button class="insp-btn danger" data-act="del">삭제</button>` : ""}
+        </div>
+      `;
+      body.querySelectorAll(".insp-btn").forEach(b => {
+        b.addEventListener("click", () => {
+          const act = b.dataset.act;
+          if (act === "open" && typeof PanoViewer !== "undefined") PanoViewer.open(p);
+          else if (act === "fly" && MapCtrl.flyTo) MapCtrl.flyTo(p.x, p.y, 2.4, 600);
+          else if (act === "edit" && App.editPin) { App.editPin(p.id); this.close(); }
+          else if (act === "del" && App.deletePin) { App.deletePin(p.id); this.close(); }
+        });
+      });
+      this._open();
     },
   };
 
@@ -2628,6 +2837,7 @@
       Notes.init();
       TimeLapse.init();
       Zones.init();
+      Inspector.init();
       // 오프라인 우선 동기화 큐 — 배지 갱신 구독 + 자동 동기화 시작
       SyncQueue.onChange(() => this._updateSyncBadge());
       SyncQueue.init();
@@ -4209,6 +4419,7 @@
     idToken: null,
     user: null,           // { email, name, picture, role }
     role: "viewer",       // 'super' | 'designer' | 'viewer'
+    superAdmin: "designsir102@gmail.com",
     _pendingDesigner: null,
     _gsiInited: false,
 
@@ -4637,6 +4848,9 @@
      DESIGNERS — 디자이너 지정 관리 (슈퍼관리자 전용)
   ══════════════════════════════════════════ */
   const Designers = {
+    _tab: "designers",
+    _reqStatus: "pending",
+    _reqCache: [],
     init() {
       const $ = (id) => document.getElementById(id);
       $("designers-close") && $("designers-close").addEventListener("click", () => this.close());
@@ -4645,14 +4859,40 @@
       $("designer-add-btn") && $("designer-add-btn").addEventListener("click", () => this.add());
       const inp = $("designer-email-input");
       if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.add(); } });
+      // 탭 전환
+      $("adm-tab-designers") && $("adm-tab-designers").addEventListener("click", () => this.switchTab("designers"));
+      $("adm-tab-requests") && $("adm-tab-requests").addEventListener("click", () => this.switchTab("requests"));
+      // 상태 필터
+      document.querySelectorAll("#adm-panel-requests .adm-filter-item").forEach((b) => {
+        b.addEventListener("click", () => {
+          this._reqStatus = b.dataset.status;
+          document.querySelectorAll("#adm-panel-requests .adm-filter-item").forEach((x) => x.classList.toggle("active", x === b));
+          this.renderRequests();
+        });
+      });
+    },
+    switchTab(tab) {
+      this._tab = tab;
+      const isD = tab === "designers";
+      const td = document.getElementById("adm-tab-designers");
+      const tr = document.getElementById("adm-tab-requests");
+      td && td.classList.toggle("active", isD);
+      tr && tr.classList.toggle("active", !isD);
+      const pd = document.getElementById("adm-panel-designers");
+      const pr = document.getElementById("adm-panel-requests");
+      pd && pd.classList.toggle("hidden", !isD);
+      pr && pr.classList.toggle("hidden", isD);
+      if (!isD) this.loadRequests();
     },
     async open() {
       if (!Auth.isSuper) return;
       const sa = document.getElementById("super-admin-email");
-      if (sa) sa.textContent = Auth.user ? Auth.user.email : "designssir@gmail.com";
+      if (sa) sa.textContent = Auth.user ? Auth.user.email : (Auth.superAdmin || "designsir102@gmail.com");
       document.getElementById("designers-modal").classList.remove("hidden");
       requestAnimationFrame(() => document.getElementById("designers-modal").classList.add("on"));
+      this.switchTab(this._tab);
       await this.render();
+      this.loadRequests(); // 배지 갱신용 선로딩
     },
     close() {
       const m = document.getElementById("designers-modal");
@@ -4700,6 +4940,95 @@
         await fetch("/api/designers/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.render();
       } catch (e) {}
+    },
+
+    /* ── 사용 신청(access requests) 관리 ── */
+    async loadRequests() {
+      try {
+        const r = await fetch("/api/access-requests", { headers: Auth.headers() });
+        if (!r.ok) { this._reqCache = []; }
+        else { const j = await r.json(); this._reqCache = (j && j.data) || []; }
+      } catch (e) { this._reqCache = []; }
+      this._updateCounts();
+      if (this._tab === "requests") this.renderRequests();
+    },
+    _updateCounts() {
+      const c = { pending: 0, approved: 0, rejected: 0, all: this._reqCache.length };
+      this._reqCache.forEach((q) => { if (c[q.status] != null) c[q.status]++; });
+      const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = n; };
+      set("adm-cnt-pending", c.pending); set("adm-cnt-approved", c.approved);
+      set("adm-cnt-rejected", c.rejected); set("adm-cnt-all", c.all);
+      const badge = document.getElementById("adm-req-badge");
+      if (badge) { badge.textContent = c.pending; badge.classList.toggle("hidden", c.pending === 0); }
+    },
+    _statusLabel(s) {
+      return s === "approved" ? "승인됨" : s === "rejected" ? "거절됨" : "대기 중";
+    },
+    renderRequests() {
+      const listEl = document.getElementById("adm-req-list");
+      if (!listEl) return;
+      const rows = this._reqStatus === "all"
+        ? this._reqCache
+        : this._reqCache.filter((q) => q.status === this._reqStatus);
+      if (!rows.length) {
+        listEl.innerHTML = '<div class="adm-req-empty"><i class="fa-regular fa-folder-open"></i><span>해당 상태의 신청이 없습니다.</span></div>';
+        return;
+      }
+      listEl.innerHTML = "";
+      rows.forEach((q) => {
+        const row = document.createElement("div");
+        row.className = "adm-req-row st-" + q.status;
+        const initials = (q.name || q.email || "?").trim().charAt(0).toUpperCase();
+        row.innerHTML = `
+          <div class="adm-col-name">
+            <span class="adm-avatar">${UI.escapeHtml(initials)}</span>
+            <span class="adm-name-block">
+              <span class="adm-name">${UI.escapeHtml(q.name || "(이름 없음)")}</span>
+              <span class="adm-email">${UI.escapeHtml(q.email)}</span>
+            </span>
+          </div>
+          <div class="adm-col-company">
+            <span class="adm-company">${UI.escapeHtml(q.company || "—")}</span>
+            <span class="adm-country">${UI.escapeHtml(q.country || "")}</span>
+          </div>
+          <div class="adm-col-contact">${UI.escapeHtml(q.phone || "—")}</div>
+          <div class="adm-col-status"><span class="adm-badge ${q.status}">${this._statusLabel(q.status)}</span></div>
+          <div class="adm-col-act"></div>
+        `;
+        const act = row.querySelector(".adm-col-act");
+        if (q.status === "pending") {
+          act.innerHTML = `<button class="adm-act-btn approve" title="승인"><i class="fa-solid fa-check"></i></button>
+            <button class="adm-act-btn reject" title="거절"><i class="fa-solid fa-xmark"></i></button>`;
+          act.querySelector(".approve").addEventListener("click", () => this.approve(q));
+          act.querySelector(".reject").addEventListener("click", () => this.reject(q));
+        } else if (q.status === "rejected") {
+          act.innerHTML = `<button class="adm-act-btn approve" title="승인으로 변경"><i class="fa-solid fa-rotate-left"></i></button>`;
+          act.querySelector(".approve").addEventListener("click", () => this.approve(q));
+        } else {
+          act.innerHTML = `<button class="adm-act-btn reject" title="권한 회수"><i class="fa-solid fa-ban"></i></button>`;
+          act.querySelector(".reject").addEventListener("click", () => this.reject(q));
+        }
+        listEl.appendChild(row);
+      });
+    },
+    async approve(q) {
+      try {
+        const r = await fetch("/api/access-requests/" + encodeURIComponent(q.id) + "/approve", { method: "POST", headers: Auth.headers() });
+        if (!r.ok) { Prompt.toast("승인 실패"); return; }
+        Prompt.toast(q.name + " 님을 디자이너로 승인했습니다");
+        await this.loadRequests();
+        await this.render();
+      } catch (e) { Prompt.toast("네트워크 오류"); }
+    },
+    async reject(q) {
+      if (!confirm((q.name || q.email) + " 의 신청을 거절/회수할까요?")) return;
+      try {
+        const r = await fetch("/api/access-requests/" + encodeURIComponent(q.id) + "/reject", { method: "POST", headers: Auth.headers() });
+        if (!r.ok) { Prompt.toast("처리 실패"); return; }
+        Prompt.toast("처리되었습니다");
+        await this.loadRequests();
+        await this.render();
+      } catch (e) { Prompt.toast("네트워크 오류"); }
     }
   };
 
@@ -4903,7 +5232,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, SyncQueue, Cloud,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, SyncQueue, Cloud,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

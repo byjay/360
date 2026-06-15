@@ -473,6 +473,20 @@
           </button>
         </div>
       </div>
+
+      <!-- ═══ CAD 인스펙터 — 구역/포인트 상세(우측 슬라이드 팝업) ═══ -->
+      <aside id="inspector" class="inspector hidden" aria-label="상세 정보">
+        <div class="inspector-head">
+          <div class="inspector-head-left">
+            <span id="inspector-kind" class="inspector-kind">ZONE</span>
+            <span id="inspector-title" class="inspector-title">—</span>
+          </div>
+          <button id="inspector-close" class="inspector-close" type="button" aria-label="닫기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </button>
+        </div>
+        <div id="inspector-body" class="inspector-body"><!-- 동적 --></div>
+      </aside>
     </main>
   </div>
 </div>
@@ -799,14 +813,60 @@
   <div id="designers-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="designers-modal-title">
     <div class="admin-gate-backdrop" data-close="designers"></div>
     <div class="admin-gate-card wide">
-      <h2 id="designers-modal-title" class="admin-gate-title">디자이너 지정 관리</h2>
-      <p class="admin-gate-sub">디자이너로 지정할 <b>구글 이메일</b>을 추가/삭제합니다.<br>슈퍼관리자(<span id="super-admin-email"></span>)는 항상 디자이너입니다.</p>
-      <div class="designer-add">
-        <input id="designer-email-input" class="admin-gate-input" type="email" autocomplete="off" placeholder="designer@gmail.com" aria-label="디자이너 이메일" />
-        <button id="designer-add-btn" class="admin-gate-btn primary" type="button">추가</button>
-      </div>
-      <div id="designer-add-error" class="admin-gate-error hidden"></div>
-      <div id="designers-list" class="designers-list"></div>
+      <h2 id="designers-modal-title" class="admin-gate-title">접근 권한 관리</h2>
+      <p class="admin-gate-sub">슈퍼관리자(<span id="super-admin-email"></span>)가 디자이너 권한과 사용 신청을 관리합니다.</p>
+
+      <!-- 탭 -->
+      <nav class="adm-tabs" role="tablist">
+        <button id="adm-tab-designers" class="adm-tab active" type="button" role="tab">
+          <i class="fa-solid fa-users-gear"></i> 디자이너 관리
+        </button>
+        <button id="adm-tab-requests" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-inbox"></i> 사용 신청 <span id="adm-req-badge" class="adm-req-badge hidden">0</span>
+        </button>
+      </nav>
+
+      <!-- 패널: 디자이너 관리 -->
+      <section id="adm-panel-designers" class="adm-panel">
+        <div class="designer-add">
+          <input id="designer-email-input" class="admin-gate-input" type="email" autocomplete="off" placeholder="designer@gmail.com" aria-label="디자이너 이메일" />
+          <button id="designer-add-btn" class="admin-gate-btn primary" type="button">추가</button>
+        </div>
+        <div id="designer-add-error" class="admin-gate-error hidden"></div>
+        <div id="designers-list" class="designers-list"></div>
+      </section>
+
+      <!-- 패널: 사용 신청 (CABLE 데이터그리드풍 좌측 필터 + 표) -->
+      <section id="adm-panel-requests" class="adm-panel hidden">
+        <div class="adm-grid">
+          <aside class="adm-filter-rail">
+            <div class="adm-filter-h">상태 필터</div>
+            <button class="adm-filter-item active" data-status="pending" type="button">
+              <span class="adm-dot pending"></span> 대기 중 <span class="adm-filter-cnt" id="adm-cnt-pending">0</span>
+            </button>
+            <button class="adm-filter-item" data-status="approved" type="button">
+              <span class="adm-dot approved"></span> 승인됨 <span class="adm-filter-cnt" id="adm-cnt-approved">0</span>
+            </button>
+            <button class="adm-filter-item" data-status="rejected" type="button">
+              <span class="adm-dot rejected"></span> 거절됨 <span class="adm-filter-cnt" id="adm-cnt-rejected">0</span>
+            </button>
+            <button class="adm-filter-item" data-status="all" type="button">
+              <span class="adm-dot all"></span> 전체 <span class="adm-filter-cnt" id="adm-cnt-all">0</span>
+            </button>
+          </aside>
+          <div class="adm-grid-main">
+            <div class="adm-grid-head">
+              <span class="adm-col-name">신청자</span>
+              <span class="adm-col-company">회사 · 국가</span>
+              <span class="adm-col-contact">연락처</span>
+              <span class="adm-col-status">상태</span>
+              <span class="adm-col-act">처리</span>
+            </div>
+            <div id="adm-req-list" class="adm-req-list"></div>
+          </div>
+        </div>
+      </section>
+
       <div class="admin-gate-actions">
         <button id="designers-close" class="admin-gate-btn ghost" type="button">닫기</button>
       </div>
