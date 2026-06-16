@@ -1103,6 +1103,9 @@
       if (!p) return;
       p.classList.toggle("hidden", !show);
       if (show) {
+        // 샘플 버튼 바인딩(렌더러 초기화 실패/지연 시에도 동작 보장)
+        const sb = this._el("btn-fls-sample");
+        if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
         this._ensureRenderer();
         setTimeout(() => this._resize(), 30);
       }
@@ -1130,6 +1133,35 @@
       }
     },
 
+    /** 내장 샘플 포인트클라우드(SEASTAR FSRU)를 불러와 3D 표시 — 기능 즉시 체험용 */
+    async loadSample() {
+      this.showPane(true);
+      const btn = this._el("btn-fls-sample");
+      if (btn) { btn.disabled = true; }
+      try {
+        if (typeof THREE === "undefined") {
+          this._showError("3D 엔진 미로딩", "Three.js 가 로드되지 않았습니다(오프라인 등). 온라인 상태에서 다시 시도하세요.");
+          return;
+        }
+        this._show("fls-loading");
+        const lm = this._el("fls-loading-msg");
+        if (lm) lm.textContent = "SEASTAR FSRU 샘플 로드 중…";
+        const url = "/samples/seastar-fsru.ply";
+        let buf = Cloud && Cloud._cache ? Cloud._cache["fls:sample"] : null;
+        if (!buf) {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error("샘플 다운로드 실패 (HTTP " + res.status + ")");
+          buf = await res.arrayBuffer();
+          if (Cloud && Cloud._cache) Cloud._cache["fls:sample"] = buf; // 재사용 캐시
+        }
+        await this.loadBuffer(buf, "seastar-fsru.ply");
+      } catch (e) {
+        this._showError("샘플 로드 실패", (e && e.message) || String(e));
+      } finally {
+        if (btn) { btn.disabled = false; }
+      }
+    },
+
     _showError(t, h) {
       this._show("fls-error");
       const et = this._el("fls-error-t"), eh = this._el("fls-error-h");
@@ -1154,13 +1186,25 @@
         return this._showError("파싱 실패", (e && e.message) || "지원되지 않는 형식일 수 있습니다.");
       }
       if (!parsed || !parsed.count) {
-        if (ext === "fls") {
-          // ── 요청 #9: FLS 직접 로드 실패 → E57로 변경 등록 안내 ──
+        if (ext === "fls" || (parsed && parsed.faroRaw)) {
+          // ── FARO .fls(iQLib 원시 압축) 직접 로드 불가 → 메타 기반 정밀 변환 안내 ──
+          const m = this._flsMeta || {};
+          let metaLine = "";
+          if (m.rows && m.cols) {
+            const vfov = (m.rStart != null && m.rEnd != null)
+              ? Math.round((m.rStart - m.rEnd) * 180 / Math.PI) + "°" : "—";
+            const hfov = (m.cEnd != null) ? Math.round(m.cEnd * 180 / Math.PI) + "°" : "360°";
+            metaLine = `[스캔 정보 인식됨] 그리드 ${m.cols.toLocaleString()}×${m.rows.toLocaleString()} · `
+              + `약 ${(m.cols * m.rows).toLocaleString()}점 · 수평 ${hfov} / 수직 ${vfov}`
+              + (m.lib ? ` · iQLib ${m.lib}` : "") + ". ";
+          }
           return this._showError(
-            "1단계: .fls 직접 로드 실패 — E57로 변경 등록하세요",
-            "FARO .fls 는 독점 포맷이라 브라우저에서 직접 열 수 없습니다. " +
-            "FARO SCENE에서 [내보내기 → E57] 로 변환한 .e57 파일을 다시 첨부하면 바로 표시됩니다. " +
-            "(.e57 도 열리지 않으면 .las/.laz/.ply 로 추가 변환해 보세요. 그래도 안 되면 3D는 표시할 수 없습니다.)"
+            ".fls(FARO 원시) 직접 표시 불가 — E57/LAS로 변환 필요",
+            metaLine +
+            "FARO .fls 의 스캔 스트림은 독점 압축($ENC$·$NES$·$GRV$)이라 SDK 없이는 좌표 디코딩이 불가합니다. " +
+            "FARO SCENE에서 [내보내기 → E57(또는 LAS/LAZ/PLY)]로 변환해 다시 첨부하면 즉시 3D로 표시됩니다. " +
+            "(SCENE이 없으면 CloudCompare + FARO LS 플러그인으로도 변환 가능합니다.) " +
+            "지금 기능을 바로 보시려면 아래 ‘샘플 FLS 불러오기’를 누르세요."
           );
         }
         if (ext === "e57") {
@@ -1359,10 +1403,41 @@
     },
 
     _parseFLS(buf, ext) {
-      // FARO .fls 는 독점 포맷. e57 도 컨테이너가 복잡(XML+binary)해 안정 파싱이 어려움.
-      // 일부 e57 은 단순 구조라 sniff 로 점이 잡히는 경우도 있으나, 신뢰성을 위해
-      // 직접 파싱 실패 시 변환 안내로 폴백한다(loadBuffer 가 처리).
+      // FARO .fls 는 독점 포맷(iQLib). 내부 ScanDataStream 은 가변 델타 압축($ENC$/$NES$/$GRV$ 토큰)
+      // 이라 FARO LS SDK 없이는 XYZ 디코딩 불가(공식 문서·CloudCompare 포럼 확인).
+      // → 시그니처를 감지해 "정확한 변환 안내"를 제공하고, 가능하면 메타데이터(그리드/FOV)를 보여준다.
+      try {
+        const head = new TextDecoder("latin1").decode(buf.slice(0, Math.min(buf.byteLength, 262144)));
+        // iQLib / 폴더형 원시(.fls) 시그니처
+        const sig = /iQscene|iQLib|Scan2DataBase|ScanParameter|DataMode\s+\d+|ScannerParam/i.test(head);
+        // 압축 스캔 스트림 토큰
+        const u8 = new Uint8Array(buf.slice(0, Math.min(buf.byteLength, 4096)));
+        let dollar = 0; for (let i = 0; i < u8.length; i++) if (u8[i] === 0x24) dollar++;
+        const streamy = dollar > 20; // $ENC$ 등 토큰 다발
+        if (sig || streamy) {
+          const meta = this._parseFLSMeta(head);
+          this._flsMeta = meta; // loadBuffer 에서 안내에 활용
+          // 직접 디코딩은 불가 → count 0 반환(loadBuffer 가 변환 안내 표시)
+          return { positions: new Float32Array(0), colors: null, count: 0, faroRaw: true };
+        }
+      } catch (e) {}
+      // 텍스트형(드물게 ASCII 좌표가 들어있는 변형) → sniff
       return this._sniff(buf);
+    },
+
+    /** FARO Params/Main 텍스트에서 스캔 메타(그리드·FOV·거리계수) 추출 */
+    _parseFLSMeta(head) {
+      const num = (re) => { const m = head.match(re); return m ? parseFloat(m[1]) : null; };
+      const rows = num(/Name\s+"NumRows"\s*\}?\s*Value\s+(\d+)/i) || num(/NumRows[^0-9]+(\d+)/i);
+      const cols = num(/Name\s+"NumCols"\s*\}?\s*Value\s+(\d+)/i) || num(/NumCols[^0-9]+(\d+)/i);
+      const rStart = num(/RowStartAngle[^0-9\-]+(-?[\d.]+)/i);
+      const rEnd = num(/RowEndAngle[^0-9\-]+(-?[\d.]+)/i);
+      const cEnd = num(/ColEndAngle[^0-9\-]+(-?[\d.]+)/i);
+      const distFact = num(/DistFactor[^0-9\-]+(-?[\d.]+)/i);
+      const distOff = num(/DistOffset[^0-9\-]+(-?[\d.]+)/i);
+      const lib = (head.match(/"iQLib"\s+([\d.]+)/i) || [])[1] || null;
+      const pts = (rows && cols) ? rows * cols : null;
+      return { rows, cols, rStart, rEnd, cEnd, distFact, distOff, lib, pts };
     },
 
     _sniff(buf) {
@@ -1462,6 +1537,8 @@
         const pane = this._el("fls-pane");
         if (pane) { pane.classList.toggle("fls-collapsed"); setTimeout(() => this._resize(), 260); }
       });
+      const sb = this._el("btn-fls-sample");
+      if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
     },
 
     _resize() {
@@ -3796,6 +3873,14 @@
 
     /* ── Topbar ── */
     _bindTopbar() {
+      // 샘플 FLS 로드 버튼 — document 위임(패널이 어떤 경로로 열려도 항상 동작)
+      if (!document._flsSampleBound) {
+        document._flsSampleBound = true;
+        document.addEventListener("click", (e) => {
+          const b = e.target && e.target.closest && e.target.closest("#btn-fls-sample, #btn-fls-sample-err");
+          if (b && typeof FLS !== "undefined") { e.preventDefault(); FLS.loadSample(); }
+        });
+      }
       UI.$("btn-back").addEventListener("click", () => {
         State.reset();
         PanoViewer.close();
