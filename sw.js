@@ -5,7 +5,7 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v2';
+const CACHE = 'wm-shell-v3';
 const SHELL = [
   './',
   'index.html',
@@ -14,6 +14,12 @@ const SHELL = [
   'manifest.webmanifest',
   'vendor/pdf.worker.min.js',                 // ★ 오프라인 PDF 로드 핵심 — 로컬 워커(1MB) 반드시 캐시
   'images/logo.png',
+  'images/icon-64.png',
+  'images/icon-192.png',
+  'images/icon-512.png',
+  'images/icon-maskable-192.png',
+  'images/icon-maskable-512.png',
+  'samples/seastar-fsru.ply',                 // ★ 오프라인 샘플 3D 로드용 포인트클라우드
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   'https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js',
   'https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap'

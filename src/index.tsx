@@ -36,6 +36,22 @@ function superAdmin(c: any): string {
   return (typeof v === 'string' && v.includes('@')) ? v.trim().toLowerCase() : SUPER_ADMIN_FALLBACK
 }
 
+/** 회사 자동 설계자(디자이너) 도메인 — 이 도메인 계정은 로그인 경로(구글/자체가입)와 무관하게
+ *  항상 설계자 권한을 부여한다. 환경변수 DESIGNER_DOMAINS(쉼표구분) 로 확장 가능.
+ *  단일 정책 소스: 자체가입·구글로그인 양쪽이 모두 이 함수를 사용해 권한 불일치를 방지한다. */
+const DESIGNER_DOMAIN_FALLBACK = ['seastargo.com']
+function designerDomains(c?: any): string[] {
+  const v = c?.env?.DESIGNER_DOMAINS
+  if (typeof v === 'string' && v.trim()) {
+    return v.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean)
+  }
+  return DESIGNER_DOMAIN_FALLBACK
+}
+function isDesignerDomain(c: any, email: string): boolean {
+  const d = emailDomain(String(email || '').toLowerCase())
+  return !!d && designerDomains(c).includes(d)
+}
+
 /* ── 데모 진입(구글 로그인 없이 바로 테스트) ──
  * 구글 OAuth 클라이언트 ID가 아직 없거나, 빠른 시연이 필요할 때 사용.
  * 클라이언트가 보내는 'Bearer demo-designer' / 'Bearer demo-viewer' 토큰을 인식한다.
@@ -297,6 +313,18 @@ async function getUser(c: any): Promise<any | null> {
 async function isDesigner(c: any, email: string): Promise<boolean> {
   if (email === superAdmin(c)) return true
   if (DEMO_LOGIN_ENABLED && email === DEMO_DESIGNER.email) return true
+  // 회사 도메인(@seastargo.com 등) 계정은 로그인 경로와 무관하게 설계자 권한 (자체가입과 정책 일치)
+  if (isDesignerDomain(c, email)) {
+    // self-heal: designers 테이블에도 자동 등록해 두어 관리 화면/통계에서 일관되게 보이도록 함
+    try {
+      const now = Date.now()
+      await c.env.DB.prepare(
+        `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0)
+         ON CONFLICT(email) DO UPDATE SET deleted = 0, updated_at = excluded.updated_at`
+      ).bind(email, email.split('@')[0], 'auto:designer-domain', now, now).run()
+    } catch (e) {}
+    return true
+  }
   const row = await c.env.DB.prepare(
     'SELECT email FROM designers WHERE email = ? AND deleted = 0'
   ).bind(email).first()
@@ -517,12 +545,12 @@ app.post('/api/signup/verify', async (c) => {
      ON CONFLICT(email) DO UPDATE SET name = excluded.name, company = excluded.company, department = excluded.department, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
   ).bind(email, name || email.split('@')[0], emailDomain(email), company || (invite && invite.company) || '', department || '', hash, salt, now, now).run()
 
-  // @seastargo.com 도메인 계정은 설계자(디자이너) 권한 자동 부여 (요구사항)
-  if (emailDomain(email) === 'seastargo.com') {
+  // 회사 도메인(@seastargo.com 등) 계정은 설계자(디자이너) 권한 자동 부여 — 단일 정책(designerDomains)
+  if (isDesignerDomain(c, email)) {
     await c.env.DB.prepare(
       `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0)
        ON CONFLICT(email) DO UPDATE SET deleted = 0, name = excluded.name, updated_at = excluded.updated_at`
-    ).bind(email, name || email.split('@')[0], 'auto:seastargo-domain', now, now).run().catch(() => {})
+    ).bind(email, name || email.split('@')[0], 'auto:designer-domain', now, now).run().catch(() => {})
   }
   // 초대 레코드가 있으면 사용 처리(used=1) 및 회사명 동기화
   if (invite) {
@@ -545,7 +573,7 @@ app.post('/api/signup/verify', async (c) => {
   await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
 
   let grantedRole = (invite && invite.role) ? invite.role : 'viewer'
-  if (emailDomain(email) === 'seastargo.com') grantedRole = 'designer'
+  if (isDesignerDomain(c, email)) grantedRole = 'designer'
   await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email), invited: !!invite, company, department, role: grantedRole } })
   return c.json({ success: true, token, email, name: name || email.split('@')[0], company, department, role: grantedRole, invited: !!invite })
 })

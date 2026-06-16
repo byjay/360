@@ -2,24 +2,50 @@
   "name": "360° Location Viewer — SEASTAR",
   "short_name": "360 Viewer",
   "description": "도면 360° 위치 뷰어 — 현장 오프라인 핀 등록 지원",
-  "start_url": "./",
+  "id": "/",
+  "start_url": "./?source=pwa",
   "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone", "fullscreen", "minimal-ui"],
   "orientation": "any",
   "background_color": "#0b1220",
   "theme_color": "#0b1220",
+  "lang": "ko",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "utilities"],
   "icons": [
     {
-      "src": "images/logo.png",
+      "src": "images/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "images/logo.png",
+      "src": "images/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "images/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "images/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "새 프로젝트",
+      "short_name": "새 프로젝트",
+      "description": "새 360 위치 뷰어 프로젝트를 만듭니다",
+      "url": "./?action=new",
+      "icons": [{ "src": "images/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }
