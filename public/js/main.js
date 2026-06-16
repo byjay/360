@@ -42,6 +42,9 @@
     pdfRotation: 0,         // 0 | 90 | 180 | 270 (PDF.js 내장 회전)
     viewerPages: null,      // 뷰어 모드: 배포본 페이지 dataURL 배열
     pins:        [],        // {id,x,y,page,label,imageUrl?,imageId?,imageName?}
+    annotations: [],        // {id,page,type:'highlight'|'rect'|'pen'|'text',color,...좌표(%)} PDF 주석
+    annoTool:    "cursor",  // 현재 주석 도구
+    annoColor:   "#ff3b30", // 현재 주석 색상
     zones:       [],        // {id,page,x,y,w,h,label,color,pinIds[],note} 영역(%) 줌무관
     placing:     false,
     drawingZone: false,     // 영역 그리기 모드
@@ -53,6 +56,7 @@
     pendingFls:  null,      // 첨부된 3D 포인트클라우드 { localId, name, size }
     editingPinId: null,     // 기존 포인트 편집 중인 id (null=신규)
     movingPinId: null,      // 드래그로 위치 이동 중인 포인트 id
+    pinEditUnlocked: null,  // '수정' 버튼으로 이동/편집 잠금 해제된 핀 id (이 id만 드래그 이동 가능)
     autoSaveDepId: null,    // 자동 저장된 배포본(작업본) id — 도면 업로드 즉시 생성
     autoSaving: false,      // 자동 저장 진행 중 플래그
     activePin:   null,
@@ -1104,9 +1108,20 @@
       }
       if (!parsed || !parsed.count) {
         if (ext === "fls") {
+          // ── 요청 #9: FLS 직접 로드 실패 → E57로 변경 등록 안내 ──
           return this._showError(
-            ".fls 원본은 브라우저 직접 파싱이 제한됩니다",
-            "FARO SCENE에서 .e57 또는 .las/.laz 로 내보낸 뒤 첨부하면 바로 표시됩니다. (이 시스템은 .e57/.las/.laz/.ply/.pcd/.xyz/.pts 직접 로드를 지원)"
+            "1단계: .fls 직접 로드 실패 — E57로 변경 등록하세요",
+            "FARO .fls 는 독점 포맷이라 브라우저에서 직접 열 수 없습니다. " +
+            "FARO SCENE에서 [내보내기 → E57] 로 변환한 .e57 파일을 다시 첨부하면 바로 표시됩니다. " +
+            "(.e57 도 열리지 않으면 .las/.laz/.ply 로 추가 변환해 보세요. 그래도 안 되면 3D는 표시할 수 없습니다.)"
+          );
+        }
+        if (ext === "e57") {
+          // ── 요청 #9: E57 도 실패 → 둘 다 안 되면 포기(추가 변환 안내) ──
+          return this._showError(
+            "2단계: .e57 로드 실패 — 추가 변환이 필요합니다",
+            "이 .e57 컨테이너는 직접 파싱이 어렵습니다. CloudCompare 등에서 .las/.laz/.ply/.pcd 로 다시 내보내 첨부해 주세요. " +
+            "변환본도 열리지 않으면 해당 스캔의 3D 표시는 지원되지 않습니다(포기)."
           );
         }
         return this._showError("표시할 점이 없습니다", "파일이 비었거나 좌표 데이터를 찾지 못했습니다.");
@@ -1807,29 +1822,39 @@
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
-        marker.classList.add("pin-marker-green"); // 녹색 구슬 핀 스타일
-        // ── 녹색 구슬 핀: 광택 있는 녹색 구(球) + 흰색 받침대(spike). 검은 라벨창은 제거.
+        marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
+        marker.dataset.no = pageIdx;
+        // ── 바늘형 핀: 둥근 머리 + 길고 날카로운 바늘 끝(tip). 머리 안에 번호만 작게.
+        const headFill = hasContent ? '#22c55e' : '#e0a526';
+        const headFill2 = hasContent ? '#15803d' : '#9a6a0f';
+        const txtFill = hasContent ? '#0f5a23' : '#6b4a0d';
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
-            <svg viewBox="0 0 40 56" xmlns="http://www.w3.org/2000/svg">
+            <svg viewBox="0 0 36 54" xmlns="http://www.w3.org/2000/svg">
               <defs>
-                <radialGradient id="pgsphere${pageIdx}" cx="38%" cy="32%" r="70%">
-                  <stop offset="0%" stop-color="#c6f78d"/>
-                  <stop offset="38%" stop-color="#7ed957"/>
-                  <stop offset="100%" stop-color="#3ca41f"/>
+                <radialGradient id="pgbody${pageIdx}" cx="38%" cy="34%" r="72%">
+                  <stop offset="0%" stop-color="${headFill}"/>
+                  <stop offset="100%" stop-color="${headFill2}"/>
                 </radialGradient>
-                <linearGradient id="pgspike${pageIdx}" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#ffffff"/>
-                  <stop offset="100%" stop-color="#c9cdd2"/>
+                <linearGradient id="pgneedle${pageIdx}" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="${headFill2}"/>
+                  <stop offset="100%" stop-color="${hasContent ? '#0b5d28' : '#5e4109'}"/>
                 </linearGradient>
-                <filter id="pgshadow${pageIdx}" x="-40%" y="-20%" width="180%" height="170%">
-                  <feDropShadow dx="0" dy="1.4" stdDeviation="1.6" flood-color="rgba(0,0,0,.42)"/>
+                <filter id="pgshadow${pageIdx}" x="-60%" y="-20%" width="220%" height="170%">
+                  <feDropShadow dx="0" dy="1.6" stdDeviation="1.5" flood-color="rgba(0,0,0,.45)"/>
                 </filter>
               </defs>
-              <path d="M20 19 L26 30 Q20 36 14 30 Z" fill="url(#pgspike${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
-              <circle cx="20" cy="15" r="14" fill="url(#pgsphere${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
-              <ellipse cx="15.5" cy="9.5" rx="5.2" ry="3.4" fill="#ffffff" opacity="0.55"/>
+              <!-- 날카로운 바늘 끝: 머리 하단에서 한 점(18,53)으로 수렴 -->
+              <path d="M12.4 16 L18 53 L23.6 16 Z" fill="url(#pgneedle${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <!-- 둥근 머리 -->
+              <circle cx="18" cy="13" r="11.5" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2"/>
+              <circle cx="18" cy="13" r="7.6" fill="#ffffff" opacity="0.95"/>
+              <text x="18" y="13.3" text-anchor="middle" dominant-baseline="central"
+                    font-family="'Segoe UI',sans-serif" font-size="9.5" font-weight="800"
+                    fill="${txtFill}">${pageIdx}</text>
+              <!-- 머리 하이라이트(광택) -->
+              <ellipse cx="14.5" cy="9" rx="3.6" ry="2.4" fill="#ffffff" opacity="0.45"/>
             </svg>
             ${issueDot}
           </div>
@@ -1871,16 +1896,22 @@
             marker.classList.remove("moving");
             if (moved) {
               State.movingPinId = null;
+              State.pinEditUnlocked = null; // 이동 끝나면 다시 잠금
               if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
               UI.renderPinList();
               if (typeof Zones !== "undefined") Zones.render();
-              Prompt.toast("📍 '" + pin.label + "' 위치 이동됨");
+              Prompt.toast("📍 '" + pin.label + "' 위치 이동됨 · 자동저장");
               App._autoSave();
             }
           };
           const onDown = (ev) => {
             if (State.placing) return; // 배치 모드에서는 드래그 비활성
             if (State.isoView) { Prompt.toast("ISO 3D 뷰에서는 위치 이동이 불가합니다. 평면 뷰로 전환하세요."); return; }
+            // ── 요청사항 #6: '수정' 버튼으로 잠금 해제한 핀만 드래그 이동 가능 ──
+            if (State.pinEditUnlocked !== pin.id) {
+              // 잠긴 상태 → 클릭으로만 동작(보기). 이동하려면 ✏ 수정 버튼을 눌러야 함.
+              return;
+            }
             startX = ev.touches ? ev.touches[0].clientX : ev.clientX;
             startY = ev.touches ? ev.touches[0].clientY : ev.clientY;
             dragging = true; moved = false;
@@ -1893,9 +1924,11 @@
           marker.addEventListener("click", e => {
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
+            if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
             App.setActivePin(pin.id);
-            // 디자이너: 360° 미디어가 있으면 클릭 즉시 팝업 뷰어 실행, 없으면 선택만(액션 아이콘 표시)
-            if (App.pinHasContent(pin)) App.openPano(pin);
+            // 디자이너: 핀 클릭 → 전용 작업 팝업(이동/수정/사진추가/삭제/보기)
+            if (typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
+            else if (App.pinHasContent(pin)) App.openPano(pin);
           });
           // 액션 아이콘 바인딩 (보기/이동/수정/삭제)
           marker.querySelectorAll(".pin-act").forEach(btn => {
@@ -1903,8 +1936,17 @@
               ev.stopPropagation();
               const act = btn.dataset.act;
               if (act === "view") App.openPano(pin);
-              else if (act === "move") Prompt.toast("핀을 드래그하여 위치를 옮기세요");
-              else if (act === "edit") App.editPin(pin.id);
+              else if (act === "move") {
+                // ── #6: 이동 잠금 해제 후 드래그 안내 ──
+                State.pinEditUnlocked = pin.id;
+                marker.classList.add("edit-unlocked");
+                Prompt.toast("🔓 '" + pin.label + "' 이동 잠금 해제 — 핀을 드래그하세요");
+              }
+              else if (act === "edit") {
+                // ── #6: 수정 버튼 → 편집 폼 + 이동 잠금 해제(사진추가/위치이동 가능) ──
+                State.pinEditUnlocked = pin.id;
+                App.editPin(pin.id);
+              }
               else if (act === "del") App.deletePin(pin.id);
             });
           });
@@ -1917,6 +1959,7 @@
         layer.appendChild(marker);
       });
       if (typeof Zones !== "undefined") Zones.render();
+      if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
     },
 
     updatePdfPagination() {
@@ -3573,6 +3616,9 @@
       Zones.init();
       Inspector.init();
       PinGrid.init();
+      PinActionPop.init();
+      CompanyAuth.init();
+      PdfAnno.init();
       // 오프라인 우선 동기화 큐 — 배지 갱신 구독 + 자동 동기화 시작
       SyncQueue.onChange(() => this._updateSyncBadge());
       SyncQueue.init();
@@ -3824,6 +3870,11 @@
         UI.show("field-pin-imgname");
         UI.$("input-pin-imgname").value = f.name.replace(/\.[^.]+$/, "");
         this._updateConfirmEnabled();
+        // ── 요청사항: 새 포인트 + 사진 등록 시 별도 저장 버튼 없이 즉시 저장 ──
+        //    (편집 모드는 '변경 저장' 버튼을 명시적으로 눌러야 반영)
+        if (!State.editingPinId) {
+          setTimeout(() => this._confirmPin(), 120);
+        }
       });
 
       // 핀 폼: 첨부 문서 선택 (PDF/Word 등 — 다중)
@@ -3920,6 +3971,14 @@
       if (tt) tt.textContent = opts.editing ? "포인트 수정" : "새 포인트";
       const saveLbl = UI.$("pf-save-label");
       if (saveLbl) saveLbl.textContent = opts.editing ? "변경 저장" : "저장하기";
+      // ── #7: 구역이 선택돼 있고 신규 포인트면 위치명 입력 숨김(번호 자동부여).
+      //   편집이거나 구역이 없으면 위치명 입력 표시.
+      const addr = UI.$("pf-addr");
+      if (addr) {
+        const zoneSelected = (typeof Projects !== "undefined" && Projects.currentDeck);
+        const hideAddr = !opts.editing && !!zoneSelected;
+        addr.classList.toggle("hidden", hideAddr);
+      }
       // 진입 애니메이션 트리거
       panel.classList.remove("pf-in");
       void panel.offsetWidth;
@@ -4125,7 +4184,9 @@
       this._openPinForm({ editing: false });
       // 포인트를 추가하면 바로 사진 업로드 다이얼로그를 띄운다 (요청사항)
       setTimeout(() => { const fi = UI.$("input-pin-file"); if (fi) fi.click(); }, 280);
-      UI.$("input-pin-label").focus();
+      // 위치명 입력이 표시돼 있을 때만 포커스 (구역 선택 시엔 숨겨짐)
+      const addr = UI.$("pf-addr");
+      if (addr && !addr.classList.contains("hidden")) UI.$("input-pin-label").focus();
     },
 
     _handlePlaceTouch(e) {
@@ -4277,10 +4338,11 @@
           UI.$("map-image").classList.add("hidden");
           await this._renderPdfPage();
           this._showMapViewport();
+          this._afterDrawingLoaded();
         } catch (err) {
           UI.$("pdf-loading").classList.add("hidden");
           UI.$("pdf-error").classList.remove("hidden");
-          UI.$("pdf-error-msg").textContent = "PDF 로드 실패: " + err.message;
+          const em = UI.$("pdf-error-msg"); if (em) em.textContent = "PDF 로드 실패: " + err.message;
         }
       } else {
         State.fileType = "image";
@@ -4292,7 +4354,7 @@
         UI.$("pdf-pagination").classList.add("hidden");
 
         const imgEl = UI.$("map-image");
-        imgEl.onload = () => { this._showMapViewport(); };
+        imgEl.onload = () => { this._showMapViewport(); this._afterDrawingLoaded(); };
         imgEl.onerror = () => {
           UI.$("pdf-error").classList.remove("hidden");
           UI.$("pdf-error-msg").textContent = "이미지 로드 실패";
@@ -4326,6 +4388,7 @@
       if (tb) tb.classList.remove("hidden");
       const tbMark = UI.$("tb-mark");
       if (tbMark) tbMark.classList.toggle("hidden", State.mode !== "designer");
+      if (typeof PdfAnno !== "undefined") PdfAnno.updateToolbar();  // 주석 도구(설계자 전용) 표시
       UI.renderPinsOnMap();
       UI.renderPinList();      // 현재 페이지 핀 목록 갱신
       UI.updatePdfPagination();
@@ -4482,7 +4545,8 @@
 
       // 편집 완료면 별도 안내만, 신규면 다음 포인트 연속 배치 안내
       if (wasEditing) {
-        Prompt.toast("✅ '" + label + "' 수정 완료");
+        State.pinEditUnlocked = null; // 수정 완료 → 다시 잠금
+        Prompt.toast("✅ '" + label + "' 수정 완료 · 자동저장");
         return;
       }
       let savedNote = (pin.pendingSync ? "📥 '" : "✅ '") + label + (pin.pendingSync ? "' 임시 저장 (오프라인)" : "' 저장 완료");
@@ -4817,10 +4881,11 @@
         return q;
       });
       const body = {
-        title:     State.fileName || "도면",
-        file_name: State.fileName || "",
-        pins:      JSON.stringify(deployablePins),
-        zones:     (typeof Zones !== "undefined") ? Zones.serialize() : "[]"
+        title:       State.fileName || "도면",
+        file_name:   State.fileName || "",
+        pins:        JSON.stringify(deployablePins),
+        zones:       (typeof Zones !== "undefined") ? Zones.serialize() : "[]",
+        annotations: JSON.stringify(State.annotations || [])
       };
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
@@ -4860,6 +4925,71 @@
       };
       const t = UI.$("autosave-text");
       if (t) t.textContent = map[stateStr] || "";
+    },
+
+    /** #3: 도면 로드 직후 — 구역 보장 + 즉시 자동저장(스냅샷) + 구역에 도면 연결 */
+    async _afterDrawingLoaded() {
+      if (State.mode !== "designer") return;
+      try {
+        // 1) 구역이 없으면 강제 생성(현재 구역 보장)
+        let deck = null;
+        if (typeof Projects !== "undefined" && Projects.currentProject) {
+          deck = await Projects.ensureDeck();
+        }
+        // 2) 도면 스냅샷 즉시 저장 (배포본 생성)
+        State.autoSaveDepId = null; // 새 도면이므로 새 스냅샷
+        await this._createInitialSave();
+        // 3) 생성된 도면 배포본을 현재 구역에 연결
+        if (deck && State.autoSaveDepId) {
+          deck.deployment_id = State.autoSaveDepId;
+          try {
+            await fetch("/api/decks/" + deck.id, {
+              method: "PUT", headers: Auth.headers(),
+              body: JSON.stringify({ name: deck.name, level_no: deck.level_no || null, deployment_id: State.autoSaveDepId })
+            });
+            Projects._renderDecks();
+          } catch (e) { /* 연결 실패해도 도면/스냅샷은 저장됨 */ }
+        }
+        Prompt.toast && Prompt.toast("📄 도면 등록 · 자동저장 완료" + (deck ? " (구역: " + deck.name + ")" : ""));
+      } catch (e) { /* 비치명적 */ }
+    },
+
+    /** 구역 선택 시 연결된 도면(배포 스냅샷)을 불러와 화면(디자이너 편집)에 표시 */
+    async loadDeckDrawing(deploymentId) {
+      if (!deploymentId) return;
+      try {
+        const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
+        if (!r.ok) return;
+        const dep = await r.json();
+        let pages = [];
+        try { pages = JSON.parse(dep.pages_data || "[]"); } catch { pages = []; }
+        if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];
+        if (!pages.length) return;
+
+        State.reset();
+        State.fileType = "image";       // 스냅샷은 이미지(dataURL)로 보관됨
+        State.viewerPages = pages;
+        State.pdfPage = 1;
+        State.fileName = dep.file_name || dep.title || "구역 도면";
+        UI.text("file-name-label", State.fileName);
+        UI.$("drop-hint").classList.add("hidden");
+        UI.$("pdf-canvas").classList.add("hidden");
+        try { State.pins  = JSON.parse(dep.pins  || "[]"); } catch { State.pins = []; }
+        try { State.zones = JSON.parse(dep.zones || "[]"); } catch { State.zones = []; }
+        try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
+
+        const imgEl = UI.$("map-image");
+        imgEl.onload = () => {
+          this._showMapViewport();
+          UI.renderPinList(); UI.renderPinsOnMap();
+          if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
+        };
+        imgEl.src = pages[0];
+        imgEl.classList.remove("hidden");
+
+        State.autoSaveDepId = deploymentId;       // 이후 자동저장은 이 배포본 갱신
+        State.currentDeploymentId = deploymentId;
+      } catch (e) { /* 무시 */ }
     },
 
     /** 도면 업로드 직후 1회: 배포본 생성(도면 스냅샷 포함) */
@@ -5097,6 +5227,8 @@
         catch { State.pins = []; }
         try { State.zones = JSON.parse(latest.zones || "[]"); }
         catch { State.zones = []; }
+        try { State.annotations = JSON.parse(latest.annotations || "[]"); }
+        catch { State.annotations = []; }
 
         const imgEl = UI.$("map-image");
         imgEl.onload = () => {
@@ -5104,6 +5236,7 @@
           UI.renderPinList();
           UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }  // 영역 표시
+          if (typeof PdfAnno !== "undefined") PdfAnno.refresh();  // PDF 주석 복원
           if (typeof Notes !== "undefined") Notes.loadSummary();  // 핀별 이슈 카운트
         };
         imgEl.src = pages[0];
@@ -5339,9 +5472,9 @@
       const af = $("access-gate-form");
       af && af.addEventListener("submit", (e) => { e.preventDefault(); this._submitAccessRequest(); });
 
-      // 저장된 토큰 복원
+      // 저장된 토큰 복원 (구글 idToken 또는 회사 이메일 로컬 토큰)
       try {
-        const saved = sessionStorage.getItem("wm_id_token");
+        const saved = sessionStorage.getItem("wm_id_token") || localStorage.getItem("wm_local_token");
         if (saved) { this.idToken = saved; }
       } catch (e) {}
 
@@ -5620,8 +5753,14 @@
         if (window.google && window.google.accounts && window.google.accounts.id)
           window.google.accounts.id.disableAutoSelect();
       } catch (e) {}
+      // 회사 이메일(로컬) 세션이면 서버에서 무효화
+      try {
+        if (this.idToken && this.idToken.indexOf("local-") === 0) {
+          fetch("/api/signup/logout", { method: "POST", headers: { "Authorization": "Bearer " + this.idToken } }).catch(() => {});
+        }
+      } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
-      try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
+      try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
       this._applyUi();
       this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
@@ -5737,7 +5876,15 @@
       // 탭 전환
       $("adm-tab-designers") && $("adm-tab-designers").addEventListener("click", () => this.switchTab("designers"));
       $("adm-tab-requests") && $("adm-tab-requests").addEventListener("click", () => this.switchTab("requests"));
+      $("adm-tab-domains") && $("adm-tab-domains").addEventListener("click", () => this.switchTab("domains"));
+      $("adm-tab-members") && $("adm-tab-members").addEventListener("click", () => this.switchTab("members"));
       $("adm-tab-logs") && $("adm-tab-logs").addEventListener("click", () => this.switchTab("logs"));
+      // 도메인 관리
+      $("domain-add-btn") && $("domain-add-btn").addEventListener("click", () => this.addDomain());
+      const dinp = $("domain-input");
+      if (dinp) dinp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addDomain(); } });
+      // 멤버
+      $("members-refresh") && $("members-refresh").addEventListener("click", () => this.loadMembers());
       // 로그 도구
       $("log-refresh") && $("log-refresh").addEventListener("click", () => this.loadLogs(true));
       $("log-more") && $("log-more").addEventListener("click", () => this.loadLogs(false));
@@ -5757,8 +5904,8 @@
     },
     switchTab(tab) {
       this._tab = tab;
-      const tabs = { designers: "adm-tab-designers", requests: "adm-tab-requests", logs: "adm-tab-logs" };
-      const panels = { designers: "adm-panel-designers", requests: "adm-panel-requests", logs: "adm-panel-logs" };
+      const tabs = { designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs" };
+      const panels = { designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs" };
       Object.keys(tabs).forEach((k) => {
         const tEl = document.getElementById(tabs[k]);
         const pEl = document.getElementById(panels[k]);
@@ -5766,7 +5913,126 @@
         if (pEl) pEl.classList.toggle("hidden", k !== tab);
       });
       if (tab === "requests") this.loadRequests();
+      if (tab === "domains") this.loadDomains();
+      if (tab === "members") this.loadMembers();
       if (tab === "logs") { this.loadLogActions(); this.loadLogs(true); }
+    },
+
+    /* ── 회사 도메인(프로젝트별 허용) 관리 ── */
+    async _fillProjectSelect() {
+      const sel = document.getElementById("domain-project-select");
+      if (!sel) return;
+      const cur = sel.value || "*";
+      let projects = [];
+      try {
+        const r = await fetch("/api/projects", { headers: Auth.headers() });
+        const j = await r.json();
+        projects = j.data || j.results || j || [];
+      } catch (e) {}
+      sel.innerHTML = '<option value="*">전체 공통 (모든 프로젝트)</option>';
+      (projects || []).forEach((p) => {
+        const o = document.createElement("option");
+        o.value = p.id; o.textContent = p.name || p.id;
+        sel.appendChild(o);
+      });
+      sel.value = cur;
+    },
+    async loadDomains() {
+      await this._fillProjectSelect();
+      const listEl = document.getElementById("domains-list");
+      if (!listEl) return;
+      listEl.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
+      try {
+        const r = await fetch("/api/allowed-domains", { headers: Auth.headers() });
+        if (!r.ok) throw new Error("forbidden");
+        const { data } = await r.json();
+        if (!data || !data.length) {
+          listEl.innerHTML = '<div class="designers-empty">등록된 회사 도메인이 없습니다. (개인 무료메일 제외 모든 회사메일 허용)</div>';
+          return;
+        }
+        // 프로젝트 id→이름 매핑
+        let pmap = {};
+        try {
+          const rp = await fetch("/api/projects", { headers: Auth.headers() });
+          const jp = await rp.json();
+          (jp.data || jp.results || jp || []).forEach((p) => { pmap[p.id] = p.name || p.id; });
+        } catch (e) {}
+        listEl.innerHTML = "";
+        data.forEach((d) => {
+          const scope = d.project_id === "*" ? "전체 공통" : ("프로젝트: " + (pmap[d.project_id] || d.project_id));
+          const row = document.createElement("div");
+          row.className = "domain-row";
+          row.innerHTML = `<span class="domain-name">@${d.domain}</span>
+            <span class="domain-scope">${scope}</span>
+            <button class="designer-del" data-id="${encodeURIComponent(d.id)}" title="삭제">✕</button>`;
+          row.querySelector(".designer-del").addEventListener("click", () => this.removeDomain(d.id));
+          listEl.appendChild(row);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<div class="designers-empty">목록을 불러올 수 없습니다(권한 필요).</div>';
+      }
+    },
+    async addDomain() {
+      const inp = document.getElementById("domain-input");
+      const sel = document.getElementById("domain-project-select");
+      const err = document.getElementById("domain-add-error");
+      err.classList.add("hidden");
+      const domain = (inp.value || "").trim().toLowerCase().replace(/^@/, "");
+      const projectId = sel ? (sel.value || "*") : "*";
+      if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) { err.textContent = "올바른 도메인을 입력하세요. (예: company.com)"; err.classList.remove("hidden"); return; }
+      try {
+        const r = await fetch("/api/allowed-domains", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ domain, project_id: projectId }) });
+        const j = await r.json();
+        if (!r.ok) { err.textContent = j.error || "추가 실패"; err.classList.remove("hidden"); return; }
+        inp.value = "";
+        await this.loadDomains();
+      } catch (e) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); }
+    },
+    async removeDomain(id) {
+      try {
+        await fetch("/api/allowed-domains/" + encodeURIComponent(id), { method: "DELETE", headers: Auth.headers() });
+        await this.loadDomains();
+      } catch (e) {}
+    },
+
+    /* ── 가입 사용자(회사 이메일 자체가입) + 로그인 기록 ── */
+    async loadMembers() {
+      const listEl = document.getElementById("members-list");
+      if (!listEl) return;
+      listEl.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
+      try {
+        const r = await fetch("/api/local-users", { headers: Auth.headers() });
+        if (!r.ok) throw new Error("forbidden");
+        const { data } = await r.json();
+        const totalEl = document.getElementById("members-total");
+        if (totalEl) totalEl.textContent = (data ? data.length : 0) + "명";
+        if (!data || !data.length) { listEl.innerHTML = '<div class="designers-empty">아직 회사 이메일로 가입한 사용자가 없습니다.</div>'; return; }
+        const fmt = (ts) => { if (!ts) return "—"; const d = new Date(ts); return d.toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }); };
+        listEl.innerHTML = "";
+        data.forEach((u) => {
+          const row = document.createElement("div");
+          row.className = "member-row";
+          row.innerHTML = `<span class="mem-col-email" title="${u.email}">${u.email}</span>
+            <span class="mem-col-name">${u.name || "—"}</span>
+            <span class="mem-col-domain">@${u.domain}</span>
+            <span class="mem-col-login">${fmt(u.last_login_at)}</span>
+            <span class="mem-col-act"><button class="designer-del" title="가입 취소(삭제)">✕</button></span>`;
+          row.querySelector(".designer-del").addEventListener("click", () => this.removeMember(u.email));
+          listEl.appendChild(row);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<div class="designers-empty">목록을 불러올 수 없습니다(권한 필요).</div>';
+      }
+    },
+    async removeMember(email) {
+      if (typeof Prompt !== "undefined" && Prompt.confirm) {
+        const ok = await Prompt.confirm("가입 취소", email + " 사용자의 가입을 취소(삭제)하시겠습니까?");
+        if (!ok) return;
+      }
+      try {
+        await fetch("/api/local-users/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
+        await this.loadMembers();
+      } catch (e) {}
     },
     async open() {
       if (!Auth.isSuper) return;
@@ -6017,6 +6283,459 @@
   };
 
   /* ══════════════════════════════════════════
+     PDF ANNO — 최소 PDF 주석(ezPDF) : 형광펜/사각형/자유선/텍스트메모
+     주석은 State.annotations[]에 % 좌표(0~1000)로 저장, 페이지별 렌더.
+  ══════════════════════════════════════════ */
+  const PdfAnno = {
+    _drawing: false,
+    _start: null,
+    _cur: null,
+    _NS: "http://www.w3.org/2000/svg",
+    init() {
+      const svg = document.getElementById("anno-svg");
+      if (!svg) return;
+      const tools = ["cursor", "highlight", "rect", "pen", "text"];
+      tools.forEach(t => {
+        const btn = document.getElementById("tb-anno-" + (t === "highlight" ? "hl" : t));
+        if (btn) btn.addEventListener("click", () => this.setTool(t));
+      });
+      const colorEl = document.getElementById("tb-anno-color");
+      if (colorEl) colorEl.addEventListener("input", e => { State.annoColor = e.target.value; });
+      const undo = document.getElementById("tb-anno-undo");
+      if (undo) undo.addEventListener("click", () => this.undo());
+      const clr = document.getElementById("tb-anno-clear");
+      if (clr) clr.addEventListener("click", () => this.clearPage());
+      svg.addEventListener("pointerdown", e => this._onDown(e));
+      window.addEventListener("pointermove", e => this._onMove(e));
+      window.addEventListener("pointerup", () => this._onUp());
+    },
+    setTool(tool) {
+      State.annoTool = tool;
+      document.querySelectorAll(".tb-anno[data-tool]").forEach(b => {
+        b.classList.toggle("active", b.getAttribute("data-tool") === tool);
+      });
+      const svg = document.getElementById("anno-svg");
+      if (svg) {
+        svg.style.pointerEvents = (tool === "cursor") ? "none" : "auto";
+        svg.style.cursor = (tool === "cursor") ? "default" : (tool === "text" ? "text" : "crosshair");
+      }
+    },
+    updateToolbar() {
+      const grp = document.getElementById("tb-anno-group");
+      if (!grp) return;
+      const show = (State.mode === "designer");
+      grp.classList.toggle("hidden", !show);
+      if (!show) this.setTool("cursor");
+    },
+    _pt(e) {
+      const svg = document.getElementById("anno-svg");
+      const r = svg.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      return {
+        x: Math.max(0, Math.min(1000, ((e.clientX - r.left) / r.width) * 1000)),
+        y: Math.max(0, Math.min(1000, ((e.clientY - r.top) / r.height) * 1000))
+      };
+    },
+    _onDown(e) {
+      if (State.mode !== "designer") return;
+      const tool = State.annoTool;
+      if (tool === "cursor") return;
+      const p = this._pt(e);
+      if (!p) return;
+      e.preventDefault(); e.stopPropagation();
+      if (tool === "text") { this._addText(p); return; }
+      this._drawing = true;
+      this._start = p;
+      const id = "an-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      if (tool === "pen") {
+        this._cur = { id, page: State.pdfPage, type: "pen", color: State.annoColor, pts: [p] };
+      } else if (tool === "highlight") {
+        this._cur = { id, page: State.pdfPage, type: "highlight", color: State.annoColor, x: p.x, y: p.y, w: 0, h: 0 };
+      } else {
+        this._cur = { id, page: State.pdfPage, type: "rect", color: State.annoColor, x: p.x, y: p.y, w: 0, h: 0 };
+      }
+    },
+    _onMove(e) {
+      if (!this._drawing || !this._cur) return;
+      const p = this._pt(e);
+      if (!p) return;
+      if (this._cur.type === "pen") {
+        this._cur.pts.push(p);
+      } else {
+        this._cur.x = Math.min(this._start.x, p.x);
+        this._cur.y = Math.min(this._start.y, p.y);
+        this._cur.w = Math.abs(p.x - this._start.x);
+        this._cur.h = Math.abs(p.y - this._start.y);
+      }
+      this._renderLive();
+    },
+    _onUp() {
+      if (!this._drawing || !this._cur) { this._drawing = false; return; }
+      this._drawing = false;
+      const c = this._cur; this._cur = null;
+      if ((c.type === "rect" || c.type === "highlight") && (c.w < 6 || c.h < 6)) { this._render(); return; }
+      if (c.type === "pen" && c.pts.length < 2) { this._render(); return; }
+      State.annotations.push(c);
+      this._render();
+      this._persist();
+    },
+    _addText(p) {
+      const txt = (typeof prompt === "function") ? prompt("메모 내용을 입력하세요") : "";
+      if (!txt) return;
+      const id = "an-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      State.annotations.push({ id, page: State.pdfPage, type: "text", color: State.annoColor, x: p.x, y: p.y, text: txt });
+      this._render();
+      this._persist();
+    },
+    undo() {
+      for (let i = State.annotations.length - 1; i >= 0; i--) {
+        if ((State.annotations[i].page || 1) === State.pdfPage) {
+          State.annotations.splice(i, 1);
+          this._render(); this._persist(); return;
+        }
+      }
+    },
+    clearPage() {
+      if (!State.annotations.some(a => (a.page || 1) === State.pdfPage)) return;
+      if (typeof confirm === "function" && !confirm("현재 페이지의 모든 주석을 삭제할까요?")) return;
+      State.annotations = State.annotations.filter(a => (a.page || 1) !== State.pdfPage);
+      this._render(); this._persist();
+    },
+    _renderLive() {
+      this._render();
+      if (!this._cur) return;
+      const svg = document.getElementById("anno-svg");
+      if (svg) svg.appendChild(this._buildShape(this._cur));
+    },
+    _buildShape(a) {
+      const NS = this._NS;
+      if (a.type === "pen") {
+        const pl = document.createElementNS(NS, "polyline");
+        pl.setAttribute("points", a.pts.map(p => p.x + "," + p.y).join(" "));
+        pl.setAttribute("fill", "none");
+        pl.setAttribute("stroke", a.color);
+        pl.setAttribute("stroke-width", "3");
+        pl.setAttribute("stroke-linecap", "round");
+        pl.setAttribute("stroke-linejoin", "round");
+        pl.setAttribute("vector-effect", "non-scaling-stroke");
+        pl.dataset.aid = a.id;
+        return pl;
+      }
+      const rect = document.createElementNS(NS, "rect");
+      rect.setAttribute("x", a.x); rect.setAttribute("y", a.y);
+      rect.setAttribute("width", a.w); rect.setAttribute("height", a.h);
+      rect.dataset.aid = a.id;
+      if (a.type === "highlight") {
+        rect.setAttribute("fill", a.color);
+        rect.setAttribute("fill-opacity", "0.28");
+        rect.setAttribute("stroke", "none");
+      } else {
+        rect.setAttribute("fill", "none");
+        rect.setAttribute("stroke", a.color);
+        rect.setAttribute("stroke-width", "2.5");
+        rect.setAttribute("vector-effect", "non-scaling-stroke");
+      }
+      return rect;
+    },
+    _render() {
+      const svg = document.getElementById("anno-svg");
+      const tl = document.getElementById("anno-text-layer");
+      if (!svg || !tl) return;
+      svg.innerHTML = "";
+      tl.innerHTML = "";
+      const page = State.pdfPage;
+      State.annotations.forEach(a => {
+        if ((a.page || 1) !== page) return;
+        if (a.type === "text") {
+          const box = document.createElement("div");
+          box.className = "anno-text-box";
+          box.style.left = (a.x / 10) + "%";
+          box.style.top = (a.y / 10) + "%";
+          box.style.borderColor = a.color;
+          box.dataset.aid = a.id;
+          box.innerHTML = `<span class="anno-text-content">${(a.text || "").replace(/</g, "&lt;")}</span>`;
+          if (State.mode === "designer") {
+            const del = document.createElement("button");
+            del.className = "anno-text-del";
+            del.textContent = "✕";
+            del.title = "메모 삭제";
+            del.addEventListener("click", ev => { ev.stopPropagation(); this._removeById(a.id); });
+            box.appendChild(del);
+            box.style.pointerEvents = "auto";
+          }
+          tl.appendChild(box);
+        } else {
+          svg.appendChild(this._buildShape(a));
+        }
+      });
+    },
+    _removeById(id) {
+      State.annotations = State.annotations.filter(a => a.id !== id);
+      this._render(); this._persist();
+    },
+    refresh() { this._render(); this.updateToolbar(); },
+    _persist() {
+      if (State.mode !== "designer") return;
+      try { if (typeof App !== "undefined" && App._autoSave) App._autoSave({}); } catch (e) {}
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     PIN ACTION POP — 핀 작업 전용 팝업
+     (디자이너가 핀 클릭 → 이동/수정·사진추가/삭제/360°보기)
+  ══════════════════════════════════════════ */
+  const PinActionPop = {
+    _pinId: null,
+    init() {
+      const $ = (id) => document.getElementById(id);
+      const el = $("pin-action-pop");
+      if (!el) return;
+      $("pap-close") && $("pap-close").addEventListener("click", () => this.close());
+      const bd = el.querySelector(".pin-action-backdrop");
+      bd && bd.addEventListener("click", () => this.close());
+      $("pap-view") && $("pap-view").addEventListener("click", () => {
+        const pin = this._pin(); if (!pin) return;
+        this.close();
+        if (App.pinHasContent(pin)) App.openPano(pin);
+        else { App.focusPin(pin, false); if (typeof Inspector !== "undefined") Inspector.showPin(pin); }
+      });
+      $("pap-move") && $("pap-move").addEventListener("click", () => {
+        const pin = this._pin(); if (!pin) return;
+        State.pinEditUnlocked = pin.id;
+        this.close();
+        UI.renderPinsOnMap();
+        const m = document.querySelector('.pin-marker[data-id="' + pin.id + '"]');
+        if (m) m.classList.add("edit-unlocked");
+        Prompt.toast && Prompt.toast("🔓 '" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
+      });
+      $("pap-edit") && $("pap-edit").addEventListener("click", () => {
+        const pin = this._pin(); if (!pin) return;
+        State.pinEditUnlocked = pin.id;
+        this.close();
+        App.editPin(pin.id);
+      });
+      $("pap-del") && $("pap-del").addEventListener("click", () => {
+        const pin = this._pin(); if (!pin) return;
+        this.close();
+        App.deletePin(pin.id);
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !el.classList.contains("hidden")) this.close();
+      });
+    },
+    _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
+    open(pinId) {
+      const el = document.getElementById("pin-action-pop");
+      if (!el) return;
+      const pin = (State.pins || []).find(p => p.id === pinId);
+      if (!pin) return;
+      this._pinId = pinId;
+      // 페이지 기준 번호 계산
+      const page = pin.page || 1;
+      const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
+      const no = samePage.indexOf(pin) + 1;
+      const hasContent = App.pinHasContent(pin);
+      const $ = (id) => document.getElementById(id);
+      $("pap-no").textContent = "#" + (no > 0 ? no : "?");
+      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
+      const mediaTxt = hasContent ? "360° 미디어 있음" : "미디어 없음";
+      const addrTxt = (pin.label && pin.label.trim()) ? pin.label : "위치명 없음";
+      $("pap-meta").textContent = addrTxt + " · " + mediaTxt + " · " + page + "페이지";
+      // 360° 보기 버튼은 미디어 있을 때 강조
+      const viewBtn = $("pap-view");
+      if (viewBtn) viewBtn.classList.toggle("dim", !hasContent);
+      el.classList.remove("hidden");
+    },
+    close() {
+      const el = document.getElementById("pin-action-pop");
+      if (el) el.classList.add("hidden");
+      this._pinId = null;
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     COMPANY AUTH — 회사 이메일 자체가입 / 로그인
+     (인증코드 → 비밀번호 → 로컬 세션 토큰)
+  ══════════════════════════════════════════ */
+  const CompanyAuth = {
+    _email: null,
+    init() {
+      const $ = (id) => document.getElementById(id);
+      const el = $("company-gate");
+      if (!el) return;
+      // 진입 버튼(로그인 게이트 안)
+      $("login-gate-company") && $("login-gate-company").addEventListener("click", () => {
+        const lg = $("login-gate"); if (lg) lg.classList.add("hidden");
+        this.open();
+      });
+      $("company-gate-cancel") && $("company-gate-cancel").addEventListener("click", () => this.close());
+      const bd = el.querySelector(".company-gate-backdrop");
+      bd && bd.addEventListener("click", () => this.close());
+      // 탭 전환
+      $("company-tab-signup") && $("company-tab-signup").addEventListener("click", () => this._tab("signup"));
+      $("company-tab-login") && $("company-tab-login").addEventListener("click", () => this._tab("login"));
+      // 가입 흐름
+      $("cg-send-code") && $("cg-send-code").addEventListener("click", () => this._sendCode());
+      $("cg-resend") && $("cg-resend").addEventListener("click", () => this._sendCode(true));
+      $("cg-change-email") && $("cg-change-email").addEventListener("click", () => this._backToEmail());
+      $("cg-create") && $("cg-create").addEventListener("click", () => this._verify());
+      // 로그인 흐름
+      $("cg-login-btn") && $("cg-login-btn").addEventListener("click", () => this._login());
+    },
+    _projectId() {
+      try { return (typeof Projects !== "undefined" && Projects.currentProject) ? Projects.currentProject.id : null; }
+      catch { return null; }
+    },
+    _err(msg) {
+      const e = document.getElementById("company-gate-error");
+      if (!e) return;
+      if (msg) { e.textContent = msg; e.classList.remove("hidden"); }
+      else { e.textContent = ""; e.classList.add("hidden"); }
+    },
+    _tab(which) {
+      const $ = (id) => document.getElementById(id);
+      this._err(null);
+      $("company-tab-signup").classList.toggle("active", which === "signup");
+      $("company-tab-login").classList.toggle("active", which === "login");
+      $("company-panel-signup").classList.toggle("hidden", which !== "signup");
+      $("company-panel-login").classList.toggle("hidden", which !== "login");
+    },
+    async open() {
+      const el = document.getElementById("company-gate");
+      if (!el) return;
+      this._err(null);
+      this._backToEmail();
+      this._tab("signup");
+      el.classList.remove("hidden");
+      // 가입 정책 안내 로드
+      try {
+        const pid = this._projectId();
+        const r = await fetch("/api/signup/policy" + (pid ? ("?project_id=" + encodeURIComponent(pid)) : ""));
+        const j = await r.json();
+        const note = document.getElementById("cg-policy-note");
+        if (note) {
+          if (j.whitelist_enabled && j.allowed_domains && j.allowed_domains.length) {
+            note.textContent = "허용 회사 도메인: " + j.allowed_domains.map(d => "@" + d).join(", ");
+          } else {
+            note.textContent = j.note || "회사 이메일(@회사도메인)로만 가입할 수 있습니다.";
+          }
+        }
+      } catch (e) {}
+    },
+    close() {
+      const el = document.getElementById("company-gate");
+      if (el) el.classList.add("hidden");
+    },
+    _backToEmail() {
+      const $ = (id) => document.getElementById(id);
+      $("company-step-email") && $("company-step-email").classList.remove("hidden");
+      $("company-step-verify") && $("company-step-verify").classList.add("hidden");
+      const dc = $("cg-dev-code"); if (dc) { dc.classList.add("hidden"); dc.textContent = ""; }
+    },
+    async _sendCode(isResend) {
+      const $ = (id) => document.getElementById(id);
+      this._err(null);
+      const email = ($("cg-email").value || "").trim().toLowerCase();
+      if (!email) { this._err("회사 이메일 주소를 입력해 주세요."); return; }
+      const btn = isResend ? $("cg-resend") : $("cg-send-code");
+      const orig = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "전송 중..."; }
+      try {
+        const pid = this._projectId();
+        const r = await fetch("/api/signup/send-code", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, project_id: pid || undefined })
+        });
+        const j = await r.json();
+        if (!r.ok) { this._err(j.error || "코드 발송에 실패했습니다."); return; }
+        this._email = email;
+        $("cg-verify-email").textContent = email;
+        $("company-step-email").classList.add("hidden");
+        $("company-step-verify").classList.remove("hidden");
+        // dev-fallback 코드 표시(메일 미설정 시)
+        const dc = $("cg-dev-code");
+        if (j.dev_code) {
+          dc.innerHTML = "📧 메일 발송 미설정 — 개발/시연용 인증코드: <b>" + j.dev_code + "</b>";
+          dc.classList.remove("hidden");
+          $("cg-code").value = j.dev_code;
+        } else {
+          dc.classList.add("hidden"); dc.textContent = "";
+          Prompt.toast && Prompt.toast("📧 인증코드를 이메일로 발송했습니다.");
+        }
+      } catch (e) {
+        this._err("네트워크 오류로 코드 발송에 실패했습니다.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = orig; }
+      }
+    },
+    async _verify() {
+      const $ = (id) => document.getElementById(id);
+      this._err(null);
+      const code = ($("cg-code").value || "").trim();
+      const pw = $("cg-pw").value || "";
+      const pw2 = $("cg-pw2").value || "";
+      const name = ($("cg-name").value || "").trim();
+      if (!/^\d{6}$/.test(code)) { this._err("인증코드 6자리를 입력해 주세요."); return; }
+      if (pw.length < 8) { this._err("비밀번호는 8자 이상이어야 합니다."); return; }
+      if (pw !== pw2) { this._err("비밀번호가 일치하지 않습니다."); return; }
+      const btn = $("cg-create"); const orig = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "처리 중..."; }
+      try {
+        const pid = this._projectId();
+        const r = await fetch("/api/signup/verify", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: this._email, code, password: pw, name, project_id: pid || undefined })
+        });
+        const j = await r.json();
+        if (!r.ok) { this._err(j.error || "가입에 실패했습니다."); return; }
+        this._onAuthed(j.token, j.name || j.email);
+      } catch (e) {
+        this._err("네트워크 오류로 가입에 실패했습니다.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = orig; }
+      }
+    },
+    async _login() {
+      const $ = (id) => document.getElementById(id);
+      this._err(null);
+      const email = ($("cg-login-email").value || "").trim().toLowerCase();
+      const pw = $("cg-login-pw").value || "";
+      if (!email || !pw) { this._err("이메일과 비밀번호를 입력해 주세요."); return; }
+      const btn = $("cg-login-btn"); const orig = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "로그인 중..."; }
+      try {
+        const r = await fetch("/api/signup/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password: pw })
+        });
+        const j = await r.json();
+        if (!r.ok) { this._err(j.error || "로그인에 실패했습니다."); return; }
+        this._onAuthed(j.token, j.name || j.email);
+      } catch (e) {
+        this._err("네트워크 오류로 로그인에 실패했습니다.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = orig; }
+      }
+    },
+    _onAuthed(token, displayName) {
+      // 로컬 세션 토큰 저장 → Auth 가 Bearer 로 사용 (idToken 슬롯 공용)
+      try {
+        sessionStorage.setItem("wm_id_token", token);
+        localStorage.setItem("wm_local_token", token);
+      } catch (e) {}
+      if (typeof Auth !== "undefined") Auth.idToken = token;
+      this.close();
+      Prompt.toast && Prompt.toast("✅ " + displayName + " 님으로 로그인되었습니다.");
+      // 인증 상태 갱신 후 뷰어로
+      if (typeof Auth !== "undefined" && Auth.refresh) {
+        Auth.refresh().then(() => { if (App.openApp) App.openApp("viewer"); }).catch(() => { if (App.openApp) App.openApp("viewer"); });
+      } else {
+        if (App.openApp) App.openApp("viewer");
+      }
+    }
+  };
+
+  /* ══════════════════════════════════════════
      PROMPT — 범용 입력 모달 (프로젝트/데크 생성)
   ══════════════════════════════════════════ */
   const Prompt = {
@@ -6096,8 +6815,7 @@
       $("btn-new-project") && $("btn-new-project").addEventListener("click", () => this.createProject());
       $("btn-delete-project") && $("btn-delete-project").addEventListener("click", () => this.deleteProject());
       $("btn-new-deck") && $("btn-new-deck").addEventListener("click", () => this.createDeck());
-      const sel = $("project-select");
-      if (sel) sel.addEventListener("change", () => this.selectProject(sel.value));
+      // #1: 프로젝트 드롭다운 '이동(전환)' 기능 제거 — select 대신 현재 프로젝트명만 표시.
     },
 
     /** 디자이너 진입 시 호출 */
@@ -6111,14 +6829,14 @@
     },
 
     _renderSelect() {
-      const sel = document.getElementById("project-select");
-      if (!sel) return;
-      const keep = this.currentProject ? this.currentProject.id : "";
-      sel.innerHTML = '<option value="">— 프로젝트 선택 —</option>' +
-        this.list.map((p) => `<option value="${p.id}">${this._esc(p.name)}</option>`).join("");
-      sel.value = keep && this.list.some((p) => p.id === keep) ? keep : "";
-      document.getElementById("project-actions").classList.toggle("hidden", !sel.value);
-      document.getElementById("decks-block").classList.toggle("hidden", !sel.value);
+      // #1: 드롭다운 전환 제거 → 현재 프로젝트명 라벨만 갱신.
+      const cur = document.getElementById("project-current");
+      const has = !!this.currentProject;
+      if (cur) cur.textContent = has ? this.currentProject.name : "— 프로젝트 선택 —";
+      const pa = document.getElementById("project-actions");
+      if (pa) pa.classList.toggle("hidden", !has);
+      const db = document.getElementById("decks-block");
+      if (db) db.classList.toggle("hidden", !has);
     },
 
     async createProject() {
@@ -6130,7 +6848,6 @@
         const p = await r.json();
         if (!r.ok) { alert(p.error || "생성 실패(권한 필요)"); return; }
         await this.load();
-        document.getElementById("project-select").value = p.id;
         await this.selectProject(p.id);
       } catch (e) { alert("네트워크 오류"); }
     },
@@ -6148,8 +6865,7 @@
 
     async selectProject(id) {
       this.currentProject = this.list.find((p) => p.id === id) || null;
-      document.getElementById("project-actions").classList.toggle("hidden", !this.currentProject);
-      document.getElementById("decks-block").classList.toggle("hidden", !this.currentProject);
+      this._renderSelect();
       if (!this.currentProject) { this.decks = []; this._renderDecks(); return; }
       await this.loadDecks();
     },
@@ -6163,29 +6879,57 @@
       this._renderDecks();
     },
 
-    async createDeck() {
-      if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return; }
-      const res = await Prompt.ask({ title: "데크(선박 층) 생성", sub: "데크 이름을 입력하세요 (예: Main Deck, 2nd Deck, Engine Deck)", placeholder: "데크 이름", second: true });
-      if (!res) return;
-      const level = res.second && /^\d+$/.test(res.second) ? Number(res.second) : null;
+    /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */
+    async createDeck(opts) {
+      opts = opts || {};
+      if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return null; }
+      let name = opts.name;
+      if (!name) {
+        const res = await Prompt.ask({ title: "구역 생성", sub: "구역 이름을 입력하세요 (예: Main Deck, Engine Room, No.1 Hold)", placeholder: "구역 이름" });
+        if (!res) return null;
+        name = res.value;
+      }
       try {
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
-          body: JSON.stringify({ name: res.value, level_no: level })
+          body: JSON.stringify({ name })
         });
         const d = await r.json();
-        if (!r.ok) { alert(d.error || "생성 실패(권한 필요)"); return; }
+        if (!r.ok) { alert(d.error || "생성 실패(권한 필요)"); return null; }
         await this.loadDecks();
-      } catch (e) { alert("네트워크 오류"); }
+        const created = this.decks.find((x) => x.id === d.id) || d;
+        if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
+        return created;
+      } catch (e) { alert("네트워크 오류"); return null; }
+    },
+
+    /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */
+    async ensureDeck() {
+      if (this.currentDeck) return this.currentDeck;
+      if (this.decks.length) { this.currentDeck = this.decks[0]; this._renderDecks(); return this.currentDeck; }
+      // 구역이 전혀 없음 → 강제 생성
+      const created = await this.createDeck({ name: "구역 1", select: true });
+      return created;
     },
 
     async deleteDeck(id, name) {
-      if (!confirm(`데크 '${name}' 를 삭제할까요?`)) return;
+      if (!confirm(`구역 '${name}' 를 삭제할까요?`)) return;
       try {
         await fetch("/api/decks/" + id, { method: "DELETE", headers: Auth.headers() });
         if (this.currentDeck && this.currentDeck.id === id) this.currentDeck = null;
         await this.loadDecks();
       } catch (e) {}
+    },
+
+    /** 구역 선택 — 해당 구역에 연결된 도면(배포 스냅샷)이 있으면 불러옴 */
+    async selectDeck(d) {
+      this.currentDeck = d;
+      this._renderDecks();
+      Prompt.toast && Prompt.toast("🗂️ 구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
+      // 연결된 도면이 있으면 로드
+      if (d.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {
+        await App.loadDeckDrawing(d.deployment_id);
+      }
     },
 
     _renderDecks() {
@@ -6198,10 +6942,10 @@
       this.decks.forEach((d) => {
         const row = document.createElement("div");
         row.className = "deck-row" + (this.currentDeck && this.currentDeck.id === d.id ? " active" : "");
-        const lvl = (d.level_no || d.level_no === 0) ? `<span class="deck-lvl">L${d.level_no}</span>` : "";
-        row.innerHTML = `${lvl}<span class="deck-name">${this._esc(d.name)}</span>
+        const dot = d.deployment_id ? '<span class="deck-hasdoc" title="도면 등록됨">📄</span>' : '';
+        row.innerHTML = `<span class="deck-name">${dot}${this._esc(d.name)}</span>
           <button class="deck-del" title="삭제">✕</button>`;
-        row.querySelector(".deck-name").addEventListener("click", () => { this.currentDeck = d; this._renderDecks(); });
+        row.querySelector(".deck-name").addEventListener("click", () => this.selectDeck(d));
         row.querySelector(".deck-del").addEventListener("click", (e) => { e.stopPropagation(); this.deleteDeck(d.id, d.name); });
         listEl.appendChild(row);
       });
@@ -6216,7 +6960,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

@@ -5,6 +5,14 @@ type Bindings = {
   DB: D1Database
   R2?: R2Bucket
   SUPER_ADMIN_EMAIL?: string
+  RESEND_API_KEY?: string
+  SENDGRID_API_KEY?: string
+  MAIL_FROM?: string
+  // ── LLM(AI) 연동: 키는 Cloudflare 시크릿으로만 주입. 프론트에 노출 금지. ──
+  // 나중에 설정에서 키를 바꾸려면 `wrangler pages secret put AI_API_KEY` 로 교체.
+  AI_API_KEY?: string          // OpenAI 호환 API 키 (Groq 등)
+  AI_BASE_URL?: string         // 예) https://api.groq.com/openai/v1
+  AI_MODEL?: string            // 예) openai/gpt-oss-120b
   ASSETS: { fetch: (req: Request) => Promise<Response> }
 }
 
@@ -114,15 +122,160 @@ async function verifyGoogleToken(token: string): Promise<any | null> {
   }
 }
 
+/* ════════════════════════════════════════════
+   회사 이메일 자체가입(self-signup) — 헬퍼
+   · 회사 이메일(xxx@회사.com)로 인증코드 발송 → 검증 → 비밀번호 설정
+   · 발급된 로컬 세션 토큰("local-...")으로 로그인 유지 (뷰어 권한)
+   · 모든 로그인은 activity_log 에 기록
+════════════════════════════════════════════ */
+const ONE_FREE_PROVIDERS = new Set([
+  'gmail.com','naver.com','daum.net','hanmail.net','nate.com','kakao.com',
+  'yahoo.com','hotmail.com','outlook.com','icloud.com','live.com','aol.com',
+  'protonmail.com','proton.me','yandex.com','qq.com','163.com','126.com'
+])
+
+function normEmail(s: string): string { return String(s || '').trim().toLowerCase() }
+function emailDomain(email: string): string { const i = email.indexOf('@'); return i < 0 ? '' : email.slice(i + 1) }
+function isValidEmail(email: string): boolean { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) }
+function gen6(): string { return String(Math.floor(100000 + Math.random() * 900000)) }
+function randToken(prefix: string): string {
+  const a = new Uint8Array(24); crypto.getRandomValues(a)
+  let h = ''; for (const x of a) h += x.toString(16).padStart(2, '0')
+  return prefix + h
+}
+function bufToHex(buf: ArrayBuffer): string {
+  const a = new Uint8Array(buf); let h = ''
+  for (const x of a) h += x.toString(16).padStart(2, '0')
+  return h
+}
+/** PBKDF2(SHA-256) 비밀번호 해시 */
+async function hashPassword(password: string, saltHex?: string): Promise<{ hash: string; salt: string }> {
+  let salt: Uint8Array
+  if (saltHex) {
+    salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)))
+  } else {
+    salt = new Uint8Array(16); crypto.getRandomValues(salt)
+  }
+  const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, baseKey, 256)
+  return { hash: bufToHex(bits), salt: bufToHex(salt.buffer) }
+}
+async function verifyPassword(password: string, saltHex: string, hashHex: string): Promise<boolean> {
+  const { hash } = await hashPassword(password, saltHex)
+  // 상수시간 비교(간이)
+  if (hash.length !== hashHex.length) return false
+  let diff = 0
+  for (let i = 0; i < hash.length; i++) diff |= hash.charCodeAt(i) ^ hashHex.charCodeAt(i)
+  return diff === 0
+}
+
+/** 허용 도메인 목록(화이트리스트).
+ *  projectId 지정 시: 해당 프로젝트 전용 + 전역('*') 도메인을 합산.
+ *  미지정 시: 모든 도메인(전역+프로젝트별) 합산. */
+async function allowedDomainList(c: any, projectId?: string): Promise<string[]> {
+  try {
+    let q: any
+    if (projectId) {
+      q = c.env.DB.prepare(
+        "SELECT domain FROM allowed_domains WHERE deleted = 0 AND (project_id = ? OR project_id = '*')"
+      ).bind(projectId)
+    } else {
+      q = c.env.DB.prepare('SELECT domain FROM allowed_domains WHERE deleted = 0')
+    }
+    const { results } = await q.all()
+    return Array.from(new Set((results || []).map((r: any) => String(r.domain).toLowerCase())))
+  } catch { return [] }
+}
+
+/** 회사 도메인 가입 가능 여부 검사. 통과 시 {ok:true}, 실패 시 사유.
+ *  projectId 가 주어지면 해당 프로젝트(또는 전역) 화이트리스트만 적용. */
+async function checkSignupDomain(c: any, email: string, projectId?: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!isValidEmail(email)) return { ok: false, reason: '올바른 이메일 형식이 아닙니다.' }
+  const domain = emailDomain(email)
+  if (!domain) return { ok: false, reason: '도메인을 확인할 수 없습니다.' }
+  const wl = await allowedDomainList(c, projectId)
+  if (wl.length > 0) {
+    // 화이트리스트가 설정돼 있으면 그 안에 있는 도메인만 허용
+    if (!wl.includes(domain)) {
+      return { ok: false, reason: '관리자가 허용한 회사 도메인이 아닙니다: @' + domain }
+    }
+    return { ok: true }
+  }
+  // 화이트리스트 미설정: 개인용 무료 메일 제공자는 차단(회사 메일만 허용)
+  if (ONE_FREE_PROVIDERS.has(domain)) {
+    return { ok: false, reason: '회사 이메일(@회사도메인)로만 가입할 수 있습니다. 개인 메일은 사용할 수 없습니다.' }
+  }
+  return { ok: true }
+}
+
+/** 이메일 발송. RESEND_API_KEY 또는 SENDGRID_API_KEY 가 있으면 실제 발송, 없으면 dev-fallback(코드 반환). */
+async function sendVerificationEmail(c: any, email: string, code: string): Promise<{ sent: boolean; devCode?: string; provider?: string }> {
+  const subject = '[SEASTAR 360° 뷰어] 이메일 인증코드'
+  const fromEmail = (c.env?.MAIL_FROM && String(c.env.MAIL_FROM).includes('@')) ? c.env.MAIL_FROM : 'no-reply@seastargo.com'
+  const text = `SEASTAR 360° 위치 뷰어 가입 인증코드: ${code}\n\n이 코드는 10분간 유효합니다. 본인이 요청하지 않았다면 무시하세요.`
+  const html = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+    <h2 style="color:#0b3a5b">SEASTAR 360° 위치 뷰어</h2>
+    <p>아래 인증코드를 입력해 회원가입을 완료하세요.</p>
+    <div style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f1f5f9;padding:16px 24px;border-radius:12px;text-align:center;color:#0b3a5b">${code}</div>
+    <p style="color:#64748b;font-size:13px">이 코드는 10분간 유효합니다. 본인이 요청하지 않았다면 무시하세요.</p>
+  </div>`
+  try {
+    if (c.env?.RESEND_API_KEY) {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + c.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromEmail, to: [email], subject, html, text })
+      })
+      if (res.ok) return { sent: true, provider: 'resend' }
+    } else if (c.env?.SENDGRID_API_KEY) {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + c.env.SENDGRID_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email }] }],
+          from: { email: fromEmail, name: 'SEASTAR 360 Viewer' },
+          subject,
+          content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }]
+        })
+      })
+      if (res.ok || res.status === 202) return { sent: true, provider: 'sendgrid' }
+    }
+  } catch (e) { /* 발송 실패 → dev-fallback */ }
+  // dev-fallback: 메일 발송 미설정/실패 시 코드 자체를 응답에 포함(개발/시연용)
+  return { sent: false, devCode: code }
+}
+
+/** 로컬 세션 토큰 검증 → 사용자 반환(없으면 null) */
+async function resolveLocalSession(c: any, token: string): Promise<any | null> {
+  try {
+    const sess: any = await c.env.DB.prepare(
+      'SELECT email, expires_at, revoked FROM local_sessions WHERE token = ?'
+    ).bind(token).first()
+    if (!sess || sess.revoked || (sess.expires_at && Date.now() > sess.expires_at)) return null
+    const u: any = await c.env.DB.prepare(
+      'SELECT email, name FROM local_users WHERE email = ? AND deleted = 0'
+    ).bind(sess.email).first()
+    if (!u) return null
+    return { email: String(u.email).toLowerCase(), name: u.name || '', picture: '', _local: true }
+  } catch { return null }
+}
+
 /** Authorization: Bearer <idToken> 에서 검증된 사용자 반환 (없으면 null) */
 async function getUser(c: any): Promise<any | null> {
   const auth = c.req.header('Authorization') || ''
   const m = auth.match(/^Bearer\s+(.+)$/i)
   if (!m) return null
+  const token = m[1]
   // 데모 토큰 우선 처리 (구글 로그인 없이 바로 진입/테스트)
-  const demo = demoUserFromToken(m[1])
+  const demo = demoUserFromToken(token)
   if (demo) return demo
-  const payload = await verifyGoogleToken(m[1])
+  // 회사 이메일 자체가입 로컬 세션 토큰 ("local-...")
+  if (token.startsWith('local-')) {
+    const lu = await resolveLocalSession(c, token)
+    if (lu) return lu
+    return null
+  }
+  const payload = await verifyGoogleToken(token)
   if (!payload) return null
   return { email: String(payload.email).toLowerCase(), name: payload.name || '', picture: payload.picture || '' }
 }
@@ -162,8 +315,293 @@ app.get('/api/auth/me', async (c) => {
     if (rr) request_status = rr.status
   }
   // 실제 로그인(데모 제외)만 로그 기록
-  if (!user._demo) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role } })
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, request_status, super_admin: superAdmin(c) })
+  if (!user._demo) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role, local: !!user._local } })
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, request_status, super_admin: superAdmin(c) })
+})
+
+/* ════════════════════════════════════════════
+   AI(LLM) 연동 — OpenAI 호환 프록시
+   · 키(AI_API_KEY)는 Cloudflare 시크릿으로만 주입 → 프론트에 절대 노출 안 함
+   · 나중에 키 교체: `npx wrangler pages secret put AI_API_KEY`
+   · GET  /api/ai/config : 활성 여부 + 모델명만 반환(키는 미반환)
+   · POST /api/ai/chat   : { messages:[{role,content}], model?, temperature? } → 응답
+════════════════════════════════════════════ */
+const AI_DEFAULT_BASE = 'https://api.groq.com/openai/v1'
+const AI_DEFAULT_MODEL = 'openai/gpt-oss-120b'
+
+app.get('/api/ai/config', async (c) => {
+  const enabled = !!(c.env?.AI_API_KEY)
+  return c.json({
+    enabled,
+    model: c.env?.AI_MODEL || AI_DEFAULT_MODEL,
+    base_url: c.env?.AI_BASE_URL || AI_DEFAULT_BASE,
+    note: enabled
+      ? 'AI 연동이 활성화되어 있습니다.'
+      : 'AI 키가 설정되지 않았습니다. 관리자가 AI_API_KEY 시크릿을 설정하면 활성화됩니다.'
+  })
+})
+
+app.post('/api/ai/chat', async (c) => {
+  // 로그인 사용자만 사용 가능(키/비용 보호)
+  const user = await getUser(c)
+  if (!user) return c.json({ error: '로그인이 필요합니다.' }, 401)
+
+  const apiKey = c.env?.AI_API_KEY
+  if (!apiKey) {
+    return c.json({
+      error: 'AI 키가 설정되지 않았습니다. 관리자가 설정에서 AI_API_KEY 시크릿을 등록해야 합니다.',
+      hint: 'npx wrangler pages secret put AI_API_KEY'
+    }, 503)
+  }
+
+  let body: any = {}
+  try { body = await c.req.json() } catch { body = {} }
+  const messages = Array.isArray(body.messages) ? body.messages : null
+  if (!messages || !messages.length) return c.json({ error: 'messages 배열이 필요합니다.' }, 400)
+
+  const baseUrl = (c.env?.AI_BASE_URL || AI_DEFAULT_BASE).replace(/\/$/, '')
+  const model = body.model || c.env?.AI_MODEL || AI_DEFAULT_MODEL
+  const temperature = (typeof body.temperature === 'number') ? body.temperature : 1
+
+  try {
+    const resp = await fetch(baseUrl + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature,
+        max_completion_tokens: Math.min(body.max_tokens || 4096, 8192),
+        top_p: 1,
+        stream: false
+      })
+    })
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      return c.json({ error: 'AI 제공자 오류(' + resp.status + ')', detail: errText.slice(0, 300) }, 502)
+    }
+    const data: any = await resp.json()
+    const content = data?.choices?.[0]?.message?.content ?? ''
+    await logActivity(c, 'ai.chat', { actor: user, targetType: 'ai', detail: { model } }).catch(() => {})
+    return c.json({ content, model, usage: data?.usage || null })
+  } catch (e: any) {
+    return c.json({ error: 'AI 호출 실패', detail: String(e).slice(0, 200) }, 502)
+  }
+})
+
+/* ════════════════════════════════════════════
+   회사 이메일 자체가입(self-signup) — API
+   1) POST /api/signup/send-code   : 회사 이메일로 인증코드 발송
+   2) POST /api/signup/verify      : 인증코드 + 비밀번호 → 계정 생성 + 자동 로그인
+   3) POST /api/signup/login       : 이메일 + 비밀번호 → 로컬 세션 토큰 발급
+   4) POST /api/signup/logout      : 세션 무효화
+════════════════════════════════════════════ */
+
+// 가입 정책 안내(프론트가 폼 표시 전 호출). 화이트리스트 존재 여부 알림.
+//  ?project_id=<id> 지정 시 해당 프로젝트 전용 정책.
+app.get('/api/signup/policy', async (c) => {
+  const projectId = c.req.query('project_id') || undefined
+  const wl = await allowedDomainList(c, projectId)
+  return c.json({
+    whitelist_enabled: wl.length > 0,
+    allowed_domains: wl,
+    project_id: projectId || null,
+    note: wl.length > 0 ? '아래 회사 도메인 이메일로만 가입할 수 있습니다.' : '회사 이메일(@회사도메인)로 가입할 수 있습니다. 개인 메일은 사용할 수 없습니다.'
+  })
+})
+
+// 1) 인증코드 발송
+app.post('/api/signup/send-code', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = normEmail(body.email)
+  const projectId = body.project_id || undefined
+  const chk = await checkSignupDomain(c, email, projectId)
+  if (!chk.ok) return c.json({ error: chk.reason }, 400)
+
+  // 이미 가입된 계정인지 확인
+  const exist: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ? AND deleted = 0').bind(email).first().catch(() => null)
+  if (exist) return c.json({ error: '이미 가입된 이메일입니다. 로그인해 주세요.', already: true }, 409)
+
+  // 재발송 쿨다운: 최근 60초 내 발송 코드가 있으면 차단
+  const recent: any = await c.env.DB.prepare(
+    'SELECT created_at FROM email_codes WHERE email = ? AND purpose = ? AND consumed = 0 ORDER BY created_at DESC LIMIT 1'
+  ).bind(email, 'signup').first().catch(() => null)
+  if (recent && Date.now() - recent.created_at < 60000) {
+    return c.json({ error: '잠시 후 다시 시도해 주세요. (1분에 1회)' }, 429)
+  }
+
+  const code = gen6()
+  const now = Date.now()
+  const expires = now + 10 * 60 * 1000 // 10분
+  // 기존 미사용 코드는 무효화
+  await c.env.DB.prepare('UPDATE email_codes SET consumed = 1 WHERE email = ? AND purpose = ? AND consumed = 0').bind(email, 'signup').run().catch(() => {})
+  await c.env.DB.prepare(
+    'INSERT INTO email_codes (id, email, code, purpose, created_at, expires_at, attempts, consumed) VALUES (?, ?, ?, ?, ?, ?, 0, 0)'
+  ).bind(randToken('ec-'), email, code, 'signup', now, expires).run()
+
+  const mail = await sendVerificationEmail(c, email, code)
+  await logActivity(c, 'signup.code_sent', { actor: { email }, targetType: 'signup', targetId: email, detail: { provider: mail.provider || 'dev-fallback' } })
+  const resp: any = { success: true, sent: mail.sent, email }
+  if (!mail.sent && mail.devCode) {
+    // 메일 발송 미설정/실패 시: 시연/개발용으로 코드 직접 반환
+    resp.dev_code = mail.devCode
+    resp.dev_note = '메일 발송이 설정되지 않아 인증코드를 직접 반환합니다(개발/시연용). RESEND_API_KEY 또는 SENDGRID_API_KEY 시크릿을 설정하면 실제 메일이 발송됩니다.'
+  }
+  return c.json(resp)
+})
+
+// 2) 인증코드 검증 + 계정 생성 + 자동 로그인
+app.post('/api/signup/verify', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = normEmail(body.email)
+  const code = String(body.code || '').trim()
+  const password = String(body.password || '')
+  const name = String(body.name || '').trim()
+  const projectId = body.project_id || undefined
+
+  const chk = await checkSignupDomain(c, email, projectId)
+  if (!chk.ok) return c.json({ error: chk.reason }, 400)
+  if (!/^\d{6}$/.test(code)) return c.json({ error: '인증코드 6자리를 입력해 주세요.' }, 400)
+  if (password.length < 8) return c.json({ error: '비밀번호는 8자 이상이어야 합니다.' }, 400)
+
+  const row: any = await c.env.DB.prepare(
+    'SELECT id, code, expires_at, attempts, consumed FROM email_codes WHERE email = ? AND purpose = ? AND consumed = 0 ORDER BY created_at DESC LIMIT 1'
+  ).bind(email, 'signup').first().catch(() => null)
+  if (!row) return c.json({ error: '인증코드를 먼저 발송해 주세요.' }, 400)
+  if (row.attempts >= 5) {
+    await c.env.DB.prepare('UPDATE email_codes SET consumed = 1 WHERE id = ?').bind(row.id).run().catch(() => {})
+    return c.json({ error: '시도 횟수를 초과했습니다. 코드를 다시 발송해 주세요.' }, 429)
+  }
+  if (Date.now() > row.expires_at) return c.json({ error: '인증코드가 만료되었습니다. 다시 발송해 주세요.' }, 400)
+  if (row.code !== code) {
+    await c.env.DB.prepare('UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?').bind(row.id).run().catch(() => {})
+    return c.json({ error: '인증코드가 일치하지 않습니다.' }, 400)
+  }
+
+  // 코드 소모
+  await c.env.DB.prepare('UPDATE email_codes SET consumed = 1 WHERE id = ?').bind(row.id).run().catch(() => {})
+
+  // 계정 생성/갱신
+  const { hash, salt } = await hashPassword(password)
+  const now = Date.now()
+  await c.env.DB.prepare(
+    `INSERT INTO local_users (email, name, domain, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0)
+     ON CONFLICT(email) DO UPDATE SET name = excluded.name, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
+  ).bind(email, name || email.split('@')[0], emailDomain(email), hash, salt, now, now).run()
+
+  // 자동 로그인: 세션 토큰 발급
+  const token = randToken('local-')
+  const exp = now + 30 * 24 * 60 * 60 * 1000 // 30일
+  await c.env.DB.prepare('INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)')
+    .bind(token, email, now, exp).run()
+  await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
+
+  await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email) } })
+  return c.json({ success: true, token, email, name: name || email.split('@')[0], role: 'viewer' })
+})
+
+// 3) 로그인(이메일 + 비밀번호)
+app.post('/api/signup/login', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = normEmail(body.email)
+  const password = String(body.password || '')
+  if (!isValidEmail(email) || !password) return c.json({ error: '이메일과 비밀번호를 입력해 주세요.' }, 400)
+
+  const u: any = await c.env.DB.prepare(
+    'SELECT email, name, pw_hash, pw_salt FROM local_users WHERE email = ? AND deleted = 0'
+  ).bind(email).first().catch(() => null)
+  if (!u) return c.json({ error: '가입되지 않은 이메일이거나 비밀번호가 올바르지 않습니다.' }, 401)
+  const ok = await verifyPassword(password, u.pw_salt, u.pw_hash)
+  if (!ok) {
+    await logActivity(c, 'auth.login_fail', { actor: { email }, targetType: 'local_user', targetId: email })
+    return c.json({ error: '가입되지 않은 이메일이거나 비밀번호가 올바르지 않습니다.' }, 401)
+  }
+
+  const now = Date.now()
+  const token = randToken('local-')
+  const exp = now + 30 * 24 * 60 * 60 * 1000
+  await c.env.DB.prepare('INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)')
+    .bind(token, email, now, exp).run()
+  await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
+  // auth.login 은 /api/auth/me 에서 기록되므로 여기선 세션 발급만
+  return c.json({ success: true, token, email: u.email, name: u.name || u.email.split('@')[0], role: 'viewer' })
+})
+
+// 4) 로그아웃(세션 무효화)
+app.post('/api/signup/logout', async (c) => {
+  const auth = c.req.header('Authorization') || ''
+  const m = auth.match(/^Bearer\s+(local-.+)$/i)
+  if (m) await c.env.DB.prepare('UPDATE local_sessions SET revoked = 1 WHERE token = ?').bind(m[1]).run().catch(() => {})
+  return c.json({ success: true })
+})
+
+/* ── 회사 도메인 화이트리스트 관리(슈퍼관리자 전용, 프로젝트별) ──
+   · GET    /api/allowed-domains?project_id=<id|*>  목록(프로젝트별, 미지정 시 전체)
+   · POST   /api/allowed-domains  { domain, project_id?, note? }
+   · DELETE /api/allowed-domains/:id  (단건 삭제 by id) */
+app.get('/api/allowed-domains', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const projectId = c.req.query('project_id')
+  let rows: any
+  if (projectId) {
+    rows = await c.env.DB.prepare(
+      'SELECT id, project_id, domain, note, added_by, created_at FROM allowed_domains WHERE deleted = 0 AND project_id = ? ORDER BY created_at DESC'
+    ).bind(projectId).all()
+  } else {
+    rows = await c.env.DB.prepare(
+      'SELECT id, project_id, domain, note, added_by, created_at FROM allowed_domains WHERE deleted = 0 ORDER BY project_id, created_at DESC'
+    ).all()
+  }
+  return c.json({ data: rows.results || [] })
+})
+app.post('/api/allowed-domains', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const domain = String(body.domain || '').trim().toLowerCase().replace(/^@/, '')
+  const projectId = String(body.project_id || '*').trim() || '*'
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return c.json({ error: '올바른 도메인을 입력해 주세요. (예: company.com)' }, 400)
+  const id = randToken('dom-')
+  await c.env.DB.prepare(
+    `INSERT INTO allowed_domains (id, project_id, domain, note, added_by, created_at, deleted) VALUES (?, ?, ?, ?, ?, ?, 0)
+     ON CONFLICT(project_id, domain) DO UPDATE SET deleted = 0, note = excluded.note`
+  ).bind(id, projectId, domain, body.note || '', su.email, Date.now()).run()
+  await logActivity(c, 'domain.add', { actor: su, targetType: 'domain', targetId: domain, detail: { project_id: projectId } })
+  return c.json({ success: true, domain, project_id: projectId })
+})
+app.delete('/api/allowed-domains/:id', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const id = decodeURIComponent(c.req.param('id'))
+  // id 또는 (하위호환) domain 으로 삭제 허용
+  await c.env.DB.prepare('UPDATE allowed_domains SET deleted = 1 WHERE id = ? OR domain = ?').bind(id, id.toLowerCase()).run()
+  await logActivity(c, 'domain.remove', { actor: su, targetType: 'domain', targetId: id })
+  return c.json({ success: true })
+})
+
+/* ── 가입 사용자 목록(슈퍼관리자 전용) — 로그인 기록과 함께 관리 ── */
+app.get('/api/local-users', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT email, name, domain, created_at, last_login_at FROM local_users WHERE deleted = 0 ORDER BY created_at DESC'
+  ).all()
+  return c.json({ data: results || [] })
+})
+app.delete('/api/local-users/:email', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const email = decodeURIComponent(c.req.param('email')).toLowerCase()
+  await c.env.DB.prepare('UPDATE local_users SET deleted = 1, updated_at = ? WHERE email = ?').bind(Date.now(), email).run()
+  await c.env.DB.prepare('UPDATE local_sessions SET revoked = 1 WHERE email = ?').bind(email).run().catch(() => {})
+  await logActivity(c, 'local_user.delete', { actor: su, targetType: 'local_user', targetId: email })
+  return c.json({ success: true })
 })
 
 /* ════════════════════════════════════════════

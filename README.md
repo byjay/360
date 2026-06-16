@@ -584,3 +584,18 @@ E2E: 생성 3개→마커/목록 3, 이동 좌표 반영, 삭제 후 2개 — **
   - `PDF.load` 타임아웃 경쟁(`_withTimeout`) 도입 — worker 2.5초 내 무응답 시 즉시 메인스레드 파싱으로 폴백, 무한 로딩 차단
   - 결과: 업로드→화면 표시 **13.8초 → 0.7초 (18배 개선)**, E2E 검증 완료
 - **드래그 앤 드롭 업로드 추가**: 도면 영역에 PDF/PNG/JPG를 끌어다 놓으면 즉시 로드 (디자이너 모드), 드래그오버 시각 피드백(골드 테두리)
+
+## 업데이트 (이번 세션)
+- **PDF 주석(ezPDF 최소 구현)**: 형광펜/사각형/자유선/텍스트메모 + 색상 선택 + 실행취소 + 페이지 일괄삭제. 페이지별 격리 저장, 배포본에 함께 직렬화/복원.
+- **바늘형 핀** + **핀 작업 팝업(PinActionPop)**: 핀 클릭 시 보기/이동/수정/삭제 전용 팝업.
+- **회사 이메일 자체가입(CompanyAuth)** + **관리자 프로젝트별 도메인 화이트리스트** 관리(추가/삭제) + **가입 사용자 목록**.
+- **AI(LLM) 연동 라우트**: `GET /api/ai/config`(활성/모델만), `POST /api/ai/chat`(로그인 필요, OpenAI 호환 프록시).
+  - 키는 **Cloudflare 시크릿** `AI_API_KEY`로만 주입(프론트 노출 없음). 설정/교체: `npx wrangler pages secret put AI_API_KEY`
+  - 선택 시크릿: `AI_BASE_URL`(기본 Groq), `AI_MODEL`(기본 openai/gpt-oss-120b)
+
+### 새 API 엔드포인트
+- `GET /api/ai/config` — AI 활성 여부 + 모델/base_url (키 미반환)
+- `POST /api/ai/chat` — `{messages:[{role,content}], model?, temperature?}` (로그인 필요; 키 없으면 503)
+- `GET/POST/DELETE /api/allowed-domains` — 프로젝트별(`project_id`, `*`=전체) 도메인 화이트리스트
+- `POST /api/signup/{send-code,verify,login,logout}` — 회사 이메일 자체가입
+- `GET/DELETE /api/local-users` — 가입 사용자 관리(관리자)

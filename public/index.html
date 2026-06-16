@@ -290,6 +290,33 @@
     <button id="tb-iso" class="tb-btn" title="ISO 3D 뷰 (평면 ↔ 입체)" aria-label="ISO 3D 뷰">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5L12 2z"/><path d="M2 7.5V16l10 5.5V13" opacity=".85"/><path d="M22 7.5V16l-10 5.5" opacity=".55"/></svg>
     </button>
+    <span class="tb-sep"></span>
+
+    <!-- ═══ PDF 주석 도구 (최소 ezPDF · 설계자 전용) ═══ -->
+    <span id="tb-anno-group" class="tb-anno-group hidden" role="group" aria-label="주석 도구">
+      <button id="tb-anno-cursor" class="tb-btn tb-anno active" data-tool="cursor" title="선택/이동 (V)" aria-label="선택">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 8-6 1.5L11 19 5 3z"/></svg>
+      </button>
+      <button id="tb-anno-hl" class="tb-btn tb-anno" data-tool="highlight" title="형광펜 (영역 강조)" aria-label="형광펜">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h6"/><path d="M15 5l4 4L9 19l-5 1 1-5L15 5z"/></svg>
+      </button>
+      <button id="tb-anno-rect" class="tb-btn tb-anno" data-tool="rect" title="사각형" aria-label="사각형">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
+      </button>
+      <button id="tb-anno-pen" class="tb-btn tb-anno" data-tool="pen" title="자유선 그리기" aria-label="자유선">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c4-8 7 4 11-3s4 1 7-2"/></svg>
+      </button>
+      <button id="tb-anno-text" class="tb-btn tb-anno" data-tool="text" title="텍스트 메모" aria-label="텍스트 메모">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+      </button>
+      <input id="tb-anno-color" class="tb-anno-color" type="color" value="#ff3b30" title="주석 색상" aria-label="주석 색상" />
+      <button id="tb-anno-undo" class="tb-btn tb-anno" title="실행취소 (마지막 주석 삭제)" aria-label="실행취소">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/></svg>
+      </button>
+      <button id="tb-anno-clear" class="tb-btn tb-anno" title="현재 페이지 주석 모두 삭제" aria-label="모두 삭제">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>
+    </span>
 
     <span class="tb-flex"></span>
 
@@ -306,33 +333,33 @@
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar">
 
-      <!-- 프로젝트 / 데크(선박 층) 관리 (designer only) -->
+      <!-- 프로젝트 / 구역 관리 (designer only) -->
       <div id="section-projects" class="sidebar-section hidden">
         <div class="sidebar-section-head">
           <span class="sidebar-section-title">📁 프로젝트</span>
           <button id="btn-new-project" class="btn-mini" type="button" title="프로젝트 생성">+ 생성</button>
         </div>
-        <select id="project-select" class="project-select" aria-label="프로젝트 선택">
-          <option value="">— 프로젝트 선택 —</option>
-        </select>
+        <!-- 현재 프로젝트명 표시(이동 기능 제거: 드롭다운 전환 없음) -->
+        <div id="project-current" class="project-current">— 프로젝트 선택 —</div>
         <div id="project-actions" class="project-actions hidden">
           <button id="btn-delete-project" class="btn-mini danger" type="button" title="프로젝트 삭제">프로젝트 삭제</button>
         </div>
 
         <div id="decks-block" class="decks-block hidden">
           <div class="sidebar-section-head">
-            <span class="sidebar-section-title">🛳️ 데크 (선박 층)</span>
-            <button id="btn-new-deck" class="btn-mini" type="button" title="데크 생성">+ 생성</button>
+            <span class="sidebar-section-title">🗂️ 구역</span>
+            <button id="btn-new-deck" class="btn-mini" type="button" title="구역 생성">+ 생성</button>
           </div>
           <div id="decks-list" class="decks-list"></div>
-          <div id="decks-empty" class="decks-empty">데크가 없습니다. + 생성으로 추가하세요.</div>
+          <div id="decks-empty" class="decks-empty">구역이 없습니다. + 생성으로 추가하세요.</div>
         </div>
       </div>
 
-      <!-- Upload -->
+      <!-- Upload — 선택된 구역에 도면(PDF) 등록 (designer only) -->
       <div id="section-upload" class="sidebar-section">
-        <button id="btn-upload-drawing" class="btn-upload">+ 도면 업로드 (PDF/PNG/JPG)</button>
+        <button id="btn-upload-drawing" class="btn-upload">+ 구역 도면 등록 (PDF/PNG/JPG)</button>
         <input id="input-drawing" type="file" accept=".pdf,.png,.jpg,.jpeg" hidden />
+        <p id="upload-zone-hint" class="place-hint">구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.</p>
         <button id="btn-import-json" class="btn-upload secondary hidden">JSON 포인트 가져오기</button>
         <input id="input-json" type="file" accept=".json" hidden />
       </div>
@@ -434,6 +461,10 @@
           <div id="zones-layer" class="zones-layer"></div>
           <!-- Zones SVG overlay (원/다각형/사각형 영역 + 드래그 미리보기) — viewBox 0 0 100 100 (% 좌표) -->
           <svg id="zones-svg" class="zones-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <!-- PDF 주석 레이어 (형광펜/사각형/자유선) — viewBox 0 0 1000 1000 (정밀 % 좌표) -->
+          <svg id="anno-svg" class="anno-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <!-- 텍스트 메모 레이어 -->
+          <div id="anno-text-layer" class="anno-text-layer"></div>
           <!-- Pins layer -->
           <div id="pins-layer" class="pins-layer"></div>
           <!-- Pending pin pulse -->
@@ -460,10 +491,10 @@
             <button id="btn-cancel-pin" class="pf-close" type="button" title="취소" aria-label="취소">✕</button>
           </div>
 
-          <!-- 위치명 주소창 -->
-          <div class="pf-addr">
+          <!-- 위치명 주소창 — 구역+포인트 흐름에서는 기본 숨김(번호 자동부여), 필요시에만 표시 -->
+          <div id="pf-addr" class="pf-addr hidden">
             <svg class="pf-addr-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="input-pin-label" type="text" placeholder="위치명 (예: No.5 Cargo Tank)" autocomplete="off" />
+            <input id="input-pin-label" type="text" placeholder="위치명 (선택 · 비우면 번호 자동부여)" autocomplete="off" />
           </div>
 
           <!-- 아이콘 툴바: 사진/영상 · 문서 · 노트 · URL -->
@@ -858,6 +889,35 @@
   }
 </script>
 <!-- ═══ 전역 오버레이 모달 (화면 전환과 무관하게 동작) ═══ -->
+
+  <!-- ═══ 핀 작업 전용 팝업 (디자이너: 핀 선택 시 — 이동/수정/사진추가/삭제) ═══ -->
+  <div id="pin-action-pop" class="pin-action-pop hidden" role="dialog" aria-modal="true" aria-labelledby="pap-title">
+    <div class="pin-action-backdrop"></div>
+    <div class="pin-action-card">
+      <div class="pap-head">
+        <span class="pap-no" id="pap-no">#1</span>
+        <h3 id="pap-title" class="pap-title">포인트</h3>
+        <button id="pap-close" class="pap-close" type="button" aria-label="닫기">×</button>
+      </div>
+      <div id="pap-meta" class="pap-meta">위치명 없음 · 미디어 없음</div>
+      <div class="pap-actions">
+        <button id="pap-view" class="pap-btn pap-view" type="button">
+          <i class="fa-solid fa-panorama"></i><span>360° 보기</span>
+        </button>
+        <button id="pap-move" class="pap-btn pap-move" type="button">
+          <i class="fa-solid fa-up-down-left-right"></i><span>위치 이동</span>
+        </button>
+        <button id="pap-edit" class="pap-btn pap-edit" type="button">
+          <i class="fa-solid fa-pen"></i><span>수정 / 사진 추가</span>
+        </button>
+        <button id="pap-del" class="pap-btn pap-del" type="button">
+          <i class="fa-solid fa-trash"></i><span>삭제</span>
+        </button>
+      </div>
+      <p class="pap-hint">‘위치 이동’을 누른 뒤 도면에서 핀을 드래그하면 위치가 바뀝니다. 모든 변경은 자동 저장됩니다.</p>
+    </div>
+  </div>
+
   <!-- 로그인 안내 모달 (디자이너 모드 진입 시 미로그인/권한없음) -->
   <div id="login-gate" class="signin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="login-gate-title">
     <div class="signin-gate-backdrop"></div>
@@ -901,7 +961,81 @@
         Contact Admin (<span class="signin-admin-mail">designssir@gmail.com</span>)
       </div>
 
+      <div class="signin-or"><span>회사 이메일로 열람</span></div>
+      <button id="login-gate-company" class="signin-company-btn" type="button" title="회사 이메일로 가입/로그인하여 열람">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        회사 이메일로 가입 / 로그인
+      </button>
+
       <button id="login-gate-cancel" class="signin-cancel" type="button">닫기</button>
+    </div>
+  </div>
+
+  <!-- ═══ 회사 이메일 자체가입 / 로그인 (User Details) ═══ -->
+  <div id="company-gate" class="company-gate hidden" role="dialog" aria-modal="true" aria-labelledby="company-gate-title">
+    <div class="company-gate-backdrop"></div>
+    <div class="company-gate-card">
+      <h2 id="company-gate-title" class="company-title">User Details</h2>
+      <p id="company-gate-sub" class="company-sub">회사 이메일로 인증코드를 받아 가입하세요.</p>
+
+      <div class="company-tabs">
+        <button id="company-tab-signup" class="company-tab active" type="button" data-tab="signup">회원가입</button>
+        <button id="company-tab-login" class="company-tab" type="button" data-tab="login">로그인</button>
+      </div>
+
+      <!-- ── 회원가입 패널 ── -->
+      <div id="company-panel-signup" class="company-panel">
+        <div id="company-step-email" class="company-step">
+          <label class="company-field">
+            <span class="company-label">회사 이메일 주소</span>
+            <input id="cg-email" class="company-input" type="email" placeholder="you@yourcompany.com" autocomplete="email" />
+          </label>
+          <p id="cg-policy-note" class="company-note">회사 이메일(@회사도메인)로만 가입할 수 있습니다.</p>
+          <button id="cg-send-code" class="company-primary-btn" type="button">인증코드 받기</button>
+        </div>
+        <div id="company-step-verify" class="company-step hidden">
+          <div class="company-verified-line">
+            <span id="cg-verify-email" class="company-verified-email"></span>
+            <button id="cg-change-email" class="company-change-btn" type="button">이메일 변경</button>
+          </div>
+          <label class="company-field">
+            <span class="company-label">인증코드 (6자리)</span>
+            <input id="cg-code" class="company-input company-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+          </label>
+          <div id="cg-dev-code" class="company-devcode hidden"></div>
+          <label class="company-field">
+            <span class="company-label">이름 (선택)</span>
+            <input id="cg-name" class="company-input" type="text" placeholder="홍길동" autocomplete="name" />
+          </label>
+          <label class="company-field">
+            <span class="company-label">비밀번호 (8자 이상)</span>
+            <input id="cg-pw" class="company-input" type="password" placeholder="새 비밀번호" autocomplete="new-password" />
+          </label>
+          <label class="company-field">
+            <span class="company-label">비밀번호 확인</span>
+            <input id="cg-pw2" class="company-input" type="password" placeholder="비밀번호 확인" autocomplete="new-password" />
+          </label>
+          <button id="cg-resend" class="company-link-btn" type="button">코드 재발송</button>
+          <button id="cg-create" class="company-primary-btn" type="button">가입 완료</button>
+        </div>
+      </div>
+
+      <!-- ── 로그인 패널 ── -->
+      <div id="company-panel-login" class="company-panel hidden">
+        <label class="company-field">
+          <span class="company-label">회사 이메일 주소</span>
+          <input id="cg-login-email" class="company-input" type="email" placeholder="you@yourcompany.com" autocomplete="email" />
+        </label>
+        <label class="company-field">
+          <span class="company-label">비밀번호</span>
+          <input id="cg-login-pw" class="company-input" type="password" placeholder="비밀번호" autocomplete="current-password" />
+        </label>
+        <button id="cg-login-btn" class="company-primary-btn" type="button">로그인</button>
+      </div>
+
+      <div id="company-gate-error" class="company-error hidden"></div>
+      <p class="company-footer-note">🔒 이메일은 열람 권한 관리에만 사용되며 제3자에게 공유되지 않습니다.</p>
+      <button id="company-gate-cancel" class="company-cancel" type="button">닫기</button>
     </div>
   </div>
 
@@ -979,6 +1113,12 @@
         <button id="adm-tab-requests" class="adm-tab" type="button" role="tab">
           <i class="fa-solid fa-inbox"></i> 사용 신청 <span id="adm-req-badge" class="adm-req-badge hidden">0</span>
         </button>
+        <button id="adm-tab-domains" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-at"></i> 회사 도메인
+        </button>
+        <button id="adm-tab-members" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-user-check"></i> 가입 사용자
+        </button>
         <button id="adm-tab-logs" class="adm-tab" type="button" role="tab">
           <i class="fa-solid fa-clock-rotate-left"></i> 활동 로그
         </button>
@@ -1023,6 +1163,40 @@
             <div id="adm-req-list" class="adm-req-list"></div>
           </div>
         </div>
+      </section>
+
+      <!-- 패널: 회사 도메인 (프로젝트별 허용 도메인 권한 세팅) -->
+      <section id="adm-panel-domains" class="adm-panel hidden">
+        <p class="adm-domain-intro">
+          허용된 회사 도메인의 이메일을 가진 사람만 인증코드로 가입·열람할 수 있습니다.
+          <b>프로젝트별로</b> 허용 도메인을 다르게 지정할 수 있고, <b>전체 공통</b>(모든 프로젝트)으로도 추가할 수 있습니다.
+          도메인이 하나도 없으면 개인용 무료 메일을 제외한 모든 회사 메일이 허용됩니다.
+        </p>
+        <div class="domain-add">
+          <select id="domain-project-select" class="admin-gate-input" aria-label="대상 프로젝트">
+            <option value="*">전체 공통 (모든 프로젝트)</option>
+          </select>
+          <input id="domain-input" class="admin-gate-input" type="text" autocomplete="off" placeholder="company.com" aria-label="회사 도메인" />
+          <button id="domain-add-btn" class="admin-gate-btn primary" type="button">추가</button>
+        </div>
+        <div id="domain-add-error" class="admin-gate-error hidden"></div>
+        <div id="domains-list" class="domains-list"></div>
+      </section>
+
+      <!-- 패널: 가입 사용자 (회사 이메일 자체가입자 목록 + 로그인 기록) -->
+      <section id="adm-panel-members" class="adm-panel hidden">
+        <div class="members-toolbar">
+          <span id="members-total" class="log-total">0명</span>
+          <button id="members-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <div class="member-grid-head">
+          <span class="mem-col-email">이메일</span>
+          <span class="mem-col-name">이름</span>
+          <span class="mem-col-domain">도메인</span>
+          <span class="mem-col-login">최근 로그인</span>
+          <span class="mem-col-act"></span>
+        </div>
+        <div id="members-list" class="members-list"></div>
       </section>
 
       <!-- 패널: 활동 로그 (슈퍼관리자 전용 — 모든 기록 관리) -->
