@@ -3215,3 +3215,19 @@ html, body {
 .drop-hint.dragover .drop-icon{ transform:scale(1.15); }
 .drop-hint{ transition:transform .18s, box-shadow .18s, background .18s, border-color .18s; }
 .drop-hint .drop-icon{ transition:transform .18s; }
+
+/* ═══════════════════════════════════════════════════════════
+   녹색 구슬 핀 (pin-marker-green) — 검은 라벨창 제거, 광택 구체
+   ─────────────────────────────────────────────────────────── */
+.pin-marker-green .pin-marker-label{ display:none !important; }  /* 검은색 라벨 창 완전 제거 */
+.pin-marker-green .pin-pin svg{ width:34px; height:48px; }
+.pin-marker-green .pin-pin{ filter:none; }
+.pin-marker-green:hover .pin-pin{ transform:scale(1.15); }
+.pin-marker-green.focused .pin-pin{ transform:scale(1.2); }
+.pin-marker-green .pin-pulse{
+  width:30px; height:30px; left:50%; top:15px;
+  transform:translate(-50%,-50%);
+  background:radial-gradient(circle, rgba(126,217,87,.55) 0%, rgba(126,217,87,0) 70%);
+}
+/* 미해결 이슈 뱃지를 녹색 구슬 우상단에 */
+.pin-marker-green .pin-marker-issue{ top:-2px; right:2px; }

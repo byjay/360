@@ -1666,7 +1666,7 @@
       if (force === undefined) el.classList.toggle("hidden");
       else force ? el.classList.remove("hidden") : el.classList.add("hidden");
     },
-    text(id, val)  { this.$(id).textContent = val; },
+    text(id, val)  { const el = this.$(id); if (el) el.textContent = val; },
     val(id)        { return this.$(id).value; },
     clearVal(id)   { this.$(id).value = ""; },
     enable(id)     { this.$(id).disabled = false; },
@@ -1807,17 +1807,30 @@
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
-        // ── 컴팩트 핀: 작고 끝이 뾰족, 머리에는 1자리 숫자만. 라벨은 호버/포커스 시만.
-        const numTxt = pageIdx > 9 ? "9" : String(pageIdx); // 머리는 1자리만 (10+는 9로 압축 표기)
+        marker.classList.add("pin-marker-green"); // 녹색 구슬 핀 스타일
+        // ── 녹색 구슬 핀: 광택 있는 녹색 구(球) + 흰색 받침대(spike). 검은 라벨창은 제거.
         marker.innerHTML = `
-          <div class="pin-marker-label">${this.escapeHtml(pin.label)}</div>
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
-            <svg viewBox="0 0 24 34" xmlns="http://www.w3.org/2000/svg">
-              <defs><filter id="pinshadow" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="1" stdDeviation="1.1" flood-color="rgba(0,0,0,.5)"/></filter></defs>
-              <path class="pin-pin-fill" filter="url(#pinshadow)" d="M12 1C6.2 1 1.5 5.6 1.5 11.2c0 6.6 8.4 19.4 9.5 21 .35.5 1.6.5 1.95 0 1.1-1.6 9.55-14.4 9.55-21C22.5 5.6 17.8 1 12 1z"/>
+            <svg viewBox="0 0 40 56" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <radialGradient id="pgsphere${pageIdx}" cx="38%" cy="32%" r="70%">
+                  <stop offset="0%" stop-color="#c6f78d"/>
+                  <stop offset="38%" stop-color="#7ed957"/>
+                  <stop offset="100%" stop-color="#3ca41f"/>
+                </radialGradient>
+                <linearGradient id="pgspike${pageIdx}" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#ffffff"/>
+                  <stop offset="100%" stop-color="#c9cdd2"/>
+                </linearGradient>
+                <filter id="pgshadow${pageIdx}" x="-40%" y="-20%" width="180%" height="170%">
+                  <feDropShadow dx="0" dy="1.4" stdDeviation="1.6" flood-color="rgba(0,0,0,.42)"/>
+                </filter>
+              </defs>
+              <path d="M20 19 L26 30 Q20 36 14 30 Z" fill="url(#pgspike${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <circle cx="20" cy="15" r="14" fill="url(#pgsphere${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <ellipse cx="15.5" cy="9.5" rx="5.2" ry="3.4" fill="#ffffff" opacity="0.55"/>
             </svg>
-            <span class="pin-pin-num">${numTxt}</span>
             ${issueDot}
           </div>
           <div class="pin-actions">
@@ -1880,8 +1893,9 @@
           marker.addEventListener("click", e => {
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
-            // 디자이너: 클릭 시 바로 사진 X → 핀 선택(액션 아이콘 표시)
             App.setActivePin(pin.id);
+            // 디자이너: 360° 미디어가 있으면 클릭 즉시 팝업 뷰어 실행, 없으면 선택만(액션 아이콘 표시)
+            if (App.pinHasContent(pin)) App.openPano(pin);
           });
           // 액션 아이콘 바인딩 (보기/이동/수정/삭제)
           marker.querySelectorAll(".pin-act").forEach(btn => {
@@ -4290,13 +4304,15 @@
 
     async _renderPdfPage() {
       const canvas = UI.$("pdf-canvas");
+      // 핵심(캔버스 래스터화)은 반드시 성공해야 한다 → 여기서 실패하면 상위 catch 로 전달.
       await PDF.renderPage(State.pdfDoc, State.pdfPage, canvas, 1.5, State.pdfRotation);
-      UI.updatePdfPagination();
       State.pan = { x: 0, y: 0 }; State.zoom = 1;
-      MapCtrl.applyTransform();
-      UI.renderPinsOnMap();
-      UI.renderPinList();      // 페이지 전환 시 현재 페이지 핀 목록 갱신
-      UI.renderPdfThumbs();
+      // 부수 UI 갱신(페이지네이션·핀·썸네일)은 하나가 실패해도 PDF 표시는 유지되도록 개별 격리.
+      try { MapCtrl.applyTransform(); } catch (e) { console.warn("applyTransform", e); }
+      try { UI.updatePdfPagination(); } catch (e) { console.warn("pagination", e); }
+      try { UI.renderPinsOnMap(); } catch (e) { console.warn("pinsOnMap", e); }
+      try { UI.renderPinList(); } catch (e) { console.warn("pinList", e); }
+      try { UI.renderPdfThumbs(); } catch (e) { console.warn("thumbs", e); }
     },
 
     _showMapViewport() {
