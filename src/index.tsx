@@ -226,12 +226,12 @@ async function checkSignupDomain(c: any, email: string, projectId?: string): Pro
 async function sendVerificationEmail(c: any, email: string, code: string): Promise<{ sent: boolean; devCode?: string; provider?: string }> {
   const subject = '[SEASTAR 360° 뷰어] 이메일 인증코드'
   const fromEmail = (c.env?.MAIL_FROM && String(c.env.MAIL_FROM).includes('@')) ? c.env.MAIL_FROM : 'no-reply@seastargo.com'
-  const text = `SEASTAR 360° 위치 뷰어 가입 인증코드: ${code}\n\n이 코드는 10분간 유효합니다. 본인이 요청하지 않았다면 무시하세요.`
+  const text = `SEASTAR 360° 위치 뷰어 가입 인증코드: ${code}\n\n이 코드는 발급 후 1시간 동안만 유효합니다. 본인이 요청하지 않았다면 무시하세요.`
   const html = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
     <h2 style="color:#0b3a5b">SEASTAR 360° 위치 뷰어</h2>
     <p>아래 인증코드를 입력해 회원가입을 완료하세요.</p>
     <div style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f1f5f9;padding:16px 24px;border-radius:12px;text-align:center;color:#0b3a5b">${code}</div>
-    <p style="color:#64748b;font-size:13px">이 코드는 10분간 유효합니다. 본인이 요청하지 않았다면 무시하세요.</p>
+    <p style="color:#64748b;font-size:13px">이 코드는 발급 후 <strong>1시간</strong> 동안만 유효합니다. 본인이 요청하지 않았다면 무시하세요.</p>
   </div>`
   try {
     if (c.env?.RESEND_API_KEY) {
@@ -447,7 +447,7 @@ app.post('/api/signup/send-code', async (c) => {
 
   const code = gen6()
   const now = Date.now()
-  const expires = now + 10 * 60 * 1000 // 10분
+  const expires = now + 60 * 60 * 1000 // 1시간 (요구사항: 1시간 이내 입력해야 유효)
   // 기존 미사용 코드는 무효화
   await c.env.DB.prepare('UPDATE email_codes SET consumed = 1 WHERE email = ? AND purpose = ? AND consumed = 0').bind(email, 'signup').run().catch(() => {})
   await c.env.DB.prepare(
@@ -456,7 +456,7 @@ app.post('/api/signup/send-code', async (c) => {
 
   const mail = await sendVerificationEmail(c, email, code)
   await logActivity(c, 'signup.code_sent', { actor: { email }, targetType: 'signup', targetId: email, detail: { provider: mail.provider || 'dev-fallback', invited: !!chk.invited } })
-  const resp: any = { success: true, sent: mail.sent, email, invited: !!chk.invited }
+  const resp: any = { success: true, sent: mail.sent, email, invited: !!chk.invited, expires_at: expires, valid_minutes: 60 }
   if (chk.invited) {
     const inv = await findInvite(c, email)
     if (inv) { resp.invite_company = inv.company || ''; resp.invite_role = inv.role || 'viewer' }
@@ -478,6 +478,7 @@ app.post('/api/signup/verify', async (c) => {
   const password = String(body.password || '')
   const name = String(body.name || '').trim()
   const company = String(body.company || '').trim()
+  const department = String(body.department || '').trim()
   const projectId = body.project_id || undefined
 
   const chk = await checkSignupDomain(c, email, projectId)
@@ -485,6 +486,8 @@ app.post('/api/signup/verify', async (c) => {
   // 사전 등록(초대) 사용자는 회사명을 반드시 입력하도록 요구
   const invite = chk.invited ? await findInvite(c, email) : null
   if (chk.invited && !company) return c.json({ error: '회사명을 입력해 주세요.' }, 400)
+  if (!name) return c.json({ error: '이름을 입력해 주세요.' }, 400)
+  if (!department) return c.json({ error: '부서/소속을 입력해 주세요.' }, 400)
   if (!/^\d{6}$/.test(code)) return c.json({ error: '인증코드 6자리를 입력해 주세요.' }, 400)
   if (password.length < 8) return c.json({ error: '비밀번호는 8자 이상이어야 합니다.' }, 400)
 
@@ -509,10 +512,18 @@ app.post('/api/signup/verify', async (c) => {
   const { hash, salt } = await hashPassword(password)
   const now = Date.now()
   await c.env.DB.prepare(
-    `INSERT INTO local_users (email, name, domain, company, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0)
-     ON CONFLICT(email) DO UPDATE SET name = excluded.name, company = excluded.company, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
-  ).bind(email, name || email.split('@')[0], emailDomain(email), company || (invite && invite.company) || '', hash, salt, now, now).run()
+    `INSERT INTO local_users (email, name, domain, company, department, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0)
+     ON CONFLICT(email) DO UPDATE SET name = excluded.name, company = excluded.company, department = excluded.department, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
+  ).bind(email, name || email.split('@')[0], emailDomain(email), company || (invite && invite.company) || '', department || '', hash, salt, now, now).run()
+
+  // @seastargo.com 도메인 계정은 설계자(디자이너) 권한 자동 부여 (요구사항)
+  if (emailDomain(email) === 'seastargo.com') {
+    await c.env.DB.prepare(
+      `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0)
+       ON CONFLICT(email) DO UPDATE SET deleted = 0, name = excluded.name, updated_at = excluded.updated_at`
+    ).bind(email, name || email.split('@')[0], 'auto:seastargo-domain', now, now).run().catch(() => {})
+  }
   // 초대 레코드가 있으면 사용 처리(used=1) 및 회사명 동기화
   if (invite) {
     await c.env.DB.prepare('UPDATE invited_users SET used = 1, company = ? WHERE email = ?')
@@ -533,9 +544,10 @@ app.post('/api/signup/verify', async (c) => {
     .bind(token, email, now, exp).run()
   await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
 
-  const grantedRole = (invite && invite.role) ? invite.role : 'viewer'
-  await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email), invited: !!invite, company, role: grantedRole } })
-  return c.json({ success: true, token, email, name: name || email.split('@')[0], company, role: grantedRole, invited: !!invite })
+  let grantedRole = (invite && invite.role) ? invite.role : 'viewer'
+  if (emailDomain(email) === 'seastargo.com') grantedRole = 'designer'
+  await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email), invited: !!invite, company, department, role: grantedRole } })
+  return c.json({ success: true, token, email, name: name || email.split('@')[0], company, department, role: grantedRole, invited: !!invite })
 })
 
 // 3) 로그인(이메일 + 비밀번호)

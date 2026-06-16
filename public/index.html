@@ -374,7 +374,11 @@
       <div id="section-place" class="sidebar-section hidden">
         <button id="btn-place" class="btn-place">+ 위치 포인트 추가</button>
         <p id="place-hint" class="place-hint hidden">도면 위 원하는 위치를 클릭하세요</p>
-        <div class="zone-tools-label">영역 지정 도구</div>
+        <details id="zone-tools-wrap" class="zone-tools-wrap" open>
+        <summary class="zone-tools-label">
+          <span class="ztl-text"><i class="fa-solid fa-draw-polygon ztl-ico"></i> 영역 지정 도구</span>
+          <i class="fa-solid fa-chevron-down ztl-chevron" aria-hidden="true"></i>
+        </summary>
         <div id="zone-tools" class="zone-tools">
           <button id="btn-zone-rect" class="zone-tool" data-shape="rect" title="사각형 영역" aria-label="사각형 영역">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg>
@@ -389,6 +393,7 @@
             <span>선/다각형</span>
           </button>
         </div>
+        </details>
         <p id="zone-hint" class="place-hint hidden">도면 위에서 드래그해 영역(구역)을 그리세요</p>
         <p id="zone-poly-hint" class="place-hint hidden">클릭으로 점을 추가하고, 시작점을 다시 클릭하면 구역이 닫힙니다 (더블클릭/Enter로 완료)</p>
       </div>
@@ -710,6 +715,13 @@
       <span id="pano-location-name" class="pano-location">—</span>
     </div>
     <div class="pano-header-actions">
+      <div id="pano-iso-views" class="pano-iso-views" role="group" aria-label="ISO 4-꼭지점 뷰 전환">
+        <span class="pano-iso-label">ISO</span>
+        <button class="pano-iso-btn" data-iso="0" title="좌상단 꼭지점 뷰 (↖)" aria-label="좌상단 뷰"><span class="iso-corner iso-tl">◤</span></button>
+        <button class="pano-iso-btn" data-iso="1" title="우상단 꼭지점 뷰 (↗)" aria-label="우상단 뷰"><span class="iso-corner iso-tr">◥</span></button>
+        <button class="pano-iso-btn" data-iso="2" title="우하단 꼭지점 뷰 (↘)" aria-label="우하단 뷰"><span class="iso-corner iso-br">◢</span></button>
+        <button class="pano-iso-btn" data-iso="3" title="좌하단 꼭지점 뷰 (↙)" aria-label="좌하단 뷰"><span class="iso-corner iso-bl">◣</span></button>
+      </div>
       <button id="btn-pano-notes" class="btn-pano-notes" title="이슈/필드노트 (현장 협업)" aria-label="이슈 노트">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <span>이슈</span>
@@ -1039,6 +1051,10 @@
           <label class="company-field">
             <span id="cg-company-label" class="company-label">회사명</span>
             <input id="cg-company" class="company-input" type="text" placeholder="(주)씨스타" autocomplete="organization" />
+          </label>
+          <label class="company-field">
+            <span class="company-label">부서 / 소속</span>
+            <input id="cg-dept" class="company-input" type="text" placeholder="예: 설계1팀 / 해양플랜트사업부" autocomplete="organization-title" />
           </label>
           <label class="company-field">
             <span class="company-label">비밀번호 (8자 이상)</span>

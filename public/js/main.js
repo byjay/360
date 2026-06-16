@@ -894,6 +894,33 @@
     /* ── 컨트롤 ── */
     setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); this._invalidate(); },
     resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; this._invalidate(); },
+    /** ISO 코너 뷰: 4개 모서리(꼭지점) 시점으로 전환. corner 0~3 = 좌상/우상/우하/좌하 느낌.
+     *  부드러운 전환을 위해 목표각으로 애니메이션 보간. */
+    setIsoView(corner) {
+      // 4개 꼭지점 방위각(yaw): 45/135/225/315°, 약간 내려보는 피치(-28°)로 등각 느낌
+      const yaws = [45, 135, 225, 315];
+      const c = ((corner % 4) + 4) % 4;
+      this._isoCorner = c;
+      const targetLon = yaws[c];
+      const targetLat = -28;
+      const targetFov = 82; // 등각투상 느낌의 약간 넓은 화각
+      // 현재값 → 목표값 부드럽게(최단 회전 경로)
+      const startLon = this.S.lon, startLat = this.S.lat, startFov = this.S.fov;
+      let dLon = ((targetLon - (startLon % 360)) + 540) % 360 - 180;
+      const t0 = performance.now(), dur = 480;
+      if (this._isoRaf) cancelAnimationFrame(this._isoRaf);
+      const step = (now) => {
+        const k = Math.min(1, (now - t0) / dur);
+        const e = k < .5 ? 2*k*k : 1-Math.pow(-2*k+2,2)/2; // easeInOutQuad
+        this.S.lon = startLon + dLon * e;
+        this.S.lat = startLat + (targetLat - startLat) * e;
+        this.S.fov = startFov + (targetFov - startFov) * e;
+        this._invalidate();
+        if (k < 1) this._isoRaf = requestAnimationFrame(step);
+      };
+      this._isoRaf = requestAnimationFrame(step);
+      return c;
+    },
     toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
     onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; },
@@ -1844,37 +1871,41 @@
         if (hasContent) marker.classList.add("has-content");
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
         marker.dataset.no = pageIdx;
-        // ── 바늘형 핀: 둥근 머리 + 길고 날카로운 바늘 끝(tip). 머리 안에 번호만 작게.
-        const headFill = hasContent ? '#22c55e' : '#e0a526';
-        const headFill2 = hasContent ? '#15803d' : '#9a6a0f';
-        const txtFill = hasContent ? '#0f5a23' : '#6b4a0d';
+        // ── 바늘형 핀(영역=골드와 색상 완전 분리):
+        //    미배치=선명한 코랄레드(#ef4444), 사진 있음=에메랄드(#10b981).
+        //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
+        const headFill  = hasContent ? '#10b981' : '#ef4444';
+        const headFill2 = hasContent ? '#047857' : '#b91c1c';
+        const needleTip = hasContent ? '#064e3b' : '#7f1d1d';
+        const txtFill   = hasContent ? '#065f46' : '#991b1b';
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
-            <svg viewBox="0 0 36 54" xmlns="http://www.w3.org/2000/svg">
+            <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
               <defs>
-                <radialGradient id="pgbody${pageIdx}" cx="38%" cy="34%" r="72%">
+                <radialGradient id="pgbody${pageIdx}" cx="38%" cy="32%" r="74%">
                   <stop offset="0%" stop-color="${headFill}"/>
                   <stop offset="100%" stop-color="${headFill2}"/>
                 </radialGradient>
                 <linearGradient id="pgneedle${pageIdx}" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stop-color="${headFill2}"/>
-                  <stop offset="100%" stop-color="${hasContent ? '#0b5d28' : '#5e4109'}"/>
+                  <stop offset="55%" stop-color="${needleTip}"/>
+                  <stop offset="100%" stop-color="#1a1a1a"/>
                 </linearGradient>
-                <filter id="pgshadow${pageIdx}" x="-60%" y="-20%" width="220%" height="170%">
-                  <feDropShadow dx="0" dy="1.6" stdDeviation="1.5" flood-color="rgba(0,0,0,.45)"/>
+                <filter id="pgshadow${pageIdx}" x="-60%" y="-20%" width="220%" height="180%">
+                  <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="rgba(0,0,0,.5)"/>
                 </filter>
               </defs>
-              <!-- 날카로운 바늘 끝: 머리 하단에서 한 점(18,53)으로 수렴 -->
-              <path d="M12.4 16 L18 53 L23.6 16 Z" fill="url(#pgneedle${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <!-- 길고 날카로운 바늘: 머리 하단(13.6/22.4)에서 한 점(18,62)으로 수렴 -->
+              <path d="M13.6 15 L18 62 L22.4 15 Z" fill="url(#pgneedle${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
               <!-- 둥근 머리 -->
-              <circle cx="18" cy="13" r="11.5" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2"/>
-              <circle cx="18" cy="13" r="7.6" fill="#ffffff" opacity="0.95"/>
-              <text x="18" y="13.3" text-anchor="middle" dominant-baseline="central"
+              <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.2"/>
+              <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.96"/>
+              <text x="18" y="12.3" text-anchor="middle" dominant-baseline="central"
                     font-family="'Segoe UI',sans-serif" font-size="9.5" font-weight="800"
                     fill="${txtFill}">${pageIdx}</text>
               <!-- 머리 하이라이트(광택) -->
-              <ellipse cx="14.5" cy="9" rx="3.6" ry="2.4" fill="#ffffff" opacity="0.45"/>
+              <ellipse cx="14.5" cy="8" rx="3.6" ry="2.3" fill="#ffffff" opacity="0.5"/>
             </svg>
             ${issueDot}
           </div>
@@ -3619,6 +3650,13 @@
       this._bindHome();
       this._bindTopbar();
       this._bindSidebar();
+      // 모바일: 영역 지정 도구를 기본 접힘으로 시작(화면 가림 방지)
+      try {
+        const ztw = document.getElementById("zone-tools-wrap");
+        if (ztw && window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+          ztw.removeAttribute("open");
+        }
+      } catch (e) {}
       this._bindMap();
       this._bindPano();
       MapCtrl.init(UI.$("map-viewport"), UI.$("map-transform"));
@@ -3842,7 +3880,24 @@
 
     /* ── Sidebar ── */
     _bindSidebar() {
-      UI.$("btn-upload-drawing").addEventListener("click", () => UI.$("input-drawing").click());
+      UI.$("btn-upload-drawing").addEventListener("click", () => {
+        // ── 요청사항: 도면 등록 전 반드시 '구역'을 먼저 선택하게 강제 ──
+        if (typeof Projects !== "undefined" && Projects.currentProject) {
+          if (!Projects.currentDeck) {
+            if (Projects.decks && Projects.decks.length) {
+              Prompt.toast("⚠️ 먼저 위쪽 '구역'에서 도면을 등록할 구역을 선택하세요.");
+              // 구역 섹션으로 시선 유도
+              const db = document.getElementById("decks-block");
+              if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1600); }
+            } else {
+              Prompt.toast("⚠️ 등록된 구역이 없습니다. '구역 + 생성'으로 먼저 구역을 만드세요.");
+              const btn = document.getElementById("btn-new-deck"); if (btn) btn.focus();
+            }
+            return; // 구역 미선택 → 파일 선택창 열지 않음
+          }
+        }
+        UI.$("input-drawing").click();
+      });
       UI.$("input-drawing").addEventListener("change", e => {
         const f = e.target.files[0]; if (!f) return;
         e.target.value = "";
@@ -3895,7 +3950,9 @@
         info.textContent = (isVid ? "🎬 " : "🖼 ") + f.name + " (" + (f.size / 1024 / 1024).toFixed(1) + " MB)";
         info.classList.remove("hidden");
         UI.show("field-pin-imgname");
-        UI.$("input-pin-imgname").value = f.name.replace(/\.[^.]+$/, "");
+        // ── 요청사항: 구역이 선택돼 있으면 파일명을 '구역명_번호'(예: ER1_1, ER1_2)로 자동 지정 ──
+        const autoName = this._zoneImageName();
+        UI.$("input-pin-imgname").value = autoName || f.name.replace(/\.[^.]+$/, "");
         this._updateConfirmEnabled();
         // ── 요청사항: 새 포인트 + 사진 등록 시 별도 저장 버튼 없이 즉시 저장 ──
         //    (편집 모드는 '변경 저장' 버튼을 명시적으로 눌러야 반영)
@@ -4291,6 +4348,21 @@
       }
     },
 
+    /** 선택된 구역명 기반 자동 사진 파일명: '구역명_번호'. 구역 없으면 null. */
+    _zoneImageName() {
+      const deck = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
+      if (!deck || !deck.name) return null;
+      const base = String(deck.name).trim().replace(/\s+/g, "_").replace(/[^\w가-힣\-]/g, "");
+      const page = State.pdfPage || 1;
+      let n = 0;
+      (State.pins || []).forEach((p) => {
+        if ((p.page || 1) !== page) return;
+        if (p.imageId || p.pendingOpId || p.imageName) n++;
+      });
+      const next = State.editingPinId ? Math.max(n, 1) : (n + 1);
+      return base + "_" + next;
+    },
+
     _handlePlaceClick(e) {
       if (!State.placing) return;
       const pct = MapCtrl.viewportToPercent(e.clientX, e.clientY);
@@ -4373,6 +4445,17 @@
       UI.$("btn-pano-zoomin").addEventListener("click",  () => PanoViewer.setFov(-10));
       UI.$("btn-pano-zoomout").addEventListener("click", () => PanoViewer.setFov(10));
       UI.$("btn-pano-reset").addEventListener("click",   () => PanoViewer.resetView());
+      // ISO 4-꼭지점 뷰 전환
+      document.querySelectorAll("#pano-iso-views .pano-iso-btn").forEach((b) => {
+        b.addEventListener("click", (e) => {
+          const corner = parseInt(e.currentTarget.getAttribute("data-iso"), 10) || 0;
+          if (PanoViewer.open && typeof PanoViewer.setIsoView === "function") {
+            PanoViewer.setIsoView(corner);
+            document.querySelectorAll("#pano-iso-views .pano-iso-btn").forEach((x) => x.classList.remove("active"));
+            e.currentTarget.classList.add("active");
+          }
+        });
+      });
       UI.$("btn-pano-full").addEventListener("click", () => {
         const ov = UI.$("pano-overlay");
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -5217,6 +5300,19 @@
 
       if (State.pins.length === 0) { alert("배포할 핀이 없습니다. 먼저 포인트를 추가하세요."); return; }
       if (typeof Log !== "undefined") Log.push("deploy.click", null, { pins: State.pins.length });
+
+      // ── 오프라인 등록은 허용하되, 서버 빌드(배포)는 인증 완료 필수 ──
+      // (요구사항: 오프라인일 때 등록은 가능하지만 서버에 빌드하려면 반드시 인증이 완료되어야 함)
+      if (!navigator.onLine) {
+        alert("현재 오프라인 상태입니다.\n\n• 포인트/도면 '등록'은 계속 가능합니다(자동 임시저장).\n• 단, 서버에 '빌드(배포)'하려면 인터넷 연결 + 인증 완료가 필요합니다.\n\n인터넷에 연결한 뒤 다시 시도해 주세요.");
+        return;
+      }
+      const authed = (typeof Auth !== "undefined") && !!Auth.idToken && !!Auth.user;
+      if (!authed || !Auth.isDesigner) {
+        alert("서버 빌드(배포)에는 설계자 인증이 필요합니다.\n\nGoogle 로그인 또는 @seastargo.com 계정으로 로그인하고 인증을 완료한 뒤 다시 시도해 주세요.");
+        if (typeof Auth !== "undefined" && Auth.requireDesigner) { try { Auth.requireDesigner(() => this._deployToViewer()); } catch (e) {} }
+        return;
+      }
 
       // 미동기화(오프라인 임시 저장) 핀이 있으면 배포 전에 먼저 서버로 일괄 업로드
       const hasPending = State.pins.some(p => p.pendingOpId || (p.attachments || []).some(a => a.pendingOpId));
@@ -7094,7 +7190,8 @@
           $("cg-code").value = j.dev_code;
         } else {
           dc.classList.add("hidden"); dc.textContent = "";
-          Prompt.toast && Prompt.toast("📧 인증코드를 이메일로 발송했습니다.");
+          const mins = j.valid_minutes || 60;
+          Prompt.toast && Prompt.toast("📧 인증코드를 이메일로 발송했습니다. (" + mins + "분 이내 입력)");
         }
       } catch (e) {
         this._err("네트워크 오류로 코드 발송에 실패했습니다.");
@@ -7110,9 +7207,12 @@
       const pw2 = $("cg-pw2").value || "";
       const name = ($("cg-name").value || "").trim();
       const company = (($("cg-company") && $("cg-company").value) || "").trim();
+      const dept = (($("cg-dept") && $("cg-dept").value) || "").trim();
       if (!/^\d{6}$/.test(code)) { this._err("인증코드 6자리를 입력해 주세요."); return; }
       if (pw.length < 8) { this._err("비밀번호는 8자 이상이어야 합니다."); return; }
       if (pw !== pw2) { this._err("비밀번호가 일치하지 않습니다."); return; }
+      if (!name) { this._err("이름을 입력해 주세요."); return; }
+      if (!dept) { this._err("부서/소속을 입력해 주세요."); return; }
       // 사전 등록(초대) 계정은 회사명 필수
       if (this._invited && !company) { this._err("회사명을 입력해 주세요."); return; }
       const btn = $("cg-create"); const orig = btn ? btn.textContent : "";
@@ -7121,7 +7221,7 @@
         const pid = this._projectId();
         const r = await fetch("/api/signup/verify", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: this._email, code, password: pw, name, company, project_id: pid || undefined })
+          body: JSON.stringify({ email: this._email, code, password: pw, name, company, department: dept, project_id: pid || undefined })
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "가입에 실패했습니다."); return; }
@@ -7377,14 +7477,31 @@
       if (!this.decks.length) { emptyEl.classList.remove("hidden"); return; }
       emptyEl.classList.add("hidden");
       this.decks.forEach((d) => {
+        const isActive = this.currentDeck && this.currentDeck.id === d.id;
         const row = document.createElement("div");
-        row.className = "deck-row" + (this.currentDeck && this.currentDeck.id === d.id ? " active" : "");
-        const dot = d.deployment_id ? '<span class="deck-hasdoc" title="도면 등록됨">📄</span>' : '';
-        row.innerHTML = `<span class="deck-name">${dot}${this._esc(d.name)}</span>
+        row.className = "deck-row" + (isActive ? " active" : "");
+        const hasDoc = !!d.deployment_id;
+        // 트리 가이드(└) + 구역 아이콘 + 도면 등록 여부
+        const dot = hasDoc
+          ? '<span class="deck-hasdoc" title="도면 등록됨"><i class="fa-solid fa-file-lines"></i></span>'
+          : '<span class="deck-nodoc" title="도면 미등록"><i class="fa-regular fa-folder-open"></i></span>';
+        row.innerHTML = `<span class="deck-tree-guide">└</span><span class="deck-name">${dot}${this._esc(d.name)}</span>
           <button class="deck-del" title="삭제">✕</button>`;
         row.querySelector(".deck-name").addEventListener("click", () => this.selectDeck(d));
         row.querySelector(".deck-del").addEventListener("click", (e) => { e.stopPropagation(); this.deleteDeck(d.id, d.name); });
         listEl.appendChild(row);
+        // ── 선택된 구역: 등록된 도면을 트리 하위로 표시(없으면 '도면 등록 필요') ──
+        if (isActive) {
+          const sub = document.createElement("div");
+          sub.className = "deck-doc-sub";
+          if (hasDoc) {
+            const fname = (typeof State !== "undefined" && State.fileName) ? State.fileName : "등록 도면";
+            sub.innerHTML = `<span class="deck-doc-line"><span class="deck-tree-guide sub">└─</span><i class="fa-solid fa-image"></i> ${this._esc(fname)}</span>`;
+          } else {
+            sub.innerHTML = `<span class="deck-doc-line empty"><span class="deck-tree-guide sub">└─</span>도면을 등록하세요 (아래 버튼)</span>`;
+          }
+          listEl.appendChild(sub);
+        }
       });
     },
 
