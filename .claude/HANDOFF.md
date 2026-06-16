@@ -1,19 +1,26 @@
-# HANDOFF — SEASTAR 360° Location Viewer
+# HANDOFF — 360° Location Viewer (SEASTAR)
 
-## 최근 세션 이력
-| 날짜 | 한 일 | Before→After | 커밋 |
-|------|-------|-------------|------|
-| 2026-06-16 | PDF주석(ezPDF)+바늘핀/핀팝업+회사가입/프로젝트별도메인+AI연동 | 주석없음→형광펜/사각형/자유선/메모, 핀클릭→팝업, AI프록시 | 259c63f |
-| 2026-06-16 | 패밀리 부트스트랩(CLAUDE.md/HANDOFF.md) + 모바일 강화 진행중 | 문서없음→정체카드 | (진행) |
+## 마지막 커밋
+- `9b2269e` feat: 최상위관리자 기능/메뉴 관장+AI설정+코드맵, 사전초대 가입+회사명, 사용자 액션로그, 모바일 바텀네비/핀치줌, IRON RULE
 
-## 현재 상태
-- 빌드: PASS (dist/_worker.js 64.69 kB, BUILD_EXIT:0)
-- 검증: 백엔드13/13, PDF주석9/9, PDF로드4/4, 관리자4/4, AI3/3, 회귀3/3
-- PWA: sw.js(앱셸캐시) + manifest.webmanifest + SyncQueue(IndexedDB+LS폴백) 존재
+## 이번 턴 완료 (4단계 검증 ALL PASS)
+- [T3] AdminPanels 모듈 wiring: App.init에서 init()+applyFeaturesToUI(), window.__wm export, feat-off CSS 10규칙
+- [T3] 기능 7종 토글(annotations/zones/pin360/fls3d/ai/timelapse/export) → body.feat-off-* → 메뉴 숨김
+- [T3] AI 설정 모달(base_url/model+연결테스트), 코드맵 대시보드(5그룹/12파일+검색)
+- [T4] /api/client-log(화이트리스트) + 프론트 Log 헬퍼 6지점(app.open/viewer.open/pin.add/edit/pdf.register/deploy.click/pano.open/settings.open)
+- [T2] 사전초대 가입(회사명 필수)+invites CRUD — 기존 curl PASS 재확인
+- [모바일] 핀치줌/더블탭/하단네비/바텀시트(메뉴 안가림 sidebarTop=246/844, map padBottom 58px) E2E PASS
 
-## 보류/진행 과제 (이번 세션)
-- [ ] 모바일 2손가락 핀치 줌(도면) — 현재 1손가락 팬만 있음
-- [ ] 모바일 하단 툴바/바텀시트 — 메뉴 안 가리게, 탭타깃≥44px
-- [ ] 모바일 PDF 쉬운 등록 + 포인트 관리 화면효율
-- [ ] 오프라인→온라인 복귀 시 SyncQueue flush 검증
-- [ ] 360° 배치/레이아웃 강화 검토
+## 검증 결과
+- BUILD: dist/_worker.js 69.81 kB, exit 0
+- curl: client-log(401/200/400), app-settings(super 200/viewer 403), invites(POST/GET/send-code invited:true) 전부 PASS
+- E2E: AdminPanels 3모달 오픈, feat-off-ai/timelapse body반영, 코드맵 검색필터, 모바일 바텀시트 PASS
+
+## 빌드/운영 메모
+- BUILD: `pm2 stop webapp; sleep 1; NODE_OPTIONS="--max-old-space-size=640" npx vite build` (plain build = OOM 137)
+- MIRROR: cp public/{js/main.js,index.html,css/style.css} → 루트, 그 후 빌드
+- AI 키: Cloudflare secret `AI_API_KEY` (`npx wrangler pages secret put AI_API_KEY`). base_url/model은 app-settings 저장
+- SUPER_ADMIN = designssir@gmail.com
+
+## 남은 후순위
+- 오프라인 SyncQueue flush 실측, 360 배치/레이아웃 보강 리뷰
