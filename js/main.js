@@ -3880,20 +3880,21 @@
 
     /* ── Sidebar ── */
     _bindSidebar() {
-      UI.$("btn-upload-drawing").addEventListener("click", () => {
-        // ── 요청사항: 도면 등록 전 반드시 '구역'을 먼저 선택하게 강제 ──
+      UI.$("btn-upload-drawing").addEventListener("click", async () => {
+        // ── 요청사항: 도면 등록 시 '구역'을 먼저 보장한다 ──
+        // (구역이 없으면 자동으로 기본 구역을 만들고, 여러 구역이 있는데 미선택이면 선택을 유도하되
+        //  업로드 자체는 막지 않는다 — 과거 "업로드가 아무 반응 없이 막힘" 회귀 방지)
         if (typeof Projects !== "undefined" && Projects.currentProject) {
           if (!Projects.currentDeck) {
-            if (Projects.decks && Projects.decks.length) {
-              Prompt.toast("⚠️ 먼저 위쪽 '구역'에서 도면을 등록할 구역을 선택하세요.");
-              // 구역 섹션으로 시선 유도
+            if (Projects.decks && Projects.decks.length > 1) {
+              // 구역이 여러 개인데 선택 안 됨 → 선택 유도(차단하지 않음, 안내만)
+              Prompt.toast("⚠️ 여러 구역이 있습니다. 위쪽 '구역'에서 등록할 구역을 먼저 선택하세요.");
               const db = document.getElementById("decks-block");
               if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1600); }
-            } else {
-              Prompt.toast("⚠️ 등록된 구역이 없습니다. '구역 + 생성'으로 먼저 구역을 만드세요.");
-              const btn = document.getElementById("btn-new-deck"); if (btn) btn.focus();
+              return;
             }
-            return; // 구역 미선택 → 파일 선택창 열지 않음
+            // 구역이 0개 또는 1개 → 자동 보장(없으면 '구역 1' 생성, 1개면 그걸 선택)
+            try { await Projects.ensureDeck(); } catch (e) {}
           }
         }
         UI.$("input-drawing").click();
