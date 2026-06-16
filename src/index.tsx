@@ -187,12 +187,26 @@ async function allowedDomainList(c: any, projectId?: string): Promise<string[]> 
   } catch { return [] }
 }
 
+/** 사전 등록(초대) 이메일 조회. 등록돼 있으면 invite 레코드, 없으면 null. */
+async function findInvite(c: any, email: string): Promise<any | null> {
+  try {
+    const inv: any = await c.env.DB.prepare(
+      'SELECT email, company, role, project_id, used FROM invited_users WHERE email = ? AND deleted = 0'
+    ).bind(email).first()
+    return inv || null
+  } catch { return null }
+}
+
 /** 회사 도메인 가입 가능 여부 검사. 통과 시 {ok:true}, 실패 시 사유.
- *  projectId 가 주어지면 해당 프로젝트(또는 전역) 화이트리스트만 적용. */
-async function checkSignupDomain(c: any, email: string, projectId?: string): Promise<{ ok: boolean; reason?: string }> {
+ *  projectId 가 주어지면 해당 프로젝트(또는 전역) 화이트리스트만 적용.
+ *  사전 등록(초대)된 이메일은 도메인 검사를 우회하고 즉시 허용. */
+async function checkSignupDomain(c: any, email: string, projectId?: string): Promise<{ ok: boolean; reason?: string; invited?: boolean }> {
   if (!isValidEmail(email)) return { ok: false, reason: '올바른 이메일 형식이 아닙니다.' }
   const domain = emailDomain(email)
   if (!domain) return { ok: false, reason: '도메인을 확인할 수 없습니다.' }
+  // 0순위: 관리자가 사전 등록(초대)한 이메일이면 도메인 무관 즉시 허용
+  const inv = await findInvite(c, email)
+  if (inv) return { ok: true, invited: true }
   const wl = await allowedDomainList(c, projectId)
   if (wl.length > 0) {
     // 화이트리스트가 설정돼 있으면 그 안에 있는 도메인만 허용
@@ -441,8 +455,12 @@ app.post('/api/signup/send-code', async (c) => {
   ).bind(randToken('ec-'), email, code, 'signup', now, expires).run()
 
   const mail = await sendVerificationEmail(c, email, code)
-  await logActivity(c, 'signup.code_sent', { actor: { email }, targetType: 'signup', targetId: email, detail: { provider: mail.provider || 'dev-fallback' } })
-  const resp: any = { success: true, sent: mail.sent, email }
+  await logActivity(c, 'signup.code_sent', { actor: { email }, targetType: 'signup', targetId: email, detail: { provider: mail.provider || 'dev-fallback', invited: !!chk.invited } })
+  const resp: any = { success: true, sent: mail.sent, email, invited: !!chk.invited }
+  if (chk.invited) {
+    const inv = await findInvite(c, email)
+    if (inv) { resp.invite_company = inv.company || ''; resp.invite_role = inv.role || 'viewer' }
+  }
   if (!mail.sent && mail.devCode) {
     // 메일 발송 미설정/실패 시: 시연/개발용으로 코드 직접 반환
     resp.dev_code = mail.devCode
@@ -459,10 +477,14 @@ app.post('/api/signup/verify', async (c) => {
   const code = String(body.code || '').trim()
   const password = String(body.password || '')
   const name = String(body.name || '').trim()
+  const company = String(body.company || '').trim()
   const projectId = body.project_id || undefined
 
   const chk = await checkSignupDomain(c, email, projectId)
   if (!chk.ok) return c.json({ error: chk.reason }, 400)
+  // 사전 등록(초대) 사용자는 회사명을 반드시 입력하도록 요구
+  const invite = chk.invited ? await findInvite(c, email) : null
+  if (chk.invited && !company) return c.json({ error: '회사명을 입력해 주세요.' }, 400)
   if (!/^\d{6}$/.test(code)) return c.json({ error: '인증코드 6자리를 입력해 주세요.' }, 400)
   if (password.length < 8) return c.json({ error: '비밀번호는 8자 이상이어야 합니다.' }, 400)
 
@@ -487,10 +509,22 @@ app.post('/api/signup/verify', async (c) => {
   const { hash, salt } = await hashPassword(password)
   const now = Date.now()
   await c.env.DB.prepare(
-    `INSERT INTO local_users (email, name, domain, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0)
-     ON CONFLICT(email) DO UPDATE SET name = excluded.name, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
-  ).bind(email, name || email.split('@')[0], emailDomain(email), hash, salt, now, now).run()
+    `INSERT INTO local_users (email, name, domain, company, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0)
+     ON CONFLICT(email) DO UPDATE SET name = excluded.name, company = excluded.company, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
+  ).bind(email, name || email.split('@')[0], emailDomain(email), company || (invite && invite.company) || '', hash, salt, now, now).run()
+  // 초대 레코드가 있으면 사용 처리(used=1) 및 회사명 동기화
+  if (invite) {
+    await c.env.DB.prepare('UPDATE invited_users SET used = 1, company = ? WHERE email = ?')
+      .bind(company || invite.company || '', email).run().catch(() => {})
+    // designer 로 초대된 경우 designers 테이블에 등록하여 로그인 시 디자이너 권한 부여
+    if (invite.role === 'designer') {
+      await c.env.DB.prepare(
+        `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0)
+         ON CONFLICT(email) DO UPDATE SET deleted = 0, name = excluded.name, updated_at = excluded.updated_at`
+      ).bind(email, name || (company ? company : email.split('@')[0]), invite.invited_by || 'invite', now, now).run().catch(() => {})
+    }
+  }
 
   // 자동 로그인: 세션 토큰 발급
   const token = randToken('local-')
@@ -499,8 +533,9 @@ app.post('/api/signup/verify', async (c) => {
     .bind(token, email, now, exp).run()
   await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
 
-  await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email) } })
-  return c.json({ success: true, token, email, name: name || email.split('@')[0], role: 'viewer' })
+  const grantedRole = (invite && invite.role) ? invite.role : 'viewer'
+  await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email), invited: !!invite, company, role: grantedRole } })
+  return c.json({ success: true, token, email, name: name || email.split('@')[0], company, role: grantedRole, invited: !!invite })
 })
 
 // 3) 로그인(이메일 + 비밀번호)
@@ -590,10 +625,115 @@ app.get('/api/local-users', async (c) => {
   const su = await requireSuper(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const { results } = await c.env.DB.prepare(
-    'SELECT email, name, domain, created_at, last_login_at FROM local_users WHERE deleted = 0 ORDER BY created_at DESC'
+    'SELECT email, name, domain, company, created_at, last_login_at FROM local_users WHERE deleted = 0 ORDER BY created_at DESC'
   ).all()
   return c.json({ data: results || [] })
 })
+
+/* ── 사전 등록(초대) 이메일 관리(슈퍼관리자 전용) ──
+   · GET    /api/invites                목록
+   · POST   /api/invites  { email, company?, role?, note?, project_id? }
+   · DELETE /api/invites/:email */
+app.get('/api/invites', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT email, company, role, note, invited_by, project_id, created_at, used FROM invited_users WHERE deleted = 0 ORDER BY created_at DESC'
+  ).all()
+  return c.json({ data: results || [] })
+})
+app.post('/api/invites', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = normEmail(body.email)
+  if (!isValidEmail(email)) return c.json({ error: '올바른 이메일을 입력해 주세요.' }, 400)
+  const role = (body.role === 'designer') ? 'designer' : 'viewer'
+  const company = String(body.company || '').trim()
+  const note = String(body.note || '').trim()
+  const projectId = String(body.project_id || '*').trim() || '*'
+  // 이미 가입된 사용자인지 안내(차단은 아님)
+  const exist: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ? AND deleted = 0').bind(email).first().catch(() => null)
+  await c.env.DB.prepare(
+    `INSERT INTO invited_users (email, company, role, note, invited_by, project_id, created_at, used, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)
+     ON CONFLICT(email) DO UPDATE SET company = excluded.company, role = excluded.role, note = excluded.note, project_id = excluded.project_id, deleted = 0`
+  ).bind(email, company, role, note, su.email, projectId, Date.now()).run()
+  await logActivity(c, 'invite.add', { actor: su, targetType: 'invite', targetId: email, detail: { role, company, project_id: projectId } })
+  return c.json({ success: true, email, role, company, already_registered: !!exist })
+})
+app.delete('/api/invites/:email', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const email = decodeURIComponent(c.req.param('email')).toLowerCase()
+  await c.env.DB.prepare('UPDATE invited_users SET deleted = 1 WHERE email = ?').bind(email).run()
+  await logActivity(c, 'invite.remove', { actor: su, targetType: 'invite', targetId: email })
+  return c.json({ success: true })
+})
+
+/* ── 앱 설정(기능/메뉴/레이아웃/AI) — 최상위 관리자가 프로젝트별로 관장 ──
+   · GET  /api/app-settings?scope=<*|projectId>&key=<features|layout|ai>  (읽기는 로그인 사용자 허용 — 프론트가 메뉴 토글에 사용)
+   · PUT  /api/app-settings  { scope?, key, value }  (슈퍼관리자만 쓰기) */
+app.get('/api/app-settings', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: '로그인이 필요합니다.' }, 401)
+  const scope = String(c.req.query('scope') || '*')
+  const key = String(c.req.query('key') || '')
+  try {
+    if (key) {
+      const row: any = await c.env.DB.prepare('SELECT value, updated_at, updated_by FROM app_settings WHERE scope = ? AND skey = ?').bind(scope, key).first()
+      let value = {}
+      try { value = row ? JSON.parse(row.value) : {} } catch { value = {} }
+      return c.json({ scope, key, value, updated_at: row?.updated_at || 0 })
+    }
+    const { results } = await c.env.DB.prepare('SELECT scope, skey, value, updated_at FROM app_settings WHERE scope = ?').bind(scope).all()
+    const out: any = {}
+    ;(results || []).forEach((r: any) => { try { out[r.skey] = JSON.parse(r.value) } catch { out[r.skey] = {} } })
+    return c.json({ scope, settings: out })
+  } catch (e: any) { return c.json({ scope, settings: {}, value: {} }) }
+})
+app.put('/api/app-settings', async (c) => {
+  const su = await requireSuper(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const scope = String(body.scope || '*').trim() || '*'
+  const key = String(body.key || '').trim()
+  if (!key) return c.json({ error: 'key가 필요합니다.' }, 400)
+  let valueStr = '{}'
+  try { valueStr = JSON.stringify(body.value ?? {}) } catch { valueStr = '{}' }
+  await c.env.DB.prepare(
+    `INSERT INTO app_settings (scope, skey, value, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(scope, skey) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
+  ).bind(scope, key, valueStr, su.email, Date.now()).run()
+  await logActivity(c, 'settings.update', { actor: su, targetType: 'settings', targetId: scope + ':' + key })
+  return c.json({ success: true, scope, key })
+})
+
+/* 프론트엔드 사용자 액션 로깅 — 로그인 이후 모든 주요 행위 추적용.
+   허용된 액션 화이트리스트만 기록(스팸/위조 방지). 로그인 필요. */
+const CLIENT_LOG_ACTIONS = new Set([
+  'app.open', 'viewer.open', 'pin.add', 'pin.edit', 'pin.delete', 'pin.view',
+  'pdf.register', 'pdf.page', 'drawing.upload', 'deploy.click', 'export.json',
+  'zone.add', 'zone.delete', 'pano.open', 'fls.attach', 'settings.open', 'logout'
+])
+app.post('/api/client-log', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized' }, 401)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const action = String(body.action || '').trim()
+  if (!CLIENT_LOG_ACTIONS.has(action)) return c.json({ error: 'unknown action' }, 400)
+  await logActivity(c, 'client.' + action, {
+    actor: user,
+    targetType: String(body.targetType || 'client').slice(0, 40),
+    targetId: body.targetId ? String(body.targetId).slice(0, 120) : undefined,
+    detail: body.detail ?? null
+  })
+  return c.json({ success: true })
+})
+
 app.delete('/api/local-users/:email', async (c) => {
   const su = await requireSuper(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)

@@ -438,6 +438,7 @@
         <div class="drop-icon">📄</div>
         <div class="drop-text">도면을 업로드하세요</div>
         <div class="drop-sub">PDF · PNG · JPG 지원</div>
+        <div class="drop-tap-cta">＋ 탭하여 도면 등록</div>
       </div>
 
       <div id="pdf-loading" class="state-overlay hidden">
@@ -638,6 +639,33 @@
       </button>
     </main>
   </div>
+
+  <!-- ═══ 모바일 사이드바 백드롭 (바텀시트 열림 시 맵 클릭으로 닫기) ═══ -->
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+  <!-- ═══ 모바일 하단 네비게이션 바 (메뉴가 콘텐츠를 가리지 않도록 하단 고정) ═══ -->
+  <nav id="mobile-nav" class="mobile-nav" aria-label="모바일 도구 모음">
+    <button id="mnav-menu" class="mnav-btn" type="button" aria-label="메뉴 열기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      <span>메뉴</span>
+    </button>
+    <button id="mnav-upload" class="mnav-btn designer-only" type="button" aria-label="도면 업로드">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <span>도면등록</span>
+    </button>
+    <button id="mnav-place" class="mnav-btn mnav-fab designer-only" type="button" aria-label="포인트 추가">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>
+      <span>포인트</span>
+    </button>
+    <button id="mnav-pins" class="mnav-btn" type="button" aria-label="포인트 목록">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor"/><circle cx="3.5" cy="12" r="1.3" fill="currentColor"/><circle cx="3.5" cy="18" r="1.3" fill="currentColor"/></svg>
+      <span>목록</span>
+    </button>
+    <button id="mnav-fit" class="mnav-btn" type="button" aria-label="화면 맞춤">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+      <span>맞춤</span>
+    </button>
+  </nav>
 </div>
 
 <!-- ═══════════════════════════════════════════
@@ -1003,9 +1031,14 @@
             <input id="cg-code" class="company-input company-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
           </label>
           <div id="cg-dev-code" class="company-devcode hidden"></div>
+          <div id="cg-invited-badge" class="company-invited-badge hidden">✅ 관리자가 사전 등록한 계정입니다. 회사·이름만 입력하면 바로 가입됩니다.</div>
           <label class="company-field">
-            <span class="company-label">이름 (선택)</span>
+            <span class="company-label">이름</span>
             <input id="cg-name" class="company-input" type="text" placeholder="홍길동" autocomplete="name" />
+          </label>
+          <label class="company-field">
+            <span id="cg-company-label" class="company-label">회사명</span>
+            <input id="cg-company" class="company-input" type="text" placeholder="(주)씨스타" autocomplete="organization" />
           </label>
           <label class="company-field">
             <span class="company-label">비밀번호 (8자 이상)</span>
@@ -1185,14 +1218,33 @@
 
       <!-- 패널: 가입 사용자 (회사 이메일 자체가입자 목록 + 로그인 기록) -->
       <section id="adm-panel-members" class="adm-panel hidden">
+        <!-- ── 사전 등록(초대): 메일 미리 등록 → 사용자는 회사/이름만 입력 후 즉시 가입 ── -->
+        <div class="invite-block">
+          <div class="invite-intro">
+            <b>📨 사용자 사전 등록</b>
+            <span>이메일을 미리 등록해 두면, 해당 사용자는 <b>회사·이름만 입력하고 바로 가입</b>됩니다(도메인 제한 무시).</span>
+          </div>
+          <div class="invite-add">
+            <input id="invite-email-input" class="admin-gate-input" type="email" autocomplete="off" placeholder="user@partner.co.kr" aria-label="초대 이메일" />
+            <select id="invite-role-select" class="admin-gate-input invite-role" aria-label="권한">
+              <option value="viewer">뷰어</option>
+              <option value="designer">디자이너</option>
+            </select>
+            <button id="invite-add-btn" class="admin-gate-btn primary" type="button">＋ 등록</button>
+          </div>
+          <div id="invite-add-error" class="admin-gate-error hidden"></div>
+          <div id="invites-list" class="invites-list"></div>
+        </div>
+
         <div class="members-toolbar">
+          <span class="members-subtitle">가입 완료된 사용자</span>
           <span id="members-total" class="log-total">0명</span>
           <button id="members-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
         </div>
         <div class="member-grid-head">
           <span class="mem-col-email">이메일</span>
           <span class="mem-col-name">이름</span>
-          <span class="mem-col-domain">도메인</span>
+          <span class="mem-col-company">회사</span>
           <span class="mem-col-login">최근 로그인</span>
           <span class="mem-col-act"></span>
         </div>
@@ -1280,7 +1332,10 @@
           이 계정은 <b>디자이너 권한이 없습니다</b>. 편집하려면 슈퍼관리자에게 디자이너 지정을 요청하세요.
         </div>
         <div id="settings-super-actions" class="settings-actions hidden">
-          <button id="btn-open-designers" class="admin-gate-btn ghost full" type="button">👥 디자이너 지정 관리</button>
+          <button id="btn-open-designers" class="admin-gate-btn ghost full" type="button">👥 디자이너 지정 · 사용자 관리</button>
+          <button id="btn-open-features" class="admin-gate-btn ghost full" type="button">🧩 기능 · 메뉴 관장</button>
+          <button id="btn-open-ai" class="admin-gate-btn ghost full" type="button">🤖 AI API 설정</button>
+          <button id="btn-open-codemap" class="admin-gate-btn ghost full" type="button">🗂️ 코드 구조 · 파일 설명</button>
         </div>
 
         <button id="btn-settings-signout" class="btn-signout full" type="button">로그아웃</button>
@@ -1288,6 +1343,68 @@
 
       <div class="admin-gate-actions">
         <button id="settings-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 기능·메뉴 관장 (최상위 관리자 전용) ═══ -->
+  <div id="features-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="features-title">
+    <div class="admin-gate-backdrop" data-close="features"></div>
+    <div class="admin-gate-card">
+      <h2 id="features-title" class="admin-gate-title">🧩 기능 · 메뉴 관장</h2>
+      <p class="admin-gate-sub">이 프로젝트에서 보일 기능/메뉴를 켜고 끕니다. 끄면 모든 사용자 화면에서 숨겨집니다.</p>
+      <div class="feat-scope-line">
+        <label class="feat-scope-label">적용 범위</label>
+        <select id="feat-scope-select" class="admin-gate-input">
+          <option value="*">전체 공통(모든 프로젝트)</option>
+        </select>
+      </div>
+      <div id="features-list" class="features-list"></div>
+      <div id="features-save-note" class="features-save-note hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="features-save" class="admin-gate-btn primary" type="button">저장</button>
+        <button id="features-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ AI API 설정 (최상위 관리자 전용) ═══ -->
+  <div id="ai-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="ai-title">
+    <div class="admin-gate-backdrop" data-close="ai"></div>
+    <div class="admin-gate-card">
+      <h2 id="ai-title" class="admin-gate-title">🤖 AI API 설정</h2>
+      <p class="admin-gate-sub">OpenAI 호환 엔드포인트(Groq 등)를 설정합니다. <b>API 키는 보안상 Cloudflare Secret으로만</b> 저장됩니다(여기서 직접 저장하지 않음).</p>
+      <div id="ai-status-line" class="ai-status-line">상태 확인 중…</div>
+      <label class="company-field"><span class="company-label">Base URL</span>
+        <input id="ai-base-url" class="company-input" type="text" placeholder="https://api.groq.com/openai/v1" /></label>
+      <label class="company-field"><span class="company-label">모델</span>
+        <input id="ai-model" class="company-input" type="text" placeholder="openai/gpt-oss-120b" /></label>
+      <div class="ai-key-note">
+        <b>🔑 API 키 변경 방법(키는 코드/DB에 저장 안 함):</b>
+        <code id="ai-secret-cmd">npx wrangler pages secret put AI_API_KEY</code>
+        <span>배포 환경에서 위 명령으로 키를 넣으면 즉시 활성화됩니다. Base URL·모델은 아래 저장 버튼으로 저장됩니다.</span>
+      </div>
+      <div id="ai-save-note" class="features-save-note hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="ai-save" class="admin-gate-btn primary" type="button">Base URL·모델 저장</button>
+        <button id="ai-test" class="admin-gate-btn ghost" type="button">연결 테스트</button>
+        <button id="ai-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 코드 구조 · 파일 설명 대시보드 (최상위 관리자 전용) ═══ -->
+  <div id="codemap-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="codemap-title">
+    <div class="admin-gate-backdrop" data-close="codemap"></div>
+    <div class="admin-gate-card wide">
+      <h2 id="codemap-title" class="admin-gate-title">🗂️ 코드 구조 · 파일 설명</h2>
+      <p class="admin-gate-sub">이 프로젝트를 구성하는 파일들이 각각 무슨 기능을 하는지 한눈에 확인합니다.</p>
+      <div class="codemap-search-line">
+        <input id="codemap-search" class="admin-gate-input" type="text" placeholder="파일·기능 검색…" />
+      </div>
+      <div id="codemap-tree" class="codemap-tree"></div>
+      <div class="admin-gate-actions">
+        <button id="codemap-close" class="admin-gate-btn ghost" type="button">닫기</button>
       </div>
     </div>
   </div>

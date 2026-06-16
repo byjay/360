@@ -2881,6 +2881,109 @@ html, body {
   .sidebar { width: 180px; }
 }
 
+/* ════════════════════════════════════════════════════════════
+   📱 모바일 하단 네비 + 바텀시트 사이드바 (메뉴가 콘텐츠 안 가림)
+   딥리서치: bottom navigation(NN/G) · bottom sheet · 44px 터치 타깃
+════════════════════════════════════════════════════════════ */
+.mobile-nav { display: none; }
+.sidebar-backdrop { display: none; }
+
+@media (max-width: 760px) {
+  /* 1) 하단 네비게이션 바 — 항상 화면 하단 고정, 콘텐츠 위가 아닌 별도 영역 */
+  .mobile-nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 140;
+    display: flex; align-items: stretch; justify-content: space-around;
+    height: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: linear-gradient(180deg, #faf7f0 0%, #f1ebdf 100%);
+    border-top: 1px solid var(--border2);
+    box-shadow: 0 -4px 18px rgba(43,40,32,.14);
+  }
+  .mnav-btn {
+    flex: 1 1 0; min-width: 44px; min-height: 44px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; padding: 6px 2px;
+    background: transparent; border: none; cursor: pointer;
+    color: #6b6457; font-family: var(--font-ui); font-size: 10px; font-weight: 700;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mnav-btn svg { width: 22px; height: 22px; }
+  .mnav-btn:active { color: var(--accent, #f59e0b); transform: scale(.94); }
+  .mnav-btn.active { color: var(--accent, #f59e0b); }
+  /* 중앙 포인트 추가 = 강조 FAB */
+  .mnav-fab { position: relative; }
+  .mnav-fab svg {
+    width: 30px; height: 30px; padding: 9px; box-sizing: content-box;
+    margin-top: -22px; border-radius: 50%;
+    background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;
+    box-shadow: 0 6px 16px rgba(217,119,6,.45); border: 3px solid #faf7f0;
+  }
+  .mnav-fab span { margin-top: -2px; color: #d97706; }
+  /* 뷰어 모드에선 designer-only 버튼 숨김 */
+  body.role-viewer .mnav-btn.designer-only { display: none; }
+
+  /* 2) 사이드바 → 바텀시트(아래에서 위로 슬라이드, 기본 숨김) */
+  .sidebar {
+    position: fixed; left: 0; right: 0;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    top: auto; width: 100% !important;
+    max-height: 64vh; height: auto;
+    border-right: none; border-top: 1px solid var(--border2);
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -14px 44px rgba(0,0,0,.4);
+    transform: translateY(calc(100% + 70px));
+    transition: transform .28s cubic-bezier(.2,.9,.25,1);
+    z-index: 145; overflow-y: auto;
+    padding-bottom: 14px;
+  }
+  /* 시트 핸들(드래그 그립) */
+  .sidebar::before {
+    content: ""; display: block; position: sticky; top: 0;
+    width: 42px; height: 5px; margin: 9px auto 4px;
+    border-radius: 99px; background: rgba(107,100,87,.35);
+  }
+  body.sidebar-open .sidebar { transform: translateY(0); }
+  body.sidebar-open .sidebar-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 142;
+    background: rgba(8,12,20,.42); backdrop-filter: blur(1px);
+  }
+
+  /* 3) 맵 영역이 풀스크린(사이드바가 자리 차지 안 함) + 하단 네비 높이만큼 패딩 */
+  .app-body { display: block; height: 100%; }
+  .map-area {
+    width: 100%; height: 100%;
+    padding-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+  }
+
+  /* 4) 터치 타깃 ≥44px — 핵심 버튼들 */
+  .btn-upload, .btn-place, .btn-deploy, .btn-mini { min-height: 44px; }
+  .pf-tool { min-width: 48px; min-height: 48px; }
+  .tb-btn { min-width: 40px; min-height: 40px; }
+  .pin-row { min-height: 48px; }
+
+  /* 5) 핀 폼 시트는 하단 네비 위로 올림 */
+  .pin-form-float { bottom: calc(58px + env(safe-area-inset-bottom, 0px)) !important; }
+
+  /* 6) 빈 화면 탭 등록 CTA 강조 */
+  .drop-tap-cta { display: inline-flex !important; }
+}
+
+/* 탭하여 등록 CTA — 기본은 데스크톱에서도 보이되 부드럽게 */
+.drop-tap-cta {
+  display: none; margin-top: 16px;
+  align-items: center; justify-content: center; gap: 6px;
+  padding: 12px 22px; min-height: 44px;
+  background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;
+  border-radius: 12px; font-family: var(--font-ui);
+  font-size: 14px; font-weight: 800; letter-spacing: .3px;
+  box-shadow: 0 8px 22px rgba(217,119,6,.4);
+}
+@media (min-width: 761px) {
+  /* 데스크톱에서도 클릭 등록 가능하게 표시(드래그앤드롭 보조) */
+  .drop-tap-cta { display: inline-flex; }
+}
+
 /* ════════════════ 활동 로그 패널(슈퍼관리자) ════════════════ */
 .log-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .log-search {
@@ -3348,7 +3451,46 @@ html, body {
 .members-list { max-height: 360px; overflow-y: auto; }
 .member-row { font-size: 12.5px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,.05); }
 .member-row .mem-col-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.member-row .mem-col-company { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; }
 .member-row .mem-col-login { color: #94a3b8; font-size: 11.5px; }
+.members-subtitle { font-size: 12px; font-weight: 700; color: #94a3b8; margin-right: auto; }
+
+/* ── 사전 등록(초대) 관리 UI ── */
+.invite-block {
+  margin-bottom: 16px; padding: 12px 13px;
+  background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.2);
+  border-radius: 12px;
+}
+.invite-intro { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.invite-intro b { color: #38bdf8; font-size: 13px; }
+.invite-intro span { color: #94a3b8; font-size: 11.5px; line-height: 1.5; }
+.invite-intro span b { color: #cbd5e1; }
+.invite-add { display: flex; gap: 7px; align-items: center; }
+.invite-add .admin-gate-input { flex: 1; min-height: 40px; }
+.invite-add .invite-role { flex: 0 0 auto; width: 92px; }
+.invites-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.invites-empty { color: #94a3b8; font-size: 12px; padding: 8px 4px; }
+.invite-row {
+  display: grid; grid-template-columns: 1fr auto auto 28px; gap: 8px; align-items: center;
+  padding: 7px 10px; background: rgba(2,6,23,.35); border: 1px solid rgba(255,255,255,.07);
+  border-radius: 9px; font-size: 12.5px;
+}
+.invite-row.used { opacity: .62; }
+.invite-mail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e2e8f0; font-weight: 600; }
+.invite-role-badge { font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 6px; }
+.invite-role-badge.role-designer { background: rgba(56,189,248,.18); color: #38bdf8; }
+.invite-role-badge.role-viewer { background: rgba(16,185,129,.16); color: #34d399; }
+.invite-status { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+.invite-status.pending { background: rgba(245,158,11,.16); color: #fbbf24; }
+.invite-status.used { background: rgba(107,114,128,.22); color: #cbd5e1; }
+
+/* 가입폼: 사전등록 안내 배지 */
+.company-invited-badge {
+  margin: 4px 0 8px; padding: 9px 12px;
+  background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3);
+  border-radius: 9px; color: #34d399; font-size: 12px; font-weight: 600; line-height: 1.45;
+}
+.company-invited-badge.hidden { display: none; }
 
 /* ═══════════════════════════════════════════
    PDF 주석(ezPDF) 레이어 + 툴바
@@ -3394,3 +3536,67 @@ html, body {
 }
 .tb-anno-color::-webkit-color-swatch-wrapper { padding: 2px; }
 .tb-anno-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+/* ══════════════════════════════════════════════════════════════
+   관리자 패널 — 기능/메뉴 관장 · AI 설정 · 코드맵 대시보드
+   ════════════════════════════════════════════════════════════ */
+.admin-gate-card.wide { max-width: 760px; width: min(760px, 94vw); }
+
+/* 기능 온오프 목록 */
+.feat-scope-line { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; }
+.feat-scope-label { font-size: 12px; color: #b8b0a2; white-space: nowrap; }
+.features-list { display: flex; flex-direction: column; gap: 8px; max-height: 48vh; overflow-y: auto; padding-right: 2px; }
+.feature-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 11px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px;
+  background: rgba(255,255,255,.03); cursor: pointer; transition: border-color .15s, background .15s;
+}
+.feature-row:hover { border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.05); }
+.feature-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.feature-meta b { font-size: 14px; color: #f3eee4; }
+.feature-meta span { font-size: 12px; color: #9d958863; color: #9d9588; }
+/* iOS 스타일 토글 스위치 */
+.feature-toggle { appearance: none; -webkit-appearance: none; position: relative; width: 46px; height: 26px; flex: 0 0 auto;
+  background: #4a463e; border-radius: 14px; cursor: pointer; transition: background .18s; outline: none; }
+.feature-toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; transition: transform .18s; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.feature-toggle:checked { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.feature-toggle:checked::after { transform: translateX(20px); }
+
+.features-save-note { margin-top: 12px; font-size: 12.5px; padding: 8px 12px; border-radius: 9px; }
+.features-save-note.hidden { display: none; }
+.features-save-note.ok { background: rgba(16,185,129,.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
+.features-save-note.err { background: rgba(239,68,68,.12); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
+
+/* AI 설정 모달 */
+.ai-status-line { font-size: 13px; padding: 9px 13px; border-radius: 10px; margin-bottom: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); }
+.ai-status-line.on { background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.3); color: #6ee7b7; }
+.ai-status-line.off { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.25); color: #fca5a5; }
+.ai-key-note { margin: 12px 0; padding: 12px 14px; border-radius: 11px; background: rgba(255,255,255,.03); border: 1px dashed rgba(245,158,11,.35); font-size: 12px; color: #b8b0a2; display: flex; flex-direction: column; gap: 7px; }
+.ai-key-note b { color: #f3eee4; font-size: 12.5px; }
+.ai-key-note code { display: block; padding: 8px 11px; background: #15130f; border-radius: 7px; color: #fbbf24; font-family: ui-monospace, monospace; font-size: 12px; user-select: all; word-break: break-all; }
+
+/* 코드맵 대시보드 */
+.codemap-search-line { margin: 4px 0 12px; }
+.codemap-tree { display: flex; flex-direction: column; gap: 16px; max-height: 56vh; overflow-y: auto; padding-right: 4px; }
+.codemap-group-h { font-size: 13px; font-weight: 700; color: #fbbf24; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid rgba(245,158,11,.2); }
+.codemap-file { padding: 10px 13px; border: 1px solid rgba(255,255,255,.07); border-radius: 10px; background: rgba(255,255,255,.025); margin-bottom: 7px; }
+.codemap-file-h { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 4px; }
+.codemap-file-h code { font-family: ui-monospace, monospace; font-size: 12.5px; color: #93c5fd; background: rgba(59,130,246,.1); padding: 2px 7px; border-radius: 5px; }
+.codemap-badge { font-size: 10.5px; padding: 1px 8px; border-radius: 20px; background: rgba(245,158,11,.15); color: #fbbf24; border: 1px solid rgba(245,158,11,.3); }
+.codemap-file-desc { font-size: 12.5px; color: #d4cdbf; line-height: 1.5; }
+.codemap-file-detail { font-size: 11.5px; color: #9d9588; line-height: 1.5; margin-top: 4px; padding-top: 4px; border-top: 1px dashed rgba(255,255,255,.06); }
+.invites-empty { text-align: center; color: #9d9588; font-size: 13px; padding: 24px 0; }
+
+/* ── 기능 OFF 시 해당 메뉴/버튼 숨김 (최상위 관리자 토글 반영) ── */
+body.feat-off-annotations #tb-anno-group { display: none !important; }
+body.feat-off-zones #zone-tools,
+body.feat-off-zones .zone-tools-label,
+body.feat-off-zones #zone-list,
+body.feat-off-zones .zone-list-head { display: none !important; }
+body.feat-off-fls3d #btn-pin-fls,
+body.feat-off-fls3d #fls-pane { display: none !important; }
+body.feat-off-timelapse #btn-tl-compare { display: none !important; }
+body.feat-off-export #section-export { display: none !important; }
+/* pin360 OFF: 360 업로드 핀 도구 숨김 (뷰어 자체는 유지) */
+body.feat-off-pin360 #btn-pin-file { display: none !important; }

@@ -296,6 +296,25 @@
   };
 
   /* ══════════════════════════════════════════
+     LOG  — 사용자 액션 추적(로그인 이후 모든 주요 행위)
+     서버 /api/client-log 로 비동기 전송. 실패해도 앱 흐름 방해 안 함.
+  ══════════════════════════════════════════ */
+  const Log = {
+    /** action(화이트리스트), targetId?, detail? */
+    push(action, targetId, detail) {
+      try {
+        // 로그인 안 된 상태면 서버가 401 → 조용히 무시됨
+        fetch("/api/client-log", {
+          method: "POST",
+          headers: Auth.headers(),
+          body: JSON.stringify({ action, targetId: targetId || undefined, detail: detail || undefined }),
+          keepalive: true
+        }).catch(() => {});
+      } catch (e) {}
+    }
+  };
+
+  /* ══════════════════════════════════════════
      CLOUD  — 360° 그림 파일 저장소 (RESTful Table API)
   ══════════════════════════════════════════ */
   const Cloud = {
@@ -684,6 +703,7 @@
 
     /** 확장자/MIME으로 360° 영상 여부 판단 후 적절한 로더 호출 */
     loadMedia(src, locationName, isVideo) {
+      if (typeof Log !== "undefined") Log.push("pano.open", null, { name: locationName || "" });
       const looksVideo = isVideo === true ||
         (typeof src === "string" && /\.(mp4|webm|mov)(\?|#|$)/i.test(src));
       if (looksVideo) this.loadVideo(src, locationName);
@@ -3619,6 +3639,9 @@
       PinActionPop.init();
       CompanyAuth.init();
       PdfAnno.init();
+      this._bindMobileNav();
+      // 최상위 관리자 패널(기능관장·AI·코드맵) 초기화 + 기능 온오프 UI 반영
+      if (typeof AdminPanels !== "undefined") { AdminPanels.init(); AdminPanels.applyFeaturesToUI(); }
       // 오프라인 우선 동기화 큐 — 배지 갱신 구독 + 자동 동기화 시작
       SyncQueue.onChange(() => this._updateSyncBadge());
       SyncQueue.init();
@@ -3646,6 +3669,10 @@
       State.mode = mode;
       opts = opts || {};
       const isDesigner = mode === "designer";
+      if (typeof Log !== "undefined") Log.push(mode === "viewer" ? "viewer.open" : "app.open", null, { mode });
+      // 모바일 하단 네비 designer-only 버튼 표시/숨김용 body 클래스
+      document.body.classList.toggle("role-designer", isDesigner);
+      document.body.classList.toggle("role-viewer", !isDesigner);
       document.documentElement.style.setProperty("--accent", isDesigner ? "var(--gold)" : "var(--green)");
       UI.$("topbar").style.borderBottomColor = isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)";
       const dot = UI.$("topbar-dot");
@@ -4066,6 +4093,57 @@
       if (hideForm) { State.editingPinId = null; this._closePinForm(); UI.$("pending-pin").classList.add("hidden"); }
     },
 
+    /* ── 모바일 하단 네비 바인딩 (메뉴=바텀시트, 콘텐츠 안 가림) ── */
+    _bindMobileNav() {
+      const $ = (id) => UI.$(id);
+      const closeSheet = () => document.body.classList.remove("sidebar-open");
+      const toggleSheet = () => document.body.classList.toggle("sidebar-open");
+
+      const menu = $("mnav-menu");
+      if (menu) menu.addEventListener("click", () => {
+        toggleSheet();
+        menu.classList.toggle("active", document.body.classList.contains("sidebar-open"));
+      });
+
+      const bd = $("sidebar-backdrop");
+      if (bd) bd.addEventListener("click", closeSheet);
+
+      // 도면 등록 → 기존 업로드 버튼 위임
+      const up = $("mnav-upload");
+      if (up) up.addEventListener("click", () => {
+        closeSheet();
+        const b = $("btn-upload-drawing"); if (b) b.click();
+      });
+
+      // 포인트 추가 → 기존 마킹 토글
+      const place = $("mnav-place");
+      if (place) place.addEventListener("click", () => {
+        closeSheet();
+        const b = $("btn-place"); if (b) b.click();
+      });
+
+      // 포인트 목록 → 전체 핀 드로어
+      const pins = $("mnav-pins");
+      if (pins) pins.addEventListener("click", () => {
+        closeSheet();
+        if (typeof AllPins !== "undefined" && AllPins.show) AllPins.show();
+      });
+
+      // 화면 맞춤
+      const fit = $("mnav-fit");
+      if (fit) fit.addEventListener("click", () => { closeSheet(); MapCtrl.fit(); });
+
+      // 시트 열렸을 때 사이드바 내 버튼 클릭 시 자동 닫기(업로드/배포 등 액션성)
+      const sb = $("sidebar");
+      if (sb) sb.addEventListener("click", (e) => {
+        if (!document.body.classList.contains("sidebar-open")) return;
+        const t = e.target.closest("button");
+        if (t && (t.id === "btn-upload-drawing" || t.id === "btn-deploy" || t.classList.contains("deck-name"))) {
+          setTimeout(closeSheet, 120);
+        }
+      });
+    },
+
     /* ── Map ── */
     _bindMap() {
       const vp = UI.$("map-viewport");
@@ -4086,15 +4164,49 @@
         MapCtrl.handlePanEnd();
       });
 
-      let lastTouch = null;
+      // ═══ 터치 제스처: 1손가락 팬 + 2손가락 핀치 줌 + 더블탭 줌 ═══
+      // 딥리서치 결과: 모바일 PDF/도면 뷰어에서 핀치 줌은 필수(미지원 시 이탈)
+      let lastTouch = null;          // 1손가락 팬 추적
+      let pinch = null;              // 2손가락 핀치 상태 {dist, cx, cy}
+      let lastTapTime = 0;           // 더블탭 추적
+      let lastTapXY = null;
+
+      const touchDist = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const touchMid  = (t0, t1) => ({ x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 });
+
       vp.addEventListener("touchstart", e => {
+        MapCtrl.cancelFly();
+        if (e.touches.length === 2) {
+          // 핀치 시작 — 팬 종료, 두 손가락 거리/중점 기록
+          lastTouch = null;
+          const mid = touchMid(e.touches[0], e.touches[1]);
+          pinch = { dist: touchDist(e.touches[0], e.touches[1]), cx: mid.x, cy: mid.y };
+          e.preventDefault();
+          return;
+        }
         if (e.touches.length === 1) {
           if (State.placing) { this._handlePlaceTouch(e); return; }
-          MapCtrl.cancelFly();
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
       }, { passive: false });
+
       vp.addEventListener("touchmove", e => {
+        if (e.touches.length === 2 && pinch) {
+          // 핀치 줌: 거리 비율만큼 확대/축소, 두 손가락 중점을 기준점으로
+          const newDist = touchDist(e.touches[0], e.touches[1]);
+          const mid = touchMid(e.touches[0], e.touches[1]);
+          if (pinch.dist > 0) {
+            const ratio = newDist / pinch.dist;
+            if (ratio && isFinite(ratio)) MapCtrl.zoomBy(ratio, mid.x, mid.y);
+          }
+          // 두 손가락 중점 이동분만큼 팬도 함께(자연스러운 동작)
+          State.pan.x += mid.x - pinch.cx;
+          State.pan.y += mid.y - pinch.cy;
+          MapCtrl.applyTransform();
+          pinch = { dist: newDist, cx: mid.x, cy: mid.y };
+          e.preventDefault();
+          return;
+        }
         if (e.touches.length === 1 && lastTouch) {
           State.pan.x += e.touches[0].clientX - lastTouch.x;
           State.pan.y += e.touches[0].clientY - lastTouch.y;
@@ -4103,9 +4215,32 @@
         }
         e.preventDefault();
       }, { passive: false });
-      vp.addEventListener("touchend", () => { lastTouch = null; });
 
-      // 더블클릭으로 클릭 지점 중심 줌인
+      vp.addEventListener("touchend", e => {
+        // 핀치 종료(손가락이 2개 미만이 되면)
+        if (pinch && (!e.touches || e.touches.length < 2)) pinch = null;
+        // 손가락이 0개면 팬도 종료
+        if (!e.touches || e.touches.length === 0) {
+          // 더블탭 줌 감지 (touchend 시점, 직전 탭과 시간·위치 근접)
+          const t = (e.changedTouches && e.changedTouches[0]) || null;
+          if (t && !State.placing) {
+            const now = Date.now();
+            const x = t.clientX, y = t.clientY;
+            if (now - lastTapTime < 300 && lastTapXY &&
+                Math.hypot(x - lastTapXY.x, y - lastTapXY.y) < 30) {
+              // 더블탭: 현재 줌 기준 토글식 확대(이미 크면 fit)
+              if (State.zoom >= 2.4) MapCtrl.fit();
+              else MapCtrl.zoomBy(1.8, x, y);
+              lastTapTime = 0; lastTapXY = null;
+            } else {
+              lastTapTime = now; lastTapXY = { x, y };
+            }
+          }
+          lastTouch = null;
+        }
+      });
+
+      // 더블클릭으로 클릭 지점 중심 줌인 (데스크톱)
       vp.addEventListener("dblclick", e => {
         if (State.placing) return;
         MapCtrl.zoomBy(1.6, e.clientX, e.clientY);
@@ -4204,14 +4339,31 @@
       window.addEventListener("mousemove", e => PanoViewer.onPointerMove(e.clientX, e.clientY));
       window.addEventListener("mouseup",   () => PanoViewer.onPointerUp());
       canvas.addEventListener("wheel", e => PanoViewer.onWheel(e), { passive: false });
+      // ═══ 360 뷰어 터치: 1손가락 회전 + 2손가락 핀치 줌(FOV) ═══
+      let panoPinchDist = null;
+      const pDist = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
       canvas.addEventListener("touchstart", e => {
-        if (e.touches.length === 1) PanoViewer.onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+        if (e.touches.length === 2) {
+          panoPinchDist = pDist(e.touches[0], e.touches[1]);
+          e.preventDefault();
+        } else if (e.touches.length === 1) {
+          PanoViewer.onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+        }
       }, { passive: false });
       canvas.addEventListener("touchmove", e => {
         e.preventDefault();
-        if (e.touches.length === 1) PanoViewer.onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+        if (e.touches.length === 2 && panoPinchDist != null) {
+          const d = pDist(e.touches[0], e.touches[1]);
+          const delta = panoPinchDist - d;        // 벌리면 줌인(FOV↓), 모으면 줌아웃(FOV↑)
+          if (Math.abs(delta) > 1) { PanoViewer.setFov(delta * 0.18); panoPinchDist = d; }
+        } else if (e.touches.length === 1) {
+          PanoViewer.onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+        }
       }, { passive: false });
-      canvas.addEventListener("touchend", () => PanoViewer.onPointerUp());
+      canvas.addEventListener("touchend", e => {
+        if (!e.touches || e.touches.length < 2) panoPinchDist = null;
+        PanoViewer.onPointerUp();
+      });
 
       // 파노라마 컨트롤 버튼
       UI.$("btn-pano-rotate").addEventListener("click", e => {
@@ -4262,6 +4414,15 @@
       const zone = UI.$("map-area");
       if (!zone || zone.dataset.dropBound) return;
       zone.dataset.dropBound = "1";
+      // 모바일 쉬운 등록: 빈 화면(도면 안내)을 탭하면 바로 파일 선택
+      const dropHint = UI.$("drop-hint");
+      if (dropHint) {
+        dropHint.style.cursor = "pointer";
+        dropHint.addEventListener("click", () => {
+          if (State.mode !== "designer") return;
+          const inp = UI.$("input-drawing"); if (inp) inp.click();
+        });
+      }
       const accept = (f) => {
         if (!f) return false;
         const n = (f.name || "").toLowerCase();
@@ -4306,6 +4467,8 @@
     },
 
     async _loadDrawing(file) {
+      const _isPdf = file.type === "application/pdf" || (file.name || "").toLowerCase().endsWith(".pdf");
+      if (typeof Log !== "undefined") Log.push(_isPdf ? "pdf.register" : "drawing.upload", file.name, { type: file.type, size: file.size });
       State.reset();
       State.fileName = file.name;
       UI.text("file-name-label", file.name);
@@ -4530,6 +4693,7 @@
       }
 
       if (!editing) State.pins.push(pin);   // 편집 시 기존 객체를 그대로 갱신했으므로 push 안 함
+      if (typeof Log !== "undefined") Log.push(editing ? "pin.edit" : "pin.add", pin.id, { label: pin.label, page: pin.page });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks(); // 영역-핀 연결 갱신
       const wasEditing = editing;
@@ -5052,6 +5216,7 @@
       const status = UI.$("deploy-status");
 
       if (State.pins.length === 0) { alert("배포할 핀이 없습니다. 먼저 포인트를 추가하세요."); return; }
+      if (typeof Log !== "undefined") Log.push("deploy.click", null, { pins: State.pins.length });
 
       // 미동기화(오프라인 임시 저장) 핀이 있으면 배포 전에 먼저 서버로 일괄 업로드
       const hasPending = State.pins.some(p => p.pendingOpId || (p.attachments || []).some(a => a.pendingOpId));
@@ -5795,6 +5960,10 @@
         if (!Auth.isSuper) return;
         Designers.open();
       });
+      // 기능·메뉴 관장 / AI 설정 / 코드맵 (슈퍼)
+      $("btn-open-features") && $("btn-open-features").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openFeatures(); });
+      $("btn-open-ai") && $("btn-open-ai").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openAI(); });
+      $("btn-open-codemap") && $("btn-open-codemap").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openCodemap(); });
       // 설정 패널 내 로그아웃
       $("btn-settings-signout") && $("btn-settings-signout").addEventListener("click", () => {
         Auth.signOut();
@@ -5885,6 +6054,10 @@
       if (dinp) dinp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addDomain(); } });
       // 멤버
       $("members-refresh") && $("members-refresh").addEventListener("click", () => this.loadMembers());
+      // 사전 등록(초대)
+      $("invite-add-btn") && $("invite-add-btn").addEventListener("click", () => this.addInvite());
+      const iinp = $("invite-email-input");
+      if (iinp) iinp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addInvite(); } });
       // 로그 도구
       $("log-refresh") && $("log-refresh").addEventListener("click", () => this.loadLogs(true));
       $("log-more") && $("log-more").addEventListener("click", () => this.loadLogs(false));
@@ -5997,6 +6170,7 @@
 
     /* ── 가입 사용자(회사 이메일 자체가입) + 로그인 기록 ── */
     async loadMembers() {
+      this.loadInvites();  // 사전 등록(초대) 목록도 함께 갱신
       const listEl = document.getElementById("members-list");
       if (!listEl) return;
       listEl.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
@@ -6014,7 +6188,7 @@
           row.className = "member-row";
           row.innerHTML = `<span class="mem-col-email" title="${u.email}">${u.email}</span>
             <span class="mem-col-name">${u.name || "—"}</span>
-            <span class="mem-col-domain">@${u.domain}</span>
+            <span class="mem-col-company" title="${u.company || ""}">${u.company || "—"}</span>
             <span class="mem-col-login">${fmt(u.last_login_at)}</span>
             <span class="mem-col-act"><button class="designer-del" title="가입 취소(삭제)">✕</button></span>`;
           row.querySelector(".designer-del").addEventListener("click", () => this.removeMember(u.email));
@@ -6034,6 +6208,57 @@
         await this.loadMembers();
       } catch (e) {}
     },
+
+    /* ── 사전 등록(초대) 관리 ── */
+    async loadInvites() {
+      const listEl = document.getElementById("invites-list");
+      if (!listEl) return;
+      try {
+        const r = await fetch("/api/invites", { headers: Auth.headers() });
+        if (!r.ok) throw new Error("forbidden");
+        const { data } = await r.json();
+        if (!data || !data.length) { listEl.innerHTML = '<div class="invites-empty">사전 등록된 이메일이 없습니다.</div>'; return; }
+        listEl.innerHTML = "";
+        data.forEach((iv) => {
+          const row = document.createElement("div");
+          row.className = "invite-row" + (iv.used ? " used" : "");
+          const roleLabel = iv.role === "designer" ? "디자이너" : "뷰어";
+          const status = iv.used ? '<span class="invite-status used">가입완료</span>' : '<span class="invite-status pending">대기</span>';
+          row.innerHTML = `<span class="invite-mail" title="${iv.email}">${iv.email}</span>
+            <span class="invite-role-badge role-${iv.role}">${roleLabel}</span>
+            ${status}
+            <button class="designer-del" title="사전등록 삭제">✕</button>`;
+          row.querySelector(".designer-del").addEventListener("click", () => this.removeInvite(iv.email));
+          listEl.appendChild(row);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<div class="invites-empty">목록을 불러올 수 없습니다(권한 필요).</div>';
+      }
+    },
+    async addInvite() {
+      const inp = document.getElementById("invite-email-input");
+      const sel = document.getElementById("invite-role-select");
+      const err = document.getElementById("invite-add-error");
+      if (err) err.classList.add("hidden");
+      const email = (inp.value || "").trim().toLowerCase();
+      const role = sel ? sel.value : "viewer";
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { if (err) { err.textContent = "올바른 이메일을 입력하세요."; err.classList.remove("hidden"); } return; }
+      try {
+        const r = await fetch("/api/invites", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ email, role }) });
+        const j = await r.json();
+        if (!r.ok) { if (err) { err.textContent = j.error || "등록 실패"; err.classList.remove("hidden"); } return; }
+        inp.value = "";
+        if (j.already_registered && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미 가입된 사용자입니다. 권한만 갱신됩니다.");
+        await this.loadInvites();
+      } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
+    },
+    async removeInvite(email) {
+      try {
+        await fetch("/api/invites/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
+        await this.loadInvites();
+      } catch (e) {}
+    },
+
     async open() {
       if (!Auth.isSuper) return;
       const sa = document.getElementById("super-admin-email");
@@ -6554,6 +6779,210 @@
   };
 
   /* ══════════════════════════════════════════
+     ADMIN PANELS — 최상위 관리자: 기능/메뉴 관장 · AI 설정 · 코드맵
+  ══════════════════════════════════════════ */
+  // 이 프로젝트에서 켜고 끌 수 있는 기능 정의(키 = app_settings.features 의 키)
+  const FEATURE_DEFS = [
+    { key: "annotations", label: "PDF 주석(형광펜·도형·메모)", desc: "도면 위 주석 도구 모음" },
+    { key: "zones",       label: "영역/구역 지정",            desc: "사각형·원·다각형 구역 그리기" },
+    { key: "pin360",      label: "360° 파노라마 핀",          desc: "핀 클릭 시 360 뷰어 열기" },
+    { key: "fls3d",       label: "3D 포인트 클라우드(FLS)",   desc: "FLS/E57/LAS 첨부·듀얼뷰" },
+    { key: "ai",          label: "AI 도우미",                 desc: "에러·사용 가이드 LLM(키 설정 시)" },
+    { key: "timelapse",   label: "타임랩스 비교",             desc: "동일 위치 시점 비교" },
+    { key: "export",      label: "내보내기/배포",             desc: "JSON 내보내기·뷰어 배포" }
+  ];
+
+  const AdminPanels = {
+    _features: {},           // 현재 적용된 기능 토글 상태
+    _featScope: "*",
+
+    /** 앱 시작 시 한 번 호출: 현재 적용 기능을 불러와 본문에 반영 */
+    async applyFeaturesToUI() {
+      try {
+        const r = await fetch("/api/app-settings?scope=*&key=features", { headers: Auth.headers() });
+        if (!r.ok) return;
+        const j = await r.json();
+        this._features = j.value || {};
+      } catch (e) { this._features = {}; }
+      this._reflect();
+    },
+    /** 기능 키가 켜져 있는지(미설정=기본 ON) */
+    isEnabled(key) {
+      const v = this._features ? this._features[key] : undefined;
+      return v === undefined ? true : !!v;
+    },
+    /** body 클래스로 기능 on/off 표시 → CSS가 해당 메뉴/버튼 숨김 */
+    _reflect() {
+      FEATURE_DEFS.forEach((f) => {
+        document.body.classList.toggle("feat-off-" + f.key, !this.isEnabled(f.key));
+      });
+    },
+
+    /* ── 기능·메뉴 관장 모달 ── */
+    async openFeatures() {
+      const m = document.getElementById("features-modal");
+      if (!m) return;
+      if (typeof Log !== "undefined") Log.push("settings.open", "features");
+      await this._fillFeatScope();
+      await this._loadFeatures();
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeFeatures() { const m = document.getElementById("features-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 180); } },
+    async _fillFeatScope() {
+      const sel = document.getElementById("feat-scope-select");
+      if (!sel) return;
+      const cur = sel.value || "*";
+      let projects = [];
+      try { const r = await fetch("/api/projects", { headers: Auth.headers() }); const j = await r.json(); projects = j.data || j.results || j || []; } catch (e) {}
+      sel.innerHTML = '<option value="*">전체 공통(모든 프로젝트)</option>';
+      (projects || []).forEach((p) => { const o = document.createElement("option"); o.value = p.id; o.textContent = p.name || p.id; sel.appendChild(o); });
+      sel.value = cur;
+      if (!sel._bound) { sel._bound = true; sel.addEventListener("change", () => { this._featScope = sel.value || "*"; this._loadFeatures(); }); }
+      this._featScope = sel.value || "*";
+    },
+    async _loadFeatures() {
+      const listEl = document.getElementById("features-list");
+      if (!listEl) return;
+      let cur = {};
+      try { const r = await fetch("/api/app-settings?scope=" + encodeURIComponent(this._featScope) + "&key=features", { headers: Auth.headers() }); const j = await r.json(); cur = j.value || {}; } catch (e) {}
+      listEl.innerHTML = "";
+      FEATURE_DEFS.forEach((f) => {
+        const on = cur[f.key] === undefined ? true : !!cur[f.key];
+        const row = document.createElement("label");
+        row.className = "feature-row";
+        row.innerHTML = `<span class="feature-meta"><b>${f.label}</b><span>${f.desc}</span></span>
+          <input type="checkbox" class="feature-toggle" data-key="${f.key}" ${on ? "checked" : ""} />`;
+        listEl.appendChild(row);
+      });
+    },
+    async saveFeatures() {
+      const listEl = document.getElementById("features-list");
+      const note = document.getElementById("features-save-note");
+      const value = {};
+      listEl.querySelectorAll(".feature-toggle").forEach((c) => { value[c.dataset.key] = c.checked; });
+      try {
+        const r = await fetch("/api/app-settings", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ scope: this._featScope, key: "features", value }) });
+        if (!r.ok) throw new Error("fail");
+        if (note) { note.textContent = "✅ 저장되었습니다. 화면에 즉시 반영됩니다."; note.className = "features-save-note ok"; }
+        // 전체 공통 저장 시 현재 화면에도 즉시 반영
+        if (this._featScope === "*") { this._features = value; this._reflect(); }
+      } catch (e) { if (note) { note.textContent = "저장 실패(권한 필요)"; note.className = "features-save-note err"; } }
+    },
+
+    /* ── AI 설정 모달 ── */
+    async openAI() {
+      const m = document.getElementById("ai-modal");
+      if (!m) return;
+      const statusEl = document.getElementById("ai-status-line");
+      try {
+        const r = await fetch("/api/ai/config", { headers: Auth.headers() });
+        const j = await r.json();
+        if (statusEl) { statusEl.textContent = j.enabled ? "🟢 활성화됨 (API 키 설정됨)" : "🔴 비활성 — API 키(AI_API_KEY) 미설정"; statusEl.className = "ai-status-line " + (j.enabled ? "on" : "off"); }
+        const bu = document.getElementById("ai-base-url"); if (bu) bu.value = j.base_url || "";
+        const md = document.getElementById("ai-model"); if (md) md.value = j.model || "";
+      } catch (e) { if (statusEl) statusEl.textContent = "상태를 불러올 수 없습니다."; }
+      // 저장된 base_url/model(app_settings) 우선 표시
+      try { const r2 = await fetch("/api/app-settings?scope=*&key=ai", { headers: Auth.headers() }); const j2 = await r2.json(); if (j2.value && j2.value.base_url) document.getElementById("ai-base-url").value = j2.value.base_url; if (j2.value && j2.value.model) document.getElementById("ai-model").value = j2.value.model; } catch (e) {}
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeAI() { const m = document.getElementById("ai-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 180); } },
+    async saveAI() {
+      const note = document.getElementById("ai-save-note");
+      const value = { base_url: (document.getElementById("ai-base-url").value || "").trim(), model: (document.getElementById("ai-model").value || "").trim() };
+      try {
+        const r = await fetch("/api/app-settings", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ scope: "*", key: "ai", value }) });
+        if (!r.ok) throw new Error("fail");
+        if (note) { note.textContent = "✅ Base URL·모델 저장됨. (키는 wrangler secret으로 별도 설정)"; note.className = "features-save-note ok"; }
+      } catch (e) { if (note) { note.textContent = "저장 실패(권한 필요)"; note.className = "features-save-note err"; } }
+    },
+    async testAI() {
+      const note = document.getElementById("ai-save-note");
+      if (note) { note.textContent = "연결 테스트 중…"; note.className = "features-save-note"; }
+      try {
+        const r = await fetch("/api/ai/chat", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ messages: [{ role: "user", content: "연결 테스트입니다. OK라고만 답해주세요." }], max_tokens: 16 }) });
+        const j = await r.json();
+        if (r.ok) { if (note) { note.textContent = "✅ 연결 성공: " + (j.content || "(응답)"); note.className = "features-save-note ok"; } }
+        else { if (note) { note.textContent = "⚠️ " + (j.error || "실패") + (j.hint ? " — " + j.hint : ""); note.className = "features-save-note err"; } }
+      } catch (e) { if (note) { note.textContent = "네트워크 오류"; note.className = "features-save-note err"; } }
+    },
+
+    /* ── 코드 구조 · 파일 설명 대시보드 ── */
+    openCodemap() {
+      const m = document.getElementById("codemap-modal");
+      if (!m) return;
+      this._renderCodemap("");
+      const s = document.getElementById("codemap-search");
+      if (s && !s._bound) { s._bound = true; s.addEventListener("input", () => this._renderCodemap(s.value || "")); }
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeCodemap() { const m = document.getElementById("codemap-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 180); } },
+    _renderCodemap(filter) {
+      const el = document.getElementById("codemap-tree");
+      if (!el) return;
+      const f = (filter || "").toLowerCase();
+      el.innerHTML = "";
+      CODE_MAP.forEach((grp) => {
+        const items = grp.items.filter((it) => !f || (it.path + " " + it.desc + " " + (it.detail || "")).toLowerCase().includes(f));
+        if (!items.length) return;
+        const g = document.createElement("div");
+        g.className = "codemap-group";
+        g.innerHTML = `<div class="codemap-group-h">${grp.group}</div>`;
+        items.forEach((it) => {
+          const row = document.createElement("div");
+          row.className = "codemap-file";
+          row.innerHTML = `<div class="codemap-file-h"><code>${it.path}</code><span class="codemap-badge">${it.kind}</span></div>
+            <div class="codemap-file-desc">${it.desc}</div>${it.detail ? `<div class="codemap-file-detail">${it.detail}</div>` : ""}`;
+          g.appendChild(row);
+        });
+        el.appendChild(g);
+      });
+      if (!el.children.length) el.innerHTML = '<div class="invites-empty">검색 결과가 없습니다.</div>';
+    },
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("features-save") && $("features-save").addEventListener("click", () => this.saveFeatures());
+      $("features-close") && $("features-close").addEventListener("click", () => this.closeFeatures());
+      $("ai-save") && $("ai-save").addEventListener("click", () => this.saveAI());
+      $("ai-test") && $("ai-test").addEventListener("click", () => this.testAI());
+      $("ai-close") && $("ai-close").addEventListener("click", () => this.closeAI());
+      $("codemap-close") && $("codemap-close").addEventListener("click", () => this.closeCodemap());
+      document.querySelectorAll('.admin-gate-backdrop[data-close]').forEach((bd) => {
+        const which = bd.getAttribute("data-close");
+        if (which === "features") bd.addEventListener("click", () => this.closeFeatures());
+        if (which === "ai") bd.addEventListener("click", () => this.closeAI());
+        if (which === "codemap") bd.addEventListener("click", () => this.closeCodemap());
+      });
+    }
+  };
+
+  /* 코드 구조 설명 데이터 — 관리자 대시보드용(파일별 기능 설명) */
+  const CODE_MAP = [
+    { group: "🖥️ 서버 / API (Hono on Cloudflare Workers)", items: [
+      { path: "src/index.tsx", kind: "서버", desc: "모든 백엔드 API·SSR 진입점. 인증·프로젝트·핀·배포·도메인·초대·설정·AI 라우트를 한 파일에 정의.", detail: "주요: /api/auth/me, /api/projects, /api/pins, /api/deploy, /api/signup/*, /api/allowed-domains, /api/invites, /api/app-settings, /api/ai/*" },
+      { path: "src/renderer.tsx", kind: "서버", desc: "Hono JSX 렌더러(HTML 셸 구성)." }
+    ]},
+    { group: "🎨 클라이언트 (public/)", items: [
+      { path: "public/index.html", kind: "마크업", desc: "앱 전체 화면 구조 — 상단바·사이드바·맵 뷰포트·각종 모달(로그인/가입/관리자/설정/기능/AI/코드맵)." },
+      { path: "public/js/main.js", kind: "로직", desc: "클라이언트 전체 로직. 모듈 집합으로 구성.", detail: "App(부트), MapCtrl(줌·팬·핀치), PanoViewer(360), PDF(렌더), PdfAnno(주석), Zones(구역), Pins/PinGrid/PinActionPop(핀), Auth/CompanyAuth(인증·가입), Designers(권한·도메인·멤버·초대·로그), Settings/AdminPanels(설정·기능관장·AI·코드맵), SyncQueue(오프라인 큐)." },
+      { path: "public/css/style.css", kind: "스타일", desc: "전체 디자인·반응형(모바일 바텀시트·하단네비)·주석/관리자 UI 스타일." }
+    ]},
+    { group: "📱 PWA / 오프라인", items: [
+      { path: "public/sw.js", kind: "서비스워커", desc: "앱 셸 캐시(stale-while-revalidate). /api/·/tables/ 는 절대 가로채지 않음 → 데이터는 항상 최신.", detail: "오프라인에서 화면 로딩 가능. PDF.js·Three.js CDN도 캐시." },
+      { path: "public/manifest.webmanifest", kind: "PWA", desc: "홈 화면 설치용 매니페스트(이름·아이콘·표시 모드)." }
+    ]},
+    { group: "🗄️ 데이터 (Cloudflare D1 / R2)", items: [
+      { path: "migrations/0001~0008_*.sql", kind: "DB", desc: "스키마 마이그레이션.", detail: "핀/배포(0001), 인증·프로젝트·구역(0002), 핀노트(0003), 구역(0004), 사용신청(0005), 활동로그(0006), 회사가입·도메인(0007), 초대·앱설정(0008)." }
+    ]},
+    { group: "⚙️ 빌드 / 운영", items: [
+      { path: "vite.config.ts", kind: "빌드", desc: "Cloudflare Pages용 Vite 빌드 → dist/_worker.js 생성." },
+      { path: "wrangler.jsonc", kind: "설정", desc: "CF Pages 설정(D1·R2 바인딩, nodejs_compat)." },
+      { path: "ecosystem.config.cjs", kind: "운영", desc: "PM2 개발 서버(wrangler pages dev) 구동 설정." },
+      { path: "CLAUDE.md / .claude/HANDOFF.md", kind: "문서", desc: "프로젝트 정체 카드 + 세션 인수인계(IRON RULE 포함)." }
+    ]}
+  ];
+
+  /* ══════════════════════════════════════════
      COMPANY AUTH — 회사 이메일 자체가입 / 로그인
      (인증코드 → 비밀번호 → 로컬 세션 토큰)
   ══════════════════════════════════════════ */
@@ -6649,9 +7078,14 @@
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "코드 발송에 실패했습니다."); return; }
         this._email = email;
+        this._invited = !!j.invited;
         $("cg-verify-email").textContent = email;
         $("company-step-email").classList.add("hidden");
         $("company-step-verify").classList.remove("hidden");
+        // 사전 등록(초대) 계정 안내 + 회사명 기본값 채움
+        const badge = $("cg-invited-badge");
+        if (badge) badge.classList.toggle("hidden", !j.invited);
+        if (j.invited && j.invite_company) { const cc = $("cg-company"); if (cc && !cc.value) cc.value = j.invite_company; }
         // dev-fallback 코드 표시(메일 미설정 시)
         const dc = $("cg-dev-code");
         if (j.dev_code) {
@@ -6675,16 +7109,19 @@
       const pw = $("cg-pw").value || "";
       const pw2 = $("cg-pw2").value || "";
       const name = ($("cg-name").value || "").trim();
+      const company = (($("cg-company") && $("cg-company").value) || "").trim();
       if (!/^\d{6}$/.test(code)) { this._err("인증코드 6자리를 입력해 주세요."); return; }
       if (pw.length < 8) { this._err("비밀번호는 8자 이상이어야 합니다."); return; }
       if (pw !== pw2) { this._err("비밀번호가 일치하지 않습니다."); return; }
+      // 사전 등록(초대) 계정은 회사명 필수
+      if (this._invited && !company) { this._err("회사명을 입력해 주세요."); return; }
       const btn = $("cg-create"); const orig = btn ? btn.textContent : "";
       if (btn) { btn.disabled = true; btn.textContent = "처리 중..."; }
       try {
         const pid = this._projectId();
         const r = await fetch("/api/signup/verify", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: this._email, code, password: pw, name, project_id: pid || undefined })
+          body: JSON.stringify({ email: this._email, code, password: pw, name, company, project_id: pid || undefined })
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "가입에 실패했습니다."); return; }
@@ -6960,7 +7397,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);
