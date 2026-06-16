@@ -2244,12 +2244,18 @@
     },
 
     /** 프로젝트 진입: 디자이너면 편집, 아니면 뷰어 */
-    openProject(p) {
+    async openProject(p) {
       // 선택 프로젝트를 Projects 모듈과 공유 (작업화면 사이드바 동기화용)
       Projects.list = this.list;
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
+      // ★ 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
+      //   isDesigner가 false인 채로 카드를 누르면 뷰어로 진입 → "PDF 업로드가 안 된다"는
+      //   회귀 느낌을 준다. 토큰이 있으면 권한 재확인을 한 번 await 한 뒤 모드를 결정한다.
+      if (!Auth.isDesigner && Auth.idToken) {
+        try { await Auth.refresh(); } catch (e) {}
+      }
       if (Auth.isDesigner) {
         App.openApp("designer", { project: p });
       } else {
@@ -3751,6 +3757,9 @@
       // "뷰어로" 버튼은 편집(designer) 모드에서만
       const btnExit = UI.$("btn-exit-edit");
       if (btnExit) btnExit.classList.toggle("hidden", !isDesigner);
+      // "설계자 모드" 버튼: 설계자 권한이 있는데 지금 뷰어 모드일 때만 노출(회귀 방지)
+      const btnEnter = UI.$("btn-enter-edit");
+      if (btnEnter) btnEnter.classList.toggle("hidden", isDesigner || !Auth.isDesigner);
       // ←(뒤로) 버튼: 프로젝트 허브로 돌아가기 (뷰어 전용 잠금 링크에서는 숨김)
       const btnBack = UI.$("btn-back");
       if (btnBack) btnBack.style.display = State.viewerLocked ? "none" : "";
@@ -3771,6 +3780,18 @@
       // 디자이너 편집 UI 정리 후 뷰어로 재진입
       PanoViewer.close();
       this.openApp("viewer");
+    },
+
+    /** 뷰어 모드 → 설계자 편집 모드로 전환 (설계자 권한 필요).
+     *  회귀 방지: 권한 확인이 늦어 뷰어로 진입한 설계자가 즉시 편집 모드로 올라올 수 있게 한다. */
+    async enterEdit() {
+      if (!Auth.isDesigner && Auth.idToken) { try { await Auth.refresh(); } catch (e) {} }
+      if (!Auth.isDesigner) {
+        if (Auth.requireDesigner) { Auth.requireDesigner(() => this.openApp("designer", { project: Projects.currentProject })); }
+        return;
+      }
+      PanoViewer.close();
+      this.openApp("designer", { project: Projects.currentProject });
     },
 
     /* ── Topbar ── */
@@ -6068,6 +6089,8 @@
       });
       // topbar "뷰어로" 버튼 → 편집 모드 종료
       $("btn-exit-edit") && $("btn-exit-edit").addEventListener("click", () => App.exitEdit());
+      // topbar "설계자 모드" 버튼 → 뷰어에서 편집 모드로 전환 (회귀 방지)
+      $("btn-enter-edit") && $("btn-enter-edit").addEventListener("click", () => App.enterEdit());
     },
 
     open() {
