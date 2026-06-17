@@ -3974,3 +3974,11 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
   .zpager-tab{ padding:8px 11px; font-size:.8rem; }
   .zpager-name{ max-width:90px; }
 }
+
+/* [마스터 규칙] 구역 미등록 시 도면 업로드 버튼 잠금 표시 */
+.btn-upload.upload-locked{
+  opacity:.62; cursor:not-allowed;
+  background:repeating-linear-gradient(45deg, rgba(120,130,145,.18), rgba(120,130,145,.18) 8px, rgba(120,130,145,.08) 8px, rgba(120,130,145,.08) 16px);
+  border:1px dashed rgba(150,160,175,.55); color:#7a8696;
+}
+.btn-upload.upload-locked:hover{ filter:none; transform:none; }

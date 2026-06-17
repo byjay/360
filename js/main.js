@@ -4158,20 +4158,32 @@
     /* ── Sidebar ── */
     _bindSidebar() {
       UI.$("btn-upload-drawing").addEventListener("click", async () => {
-        // ── 요청사항: 도면 등록 시 '구역'을 먼저 보장한다 ──
-        // (구역이 없으면 자동으로 기본 구역을 만들고, 여러 구역이 있는데 미선택이면 선택을 유도하되
-        //  업로드 자체는 막지 않는다 — 과거 "업로드가 아무 반응 없이 막힘" 회귀 방지)
+        // ── [마스터 규칙] 프로젝트 하부에 '구역'이 없으면 도면 등록 차단 → 반드시 구역부터 등록 ──
+        //  (자동생성으로 우회하지 않고, 사용자가 직접 구역을 먼저 만들도록 강제)
         if (typeof Projects !== "undefined" && Projects.currentProject) {
+          const decks = Projects.decks || [];
+          // 1) 구역이 0개 → 업로드 차단 + 구역 생성 유도
+          if (decks.length === 0) {
+            Prompt.toast && Prompt.toast("⛔ 먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다. 구역을 생성하세요.");
+            const db = document.getElementById("decks-block");
+            if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
+            // 구역 생성 다이얼로그 바로 띄움
+            try {
+              const created = await Projects.createDeck();
+              if (!created) return; // 사용자가 취소 → 업로드도 중단
+            } catch (e) { return; }
+          }
+          // 2) 구역은 있는데 미선택 → 선택 유도(차단)
           if (!Projects.currentDeck) {
-            if (Projects.decks && Projects.decks.length > 1) {
-              // 구역이 여러 개인데 선택 안 됨 → 선택 유도(차단하지 않음, 안내만)
-              Prompt.toast("⚠️ 여러 구역이 있습니다. 위쪽 '구역'에서 등록할 구역을 먼저 선택하세요.");
+            if ((Projects.decks || []).length === 1) {
+              Projects.currentDeck = Projects.decks[0];
+              if (Projects._renderDecks) Projects._renderDecks();
+            } else {
+              Prompt.toast && Prompt.toast("⚠️ 도면을 등록할 ‘구역’을 먼저 선택하세요.");
               const db = document.getElementById("decks-block");
-              if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1600); }
+              if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
               return;
             }
-            // 구역이 0개 또는 1개 → 자동 보장(없으면 '구역 1' 생성, 1개면 그걸 선택)
-            try { await Projects.ensureDeck(); } catch (e) {}
           }
         }
         UI.$("input-drawing").click();
@@ -4915,6 +4927,26 @@
     },
 
     async _loadDrawing(file) {
+      // ── [마스터 규칙] 구역(deck) 선행 등록 강제: 프로젝트에 구역이 없거나 미선택이면 도면 로드 차단 ──
+      //  (버튼/드래그앤드롭/시트 등 모든 진입 경로를 여기서 중앙 차단)
+      if (typeof Projects !== "undefined" && Projects.currentProject) {
+        const decks = Projects.decks || [];
+        if (decks.length === 0) {
+          Prompt && Prompt.toast && Prompt.toast("⛔ 먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다.");
+          const db = document.getElementById("decks-block");
+          if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
+          try { const created = await Projects.createDeck(); if (!created) return; } catch (e) { return; }
+        }
+        if (!Projects.currentDeck) {
+          if ((Projects.decks || []).length === 1) { Projects.currentDeck = Projects.decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
+          else {
+            Prompt && Prompt.toast && Prompt.toast("⚠️ 도면을 등록할 ‘구역’을 먼저 선택하세요.");
+            const db = document.getElementById("decks-block");
+            if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
+            return;
+          }
+        }
+      }
       const _isPdf = file.type === "application/pdf" || (file.name || "").toLowerCase().endsWith(".pdf");
       if (typeof Log !== "undefined") Log.push(_isPdf ? "pdf.register" : "drawing.upload", file.name, { type: file.type, size: file.size });
       State.reset();
@@ -8001,6 +8033,8 @@
     _renderDecks() {
       const listEl = document.getElementById("decks-list");
       const emptyEl = document.getElementById("decks-empty");
+      // [마스터 규칙] 구역 유무에 따라 도면 업로드 버튼 잠금/해제 (구역 선행 등록 시각화)
+      this._syncUploadLock();
       if (!listEl) return;
       listEl.innerHTML = "";
       if (!this.decks.length) { emptyEl.classList.remove("hidden"); return; }
@@ -8032,6 +8066,27 @@
           listEl.appendChild(sub);
         }
       });
+    },
+
+    /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */
+    _syncUploadLock() {
+      const btn = document.getElementById("btn-upload-drawing");
+      const hint = document.getElementById("upload-zone-hint");
+      if (!btn) return;
+      // 프로젝트가 선택된 디자이너 동선에서만 잠금 적용
+      const hasProject = !!this.currentProject;
+      const hasDeck = (this.decks || []).length > 0;
+      const locked = hasProject && !hasDeck;
+      btn.classList.toggle("upload-locked", locked);
+      btn.setAttribute("aria-disabled", locked ? "true" : "false");
+      if (locked) {
+        btn.dataset.origText = btn.dataset.origText || btn.textContent;
+        btn.textContent = "🔒 먼저 구역을 등록하세요";
+        if (hint) hint.textContent = "도면을 올리려면 위 ‘🗂️ 구역’에서 + 생성으로 구역을 먼저 만드세요.";
+      } else {
+        if (btn.dataset.origText) btn.textContent = btn.dataset.origText;
+        if (hint) hint.textContent = "구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.";
+      }
     },
 
     _esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }

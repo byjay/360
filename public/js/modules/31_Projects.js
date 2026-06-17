@@ -129,6 +129,8 @@
     _renderDecks() {
       const listEl = document.getElementById("decks-list");
       const emptyEl = document.getElementById("decks-empty");
+      // [마스터 규칙] 구역 유무에 따라 도면 업로드 버튼 잠금/해제 (구역 선행 등록 시각화)
+      this._syncUploadLock();
       if (!listEl) return;
       listEl.innerHTML = "";
       if (!this.decks.length) { emptyEl.classList.remove("hidden"); return; }
@@ -160,6 +162,27 @@
           listEl.appendChild(sub);
         }
       });
+    },
+
+    /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */
+    _syncUploadLock() {
+      const btn = document.getElementById("btn-upload-drawing");
+      const hint = document.getElementById("upload-zone-hint");
+      if (!btn) return;
+      // 프로젝트가 선택된 디자이너 동선에서만 잠금 적용
+      const hasProject = !!this.currentProject;
+      const hasDeck = (this.decks || []).length > 0;
+      const locked = hasProject && !hasDeck;
+      btn.classList.toggle("upload-locked", locked);
+      btn.setAttribute("aria-disabled", locked ? "true" : "false");
+      if (locked) {
+        btn.dataset.origText = btn.dataset.origText || btn.textContent;
+        btn.textContent = "🔒 먼저 구역을 등록하세요";
+        if (hint) hint.textContent = "도면을 올리려면 위 ‘🗂️ 구역’에서 + 생성으로 구역을 먼저 만드세요.";
+      } else {
+        if (btn.dataset.origText) btn.textContent = btn.dataset.origText;
+        if (hint) hint.textContent = "구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.";
+      }
     },
 
     _esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
