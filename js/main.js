@@ -3582,6 +3582,17 @@
     collapsed: false,
     query: "",
 
+    /** 모바일/태블릿(터치) 또는 좁은 화면이면 true → 화면 가리지 않는 바텀시트(드롭다운) 모드.
+     *  폭이 640px보다 큰 큰 갤럭시/폴더블/태블릿도 터치 기기는 모두 포함한다. */
+    isMobileSheet() {
+      if (typeof window === "undefined" || !window.matchMedia) return false;
+      try {
+        return window.matchMedia("(max-width: 640px), (pointer: coarse)").matches;
+      } catch (e) {
+        return window.matchMedia("(max-width: 640px)").matches;
+      }
+    },
+
     init() {
       const toggle = document.getElementById("pin-grid-toggle");
       const reopen = document.getElementById("pin-grid-reopen");
@@ -3637,7 +3648,7 @@
       }
       // 모바일(≤640px): 도면을 먼저 보도록 첫 표시 시 자동으로 접어 둠(바텀시트 닫힘).
       // 사용자가 하단 '목록' 버튼/리오픈 탭으로 열 수 있음.
-      if (!this._mobileInit && typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+      if (!this._mobileInit && this.isMobileSheet()) {
         this._mobileInit = true;
         this.collapsed = true;
       }
@@ -3748,7 +3759,8 @@
       // 모바일: 영역 지정 도구를 기본 접힘으로 시작(화면 가림 방지)
       try {
         const ztw = document.getElementById("zone-tools-wrap");
-        if (ztw && window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+        const narrowOrTouch = window.matchMedia && (window.matchMedia("(max-width: 640px)").matches || window.matchMedia("(pointer: coarse)").matches);
+        if (ztw && narrowOrTouch) {
           ztw.removeAttribute("open");
         }
       } catch (e) {}

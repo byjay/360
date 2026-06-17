@@ -3410,17 +3410,19 @@ html, body {
 .pin-grid-reopen.hidden{ display:none; }
 .pin-grid-reopen:hover{ transform:scale(1.07); filter:brightness(1.06); }
 
-@media (max-width: 860px) and (min-width: 641px){
+/* 데스크톱(마우스) 중간 폭에서만 우측 축소 패널 — 터치 기기는 아래 바텀시트가 적용됨 */
+@media (hover: hover) and (pointer: fine) and (max-width: 860px) and (min-width: 641px){
   .pin-grid-panel{ width:300px; max-width:62vw; top:10px; right:10px; bottom:10px; }
 }
 
 /* ════════════════════════════════════════════
-   모바일 포인트 리스트 — 바텀시트 (≤640px)
-   · 화면을 가리지 않도록 하단에서 올라오는 시트로 전환
+   모바일/태블릿 포인트 리스트 — 바텀시트(드롭다운형)
+   · 좁은 화면(≤640px) 또는 모든 터치 기기(pointer: coarse)에 적용
+   · 큰 갤럭시/폴더블/태블릿(폭 853px 등)도 터치면 화면을 가리지 않도록 전환
    · 도면 상단은 항상 보이도록 높이 제한(둥근 모서리 + 드래그 핸들)
    · 닫힘은 translateY(아래로) 로 — 데스크톱 translateX 오버라이드
 ════════════════════════════════════════════ */
-@media (max-width: 640px){
+@media (max-width: 640px), (pointer: coarse){
   .pin-grid-panel{
     position:fixed;
     left:0; right:0; bottom:0; top:auto;
