@@ -70,6 +70,9 @@
     currentProjectName: null,
     currentDeploymentId: null,   // 현재 로드된 배포본 id (노트/협업 연결용)
     noteSummary: {},             // { pin_id: {total,open,progress,done} } 도면 뱃지용
+    pinColor:    null,           // 핀 기본 색상(설정에서 변경) — null이면 PinPrefs 기본(green)
+    checkboardStart: {},         // { [page]: 시작번호 } 구역(페이지)별 체크보드 시작 번호
+    zoneView:    null,           // 구역 페이지(crop-view) 진입 중인 zone id — null이면 전체 도면
 
     reset() {
       if (this.imageUrl) { URL.revokeObjectURL(this.imageUrl); this.imageUrl = null; }
@@ -1790,6 +1793,26 @@
     },
     cancelFly() {
       if (this._flyRaf) { cancelAnimationFrame(this._flyRaf); this._flyRaf = null; }
+    },
+
+    /** 구역(zone bbox %)을 화면에 꽉 차게 확대(crop-view). 구역 페이지 진입에 사용.
+     *  bbox: {x,y,w,h} (% 단위). pad: 여백 비율(0.12 = 12%). */
+    fitZone(bbox, pad = 0.12, duration = 620) {
+      if (!bbox || !(bbox.w > 0) || !(bbox.h > 0)) return;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      if (!vw || !vh || !cw || !ch) return;
+      // 구역의 픽셀 크기(줌1 기준) = (w% / 100) * cw
+      const zoneW = (bbox.w / 100) * cw;
+      const zoneH = (bbox.h / 100) * ch;
+      // 패딩 포함해 화면에 맞추는 배율 (가로/세로 중 더 빡빡한 쪽)
+      const padK = 1 - Math.max(0, Math.min(0.4, pad));
+      let z = Math.min((vw * padK) / zoneW, (vh * padK) / zoneH);
+      z = Math.max(0.3, Math.min(8, z)); // MapCtrl 줌 한계 내로
+      const cx = bbox.x + bbox.w / 2;
+      const cy = bbox.y + bbox.h / 2;
+      this.flyTo(cx, cy, z, duration);
+      return z;
     }
   };
 
@@ -1942,6 +1965,13 @@
         marker.style.left = pin.x + "%";
         marker.style.top  = pin.y + "%";
         marker.dataset.id = pin.id;
+        // 구역 페이지(crop-view) 진입 중이면, 해당 구역 밖 핀은 흐리게(dim)
+        if (State.zoneView) {
+          const _zv = (State.zones || []).find(z => z.id === State.zoneView);
+          if (_zv && typeof Zones !== "undefined" && Zones._contains && !Zones._contains(_zv, pin.x, pin.y)) {
+            marker.classList.add("zone-dim");
+          }
+        }
         const hasContent = App.pinHasContent(pin);
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
@@ -1950,12 +1980,14 @@
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
         marker.dataset.no = pageIdx;
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
-        //    미배치=선명한 코랄레드(#ef4444), 사진 있음=에메랄드(#10b981).
+        //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
+        //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
-        const headFill  = hasContent ? '#10b981' : '#ef4444';
-        const headFill2 = hasContent ? '#047857' : '#b91c1c';
-        const needleTip = hasContent ? '#064e3b' : '#7f1d1d';
-        const txtFill   = hasContent ? '#065f46' : '#991b1b';
+        const _pc = (typeof PinPrefs !== "undefined") ? PinPrefs.color() : { head:'#10b981', head2:'#047857', needle:'#064e3b', text:'#065f46' };
+        const headFill  = hasContent ? _pc.head   : '#ef4444';
+        const headFill2 = hasContent ? _pc.head2  : '#b91c1c';
+        const needleTip = hasContent ? _pc.needle : '#7f1d1d';
+        const txtFill   = hasContent ? _pc.text   : '#991b1b';
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -3142,13 +3174,15 @@
       const layer = document.getElementById("zones-layer");
       if (!svg || !layer) return;
 
-      // 1) SVG 도형(채움+테두리)
+      // 1) SVG 도형(채움+테두리). 구역뷰 진입 중이면 현재 구역 외 도형 dim
       const draft = svg.querySelector(".zone-draft-svg");
+      const zv = State.zoneView;
       svg.innerHTML = zones.map(z => {
         const a = z.id === this._active ? " active" : "";
-        if (z.shape === "circle") return `<ellipse data-zone="${z.id}" class="zone-shape${a}" cx="${z.cx}" cy="${z.cy}" rx="${z.r}" ry="${z.r}" style="--zc:${z.color}"/>`;
-        if (z.shape === "poly") return `<polygon data-zone="${z.id}" class="zone-shape${a}" points="${(z.points||[]).map(p=>p.x+","+p.y).join(" ")}" style="--zc:${z.color}"/>`;
-        return `<rect data-zone="${z.id}" class="zone-shape${a}" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="0.6" style="--zc:${z.color}"/>`;
+        const d = (zv && z.id !== zv) ? " zone-dim" : "";
+        if (z.shape === "circle") return `<ellipse data-zone="${z.id}" class="zone-shape${a}${d}" cx="${z.cx}" cy="${z.cy}" rx="${z.r}" ry="${z.r}" style="--zc:${z.color}"/>`;
+        if (z.shape === "poly") return `<polygon data-zone="${z.id}" class="zone-shape${a}${d}" points="${(z.points||[]).map(p=>p.x+","+p.y).join(" ")}" style="--zc:${z.color}"/>`;
+        return `<rect data-zone="${z.id}" class="zone-shape${a}${d}" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="0.6" style="--zc:${z.color}"/>`;
       }).join("");
       if (draft) svg.appendChild(draft);
 
@@ -3179,6 +3213,8 @@
       layer.querySelectorAll("[data-zdel]").forEach(b => {
         b.addEventListener("click", (e) => { e.stopPropagation(); this.remove(b.dataset.zdel); });
       });
+      // 구역 페이저(전체+구역 탭) 갱신
+      try { if (typeof App !== "undefined" && App._renderZonePager) App._renderZonePager(); } catch (e) {}
     },
 
     /* ── 사이드바 목록 ── */
@@ -3392,7 +3428,8 @@
         ${z.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(z.note)}</div></div>` : ""}
 
         <div class="insp-actions">
-          <button class="insp-btn primary" data-act="fly">화면 이동</button>
+          <button class="insp-btn primary" data-act="zoom">📄 구역 페이지 열기</button>
+          <button class="insp-btn ghost" data-act="fly">화면 이동</button>
           ${designer ? `<button class="insp-btn ghost" data-act="rename">이름 변경</button>
           <button class="insp-btn danger" data-act="del">구역 삭제</button>` : ""}
         </div>
@@ -3409,7 +3446,8 @@
       body.querySelectorAll(".insp-btn").forEach(b => {
         b.addEventListener("click", () => {
           const act = b.dataset.act;
-          if (act === "fly") Zones.focus(z.id);
+          if (act === "zoom") { if (typeof App !== "undefined" && App.enterZoneView) App.enterZoneView(z.id); }
+          else if (act === "fly") Zones.focus(z.id);
           else if (act === "del") { Zones.remove(z.id); this.close(); }
           else if (act === "rename") {
             const nv = prompt("구역 이름", z.label || "");
@@ -3769,6 +3807,7 @@
       MapCtrl.init(UI.$("map-viewport"), UI.$("map-transform"));
       PanoViewer.init(UI.$("pano-canvas"));
       AllPins.init();
+      try { State.pinColor = PinPrefs.get(); } catch (e) {}  // 저장된 핀 색상 복원(기본 그린)
       Auth.init();
       Settings.init();
       Designers.init();
@@ -3836,6 +3875,16 @@
       UI.toggle("section-projects",  isDesigner);   // 프로젝트/데크 관리
       UI.toggle("section-upload",    isDesigner);   // 도면 업로드
       UI.toggle("section-place",     isDesigner);   // 위치 포인트 추가 (도구 패널 — 항상 유지)
+      UI.toggle("section-checkboard", isDesigner);  // 체크보드 상설 메뉴 (디자이너 전용)
+      // 체크보드 메뉴 카드의 진입 버튼 라벨/활성 상태 동기화
+      try {
+        const cbEnter = UI.$("btn-checkboard-enter");
+        const cbEnterLbl = UI.$("btn-checkboard-enter-label");
+        if (cbEnter) cbEnter.classList.toggle("active", isCheckboard);
+        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "디자이너 모드로 복귀" : "체크보드 모드 시작";
+        const startInput = UI.$("input-checkboard-start");
+        if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
+      } catch (e) {}
       if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
       // 핀 편집 폼은 사이드바가 아닌 도면 위 플로팅 패널 — 시작 시 닫힘
@@ -4026,6 +4075,86 @@
       }
     },
 
+    /* ══════════════════════════════════════════
+       구역 페이지(crop-view) 시스템
+       — 물리 페이지를 늘리지 않고 "가상 페이지"로 처리.
+       — 1페이지(전체)는 모든 핀 표시 + 통합관리.
+       — 구역 진입 시 해당 구역만 화면에 꽉 차게 확대(crop-view),
+         구역 밖 핀/구역은 흐리게 처리해 상세 작업에 집중.
+       — viewportToPercent는 줌/팬 보정된 전체 도면 %를 반환하므로
+         확대 상태에서 클릭해도 전역 좌표가 정확히 등록됨(중복 좌표 없음).
+       ══════════════════════════════════════════ */
+
+    /** 현재 페이지의 구역 목록(페이저 탭용) */
+    _zonesOnPage() {
+      const pg = State.pdfPage || 1;
+      return (State.zones || []).filter(z => (z.page || 1) === pg);
+    },
+
+    /** 구역 페이지 진입 — crop-view 확대 + 비활성 핀/구역 dim */
+    enterZoneView(zoneId) {
+      const z = (State.zones || []).find(x => x.id === zoneId);
+      if (!z) return;
+      // 다른 PDF 페이지면 먼저 전환
+      if ((z.page || 1) !== (State.pdfPage || 1) && this._gotoPage) {
+        Promise.resolve(this._gotoPage(z.page)).then(() => {
+          setTimeout(() => this.enterZoneView(zoneId), 80);
+        });
+        return;
+      }
+      State.zoneView = zoneId;
+      const bb = (typeof Zones !== "undefined" && Zones._bbox) ? Zones._bbox(z) : { x: z.x, y: z.y, w: z.w, h: z.h };
+      if (MapCtrl.fitZone) MapCtrl.fitZone(bb, 0.14, 640);
+      try { document.body.classList.add("zone-view-active"); } catch (e) {}
+      if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
+      if (typeof Zones !== "undefined" && Zones.render) Zones.render();
+      this._renderZonePager();
+      try {
+        Prompt && Prompt.toast && Prompt.toast("🔍 구역 페이지: " + (z.label || "구역") + " — 이 안에서 상세 등록·수정. ‘전체’ 탭으로 복귀");
+      } catch (e) {}
+    },
+
+    /** 전체 도면 복귀 — 모든 핀/구역 표시 */
+    exitZoneView() {
+      State.zoneView = null;
+      try { document.body.classList.remove("zone-view-active"); } catch (e) {}
+      if (MapCtrl.flyTo) MapCtrl.flyTo(50, 50, 1, 560);
+      if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
+      if (typeof Zones !== "undefined" && Zones.render) Zones.render();
+      this._renderZonePager();
+    },
+
+    /** 구역 페이저 탭 strip 렌더 (전체 + zone1..zoneN) */
+    _renderZonePager() {
+      const bar = UI.$("zone-pager");
+      if (!bar) return;
+      const zones = this._zonesOnPage();
+      // 구역이 없으면 페이저 숨김
+      if (!zones.length) { bar.classList.add("hidden"); bar.innerHTML = ""; return; }
+      bar.classList.remove("hidden");
+      const cur = State.zoneView;
+      let html = `<button class="zpager-tab ${!cur ? "active" : ""}" data-zone="__all__">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          전체 도면</button>`;
+      zones.forEach((z, i) => {
+        const active = cur === z.id;
+        const cnt = (z.pinIds || []).length;
+        html += `<button class="zpager-tab ${active ? "active" : ""}" data-zone="${z.id}" title="${UI.escapeHtml(z.label || "구역 " + (i + 1))}">
+            <span class="zpager-dot" style="background:${z.color || "#2f6db5"}"></span>
+            <span class="zpager-name">${UI.escapeHtml(z.label || "구역 " + (i + 1))}</span>
+            ${cnt ? `<span class="zpager-cnt">${cnt}</span>` : ""}
+          </button>`;
+      });
+      bar.innerHTML = html;
+      bar.querySelectorAll(".zpager-tab").forEach(b => {
+        b.addEventListener("click", () => {
+          const zid = b.getAttribute("data-zone");
+          if (zid === "__all__") this.exitZoneView();
+          else this.enterZoneView(zid);
+        });
+      });
+    },
+
     /* ── Sidebar ── */
     _bindSidebar() {
       UI.$("btn-upload-drawing").addEventListener("click", async () => {
@@ -4078,19 +4207,34 @@
       // 포인트 배치 모드 토글
       UI.$("btn-place").addEventListener("click", () => this._togglePlacing());
 
-      // 체크보드 모드 토글 (디자이너 ↔ 체크보드)
-      const cbBtn = UI.$("btn-checkboard-toggle");
-      if (cbBtn) cbBtn.addEventListener("click", () => {
-        // 배치 모드 진행 중이면 정리
+      // 체크보드 모드 토글 (디자이너 ↔ 체크보드) — 두 버튼 공용 핸들러
+      const toggleCheckboard = () => {
         if (State.placing) this._togglePlacing();
         const next = State.checkboard ? "designer" : "checkboard";
         App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
         Prompt && Prompt.toast && Prompt.toast(
           next === "checkboard"
-            ? "🔢 체크보드 모드 — 도면을 클릭하면 번호 핀이 바로 찍힙니다"
+            ? "🔢 체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다"
             : "🎨 디자이너 모드로 복귀"
         );
-      });
+        if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
+      };
+      const cbBtn = UI.$("btn-checkboard-toggle");
+      if (cbBtn) cbBtn.addEventListener("click", toggleCheckboard);
+      const cbEnter = UI.$("btn-checkboard-enter");
+      if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
+
+      // 체크보드 구역별 시작 번호 입력
+      const cbStart = UI.$("input-checkboard-start");
+      if (cbStart) {
+        const applyStart = () => {
+          const n = this._setCheckboardStart(State.pdfPage || 1, cbStart.value);
+          cbStart.value = String(n);
+          Prompt && Prompt.toast && Prompt.toast("🔢 이 구역 시작 번호: " + n);
+        };
+        cbStart.addEventListener("change", applyStart);
+        cbStart.addEventListener("blur", applyStart);
+      }
 
       // "다음 포인트 지정" — 연속 배치
       UI.$("btn-next-point").addEventListener("click", () => {
@@ -4535,6 +4679,24 @@
 
     /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
      *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
+    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1) */
+    _checkboardStart(page) {
+      const p = page || State.pdfPage || 1;
+      const v = State.checkboardStart && State.checkboardStart[p];
+      const n = parseInt(v, 10);
+      return (Number.isFinite(n) && n >= 1) ? n : 1;
+    },
+    /** 현재 구역(페이지)의 체크보드 시작 번호 설정 */
+    _setCheckboardStart(page, value) {
+      const p = page || State.pdfPage || 1;
+      let n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) n = 1;
+      State.checkboardStart = State.checkboardStart || {};
+      State.checkboardStart[p] = n;
+      this._autoSave && this._autoSave();
+      return n;
+    },
+
     _placeCheckboardPin(pct) {
       const totalPages = State.mode === "viewer"
         ? (State.viewerPages ? State.viewerPages.length : 1)
@@ -4542,7 +4704,9 @@
       const curPage = State.pdfPage || 1;
       const isMulti = (totalPages || 1) > 1;
       const onPage = isMulti ? State.pins.filter(p => (p.page || 1) === curPage) : State.pins;
-      const no = onPage.length + 1;
+      // 구역별 시작 번호부터 1씩 자동 증가: no = 시작번호 + (현재 페이지 핀 수)
+      const start = this._checkboardStart(curPage);
+      const no = start + onPage.length;
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
       State.pins.push(pin);
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
@@ -4562,14 +4726,10 @@
       if (!pct) return;
 
       // 체크보드 모드: 이름/사진 입력 없이 즉시 번호 핀만 찍는다.
+      // 연속 배치 — placing 을 유지해 클릭마다 번호가 1씩 증가하며 계속 찍힌다.
       if (State.checkboard) {
-        State.placing = false;
-        UI.$("btn-place").classList.remove("active");
-        UI.$("place-hint").classList.add("hidden");
-        UI.$("crosshair-overlay").classList.add("hidden");
-        UI.$("map-viewport").style.cursor = "grab";
         this._placeCheckboardPin(pct);
-        return;
+        return; // placing 유지(다음 클릭도 번호 핀). 종료는 '＋ 번호 핀 찍기' 토글로.
       }
 
       State.pending = pct;
@@ -4861,6 +5021,96 @@
       });
     },
 
+    /** 신규 사진 포인트 즉시 등록 — 업로드는 백그라운드(오프라인 시 큐잉) */
+    async _confirmPinInstant({ label, url, note, file, docs }) {
+      // 1) 즉시 로컬 미리보기 blob 생성 + 핀 객체 등록 (대기 없음)
+      const localPreview = URL.createObjectURL(file);
+      _trackVideoBlob && _trackVideoBlob(localPreview); // blob 누수 추적(공용 추적기 재사용)
+      const imgName = UI.val("input-pin-imgname").trim() || file.name.replace(/\.[^.]+$/, "");
+      const pin = {
+        id: Date.now(),
+        x: State.pending.x, y: State.pending.y,
+        page: State.pdfPage, label,
+        imageName: imgName,
+        localPreview,            // 업로드 완료 전까지 즉시 미리보기에 사용
+        pendingSync: true,       // 업로드 진행/대기 표시
+        uploading: true
+      };
+      if (note) pin.note = note;
+      if (url)  { pin.imageUrl = url; if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) pin.isVideo = true; }
+      if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache["local:" + pin.id] = localPreview; }
+
+      State.pins.push(pin);
+      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, instant: true });
+      State.activePin = pin.id;
+      if (typeof Zones !== "undefined") Zones.refreshPinLinks();
+
+      // 2) 폼 닫고 화면 즉시 반영 (사용자는 곧바로 다음 포인트 가능)
+      State.editingPinId = null;
+      this._resetPinForm(true);
+      UI.renderPinList();
+      UI.renderPinsOnMap(pin.id);
+      if (typeof PinGrid !== "undefined") PinGrid.render();
+      MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 450);
+      this._updateSyncBadge();
+      Prompt && Prompt.toast && Prompt.toast("📍 '" + label + "' 등록 · " + (navigator.onLine ? "백그라운드 업로드 중" : "오프라인 임시저장"));
+      UI.text && UI.text("pin-saved-msg", "📍 '" + label + "' 등록됨 · 업로드는 백그라운드로 진행됩니다");
+      UI.show && UI.show("section-next-point");
+
+      // 3) 백그라운드 업로드 (await 하지 않음 → 화면 블로킹 없음)
+      this._uploadPinImageBg(pin, file, imgName, docs);
+      this._autoSave && this._autoSave();
+    },
+
+    /** 백그라운드 이미지/첨부 업로드 — 완료 시 imageId 치환 + 미리보기 캐시 이관 */
+    async _uploadPinImageBg(pin, file, imgName, docs) {
+      try {
+        const { dataURL, width, height } = await Cloud.resizeImage(file);
+        Cloud._cache[("op-preview:" + pin.id)] = dataURL;
+        let uploaded = false;
+        if (navigator.onLine) {
+          try {
+            const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
+            pin.imageId = imageId;
+            Cloud._cache[imageId] = dataURL;
+            uploaded = true;
+          } catch (e) { uploaded = false; }
+        }
+        if (!uploaded) {
+          const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
+          pin.pendingOpId = opId;
+          Cloud._cache["op:" + opId] = dataURL;
+        }
+        // 첨부 문서(있으면)도 백그라운드 처리
+        if (docs && docs.length) {
+          if (!Array.isArray(pin.attachments)) pin.attachments = [];
+          for (let i = 0; i < docs.length; i++) {
+            const d = docs[i];
+            try {
+              const durl = await Cloud.fileToDataURL(d.file);
+              let docOk = false, docId = null;
+              if (navigator.onLine) { try { docId = await Cloud.uploadDoc(d.name, durl); docOk = true; } catch (e) {} }
+              const att = { id: d.tempId, name: d.name, size: d.size, type: d.kind && d.kind.type };
+              if (docOk) att.docId = docId;
+              else { const opId = await SyncQueue.enqueue({ kind: "doc", name: d.name, image_data: durl }); att.pendingOpId = opId; att.pendingSync = true; Cloud._cache["op:" + opId] = durl; }
+              pin.attachments.push(att);
+            } catch (e) {}
+          }
+        }
+        // 업로드 완료 상태 정리
+        pin.uploading = false;
+        if (!pin.pendingOpId && !(pin.attachments || []).some(a => a.pendingOpId)) delete pin.pendingSync;
+        // 로컬 미리보기 정리(서버 이미지로 대체됨)
+        if (pin.imageId && pin.localPreview) { try { URL.revokeObjectURL(pin.localPreview); } catch (e) {} delete pin.localPreview; }
+      } catch (e) {
+        pin.uploading = false;
+        Prompt && Prompt.toast && Prompt.toast("⚠ '" + pin.label + "' 업로드 지연 — 동기화 대기에 보관됨");
+      }
+      try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+      this._updateSyncBadge && this._updateSyncBadge();
+      this._autoSave && this._autoSave();
+    },
+
     /* ── Pin: 저장 & 업로드 ── */
     async _confirmPin() {
       if (!State.pending) return;
@@ -4872,6 +5122,15 @@
 
       // ── 편집 모드 판정 ──
       const editing = !!State.editingPinId;
+      // ════════════════════════════════════════════════════════════
+      // 요청사항: 신규 포인트 + 사진(이미지) 선택 시 → 업로드를 기다리지 않고
+      // 즉시 핀을 화면에 등록(로컬 미리보기)하고, 업로드는 백그라운드에서 진행.
+      // 오프라인이면 SyncQueue 에 적재되어 인터넷 복구 시 자동 업로드된다.
+      // (영상/3D/문서/URL 만 있는 경우엔 기존 동기 경로 사용 — 즉시등록 대상 아님)
+      // ════════════════════════════════════════════════════════════
+      if (!editing && file && !State.pendingIsVideo) {
+        return this._confirmPinInstant({ label, url, note, file, docs });
+      }
       const existing = editing ? State.pins.find(p => p.id === State.editingPinId) : null;
       // 신규: 미디어·노트·첨부 중 최소 하나 필요. 편집: 라벨/노트만 바꿔도 저장 허용.
       if (!editing && !file && !url && !note && docs.length === 0) return;
@@ -5157,7 +5416,7 @@
 
     /** 핀에 360° 미디어(클라우드 이미지/로컬 영상/외부 URL/미동기화 로컬)가 등록되어 있는가 */
     pinHasMedia(pin) {
-      return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl || pin.pendingOpId));
+      return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl || pin.pendingOpId || pin.localPreview));
     },
 
     /** 핀에 노트/첨부/3D 포인트클라우드가 있는가 */
@@ -5270,6 +5529,19 @@
       this._renderPanoInfoPanel(pin); // 미디어와 함께 노트/첨부도 표시
       // 1) 로컬 영상 blob
       if (pin.videoUrl) { PanoViewer.loadVideo(pin.videoUrl, pin.label); return; }
+      // 1.3) 즉시등록 로컬 미리보기(업로드 진행 중) — imageId 준비 전이라도 바로 표시
+      if (!pin.imageId && pin.localPreview) {
+        const $ = id => document.getElementById(id);
+        $("pano-location-name").textContent = "360°(" + (pin.uploading ? "업로드 중" : "임시") + ") — " + pin.label;
+        $("pano-loading").classList.add("hidden");
+        $("pano-error").classList.add("hidden");
+        $("pano-hint").classList.add("hidden");
+        $("pano-controls").classList.add("hidden");
+        $("pano-overlay").classList.remove("hidden");
+        PanoViewer.open = true;
+        PanoViewer.load(pin.localPreview, pin.label);
+        return;
+      }
       // 1.5) 미동기화 로컬 이미지(오프라인 임시 저장) — 로컬 캐시로 즉시 미리보기
       if (pin.pendingOpId && Cloud._cache["op:" + pin.pendingOpId]) {
         const $ = id => document.getElementById(id);
@@ -6239,6 +6511,35 @@
   /* ══════════════════════════════════════════
      SETTINGS — 설정 패널 (A안: 접속=뷰어, ⚙️ 설정 → 로그인 → 편집)
   ══════════════════════════════════════════ */
+  /* ══════════════════════════════════════════
+     PinPrefs — 핀 색상 환경설정 (기본=그린, 설정에서 변경)
+  ══════════════════════════════════════════ */
+  const PinPrefs = {
+    KEY: "wm_pin_color",
+    // 선택 가능한 색상 팔레트 (라벨 + 머리색/머리진한색/바늘끝/글자색)
+    PALETTE: [
+      { id: "green",  name: "그린(기본)", head: "#10b981", head2: "#047857", needle: "#064e3b", text: "#065f46" },
+      { id: "blue",   name: "블루",       head: "#2f6db5", head2: "#1d4f88", needle: "#13315a", text: "#1d4f88" },
+      { id: "gold",   name: "골드",       head: "#c9962a", head2: "#9a7016", needle: "#5f450c", text: "#7a5a12" },
+      { id: "red",    name: "레드",       head: "#ef4444", head2: "#b91c1c", needle: "#7f1d1d", text: "#991b1b" },
+      { id: "purple", name: "퍼플",       head: "#8b5cf6", head2: "#6d28d9", needle: "#4c1d95", text: "#5b21b6" },
+      { id: "orange", name: "오렌지",     head: "#f97316", head2: "#c2410c", needle: "#7c2d12", text: "#9a3412" }
+    ],
+    DEFAULT: "green",
+    get() {
+      try { return localStorage.getItem(this.KEY) || this.DEFAULT; } catch (e) { return this.DEFAULT; }
+    },
+    set(id) {
+      try { localStorage.setItem(this.KEY, id); } catch (e) {}
+      State.pinColor = id;
+      try { if (typeof UI !== "undefined") UI.renderPinsOnMap(); } catch (e) {}
+    },
+    color() {
+      const id = State.pinColor || this.get();
+      return this.PALETTE.find(p => p.id === id) || this.PALETTE[0];
+    }
+  };
+
   const Settings = {
     _isOpen: false,
 
@@ -6246,6 +6547,15 @@
       const $ = (id) => document.getElementById(id);
       // ⚙️ 설정 버튼 → 패널 열기
       $("btn-settings") && $("btn-settings").addEventListener("click", () => this.open());
+      // 핀 색상 선택(설정 패널 내) — 위임 바인딩
+      const wrap = $("settings-pincolor");
+      if (wrap) wrap.addEventListener("click", (e) => {
+        const sw = e.target.closest && e.target.closest("[data-pincolor]");
+        if (!sw) return;
+        PinPrefs.set(sw.getAttribute("data-pincolor"));
+        this._renderPinColor();
+        Prompt && Prompt.toast && Prompt.toast("🎨 핀 색상 변경됨");
+      });
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
       const bd = document.querySelector('#settings-modal .admin-gate-backdrop');
@@ -6276,11 +6586,23 @@
       $("btn-enter-edit") && $("btn-enter-edit").addEventListener("click", () => App.enterEdit());
     },
 
+    /** 설정 패널의 핀 색상 스와치 렌더 */
+    _renderPinColor() {
+      const wrap = document.getElementById("settings-pincolor");
+      if (!wrap) return;
+      const cur = State.pinColor || PinPrefs.get();
+      wrap.innerHTML = PinPrefs.PALETTE.map(p =>
+        `<button type="button" class="pincolor-sw${p.id === cur ? " active" : ""}" data-pincolor="${p.id}" title="${p.name}" aria-label="${p.name}" style="background:${p.head};border-color:${p.head2};">` +
+        (p.id === cur ? '<i class="fa-solid fa-check"></i>' : '') + `</button>`
+      ).join("");
+    },
+
     open() {
       const m = document.getElementById("settings-modal");
       if (!m) return;
       this._isOpen = true;
       this.render();
+      this._renderPinColor();
       m.classList.remove("hidden");
       requestAnimationFrame(() => m.classList.add("on"));
       // GIS 버튼이 아직 렌더 안됐으면 렌더 시도
@@ -7721,7 +8043,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

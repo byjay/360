@@ -4,7 +4,9 @@
   "scripts": {
     "dev": "vite",
     "dev:sandbox": "wrangler pages dev dist --d1=webapp-production --local --ip 0.0.0.0 --port 3000",
-    "build": "vite build",
+    "js:split": "python3 build-tools/split-modules.py",
+    "js:assemble": "python3 build-tools/assemble.py",
+    "build": "npm run js:assemble && vite build",
     "preview": "wrangler pages dev dist",
     "deploy": "npm run build && wrangler pages deploy dist",
     "deploy:prod": "npm run build && wrangler pages deploy dist --project-name webapp",
