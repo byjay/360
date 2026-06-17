@@ -32,6 +32,7 @@
 
   const State = {
     mode:        null,      // 'designer' | 'viewer'
+    checkboard:  false,     // 체크보드 모드: 디자이너와 동일하나 핀에 이름 대신 번호만 자동 부여
     fileType:    null,      // 'pdf' | 'image'
     fileName:    null,
     imageUrl:    null,      // blob URL (revoke on reset)
@@ -3634,10 +3635,21 @@
         if (reopen) reopen.classList.add("hidden");
         return;
       }
+      // 모바일(≤640px): 도면을 먼저 보도록 첫 표시 시 자동으로 접어 둠(바텀시트 닫힘).
+      // 사용자가 하단 '목록' 버튼/리오픈 탭으로 열 수 있음.
+      if (!this._mobileInit && typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+        this._mobileInit = true;
+        this.collapsed = true;
+      }
       panel.classList.remove("hidden");
       // 접힌 상태면 패널은 숨고 리오픈 탭만
-      if (this.collapsed) { if (reopen) reopen.classList.remove("hidden"); }
-      else { if (reopen) reopen.classList.add("hidden"); }
+      if (this.collapsed) {
+        panel.classList.add("collapsed");
+        if (reopen) reopen.classList.remove("hidden");
+      } else {
+        panel.classList.remove("collapsed");
+        if (reopen) reopen.classList.add("hidden");
+      }
 
       if (pgB) pgB.textContent = "P" + (State.pdfPage || 1);
 
@@ -3787,19 +3799,25 @@
     },
 
     openApp(mode, opts) {
-      State.mode = mode;
+      // 체크보드 모드: 내부적으로 디자이너와 동일하게 동작(도면등록/핀 추가/이동/삭제),
+      // 차이는 ① 핀에 이름 대신 번호만 자동 부여 ② 상단 라벨/색상이 'CHECKBOARD'.
+      const isCheckboard = mode === "checkboard";
+      State.checkboard = isCheckboard;
+      State.mode = isCheckboard ? "designer" : mode;   // 도구 분기(mode==='designer')를 그대로 재사용
       opts = opts || {};
-      const isDesigner = mode === "designer";
+      const isDesigner = State.mode === "designer";
       if (typeof Log !== "undefined") Log.push(mode === "viewer" ? "viewer.open" : "app.open", null, { mode });
       // 모바일 하단 네비 designer-only 버튼 표시/숨김용 body 클래스
       document.body.classList.toggle("role-designer", isDesigner);
       document.body.classList.toggle("role-viewer", !isDesigner);
-      document.documentElement.style.setProperty("--accent", isDesigner ? "var(--gold)" : "var(--green)");
-      UI.$("topbar").style.borderBottomColor = isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)";
+      document.body.classList.toggle("mode-checkboard", isCheckboard);
+      const accentVar = isCheckboard ? "var(--blue)" : (isDesigner ? "var(--gold)" : "var(--green)");
+      document.documentElement.style.setProperty("--accent", accentVar);
+      UI.$("topbar").style.borderBottomColor = isCheckboard ? "rgba(47,109,181,.28)" : (isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)");
       const dot = UI.$("topbar-dot");
-      if (dot) dot.style.background = isDesigner ? "var(--gold)" : "var(--green)";
-      UI.text("mode-label", isDesigner ? "DESIGNER MODE" : "VIEWER MODE");
-      UI.$("mode-label").style.color = isDesigner ? "var(--gold)" : "var(--green)";
+      if (dot) dot.style.background = accentVar;
+      UI.text("mode-label", isCheckboard ? "CHECKBOARD MODE" : (isDesigner ? "DESIGNER MODE" : "VIEWER MODE"));
+      UI.$("mode-label").style.color = accentVar;
 
       // ── 뷰어는 "보기 전용". 업로드/편집/배포 관련 UI는 모두 숨긴다. ──
       //  (사용자 요청: "뷰어는 업로드가 왜 필요하지. 뷰어만 완벽하게 되게 만들어")
@@ -3847,6 +3865,18 @@
         State.currentProjectId = opts.project.id;
         State.currentProjectName = opts.project.name;
       }
+
+      // 체크보드 모드 UI 반영: 토글 버튼 활성 + 배치 버튼 라벨 변경
+      const cbBtn = UI.$("btn-checkboard-toggle");
+      if (cbBtn) cbBtn.classList.toggle("active", isCheckboard);
+      const cbLabel = UI.$("btn-checkboard-label");
+      if (cbLabel) cbLabel.textContent = isCheckboard ? "디자이너 모드로 복귀" : "체크보드 모드";
+      const placeBtn = UI.$("btn-place");
+      if (placeBtn) placeBtn.textContent = isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
+      const placeHint = UI.$("place-hint");
+      if (placeHint) placeHint.textContent = isCheckboard
+        ? "도면 위를 클릭하면 번호가 자동으로 매겨집니다"
+        : "도면 위 원하는 위치를 클릭하세요";
 
       UI.showScreen("screen-app");
       if (!isDesigner) this.loadLatestDeployment();
@@ -4035,6 +4065,20 @@
 
       // 포인트 배치 모드 토글
       UI.$("btn-place").addEventListener("click", () => this._togglePlacing());
+
+      // 체크보드 모드 토글 (디자이너 ↔ 체크보드)
+      const cbBtn = UI.$("btn-checkboard-toggle");
+      if (cbBtn) cbBtn.addEventListener("click", () => {
+        // 배치 모드 진행 중이면 정리
+        if (State.placing) this._togglePlacing();
+        const next = State.checkboard ? "designer" : "checkboard";
+        App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
+        Prompt && Prompt.toast && Prompt.toast(
+          next === "checkboard"
+            ? "🔢 체크보드 모드 — 도면을 클릭하면 번호 핀이 바로 찍힙니다"
+            : "🎨 디자이너 모드로 복귀"
+        );
+      });
 
       // "다음 포인트 지정" — 연속 배치
       UI.$("btn-next-point").addEventListener("click", () => {
@@ -4290,7 +4334,14 @@
       const pins = $("mnav-pins");
       if (pins) pins.addEventListener("click", () => {
         closeSheet();
-        if (typeof AllPins !== "undefined" && AllPins.show) AllPins.show();
+        // 모바일: 화면을 가리지 않는 바텀시트(PinGrid) 토글. 도면이 있을 때만 의미.
+        const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
+        if (hasDrawing && typeof PinGrid !== "undefined") {
+          PinGrid.render();
+          PinGrid.setCollapsed(!PinGrid.collapsed ? true : false);
+        } else if (typeof AllPins !== "undefined" && AllPins.show) {
+          AllPins.show();
+        }
       });
 
       // 화면 맞춤
@@ -4470,10 +4521,45 @@
       return base + "_" + next;
     },
 
+    /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
+     *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
+    _placeCheckboardPin(pct) {
+      const totalPages = State.mode === "viewer"
+        ? (State.viewerPages ? State.viewerPages.length : 1)
+        : State.pdfPages;
+      const curPage = State.pdfPage || 1;
+      const isMulti = (totalPages || 1) > 1;
+      const onPage = isMulti ? State.pins.filter(p => (p.page || 1) === curPage) : State.pins;
+      const no = onPage.length + 1;
+      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      State.pins.push(pin);
+      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
+      State.activePin = pin.id;
+      if (typeof Zones !== "undefined") Zones.refreshPinLinks();
+      UI.renderPinList();
+      UI.renderPinsOnMap(pin.id);
+      if (typeof PinGrid !== "undefined") PinGrid.render();
+      this._updateSyncBadge && this._updateSyncBadge();
+      this._autoSave && this._autoSave();
+      Prompt && Prompt.toast && Prompt.toast("📍 체크 포인트 #" + no + " 추가 · 자동저장");
+    },
+
     _handlePlaceClick(e) {
       if (!State.placing) return;
       const pct = MapCtrl.viewportToPercent(e.clientX, e.clientY);
       if (!pct) return;
+
+      // 체크보드 모드: 이름/사진 입력 없이 즉시 번호 핀만 찍는다.
+      if (State.checkboard) {
+        State.placing = false;
+        UI.$("btn-place").classList.remove("active");
+        UI.$("place-hint").classList.add("hidden");
+        UI.$("crosshair-overlay").classList.add("hidden");
+        UI.$("map-viewport").style.cursor = "grab";
+        this._placeCheckboardPin(pct);
+        return;
+      }
+
       State.pending = pct;
       State.placing = false;
       UI.$("btn-place").classList.remove("active");

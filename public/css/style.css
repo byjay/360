@@ -3410,8 +3410,61 @@ html, body {
 .pin-grid-reopen.hidden{ display:none; }
 .pin-grid-reopen:hover{ transform:scale(1.07); filter:brightness(1.06); }
 
-@media (max-width: 860px){
-  .pin-grid-panel{ width:300px; max-width:78vw; top:10px; right:10px; bottom:10px; }
+@media (max-width: 860px) and (min-width: 641px){
+  .pin-grid-panel{ width:300px; max-width:62vw; top:10px; right:10px; bottom:10px; }
+}
+
+/* ════════════════════════════════════════════
+   모바일 포인트 리스트 — 바텀시트 (≤640px)
+   · 화면을 가리지 않도록 하단에서 올라오는 시트로 전환
+   · 도면 상단은 항상 보이도록 높이 제한(둥근 모서리 + 드래그 핸들)
+   · 닫힘은 translateY(아래로) 로 — 데스크톱 translateX 오버라이드
+════════════════════════════════════════════ */
+@media (max-width: 640px){
+  .pin-grid-panel{
+    position:fixed;
+    left:0; right:0; bottom:0; top:auto;
+    width:100%; max-width:100%;
+    height:min(56vh, 460px);
+    border-radius:18px 18px 0 0;
+    border-left:none; border-right:none; border-bottom:none;
+    border-top:1px solid var(--border,#e4dccb);
+    box-shadow:0 -10px 30px rgba(60,48,20,.22);
+    /* 하단 탭바(약 64px) 위로 띄워 겹침 방지 */
+    margin-bottom:calc(env(safe-area-inset-bottom, 0px) + 64px);
+    z-index:60;
+    transition:transform .28s cubic-bezier(.4,0,.2,1), opacity .2s;
+  }
+  /* 드래그 핸들 (시트 상단 그립) */
+  .pin-grid-panel::before{
+    content:""; position:absolute; top:7px; left:50%; transform:translateX(-50%);
+    width:42px; height:5px; border-radius:999px; background:var(--border2,#d9cfb8);
+    z-index:3; pointer-events:none;
+  }
+  /* 닫힘 = 아래로 슬라이드 (가로 이동 오버라이드) */
+  .pin-grid-panel.collapsed{ transform:translateY(calc(100% + 80px)); opacity:0; pointer-events:none; }
+
+  .pin-grid-head{ padding:15px 14px 10px; }
+  .pin-grid-title{ font-size:14px; }
+  /* 헤더 토글 버튼 = 시트 닫기(아래로) 의미로 아이콘 회전 */
+  #pin-grid-toggle i{ transform:rotate(90deg); }
+  .pin-grid-iconbtn{ width:34px; height:34px; font-size:15px; }
+  .pin-grid-search-wrap{ padding:8px 14px; }
+  .pin-grid-search{ font-size:15px; padding:10px 12px 10px 32px; }  /* iOS 줌 방지 위해 ≥15px */
+  .pin-grid-search-wrap > i{ left:24px; }
+  .pin-grid-table{ font-size:13px; }
+  .pin-grid-row > td{ padding:11px 8px; }     /* 터치 타깃 확대 */
+  .pin-grid-go{ width:30px; height:30px; font-size:12px; }
+  .pin-grid-name-txt{ max-width:42vw; }
+  /* 좌표 컬럼은 좁은 화면에서 숨겨 깨짐 방지 */
+  .pin-grid-table th.pgt-coord, .pin-grid-row td.pgt-coord{ display:none; }
+
+  /* 다시 열기 탭(FAB) — 하단 탭바 위 우측 */
+  .pin-grid-reopen{
+    top:auto; right:14px;
+    bottom:calc(env(safe-area-inset-bottom, 0px) + 76px);
+    width:46px; height:46px; border-radius:14px; z-index:59;
+  }
 }
 
 /* ── 드래그 앤 드롭 업로드 시각 피드백 ── */
@@ -3834,3 +3887,26 @@ button { font-family: var(--font-ui); }
   .btn-manage svg { width: 16px; height: 16px; }
   .user-name { max-width: 72px; }
 }
+
+/* ════════════════════════════════════════════
+   체크보드 모드 토글 버튼 (디자이너 도구 패널 내)
+════════════════════════════════════════════ */
+.btn-checkboard-toggle{
+  margin-top:8px; width:100%;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  padding:9px 14px; border-radius:var(--radius,9px);
+  background:rgba(47,109,181,.10);
+  border:1px solid rgba(47,109,181,.45);
+  color:var(--blue,#2f6db5); font-size:12.5px; font-weight:700;
+  cursor:pointer; transition:background .15s, border-color .15s, transform .1s;
+}
+.btn-checkboard-toggle:hover{ background:rgba(47,109,181,.18); border-color:rgba(47,109,181,.7); }
+.btn-checkboard-toggle:active{ transform:translateY(1px); }
+.btn-checkboard-toggle.active{
+  background:var(--blue,#2f6db5); color:#fff; border-color:var(--blue,#2f6db5);
+  box-shadow:0 3px 10px rgba(47,109,181,.3);
+}
+.btn-checkboard-toggle svg{ flex-shrink:0; }
+
+/* 체크보드 모드일 때 상단 모드 표시 강조(파랑) */
+body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }

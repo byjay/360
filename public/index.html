@@ -385,6 +385,11 @@
       <div id="section-place" class="sidebar-section hidden">
         <button id="btn-place" class="btn-place">+ 위치 포인트 추가</button>
         <p id="place-hint" class="place-hint hidden">도면 위 원하는 위치를 클릭하세요</p>
+        <!-- 체크보드 모드 토글: 디자이너와 동일하나 핀에 번호만 자동 부여 -->
+        <button id="btn-checkboard-toggle" class="btn-checkboard-toggle" type="button" title="체크보드: 도면 위를 클릭하면 번호 핀이 바로 찍힙니다 (이름·사진 없이)">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span id="btn-checkboard-label">체크보드 모드</span>
+        </button>
         <details id="zone-tools-wrap" class="zone-tools-wrap" open>
         <summary class="zone-tools-label">
           <span class="ztl-text"><i class="fa-solid fa-draw-polygon ztl-ico"></i> 영역 지정 도구</span>
