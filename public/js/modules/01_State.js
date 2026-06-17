@@ -18,6 +18,7 @@
     placing:     false,
     drawingZone: false,     // 영역 그리기 모드
     isoView:     false,     // ISO 3D 아이소메트릭 뷰 (평면↔입체 회전)
+    isoDir:      0,          // ISO 시점 방향 0~3 (북동/남동/남서/북서) — 4방향 회전
     pending:     null,      // { x, y }
     pendingFile: null,      // 선택된 360° 그림/영상 파일
     pendingIsVideo: false,

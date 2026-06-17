@@ -17,7 +17,9 @@
       const cssRot = (State.mode !== "viewer" && State.fileType === "pdf") ? 0 : (State.pdfRotation || 0);
       const rot = cssRot ? ` rotate(${cssRot}deg)` : "";
       // ISO 3D 아이소메트릭: 평면 도면을 입체로 기울여 회전(엔지니어링 ISO 뷰 느낌)
-      const iso = State.isoView ? " rotateX(54deg) rotateZ(-32deg)" : "";
+      // 4방향(0~3) = 북동/남동/남서/북서 코너 시점 → rotateZ 각도만 90° 간격으로 회전.
+      const ISO_Z = [-32, 58, 148, 238];  // 4개 코너 시점(도)
+      const iso = State.isoView ? ` rotateX(54deg) rotateZ(${ISO_Z[State.isoDir % 4]}deg)` : "";
       // translate3d 로 GPU 레이어 승격 (체감 속도 향상)
       this.transform.style.transform =
         `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})${iso}${rot}`;
@@ -30,14 +32,48 @@
       }
     },
 
-    /** ISO 3D 뷰 토글 — 평면 ↔ 아이소메트릭 입체 회전 (부드러운 전환) */
+    /** ISO 3D 뷰 — 4방향 순환:
+     *  평면 → 북동(0) → 남동(1) → 남서(2) → 북서(3) → 평면 …
+     *  버튼을 누를 때마다 한 단계씩 코너 시점을 회전한다. */
+    ISO_LABELS: ["북동", "남동", "남서", "북서"],
     toggleIso() {
-      State.isoView = !State.isoView;
+      if (!State.isoView) {
+        // 평면 → ISO 진입(북동부터)
+        State.isoView = true; State.isoDir = 0;
+      } else if (State.isoDir < 3) {
+        // 다음 코너로 회전
+        State.isoDir += 1;
+      } else {
+        // 마지막 코너에서 한 번 더 → 평면 복귀
+        State.isoView = false; State.isoDir = 0;
+      }
+      this._applyIso();
+    },
+    /** 특정 코너 시점으로 직접 전환 (0~3). */
+    setIsoDir(dir) {
+      State.isoView = true;
+      State.isoDir = ((dir % 4) + 4) % 4;
+      this._applyIso();
+    },
+    _applyIso() {
       const vp = this.viewport, tr = this.transform;
       const btn = document.getElementById("btn-iso");
-      if (btn) btn.classList.toggle("active", State.isoView);
+      if (btn) {
+        btn.classList.toggle("active", State.isoView);
+        // 버튼에 현재 방향 표시(예: "ISO 북동")
+        try {
+          const base = btn.dataset.baseLabel || (btn.dataset.baseLabel = (btn.getAttribute("title") || "ISO"));
+          btn.setAttribute("title", State.isoView ? (base + " · " + this.ISO_LABELS[State.isoDir]) : base);
+        } catch (e) {}
+      }
       if (vp) vp.classList.toggle("iso-active", State.isoView);
-      // ISO 진입 시 입체 도면이 화면 안에 들어오도록 살짝 축소·중앙 정렬
+      // ISO 방향 표시 토스트
+      try {
+        if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
+          Prompt.toast("🧊 ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
+        else if (!State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
+          Prompt.toast("🗺️ 평면 뷰로 복귀");
+      } catch (e) {}
       const size = this._contentSize();
       if (tr) {
         tr.style.transition = "transform .75s cubic-bezier(.22,.61,.36,1)";
