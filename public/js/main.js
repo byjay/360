@@ -4092,13 +4092,13 @@
     },
 
     /** 구역 페이지 진입 — crop-view 확대 + 비활성 핀/구역 dim */
-    enterZoneView(zoneId) {
+    enterZoneView(zoneId, _retry) {
       const z = (State.zones || []).find(x => x.id === zoneId);
       if (!z) return;
-      // 다른 PDF 페이지면 먼저 전환
-      if ((z.page || 1) !== (State.pdfPage || 1) && this._gotoPage) {
+      // 다른 PDF 페이지면 먼저 전환 (재시도 1회 가드 — 무한루프 방지)
+      if ((z.page || 1) !== (State.pdfPage || 1) && this._gotoPage && !_retry) {
         Promise.resolve(this._gotoPage(z.page)).then(() => {
-          setTimeout(() => this.enterZoneView(zoneId), 80);
+          setTimeout(() => this.enterZoneView(zoneId, true), 80);
         });
         return;
       }
