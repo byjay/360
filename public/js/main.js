@@ -6310,23 +6310,70 @@
       return h;
     },
 
-    /** 서버에 권한 확인 → UI 갱신 */
+    /** 서버에 권한 확인 → UI 갱신
+     *  ★ 오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
+     *    네트워크 실패(오프라인)이면서 토큰이 있으면 캐시된 권한을 복원.
+     *    → 비행기·현장 등 오프라인에서도 디자이너/슈퍼 권한이 유지됨. */
     async refresh() {
-      let data = { authenticated: false, role: "viewer" };
+      let data = null;
+      let netFail = false;
       try {
         const r = await fetch("/api/auth/me", { headers: this.headers() });
         data = await r.json();
-      } catch (e) {}
-      if (data.authenticated) {
+      } catch (e) { netFail = true; }
+
+      // 오프라인(네트워크 실패)이고 토큰이 살아있으면 → 캐시 권한 복원
+      if (netFail && (this.idToken || this._hasLocalToken())) {
+        const cached = this._loadAuthCache();
+        if (cached && cached.authenticated) {
+          this.user = { email: cached.email, name: cached.name, picture: cached.picture, role: cached.role, request_status: cached.request_status || null };
+          this.role = cached.role;
+          this.superAdmin = cached.super_admin || this.superAdmin;
+          this._offline = true;
+          this._applyUi();
+          return this.role;
+        }
+      }
+
+      if (data && data.authenticated) {
         this.user = { email: data.email, name: data.name, picture: data.picture, role: data.role, request_status: data.request_status || null };
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
-      } else {
+        this._offline = false;
+        this._saveAuthCache(data);   // ★ 성공 시 권한 스냅샷 저장
+      } else if (!netFail) {
+        // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
         this.user = null; this.role = "viewer"; this.idToken = null;
         try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
+        this._clearAuthCache();
       }
       this._applyUi();
       return this.role;
+    },
+
+    _hasLocalToken() {
+      try { return !!(sessionStorage.getItem("wm_id_token") || localStorage.getItem("wm_local_token")); } catch (e) { return false; }
+    },
+    _saveAuthCache(data) {
+      try {
+        localStorage.setItem("wm_auth_cache", JSON.stringify({
+          authenticated: true, email: data.email, name: data.name, picture: data.picture,
+          role: data.role, request_status: data.request_status || null,
+          super_admin: data.super_admin || null, _ts: Date.now()
+        }));
+      } catch (e) {}
+    },
+    _loadAuthCache() {
+      try {
+        const raw = localStorage.getItem("wm_auth_cache");
+        if (!raw) return null;
+        const c = JSON.parse(raw);
+        if (c._ts && (Date.now() - c._ts) > 7 * 24 * 3600 * 1000) return null;
+        return c;
+      } catch (e) { return null; }
+    },
+    _clearAuthCache() {
+      try { localStorage.removeItem("wm_auth_cache"); } catch (e) {}
     },
 
     _applyUi() {
@@ -6531,6 +6578,7 @@
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
       try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
+      this._clearAuthCache();   // ★ 오프라인 권한 캐시도 함께 정리
       this._applyUi();
       this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
