@@ -1402,6 +1402,7 @@
           <button id="btn-open-designers" class="admin-gate-btn ghost full" type="button">👥 디자이너 지정 · 사용자 관리</button>
           <button id="btn-open-features" class="admin-gate-btn ghost full" type="button">🧩 기능 · 메뉴 관장</button>
           <button id="btn-open-ai" class="admin-gate-btn ghost full" type="button">🤖 AI API 설정</button>
+          <button id="btn-open-firebase" class="admin-gate-btn ghost full" type="button">🔥 Firebase 연결 (내 Google 계정)</button>
           <button id="btn-open-codemap" class="admin-gate-btn ghost full" type="button">🗂️ 코드 구조 · 파일 설명</button>
         </div>
 
@@ -1456,6 +1457,51 @@
         <button id="ai-save" class="admin-gate-btn primary" type="button">Base URL·모델 저장</button>
         <button id="ai-test" class="admin-gate-btn ghost" type="button">연결 테스트</button>
         <button id="ai-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Firebase 연결 (내 Google 계정으로 자동 세팅) ═══ -->
+  <div id="firebase-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="firebase-title">
+    <div class="admin-gate-backdrop" data-close="firebase"></div>
+    <div class="admin-gate-card">
+      <h2 id="firebase-title" class="admin-gate-title">🔥 Firebase 연결</h2>
+      <p class="admin-gate-sub">본인 Google 계정의 Firebase 프로젝트에 바로 연결합니다. <b>코드 수정 없이</b> 아래에 값을 넣고 저장하면 즉시 활성화됩니다.</p>
+
+      <div id="firebase-status-line" class="ai-status-line">상태 확인 중…</div>
+
+      <details class="fb-guide">
+        <summary>📖 3분 안내 — Firebase Console에서 값 얻기</summary>
+        <ol class="fb-guide-list">
+          <li><a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> 접속 → 본인 Google ID 로그인</li>
+          <li>"프로젝트 추가" → 이름 입력(예: seastar-viewer)</li>
+          <li>좌측 톱니바퀴 → 프로젝트 설정 → "내 앱" → 웹앱(<b>&lt;/&gt;</b>) 추가</li>
+          <li>표시되는 <code>firebaseConfig = { ... }</code> 전체를 복사 → 아래에 붙여넣기</li>
+          <li>Authentication → 시작하기 → <b>Google</b> 공급업체 사용 설정</li>
+          <li>Firestore Database → 데이터베이스 만들기</li>
+        </ol>
+      </details>
+
+      <label class="company-field"><span class="company-label">① firebaseConfig 붙여넣기 (콘솔에서 복사한 그대로)</span>
+        <textarea id="fb-paste" class="company-input" rows="6" placeholder='const firebaseConfig = {
+  apiKey: "AIza...",
+  authDomain: "myproj.firebaseapp.com",
+  projectId: "myproj",
+  storageBucket: "myproj.appspot.com",
+  messagingSenderId: "1234567890",
+  appId: "1:1234:web:abcd"
+};'></textarea></label>
+
+      <label class="company-field"><span class="company-label">② 내 Google 계정 이메일 (슈퍼관리자로 등록)</span>
+        <input id="fb-owner-email" class="company-input" type="email" placeholder="designssir@gmail.com" /></label>
+
+      <div id="firebase-save-note" class="features-save-note hidden"></div>
+
+      <div class="admin-gate-actions">
+        <button id="firebase-save" class="admin-gate-btn primary" type="button">💾 저장하고 활성화</button>
+        <button id="firebase-login" class="admin-gate-btn ghost" type="button">🔑 Google 로그인 테스트</button>
+        <button id="firebase-clear" class="admin-gate-btn ghost" type="button">연결 해제</button>
+        <button id="firebase-close" class="admin-gate-btn ghost" type="button">닫기</button>
       </div>
     </div>
   </div>

@@ -145,6 +145,81 @@
       if (!el.children.length) el.innerHTML = '<div class="invites-empty">검색 결과가 없습니다.</div>';
     },
 
+    /* ── Firebase 연결 모달 (내 Google 계정 자동 세팅) ── */
+    openFirebase() {
+      const m = document.getElementById("firebase-modal");
+      if (!m) return;
+      this._firebaseStatus();
+      // 저장된 값 미리 채우기
+      try {
+        const cfg = (window.SeaFirebaseConfig && window.SeaFirebaseConfig.current()) || {};
+        const paste = document.getElementById("fb-paste");
+        if (paste && cfg.apiKey && !String(cfg.apiKey).startsWith("YOUR_")) {
+          paste.value = JSON.stringify(cfg, null, 2);
+        }
+        const em = document.getElementById("fb-owner-email");
+        if (em) em.value = window.FIREBASE_OWNER_EMAIL && !String(window.FIREBASE_OWNER_EMAIL).includes("designssir") ? window.FIREBASE_OWNER_EMAIL : (window.FIREBASE_OWNER_EMAIL || "");
+      } catch (e) {}
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeFirebase() { const m = document.getElementById("firebase-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 180); } },
+    _firebaseStatus() {
+      const el = document.getElementById("firebase-status-line");
+      if (!el) return;
+      const on = !!(window.SeaFirebaseConfig && window.SeaFirebaseConfig.isEnabled());
+      const ready = !!(window.SeaFirebase && window.SeaFirebase.ready);
+      if (on) {
+        const u = (window.SeaFirebase && window.SeaFirebase.currentUser && window.SeaFirebase.currentUser());
+        el.textContent = ready
+          ? (u ? "🟢 연결됨 · 로그인: " + (u.email || u.uid) : "🟢 연결됨 · (로그인 대기)")
+          : "🟢 설정 저장됨 · 새로고침 후 완전 활성화";
+        el.className = "ai-status-line on";
+      } else {
+        el.textContent = "🔴 미연결 — 아래에 firebaseConfig 를 붙여넣고 저장하세요.";
+        el.className = "ai-status-line off";
+      }
+    },
+    saveFirebase() {
+      const note = document.getElementById("firebase-save-note");
+      const setNote = (t, ok) => { if (note) { note.textContent = t; note.className = "features-save-note " + (ok ? "ok" : "err"); note.classList.remove("hidden"); } };
+      const pasteEl = document.getElementById("fb-paste");
+      const emailEl = document.getElementById("fb-owner-email");
+      const raw = (pasteEl && pasteEl.value || "").trim();
+      const email = (emailEl && emailEl.value || "").trim();
+      if (!raw) { setNote("firebaseConfig 값을 붙여넣어 주세요.", false); return; }
+      const cfg = window.SeaFirebaseConfig.parsePasted(raw);
+      if (!cfg || !cfg.apiKey || !cfg.projectId) {
+        setNote("형식을 인식하지 못했습니다. 콘솔의 firebaseConfig 객체 전체를 그대로 붙여넣어 주세요.", false);
+        return;
+      }
+      window.SeaFirebaseConfig.save(cfg, email);
+      setNote("✅ 저장 완료! 새로고침하면 Firebase가 자동 활성화됩니다. (3초 후 자동 새로고침)", true);
+      this._firebaseStatus();
+      setTimeout(() => { try { location.reload(); } catch (e) {} }, 3000);
+    },
+    async loginFirebase() {
+      const note = document.getElementById("firebase-save-note");
+      const setNote = (t, ok) => { if (note) { note.textContent = t; note.className = "features-save-note " + (ok ? "ok" : "err"); note.classList.remove("hidden"); } };
+      if (!(window.SeaFirebase && window.SeaFirebase.ready)) {
+        setNote("먼저 설정을 저장하고 새로고침한 뒤 다시 시도하세요.", false);
+        return;
+      }
+      try {
+        const u = await window.SeaFirebase.loginGoogle();
+        setNote("✅ Google 로그인 성공: " + (u.email || u.uid), true);
+        this._firebaseStatus();
+      } catch (e) {
+        setNote("로그인 실패: " + (e && e.message || e) + " — Firebase 콘솔에서 Google 공급업체를 켰는지, 승인된 도메인에 현재 주소가 있는지 확인하세요.", false);
+      }
+    },
+    clearFirebase() {
+      if (window.SeaFirebaseConfig) window.SeaFirebaseConfig.clear();
+      const note = document.getElementById("firebase-save-note");
+      if (note) { note.textContent = "연결 해제됨. 새로고침하면 D1 백엔드만 사용합니다. (3초 후 자동 새로고침)"; note.className = "features-save-note ok"; note.classList.remove("hidden"); }
+      this._firebaseStatus();
+      setTimeout(() => { try { location.reload(); } catch (e) {} }, 3000);
+    },
+
     init() {
       const $ = (id) => document.getElementById(id);
       $("features-save") && $("features-save").addEventListener("click", () => this.saveFeatures());
@@ -153,10 +228,16 @@
       $("ai-test") && $("ai-test").addEventListener("click", () => this.testAI());
       $("ai-close") && $("ai-close").addEventListener("click", () => this.closeAI());
       $("codemap-close") && $("codemap-close").addEventListener("click", () => this.closeCodemap());
+      // Firebase 연결 모달 (열기 버튼은 Settings에서 권한 게이트와 함께 바인딩)
+      $("firebase-save") && $("firebase-save").addEventListener("click", () => this.saveFirebase());
+      $("firebase-login") && $("firebase-login").addEventListener("click", () => this.loginFirebase());
+      $("firebase-clear") && $("firebase-clear").addEventListener("click", () => this.clearFirebase());
+      $("firebase-close") && $("firebase-close").addEventListener("click", () => this.closeFirebase());
       document.querySelectorAll('.admin-gate-backdrop[data-close]').forEach((bd) => {
         const which = bd.getAttribute("data-close");
         if (which === "features") bd.addEventListener("click", () => this.closeFeatures());
         if (which === "ai") bd.addEventListener("click", () => this.closeAI());
+        if (which === "firebase") bd.addEventListener("click", () => this.closeFirebase());
         if (which === "codemap") bd.addEventListener("click", () => this.closeCodemap());
       });
     }
