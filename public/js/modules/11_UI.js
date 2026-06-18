@@ -24,10 +24,29 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     },
 
+    /** ★ [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
+    togglePinList(force) {
+      const wrap = this.$("section-pin-list");
+      const toggle = this.$("pin-list-toggle");
+      if (!wrap) return;
+      const willOpen = (force === undefined) ? wrap.classList.contains("collapsed") : !!force;
+      wrap.classList.toggle("collapsed", !willOpen);
+      if (toggle) toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    },
+
+    /** 헤더 옆 카운트 배지 갱신 */
+    _updatePinListCount(n) {
+      const c = this.$("pin-list-count");
+      if (!c) return;
+      c.textContent = n;
+      c.classList.toggle("hidden", !n);
+    },
+
     renderPinList() {
       const list  = this.$("pin-list");
       const empty = this.$("pin-empty");
       const badge = this.$("pin-count-badge");
+      this._updatePinListCount(State.pins ? State.pins.length : 0);
       list.innerHTML = "";
 
       if (State.pins.length === 0) {

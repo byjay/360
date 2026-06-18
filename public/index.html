@@ -451,16 +451,21 @@
         <button id="btn-next-point" class="btn-place">＋ 다음 포인트 지정</button>
       </div>
 
-      <!-- Pin list (포인트 목록 — 항상 표시) -->
-      <div id="section-pin-list" class="sidebar-section pin-list-wrap">
-        <div class="pin-list-head">
+      <!-- Pin list (포인트 목록 — 아이콘 토글식: 평소 접힘, 누르면 펼침) -->
+      <div id="section-pin-list" class="sidebar-section pin-list-wrap collapsed">
+        <button id="pin-list-toggle" class="pin-list-head" type="button" aria-expanded="false" aria-controls="pin-list-body" title="포인트 목록 펼치기/접기">
           <span class="form-label pin-list-title">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.4"/></svg>
             포인트 목록
+            <span id="pin-list-count" class="pin-list-count hidden">0</span>
           </span>
+          <svg class="pin-list-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="pin-list-body" class="pin-list-body">
+          <button id="pin-list-close" class="pin-list-close" type="button" title="포인트 목록 닫기">✕ 닫기</button>
+          <div id="pin-list" class="pin-list"></div>
+          <div id="pin-empty" class="pin-empty">포인트를 추가하세요</div>
         </div>
-        <div id="pin-list" class="pin-list"></div>
-        <div id="pin-empty" class="pin-empty">포인트를 추가하세요</div>
       </div>
 
       <!-- Export (designer only) -->

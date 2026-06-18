@@ -13,21 +13,89 @@
       });
     },
 
+    DRAFT_STORE: "drafts",
+
     async _open() {
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 1);
+        const req = indexedDB.open(this.DB_NAME, 2);   // ★ v2: drafts 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
             db.createObjectStore(this.STORE, { keyPath: "opId" });
+          }
+          if (!db.objectStoreNames.contains(this.DRAFT_STORE)) {
+            db.createObjectStore(this.DRAFT_STORE, { keyPath: "key" }); // 도면 임시저장(오프라인/서버실패 폴백)
           }
         };
         req.onsuccess = () => res(req.result);
         req.onerror = () => rej(req.error || new Error("indexedDB open failed"));
       }).catch(() => null);
       return this._db;
+    },
+
+    /* ═══ 도면 DRAFT 영속화 (오프라인/서버실패 시 도면 소실 방지) ═══
+       key 별로 도면 스냅샷+핀+구역을 로컬에 보관. 새로고침/오프라인에도 유지.
+       IndexedDB 우선, 미지원 시 localStorage 폴백. */
+    async saveDraft(key, data) {
+      const rec = { key: key, data: data, savedAt: Date.now() };
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          await new Promise((res, rej) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readwrite");
+            tx.objectStore(this.DRAFT_STORE).put(rec);
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+          });
+          return true;
+        } catch (e) { /* 폴백으로 */ }
+      }
+      try { localStorage.setItem("wm_draft_" + key, JSON.stringify(rec)); return true; }
+      catch (e) { return false; }
+    },
+    async loadDraft(key) {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          const rec = await new Promise((res) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readonly");
+            const rq = tx.objectStore(this.DRAFT_STORE).get(key);
+            rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null);
+          });
+          if (rec) return rec.data;
+        } catch (e) {}
+      }
+      try { const r = JSON.parse(localStorage.getItem("wm_draft_" + key) || "null"); return r ? r.data : null; }
+      catch (e) { return null; }
+    },
+    async removeDraft(key) {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          await new Promise((res) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readwrite");
+            tx.objectStore(this.DRAFT_STORE).delete(key);
+            tx.oncomplete = res; tx.onerror = res;
+          });
+        } catch (e) {}
+      }
+      try { localStorage.removeItem("wm_draft_" + key); } catch (e) {}
+    },
+    async allDraftKeys() {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          return await new Promise((res) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readonly");
+            const rq = tx.objectStore(this.DRAFT_STORE).getAllKeys();
+            rq.onsuccess = () => res(rq.result || []); rq.onerror = () => res([]);
+          });
+        } catch (e) {}
+      }
+      const keys = [];
+      try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
+      return keys;
     },
 
     /* ── localStorage 폴백 ── */

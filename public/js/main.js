@@ -554,21 +554,89 @@
       });
     },
 
+    DRAFT_STORE: "drafts",
+
     async _open() {
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 1);
+        const req = indexedDB.open(this.DB_NAME, 2);   // ★ v2: drafts 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
             db.createObjectStore(this.STORE, { keyPath: "opId" });
+          }
+          if (!db.objectStoreNames.contains(this.DRAFT_STORE)) {
+            db.createObjectStore(this.DRAFT_STORE, { keyPath: "key" }); // 도면 임시저장(오프라인/서버실패 폴백)
           }
         };
         req.onsuccess = () => res(req.result);
         req.onerror = () => rej(req.error || new Error("indexedDB open failed"));
       }).catch(() => null);
       return this._db;
+    },
+
+    /* ═══ 도면 DRAFT 영속화 (오프라인/서버실패 시 도면 소실 방지) ═══
+       key 별로 도면 스냅샷+핀+구역을 로컬에 보관. 새로고침/오프라인에도 유지.
+       IndexedDB 우선, 미지원 시 localStorage 폴백. */
+    async saveDraft(key, data) {
+      const rec = { key: key, data: data, savedAt: Date.now() };
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          await new Promise((res, rej) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readwrite");
+            tx.objectStore(this.DRAFT_STORE).put(rec);
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+          });
+          return true;
+        } catch (e) { /* 폴백으로 */ }
+      }
+      try { localStorage.setItem("wm_draft_" + key, JSON.stringify(rec)); return true; }
+      catch (e) { return false; }
+    },
+    async loadDraft(key) {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          const rec = await new Promise((res) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readonly");
+            const rq = tx.objectStore(this.DRAFT_STORE).get(key);
+            rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null);
+          });
+          if (rec) return rec.data;
+        } catch (e) {}
+      }
+      try { const r = JSON.parse(localStorage.getItem("wm_draft_" + key) || "null"); return r ? r.data : null; }
+      catch (e) { return null; }
+    },
+    async removeDraft(key) {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          await new Promise((res) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readwrite");
+            tx.objectStore(this.DRAFT_STORE).delete(key);
+            tx.oncomplete = res; tx.onerror = res;
+          });
+        } catch (e) {}
+      }
+      try { localStorage.removeItem("wm_draft_" + key); } catch (e) {}
+    },
+    async allDraftKeys() {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.DRAFT_STORE)) {
+        try {
+          return await new Promise((res) => {
+            const tx = db.transaction(this.DRAFT_STORE, "readonly");
+            const rq = tx.objectStore(this.DRAFT_STORE).getAllKeys();
+            rq.onsuccess = () => res(rq.result || []); rq.onerror = () => res([]);
+          });
+        } catch (e) {}
+      }
+      const keys = [];
+      try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
+      return keys;
     },
 
     /* ── localStorage 폴백 ── */
@@ -1882,10 +1950,29 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     },
 
+    /** ★ [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
+    togglePinList(force) {
+      const wrap = this.$("section-pin-list");
+      const toggle = this.$("pin-list-toggle");
+      if (!wrap) return;
+      const willOpen = (force === undefined) ? wrap.classList.contains("collapsed") : !!force;
+      wrap.classList.toggle("collapsed", !willOpen);
+      if (toggle) toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    },
+
+    /** 헤더 옆 카운트 배지 갱신 */
+    _updatePinListCount(n) {
+      const c = this.$("pin-list-count");
+      if (!c) return;
+      c.textContent = n;
+      c.classList.toggle("hidden", !n);
+    },
+
     renderPinList() {
       const list  = this.$("pin-list");
       const empty = this.$("pin-empty");
       const badge = this.$("pin-count-badge");
+      this._updatePinListCount(State.pins ? State.pins.length : 0);
       list.innerHTML = "";
 
       if (State.pins.length === 0) {
@@ -3867,6 +3954,9 @@
       SyncQueue.onChange(() => this._updateSyncBadge());
       SyncQueue.init();
       this._updateSyncBadge();
+      // ★ 온라인 복귀 시 로컬에 보관된(dirty) 도면 draft 를 서버로 자동 업로드
+      window.addEventListener("online", () => { setTimeout(() => this._flushDirtyDrafts(), 600); });
+      if (navigator.onLine) setTimeout(() => this._flushDirtyDrafts(), 1500);
     },
 
     /* ── Home ── */
@@ -4194,6 +4284,12 @@
 
     /* ── Sidebar ── */
     _bindSidebar() {
+      // ★ [항목3] 포인트 목록 아이콘 토글 + 닫기 버튼
+      const plToggle = document.getElementById("pin-list-toggle");
+      const plClose  = document.getElementById("pin-list-close");
+      if (plToggle) plToggle.addEventListener("click", () => UI.togglePinList());
+      if (plClose)  plClose.addEventListener("click", (e) => { e.stopPropagation(); UI.togglePinList(false); });
+
       UI.$("btn-upload-drawing").addEventListener("click", async () => {
         // ── [마스터 규칙] 프로젝트 하부에 '구역'이 없으면 도면 등록 차단 → 반드시 구역부터 등록 ──
         //  (자동생성으로 우회하지 않고, 사용자가 직접 구역을 먼저 만들도록 강제)
@@ -5749,15 +5845,18 @@
 
     /** 구역 선택 시 연결된 도면(배포 스냅샷)을 불러와 화면(디자이너 편집)에 표시 */
     async loadDeckDrawing(deploymentId) {
-      if (!deploymentId) return;
+      if (!deploymentId) {
+        // 서버 배포본 ID 가 없어도 로컬 draft 가 있으면 복원 시도(오프라인 신규 등록분)
+        return await this._restoreDraftLocal();
+      }
       try {
         const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
-        if (!r.ok) return;
+        if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
         const dep = await r.json();
         let pages = [];
         try { pages = JSON.parse(dep.pages_data || "[]"); } catch { pages = []; }
         if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];
-        if (!pages.length) return;
+        if (!pages.length) { await this._restoreDraftLocal(); return; }
 
         State.reset();
         State.fileType = "image";       // 스냅샷은 이미지(dataURL)로 보관됨
@@ -5782,18 +5881,123 @@
 
         State.autoSaveDepId = deploymentId;       // 이후 자동저장은 이 배포본 갱신
         State.currentDeploymentId = deploymentId;
-      } catch (e) { /* 무시 */ }
+      } catch (e) { await this._restoreDraftLocal(); }   // 네트워크 오류 → 로컬 폴백
+    },
+
+    /** ★ 로컬(IndexedDB) draft 로부터 도면+핀+구역 복원 — 서버 실패/오프라인/새로고침 대응 */
+    async _restoreDraftLocal() {
+      try {
+        if (typeof SyncQueue === "undefined") return false;
+        const d = await SyncQueue.loadDraft(this._draftKey());
+        if (!d || !d.pages || !d.pages.length) return false;
+
+        State.reset();
+        State.fileType    = "image";          // draft 스냅샷은 dataURL 이미지
+        State.viewerPages = d.pages;
+        State.pdfPage     = 1;
+        State.fileName    = d.fileName || "도면";
+        State.pins        = Array.isArray(d.pins)  ? d.pins  : [];
+        State.zones       = Array.isArray(d.zones) ? d.zones : [];
+        State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
+        if (d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; }
+        UI.text("file-name-label", State.fileName);
+        UI.$("drop-hint").classList.add("hidden");
+        UI.$("pdf-canvas").classList.add("hidden");
+
+        const imgEl = UI.$("map-image");
+        imgEl.onload = () => {
+          this._showMapViewport();
+          UI.renderPinList(); UI.renderPinsOnMap();
+          if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
+        };
+        imgEl.src = d.pages[0];
+        imgEl.classList.remove("hidden");
+        if (d.dirty) {
+          this._setSaveIndicator(navigator.onLine ? "saving" : "offline");
+          if (navigator.onLine) setTimeout(() => this._flushDirtyDrafts(), 400);
+        }
+        Prompt && Prompt.toast && Prompt.toast("💾 로컬에 보관된 도면을 복원했습니다" + (d.dirty ? " (서버 동기화 대기 중)" : ""));
+        return true;
+      } catch (e) { return false; }
+    },
+
+    /** ★ 온라인 복귀 시 dirty draft 를 서버로 자동 업로드 */
+    async _flushDirtyDrafts() {
+      if (!navigator.onLine) return;
+      if (typeof SyncQueue === "undefined") return;
+      let keys = [];
+      try { keys = await SyncQueue.allDraftKeys(); } catch (e) { return; }
+      for (const key of keys) {
+        let d;
+        try { d = await SyncQueue.loadDraft(key); } catch (e) { continue; }
+        if (!d || !d.dirty || !d.pages || !d.pages.length) continue;
+        try {
+          const body = {
+            title: d.fileName || "도면", file_name: d.fileName || "",
+            pins: JSON.stringify(d.pins || []), zones: JSON.stringify(d.zones || []),
+            annotations: JSON.stringify(d.annotations || []),
+            drawing_data: d.pages[0], pages_data: JSON.stringify(d.pages)
+          };
+          let res;
+          if (d.depId) {
+            res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
+              method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
+            });
+          } else {
+            res = await fetch("/tables/deployments", {
+              method: "POST", headers: Auth.headers(), body: JSON.stringify(body)
+            });
+          }
+          if (!res.ok) continue;                  // 실패 → dirty 유지, 다음 기회에 재시도
+          const rec = await res.json().catch(() => null);
+          d.depId = (rec && rec.id) ? rec.id : d.depId;
+          d.dirty = false;
+          await SyncQueue.saveDraft(key, d);
+          if (key === this._draftKey() && d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; this._setSaveIndicator("saved"); }
+        } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
+      }
     },
 
     /** 도면 업로드 직후 1회: 배포본 생성(도면 스냅샷 포함) */
+    /** 현재 도면 draft 의 로컬 키 — 구역(deck) 단위로 1개 보관 */
+    _draftKey() {
+      const pid = (typeof Projects !== "undefined" && Projects.currentProject) ? Projects.currentProject.id : "noproj";
+      const did = (typeof Projects !== "undefined" && Projects.currentDeck) ? Projects.currentDeck.id : "nodeck";
+      return pid + "::" + did;
+    },
+
+    /** ★ 도면 스냅샷+핀+구역을 로컬(IndexedDB)에 영속 저장 — 오프라인/서버실패에도 절대 소실 안 됨 */
+    async _saveDraftLocal(pages) {
+      try {
+        if (typeof SyncQueue === "undefined") return false;
+        const snap = (pages && pages.length) ? pages : await this._snapshotPages();
+        if (!snap || !snap.length) return false;
+        const payload = {
+          fileName:    State.fileName || "도면",
+          fileType:    State.fileType || "image",
+          pages:       snap,
+          pins:        State.pins || [],
+          zones:       (typeof Zones !== "undefined" && State.zones) ? State.zones : [],
+          annotations: State.annotations || [],
+          depId:       State.autoSaveDepId || null,
+          dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
+        };
+        await SyncQueue.saveDraft(this._draftKey(), payload);
+        return true;
+      } catch (e) { return false; }
+    },
+
     async _createInitialSave() {
       if (State.mode !== "designer") return;
       if (State.autoSaveDepId) return; // 이미 생성됨
       if (!State.fileType) return;
+      let pages = null;
       try {
         this._setSaveIndicator("saving");
-        const pages = await this._snapshotPages();
+        pages = await this._snapshotPages();
         if (!pages.length) { this._setSaveIndicator("error"); return; }
+        // ★ 먼저 로컬에 무조건 보관(서버 성공 여부와 무관하게 도면 소실 방지)
+        await this._saveDraftLocal(pages);
         const body = this._buildSavePayload(pages);
         const res = await fetch("/tables/deployments", {
           method: "POST",
@@ -5804,10 +6008,28 @@
         const rec = await res.json();
         State.autoSaveDepId = (rec && rec.id) ? rec.id : null;
         State.currentDeploymentId = State.autoSaveDepId;
+        // 서버 저장 성공 → 로컬 draft 의 dirty 해제(스냅샷은 백업으로 유지)
+        await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
       } catch (e) {
+        // 서버 실패/오프라인 → 로컬 draft 는 이미 보관됨. 사용자에겐 '로컬 보관' 표시.
+        if (pages) await this._saveDraftLocal(pages);
         this._setSaveIndicator(navigator.onLine ? "error" : "offline");
       }
+    },
+
+    /** 서버 저장 성공분의 로컬 draft dirty=false 로 표시(여전히 로컬 백업 유지) */
+    async _markDraftClean(pages) {
+      try {
+        if (typeof SyncQueue === "undefined") return;
+        const payload = {
+          fileName: State.fileName || "도면", fileType: State.fileType || "image",
+          pages: (pages && pages.length) ? pages : await this._snapshotPages(),
+          pins: State.pins || [], zones: State.zones || [], annotations: State.annotations || [],
+          depId: State.autoSaveDepId || null, dirty: false
+        };
+        if (payload.pages && payload.pages.length) await SyncQueue.saveDraft(this._draftKey(), payload);
+      } catch (e) {}
     },
 
     /** 핀/영역 변경 시 디바운스 자동 저장 (도면 스냅샷은 보통 변경 안 되므로 생략) */
@@ -5824,6 +6046,8 @@
           this._setSaveIndicator("saving");
           const includePages = !!opts.withPages;
           const pages = includePages ? await this._snapshotPages() : null;
+          // ★ 핀/구역 변경분도 항상 로컬에 먼저 보관(소실 방지)
+          await this._saveDraftLocal(pages);
           const body = this._buildSavePayload(pages);
           const res = await fetch("/tables/deployments/" + encodeURIComponent(State.autoSaveDepId), {
             method: "PATCH",
@@ -5831,6 +6055,7 @@
             body: JSON.stringify(body)
           });
           if (!res.ok) throw new Error("HTTP " + res.status);
+          await this._markDraftClean(pages);
           this._setSaveIndicator("saved");
         } catch (e) {
           this._setSaveIndicator(navigator.onLine ? "error" : "offline");
