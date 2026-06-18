@@ -1935,10 +1935,16 @@
         if (typeof Projects !== "undefined" && Projects.currentProject) {
           deck = await Projects.ensureDeck();
         }
-        // 2) 도면 스냅샷 즉시 저장 (배포본 생성)
-        State.autoSaveDepId = null; // 새 도면이므로 새 스냅샷
-        await this._createInitialSave();
-        // 3) 생성된 도면 배포본을 현재 구역에 연결
+        // 2) ★ 도면 교체 지원: 구역에 기존 도면이 있으면 그 배포본을 덮어써서 교체(고아 방지),
+        //    없으면 새 배포본 생성. (구역당 도면 1개 유지 — 구역을 여러 개 만들면 도면 다수 등록)
+        const isReplace = !!(deck && deck.deployment_id);
+        if (isReplace) {
+          await this._replaceDeckDrawing(deck.deployment_id);      // 기존 배포본 PATCH = 교체
+        } else {
+          State.autoSaveDepId = null;
+          await this._createInitialSave();                         // 신규 생성
+        }
+        // 3) 생성/교체된 도면 배포본을 현재 구역에 연결
         if (deck && State.autoSaveDepId) {
           deck.deployment_id = State.autoSaveDepId;
           try {
@@ -1949,7 +1955,7 @@
             Projects._renderDecks();
           } catch (e) { /* 연결 실패해도 도면/스냅샷은 저장됨 */ }
         }
-        Prompt.toast && Prompt.toast("📄 도면 등록 · 자동저장 완료" + (deck ? " (구역: " + deck.name + ")" : ""));
+        Prompt.toast && Prompt.toast((isReplace ? "🔄 도면 교체 완료" : "📄 도면 등록 · 자동저장 완료") + (deck ? " (구역: " + deck.name + ")" : ""));
       } catch (e) { /* 비치명적 */ }
     },
 
@@ -2095,6 +2101,30 @@
         await SyncQueue.saveDraft(this._draftKey(), payload);
         return true;
       } catch (e) { return false; }
+    },
+
+    /** ★ 기존 구역 도면을 새 도면으로 교체(같은 배포본 ID 덮어쓰기) — 고아 배포본 방지 */
+    async _replaceDeckDrawing(depId) {
+      if (State.mode !== "designer" || !depId) return;
+      State.autoSaveDepId = depId;
+      State.currentDeploymentId = depId;
+      let pages = null;
+      try {
+        this._setSaveIndicator("saving");
+        pages = await this._snapshotPages();
+        if (!pages.length) { this._setSaveIndicator("error"); return; }
+        await this._saveDraftLocal(pages);                       // 로컬 우선 보관
+        const body = this._buildSavePayload(pages);
+        const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
+          method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        await this._markDraftClean(pages);
+        this._setSaveIndicator("saved");
+      } catch (e) {
+        if (pages) await this._saveDraftLocal(pages);           // 실패 시 로컬 보관(online 복귀시 업로드)
+        this._setSaveIndicator(navigator.onLine ? "error" : "offline");
+      }
     },
 
     async _createInitialSave() {
