@@ -285,10 +285,31 @@
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
             if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
             App.setActivePin(pin.id);
-            // 디자이너: 핀 클릭 → 전용 작업 팝업(이동/수정/사진추가/삭제/보기)
-            if (typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
-            else if (App.pinHasContent(pin)) App.openPano(pin);
+            // ── [마스터 요청·항목3] 클릭하면 "사진부터" 보이게 ──
+            //  · 사진(콘텐츠) 있는 핀  → 곧바로 360° 뷰어(사진만) 열기
+            //  · 사진 없는 핀          → 전용 작업 팝업(사진추가/수정/이동/삭제)으로 등록 유도
+            //  수정/이동/삭제는 핀의 ✏️/↔/🗑 아이콘(액션바) 또는 빈 핀 팝업으로 분리 제공.
+            if (App.pinHasContent(pin)) {
+              App.openPano(pin);
+            } else if (typeof PinActionPop !== "undefined") {
+              PinActionPop.open(pin.id);
+            }
           });
+          // ── 길게 누르기(롱프레스) → 사진 있는 핀도 작업 팝업(수정/이동/삭제) 진입 ──
+          //   (모바일에서 사진 핀의 편집 경로 확보 · 데스크톱은 우클릭으로도 진입)
+          let _lpTimer = null;
+          const _openMenu = () => {
+            if (State.pinEditUnlocked === pin.id) return;
+            App.setActivePin(pin.id);
+            if (typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
+          };
+          marker.addEventListener("pointerdown", () => {
+            clearTimeout(_lpTimer);
+            _lpTimer = setTimeout(_openMenu, 550);
+          });
+          ["pointerup", "pointerleave", "pointercancel"].forEach(ev =>
+            marker.addEventListener(ev, () => clearTimeout(_lpTimer)));
+          marker.addEventListener("contextmenu", (e) => { e.preventDefault(); _openMenu(); });
           // 액션 아이콘 바인딩 (보기/이동/수정/삭제)
           marker.querySelectorAll(".pin-act").forEach(btn => {
             btn.addEventListener("click", ev => {

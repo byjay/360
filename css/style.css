@@ -160,9 +160,10 @@ html, body {
   border-left: 1px solid var(--border2);
   height: 28px;
 }
-.brand-logo-top.brand-logo--img { padding: 5px 10px; border-radius: 6px; }
-.brand-logo-top .brand-logo-img { height: 20px; max-width: 150px; }
-.brand-logo-top.brand-logo--text { font-size: 14px; }
+.brand-logo-top.brand-logo--img { padding: 6px 12px; border-radius: 6px; }
+/* [마스터 요청] 상단 로고/제목 2배 확대 */
+.brand-logo-top .brand-logo-img { height: 36px; max-width: 260px; }
+.brand-logo-top.brand-logo--text { font-size: 26px; font-weight: 800; }
 
 /* — 파노라마 오버레이: 미세 워터마크 로고 — */
 .brand-logo-pano {
@@ -396,7 +397,8 @@ html, body {
    APP — TOPBAR
 ══════════════════════════════════════════════════════ */
 .topbar {
-  height: 50px; flex-shrink: 0;
+  /* [마스터 요청] 타이틀 2배에 맞춰 상단바 높이 확대 */
+  height: 68px; flex-shrink: 0;
   display: flex; align-items: center; gap: 10px;
   padding: 0 16px;
   background: linear-gradient(180deg, #efe9dc 0%, var(--bg2) 100%);
@@ -417,12 +419,15 @@ html, body {
   flex-shrink: 0;
 }
 .mode-label {
-  font-size: 10px; letter-spacing: 3px; color: var(--gold);
+  /* [마스터 요청] 상단 타이틀 2배 확대 + 진하게(가시성) */
+  font-size: 20px; letter-spacing: 3px; color: var(--gold);
+  font-weight: 800;
 }
 .topbar-sep { color: var(--border2); }
 .file-name-label {
-  color: var(--text3); font-size: 10px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
+  /* [마스터 요청] 도면명 2배 확대 + 본문색(진하게)으로 가시성 확보 */
+  color: var(--text); font-size: 18px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px;
 }
 .pdf-pagination {
   display: flex; align-items: center; gap: 3px; margin-left: 12px;
@@ -549,11 +554,12 @@ html, body {
 /* ── topbar 설정/전환 버튼 ── */
 .btn-settings, .btn-exit-edit, .btn-enter-edit {
   display: flex; align-items: center; gap: 6px; margin-left: 8px;
-  padding: 6px 12px; border-radius: 8px; cursor: pointer;
-  font-size: 11px; letter-spacing: .5px; font-family: var(--font-ui);
+  /* [마스터 요청] 우상단 버튼 가시성 — 패딩/글자 키우고 굵게 */
+  padding: 9px 15px; border-radius: 8px; cursor: pointer;
+  font-size: 13.5px; font-weight: 700; letter-spacing: .5px; font-family: var(--font-ui);
   transition: background .15s, border-color .15s, transform .1s;
 }
-.btn-settings { background: rgba(107,100,87,.1); border: 1px solid var(--border); color: #3a352b; }
+.btn-settings { background: rgba(107,100,87,.16); border: 1px solid var(--border); color: #2b2820; }
 .btn-settings:hover { background: rgba(107,100,87,.22); border-color: #6b6457; color: #fff; transform: translateY(-1px); }
 .btn-settings svg { width: 14px; height: 14px; }
 .btn-exit-edit { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.4); color: #10b981; }
@@ -1218,18 +1224,22 @@ html, body {
   background: var(--gold); box-shadow: 0 0 8px var(--gold);
 }
 .pano-location {
-  color: #fff; font-size: 13px;
+  /* [마스터 요청] 검은 배경 글자 → 진한 흰색 + 크게 */
+  color: #ffffff; font-size: 15px; font-weight: 700;
   font-family: var(--font-mono); letter-spacing: 1px;
+  text-shadow: 0 1px 4px rgba(0,0,0,.8);
 }
 .btn-pano-close {
   display: inline-flex; align-items: center; gap: 7px;
-  background: rgba(43,40,32,0.136); border: 1px solid rgba(43,40,32,0.272);
-  color: #fff; padding: 7px 14px; border-radius: 8px;
-  cursor: pointer; font-size: 12px; font-weight: 600; font-family: var(--font-ui);
-  transition: background .15s, transform .12s;
+  /* [마스터 요청] 사진 내 버튼 대비 개선 — 투명배경(0.136) → 진한 반투명 흰테두리 */
+  background: rgba(20,24,34,0.82); border: 1px solid rgba(255,255,255,0.45);
+  color: #ffffff; padding: 8px 15px; border-radius: 8px;
+  cursor: pointer; font-size: 13px; font-weight: 700; font-family: var(--font-ui);
+  text-shadow: 0 1px 3px rgba(0,0,0,.7);
+  transition: background .15s, transform .12s, border-color .15s;
 }
-.btn-pano-close svg { width: 16px; height: 16px; }
-.btn-pano-close:hover { background: rgba(43,40,32,0.306); transform: translateY(-1px); }
+.btn-pano-close svg { width: 17px; height: 17px; }
+.btn-pano-close:hover { background: rgba(220,38,38,0.85); border-color: #fff; transform: translateY(-1px); }
 .btn-pano-close:active { transform: translateY(0); }
 
 .pano-state {
@@ -1355,9 +1365,10 @@ html, body {
   display: inline-flex; align-items: center; gap: 7px;
   background: transparent;
   border: 1px solid transparent;
-  color: rgba(43,40,32,.85); border-radius: 8px;
+  /* [마스터 요청·버그수정] 검은 배경 컨트롤바에 검은 글자(43,40,32) → 진한 흰색으로 가시성 확보 */
+  color: #f1f3f8; border-radius: 8px;
   padding: 8px 13px; cursor: pointer;
-  font-size: 12px; font-weight: 600; font-family: var(--font-ui);
+  font-size: 12px; font-weight: 700; font-family: var(--font-ui);
   transition: background .16s, color .16s, transform .12s;
   white-space: nowrap;
 }
@@ -1456,7 +1467,8 @@ html, body {
   position: absolute;
   left: 14px; top: 14px; bottom: 14px;
   z-index: 28;
-  width: 96px;
+  /* [마스터 요청] PDF 썸네일 2배 확대 (96 → 192) */
+  width: 192px;
   display: flex; flex-direction: column;
   gap: 8px;
   padding: 10px 8px;
@@ -1475,8 +1487,9 @@ html, body {
 .pdf-thumb-item {
   position: relative;
   display: flex; align-items: center; justify-content: center;
-  width: 100%; min-height: 56px;
-  padding: 4px;
+  /* [마스터 요청] 썸네일 항목 2배 (56 → 112) */
+  width: 100%; min-height: 112px;
+  padding: 6px;
   background: rgba(43,40,32,0.051);
   border: 1.5px solid transparent;
   border-radius: 8px;
@@ -1491,7 +1504,8 @@ html, body {
   box-shadow: 0 0 0 1px rgba(245,158,11,.25);
 }
 .pdf-thumb-canvas {
-  max-width: 100%; max-height: 110px;
+  /* [마스터 요청] 썸네일 캔버스 2배 (110 → 220) */
+  max-width: 100%; max-height: 220px;
   display: block;
   border-radius: 4px;
   background: #fff;
@@ -1499,12 +1513,13 @@ html, body {
 }
 .pdf-thumb-no {
   position: absolute;
-  right: 5px; bottom: 5px;
+  right: 6px; bottom: 6px;
   font-family: var(--font-ui);
-  font-size: 9px; line-height: 1;
-  color: #fff;
-  background: rgba(0,0,0,.6);
-  padding: 2px 4px; border-radius: 4px;
+  /* [마스터 요청] 페이지 번호도 2배 + 진한 흰색(검은배경 가시성) */
+  font-size: 14px; line-height: 1; font-weight: 700;
+  color: #ffffff;
+  background: rgba(0,0,0,.78);
+  padding: 3px 7px; border-radius: 5px;
   pointer-events: none;
 }
 .pdf-thumb-item.active .pdf-thumb-no {
@@ -1575,10 +1590,11 @@ html, body {
 }
 .pin-marker.focused .pin-marker-label { display: none; } /* 액션바와 겹침 방지 */
 .pin-act {
-  width: 30px; height: 30px; border-radius: 7px; cursor: pointer; flex: 0 0 auto;
-  display: grid; place-items: center; font-size: 12px;
-  color: #f3eee2; background: rgba(255,255,255,0.10);
-  border: 1px solid rgba(255,255,255,0.18); transition: all .13s;
+  width: 32px; height: 32px; border-radius: 7px; cursor: pointer; flex: 0 0 auto;
+  display: grid; place-items: center; font-size: 13px;
+  /* [마스터 요청] 검은 액션바 내 버튼 대비 강화 — 흰색 글자(진하게)+밝은 반투명 배경 */
+  color: #ffffff; background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.40); transition: all .13s;
   pointer-events: auto;          /* ★ 부모(.pins-layer pe:none) 상속 방지 — 항상 클릭 가능 */
   -webkit-tap-highlight-color: rgba(91,170,255,.4);
   touch-action: manipulation;    /* 더블탭 줌 지연 제거 → 즉각 반응 */
@@ -3353,7 +3369,8 @@ body.role-viewer .tq-btn.designer-only { display: none; }
 /* 좌측 도킹 썸네일 패널 (ezPDF 스타일) — docked 시 떠있는 캡슐이 아닌 사이드바형 */
 .pdf-thumb-strip.docked {
   left: 0; top: 0; bottom: 0;
-  width: 132px;
+  /* [마스터 요청] 도킹 썸네일도 2배 (132 → 240) */
+  width: 240px;
   border-radius: 0;
   border-top: none; border-bottom: none; border-left: none;
   border-right: 1px solid var(--border2);
@@ -3361,7 +3378,7 @@ body.role-viewer .tq-btn.designer-only { display: none; }
   backdrop-filter: blur(8px);
   box-shadow: 2px 0 16px rgba(43,40,32,.14);
 }
-.pdf-thumb-strip.docked .pdf-thumb-canvas { max-height: 150px; }
+.pdf-thumb-strip.docked .pdf-thumb-canvas { max-height: 300px; }
 
 @media (max-width: 720px) {
   .tb-label { display: none; }
