@@ -176,7 +176,14 @@
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
-        marker.dataset.no = pageIdx;
+        // ── [마스터 요청] 체크보드 핀은 저장된 실제 번호(pin.label = 시작번호+순번)를
+        //   표시한다. 일반 핀은 페이지 내 순번(pageIdx)을 표시. ──
+        let dispNo = pageIdx;
+        if (pin.checkboard) {
+          const lblNum = parseInt(pin.label, 10);
+          if (Number.isFinite(lblNum)) dispNo = lblNum;
+        }
+        marker.dataset.no = dispNo;
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
@@ -206,12 +213,14 @@
               </defs>
               <!-- 길고 날카로운 바늘: 머리 하단(13.6/22.4)에서 한 점(18,62)으로 수렴 -->
               <path d="M13.6 15 L18 62 L22.4 15 Z" fill="url(#pgneedle${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 + 흰 테두리 2중 -->
+              <circle cx="18" cy="12" r="11.6" fill="none" stroke="#1a1a1a" stroke-width="3.4" opacity="0.55"/>
               <!-- 둥근 머리 -->
-              <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.2"/>
-              <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.96"/>
+              <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.6"/>
+              <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.98"/>
               <text x="18" y="12.3" text-anchor="middle" dominant-baseline="central"
-                    font-family="'Segoe UI',sans-serif" font-size="9.5" font-weight="800"
-                    fill="${txtFill}">${pageIdx}</text>
+                    font-family="'Segoe UI',sans-serif" font-size="9.8" font-weight="900"
+                    fill="${txtFill}">${dispNo}</text>
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14.5" cy="8" rx="3.6" ry="2.3" fill="#ffffff" opacity="0.5"/>
             </svg>
@@ -340,6 +349,8 @@
       });
       if (typeof Zones !== "undefined") Zones.render();
       if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
+      // ── [마스터 요청] 렌더 직후에도 ISO면 핀을 즉시 수직(빌보드)으로 세움 ──
+      if (typeof MapCtrl !== "undefined" && MapCtrl._applyPinBillboard) MapCtrl._applyPinBillboard();
     },
 
     updatePdfPagination() {

@@ -1673,6 +1673,10 @@
       // translate3d 로 GPU 레이어 승격 (체감 속도 향상)
       this.transform.style.transform =
         `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})${iso}${rot}`;
+      // ── [마스터 요청] ISO(기울임)에서도 핀은 항상 "서 있게"(빌보드 3D) ──
+      //   도면(map-transform)이 rotateX/rotateZ 로 눕는 만큼, 핀 마커에
+      //   역회전(rotateZ -각 → rotateX -54deg)을 걸어 화면 기준 수직으로 세운다.
+      this._applyPinBillboard();
       this._updateZoomLabel();
       // ── 벡터 PDF 화질 보존: 줌이 오르면 그 배율로 PDF 를 다시 래스터화 ──
       // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
@@ -1736,6 +1740,36 @@
         }
         this.applyTransform();
         setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} }, 800);
+      }
+    },
+
+    /** ISO 뷰에서 핀 마커를 화면 기준 수직(빌보드)으로 세운다.
+     *  · 평면 뷰  : 핀 보정 없음(원래대로 도면에 누움 — 평면이라 무관)
+     *  · ISO 뷰   : 도면 rotateX(54)·rotateZ(θ) 의 역(rotateZ(-θ)·rotateX(-54))을
+     *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
+     *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
+    _applyPinBillboard() {
+      const layer = document.getElementById("pins-layer");
+      if (!layer) return;
+      const ISO_Z = [-32, 58, 148, 238];
+      if (State.isoView) {
+        const z = ISO_Z[State.isoDir % 4];
+        // CSS .pin-marker 의 기본 translate(-50%, calc(-100% + 2px)) 를 유지하면서
+        // 그 앞에 역회전을 합성(바늘 끝 기준). 도면이 rotateX(54)→rotateZ(z)로
+        // 누우므로 핀은 rotateZ(-z)→rotateX(-54)로 되돌려 화면 수직 복원.
+        const billboard =
+          `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-54deg)`;
+        layer.style.transformStyle = "preserve-3d";
+        for (const m of layer.children) {
+          m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) 기준 회전
+          m.style.transform = billboard;
+        }
+      } else {
+        // 평면 복귀: inline 보정 제거 → CSS 기본 transform 으로 복원
+        for (const m of layer.children) {
+          m.style.transform = "";
+          m.style.transformOrigin = "";
+        }
       }
     },
 
@@ -2103,7 +2137,14 @@
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
-        marker.dataset.no = pageIdx;
+        // ── [마스터 요청] 체크보드 핀은 저장된 실제 번호(pin.label = 시작번호+순번)를
+        //   표시한다. 일반 핀은 페이지 내 순번(pageIdx)을 표시. ──
+        let dispNo = pageIdx;
+        if (pin.checkboard) {
+          const lblNum = parseInt(pin.label, 10);
+          if (Number.isFinite(lblNum)) dispNo = lblNum;
+        }
+        marker.dataset.no = dispNo;
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
@@ -2133,12 +2174,14 @@
               </defs>
               <!-- 길고 날카로운 바늘: 머리 하단(13.6/22.4)에서 한 점(18,62)으로 수렴 -->
               <path d="M13.6 15 L18 62 L22.4 15 Z" fill="url(#pgneedle${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 + 흰 테두리 2중 -->
+              <circle cx="18" cy="12" r="11.6" fill="none" stroke="#1a1a1a" stroke-width="3.4" opacity="0.55"/>
               <!-- 둥근 머리 -->
-              <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.2"/>
-              <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.96"/>
+              <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.6"/>
+              <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.98"/>
               <text x="18" y="12.3" text-anchor="middle" dominant-baseline="central"
-                    font-family="'Segoe UI',sans-serif" font-size="9.5" font-weight="800"
-                    fill="${txtFill}">${pageIdx}</text>
+                    font-family="'Segoe UI',sans-serif" font-size="9.8" font-weight="900"
+                    fill="${txtFill}">${dispNo}</text>
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14.5" cy="8" rx="3.6" ry="2.3" fill="#ffffff" opacity="0.5"/>
             </svg>
@@ -2267,6 +2310,8 @@
       });
       if (typeof Zones !== "undefined") Zones.render();
       if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
+      // ── [마스터 요청] 렌더 직후에도 ISO면 핀을 즉시 수직(빌보드)으로 세움 ──
+      if (typeof MapCtrl !== "undefined" && MapCtrl._applyPinBillboard) MapCtrl._applyPinBillboard();
     },
 
     updatePdfPagination() {
@@ -4518,6 +4563,14 @@
     },
 
     _togglePlacing() {
+      // ── [마스터 요청 #6] 배치 모드를 켜기 전, 진행 중이던 다른 명령(영역그리기·
+      //   핀이동잠금·편집폼·팝업)을 먼저 조용히 종료한다. (placing 자신은 토글에 맡김)
+      if (!State.placing) {
+        const wasPlacing = State.placing;
+        State.placing = true;              // cancel 이 placing 을 끄지 않도록 잠깐 플래그
+        this.cancelActiveOperation({ silent: true });
+        State.placing = wasPlacing;        // 토글 직전 원복
+      }
       State.placing = !State.placing;
       if (State.placing) {
         State.pending = null;
@@ -4529,6 +4582,58 @@
       UI.$("place-hint").classList.toggle("hidden", !State.placing);
       UI.$("crosshair-overlay").classList.toggle("hidden", !State.placing);
       UI.$("map-viewport").style.cursor = State.placing ? "crosshair" : "grab";
+    },
+
+    /** ── [마스터 요청 #5·#6] 현재 실행 중인 "도구/명령"을 모두 즉시 종료 ──
+     *  ESC 키 또는 다른 기능 버튼 진입 시 호출 → 직전 명령이 깔끔히 중지되고
+     *  새 명령만 진행되게 한다. (배치/영역그리기/핀이동잠금해제/편집폼/팝업)
+     *  @returns {boolean} 실제로 무언가 취소했으면 true. */
+    cancelActiveOperation(opts) {
+      opts = opts || {};
+      let did = false;
+      // 1) 영역(존) 그리기 중 → 취소
+      try {
+        if (typeof Zones !== "undefined" && (State.drawingZone || (Zones._poly && Zones._poly.length))) {
+          if (Zones._cancelDraw) Zones._cancelDraw(); did = true;
+        }
+      } catch (e) {}
+      // 2) 핀 배치(placing) 모드 → 종료
+      if (State.placing) {
+        State.placing = false;
+        const bp = UI.$("btn-place"); if (bp) bp.classList.remove("active");
+        UI.hide && UI.hide("place-hint");
+        const ch = UI.$("crosshair-overlay"); if (ch) ch.classList.add("hidden");
+        const mv = UI.$("map-viewport"); if (mv) mv.style.cursor = "grab";
+        did = true;
+      }
+      // 3) 핀 이동 잠금해제 상태 → 다시 잠금
+      if (State.pinEditUnlocked) {
+        State.pinEditUnlocked = null; State.movingPinId = null;
+        document.querySelectorAll(".pin-marker.edit-unlocked,.pin-marker.moving")
+          .forEach(m => m.classList.remove("edit-unlocked", "moving"));
+        did = true;
+      }
+      // 4) 핀 편집 폼이 떠 있으면 닫기
+      const pf = UI.$("section-pin-form");
+      if (pf && !pf.classList.contains("hidden")) { this._closePinForm(); State.editingPinId = null; did = true; }
+      // 5) 핀 작업 팝업(PinActionPop) 열려 있으면 닫기
+      try {
+        if (typeof PinActionPop !== "undefined" && PinActionPop.close) {
+          const pap = UI.$("pin-action-pop");
+          if (pap && !pap.classList.contains("hidden")) { PinActionPop.close(); did = true; }
+        }
+      } catch (e) {}
+      // 6) pending(미확정 핀) 정리
+      if (State.pending) {
+        State.pending = null;
+        const pp = UI.$("pending-pin"); if (pp) pp.classList.add("hidden");
+        UI.hide && UI.hide("section-next-point");
+        did = true;
+      }
+      if (did && !opts.silent && typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast("⎋ 진행 중이던 작업을 종료했습니다");
+      }
+      return did;
     },
 
     /** 플로팅 핀 편집 패널 열기 (새 포인트 or 기존 포인트 편집) */
@@ -4725,6 +4830,9 @@
       vp.addEventListener("wheel", e => { e.preventDefault(); MapCtrl.handleWheel(e); }, { passive: false });
 
       vp.addEventListener("mousedown", e => {
+        // ── [마스터 요청 #7] 핀(또는 액션버튼) 위를 눌렀으면 배치/그리기보다 핀 클릭을 우선.
+        //   (체크보드는 항상 placing 상태라, 양보 없으면 핀 위 클릭 시 새 핀이 찍혀 '핀클릭 안됨'이 됨)
+        if (e.target && e.target.closest(".pin-marker")) { return; }
         if (State.placing) { this._handlePlaceClick(e); return; }
         if (State.drawingZone) { if (Zones.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         MapCtrl.handlePanStart(e);
@@ -4759,6 +4867,8 @@
           return;
         }
         if (e.touches.length === 1) {
+          // 핀(또는 액션버튼) 위 터치는 배치보다 핀 클릭을 우선 (체크보드 핀 클릭 보장)
+          if (e.target && e.target.closest(".pin-marker")) { return; }
           if (State.placing) { this._handlePlaceTouch(e); return; }
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
@@ -5041,6 +5151,16 @@
           if (e.key === "ArrowLeft")  { e.preventDefault(); PanoNav.go(-1); }
           else if (e.key === "ArrowRight") { e.preventDefault(); PanoNav.go(1); }
           return;
+        }
+        // ── [마스터 요청 #5] ESC → 직전 실행 명령 즉시 중지 ──
+        //   (배치/영역그리기/핀이동/편집폼/팝업 등 진행 중이면 모두 종료)
+        if (e.key === "Escape") {
+          const canceled = this.cancelActiveOperation();
+          if (canceled) { e.preventDefault(); return; }
+          // 취소할 작업이 없으면: ISO 뷰면 평면으로 복귀
+          if (State.isoView && typeof MapCtrl !== "undefined") {
+            State.isoView = false; State.isoDir = 0; MapCtrl._applyIso(); e.preventDefault(); return;
+          }
         }
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;

@@ -785,6 +785,47 @@ html, body {
   flex: 1; overflow-y: auto; border-bottom: none;
   padding: 8px;
 }
+
+/* ── [마스터 요청] 체크보드 모드 UI (시작번호 입력 + 진입/토글 버튼) ── */
+.checkboard-start-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px;
+}
+.checkboard-start-label {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  font-family: var(--font-ui); white-space: nowrap;
+}
+.checkboard-start-input {
+  width: 72px; padding: 7px 9px; border-radius: 8px;
+  border: 1px solid var(--border); background: #ffffff;
+  color: var(--text); font-size: 14px; font-weight: 700; text-align: center;
+  font-family: var(--font-mono); box-sizing: border-box;
+  transition: border-color .14s, box-shadow .14s;
+}
+.checkboard-start-input:focus {
+  outline: none; border-color: var(--blue, #2f6db5);
+  box-shadow: 0 0 0 3px rgba(47,109,181,.18);
+}
+.btn-checkboard-toggle {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 10px 14px; border-radius: 10px; cursor: pointer;
+  background: linear-gradient(180deg, #ffffff 0%, #eef2f8 100%);
+  border: 1px solid #c8d4e4; color: #1f3a5c;
+  font-size: 13.5px; font-weight: 700; font-family: var(--font-ui);
+  box-shadow: 0 1px 2px rgba(31,58,92,.12), inset 0 1px 0 rgba(255,255,255,.9);
+  transition: background .14s, border-color .14s, transform .1s, box-shadow .14s;
+}
+.btn-checkboard-toggle svg { width: 16px; height: 16px; }
+.btn-checkboard-toggle:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #e3ecf7 100%);
+  border-color: #9fb6d4; transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(31,58,92,.18), inset 0 1px 0 rgba(255,255,255,.9);
+}
+.btn-checkboard-toggle.active {
+  background: linear-gradient(180deg, #2f6db5 0%, #245a9c 100%);
+  border-color: #1f4e8a; color: #ffffff;
+  box-shadow: 0 2px 8px rgba(47,109,181,.4), inset 0 1px 0 rgba(255,255,255,.25);
+}
 /* ★ [항목3] 포인트 목록 아이콘 토글 — 평소 접힘(화면 안 가림), 헤더 누르면 펼침 */
 .sidebar-section.pin-list-wrap.collapsed {
   flex: none; overflow: visible;
@@ -1318,8 +1359,9 @@ html, body {
 .btn-pano-nav {
   display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; border-radius: 50%;
-  background: rgba(43,40,32,0.102); border: 1px solid rgba(43,40,32,0.204);
-  color: #2b2820; cursor: pointer; transition: background .12s, transform .12s;
+  /* [대비수정] 360뷰어 좌우 네비 — 어두운 오버레이 위 흰 아이콘 */
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.30);
+  color: #f1f3f8; cursor: pointer; transition: background .12s, transform .12s;
 }
 .btn-pano-nav svg { width: 18px; height: 18px; }
 .btn-pano-nav:hover:not(:disabled) { background: rgba(245,158,11,.22); border-color: rgba(245,158,11,.5); transform: translateY(-1px); }
@@ -1782,21 +1824,23 @@ html, body {
 }
 .pano-iso-btn {
   width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 7px; cursor: pointer; border: 1px solid transparent;
-  background: rgba(43,40,32,.12); color: #2b2820;
+  border-radius: 7px; cursor: pointer; border: 1px solid rgba(255,255,255,.22);
+  /* [대비수정] 어두운 헤더 위 버튼 → 밝은 글자/심볼(흰색) + 약한 밝은 배경 */
+  background: rgba(255,255,255,.10); color: #eef2f8;
   transition: background .15s, border-color .15s, transform .1s, color .15s;
 }
 .pano-iso-btn .iso-corner { font-size: 13px; line-height: 1; }
-.pano-iso-btn:hover { background: rgba(56,189,248,.25); transform: translateY(-1px); }
+.pano-iso-btn:hover { background: rgba(56,189,248,.35); color: #ffffff; transform: translateY(-1px); }
 .pano-iso-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-pano-notes {
   position: relative; display: inline-flex; align-items: center; gap: 7px;
   padding: 8px 14px; border-radius: 999px; cursor: pointer;
-  background: rgba(15,23,42,.7); border: 1px solid var(--border); color: #2b2820;
+  /* [대비수정] 어두운 배경 → 흰 글자/아이콘 */
+  background: rgba(15,23,42,.7); border: 1px solid rgba(255,255,255,.22); color: #eef2f8;
   font-size: 12px; font-family: var(--font-ui); font-weight: 600;
   transition: background .15s, border-color .15s, transform .1s;
 }
-.btn-pano-notes:hover { background: rgba(30,41,59,.9); border-color: var(--accent); transform: translateY(-1px); }
+.btn-pano-notes:hover { background: rgba(30,41,59,.95); color: #ffffff; border-color: var(--accent); transform: translateY(-1px); }
 .btn-pano-notes svg { width: 15px; height: 15px; }
 .pano-notes-count {
   display: inline-flex; align-items: center; justify-content: center;
@@ -2094,8 +2138,9 @@ html, body {
 }
 .pano-timeline.hidden { display: none !important; }
 .tl-arrow {
-  flex: 0 0 auto; width: 34px; border: 1px solid rgba(43,40,32,0.238);
-  background: rgba(43,40,32,0.085); border-radius: 9px; color: #2b2820;
+  flex: 0 0 auto; width: 34px; border: 1px solid rgba(255,255,255,0.28);
+  /* [대비수정] 타임라인(어두운 배경) 위 화살표 → 흰색 */
+  background: rgba(255,255,255,0.10); border-radius: 9px; color: #f1f3f8;
   display: flex; align-items: center; justify-content: center; cursor: pointer;
   transition: .15s;
 }
@@ -2405,7 +2450,8 @@ html, body {
 .wm-toast {
   background: linear-gradient(165deg, rgba(13,20,37,.98), rgba(10,16,32,.99));
   border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border2));
-  color: #2b2820; font-size: 12.5px; font-weight: 600;
+  /* [대비수정] 어두운 배경 → 흰 글자(이전엔 #2b2820 검정이라 안 보임) */
+  color: #f4f6fb; font-size: 12.5px; font-weight: 600;
   padding: 10px 16px; border-radius: 10px;
   box-shadow: 0 12px 30px rgba(0,0,0,.5), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
   opacity: 0; transform: translateY(10px) scale(.96);

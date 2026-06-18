@@ -23,6 +23,10 @@
       // translate3d 로 GPU 레이어 승격 (체감 속도 향상)
       this.transform.style.transform =
         `translate3d(${x}px, ${y}px, 0) scale(${State.zoom})${iso}${rot}`;
+      // ── [마스터 요청] ISO(기울임)에서도 핀은 항상 "서 있게"(빌보드 3D) ──
+      //   도면(map-transform)이 rotateX/rotateZ 로 눕는 만큼, 핀 마커에
+      //   역회전(rotateZ -각 → rotateX -54deg)을 걸어 화면 기준 수직으로 세운다.
+      this._applyPinBillboard();
       this._updateZoomLabel();
       // ── 벡터 PDF 화질 보존: 줌이 오르면 그 배율로 PDF 를 다시 래스터화 ──
       // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
@@ -86,6 +90,36 @@
         }
         this.applyTransform();
         setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} }, 800);
+      }
+    },
+
+    /** ISO 뷰에서 핀 마커를 화면 기준 수직(빌보드)으로 세운다.
+     *  · 평면 뷰  : 핀 보정 없음(원래대로 도면에 누움 — 평면이라 무관)
+     *  · ISO 뷰   : 도면 rotateX(54)·rotateZ(θ) 의 역(rotateZ(-θ)·rotateX(-54))을
+     *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
+     *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
+    _applyPinBillboard() {
+      const layer = document.getElementById("pins-layer");
+      if (!layer) return;
+      const ISO_Z = [-32, 58, 148, 238];
+      if (State.isoView) {
+        const z = ISO_Z[State.isoDir % 4];
+        // CSS .pin-marker 의 기본 translate(-50%, calc(-100% + 2px)) 를 유지하면서
+        // 그 앞에 역회전을 합성(바늘 끝 기준). 도면이 rotateX(54)→rotateZ(z)로
+        // 누우므로 핀은 rotateZ(-z)→rotateX(-54)로 되돌려 화면 수직 복원.
+        const billboard =
+          `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-54deg)`;
+        layer.style.transformStyle = "preserve-3d";
+        for (const m of layer.children) {
+          m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) 기준 회전
+          m.style.transform = billboard;
+        }
+      } else {
+        // 평면 복귀: inline 보정 제거 → CSS 기본 transform 으로 복원
+        for (const m of layer.children) {
+          m.style.transform = "";
+          m.style.transformOrigin = "";
+        }
       }
     },
 

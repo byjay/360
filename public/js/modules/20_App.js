@@ -588,6 +588,14 @@
     },
 
     _togglePlacing() {
+      // ── [마스터 요청 #6] 배치 모드를 켜기 전, 진행 중이던 다른 명령(영역그리기·
+      //   핀이동잠금·편집폼·팝업)을 먼저 조용히 종료한다. (placing 자신은 토글에 맡김)
+      if (!State.placing) {
+        const wasPlacing = State.placing;
+        State.placing = true;              // cancel 이 placing 을 끄지 않도록 잠깐 플래그
+        this.cancelActiveOperation({ silent: true });
+        State.placing = wasPlacing;        // 토글 직전 원복
+      }
       State.placing = !State.placing;
       if (State.placing) {
         State.pending = null;
@@ -599,6 +607,58 @@
       UI.$("place-hint").classList.toggle("hidden", !State.placing);
       UI.$("crosshair-overlay").classList.toggle("hidden", !State.placing);
       UI.$("map-viewport").style.cursor = State.placing ? "crosshair" : "grab";
+    },
+
+    /** ── [마스터 요청 #5·#6] 현재 실행 중인 "도구/명령"을 모두 즉시 종료 ──
+     *  ESC 키 또는 다른 기능 버튼 진입 시 호출 → 직전 명령이 깔끔히 중지되고
+     *  새 명령만 진행되게 한다. (배치/영역그리기/핀이동잠금해제/편집폼/팝업)
+     *  @returns {boolean} 실제로 무언가 취소했으면 true. */
+    cancelActiveOperation(opts) {
+      opts = opts || {};
+      let did = false;
+      // 1) 영역(존) 그리기 중 → 취소
+      try {
+        if (typeof Zones !== "undefined" && (State.drawingZone || (Zones._poly && Zones._poly.length))) {
+          if (Zones._cancelDraw) Zones._cancelDraw(); did = true;
+        }
+      } catch (e) {}
+      // 2) 핀 배치(placing) 모드 → 종료
+      if (State.placing) {
+        State.placing = false;
+        const bp = UI.$("btn-place"); if (bp) bp.classList.remove("active");
+        UI.hide && UI.hide("place-hint");
+        const ch = UI.$("crosshair-overlay"); if (ch) ch.classList.add("hidden");
+        const mv = UI.$("map-viewport"); if (mv) mv.style.cursor = "grab";
+        did = true;
+      }
+      // 3) 핀 이동 잠금해제 상태 → 다시 잠금
+      if (State.pinEditUnlocked) {
+        State.pinEditUnlocked = null; State.movingPinId = null;
+        document.querySelectorAll(".pin-marker.edit-unlocked,.pin-marker.moving")
+          .forEach(m => m.classList.remove("edit-unlocked", "moving"));
+        did = true;
+      }
+      // 4) 핀 편집 폼이 떠 있으면 닫기
+      const pf = UI.$("section-pin-form");
+      if (pf && !pf.classList.contains("hidden")) { this._closePinForm(); State.editingPinId = null; did = true; }
+      // 5) 핀 작업 팝업(PinActionPop) 열려 있으면 닫기
+      try {
+        if (typeof PinActionPop !== "undefined" && PinActionPop.close) {
+          const pap = UI.$("pin-action-pop");
+          if (pap && !pap.classList.contains("hidden")) { PinActionPop.close(); did = true; }
+        }
+      } catch (e) {}
+      // 6) pending(미확정 핀) 정리
+      if (State.pending) {
+        State.pending = null;
+        const pp = UI.$("pending-pin"); if (pp) pp.classList.add("hidden");
+        UI.hide && UI.hide("section-next-point");
+        did = true;
+      }
+      if (did && !opts.silent && typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast("⎋ 진행 중이던 작업을 종료했습니다");
+      }
+      return did;
     },
 
     /** 플로팅 핀 편집 패널 열기 (새 포인트 or 기존 포인트 편집) */
@@ -795,6 +855,9 @@
       vp.addEventListener("wheel", e => { e.preventDefault(); MapCtrl.handleWheel(e); }, { passive: false });
 
       vp.addEventListener("mousedown", e => {
+        // ── [마스터 요청 #7] 핀(또는 액션버튼) 위를 눌렀으면 배치/그리기보다 핀 클릭을 우선.
+        //   (체크보드는 항상 placing 상태라, 양보 없으면 핀 위 클릭 시 새 핀이 찍혀 '핀클릭 안됨'이 됨)
+        if (e.target && e.target.closest(".pin-marker")) { return; }
         if (State.placing) { this._handlePlaceClick(e); return; }
         if (State.drawingZone) { if (Zones.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         MapCtrl.handlePanStart(e);
@@ -829,6 +892,8 @@
           return;
         }
         if (e.touches.length === 1) {
+          // 핀(또는 액션버튼) 위 터치는 배치보다 핀 클릭을 우선 (체크보드 핀 클릭 보장)
+          if (e.target && e.target.closest(".pin-marker")) { return; }
           if (State.placing) { this._handlePlaceTouch(e); return; }
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
@@ -1111,6 +1176,16 @@
           if (e.key === "ArrowLeft")  { e.preventDefault(); PanoNav.go(-1); }
           else if (e.key === "ArrowRight") { e.preventDefault(); PanoNav.go(1); }
           return;
+        }
+        // ── [마스터 요청 #5] ESC → 직전 실행 명령 즉시 중지 ──
+        //   (배치/영역그리기/핀이동/편집폼/팝업 등 진행 중이면 모두 종료)
+        if (e.key === "Escape") {
+          const canceled = this.cancelActiveOperation();
+          if (canceled) { e.preventDefault(); return; }
+          // 취소할 작업이 없으면: ISO 뷰면 평면으로 복귀
+          if (State.isoView && typeof MapCtrl !== "undefined") {
+            State.isoView = false; State.isoDir = 0; MapCtrl._applyIso(); e.preventDefault(); return;
+          }
         }
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
