@@ -4037,6 +4037,24 @@
       UI.toggle("btn-import-json",   false);        // JSON 가져오기 — 뷰어/디자이너 모두 숨김
       UI.toggle("section-viewer-load", !isDesigner); // 뷰어 로드 상태 표시
 
+      // ── [마스터 규칙·G1 버그수정] 도면 빈화면(drop-hint) 문구를 모드별로 분기 ──
+      //  디자이너: "도면을 업로드하세요 / ＋탭하여 도면 등록"(CTA 노출)
+      //  뷰어    : "디자이너가 배포한 도면을 기다리는 중" — 등록 CTA는 절대 노출하지 않음
+      try {
+        const dIcon = UI.$("drop-icon"), dText = UI.$("drop-text");
+        const dSub  = UI.$("drop-sub"),  dCta  = UI.$("drop-tap-cta");
+        if (dCta) { dCta.classList.toggle("hidden", !isDesigner); dCta.style.display = isDesigner ? "" : "none"; }
+        if (isDesigner) {
+          if (dIcon) dIcon.textContent = "📄";
+          if (dText) dText.textContent = "도면을 업로드하세요";
+          if (dSub)  dSub.textContent  = "PDF · PNG · JPG 지원";
+        } else {
+          if (dIcon) dIcon.textContent = "🗂️";
+          if (dText) dText.textContent = "배포된 도면을 기다리는 중";
+          if (dSub)  dSub.textContent  = "설계자가 도면을 배포하면 자동으로 표시됩니다";
+        }
+      } catch (e) {}
+
       if (isDesigner) Projects.load();              // 프로젝트 목록 로드
 
       if (!isDesigner) {

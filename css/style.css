@@ -150,7 +150,7 @@ html, body {
   min-height: 40px;
 }
 .brand-logo-home.brand-logo--img { padding: 12px 20px; }
-.brand-logo-home .brand-logo-img { height: 48px; max-width: 300px; }
+.brand-logo-home .brand-logo-img { height: 56px; max-width: none; width: auto; }
 .brand-logo-home.brand-logo--text { font-size: clamp(22px, 3.6vw, 32px); }
 
 /* — 상단바: 컴팩트 로고, 좌측 — */
@@ -160,9 +160,9 @@ html, body {
   border-left: 1px solid var(--border2);
   height: 28px;
 }
-.brand-logo-top.brand-logo--img { padding: 6px 12px; border-radius: 6px; }
-/* [마스터 요청] 상단 로고/제목 2배 확대 */
-.brand-logo-top .brand-logo-img { height: 36px; max-width: 260px; }
+.brand-logo-top.brand-logo--img { padding: 5px 12px; border-radius: 7px; }
+/* [마스터 요청] 상단 로고 — 높이만 지정하고 max-width 제거 → 원본 가로세로비 정확 유지 */
+.brand-logo-top .brand-logo-img { height: 38px; max-width: none; width: auto; }
 .brand-logo-top.brand-logo--text { font-size: 26px; font-weight: 800; }
 
 /* — 파노라마 오버레이: 미세 워터마크 로고 — */
@@ -3048,17 +3048,29 @@ html, body {
 .sidebar-backdrop { display: none; }
 
 /* ★ 상단 빠른 도구 아이콘 (데스크톱: 좌측 사이드바 핵심 기능을 상단에서 바로) */
-.topbar-quick { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+.topbar-quick { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; }
+/* [마스터 요청] 상단 빠른도구 — 밝은 크림 상단바에 맞춘 CAD급 입체 버튼 */
 .tq-btn {
-  width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
-  background: var(--bg3, #1a1f2b); border: 1px solid var(--border2, #2a3242);
-  color: var(--text2, #b9c2d0); border-radius: 8px; cursor: pointer;
-  transition: background .14s, color .14s, border-color .14s;
-  -webkit-tap-highlight-color: rgba(91,170,255,.3); touch-action: manipulation;
+  width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, #ffffff 0%, #ece5d7 100%);
+  border: 1px solid #cdc3ad;
+  color: #3a352b; border-radius: 9px; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(43,40,32,.14), inset 0 1px 0 rgba(255,255,255,.9);
+  transition: background .14s, color .14s, border-color .14s, transform .08s, box-shadow .14s;
+  -webkit-tap-highlight-color: rgba(201,150,42,.3); touch-action: manipulation;
 }
-.tq-btn svg { width: 18px; height: 18px; }
-.tq-btn:hover { background: var(--border, #232a38); color: var(--gold, #c9962a); border-color: var(--gold, #c9962a); }
-.tq-btn.active { background: var(--gold, #c9962a); color: #1a1206; border-color: var(--gold, #c9962a); }
+.tq-btn svg { width: 20px; height: 20px; filter: drop-shadow(0 1px 0 rgba(255,255,255,.7)); }
+.tq-btn:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #f3eada 100%);
+  color: var(--gold, #c9962a); border-color: var(--gold, #c9962a);
+  box-shadow: 0 2px 8px rgba(201,150,42,.3), inset 0 1px 0 rgba(255,255,255,.95);
+  transform: translateY(-1px);
+}
+.tq-btn.active {
+  background: linear-gradient(180deg, #f7d98a 0%, #e9b84e 100%);
+  color: #3a2c08; border-color: var(--gold, #c9962a);
+  box-shadow: 0 0 0 1px rgba(201,150,42,.5), 0 2px 8px rgba(201,150,42,.4), inset 0 1px 0 rgba(255,255,255,.6);
+}
 body.role-viewer .tq-btn.designer-only { display: none; }
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
 @media (max-width: 760px) { .topbar-quick { display: none; } }
@@ -3294,46 +3306,62 @@ body.role-viewer .tq-btn.designer-only { display: none; }
 ═══════════════════════════════════════════════════════════ */
 .pdf-toolbar {
   flex-shrink: 0;
-  display: flex; align-items: center; gap: 4px;
-  height: 46px; padding: 0 10px;
-  background: linear-gradient(180deg, #faf7f0 0%, #f2ece0 100%);
-  border-bottom: 1px solid var(--border2);
-  box-shadow: 0 2px 10px rgba(43,40,32,.12), inset 0 1px 0 rgba(255,255,255,.5);
+  display: flex; align-items: center; gap: 5px;
+  height: 50px; padding: 0 12px;
+  /* CAD 리본 느낌: 위쪽 밝고 아래쪽 약간 그늘 + 하단 골드 라인 */
+  background: linear-gradient(180deg, #fdfaf3 0%, #efe7d8 100%);
+  border-bottom: 2px solid #d8cdb5;
+  box-shadow: 0 3px 12px rgba(43,40,32,.16), inset 0 1px 0 rgba(255,255,255,.7);
   position: relative; z-index: 4;
   overflow-x: auto; scrollbar-width: none;
 }
 .pdf-toolbar::-webkit-scrollbar { height: 0; }
 .pdf-toolbar.hidden { display: none !important; }
 
+/* ── [마스터 요청] CAD급(ZWCAD/ABViewer) 입체 버튼 — 미세 그라데이션·내부 하이라이트·또렷한 음영 ── */
 .tb-btn {
   flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-  height: 32px; min-width: 32px; padding: 0 7px;
-  background: rgba(43,40,32,0.068);
-  border: 1px solid transparent;
+  height: 34px; min-width: 34px; padding: 0 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #ece5d7 100%);
+  border: 1px solid #cdc3ad;
   border-radius: 7px;
-  color: var(--text); cursor: pointer;
-  transition: background .14s, border-color .14s, color .14s, transform .08s;
+  color: #2b2820; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(43,40,32,.12), inset 0 1px 0 rgba(255,255,255,.9);
+  transition: background .14s, border-color .14s, color .14s, transform .08s, box-shadow .14s;
 }
-.tb-btn svg { width: 18px; height: 18px; display: block; }
-.tb-btn:hover { background: rgba(43,40,32,0.17); border-color: var(--border2); }
-.tb-btn:active { transform: scale(.94); }
-.tb-btn:disabled { opacity: .32; cursor: default; pointer-events: none; }
+.tb-btn svg { width: 19px; height: 19px; display: block; filter: drop-shadow(0 1px 0 rgba(255,255,255,.7)); }
+.tb-btn:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #f3eada 100%);
+  border-color: var(--gold);
+  box-shadow: 0 2px 7px rgba(201,150,42,.28), inset 0 1px 0 rgba(255,255,255,.95);
+  transform: translateY(-1px);
+}
+.tb-btn:active {
+  transform: translateY(0) scale(.97);
+  background: linear-gradient(180deg, #e8e0d0 0%, #ddd3bf 100%);
+  box-shadow: inset 0 2px 4px rgba(43,40,32,.22);
+}
+.tb-btn:disabled { opacity: .32; cursor: default; pointer-events: none; box-shadow: none; }
 .tb-btn.active {
-  background: rgba(245,158,11,.16);
-  border-color: rgba(245,158,11,.4);
-  color: var(--gold);
+  background: linear-gradient(180deg, #f7d98a 0%, #e9b84e 100%);
+  border-color: var(--gold);
+  color: #3a2c08;
+  box-shadow: 0 0 0 1px rgba(201,150,42,.5), 0 2px 8px rgba(201,150,42,.4), inset 0 1px 0 rgba(255,255,255,.6);
 }
-.tb-btn-wide { padding: 0 10px; }
-.tb-label { font-size: 11px; font-family: var(--font-ui); letter-spacing: .3px; }
+.tb-btn-wide { padding: 0 11px; }
+.tb-label { font-size: 11px; font-weight: 600; font-family: var(--font-ui); letter-spacing: .3px; }
 .tb-btn-accent {
-  background: rgba(245,158,11,.14);
-  border-color: rgba(245,158,11,.35);
-  color: var(--gold);
+  background: linear-gradient(180deg, #f7d98a 0%, #e9b84e 100%);
+  border-color: var(--gold);
+  color: #3a2c08; font-weight: 700;
+  box-shadow: 0 2px 7px rgba(201,150,42,.35), inset 0 1px 0 rgba(255,255,255,.6);
 }
-.tb-btn-accent:hover { background: rgba(245,158,11,.24); }
+.tb-btn-accent:hover { background: linear-gradient(180deg, #ffe6a0 0%, #f0c25e 100%); transform: translateY(-1px); }
 
-.tb-sep { flex-shrink: 0; width: 1px; height: 22px; background: var(--border2); margin: 0 4px; }
+.tb-sep { flex-shrink: 0; width: 2px; height: 24px; margin: 0 5px;
+  background: linear-gradient(180deg, transparent, #c9bda3 35%, #c9bda3 65%, transparent);
+  box-shadow: 1px 0 0 rgba(255,255,255,.6); }
 .tb-flex { flex: 1; min-width: 8px; }
 
 .tb-page {
