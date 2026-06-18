@@ -1,5 +1,5 @@
   const PinGrid = {
-    collapsed: false,
+    collapsed: true,        // ★ 기본 접힘 — 버튼(리스트 열기)을 눌러야만 표시(마스터 요청)
     query: "",
 
     /** 모바일/태블릿(터치) 또는 좁은 화면이면 true → 화면 가리지 않는 바텀시트(드롭다운) 모드.
@@ -66,12 +66,7 @@
         if (reopen) reopen.classList.add("hidden");
         return;
       }
-      // 모바일(≤640px): 도면을 먼저 보도록 첫 표시 시 자동으로 접어 둠(바텀시트 닫힘).
-      // 사용자가 하단 '목록' 버튼/리오픈 탭으로 열 수 있음.
-      if (!this._mobileInit && this.isMobileSheet()) {
-        this._mobileInit = true;
-        this.collapsed = true;
-      }
+      // ★ 데스크톱·모바일 모두: 기본 접힘. 사용자가 '포인트 리스트 열기' 버튼을 눌러야만 펼쳐짐.
       panel.classList.remove("hidden");
       // 접힌 상태면 패널은 숨고 리오픈 탭만
       if (this.collapsed) {

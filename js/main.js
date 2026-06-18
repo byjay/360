@@ -1707,15 +1707,16 @@
     },
     _applyIso() {
       const vp = this.viewport, tr = this.transform;
-      const btn = document.getElementById("btn-iso");
-      if (btn) {
+      // ★ 하단 nav 버튼(btn-iso) + 상단 툴바 버튼(tb-iso) 모두 동기화 + 방향 라벨 표시
+      ["btn-iso", "tb-iso"].forEach((bid) => {
+        const btn = document.getElementById(bid);
+        if (!btn) return;
         btn.classList.toggle("active", State.isoView);
-        // 버튼에 현재 방향 표시(예: "ISO 북동")
         try {
           const base = btn.dataset.baseLabel || (btn.dataset.baseLabel = (btn.getAttribute("title") || "ISO"));
           btn.setAttribute("title", State.isoView ? (base + " · " + this.ISO_LABELS[State.isoDir]) : base);
         } catch (e) {}
-      }
+      });
       if (vp) vp.classList.toggle("iso-active", State.isoView);
       // ISO 방향 표시 토스트
       try {
@@ -3741,7 +3742,7 @@
      현재 PDF 페이지의 핀을 표로 표시. 행 클릭 → 페이지 이동 + 핀 포커스 + 360° 자동 실행.
   ══════════════════════════════════════════ */
   const PinGrid = {
-    collapsed: false,
+    collapsed: true,        // ★ 기본 접힘 — 버튼(리스트 열기)을 눌러야만 표시(마스터 요청)
     query: "",
 
     /** 모바일/태블릿(터치) 또는 좁은 화면이면 true → 화면 가리지 않는 바텀시트(드롭다운) 모드.
@@ -3808,12 +3809,7 @@
         if (reopen) reopen.classList.add("hidden");
         return;
       }
-      // 모바일(≤640px): 도면을 먼저 보도록 첫 표시 시 자동으로 접어 둠(바텀시트 닫힘).
-      // 사용자가 하단 '목록' 버튼/리오픈 탭으로 열 수 있음.
-      if (!this._mobileInit && this.isMobileSheet()) {
-        this._mobileInit = true;
-        this.collapsed = true;
-      }
+      // ★ 데스크톱·모바일 모두: 기본 접힘. 사용자가 '포인트 리스트 열기' 버튼을 눌러야만 펼쳐짐.
       panel.classList.remove("hidden");
       // 접힌 상태면 패널은 숨고 리오픈 탭만
       if (this.collapsed) {
@@ -4648,6 +4644,29 @@
       // 화면 맞춤
       const fit = $("mnav-fit");
       if (fit) fit.addEventListener("click", () => { closeSheet(); MapCtrl.fit(); });
+
+      // ★ 상단 빠른 도구(데스크톱) — 모바일 nav 와 동일 액션 위임
+      const tqMenu = $("tq-menu");
+      if (tqMenu) tqMenu.addEventListener("click", () => {
+        toggleSheet();
+        tqMenu.classList.toggle("active", document.body.classList.contains("sidebar-open"));
+      });
+      const tqUp = $("tq-upload");
+      if (tqUp) tqUp.addEventListener("click", () => { const b = $("btn-upload-drawing"); if (b) b.click(); });
+      const tqPlace = $("tq-place");
+      if (tqPlace) tqPlace.addEventListener("click", () => { const b = $("btn-place"); if (b) b.click(); });
+      const tqPins = $("tq-pins");
+      if (tqPins) tqPins.addEventListener("click", () => {
+        const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
+        if (hasDrawing && typeof PinGrid !== "undefined") {
+          PinGrid.render();
+          PinGrid.setCollapsed(!PinGrid.collapsed);   // 토글: 열림↔접힘
+        } else if (typeof AllPins !== "undefined" && AllPins.show) {
+          AllPins.show();
+        }
+      });
+      const tqFit = $("tq-fit");
+      if (tqFit) tqFit.addEventListener("click", () => MapCtrl.fit());
 
       // 시트 열렸을 때 사이드바 내 버튼 클릭 시 자동 닫기(업로드/배포 등 액션성)
       const sb = $("sidebar");

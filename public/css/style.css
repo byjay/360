@@ -3031,6 +3031,22 @@ html, body {
 .mobile-nav { display: none; }
 .sidebar-backdrop { display: none; }
 
+/* ★ 상단 빠른 도구 아이콘 (데스크톱: 좌측 사이드바 핵심 기능을 상단에서 바로) */
+.topbar-quick { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+.tq-btn {
+  width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg3, #1a1f2b); border: 1px solid var(--border2, #2a3242);
+  color: var(--text2, #b9c2d0); border-radius: 8px; cursor: pointer;
+  transition: background .14s, color .14s, border-color .14s;
+  -webkit-tap-highlight-color: rgba(91,170,255,.3); touch-action: manipulation;
+}
+.tq-btn svg { width: 18px; height: 18px; }
+.tq-btn:hover { background: var(--border, #232a38); color: var(--gold, #c9962a); border-color: var(--gold, #c9962a); }
+.tq-btn.active { background: var(--gold, #c9962a); color: #1a1206; border-color: var(--gold, #c9962a); }
+body.role-viewer .tq-btn.designer-only { display: none; }
+/* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
+@media (max-width: 760px) { .topbar-quick { display: none; } }
+
 @media (max-width: 760px) {
   /* 1) 하단 네비게이션 바 — 항상 화면 하단 고정, 콘텐츠 위가 아닌 별도 영역 */
   .mobile-nav {
@@ -3460,13 +3476,16 @@ html, body {
 /* 접힌 상태에서 다시 열기 버튼 (오른쪽 모서리 탭) */
 .pin-grid-reopen{
   position:absolute; top:16px; right:14px; z-index:45;
-  width:40px; height:40px; display:grid; place-items:center;
+  height:40px; padding:0 14px; display:inline-flex; align-items:center; gap:7px;
   background:var(--gold,#c9962a); color:#fff; border:none; border-radius:12px;
   box-shadow:0 6px 18px rgba(201,150,42,.36); cursor:pointer;
-  font-size:15px; transition:transform .15s, filter .15s;
+  font-size:13px; font-weight:700; font-family:var(--font-ui);
+  transition:transform .15s, filter .15s;
+  -webkit-tap-highlight-color:rgba(255,255,255,.3); touch-action:manipulation;
 }
+.pin-grid-reopen-label{ white-space:nowrap; }
 .pin-grid-reopen.hidden{ display:none; }
-.pin-grid-reopen:hover{ transform:scale(1.07); filter:brightness(1.06); }
+.pin-grid-reopen:hover{ transform:scale(1.05); filter:brightness(1.06); }
 
 /* 데스크톱(마우스) 중간 폭에서만 우측 축소 패널 — 터치 기기는 아래 바텀시트가 적용됨 */
 @media (hover: hover) and (pointer: fine) and (max-width: 860px) and (min-width: 641px){

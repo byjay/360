@@ -57,15 +57,16 @@
     },
     _applyIso() {
       const vp = this.viewport, tr = this.transform;
-      const btn = document.getElementById("btn-iso");
-      if (btn) {
+      // ★ 하단 nav 버튼(btn-iso) + 상단 툴바 버튼(tb-iso) 모두 동기화 + 방향 라벨 표시
+      ["btn-iso", "tb-iso"].forEach((bid) => {
+        const btn = document.getElementById(bid);
+        if (!btn) return;
         btn.classList.toggle("active", State.isoView);
-        // 버튼에 현재 방향 표시(예: "ISO 북동")
         try {
           const base = btn.dataset.baseLabel || (btn.dataset.baseLabel = (btn.getAttribute("title") || "ISO"));
           btn.setAttribute("title", State.isoView ? (base + " · " + this.ISO_LABELS[State.isoDir]) : base);
         } catch (e) {}
-      }
+      });
       if (vp) vp.classList.toggle("iso-active", State.isoView);
       // ISO 방향 표시 토스트
       try {

@@ -736,6 +736,29 @@
       const fit = $("mnav-fit");
       if (fit) fit.addEventListener("click", () => { closeSheet(); MapCtrl.fit(); });
 
+      // ★ 상단 빠른 도구(데스크톱) — 모바일 nav 와 동일 액션 위임
+      const tqMenu = $("tq-menu");
+      if (tqMenu) tqMenu.addEventListener("click", () => {
+        toggleSheet();
+        tqMenu.classList.toggle("active", document.body.classList.contains("sidebar-open"));
+      });
+      const tqUp = $("tq-upload");
+      if (tqUp) tqUp.addEventListener("click", () => { const b = $("btn-upload-drawing"); if (b) b.click(); });
+      const tqPlace = $("tq-place");
+      if (tqPlace) tqPlace.addEventListener("click", () => { const b = $("btn-place"); if (b) b.click(); });
+      const tqPins = $("tq-pins");
+      if (tqPins) tqPins.addEventListener("click", () => {
+        const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
+        if (hasDrawing && typeof PinGrid !== "undefined") {
+          PinGrid.render();
+          PinGrid.setCollapsed(!PinGrid.collapsed);   // 토글: 열림↔접힘
+        } else if (typeof AllPins !== "undefined" && AllPins.show) {
+          AllPins.show();
+        }
+      });
+      const tqFit = $("tq-fit");
+      if (tqFit) tqFit.addEventListener("click", () => MapCtrl.fit());
+
       // 시트 열렸을 때 사이드바 내 버튼 클릭 시 자동 닫기(업로드/배포 등 액션성)
       const sb = $("sidebar");
       if (sb) sb.addEventListener("click", (e) => {
