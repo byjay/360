@@ -1028,8 +1028,17 @@ html, body {
   background: rgba(8,13,24,.5); border: 1px solid var(--border2);
   color: var(--text2); display: flex; align-items: center; justify-content: center;
   transition: background .14s, color .14s, border-color .14s;
+  pointer-events: auto;          /* ★ 항상 클릭 가능 */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(91,170,255,.4);
 }
 .pin-act svg { width: 14px; height: 14px; }
+/* ★ [항목3] 터치 기기(hover 없음): 수정/삭제 버튼 항상 노출 + 터치타깃 확대 */
+@media (hover: none) {
+  .pin-acts { opacity: 1 !important; }
+  .pin-act { width: 34px; height: 34px; }
+  .pin-act svg { width: 17px; height: 17px; }
+}
 .pin-edit:hover { background: color-mix(in srgb, var(--accent) 14%, var(--bg3)); border-color: var(--accent); color: var(--accent); }
 .pin-del:hover { background: rgba(248,113,113,.14); border-color: rgba(248,113,113,.55); color: var(--red); }
 .pin-arrow { color: var(--gold); font-size: 14px; }
