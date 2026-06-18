@@ -993,11 +993,37 @@
 <script src="js/firebase-config.js"></script>
 <script type="module" src="js/firebase-init.js"></script>
 <script src="js/main.js"></script>
-<!-- Service Worker 등록 (PWA 오프라인 앱 셸) -->
+<!-- Service Worker 등록 (PWA 오프라인 앱 셸) — 새 버전 자동 감지·즉시 적용 -->
 <script>
   if ('serviceWorker' in navigator) {
+    // 새 SW가 제어권을 가져가면(=새 버전 활성화) 한 번만 새로고침해서
+    // 마스터 화면이 즉시 최신 CSS/JS를 받도록 한다.
+    var swRefreshed = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (swRefreshed) return;
+      swRefreshed = true;
+      window.location.reload();
+    });
+
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function () { /* 등록 실패 무시 */ });
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // 등록 즉시 업데이트 확인(캐시된 옛 SW 강제 교체)
+        try { reg.update(); } catch (e) {}
+
+        // 새 SW가 설치되면 대기 없이 즉시 활성화 요청
+        function promote(sw) {
+          if (!sw) return;
+          sw.addEventListener('statechange', function () {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              // 이미 페이지를 제어하는 SW가 있다 = 업데이트 상황 → skipWaiting 트리거
+              try { sw.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+            }
+          });
+        }
+        if (reg.waiting) { try { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {} }
+        if (reg.installing) promote(reg.installing);
+        reg.addEventListener('updatefound', function () { promote(reg.installing); });
+      }).catch(function () { /* 등록 실패 무시 */ });
     });
   }
 </script>

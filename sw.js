@@ -5,7 +5,7 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v3';
+const CACHE = 'wm-shell-v5';
 const SHELL = [
   './',
   'index.html',
@@ -42,6 +42,13 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// 클라이언트(index.html)가 새 버전을 즉시 적용하라고 보내는 신호 처리
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 function isApi(url) {
   return url.pathname.startsWith('/api/') ||
          url.pathname.startsWith('/tables/') ||
@@ -62,7 +69,29 @@ self.addEventListener('fetch', (e) => {
   if (url.hostname.indexOf('accounts.google.com') !== -1) return;
   // 폰트(googleapis/gstatic)는 오프라인을 위해 cache-first 허용 — 아래 공통 전략으로 처리
 
-  // 셸/정적자산: stale-while-revalidate
+  // ── [근본수정] 앱 셸 핵심(HTML/CSS/JS)은 NETWORK-FIRST ──
+  //   기존 stale-while-revalidate는 "캐시 즉시 반환"이라 코드를 바꿔도
+  //   사용자가 옛 화면을 계속 보는 문제가 있었다(아이콘/스타일 개선 미반영).
+  //   → 같은 출처의 .html/.css/.js 는 항상 네트워크 최신을 먼저 쓰고,
+  //     오프라인일 때만 캐시로 폴백한다. (오프라인 동작은 그대로 유지)
+  const sameOrigin = (url.origin === self.location.origin);
+  const isShellCode = sameOrigin && /\.(html|css|js)$/i.test(url.pathname) || url.pathname === '/' ;
+  if (isShellCode) {
+    e.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.status === 200 && (res.type === 'basic' || res.type === 'cors')) {
+          const clone = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});
+        }
+        return res;
+      }).catch(() =>
+        caches.open(CACHE).then((c) => c.match(req)).then((cached) => cached || caches.match('index.html'))
+      )
+    );
+    return;
+  }
+
+  // 그 외 정적자산(폰트/라이브러리/이미지/PDF워커/3D): stale-while-revalidate
   e.respondWith(
     caches.open(CACHE).then((cache) =>
       cache.match(req).then((cached) => {
