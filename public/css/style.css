@@ -272,15 +272,19 @@ html, body {
   pointer-events: none;
 }
 @keyframes hubScan { 0% { top: -26px; } 100% { top: 110px; } }
-/* 선박 와이어프레임 */
+/* 선박 아이콘 — CAD/3D 블루프린트 스타일 (그라데이션 입체 선체) */
 .hub-thumb-ship {
   position: relative; z-index: 1;
-  width: 78px; height: auto;
-  color: color-mix(in srgb, var(--accent) 88%, #fff);
-  filter: drop-shadow(0 2px 6px rgba(0,0,0,.5));
-  transition: transform .35s ease;
+  width: 86px; height: auto;
+  filter: drop-shadow(0 3px 7px rgba(13,91,168,.45)) drop-shadow(0 1px 2px rgba(0,0,0,.35));
+  transition: transform .4s cubic-bezier(.22,.61,.36,1), filter .4s ease;
 }
-.hub-card:hover .hub-thumb-ship { transform: translateY(-2px) scale(1.04); }
+.hub-card:hover .hub-thumb-ship {
+  transform: translateY(-3px) scale(1.06);
+  filter: drop-shadow(0 6px 14px rgba(31,127,214,.55)) drop-shadow(0 1px 3px rgba(0,0,0,.4));
+}
+/* 치수선이 hover 시 살짝 또렷해지는 테크니컬 도면 효과 */
+.hub-card:hover .hub-thumb-ship .ship-dim { opacity: .7; transition: opacity .4s ease; }
 /* 도면 코드 라벨 */
 .hub-thumb-code {
   position: absolute; bottom: 7px; left: 10px; z-index: 2;

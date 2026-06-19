@@ -71,13 +71,39 @@
           '<div class="hub-card-thumb">' +
             '<div class="hub-thumb-grid"></div>' +
             '<div class="hub-thumb-scan"></div>' +
-            '<svg class="hub-thumb-ship" viewBox="0 0 120 64" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-              '<path d="M10 40 L100 40 L92 52 L20 52 Z"/>' +
-              '<path d="M22 40 L22 26 L74 26 L74 40"/>' +
-              '<path d="M30 26 L30 18 L60 18 L60 26"/>' +
-              '<line x1="36" y1="22" x2="40" y2="22"/><line x1="46" y1="22" x2="50" y2="22"/>' +
-              '<line x1="80" y1="40" x2="80" y2="30"/><line x1="80" y1="30" x2="92" y2="32"/>' +
-              '<path d="M6 46 q6 4 12 0 q6 -4 12 0 q6 4 12 0 q6 -4 12 0 q6 4 12 0 q6 -4 12 0 q6 4 12 0" opacity=".4"/>' +
+            '<svg class="hub-thumb-ship" viewBox="0 0 132 72" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+              '<defs>' +
+                '<linearGradient id="shipHull" x1="0" y1="0" x2="0" y2="1">' +
+                  '<stop offset="0" stop-color="#7fe3ff"/><stop offset="1" stop-color="#1f7fd6"/>' +
+                '</linearGradient>' +
+                '<linearGradient id="shipDeck" x1="0" y1="0" x2="1" y2="0">' +
+                  '<stop offset="0" stop-color="#aef0ff"/><stop offset="1" stop-color="#3da3e6"/>' +
+                '</linearGradient>' +
+              '</defs>' +
+              /* 흘수선(waterline) 치수 보조선 */
+              '<g class="ship-dim" stroke="#3da3e6" stroke-width=".7" opacity=".45">' +
+                '<line x1="8" y1="60" x2="8" y2="66"/><line x1="120" y1="60" x2="120" y2="66"/>' +
+                '<line x1="8" y1="63" x2="120" y2="63" stroke-dasharray="3 3"/>' +
+              '</g>' +
+              /* 선체(hull) — 입체 그라데이션 */
+              '<path d="M10 42 L116 42 L106 56 L22 56 Z" fill="url(#shipHull)" stroke="#0d5ba8" stroke-width="1.4"/>' +
+              '<line x1="14" y1="49" x2="112" y2="49" stroke="#0d5ba8" stroke-width=".8" opacity=".5"/>' +
+              /* 메인 갑판 구조물(데크하우스) */
+              '<path d="M24 42 L24 26 L84 26 L84 42 Z" fill="url(#shipDeck)" stroke="#0d5ba8" stroke-width="1.3"/>' +
+              /* 선교(bridge) */
+              '<path d="M32 26 L32 16 L62 16 L62 26 Z" fill="#dff6ff" stroke="#0d5ba8" stroke-width="1.2"/>' +
+              /* 선교 창문 */
+              '<g stroke="#0d5ba8" stroke-width="1.1">' +
+                '<line x1="38" y1="21" x2="42" y2="21"/><line x1="47" y1="21" x2="51" y2="21"/><line x1="56" y1="21" x2="58" y2="21"/>' +
+              '</g>' +
+              /* 크레인/마스트 */
+              '<g stroke="#0d5ba8" stroke-width="1.3">' +
+                '<line x1="94" y1="42" x2="94" y2="28"/><line x1="94" y1="28" x2="108" y2="32"/><line x1="94" y1="31" x2="100" y2="42"/>' +
+              '</g>' +
+              /* 연돌(funnel) */
+              '<rect x="70" y="20" width="9" height="6" rx="1.5" fill="#7fe3ff" stroke="#0d5ba8" stroke-width="1.1"/>' +
+              /* 파도(waterline ripple) */
+              '<path d="M4 60 q7 4 14 0 q7 -4 14 0 q7 4 14 0 q7 -4 14 0 q7 4 14 0 q7 -4 14 0 q7 4 14 0 q7 -4 14 0" stroke="url(#shipDeck)" stroke-width="1.3" opacity=".55"/>' +
             '</svg>' +
             '<span class="hub-thumb-code">' + code + '</span>' +
           '</div>' +
