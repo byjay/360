@@ -65,11 +65,20 @@
     },
 
     async loadDecks() {
+      // ── [마스터 요청] 목록 정합성: 요청 시점의 프로젝트 ID를 고정해, 응답 도착 시
+      //    현재 프로젝트가 바뀌었으면 폐기(유령 항목 방지). 또 응답에서 현재 프로젝트 deck만 채택. ──
+      const reqPid = this.currentProject ? this.currentProject.id : null;
+      if (!reqPid) { this.decks = []; this._renderDecks(); return; }
+      let data = [];
       try {
-        const r = await fetch("/api/projects/" + this.currentProject.id + "/decks");
-        const { data } = await r.json();
-        this.decks = data || [];
-      } catch (e) { this.decks = []; }
+        const r = await fetch("/api/projects/" + reqPid + "/decks");
+        const j = await r.json();
+        data = j.data || [];
+      } catch (e) { data = []; }
+      // 응답 도착 사이 프로젝트가 바뀌었으면 무시
+      if (!this.currentProject || this.currentProject.id !== reqPid) return;
+      // 서버가 다른 프로젝트 deck을 섞어줘도(이론상) 현재 프로젝트 것만 사용
+      this.decks = (data || []).filter((d) => !d.project_id || d.project_id === reqPid);
       this._renderDecks();
     },
 
@@ -77,12 +86,24 @@
     async createDeck(opts) {
       opts = opts || {};
       if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return null; }
+      // ── [마스터 요청] 생성 버튼 연타 가드: 진행 중이면 중복 생성 차단 ──
+      if (this._creatingDeck) { return null; }
       let name = opts.name;
       if (!name) {
         const res = await Prompt.ask({ title: "구역 생성", sub: "구역 이름을 입력하세요 (예: Main Deck, Engine Room, No.1 Hold)", placeholder: "구역 이름" });
         if (!res) return null;
         name = res.value;
       }
+      // ── [마스터 요청] 이름 검증 + 중복 방지(같은 프로젝트에 같은 이름 구역 차단) ──
+      name = String(name || "").trim();
+      if (!name) { alert("구역 이름을 입력하세요."); return null; }
+      const dup = (this.decks || []).find((x) => String(x.name).trim().toLowerCase() === name.toLowerCase());
+      if (dup) {
+        Prompt.toast && Prompt.toast("⚠️ 이미 '" + name + "' 구역이 있습니다 — 그 구역을 선택합니다");
+        this.currentDeck = dup; this._renderDecks();
+        return dup; // 중복 생성하지 않고 기존 구역 반환
+      }
+      this._creatingDeck = true;
       try {
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
@@ -95,6 +116,7 @@
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
         return created;
       } catch (e) { alert("네트워크 오류"); return null; }
+      finally { this._creatingDeck = false; }
     },
 
     /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */

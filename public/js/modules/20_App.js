@@ -42,8 +42,15 @@
       SyncQueue.init();
       this._updateSyncBadge();
       // ★ 온라인 복귀 시 로컬에 보관된(dirty) 도면 draft 를 서버로 자동 업로드
-      window.addEventListener("online", () => { setTimeout(() => this._flushDirtyDrafts(), 600); });
-      if (navigator.onLine) setTimeout(() => this._flushDirtyDrafts(), 1500);
+      //   + [마스터 요청] 미연결 도면↔구역 연결도 함께 재시도(중지/새로고침 복구)
+      window.addEventListener("online", () => {
+        setTimeout(() => this._flushDirtyDrafts(), 600);
+        setTimeout(() => this._flushDeckLinkQueue(), 800);
+      });
+      if (navigator.onLine) {
+        setTimeout(() => this._flushDirtyDrafts(), 1500);
+        setTimeout(() => this._flushDeckLinkQueue(), 1800);
+      }
     },
 
     /* ── Home ── */
@@ -125,7 +132,11 @@
         }
       } catch (e) {}
 
-      if (isDesigner) Projects.load();              // 프로젝트 목록 로드
+      if (isDesigner) {
+        Projects.load();                            // 프로젝트 목록 로드
+        // [마스터 요청] 디자이너 진입 시 미연결 도면↔구역 연결 재시도(복구)
+        setTimeout(() => this._flushDeckLinkQueue(), 1200);
+      }
 
       if (!isDesigner) {
         // 뷰어 전용 링크(?mode=viewer)로 진입한 경우 홈 버튼도 숨긴다.
@@ -2050,6 +2061,37 @@
     /* ── 자동 저장 (버튼 없이 즉시 저장) ──
        도면 업로드 즉시 배포본(작업본)을 생성하고, 핀·영역 변경 시 디바운스 갱신한다.
        사용자가 "배포" 버튼을 누르지 않아도 도면과 작업 내용이 서버에 보존된다. */
+    /** ── [마스터 요청 (나)] 도면 페이지(dataURL)를 R2에 업로드하고 R2 URL 배열로 치환 ──
+     *  · 성공: ['/api/r2/object/assets/xxx.jpg', ...] 반환 → D1에는 URL만 저장(가벼움)
+     *  · 실패(R2 미구성/네트워크): 원본 dataURL 배열 그대로 반환 → D1 base64 폴백(소실 방지)
+     *  이미 R2 URL(또는 http URL)인 항목은 재업로드하지 않고 그대로 둠(중복 방지). */
+    async _uploadPagesToR2(pagesData) {
+      if (!Array.isArray(pagesData) || !pagesData.length) return pagesData || [];
+      const out = [];
+      for (const page of pagesData) {
+        // 이미 URL이면(스냅샷 재저장 등) 그대로 사용
+        if (typeof page === "string" && /^(https?:|\/api\/r2\/object\/)/i.test(page)) {
+          out.push(page); continue;
+        }
+        // dataURL이 아니면 변환 불가 → 원본 유지
+        if (typeof page !== "string" || !/^data:/i.test(page)) { out.push(page); continue; }
+        try {
+          const m = /^data:([^;,]+)[;,]/i.exec(page);
+          const ct = (m && m[1]) || "image/jpeg";
+          const blob = await (await fetch(page)).blob(); // dataURL → Blob (브라우저 표준)
+          const r = await fetch("/api/r2/upload", {
+            method: "PUT",
+            headers: Object.assign({ "Content-Type": ct }, Auth.headers ? Auth.headers() : {}),
+            body: blob
+          });
+          if (!r.ok) { out.push(page); continue; }  // 실패 → base64 폴백
+          const j = await r.json();
+          out.push(j.url || page);                  // R2 URL 채택
+        } catch (e) { out.push(page); }             // 예외 → base64 폴백
+      }
+      return out;
+    },
+
     _buildSavePayload(pagesData) {
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
@@ -2121,19 +2163,71 @@
           State.autoSaveDepId = null;
           await this._createInitialSave();                         // 신규 생성
         }
-        // 3) 생성/교체된 도면 배포본을 현재 구역에 연결
+        // 3) 생성/교체된 도면 배포본을 현재 구역에 연결 (즉시 + 실패 시 재시도 큐)
         if (deck && State.autoSaveDepId) {
           deck.deployment_id = State.autoSaveDepId;
-          try {
-            await fetch("/api/decks/" + deck.id, {
-              method: "PUT", headers: Auth.headers(),
-              body: JSON.stringify({ name: deck.name, level_no: deck.level_no || null, deployment_id: State.autoSaveDepId })
-            });
-            Projects._renderDecks();
-          } catch (e) { /* 연결 실패해도 도면/스냅샷은 저장됨 */ }
+          Projects._renderDecks();  // 화면엔 즉시 '도면 등록됨'으로 반영(낙관적)
+          await this._linkDeckDeployment(deck.id, State.autoSaveDepId, deck);
         }
         Prompt.toast && Prompt.toast((isReplace ? "🔄 도면 교체 완료" : "📄 도면 등록 · 자동저장 완료") + (deck ? " (구역: " + deck.name + ")" : ""));
       } catch (e) { /* 비치명적 */ }
+    },
+
+    /** ── [마스터 요청] 도면↔구역 연결을 즉시 시도하고, 실패하면 재시도 큐에 넣어
+     *  앱이 중지/새로고침돼도 다음 기회에 반드시 연결되도록 보장한다. ── */
+    async _linkDeckDeployment(deckId, depId, deckObj) {
+      if (!deckId || !depId) return false;
+      const body = {
+        name: (deckObj && deckObj.name) || undefined,
+        level_no: (deckObj && deckObj.level_no) || null,
+        deployment_id: depId
+      };
+      // 1) 재시도 큐에 먼저 기록(localStorage) — 즉시 성공해도 무해(성공 시 제거)
+      this._enqueueDeckLink(deckId, depId, body);
+      try {
+        const r = await fetch("/api/decks/" + deckId, {
+          method: "PUT", headers: Auth.headers(), body: JSON.stringify(body)
+        });
+        if (r.ok) {
+          this._dequeueDeckLink(deckId);   // 성공 → 큐에서 제거
+          if (typeof Projects !== "undefined") Projects._renderDecks();
+          return true;
+        }
+      } catch (e) { /* 네트워크 실패 → 큐에 남아 재시도 */ }
+      return false;
+    },
+
+    _deckLinkKey() { return "wm_deck_link_queue"; },
+    _enqueueDeckLink(deckId, depId, body) {
+      try {
+        const q = JSON.parse(localStorage.getItem(this._deckLinkKey()) || "{}");
+        q[deckId] = { deckId, depId, body, ts: Date.now() };
+        localStorage.setItem(this._deckLinkKey(), JSON.stringify(q));
+      } catch (e) {}
+    },
+    _dequeueDeckLink(deckId) {
+      try {
+        const q = JSON.parse(localStorage.getItem(this._deckLinkKey()) || "{}");
+        if (q[deckId]) { delete q[deckId]; localStorage.setItem(this._deckLinkKey(), JSON.stringify(q)); }
+      } catch (e) {}
+    },
+    /** 앱 시작/온라인 복귀 시: 미연결 도면↔구역 연결을 재시도해 누락을 복구 */
+    async _flushDeckLinkQueue() {
+      let q = {};
+      try { q = JSON.parse(localStorage.getItem(this._deckLinkKey()) || "{}"); } catch (e) { return; }
+      const items = Object.values(q || {});
+      if (!items.length) return;
+      for (const it of items) {
+        try {
+          const r = await fetch("/api/decks/" + it.deckId, {
+            method: "PUT", headers: Auth.headers(), body: JSON.stringify(it.body)
+          });
+          if (r.ok) this._dequeueDeckLink(it.deckId);
+        } catch (e) { /* 다음 기회에 재시도 */ }
+      }
+      if (typeof Projects !== "undefined" && Projects.loadDecks && Projects.currentProject) {
+        try { await Projects.loadDecks(); } catch (e) {}
+      }
     },
 
     /** 구역 선택 시 연결된 도면(배포 스냅샷)을 불러와 화면(디자이너 편집)에 표시 */
@@ -2290,8 +2384,10 @@
         this._setSaveIndicator("saving");
         pages = await this._snapshotPages();
         if (!pages.length) { this._setSaveIndicator("error"); return; }
-        await this._saveDraftLocal(pages);                       // 로컬 우선 보관
-        const body = this._buildSavePayload(pages);
+        await this._saveDraftLocal(pages);                       // 로컬 우선 보관(원본 dataURL)
+        // [마스터 요청 (나)] 교체 도면도 R2 업로드 후 URL 저장(실패 시 base64 폴백)
+        const r2pages = await this._uploadPagesToR2(pages);
+        const body = this._buildSavePayload(r2pages);
         const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
           method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
         });
@@ -2313,9 +2409,11 @@
         this._setSaveIndicator("saving");
         pages = await this._snapshotPages();
         if (!pages.length) { this._setSaveIndicator("error"); return; }
-        // ★ 먼저 로컬에 무조건 보관(서버 성공 여부와 무관하게 도면 소실 방지)
+        // ★ 먼저 로컬에 무조건 보관(서버 성공 여부와 무관하게 도면 소실 방지) — 원본 dataURL 보존
         await this._saveDraftLocal(pages);
-        const body = this._buildSavePayload(pages);
+        // [마스터 요청 (나)] 도면 바이너리를 R2에 올리고 URL로 치환(실패 시 base64 폴백)
+        const r2pages = await this._uploadPagesToR2(pages);
+        const body = this._buildSavePayload(r2pages);
         const res = await fetch("/tables/deployments", {
           method: "POST",
           headers: Auth.headers(),
