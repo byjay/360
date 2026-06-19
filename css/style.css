@@ -1001,6 +1001,19 @@ html, body {
 .pf-tool:hover { border-color: var(--accent); color: #3a352b; background: color-mix(in srgb, var(--accent) 8%, var(--bg3)); }
 .pf-tool.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg3)); }
 
+/* ── [마스터 요청] RICOH THETA 360 전용 버튼: 파란 강조(일반 사진버튼과 구분) ── */
+.pf-tool-theta {
+  border-color: #2f6df0;
+  color: #1f4fc4;
+  background: linear-gradient(180deg, #eef4ff 0%, #e2ecff 100%);
+}
+.pf-tool-theta svg { color: #2f6df0; }
+.pf-tool-theta:hover {
+  border-color: #1f4fc4;
+  color: #16399a;
+  background: linear-gradient(180deg, #e2ecff 0%, #d3e2ff 100%);
+}
+
 /* 접이식 필드 */
 .pf-collapse { display: block; }
 .pf-collapse.hidden { display: none; }

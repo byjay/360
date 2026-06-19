@@ -996,6 +996,69 @@
     },
     toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
+    /* ── [마스터 요청] 자이로(폰 기울임) 둘러보기 — 삼성폰 DeviceOrientation ── */
+    isGyroSupported() { return typeof window !== "undefined" && "DeviceOrientationEvent" in window; },
+
+    /** 자이로 켜기/끄기 토글. iOS는 권한요청 필요(삼성폰=Android는 즉시 동작). 반환: 켜짐 여부 */
+    async toggleGyro() {
+      if (this._gyroOn) { this._stopGyro(); return false; }
+      if (!this.isGyroSupported()) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 기기는 자이로 센서를 지원하지 않습니다");
+        return false;
+      }
+      // iOS 13+ 권한 요청(Android/삼성폰은 해당 없음)
+      try {
+        const DOE = window.DeviceOrientationEvent;
+        if (DOE && typeof DOE.requestPermission === "function") {
+          const res = await DOE.requestPermission();
+          if (res !== "granted") {
+            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 권한이 거부되었습니다");
+            return false;
+          }
+        }
+      } catch (e) {/* Android는 requestPermission 없음 → 무시 */}
+      this._startGyro();
+      return true;
+    },
+
+    _startGyro() {
+      if (this._gyroHandler) this._stopGyro();
+      this.S.autoRotate = false; // 자이로 중엔 자동회전 끔(충돌 방지)
+      this._gyroBase = null;     // 첫 측정값을 기준으로 상대 이동
+      this._gyroHandler = (e) => {
+        if (!this.open || this.S.dragging) return;
+        // alpha=나침반(yaw), beta=앞뒤기울임(pitch). 가로/세로 회전 보정은 화면방향 고려.
+        const alpha = (e.alpha == null) ? null : e.alpha;
+        const beta  = (e.beta  == null) ? null : e.beta;
+        if (alpha == null && beta == null) return;
+        if (!this._gyroBase) {
+          this._gyroBase = { alpha: alpha || 0, beta: beta || 0, lon: this.S.lon, lat: this.S.lat };
+          return;
+        }
+        const b = this._gyroBase;
+        // yaw: alpha 증가 → 좌측 회전. 부호는 직관에 맞게 보정.
+        let dAlpha = (alpha == null) ? 0 : (alpha - b.alpha);
+        // -180~180 정규화
+        dAlpha = ((dAlpha + 540) % 360) - 180;
+        const dBeta = (beta == null) ? 0 : (beta - b.beta);
+        this.S.lon = b.lon - dAlpha;
+        this.S.lat = b.lat + dBeta;
+        this._invalidate();
+      };
+      window.addEventListener("deviceorientation", this._gyroHandler, true);
+      this._gyroOn = true;
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자이로 켜짐 — 폰을 돌려 둘러보세요");
+    },
+
+    _stopGyro() {
+      if (this._gyroHandler) {
+        window.removeEventListener("deviceorientation", this._gyroHandler, true);
+        this._gyroHandler = null;
+      }
+      this._gyroOn = false;
+      this._gyroBase = null;
+    },
+
     onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; },
     onPointerMove(x, y) {
       if (!this.S.dragging) return;
@@ -1012,6 +1075,7 @@
       this.open = false;
       this._currentPin = null;
       cancelAnimationFrame(this.rafId);
+      this._stopGyro();           // [마스터 요청] 자이로 리스너 정리(닫을 때 누수 방지)
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
       const ip = document.getElementById("pano-info-panel");
@@ -4476,21 +4540,26 @@
         const isImg = f.type.startsWith("image/");
         const isVid = f.type.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(f.name);
         if (!isImg && !isVid) { alert("이미지(.jpg/.png) 또는 360° 영상(.mp4) 파일을 선택하세요."); return; }
-        State.pendingFile = f;
-        State.pendingIsVideo = isVid;
-        const info = UI.$("pin-file-info");
-        info.textContent = (isVid ? "🎬 " : "🖼 ") + f.name + " (" + (f.size / 1024 / 1024).toFixed(1) + " MB)";
-        info.classList.remove("hidden");
-        UI.show("field-pin-imgname");
-        // ── 요청사항: 구역이 선택돼 있으면 파일명을 '구역명_번호'(예: ER1_1, ER1_2)로 자동 지정 ──
-        const autoName = this._zoneImageName();
-        UI.$("input-pin-imgname").value = autoName || f.name.replace(/\.[^.]+$/, "");
-        this._updateConfirmEnabled();
-        // ── 요청사항: 새 포인트 + 사진 등록 시 별도 저장 버튼 없이 즉시 저장 ──
-        //    (편집 모드는 '변경 저장' 버튼을 명시적으로 눌러야 반영)
-        if (!State.editingPinId) {
-          setTimeout(() => this._confirmPin(), 120);
-        }
+        this._acceptPinMediaFile(f, isVid, false);
+      });
+
+      // ── [마스터 요청] RICOH THETA 360° 전용 버튼 (삼성폰) ──
+      //   THETA 앱이 폰 갤러리에 저장한 360 JPG를 고르거나, 카메라로 바로 촬영.
+      //   THETA 사진은 표준 equirectangular(가로:세로 = 2:1) → 360 뷰어로 자동 표시.
+      const btnTheta = UI.$("btn-pin-theta");
+      if (btnTheta) btnTheta.addEventListener("click", () => {
+        if (Prompt && Prompt.toast)
+          Prompt.toast("🌐 RICOH THETA 360 — 삼성폰 갤러리에서 360 사진을 고르거나 촬영하세요");
+        UI.$("input-pin-theta").click();
+      });
+      const inputTheta = UI.$("input-pin-theta");
+      if (inputTheta) inputTheta.addEventListener("change", e => {
+        const f = e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        if (!f.type.startsWith("image/")) { alert("360° 사진(JPG/PNG)을 선택하세요."); return; }
+        // THETA 경로로 들어온 이미지는 360 후보로 표시(실제 2:1 검사는 _acceptPinMediaFile 내부)
+        this._acceptPinMediaFile(f, false, true);
       });
 
       // 핀 폼: 첨부 문서 선택 (PDF/Word 등 — 다중)
@@ -4723,6 +4792,7 @@
       State.pending = null;
       State.pendingFile = null;
       State.pendingIsVideo = false;
+      State.pendingIs360 = false;
       State.pendingDocs = [];
       State.pendingFls = null;
       UI.$("pending-pin").classList.add("hidden");
@@ -4990,6 +5060,66 @@
       return base + "_" + next;
     },
 
+    /** ── [마스터 요청] 핀 사진/영상 파일 공통 처리 + RICOH THETA 360 자동 판별 ──
+     *  @param f         선택된 File
+     *  @param isVid     동영상 여부
+     *  @param viaTheta  THETA 360 버튼 경로 여부(360 후보 우선)
+     *  THETA 사진은 equirectangular(가로:세로 ≈ 2:1) → 비율 검사로 360 자동 태깅. */
+    _acceptPinMediaFile(f, isVid, viaTheta) {
+      State.pendingFile = f;
+      State.pendingIsVideo = !!isVid;
+      State.pendingIs360 = false; // 검사 후 갱신
+      const info = UI.$("pin-file-info");
+      const sizeMB = (f.size / 1024 / 1024).toFixed(1);
+      info.textContent = (isVid ? "🎬 " : "🖼 ") + f.name + " (" + sizeMB + " MB)";
+      info.classList.remove("hidden");
+      UI.show("field-pin-imgname");
+      const autoName = this._zoneImageName();
+      UI.$("input-pin-imgname").value = autoName || f.name.replace(/\.[^.]+$/, "");
+      this._updateConfirmEnabled();
+
+      // 이미지면 실제 픽셀 비율로 360(2:1) 판별 → 뱃지 표시 + 360 태깅
+      if (!isVid && f.type.startsWith("image/")) {
+        this._detect360(f, (is360, w, h) => {
+          State.pendingIs360 = is360;
+          const badge = is360 ? "  🌐 360° 파노라마" : (viaTheta ? "  ⚠ 360 비율 아님(일반 사진)" : "");
+          if (badge) {
+            info.textContent = (is360 ? "🌐 " : "🖼 ") + f.name + " (" + sizeMB + " MB)" + badge;
+          }
+          if (is360 && !autoName) {
+            // 360이면 이름 끝에 _360 힌트
+            const cur = UI.$("input-pin-imgname").value;
+            if (cur && !/_360$/i.test(cur)) UI.$("input-pin-imgname").value = cur + "_360";
+          }
+          if (is360 && Prompt && Prompt.toast)
+            Prompt.toast("🌐 360° 사진 감지(" + w + "×" + h + ") — 둘러보기 뷰어로 표시됩니다");
+        });
+      }
+
+      // 새 포인트 + 이미지 → 즉시 저장(편집 모드는 명시적 저장 버튼)
+      if (!State.editingPinId) {
+        setTimeout(() => this._confirmPin(), viaTheta ? 260 : 120);
+      }
+    },
+
+    /** 이미지 파일이 360 equirectangular(가로:세로 ≈ 2:1)인지 비동기 판별 */
+    _detect360(file, cb) {
+      try {
+        const url = URL.createObjectURL(file);
+        const im = new Image();
+        im.onload = () => {
+          const w = im.naturalWidth, h = im.naturalHeight;
+          const ratio = h > 0 ? w / h : 0;
+          // THETA/equirectangular는 정확히 2:1. 허용오차 ±8%.
+          const is360 = ratio >= 1.85 && ratio <= 2.15 && w >= 1024;
+          URL.revokeObjectURL(url);
+          cb(is360, w, h);
+        };
+        im.onerror = () => { URL.revokeObjectURL(url); cb(false, 0, 0); };
+        im.src = url;
+      } catch (e) { cb(false, 0, 0); }
+    },
+
     /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
      *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
     /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1) */
@@ -5119,7 +5249,23 @@
       UI.$("btn-pano-rotate").addEventListener("click", e => {
         const on = PanoViewer.toggleAuto();
         e.currentTarget.classList.toggle("on", on);
+        // 자동회전 켜면 자이로 끔(충돌 방지) — 버튼 상태 동기화
+        if (on) { const g = UI.$("btn-pano-gyro"); if (g) g.classList.remove("on"); }
       });
+      // ── [마스터 요청] 자이로(폰 기울임) 둘러보기 토글 ──
+      const gyroBtn = UI.$("btn-pano-gyro");
+      if (gyroBtn) {
+        // 자이로 미지원 기기에선 버튼 숨김(혼란 방지)
+        if (typeof PanoViewer !== "undefined" && !PanoViewer.isGyroSupported()) {
+          gyroBtn.style.display = "none";
+        }
+        gyroBtn.addEventListener("click", async (e) => {
+          const on = await PanoViewer.toggleGyro();
+          e.currentTarget.classList.toggle("on", on);
+          // 자이로 켜면 자동회전 버튼 표시 동기화
+          if (on) { const r = UI.$("btn-pano-rotate"); if (r) r.classList.remove("on"); }
+        });
+      }
       UI.$("btn-pano-zoomin").addEventListener("click",  () => PanoViewer.setFov(-10));
       UI.$("btn-pano-zoomout").addEventListener("click", () => PanoViewer.setFov(10));
       UI.$("btn-pano-reset").addEventListener("click",   () => PanoViewer.resetView());
@@ -5381,6 +5527,8 @@
       };
       if (note) pin.note = note;
       if (url)  { pin.imageUrl = url; if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) pin.isVideo = true; }
+      // [마스터 요청] RICOH THETA 360(2:1 equirectangular) 감지 결과를 핀에 보존 → 뷰어가 360으로 표시
+      if (State.pendingIs360) pin.is360 = true;
       if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache["local:" + pin.id] = localPreview; }
 
       State.pins.push(pin);

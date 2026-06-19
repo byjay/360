@@ -227,6 +227,69 @@
     },
     toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
+    /* ── [마스터 요청] 자이로(폰 기울임) 둘러보기 — 삼성폰 DeviceOrientation ── */
+    isGyroSupported() { return typeof window !== "undefined" && "DeviceOrientationEvent" in window; },
+
+    /** 자이로 켜기/끄기 토글. iOS는 권한요청 필요(삼성폰=Android는 즉시 동작). 반환: 켜짐 여부 */
+    async toggleGyro() {
+      if (this._gyroOn) { this._stopGyro(); return false; }
+      if (!this.isGyroSupported()) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 기기는 자이로 센서를 지원하지 않습니다");
+        return false;
+      }
+      // iOS 13+ 권한 요청(Android/삼성폰은 해당 없음)
+      try {
+        const DOE = window.DeviceOrientationEvent;
+        if (DOE && typeof DOE.requestPermission === "function") {
+          const res = await DOE.requestPermission();
+          if (res !== "granted") {
+            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 권한이 거부되었습니다");
+            return false;
+          }
+        }
+      } catch (e) {/* Android는 requestPermission 없음 → 무시 */}
+      this._startGyro();
+      return true;
+    },
+
+    _startGyro() {
+      if (this._gyroHandler) this._stopGyro();
+      this.S.autoRotate = false; // 자이로 중엔 자동회전 끔(충돌 방지)
+      this._gyroBase = null;     // 첫 측정값을 기준으로 상대 이동
+      this._gyroHandler = (e) => {
+        if (!this.open || this.S.dragging) return;
+        // alpha=나침반(yaw), beta=앞뒤기울임(pitch). 가로/세로 회전 보정은 화면방향 고려.
+        const alpha = (e.alpha == null) ? null : e.alpha;
+        const beta  = (e.beta  == null) ? null : e.beta;
+        if (alpha == null && beta == null) return;
+        if (!this._gyroBase) {
+          this._gyroBase = { alpha: alpha || 0, beta: beta || 0, lon: this.S.lon, lat: this.S.lat };
+          return;
+        }
+        const b = this._gyroBase;
+        // yaw: alpha 증가 → 좌측 회전. 부호는 직관에 맞게 보정.
+        let dAlpha = (alpha == null) ? 0 : (alpha - b.alpha);
+        // -180~180 정규화
+        dAlpha = ((dAlpha + 540) % 360) - 180;
+        const dBeta = (beta == null) ? 0 : (beta - b.beta);
+        this.S.lon = b.lon - dAlpha;
+        this.S.lat = b.lat + dBeta;
+        this._invalidate();
+      };
+      window.addEventListener("deviceorientation", this._gyroHandler, true);
+      this._gyroOn = true;
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자이로 켜짐 — 폰을 돌려 둘러보세요");
+    },
+
+    _stopGyro() {
+      if (this._gyroHandler) {
+        window.removeEventListener("deviceorientation", this._gyroHandler, true);
+        this._gyroHandler = null;
+      }
+      this._gyroOn = false;
+      this._gyroBase = null;
+    },
+
     onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; },
     onPointerMove(x, y) {
       if (!this.S.dragging) return;
@@ -243,6 +306,7 @@
       this.open = false;
       this._currentPin = null;
       cancelAnimationFrame(this.rafId);
+      this._stopGyro();           // [마스터 요청] 자이로 리스너 정리(닫을 때 누수 방지)
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
       const ip = document.getElementById("pano-info-panel");
