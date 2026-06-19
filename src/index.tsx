@@ -1199,6 +1199,7 @@ function mapDeployment(r: any) {
     zones: r.zones || '[]',
     created_at: r.created_at,
     updated_at: r.updated_at,
+    version: (r.version != null ? r.version : 0),
     deleted: !!r.deleted
   }
 }
@@ -1342,8 +1343,8 @@ app.post('/tables/deployments', async (c) => {
   const id = genId('dep')
   const now = Date.now()
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, created_at, updated_at, version, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
   ).bind(
     id,
     body.title || '',
@@ -1362,7 +1363,7 @@ app.post('/tables/deployments', async (c) => {
   return c.json(mapDeployment({
     id, title: body.title || '', file_name: body.file_name || '',
     drawing_data: body.drawing_data || null, pages_data: body.pages_data || null,
-    pins: body.pins || '[]', zones: body.zones || '[]', created_at: now, updated_at: now, deleted: 0
+    pins: body.pins || '[]', zones: body.zones || '[]', created_at: now, updated_at: now, version: 0, deleted: 0
   }))
 })
 
@@ -1377,6 +1378,21 @@ const updateDeployment = async (c: any) => {
   const existing = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(id).first()
   if (!existing) return c.json({ error: 'not found' }, 404)
   const now = Date.now()
+  const curVersion = (existing.version != null ? Number(existing.version) : 0)
+
+  // ── [멀티유저 충돌 방지 — 낙관적 잠금] ─────────────────────────────
+  // 클라이언트가 base_version 을 보냈고, 서버의 현재 version 과 다르면
+  // 그 사이 다른 사용자가 저장한 것 → 409 충돌. 서버 최신본(pins/zones/version)을
+  // 함께 돌려주어 클라이언트가 병합 후 재시도하게 한다.
+  // base_version 미전송(구버전 클라이언트)이면 종전처럼 그대로 갱신(하위호환).
+  if (body.base_version != null && Number(body.base_version) !== curVersion) {
+    return c.json({
+      error: 'conflict',
+      message: '다른 사용자가 먼저 저장했습니다. 최신본과 병합 후 다시 저장하세요.',
+      current: mapDeployment(existing)
+    }, 409)
+  }
+
   const merged = {
     title:        body.title        != null ? body.title        : existing.title,
     file_name:    body.file_name     != null ? body.file_name    : existing.file_name,
@@ -1385,13 +1401,14 @@ const updateDeployment = async (c: any) => {
     pins:         body.pins          != null ? body.pins         : existing.pins,
     zones:        body.zones         != null ? body.zones        : existing.zones,
   }
+  const newVersion = curVersion + 1
   await c.env.DB.prepare(
-    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, updated_at=? WHERE id=?`
+    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, updated_at=?, version=? WHERE id=?`
   ).bind(
     merged.title, merged.file_name, merged.drawing_data, merged.pages_data,
-    merged.pins, merged.zones, now, id
+    merged.pins, merged.zones, now, newVersion, id
   ).run()
-  return c.json(mapDeployment(Object.assign({}, existing, merged, { id, updated_at: now })))
+  return c.json(mapDeployment(Object.assign({}, existing, merged, { id, updated_at: now, version: newVersion })))
 }
 app.patch('/tables/deployments/:id', updateDeployment)
 app.put('/tables/deployments/:id', updateDeployment)

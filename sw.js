@@ -5,7 +5,7 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v5';
+const CACHE = 'wm-shell-v6';
 const SHELL = [
   './',
   'index.html',
@@ -49,7 +49,15 @@ self.addEventListener('message', (e) => {
   }
 });
 
+// R2 객체(도면/360 이미지 등)는 불변(immutable) 바이너리 — 오프라인을 위해 캐시 대상.
+//  키가 내용 기반이라 한번 받은 URL의 내용은 절대 바뀌지 않으므로 cache-first 안전.
+function isR2Object(url) {
+  return url.pathname.indexOf('/api/r2/object/') !== -1;
+}
+
 function isApi(url) {
+  // ★[오프라인 도면연동] R2 객체는 '데이터 API'가 아니라 '정적 자산'으로 취급 → 캐시 허용
+  if (isR2Object(url)) return false;
   return url.pathname.startsWith('/api/') ||
          url.pathname.startsWith('/tables/') ||
          url.pathname.includes('/api/') ||
@@ -64,6 +72,24 @@ self.addEventListener('fetch', (e) => {
 
   // API/데이터는 절대 캐시·가로채지 않음 → 항상 네트워크
   if (isApi(url)) return;
+
+  // ── [오프라인 도면연동] R2 객체(불변 도면/이미지)는 CACHE-FIRST ──
+  //   한번 받은 도면은 캐시에 보관 → 오프라인에서도 '이미 업로드된 도면'을 그대로 표시.
+  //   (R2 키는 내용 기반이라 내용이 바뀌면 URL 자체가 달라지므로 stale 위험 없음)
+  if (isR2Object(url)) {
+    e.respondWith(
+      caches.open(CACHE).then((cache) =>
+        cache.match(req).then((cached) => {
+          if (cached) return cached;            // 캐시 히트 → 오프라인에서도 즉시 표시
+          return fetch(req).then((res) => {
+            if (res && res.status === 200) cache.put(req, res.clone()).catch(() => {});
+            return res;
+          });
+        })
+      )
+    );
+    return;
+  }
 
   // 구글 OAuth 스크립트는 캐시하지 않음(인증 관련)
   if (url.hostname.indexOf('accounts.google.com') !== -1) return;

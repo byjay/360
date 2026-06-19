@@ -61,6 +61,7 @@
     pinEditUnlocked: null,  // '수정' 버튼으로 이동/편집 잠금 해제된 핀 id (이 id만 드래그 이동 가능)
     autoSaveDepId: null,    // 자동 저장된 배포본(작업본) id — 도면 업로드 즉시 생성
     autoSaving: false,      // 자동 저장 진행 중 플래그
+    depVersion: 0,          // ★[멀티유저 충돌방지] 현재 로드된 배포본의 서버 version(낙관적 잠금 기준값)
     activePin:   null,
     zoom:        1,
     pan:         { x: 0, y: 0 },
@@ -86,7 +87,7 @@
       this.pendingDocs = [];
       this.pendingFls = null;
       this.editingPinId = null; this.movingPinId = null;
-      this.autoSaveDepId = null; this.autoSaving = false;
+      this.autoSaveDepId = null; this.autoSaving = false; this.depVersion = 0;
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };
     }
   };
@@ -6131,6 +6132,73 @@
       return out;
     },
 
+    /* ════════════════════════════════════════════════════════════════
+       [멀티유저 동시작업 충돌 방지 — 낙관적 잠금 + 자동 병합]
+       두 명 이상이 같은 구역 도면을 동시에 편집할 때, 나중 저장이 먼저
+       저장을 통째로 덮어쓰는 데이터 유실을 막는다.
+       · 저장(PATCH) 시 base_version(내가 불러온 버전)을 함께 전송
+       · 서버 버전이 다르면 409 + 서버 최신본(current) 반환
+       · 클라이언트는 서버 최신 pins/zones 와 내 로컬 변경분을 id 기준으로
+         병합(양쪽 모두 보존)한 뒤, 서버 최신 버전으로 1회 재시도
+       ════════════════════════════════════════════════════════════════ */
+
+    /** id(또는 보조키) 기준 두 배열 병합 — 서버본 기준에 내 추가/수정분을 덮어쓰기 union */
+    _mergeById(serverArr, localArr) {
+      const keyOf = (o) => (o && (o.id != null ? "id:" + o.id
+        : (o.pin_id != null ? "pid:" + o.pin_id
+        : (o.name != null && o.x != null ? "nx:" + o.name + ":" + o.x + ":" + o.y : null))));
+      const map = new Map();
+      (Array.isArray(serverArr) ? serverArr : []).forEach((o) => { const k = keyOf(o); if (k) map.set(k, o); else map.set("anon:" + map.size, o); });
+      // 내 로컬 항목으로 덮어쓰기(=내가 최근 편집한 내용 우선) + 서버에만 있던 항목 보존
+      (Array.isArray(localArr) ? localArr : []).forEach((o) => { const k = keyOf(o); if (k) map.set(k, o); else map.set("anon:" + map.size + "L", o); });
+      return Array.from(map.values());
+    },
+
+    /** 409 충돌 시: 서버 최신본(current)과 현재 State 의 핀/구역을 병합하여 State 갱신.
+     *  반환: 병합된 {pins, zones, version} (version 은 서버 최신값) */
+    _mergeConflict(current) {
+      let srvPins = [], srvZones = [];
+      try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
+      try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
+      const mergedPins  = this._mergeById(srvPins,  State.pins  || []);
+      const mergedZones = this._mergeById(srvZones, State.zones || []);
+      State.pins  = mergedPins;
+      State.zones = mergedZones;
+      State.depVersion = (current.version != null ? Number(current.version) : State.depVersion);
+      // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
+      try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
+      try { if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); } } catch (e) {}
+      return { pins: mergedPins, zones: mergedZones, version: State.depVersion };
+    },
+
+    /** 배포본 PATCH(낙관적 잠금) — 409면 1회 병합 후 재시도.
+     *  buildBody(): 호출 시점의 현재 State 로 payload 를 만드는 함수(병합 후 재생성용).
+     *  반환: { ok, rec?, conflictMerged? } */
+    async _patchDeployment(depId, buildBody) {
+      const send = async () => {
+        const body = buildBody();
+        body.base_version = (State.depVersion != null ? State.depVersion : 0);
+        const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
+          method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
+        });
+        return res;
+      };
+      let res = await send();
+      if (res.status === 409) {
+        // 다른 사용자가 먼저 저장 → 병합 후 1회 재시도
+        let j = null; try { j = await res.json(); } catch (e) {}
+        if (j && j.current) {
+          this._mergeConflict(j.current);
+          Prompt && Prompt.toast && Prompt.toast("🔄 다른 사용자의 변경을 병합했습니다 — 다시 저장합니다");
+          res = await send(); // 병합된 State + 최신 version 으로 재시도
+        }
+      }
+      if (!res.ok) return { ok: false, status: res.status };
+      let rec = null; try { rec = await res.json(); } catch (e) {}
+      if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
+      return { ok: true, rec };
+    },
+
     _buildSavePayload(pagesData) {
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
@@ -6302,11 +6370,19 @@
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
+        // ★[오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
+        //   로컬 draft(원본 dataURL)로 폴백하여 도면을 끊김없이 표시.
+        imgEl.onerror = () => {
+          if (/^\/api\/r2\/object\//.test(pages[0] || "")) {
+            this._restoreDraftLocal();
+          }
+        };
         imgEl.src = pages[0];
         imgEl.classList.remove("hidden");
 
         State.autoSaveDepId = deploymentId;       // 이후 자동저장은 이 배포본 갱신
         State.currentDeploymentId = deploymentId;
+        State.depVersion = (dep.version != null ? Number(dep.version) : 0); // ★[충돌방지] 로드 시점 버전 기록
       } catch (e) { await this._restoreDraftLocal(); }   // 네트워크 오류 → 로컬 폴백
     },
 
@@ -6366,6 +6442,22 @@
           };
           let res;
           if (d.depId) {
+            // ★[멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
+            //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
+            //   서버 핀/구역과 오프라인 작업분을 병합하여 양쪽 모두 보존.
+            let baseVer = 0, srvPins = null, srvZones = null;
+            try {
+              const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId));
+              if (cur.ok) {
+                const cj = await cur.json();
+                baseVer = (cj.version != null ? Number(cj.version) : 0);
+                try { srvPins = JSON.parse(cj.pins || "[]"); } catch (e) {}
+                try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
+              }
+            } catch (e) {}
+            if (srvPins) body.pins = JSON.stringify(this._mergeById(srvPins, d.pins || []));
+            if (srvZones) body.zones = JSON.stringify(this._mergeById(srvZones, d.zones || []));
+            body.base_version = baseVer;
             res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
               method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
             });
@@ -6378,8 +6470,15 @@
           const rec = await res.json().catch(() => null);
           d.depId = (rec && rec.id) ? rec.id : d.depId;
           d.dirty = false;
+          // 병합된 핀/구역을 draft 에도 반영(다음 동기화 기준 정합)
+          if (srvPins)  { try { d.pins  = JSON.parse(body.pins  || "[]"); } catch (e) {} }
+          if (srvZones) { try { d.zones = JSON.parse(body.zones || "[]"); } catch (e) {} }
           await SyncQueue.saveDraft(key, d);
-          if (key === this._draftKey() && d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; this._setSaveIndicator("saved"); }
+          if (key === this._draftKey() && d.depId) {
+            State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId;
+            if (rec && rec.version != null) State.depVersion = Number(rec.version); // ★ 버전 동기화
+            this._setSaveIndicator("saved");
+          }
         } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
       }
     },
@@ -6426,11 +6525,9 @@
         await this._saveDraftLocal(pages);                       // 로컬 우선 보관(원본 dataURL)
         // [마스터 요청 (나)] 교체 도면도 R2 업로드 후 URL 저장(실패 시 base64 폴백)
         const r2pages = await this._uploadPagesToR2(pages);
-        const body = this._buildSavePayload(r2pages);
-        const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
-          method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
-        });
-        if (!res.ok) throw new Error("HTTP " + res.status);
+        // ★[멀티유저 충돌방지] 낙관적 잠금 PATCH — 409면 병합 후 재시도
+        const r = await this._patchDeployment(depId, () => this._buildSavePayload(r2pages));
+        if (!r.ok) throw new Error("HTTP " + (r.status || "fail"));
         await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
       } catch (e) {
@@ -6502,13 +6599,10 @@
           const pages = includePages ? await this._snapshotPages() : null;
           // ★ 핀/구역 변경분도 항상 로컬에 먼저 보관(소실 방지)
           await this._saveDraftLocal(pages);
-          const body = this._buildSavePayload(pages);
-          const res = await fetch("/tables/deployments/" + encodeURIComponent(State.autoSaveDepId), {
-            method: "PATCH",
-            headers: Auth.headers(),
-            body: JSON.stringify(body)
-          });
-          if (!res.ok) throw new Error("HTTP " + res.status);
+          // ★[멀티유저 충돌방지] 낙관적 잠금 PATCH — 409면 병합 후 재시도.
+          //   buildBody 는 (병합으로 State 가 바뀔 수 있으므로) 호출 시점 State 로 payload 재생성.
+          const r = await this._patchDeployment(State.autoSaveDepId, () => this._buildSavePayload(pages));
+          if (!r.ok) throw new Error("HTTP " + (r.status || "fail"));
           await this._markDraftClean(pages);
           this._setSaveIndicator("saved");
         } catch (e) {
