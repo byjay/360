@@ -1178,6 +1178,37 @@ async function requireDesigner(c: any): Promise<any | null> {
   return user
 }
 
+/* ── [PART 0 · Tenant 스코핑 헬퍼] ────────────────────────────────────
+ * 멀티테넌트(회사별 격리)의 단일 진실 소스.
+ * 모든 테넌트-스코프 쿼리는 tenantOf() 가 돌려준 tenant_id 로 필터해야 한다.
+ *
+ * 정책:
+ *  - 슈퍼관리자(superAdmin)는 전 테넌트 접근 가능 → null 반환(= 필터 없음)
+ *  - tenant_members 에 등록된 사용자는 자신의 tenant_id 로 한정
+ *  - 미등록 사용자/구버전 데이터는 'tnt_default' 로 귀속(하위호환)
+ *  - tenants/tenant_members 테이블이 아직 없으면(마이그레이션 전) 안전하게 null(필터 해제)
+ * 반환:
+ *  - string  → 해당 tenant_id 로 스코프
+ *  - null    → 스코프 없음(슈퍼/마이그레이션 전) = 전체 접근
+ */
+const DEFAULT_TENANT = 'tnt_default'
+async function tenantOf(c: any, user: any): Promise<string | null> {
+  try {
+    if (!user || !user.email) return DEFAULT_TENANT
+    // 슈퍼관리자는 전 테넌트 접근
+    if (user.email === superAdmin(c)) return null
+    const row = await c.env.DB.prepare(
+      'SELECT tenant_id FROM tenant_members WHERE email = ? LIMIT 1'
+    ).bind(user.email).first()
+    if (row && row.tenant_id) return String(row.tenant_id)
+    // 미등록 → 기본 테넌트(하위호환)
+    return DEFAULT_TENANT
+  } catch (e) {
+    // tenant_members 테이블 부재(마이그레이션 전) 등 → 안전하게 필터 해제
+    return null
+  }
+}
+
 function mapProject(r: any) {
   return { id: r.id, name: r.name, description: r.description, owner: r.owner, created_at: r.created_at, updated_at: r.updated_at }
 }
@@ -1432,10 +1463,24 @@ app.get('/tables/deployments', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
-  ).bind(limit).all()
-  return c.json({ data: (results || []).map(mapDeployment), total: (results || []).length })
+  // [PART 0 · Tenant 격리] 자신의 테넌트 배포본만 열거(슈퍼/마이그레이션전은 전체)
+  const tid = await tenantOf(c, user)
+  let results: any[] = []
+  if (tid) {
+    // tenant_id 가 NULL 인 구버전 행도 기본 테넌트 사용자에게는 함께 보이도록(하위호환)
+    const includeNull = (tid === DEFAULT_TENANT)
+    const sql = includeNull
+      ? 'SELECT * FROM deployments WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
+      : 'SELECT * FROM deployments WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
+    const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
+    results = r.results || []
+  } else {
+    const r = await c.env.DB.prepare(
+      'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
+    ).bind(limit).all()
+    results = r.results || []
+  }
+  return c.json({ data: results.map(mapDeployment), total: results.length })
 })
 
 // 단건 조회 (특정 배포본 고정 공유 — B1)
@@ -1447,6 +1492,13 @@ app.get('/tables/deployments/:id', async (c) => {
   const id = c.req.param('id')
   const row = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
+  // [PART 0 · Tenant 격리] 타 테넌트 자원 접근 차단(슈퍼/마이그레이션전 제외).
+  //   tenant_id NULL 구행은 기본 테넌트로 간주(하위호환).
+  const tid = await tenantOf(c, user)
+  if (tid) {
+    const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
+    if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+  }
   return c.json(mapDeployment(row))
 })
 
@@ -1459,9 +1511,11 @@ app.post('/tables/deployments', async (c) => {
 
   const id = genId('dep')
   const now = Date.now()
+  // [PART 0 · Tenant 격리] 새 배포본은 작성자 테넌트로 귀속(슈퍼/미등록은 기본 테넌트)
+  const ownerTenant = (await tenantOf(c, user)) || DEFAULT_TENANT
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, created_at, updated_at, version, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, tenant_id, created_at, updated_at, version, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
   ).bind(
     id,
     body.title || '',
@@ -1471,6 +1525,7 @@ app.post('/tables/deployments', async (c) => {
     body.pins || '[]',
     body.zones || '[]',
     body.annotations || '[]',
+    ownerTenant,
     now, now
   ).run()
 
@@ -1496,6 +1551,14 @@ const updateDeployment = async (c: any) => {
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const existing = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(id).first()
   if (!existing) return c.json({ error: 'not found' }, 404)
+  // [PART 0 · Tenant 격리] 타 테넌트 배포본 수정 차단(슈퍼/마이그레이션전 제외)
+  {
+    const tid = await tenantOf(c, user)
+    if (tid) {
+      const rowTenant = (existing as any).tenant_id || DEFAULT_TENANT
+      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+    }
+  }
   const now = Date.now()
   const curVersion = (existing.version != null ? Number(existing.version) : 0)
 
@@ -1551,6 +1614,14 @@ app.post('/tables/deployments/:id/ops', async (c) => {
 
   const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(id).first()
   if (!dep) return c.json({ error: 'not found' }, 404)
+  // [PART 0 · Tenant 격리] 타 테넌트 배포본 op 적용 차단(슈퍼/마이그레이션전 제외)
+  {
+    const tid = await tenantOf(c, user)
+    if (tid) {
+      const rowTenant = dep.tenant_id || DEFAULT_TENANT
+      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+    }
+  }
 
   // 현재 서버 상태를 id→객체 맵으로 로드
   const toMap = (j: string) => {
@@ -1615,6 +1686,15 @@ app.delete('/tables/deployments/:id', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const id = c.req.param('id')
+  // [PART 0 · Tenant 격리] 타 테넌트 배포본 삭제 차단(슈퍼/마이그레이션전 제외)
+  const tid = await tenantOf(c, user)
+  if (tid) {
+    const row = await c.env.DB.prepare('SELECT tenant_id FROM deployments WHERE id = ?').bind(id).first()
+    if (row) {
+      const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
+      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+    }
+  }
   await c.env.DB.prepare('UPDATE deployments SET deleted = 1, updated_at = ? WHERE id = ?')
     .bind(Date.now(), id).run()
   return c.json({ success: true })

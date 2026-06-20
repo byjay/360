@@ -1555,8 +1555,15 @@
         // 업로드 완료 상태 정리
         pin.uploading = false;
         if (!pin.pendingOpId && !(pin.attachments || []).some(a => a.pendingOpId)) delete pin.pendingSync;
-        // 로컬 미리보기 정리(서버 이미지로 대체됨)
+        // 로컬 미리보기 정리(서버 이미지로 대체됨) — 죽은 blob URL 이 서버에 남지 않도록 제거
         if (pin.imageId && pin.localPreview) { try { URL.revokeObjectURL(pin.localPreview); } catch (e) {} delete pin.localPreview; }
+        // 🔴 [핵심 버그 수정] 업로드 완료 후 imageId(또는 pendingOpId)를 서버에 반드시 영속화.
+        //   이전: _confirmPinInstant 에서 blob localPreview 만 저장되고, 업로드 성공 후 재저장이
+        //         없어 서버에는 죽은 blob URL 만 남았다 → 재접속 시 "이미지를 불러올 수 없습니다".
+        //   이제: 업로드 결과(imageId)를 담아 다시 _autoSave 로 서버에 반영한다.
+        if (pin.imageId || pin.pendingOpId) {
+          try { this._autoSave && this._autoSave(); } catch (e) {}
+        }
       } catch (e) {
         pin.uploading = false;
         Prompt && Prompt.toast && Prompt.toast("⚠ '" + pin.label + "' 업로드 지연 — 동기화 대기에 보관됨");
@@ -1993,17 +2000,28 @@
       // 1) 로컬 영상 blob
       if (pin.videoUrl) { PanoViewer.loadVideo(pin.videoUrl, pin.label); return; }
       // 1.3) 즉시등록 로컬 미리보기(업로드 진행 중) — imageId 준비 전이라도 바로 표시
-      if (!pin.imageId && pin.localPreview) {
+      //   ⚠ blob: URL 은 이 세션에서 만든 것만 유효(재접속하면 죽음). 메모리 캐시(현 세션)를
+      //      우선 사용하고, 죽은 blob 이면 명확히 안내한다.
+      if (!pin.imageId && (pin.localPreview || (typeof Cloud !== "undefined" && (Cloud._cache["op-preview:" + pin.id] || Cloud._cache["local:" + pin.id])))) {
         const $ = id => document.getElementById(id);
-        $("pano-location-name").textContent = "360°(" + (pin.uploading ? "업로드 중" : "임시") + ") — " + pin.label;
-        $("pano-loading").classList.add("hidden");
-        $("pano-error").classList.add("hidden");
-        $("pano-hint").classList.add("hidden");
-        $("pano-controls").classList.add("hidden");
-        $("pano-overlay").classList.remove("hidden");
-        PanoViewer.open = true;
-        PanoViewer.load(pin.localPreview, pin.label);
-        return;
+        // 🔴 [핵심 버그 수정] 현 세션 메모리 캐시(살아있는 dataURL)를 "유일한 신뢰원"으로 사용.
+        //   pin.localPreview 는 blob: 인 경우 재접속하면 죽은 URL → 절대 fallback 으로 쓰지 않는다.
+        //   (blob 이 아닌 dataURL localPreview 만 예외적으로 허용)
+        const memSrc = (typeof Cloud !== "undefined" && (Cloud._cache["op-preview:" + pin.id] || Cloud._cache["local:" + pin.id])) || null;
+        const lpAlive = (typeof pin.localPreview === "string" && pin.localPreview.indexOf("blob:") !== 0) ? pin.localPreview : null;
+        let src = memSrc || lpAlive;
+        if (src) {
+          $("pano-location-name").textContent = "360°(" + (pin.uploading ? "업로드 중" : "임시") + ") — " + pin.label;
+          $("pano-loading").classList.add("hidden");
+          $("pano-error").classList.add("hidden");
+          $("pano-hint").classList.add("hidden");
+          $("pano-controls").classList.add("hidden");
+          $("pano-overlay").classList.remove("hidden");
+          PanoViewer.open = true;
+          PanoViewer.load(src, pin.label);
+          return;
+        }
+        // 살아있는 소스 없음(죽은 blob) → 아래 공통 안내로 진행
       }
       // 1.5) 미동기화 로컬 이미지(오프라인 임시 저장) — 로컬 캐시로 즉시 미리보기
       if (pin.pendingOpId && Cloud._cache["op:" + pin.pendingOpId]) {
@@ -2038,22 +2056,27 @@
         } catch (e) {
           PanoViewer._showError("(클라우드: " + (pin.imageName || pin.imageId) + ")", e.message);
         }
-      } else if (pin.imageUrl) {
-        // 3) URL 직접 입력 (이미지/영상 자동 판별)
+      } else if (pin.imageUrl && pin.imageUrl.indexOf("blob:") !== 0) {
+        // 3) URL 직접 입력 (이미지/영상 자동 판별). 단, blob: 은 죽은 임시 URL 이라 제외.
         PanoViewer.loadMedia(pin.imageUrl, pin.label, pin.isVideo);
       } else {
-        // 4) [B3] 미디어 없음 (로컬 영상이 배포 과정에서 제거된 경우 등) — 명확히 안내
+        // 4) [B3] 미디어 없음 / 죽은 blob 임시 미리보기 — 원인별 명확 안내
         const $ = id => document.getElementById(id);
         $("pano-location-name").textContent = "360° — " + pin.label;
         $("pano-loading").classList.add("hidden");
         $("pano-canvas").classList.add("hidden");
         $("pano-controls").classList.add("hidden");
         $("pano-hint").classList.add("hidden");
-        $("pano-error").querySelector(".pano-error-msg").textContent =
-          "이 포인트의 360° 영상은 로컬 전용이라 배포본에 포함되지 않았습니다. 설계자 모드에서 영상 URL로 다시 저장해 주세요.";
+        // 한 번이라도 이미지 미리보기(localPreview/imageUrl=blob)가 있었으면 업로드 미완으로 판단
+        const hadTempImage = !!(pin.localPreview || (pin.imageUrl && pin.imageUrl.indexOf("blob:") === 0) || pin.imageName);
+        $("pano-error").querySelector(".pano-error-msg").textContent = hadTempImage
+          ? "이 360° 사진은 임시 미리보기만 저장되어 재접속 후 표시할 수 없습니다. 설계자 모드에서 사진을 다시 업로드해 주세요."
+          : "이 포인트에는 360° 미디어가 등록되지 않았습니다. 설계자 모드에서 사진(클라우드 업로드) 또는 영상 URL을 추가해 주세요.";
         $("pano-error-url").textContent = "";
         const hint = $("pano-error").querySelector(".pano-error-hint");
-        if (hint) hint.textContent = "영상은 외부에 호스팅된 URL(.mp4) 형태로 저장하면 모든 환경에서 재생됩니다.";
+        if (hint) hint.textContent = hadTempImage
+          ? "사진은 '그림 파일 선택'으로 업로드하면 클라우드에 저장되어 모든 기기·재접속에서 표시됩니다."
+          : "영상은 외부 호스팅 URL(.mp4)로, 사진은 파일 업로드로 저장하세요.";
         $("pano-error").classList.remove("hidden");
         $("pano-overlay").classList.remove("hidden");
         PanoViewer.open = true;
@@ -2166,6 +2189,13 @@
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
+        // 🔴 [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
+        //   서버/배포본에 저장하면 재접속 시 죽은 blob 으로 "이미지를 불러올 수 없습니다".
+        //   localPreview(blob) 와 일시 상태 플래그는 직렬화에서 제거한다.
+        //   (실제 이미지는 imageId(클라우드) 또는 pendingOpId(동기화 대기)로만 보존)
+        if (typeof q.localPreview === "string" && q.localPreview.indexOf("blob:") === 0) delete q.localPreview;
+        if (typeof q.imageUrl === "string" && q.imageUrl.indexOf("blob:") === 0) delete q.imageUrl;
+        delete q.uploading;
         return q;
       });
       const body = {

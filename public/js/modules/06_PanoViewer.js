@@ -49,7 +49,12 @@
       }
 
       const img = new Image();
-      img.crossOrigin = "anonymous";
+      // 🔴 [핵심 버그 수정] crossOrigin 은 "외부 http(s) 출처" 일 때만 설정.
+      //   data:/blob:/same-origin 에 crossOrigin="anonymous" 를 붙이면 일부 모바일
+      //   브라우저가 WebGL 텍스처 보안정책으로 onerror 처리 → "이미지를 불러올 수 없습니다".
+      if (/^https?:\/\//i.test(src) && !src.startsWith(location.origin)) {
+        img.crossOrigin = "anonymous";
+      }
       img.onload = () => {
         if (!this.open) return;
         this.isVideo = false; // 정지 이미지 → 온디맨드 렌더
