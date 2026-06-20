@@ -205,8 +205,15 @@
         return;
       }
       try {
-        const u = await window.SeaFirebase.loginGoogle();
-        setNote("✅ Google 로그인 성공: " + (u.email || u.uid), true);
+        // ★ 단순 테스트가 아니라 앱 전체 로그인으로 연결 (Auth.loginWithFirebase)
+        if (typeof Auth !== "undefined" && Auth.loginWithFirebase) {
+          const role = await Auth.loginWithFirebase();
+          const who = (Auth.user && (Auth.user.name || Auth.user.email)) || "";
+          setNote("✅ 로그인 완료: " + who + " · 권한=" + (role === "super" ? "슈퍼관리자" : role === "designer" ? "디자이너" : "뷰어"), true);
+        } else {
+          const u = await window.SeaFirebase.loginGoogle();
+          setNote("✅ Google 로그인 성공: " + (u.email || u.uid), true);
+        }
         this._firebaseStatus();
       } catch (e) {
         setNote("로그인 실패: " + (e && e.message || e) + " — Firebase 콘솔에서 Google 공급업체를 켰는지, 승인된 도메인에 현재 주소가 있는지 확인하세요.", false);

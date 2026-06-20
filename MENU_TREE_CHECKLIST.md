@@ -153,5 +153,34 @@
 - [ ] Pretendard(본문) + JetBrains Mono(좌표) 적용
 - [ ] 버튼 글자 또렷(weight 600)
 
+### 4-E. 색상 대비 (검은바탕 검은글씨 방지)
+- [ ] 사용자 인증 배지(다크 pill) 안 이름 = 흰글씨
+- [ ] 360 노트 패널 / 타임라인 / FLS 헤더(다크 배경) 텍스트 = 흰글씨
+- [ ] 데모 모드 배지(다크 pill) = 흰글씨
+- [ ] 컬러 배경 버튼(데모/배포 등) = 흰글씨 유지 (정상)
+- [ ] 자동 대비 감사(`/tmp/contrast_audit.mjs`)에서 다크배경+다크글씨 0건
+
+### 4-F. Google 로그인 (Firebase 연동)
+| 파일 | 역할 |
+|---|---|
+| `public/js/firebase-config.js` | 마스터가 콘솔에서 복사한 `firebaseConfig` 저장(localStorage) → `FIREBASE_ENABLED` 자동 판정 |
+| `public/js/firebase-init.js` | Firebase SDK v10 동적 로드 → `SeaFirebase.loginGoogle()` 등 노출 |
+| `22_Auth.js` › `loginWithFirebase()` | Firebase 팝업 로그인 → ID토큰 → `refresh()`로 앱 전체 로그인 반영 |
+| `22_Auth.js` › `_doFirebaseLogin()` | 로그인 실행 + 토스트 피드백(성공/실패) |
+| `28_AdminPanels.js` › `loginFirebase()` | 설정 모달의 "Google 로그인 테스트" → 실제 앱 로그인으로 연결 |
+| `src/index.tsx` › `verifyFirebaseToken()` | 서버: Firebase ID토큰 서명(RS256/X.509) 검증 → email 추출 |
+
+**마스터용 5분 세팅 순서:**
+1. console.firebase.google.com → 본인 Google ID로 로그인 → 프로젝트 생성
+2. 프로젝트 설정 → 웹앱(</>) 추가 → 표시되는 `firebaseConfig` 전체 복사
+3. 앱 → 설정(⚙️) → 🔥 Firebase 연결 → 붙여넣기 → 저장 (자동 새로고침)
+4. Authentication → Google 공급업체 사용 설정 / 승인된 도메인에 현재 주소 추가
+5. 로그인 게이트의 "Google 로그인" 클릭 → 바로 로그인됨
+
+- [ ] firebaseConfig 저장 → `FIREBASE_ENABLED:true`
+- [ ] Google 로그인 클릭 → 팝업 → 앱에 로그인 반영(이름/권한 표시)
+- [ ] 서버가 Firebase ID토큰 서명 검증 통과(SPKI import OK)
+- [ ] 미설정 시 "Firebase 미설정" 안전 안내(에러 없음)
+
 ---
 *이 체크리스트는 매 업데이트마다 갱신하여 회귀를 방지합니다.*

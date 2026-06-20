@@ -30,11 +30,19 @@
       $("hub-btn-demo-viewer")   && $("hub-btn-demo-viewer").addEventListener("click", () => this.demoLogin("viewer"));
       // 로그인 게이트 내 데모(설계자)
       $("login-gate-demo") && $("login-gate-demo").addEventListener("click", () => this.demoLogin("designer"));
-      // 구글 로그인 폴백 버튼(클라이언트 ID 미설정 시 안내)
-      $("login-gate-google-fallback") && $("login-gate-google-fallback").addEventListener("click", () => {
+      // 구글 로그인 폴백 버튼
+      //  · Firebase가 연결돼 있으면 → Firebase Google 팝업 로그인 (마스터: ID만 넣으면 바로 로그인)
+      //  · 아니면 → 안내 토스트
+      $("login-gate-google-fallback") && $("login-gate-google-fallback").addEventListener("click", async () => {
+        if (this.firebaseEnabled) { await this._doFirebaseLogin(); return; }
         if (!this.clientId) {
-          Prompt && Prompt.toast && Prompt.toast("구글 로그인은 관리자 설정(클라이언트 ID) 후 사용할 수 있어요. 우선 체험으로 진행하세요.", 3200);
+          Prompt && Prompt.toast && Prompt.toast("구글 로그인은 관리자 설정(Firebase ID 연결) 후 사용할 수 있어요. 우선 체험으로 진행하세요.", 3200);
         }
+      });
+      // 허브 상단의 구글 로그인 버튼(빈 컨테이너)도 Firebase 활성 시 클릭 가능하도록 위임
+      ["google-signin-btn", "hub-google-signin-btn", "login-gate-signin", "settings-signin"].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener("click", async () => { if (this.firebaseEnabled && !this.clientId) await this._doFirebaseLogin(); });
       });
       $("login-gate-learn") && $("login-gate-learn").addEventListener("click", () => {
         Prompt && Prompt.toast && Prompt.toast("SEASTAR 360° Viewer — 도면 위 360° 파노라마 위치 점검 시스템", 3000);
@@ -58,8 +66,30 @@
       if (this.idToken) this.refresh();
     },
 
+    /** Firebase 팝업 로그인 실행 + 사용자 피드백(토스트/게이트 에러) */
+    async _doFirebaseLogin() {
+      try {
+        Prompt && Prompt.toast && Prompt.toast("🔑 Google 로그인 창을 여는 중…", 1600);
+        await this.loginWithFirebase();
+        const who = (this.user && (this.user.name || this.user.email)) || "";
+        Prompt && Prompt.toast && Prompt.toast("✅ 로그인 완료 — " + who + " (" + (this.role === "super" ? "슈퍼관리자" : this.role === "designer" ? "디자이너" : "뷰어") + ")", 3000);
+      } catch (e) {
+        const msg = (e && e.message) ? e.message : String(e);
+        Prompt && Prompt.toast && Prompt.toast("로그인 실패: " + msg + " — Firebase 콘솔에서 Google 공급업체와 승인된 도메인을 확인하세요.", 4200);
+      }
+    },
+
     _initGsi() {
       if (this._gsiInited) return;
+      // ★ Firebase가 연결돼 있으면 GIS(클라이언트 ID) 없이도 Google 로그인 가능
+      if (this.firebaseEnabled) {
+        const hint = document.querySelector(".auth-hint");
+        if (hint) hint.textContent = "Google 계정으로 로그인 (Firebase 연결됨)";
+        // 폴백 버튼을 '실제 로그인 버튼'으로 노출
+        const fb = document.getElementById("login-gate-google-fallback");
+        if (fb) fb.classList.remove("hidden");
+        return;
+      }
       if (!window.google || !window.google.accounts || !window.google.accounts.id) {
         // GIS 스크립트 로딩 대기
         setTimeout(() => this._initGsi(), 300);
@@ -68,7 +98,7 @@
       if (!this.clientId) {
         // 클라이언트 ID 미설정 — 버튼 자리에 안내
         const hint = document.querySelector(".auth-hint");
-        if (hint) hint.textContent = "구글 로그인 미설정 (관리자가 클라이언트 ID 설정 필요)";
+        if (hint) hint.textContent = "구글 로그인 미설정 (관리자 설정에서 Firebase ID 연결 필요)";
         return;
       }
       this._gsiInited = true;
@@ -89,6 +119,48 @@
       if (b2) { b2.innerHTML = ""; g.renderButton(b2, { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" }); }
       if (b3) { b3.innerHTML = ""; g.renderButton(b3, { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" }); }
       this._renderHubSignin();
+    },
+
+    /** Firebase 로그인 활성 여부 (firebase-config 채워지면 true) */
+    get firebaseEnabled() {
+      return !!(window.FIREBASE_ENABLED && window.SeaFirebase);
+    },
+
+    /** ★ Firebase Google 로그인 → 앱 Auth 연결 (마스터: ID만 넣으면 바로 로그인)
+     *  1) Firebase 팝업으로 Google 로그인
+     *  2) Firebase ID 토큰을 받아 this.idToken 에 저장
+     *  3) refresh() 로 서버에 권한 확인 → 앱 전체 로그인 상태 반영
+     *  반환: role (실패 시 throw) */
+    async loginWithFirebase() {
+      if (!this.firebaseEnabled) throw new Error("Firebase 미설정");
+      if (!window.SeaFirebase.ready) {
+        // init.js 의 동적 import 완료 대기 (최대 5초)
+        await new Promise((res) => {
+          if (window.SeaFirebase.ready) return res();
+          const t = setTimeout(res, 5000);
+          document.addEventListener("seafirebase:ready", () => { clearTimeout(t); res(); }, { once: true });
+        });
+      }
+      const fbUser = await window.SeaFirebase.loginGoogle();
+      // Firebase v10: getIdToken
+      let idToken = null;
+      try { idToken = await fbUser.getIdToken(); } catch (e) {}
+      if (!idToken && window.SeaFirebase._auth && window.SeaFirebase._auth.currentUser) {
+        idToken = await window.SeaFirebase._auth.currentUser.getIdToken();
+      }
+      if (!idToken) throw new Error("Firebase ID 토큰을 가져오지 못했습니다.");
+      this.idToken = idToken;
+      try { sessionStorage.setItem("wm_id_token", idToken); } catch (e) {}
+      const role = await this.refresh();
+      // 디자이너 진입 대기 콜백 처리
+      if (this._pendingDesigner) {
+        const cb = this._pendingDesigner;
+        if (this.isDesigner) { this._pendingDesigner = null; this._closeGate(); cb(); }
+        else { this._closeGate(); this._openAccessGate(); }
+      } else {
+        this._closeGate();
+      }
+      return role;
     },
 
     async _onCredential(resp) {
@@ -242,9 +314,12 @@
       requestAnimationFrame(() => gate.classList.add("on"));
       // 게이트 안 버튼 렌더 (로그인은 됐지만 권한 없는 경우엔 안내)
       if (this._gsiInited) this._renderButtons();
-      // 구글 클라이언트 ID가 있으면 폴백 버튼 숨김(실제 GIS 버튼 사용)
+      // 폴백 버튼 표시 규칙:
+      //  · GIS 클라이언트 ID 있음 → 숨김(실제 GIS 버튼 사용)
+      //  · Firebase 연결됨 → 표시(폴백 버튼이 곧 Firebase 로그인 버튼)
+      //  · 둘 다 없음 → 표시(클릭 시 안내)
       const fb = document.getElementById("login-gate-google-fallback");
-      if (fb) fb.classList.toggle("hidden", !!this.clientId);
+      if (fb) fb.classList.toggle("hidden", !!this.clientId && !this.firebaseEnabled);
     },
     _showGateError() {
       const err = document.getElementById("login-gate-error");

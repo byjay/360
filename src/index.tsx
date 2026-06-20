@@ -89,6 +89,107 @@ async function getGoogleKeys(): Promise<any[]> {
   return _googleKeys.keys
 }
 
+/* ════════════════════════════════════════════════════════════
+   Firebase ID 토큰 검증 (마스터가 Firebase ID만 연결하면 바로 로그인)
+   · Firebase 토큰 iss = https://securetoken.google.com/<projectId>
+   · 서명 키는 X.509 PEM 인증서 (JWK가 아님) →
+     https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com
+   · kid → PEM 매핑을 받아 SubtleCrypto(spki)로 import 후 RS256 검증
+   ──────────────────────────────────────────────────────────── */
+let _fbCerts: { map: Record<string, string>; exp: number } | null = null
+async function getFirebaseCerts(): Promise<Record<string, string>> {
+  const now = Date.now()
+  if (_fbCerts && _fbCerts.exp > now) return _fbCerts.map
+  const res = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com')
+  const json: any = await res.json()  // { kid: "-----BEGIN CERTIFICATE-----..." }
+  const cc = res.headers.get('cache-control') || ''
+  const m = cc.match(/max-age=(\d+)/)
+  const ttl = m ? Number(m[1]) * 1000 : 3600_000
+  _fbCerts = { map: json || {}, exp: now + ttl }
+  return _fbCerts.map
+}
+
+/** PEM(X.509 인증서)에서 공개키를 추출해 RS256 verify 키로 import */
+async function importX509Spki(pem: string): Promise<CryptoKey> {
+  // 인증서 PEM → DER. 인증서 전체를 importKey('spki')에 넣으면 일부 런타임에서 실패할 수 있어
+  // WebCrypto가 인증서에서 공개키를 뽑도록 'spki' 시도, 실패 시 인증서 본문 그대로 시도.
+  const body = pem.replace(/-----BEGIN CERTIFICATE-----/g, '')
+                  .replace(/-----END CERTIFICATE-----/g, '')
+                  .replace(/\s+/g, '')
+  const der = b64urlToUint8(body.replace(/\+/g, '-').replace(/\//g, '_'))
+  // X.509 인증서에서 SubjectPublicKeyInfo 추출
+  const spki = extractSpkiFromCert(der)
+  return crypto.subtle.importKey(
+    'spki', spki,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false, ['verify']
+  )
+}
+
+/** DER 인코딩된 X.509 인증서에서 SubjectPublicKeyInfo(SPKI) 블록을 추출.
+ *  ASN.1을 가볍게 순회: Certificate → TBSCertificate → ... → SPKI(SEQUENCE).
+ *  SPKI는 rsaEncryption OID(1.2.840.113549.1.1.1)를 포함하는 SEQUENCE다. */
+function extractSpkiFromCert(der: Uint8Array): Uint8Array {
+  // rsaEncryption OID 바이트열
+  const oid = [0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01]
+  let idx = -1
+  for (let i = 0; i < der.length - oid.length; i++) {
+    let ok = true
+    for (let j = 0; j < oid.length; j++) { if (der[i + j] !== oid[j]) { ok = false; break } }
+    if (ok) { idx = i; break }
+  }
+  if (idx < 0) throw new Error('SPKI OID not found')
+  // OID 앞쪽으로 거슬러: AlgorithmIdentifier SEQUENCE 시작 → 그 앞 SPKI SEQUENCE 시작
+  // AlgorithmIdentifier: 30 LL 06 09 ...  → SEQUENCE 태그(0x30)는 oid 바로 앞 2바이트(태그+길이) 위치
+  const algSeqStart = idx - 2
+  // SPKI SEQUENCE는 AlgorithmIdentifier를 감싸는 바깥 SEQUENCE. 그 앞에서 0x30 태그를 찾는다.
+  // 길이 인코딩(short/long)을 고려해 algSeqStart 앞 1~4바이트 내에서 0x30을 탐색.
+  let spkiStart = -1
+  for (let k = algSeqStart - 1; k >= Math.max(0, algSeqStart - 6); k--) {
+    if (der[k] === 0x30) { spkiStart = k; break }
+  }
+  if (spkiStart < 0) throw new Error('SPKI SEQUENCE start not found')
+  // 길이 파싱
+  const { len, hdr } = readDerLen(der, spkiStart + 1)
+  const total = 1 + hdr + len
+  return der.slice(spkiStart, spkiStart + total)
+}
+
+function readDerLen(buf: Uint8Array, p: number): { len: number; hdr: number } {
+  const first = buf[p]
+  if (first < 0x80) return { len: first, hdr: 1 }
+  const n = first & 0x7f
+  let len = 0
+  for (let i = 0; i < n; i++) len = (len << 8) | buf[p + 1 + i]
+  return { len, hdr: 1 + n }
+}
+
+/** Firebase ID 토큰 검증. 성공 시 payload 반환, 실패 시 null. */
+async function verifyFirebaseToken(token: string): Promise<any | null> {
+  try {
+    const [h, p, s] = token.split('.')
+    if (!h || !p || !s) return null
+    const header = decodeJwtPart(h)
+    const payload = decodeJwtPart(p)
+    const iss = String(payload.iss || '')
+    // Firebase 발급자만 통과 (securetoken.google.com/<projectId>)
+    if (!iss.startsWith('https://securetoken.google.com/')) return null
+    if (payload.exp && Date.now() / 1000 > payload.exp) return null
+    if (!payload.email) return null
+    const certs = await getFirebaseCerts()
+    const pem = certs[header.kid]
+    if (!pem) return null
+    const key = await importX509Spki(pem)
+    const data = new TextEncoder().encode(h + '.' + p)
+    const sig = b64urlToUint8(s.replace(/-/g, '+').replace(/_/g, '/'))
+    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, sig, data)
+    if (!valid) return null
+    return payload
+  } catch {
+    return null
+  }
+}
+
 function b64urlToUint8(b64url: string): Uint8Array {
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b64url.length / 4) * 4, '=')
   const bin = atob(b64)
@@ -305,9 +406,12 @@ async function getUser(c: any): Promise<any | null> {
     if (lu) return lu
     return null
   }
-  const payload = await verifyGoogleToken(token)
+  // 1) 표준 Google ID 토큰(GIS) 검증
+  let payload = await verifyGoogleToken(token)
+  // 2) 실패 시 Firebase ID 토큰 검증 (마스터가 Firebase ID만 연결하면 바로 로그인)
+  if (!payload) payload = await verifyFirebaseToken(token)
   if (!payload) return null
-  return { email: String(payload.email).toLowerCase(), name: payload.name || '', picture: payload.picture || '' }
+  return { email: String(payload.email).toLowerCase(), name: payload.name || payload.display_name || '', picture: payload.picture || '' }
 }
 
 async function isDesigner(c: any, email: string): Promise<boolean> {

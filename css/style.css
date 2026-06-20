@@ -4199,3 +4199,47 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 .fb-guide-list li { margin: 3px 0; }
 .fb-guide-list code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 #fb-paste { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; resize: vertical; min-height: 110px; }
+
+/* ════════════════════════════════════════════════════════════
+   [마스터 요청] 대비 보정 — "검은 바탕 검은 글씨" → "검은 바탕 흰 글씨"
+   라이트(아이보리) 테마로 전환되며 일부 패널/배지가 예전 다크 배경을
+   유지해 텍스트가 묻히던 문제를 일괄 교정. (다크 배경은 그대로 유지하고
+   그 위 텍스트만 흰색 계열로 강제)
+   ──────────────────────────────────────────────────────────── */
+
+/* ── 1) 사용자 인증 배지(다크 pill) 안의 이름/아바타 ── */
+.user-badge .user-name,
+.hub-auth-bar .user-name,
+#user-name, #hub-user-name { color: #f3f5f9 !important; }
+
+/* ── 2) 360 노트(필드노트) 패널: 다크 배경 위 제목/본문 ── */
+.pano-notes-panel .pnp-title { color: #f3f5f9 !important; }
+
+/* ── 3) 타임랩스 타임라인(다크 배경) 위 텍스트 ── */
+.pano-timeline .tl-head,
+.pano-timeline .tl-ico,
+.pano-timeline .tl-current { color: rgba(243,245,249,.92) !important; }
+
+/* ── 4) FLS / CAD 검토 패널 헤더(다크 네이비) 위 제목·버튼 ── */
+.fls-head { color: #e8eefb !important; }
+.fls-head .fls-head-title,
+.fls-head .fls-head-title span:not(.fls-fmt-badge),
+#btn-fls-reset, #btn-fls-collapse { color: #e8eefb !important; }
+.fls-ctrl { color: #cfe0f5 !important; }
+/* 파노라마 시점 안내 문구(다크 캔버스 위) */
+.pano-overlay .pano-hint,
+.pano-overlay .pano-hint span { color: rgba(243,245,249,.85) !important; }
+
+/* ── 5) 데모 모드 안내 배지(다크 pill) 위 글씨 → 흰색 ── */
+.demo-mode-badge { color: #f3f5f9 !important; }
+
+/* ── 6) 관리자 필터 칩: 비활성(밝은 배경)=다크 글씨, 활성(컬러 배경)=흰색 ── */
+.adm-filter-item { color: var(--text2) !important; }
+.adm-filter-item.active { color: #ffffff !important; }
+
+/* ── 7) 흐린 라벨(거의 안 보이던) 대비 살짝 강화 ── */
+.feat-scope-label { color: var(--text3) !important; }
+
+/* (참고) #btn-deploy, #hub-btn-demo-designer, #login-gate-demo 등은 실제로
+   컬러/다크 배경 위 흰 글씨라 정상입니다. 감사 도구가 숨김 상태에서
+   부모 배경으로 오탐한 케이스이므로 색을 바꾸지 않습니다. */
