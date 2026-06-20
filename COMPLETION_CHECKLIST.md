@@ -2,8 +2,8 @@
 
 > 작업: P0 batch + 오프라인 완전구현(SEASTAR_OFFLINE_WORKORDER ❶-❿) 병렬처리·병렬검증
 > 통합 인수인계: SEASTAR_MASTER_WORKORDER (HANDOFF) 2-A 결함 D1/S1/S2 = 본 P0와 동일 매핑 확인
-> commit: `1cf5f20` / 빌드 EXIT 0 / 모든 E2E PASS
-> 최종 검증일: 2026-06-20
+> 빌드 EXIT 0 / 멱등 10회 + 전체 E2E ALL PASS / 클린 재검증 ①~⑥ 통과
+> 최종 검증일: 2026-06-20 (클린 재검증 + Tenant Architecture 추가)
 
 ---
 
@@ -78,8 +78,39 @@ OVERALL: ALL PASS
 2. DEMO_LOGIN 봉인: `npx wrangler pages secret put DEMO_LOGIN` → 값 `0`
 3. 배포: `npx wrangler pages deploy dist --project-name webapp`
 
-## 8. 잔여(권장 — 다음 배치 후보, 마스터 확인 요)
+## 8. 클린 재검증 (설치→오프라인 실행, 처음부터 재수행)
 
-- 오프라인 클라이언트 **브라우저 E2E**(IndexedDB bundle 키/OpLog pending/오프라인 부팅) — 현재 서버측 로직 + JS 무결성까지 검증, 실기기 PWA 테스트는 미실시
-- HANDOFF PART 3 디자인 시스템 8분야 체크리스트(패밀리룩) — 별도 배치
-- 전략문서 P1~P3 로드맵 항목
+> 마스터 지시: "설치부터 오프라인 실행 검증까지 완벽 재검증" — dist 삭제 후 처음부터 재구성
+
+| # | 단계 | 결과 |
+|---|---|---|
+| ① | 의존성 무결성 (node_modules / vite·wrangler bin / hono 4.12.23) | ✅ PASS |
+| ② | 마이그레이션 D1 적용 (0001~0012 전부 + annotations·applied_ops 존재) | ✅ PASS |
+| ③ | 클린 빌드 (dist 삭제 → 640MB build) EXIT 0 / _worker.js 75.40 kB | ✅ PASS |
+| ④ | PM2 재기동 + HTTP 200 + 정적자원(main.js/style.css/sw.js) 200 | ✅ PASS |
+| ⑤ | 서버 E2E: 멱등 10회 ALL PASS + P0/충돌제로 전체 ALL PASS | ✅ PASS |
+| ⑥ | dist 산출물에 오프라인 함수 실제 포함(OfflineBundle/OpLog/resolvePanoSource/_flushOpLogs/net-badge/sw v11) | ✅ PASS |
+
+### 멱등성 "간헐 FAIL" 정밀 분석 (정직 보고)
+- 5회 루프 테스트에서 간헐 FAIL 발생 → **서버 버그 아님, 테스트 스크립트 결함**
+- 원인: 옛 스크립트가 opId를 `op-{초단위 timestamp}`로 생성 → 1초 내 반복 시 opId 중복 → 서버가 "이미 적용"으로 정상 멱등 처리(version 미증가)하나 테스트는 새 dep 가정으로 오판정
+- **고유 opId(uuid)로 교체 후 10/10 ALL PASS** → 서버 멱등성은 오히려 완벽(applied_ops 전역 PK = 의도된 동작, 실제 클라 opId는 uuid라 충돌 없음)
+
+## 9. PART 0 — Tenant Architecture (멀티테넌트 SaaS 기반)
+
+> HANDOFF PART 0 "🥇 1위 Tenant Architecture" 반영 — 빈 껍데기 + 하위호환 백필
+
+| 항목 | 결과 |
+|---|---|
+| migration `0013_tenancy.sql` (문서 0012→번호충돌로 0013 조정) | ✅ 생성·적용 |
+| tenants / tenant_members 테이블 | ✅ 생성 |
+| 6개 1급 리소스 tenant_id 컬럼 추가(projects/decks/deployments/pano_images/pin_notes/activity_log) | ✅ |
+| tnt_default 테넌트 + 기존 데이터 백필(projects 4건) | ✅ |
+| 테넌트 스코프 인덱스 4종 | ✅ |
+| **하위호환**: 서버 코드 변경 0 → 기존 동작 무영향 (E2E 재실행 ALL PASS로 입증) | ✅ |
+
+## 10. 잔여(권장 — 다음 배치 후보, 마스터 확인 요)
+
+- **서버 스코핑 헬퍼** (PART 0 문서가 "모든 쿼리가 통과해야 하는…"에서 잘림) — tenant_id 강제 필터 미들웨어. 현재는 스키마만 박은 상태(빈 껍데기). 실제 격리 enforce는 다음 배치
+- 오프라인 클라이언트 **실기기 브라우저 E2E**(IndexedDB bundle 키/OpLog pending/오프라인 부팅) — 서버 로직 + 빌드 포함은 검증, 실기기 PWA 테스트 미실시
+- HANDOFF PART 3 디자인 시스템 8분야(패밀리룩), 전략문서 P1~P3
