@@ -960,6 +960,31 @@
         <span id="fls-fmt-badge" class="fls-fmt-badge"></span>
       </div>
       <div class="fls-head-actions">
+        <!-- ── [마스터 요청] Navisworks풍 3D 검토 도구 (SEASTAR 오리지널 아이콘) ── -->
+        <div class="cad-toolbar" role="toolbar" aria-label="3D 검토 도구">
+          <button id="btn-cad-orbit" class="cad-tool active" data-mode="orbit" type="button" title="오비트 (3D 회전)" aria-label="오비트">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3.2"/>
+              <ellipse cx="12" cy="12" rx="9.5" ry="4"/>
+              <ellipse cx="12" cy="12" rx="4" ry="9.5"/>
+            </svg>
+          </button>
+          <button id="btn-cad-pan" class="cad-tool" data-mode="pan" type="button" title="팬 (평행 이동)" aria-label="팬">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>
+            </svg>
+          </button>
+          <button id="btn-cad-section" class="cad-tool" data-mode="section" type="button" title="단면 (잘라보기)" aria-label="단면">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 8l18-4v12L3 20z" opacity=".55"/><path d="M9 6.7v12.6" stroke-dasharray="2.5 2.5"/>
+            </svg>
+          </button>
+          <button id="btn-cad-measure" class="cad-tool" data-mode="measure" type="button" title="측정 (거리)" aria-label="측정">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7l4-4 14 14-4 4z"/><path d="M7 7l1.5 1.5M10 10l1.5 1.5M13 13l1.5 1.5"/>
+            </svg>
+          </button>
+        </div>
         <button id="btn-fls-reset" class="fls-ctrl" title="시점 초기화">초기화</button>
         <button id="btn-fls-collapse" class="fls-ctrl" title="3D 패널 접기/펼치기">⇔</button>
       </div>
@@ -991,6 +1016,7 @@
         </button>
       </div>
       <div id="fls-stats" class="fls-stats hidden"></div>
+      <div id="fls-measure-label" class="fls-measure-label hidden"></div>
     </div>
   </section>
 </div>

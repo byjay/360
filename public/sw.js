@@ -5,7 +5,7 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v6';
+const CACHE = 'wm-shell-v7';
 const SHELL = [
   './',
   'index.html',
@@ -69,6 +69,26 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return; // 쓰기 요청은 패스(네트워크 직행)
   let url;
   try { url = new URL(req.url); } catch { return; }
+
+  // ── [오프라인 모바일 핵심] 네비게이션 요청은 항상 앱 셸로 폴백 ──
+  //   모바일 PWA를 오프라인으로 처음 열거나, /projects 등 라우트로 진입할 때
+  //   navigation 요청(mode:'navigate')이 네트워크 실패하면 캐시된 index.html을 돌려준다.
+  //   → 오프라인에서도 앱이 '하얀 화면' 없이 즉시 부팅된다.
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then((c) => c.put('index.html', clone)).catch(() => {});
+        }
+        return res;
+      }).catch(() =>
+        caches.open(CACHE).then((c) => c.match('index.html'))
+          .then((cached) => cached || caches.match('./'))
+      )
+    );
+    return;
+  }
 
   // API/데이터는 절대 캐시·가로채지 않음 → 항상 네트워크
   if (isApi(url)) return;

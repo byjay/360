@@ -3,6 +3,9 @@
     renderer: null, scene: null, camera: null, points: null,
     _raf: null, _drag: null, _rot: { theta: 0.6, phi: 1.1, r: 3 },
     _target: { x: 0, y: 0, z: 0 }, _inited: false, _ro: null,
+    _mode: "orbit",            // [Navisworks 동작 모방] orbit | pan | section | measure
+    _section: null,            // 단면 평면 클리핑 상태
+    _measure: null,            // 측정 2점 + 라인/라벨
 
     SUPPORTED: ["ply", "pcd", "xyz", "pts", "asc", "txt", "las", "laz", "fls", "e57"],
 
@@ -384,6 +387,9 @@
       const grid = new THREE.GridHelper(10, 20, 0x1b75bb, 0x16324d);
       grid.material.opacity = 0.25; grid.material.transparent = true;
       this.scene.add(grid);
+      // ── [마스터 요청] 업라이트 핀(퀸) 그룹: 어떤 각도에서 봐도 '서있는' 마커 ──
+      this._markers = new THREE.Group();
+      this.scene.add(this._markers);
       this._bindControls(canvas);
       this._inited = true;
       // 반응형 리사이즈
@@ -421,20 +427,198 @@
       this._show("fls-stats");
       const stats = this._el("fls-stats");
       if (stats) stats.textContent = parsed.count.toLocaleString() + " pts";
+      // ── [마스터 요청] 모델 중심 위에 '서있는 지도 핀'을 1개 배치(예시/기준점) ──
+      this._placeUprightPin(cx, bb.max.y, cz, size);
       this._resize();
+    },
+
+    /* ── [마스터 요청 정정] 지도 '핀(Pin)' 3D 마커 만들기 ────────────────────
+       · 지도에 꽂는 물방울(teardrop) 위치 핀 — 체스 퀸 X.
+       · 구조: (아래)뾰족한 끝 → (위)둥근 머리, 끝점이 표면을 가리킴.
+       · 어느 각도에서 봐도 항상 '서있다' → _loop에서 yaw만 빌보드, 절대 눕지않음.
+       · 표면에 닿는 그림자 디스크로 '꽂혀있는' 인지 강화.                       */
+    _makeUprightPin(color) {
+      const g = new THREE.Group();
+      const col = color || 0x2f6df0;
+      // 바닥 그림자 디스크(표면에 평평하게 누움) — 핀이 '꽂혀있다'는 인지
+      const shadow = new THREE.Mesh(
+        new THREE.CircleGeometry(0.42, 24),
+        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false })
+      );
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.y = 0.002;
+      g.add(shadow);
+      // 핀 꼬리(뾰족한 끝) — 끝점이 바닥(표면)을 향함. 위로 갈수록 넓어짐
+      const tail = new THREE.Mesh(
+        new THREE.ConeGeometry(0.52, 1.35, 24),
+        new THREE.MeshBasicMaterial({ color: col })
+      );
+      tail.position.y = 0.675;          // 끝(y=0)이 표면, 넓은쪽(y=1.35)이 머리쪽
+      g.add(tail);
+      // 핀 머리(둥근 물방울 머리) — 위쪽 구
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.62, 24, 18),
+        new THREE.MeshBasicMaterial({ color: col })
+      );
+      head.position.y = 1.62;
+      g.add(head);
+      // 머리 안 흰색 도넛(지도 핀의 구멍 느낌) — 카메라쪽 면에 항상 보이도록 빌보드 자식
+      const hole = new THREE.Mesh(
+        new THREE.SphereGeometry(0.30, 20, 14),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      hole.position.y = 1.62;
+      g.add(hole);
+      g.userData.upright = true;        // 루프에서 빌보드 처리 대상 표시
+      g.userData.pinHeight = 2.24;      // 끝~머리 전체 높이(배치 보정용)
+      return g;
+    },
+
+    /** 모델 중심 위에 업라이트 핀 1개 배치(scale 자동) */
+    _placeUprightPin(x, topY, z, modelSize) {
+      if (!this._markers || typeof THREE === "undefined") return;
+      // 기존 마커 제거
+      while (this._markers.children.length) {
+        const m = this._markers.children.pop();
+        m.traverse && m.traverse(o => { o.geometry && o.geometry.dispose && o.geometry.dispose(); o.material && o.material.dispose && o.material.dispose(); });
+        this._markers.remove(m);
+      }
+      const pin = this._makeUprightPin(0x2f6df0);
+      const s = (modelSize || 1) * 0.06;   // 모델 크기의 6% 정도 높이
+      pin.scale.setScalar(s);
+      // 핀의 뾰족한 끝(local y=0)이 표면(topY)에 정확히 닿도록 배치
+      pin.position.set(x, topY + (modelSize || 1) * 0.004, z);
+      this._markers.add(pin);
+    },
+
+    /* ── [Navisworks 동작 모방] 검토 모드 전환 ──────────────────────────────
+       orbit  : 드래그=3D 회전(스피어 카메라)
+       pan    : 드래그=화면 평행이동(타깃 이동)
+       section : 드래그=수직 단면 클리핑 평면 이동(잘라보기)
+       measure : 클릭 2점 = 거리 측정(라인+라벨)                              */
+    setMode(mode) {
+      const ok = ["orbit", "pan", "section", "measure"];
+      if (!ok.includes(mode)) return;
+      this._mode = mode;
+      // 단면 모드 해제 시 클리핑 평면 제거
+      if (mode !== "section") this._clearSection();
+      // 측정 모드 해제 시 측정 마커 제거
+      if (mode !== "measure") this._clearMeasure();
+      // 버튼 active 토글
+      ["orbit", "pan", "section", "measure"].forEach(m => {
+        const b = this._el("btn-cad-" + m);
+        if (b) b.classList.toggle("active", m === mode);
+      });
+      // 커서 힌트
+      const cv = this._el("fls-canvas");
+      if (cv) cv.style.cursor = (mode === "measure") ? "crosshair" : (mode === "pan" ? "move" : "grab");
+    },
+
+    _clearSection() {
+      if (this.renderer) this.renderer.clippingPlanes = [];
+      this._section = null;
+    },
+    /** 수직(Y) 클리핑 평면 적용 — offset 위쪽만 보이게 잘라보기 */
+    _applySection(offset) {
+      if (!this.renderer || typeof THREE === "undefined") return;
+      this.renderer.localClippingEnabled = true;
+      // 평면 법선 (0,1,0): y >= -constant 영역만 표시
+      const plane = (this._section && this._section.plane) || new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      const base = this._target ? this._target.y : 0;
+      plane.constant = -(base + offset);
+      this.renderer.clippingPlanes = [plane];
+      this._section = { plane, offset };
+    },
+    _clearMeasure() {
+      if (this._measure && this.scene) {
+        if (this._measure.line) { this.scene.remove(this._measure.line); this._measure.line.geometry.dispose(); this._measure.line.material.dispose(); }
+        (this._measure.dots || []).forEach(d => { this.scene.remove(d); d.geometry.dispose(); d.material.dispose(); });
+      }
+      this._measure = null;
+      const lab = this._el("fls-measure-label");
+      if (lab) lab.classList.add("hidden");
+    },
+
+    /** 화면 좌표 → 포인트 클라우드 표면의 3D 좌표(레이캐스트) */
+    _pick(clientX, clientY) {
+      if (!this.points || typeof THREE === "undefined") return null;
+      const stage = this._el("fls-stage");
+      const rect = (this._el("fls-canvas") || stage).getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1
+      );
+      const rc = new THREE.Raycaster();
+      // 포인트 클라우드용 임계값(모델 스케일 비례)
+      const s = this._rot.r || 1;
+      rc.params.Points = { threshold: s * 0.02 };
+      rc.setFromCamera(ndc, this.camera);
+      const hit = rc.intersectObject(this.points, false);
+      return hit && hit.length ? hit[0].point.clone() : null;
+    },
+
+    _addMeasurePoint(pt) {
+      if (!this._measure) this._measure = { pts: [], dots: [], line: null };
+      // 이미 2점이면 리셋하고 새로 시작
+      if (this._measure.pts.length >= 2) this._clearMeasure(), this._measure = { pts: [], dots: [], line: null };
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry((this._rot.r || 1) * 0.01, 12, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffd54a })
+      );
+      dot.position.copy(pt);
+      this.scene.add(dot);
+      this._measure.dots.push(dot);
+      this._measure.pts.push(pt);
+      if (this._measure.pts.length === 2) {
+        const [a, b] = this._measure.pts;
+        const g = new THREE.BufferGeometry().setFromPoints([a, b]);
+        const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffd54a }));
+        this.scene.add(line);
+        this._measure.line = line;
+        const dist = a.distanceTo(b);
+        const lab = this._el("fls-measure-label");
+        if (lab) { lab.textContent = "📏 " + dist.toFixed(3) + " m"; lab.classList.remove("hidden"); }
+      }
     },
 
     _bindControls(canvas) {
       const down = e => {
         const p = e.touches ? e.touches[0] : e;
-        this._drag = { x: p.clientX, y: p.clientY, theta: this._rot.theta, phi: this._rot.phi };
+        if (this._mode === "measure") {
+          const pt = this._pick(p.clientX, p.clientY);
+          if (pt) this._addMeasurePoint(pt);
+          return; // 측정은 드래그 회전 안함
+        }
+        this._drag = {
+          x: p.clientX, y: p.clientY,
+          theta: this._rot.theta, phi: this._rot.phi,
+          tx: this._target.x, ty: this._target.y, tz: this._target.z,
+          sec: this._section ? this._section.offset : 0
+        };
       };
       const move = e => {
         if (!this._drag) return;
         const p = e.touches ? e.touches[0] : e;
         const dx = p.clientX - this._drag.x, dy = p.clientY - this._drag.y;
-        this._rot.theta = this._drag.theta - dx * 0.005;
-        this._rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, this._drag.phi - dy * 0.005));
+        if (this._mode === "pan") {
+          // 화면 평행 이동: 카메라 right/up 벡터 기준 타깃 이동
+          const r = this._rot.r || 1;
+          const sp = r * 0.0016;
+          const right = new THREE.Vector3(), up = new THREE.Vector3(), fwd = new THREE.Vector3();
+          this.camera.getWorldDirection(fwd);
+          right.crossVectors(fwd, this.camera.up).normalize();
+          up.copy(this.camera.up).normalize();
+          this._target.x = this._drag.tx - right.x * dx * sp + up.x * dy * sp;
+          this._target.y = this._drag.ty - right.y * dx * sp + up.y * dy * sp;
+          this._target.z = this._drag.tz - right.z * dx * sp + up.z * dy * sp;
+        } else if (this._mode === "section") {
+          // 수직(Y) 단면 평면을 드래그로 위아래 이동
+          this._applySection(this._drag.sec - dy * (this._rot.r || 1) * 0.002);
+        } else {
+          // orbit (기본)
+          this._rot.theta = this._drag.theta - dx * 0.005;
+          this._rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, this._drag.phi - dy * 0.005));
+        }
       };
       const up = () => { this._drag = null; };
       canvas.addEventListener("mousedown", down);
@@ -459,6 +643,12 @@
       });
       const sb = this._el("btn-fls-sample");
       if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
+      // ── [Navisworks 동작 모방] CAD 툴바 모드 버튼 바인딩 ──
+      ["orbit", "pan", "section", "measure"].forEach(m => {
+        const b = this._el("btn-cad-" + m);
+        if (b && !b._bound) { b._bound = true; b.addEventListener("click", () => this.setMode(m)); }
+      });
+      this.setMode("orbit");
     },
 
     _resize() {
@@ -484,6 +674,16 @@
           this._target.z + r * Math.sin(phi) * Math.sin(theta)
         );
         this.camera.lookAt(this._target.x, this._target.y, this._target.z);
+        // ── [마스터 요청] 업라이트 핀 빌보드: 카메라 쪽으로 yaw 만 회전 → 항상 '서있음' ──
+        if (this._markers && this._markers.children.length) {
+          const cam = this.camera.position;
+          for (const m of this._markers.children) {
+            if (!m.userData || !m.userData.upright) continue;
+            const dx = cam.x - m.position.x;
+            const dz = cam.z - m.position.z;
+            m.rotation.set(0, Math.atan2(dx, dz), 0); // Y축 회전만(절대 눕지 않음)
+          }
+        }
         this.renderer.render(this.scene, this.camera);
       };
       this._raf = requestAnimationFrame(tick);
