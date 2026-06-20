@@ -1027,6 +1027,32 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   background: linear-gradient(180deg, #e2ecff 0%, #d3e2ff 100%);
 }
 
+/* ── [마스터 요청] 핀(호스팟)별 아이콘 선택 그리드 ── */
+.pf-icon-section { margin: 2px 0 4px; }
+.pf-icon-label {
+  font-size: 10.5px; font-weight: 700; color: var(--text2);
+  margin: 0 0 5px 1px; letter-spacing: .2px;
+}
+.pf-icon-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px;
+}
+.pf-icon-chip {
+  display: flex; align-items: center; justify-content: center;
+  aspect-ratio: 1 / 1; padding: 6px; cursor: pointer;
+  border: 1px solid var(--border2); border-radius: 9px;
+  background: var(--bg3); color: var(--text2); transition: all .15s;
+}
+.pf-icon-chip svg { width: 19px; height: 19px; display: block; }
+.pf-icon-chip:hover {
+  border-color: var(--accent); color: #3a352b;
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg3));
+}
+.pf-icon-chip.active {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg3));
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 /* 접이식 필드 */
 .pf-collapse { display: block; }
 .pf-collapse.hidden { display: none; }

@@ -688,10 +688,38 @@
         const hideAddr = !opts.editing && !!zoneSelected;
         addr.classList.toggle("hidden", hideAddr);
       }
+      // [마스터 요청] 아이콘 선택 그리드 렌더(현재 State.pendingIcon 반영)
+      this._renderIconPicker();
       // 진입 애니메이션 트리거
       panel.classList.remove("pf-in");
       void panel.offsetWidth;
       panel.classList.add("pf-in");
+    },
+
+    /** [마스터 요청] 핀 아이콘 선택 그리드 렌더 + 선택 상태 동기화 */
+    _renderIconPicker() {
+      const grid = UI.$("pf-icon-grid");
+      if (!grid || typeof PinIcons === "undefined") return;
+      const cur = State.pendingIcon || "number";
+      grid.innerHTML = PinIcons.SET.map(it =>
+        `<button type="button" class="pf-icon-chip${it.id === cur ? " active" : ""}" ` +
+        `data-icon="${it.id}" title="${it.name}" aria-label="${it.name}" ` +
+        `aria-pressed="${it.id === cur ? "true" : "false"}">${PinIcons.chipSvg(it.id)}</button>`
+      ).join("");
+      // 위임 바인딩(중복 방지)
+      if (!grid._iconBound) {
+        grid.addEventListener("click", (e) => {
+          const chip = e.target.closest(".pf-icon-chip");
+          if (!chip) return;
+          State.pendingIcon = chip.dataset.icon || "number";
+          grid.querySelectorAll(".pf-icon-chip").forEach(c => {
+            const on = c === chip;
+            c.classList.toggle("active", on);
+            c.setAttribute("aria-pressed", on ? "true" : "false");
+          });
+        });
+        grid._iconBound = true;
+      }
     },
 
     /** 플로팅 핀 편집 패널 닫기 */
@@ -759,6 +787,7 @@
       State.pendingIs360 = false;
       State.pendingDocs = [];
       State.pendingFls = null;
+      State.pendingIcon = "number"; // [마스터 요청] 아이콘 선택 초기화(기본 번호)
       UI.$("pending-pin").classList.add("hidden");
       UI.clearVal("input-pin-label");
       UI.clearVal("input-pin-url");
@@ -1498,6 +1527,8 @@
       };
       if (note) pin.note = note;
       if (url)  { pin.imageUrl = url; if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) pin.isVideo = true; }
+      // [마스터 요청] 핀(호스팟)별 아이콘 — 선택값을 핀에 보존(기본 number는 저장 생략)
+      if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       // [마스터 요청] RICOH THETA 360(2:1 equirectangular) 감지 결과를 핀에 보존 → 뷰어가 360으로 표시
       if (State.pendingIs360) pin.is360 = true;
       if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache["local:" + pin.id] = localPreview; }
@@ -1616,6 +1647,9 @@
         : { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label };
       pin.label = label;
       if (note) pin.note = note; else if (editing) delete pin.note;
+      // [마스터 요청] 핀(호스팟)별 아이콘 캡처 — number(기본)면 속성 제거(하위호환)
+      if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
+      else delete pin.icon;
 
       try {
         if (file && State.pendingIsVideo) {
@@ -1861,6 +1895,8 @@
       State.editingPinId = id;
       State.pending = { x: pin.x, y: pin.y };   // 좌표 보존
       State.pendingFile = null; State.pendingIsVideo = false; State.pendingDocs = [];
+      // [마스터 요청] 기존 핀 아이콘을 선택 상태로 로드(없으면 기본 number)
+      State.pendingIcon = pin.icon || "number";
       // 폼 필드 채우기
       UI.$("input-pin-label").value = pin.label || "";
       UI.$("input-pin-note").value = pin.note || "";

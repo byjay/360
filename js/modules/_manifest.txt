@@ -22,6 +22,7 @@
 21_AllPins.js
 22_Auth.js
 23_PinPrefs.js
+23b_PinIcons.js
 24_Settings.js
 25_Designers.js
 26_PdfAnno.js

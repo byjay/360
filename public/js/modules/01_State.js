@@ -24,6 +24,7 @@
     pendingIsVideo: false,
     pendingDocs: [],        // 첨부 문서 후보 [{tempId, file, name, size, kind, status, docId}]
     pendingFls:  null,      // 첨부된 3D 포인트클라우드 { localId, name, size }
+    pendingIcon: "number",  // [마스터 요청] 핀(호스팟)별 아이콘 선택값 (기본=번호)
     editingPinId: null,     // 기존 포인트 편집 중인 id (null=신규)
     movingPinId: null,      // 드래그로 위치 이동 중인 포인트 id
     pinEditUnlocked: null,  // '수정' 버튼으로 이동/편집 잠금 해제된 핀 id (이 id만 드래그 이동 가능)
@@ -54,6 +55,7 @@
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
       this.pendingFls = null;
+      this.pendingIcon = "number";
       this.editingPinId = null; this.movingPinId = null;
       this.autoSaveDepId = null; this.autoSaving = false; this.depVersion = 0;
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };

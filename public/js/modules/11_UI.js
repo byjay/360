@@ -218,9 +218,9 @@
               <!-- 둥근 머리 -->
               <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.6"/>
               <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.98"/>
-              <text x="18" y="12.3" text-anchor="middle" dominant-baseline="central"
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill)) || `<text x="18" y="12.3" text-anchor="middle" dominant-baseline="central"
                     font-family="'Segoe UI',sans-serif" font-size="9.8" font-weight="900"
-                    fill="${txtFill}">${dispNo}</text>
+                    fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14.5" cy="8" rx="3.6" ry="2.3" fill="#ffffff" opacity="0.5"/>
             </svg>
