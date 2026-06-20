@@ -5636,6 +5636,13 @@
     },
 
     async _loadDrawing(file) {
+      // ── 🔴 [마스터 규칙·권한] 뷰어는 도면을 등록할 수 없다(보기 전용) ──
+      //  도면 등록의 모든 진입 경로(버튼/단축키/드래그앤드롭/mnav/시트)는 결국 이 함수로 모이므로,
+      //  여기서 한 번에 권한을 강제한다. 설계자 권한 + 디자이너 모드일 때만 통과.
+      if (State.mode !== "designer" || (typeof Auth !== "undefined" && !Auth.isDesigner)) {
+        Prompt && Prompt.toast && Prompt.toast("👁️ 뷰어는 도면을 등록할 수 없습니다. 설계자 모드에서만 가능합니다.");
+        return;
+      }
       // ── [마스터 규칙] 구역(deck) 선행 등록 강제: 프로젝트에 구역이 없거나 미선택이면 도면 로드 차단 ──
       //  (버튼/드래그앤드롭/시트 등 모든 진입 경로를 여기서 중앙 차단)
       if (typeof Projects !== "undefined" && Projects.currentProject) {

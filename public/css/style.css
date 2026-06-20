@@ -3144,6 +3144,17 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   box-shadow: 0 0 0 1px rgba(201,150,42,.5), 0 2px 8px rgba(201,150,42,.4), inset 0 1px 0 rgba(255,255,255,.6);
 }
 body.role-viewer .tq-btn.designer-only { display: none; }
+/* 🔴 [마스터 규칙·권한] 뷰어는 도면 등록/편집 관련 UI를 전부 숨긴다(보기 전용).
+   CSS 1차 방어 + _loadDrawing 권한 가드 2차 방어 = 이중 차단 */
+body.role-viewer .designer-only,
+body.role-viewer #btn-upload-drawing,
+body.role-viewer #mnav-upload,
+body.role-viewer #tq-upload,
+body.role-viewer #section-upload,
+body.role-viewer #drop-tap-cta,
+body.role-viewer #section-checkboard,
+body.role-viewer #btn-checkboard-toggle,
+body.role-viewer #btn-checkboard-enter { display: none !important; }
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
 @media (max-width: 760px) { .topbar-quick { display: none; } }
 
