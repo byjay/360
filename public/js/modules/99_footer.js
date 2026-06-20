@@ -2,9 +2,13 @@
   document.addEventListener("DOMContentLoaded", () => {
     App.init();
 
+    // [오프라인 작업지시서 ❼] 오프라인 상태 배지/네트워크 이벤트 연결
+    if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
+
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
       State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
+      Offline, OfflineBundle, OfflineLoad, OpLog,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

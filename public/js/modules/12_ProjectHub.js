@@ -116,6 +116,9 @@
           '</div>' +
           (isDesigner
             ? '<div class="hub-card-actions">' +
+                '<button class="hub-card-act hub-card-dl" title="오프라인 다운로드" data-act="dl" aria-label="오프라인 다운로드">' +
+                  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>' +
+                '</button>' +
                 '<button class="hub-card-act hub-card-del" title="삭제" data-act="del" aria-label="삭제">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
                 '</button>' +
@@ -133,6 +136,24 @@
         // 삭제 버튼
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
+
+        // [오프라인 작업지시서 ❷] 오프라인 다운로드 버튼
+        const dl = card.querySelector('[data-act="dl"]');
+        if (dl) dl.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (typeof OfflineBundle === "undefined") { Prompt.toast("오프라인 모듈 미로드"); return; }
+          const orig = dl.innerHTML;
+          dl.disabled = true; dl.classList.add("busy");
+          try {
+            const m = await OfflineBundle.download(p.id, (done, total, label) => {
+              dl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
+            });
+            const v = await OfflineBundle.verify(p.id);
+            if (v.ok) Prompt.toast("✅ 오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
+            else Prompt.toast("⚠️ 일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
+          } catch (err) { Prompt.toast("❌ " + (err && err.message ? err.message : "다운로드 실패")); }
+          finally { dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig; dl.setAttribute("title", "오프라인 다운로드"); }
+        });
 
         grid.appendChild(card);
       });

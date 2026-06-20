@@ -13,6 +13,8 @@ type Bindings = {
   AI_API_KEY?: string          // OpenAI 호환 API 키 (Groq 등)
   AI_BASE_URL?: string         // 예) https://api.groq.com/openai/v1
   AI_MODEL?: string            // 예) openai/gpt-oss-120b
+  // [P0-3] 데모 로그인 스위치. 운영 봉인 시 `wrangler pages secret put DEMO_LOGIN` (값 0).
+  DEMO_LOGIN?: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
 }
 
@@ -57,16 +59,20 @@ function isDesignerDomain(c: any, email: string): boolean {
  * 클라이언트가 보내는 'Bearer demo-designer' / 'Bearer demo-viewer' 토큰을 인식한다.
  * - demo-designer : 디자이너 권한(프로젝트 생성/삭제까지 테스트 가능)
  * - demo-viewer   : 뷰어 권한(열람만)
- * 운영에서 끄려면 DEMO_LOGIN_ENABLED = false 로 변경. */
-const DEMO_LOGIN_ENABLED = true
+ * [P0-3 🟠 보안] 운영에서는 Cloudflare 시크릿 DEMO_LOGIN='0' 으로 끈다.
+ *   기본값(미설정)은 true 라 개발/시연 환경에선 종전대로 동작하고,
+ *   운영 배포 시 `wrangler pages secret put DEMO_LOGIN`(값 0) 한 번이면 봉인된다. */
+function demoLoginEnabled(c: any): boolean {
+  try { return String(c?.env?.DEMO_LOGIN ?? '1') !== '0' } catch { return true }
+}
 const DEMO_DESIGNER = { email: 'demo.designer@seastargo.com', name: '데모 설계자', picture: '', role: 'designer' as const }
 const DEMO_VIEWER = { email: 'demo.viewer@seastargo.com', name: '데모 열람자', picture: '', role: 'viewer' as const }
 
 const DEMO_SUPER = { email: SUPER_ADMIN, name: '데모 슈퍼관리자', picture: '', role: 'super' as const }
 
 /** 데모 토큰이면 가짜 사용자 반환, 아니면 null */
-function demoUserFromToken(token: string): any | null {
-  if (!DEMO_LOGIN_ENABLED) return null
+function demoUserFromToken(c: any, token: string): any | null {
+  if (!demoLoginEnabled(c)) return null
   if (token === 'demo-designer') return { ...DEMO_DESIGNER, _demo: true }
   if (token === 'demo-viewer') return { ...DEMO_VIEWER, _demo: true }
   if (token === 'demo-super') return { ...DEMO_SUPER, _demo: true }
@@ -398,7 +404,7 @@ async function getUser(c: any): Promise<any | null> {
   if (!m) return null
   const token = m[1]
   // 데모 토큰 우선 처리 (구글 로그인 없이 바로 진입/테스트)
-  const demo = demoUserFromToken(token)
+  const demo = demoUserFromToken(c, token)
   if (demo) return demo
   // 회사 이메일 자체가입 로컬 세션 토큰 ("local-...")
   if (token.startsWith('local-')) {
@@ -416,7 +422,7 @@ async function getUser(c: any): Promise<any | null> {
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
   if (email === superAdmin(c)) return true
-  if (DEMO_LOGIN_ENABLED && email === DEMO_DESIGNER.email) return true
+  if (demoLoginEnabled(c) && email === DEMO_DESIGNER.email) return true
   // 회사 도메인(@seastargo.com 등) 계정은 로그인 경로와 무관하게 설계자 권한 (자체가입과 정책 일치)
   if (isDesignerDomain(c, email)) {
     // self-heal: designers 테이블에도 자동 등록해 두어 관리 화면/통계에서 일관되게 보이도록 함
@@ -1301,6 +1307,7 @@ function mapDeployment(r: any) {
     pages_data: r.pages_data,
     pins: r.pins,
     zones: r.zones || '[]',
+    annotations: r.annotations || '[]',
     created_at: r.created_at,
     updated_at: r.updated_at,
     version: (r.version != null ? r.version : 0),
@@ -1420,8 +1427,10 @@ app.delete('/api/r2/object/*', async (c) => {
    deployments — 배포 스냅샷
 ════════════════════════════════════════════ */
 
-// 목록
+// 목록 — [P0-2 🔴 보안 봉인] 로그인 사용자(뷰어 이상)만 도면 목록 열람
 app.get('/tables/deployments', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
@@ -1430,7 +1439,11 @@ app.get('/tables/deployments', async (c) => {
 })
 
 // 단건 조회 (특정 배포본 고정 공유 — B1)
+// [P0-2 🔴 보안 봉인] 로그인 사용자(뷰어 이상)만 단건 도면 열람 가능.
+//   (서명 공유링크 기능은 P3-2 에서 별도 토큰으로 분리 제공 예정)
 app.get('/tables/deployments/:id', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
   const id = c.req.param('id')
   const row = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
@@ -1447,8 +1460,8 @@ app.post('/tables/deployments', async (c) => {
   const id = genId('dep')
   const now = Date.now()
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, created_at, updated_at, version, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, created_at, updated_at, version, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
   ).bind(
     id,
     body.title || '',
@@ -1457,6 +1470,7 @@ app.post('/tables/deployments', async (c) => {
     body.pages_data || null,
     body.pins || '[]',
     body.zones || '[]',
+    body.annotations || '[]',
     now, now
   ).run()
 
@@ -1467,7 +1481,8 @@ app.post('/tables/deployments', async (c) => {
   return c.json(mapDeployment({
     id, title: body.title || '', file_name: body.file_name || '',
     drawing_data: body.drawing_data || null, pages_data: body.pages_data || null,
-    pins: body.pins || '[]', zones: body.zones || '[]', created_at: now, updated_at: now, version: 0, deleted: 0
+    pins: body.pins || '[]', zones: body.zones || '[]', annotations: body.annotations || '[]',
+    created_at: now, updated_at: now, version: 0, deleted: 0
   }))
 })
 
@@ -1504,18 +1519,96 @@ const updateDeployment = async (c: any) => {
     pages_data:   body.pages_data    != null ? body.pages_data   : existing.pages_data,
     pins:         body.pins          != null ? body.pins         : existing.pins,
     zones:        body.zones         != null ? body.zones        : existing.zones,
+    annotations:  body.annotations   != null ? body.annotations  : (existing.annotations || '[]'),
   }
   const newVersion = curVersion + 1
   await c.env.DB.prepare(
-    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, updated_at=?, version=? WHERE id=?`
+    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?, updated_at=?, version=? WHERE id=?`
   ).bind(
     merged.title, merged.file_name, merged.drawing_data, merged.pages_data,
-    merged.pins, merged.zones, now, newVersion, id
+    merged.pins, merged.zones, merged.annotations, now, newVersion, id
   ).run()
   return c.json(mapDeployment(Object.assign({}, existing, merged, { id, updated_at: now, version: newVersion })))
 }
 app.patch('/tables/deployments/:id', updateDeployment)
 app.put('/tables/deployments/:id', updateDeployment)
+
+/* ── [오프라인 작업지시서 ❶/❾] 충돌 없는 op 일괄 적용 ─────────────────
+ * 배열 통째 덮어쓰기 금지. 핀/구역/주석을 id 기준 개별 op 로 적용한다.
+ *  - 두 작업자가 서로 다른 핀을 추가 → 둘 다 보존(충돌 없음)
+ *  - 같은 엔티티 동시 수정 → 필드단위 얕은 병합 + ts 최신(LWW)
+ *  - delete → tombstone(_deleted) 보존(재생성 방지)
+ *  - 같은 opId 재전송 → applied_ops 로 멱등 차단(version 추가증가 없음)
+ * body: { base_version?, ops:[ {opId, entity:'pin'|'zone'|'anno', action:'upsert'|'delete', id, data?, ts, author} ] }
+ */
+app.post('/tables/deployments/:id/ops', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const id = c.req.param('id')
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const ops = Array.isArray(body?.ops) ? body.ops : []
+
+  const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!dep) return c.json({ error: 'not found' }, 404)
+
+  // 현재 서버 상태를 id→객체 맵으로 로드
+  const toMap = (j: string) => {
+    const arr = (() => { try { return JSON.parse(j || '[]') } catch { return [] } })()
+    const m = new Map<string, any>()
+    for (const o of arr) if (o && o.id != null) m.set(String(o.id), o)
+    return m
+  }
+  const pins = toMap(dep.pins), zones = toMap(dep.zones), annos = toMap(dep.annotations)
+  const pick = (e: string) => e === 'pin' ? pins : e === 'zone' ? zones : annos
+
+  const applied: string[] = []
+  let newlyApplied = 0   // 멱등: 실제로 새로 적용된 op만 카운트 → version 증가 판정에 사용
+  for (const op of ops) {
+    if (!op || !op.opId || !op.entity || op.id == null) continue
+    // 멱등: 이미 적용된 opId면 건너뜀(중복 업로드 무해, version 증가에 기여하지 않음)
+    const dup = await c.env.DB.prepare('SELECT op_id FROM applied_ops WHERE op_id = ?').bind(op.opId).first()
+    if (dup) { applied.push(op.opId); continue }
+    const m = pick(op.entity)
+    const cur = m.get(String(op.id))
+    const opTs = Number(op.ts || Date.now())
+    if (op.action === 'delete') {
+      // tombstone 보존 — 더 최신 의도만 반영
+      if (!cur || opTs >= Number(cur.ts || 0)) {
+        m.set(String(op.id), { id: op.id, _deleted: true, ts: opTs })
+      }
+    } else { // upsert — 필드단위 얕은 병합(둘 다 보존) + 같은 필드는 ts 최신
+      if (cur && !cur._deleted) {
+        const merged = Object.assign({}, cur, op.data, { id: op.id, ts: Math.max(opTs, Number(cur.ts || 0)) })
+        m.set(String(op.id), merged)
+      } else {
+        m.set(String(op.id), Object.assign({}, op.data, { id: op.id, ts: opTs }))
+      }
+    }
+    await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)')
+      .bind(op.opId, id, Date.now()).run()
+    applied.push(op.opId)
+    newlyApplied++
+  }
+
+  const dump = (m: Map<string, any>) => JSON.stringify(Array.from(m.values()))
+  const curVersion = (dep.version != null ? Number(dep.version) : 0)
+  // 새로 적용된 op가 있을 때만 version 증가(중복 opId 재전송은 version 불변 — 멱등)
+  const changed = newlyApplied > 0
+  const newVersion = changed ? curVersion + 1 : curVersion
+  if (changed) {
+    await c.env.DB.prepare(
+      'UPDATE deployments SET pins=?, zones=?, annotations=?, updated_at=?, version=? WHERE id=?'
+    ).bind(dump(pins), dump(zones), dump(annos), Date.now(), newVersion, id).run()
+  }
+
+  return c.json({
+    ok: true, applied, version: newVersion,
+    current: mapDeployment(Object.assign({}, dep, {
+      pins: dump(pins), zones: dump(zones), annotations: dump(annos), version: newVersion
+    }))
+  })
+})
 
 // 삭제 (soft delete) — 디자이너 이상
 app.delete('/tables/deployments/:id', async (c) => {

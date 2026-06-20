@@ -1707,6 +1707,10 @@
       UI.renderPinList();
       UI.renderPinsOnMap(wasEditing ? null : pin.id); // 신규만 드롭 애니메이션
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 500);
+      // [오프라인 작업지시서 ❻] 오프라인이면 엔티티 op 기록 + 로컬 스냅샷(온라인은 _autoSave 경로 유지)
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        try { await OpLog.recordCurrent("pin", "upsert", pin.id, pin); await persistLocalDeployment(); } catch (e) {}
+      }
       this._autoSave(); // 버튼 없이 즉시 서버 저장
 
       // 편집 완료면 별도 안내만, 신규면 다음 포인트 연속 배치 안내
@@ -1827,6 +1831,10 @@
       UI.renderPinList();
       UI.renderPinsOnMap();
       Prompt.toast("🗑️ '" + removed.label + "' 삭제됨");
+      // [오프라인 작업지시서 ❻] 오프라인이면 삭제 op 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+      }
       this._autoSave();
     },
 
@@ -2022,7 +2030,10 @@
         $("pano-overlay").classList.remove("hidden");
         PanoViewer.open = true;
         try {
-          const dataURL = await Cloud.fetchImage(pin.imageId);
+          // [오프라인 작업지시서 ❺] 오프라인 번들(IndexedDB) base64 우선 → 온라인 재시도
+          let dataURL = (typeof resolvePanoSource === "function") ? await resolvePanoSource(pin) : null;
+          if (!dataURL) dataURL = await Cloud.fetchImage(pin.imageId);
+          if (!dataURL) throw new Error("이 3D는 오프라인에 다운로드되지 않았습니다.");
           PanoViewer.load(dataURL, pin.label);
         } catch (e) {
           PanoViewer._showError("(클라우드: " + (pin.imageName || pin.imageId) + ")", e.message);
@@ -2296,9 +2307,16 @@
         return await this._restoreDraftLocal();
       }
       try {
-        const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
-        if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
-        const dep = await r.json();
+        // [오프라인 작업지시서 ❹] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
+        let dep = null;
+        if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
+          dep = await OfflineLoad.deployment(deploymentId);
+          if (!dep) { await this._restoreDraftLocal(); return; }
+        } else {
+          const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
+          if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
+          dep = await r.json();
+        }
         let pages = [];
         try { pages = JSON.parse(dep.pages_data || "[]"); } catch { pages = []; }
         if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];

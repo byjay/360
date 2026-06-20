@@ -4243,3 +4243,12 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 /* (참고) #btn-deploy, #hub-btn-demo-designer, #login-gate-demo 등은 실제로
    컬러/다크 배경 위 흰 글씨라 정상입니다. 감사 도구가 숨김 상태에서
    부모 배경으로 오탐한 케이스이므로 색을 바꾸지 않습니다. */
+
+/* [오프라인 작업지시서 ❼] 네트워크 상태 배지 */
+.net-badge{position:fixed;top:8px;right:8px;display:none;align-items:center;gap:6px;
+  background:var(--red);color:#fff;padding:6px 12px;border-radius:20px;
+  font:700 11px var(--font-ui);z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+.net-badge.show{display:flex}
+.net-badge.syncing{background:var(--blue)}
+.net-q{background:rgba(0,0,0,.25);color:#fff;padding:2px 8px;border-radius:10px;
+  font:700 11px var(--font-mono)}

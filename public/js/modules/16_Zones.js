@@ -163,6 +163,10 @@
       this._cancelDraw();
       this.render();
       this.renderList();
+      // [오프라인 작업지시서 ❻] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        OpLog.recordCurrent("zone", "upsert", zone.id, zone).then(() => persistLocalDeployment()).catch(() => {});
+      }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
 
@@ -374,6 +378,10 @@
       if (this._active === id) this._active = null;
       this.render();
       this.renderList();
+      // [오프라인 작업지시서 ❻] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+      }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
 

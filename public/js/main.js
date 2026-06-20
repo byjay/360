@@ -757,6 +757,10 @@
         if (typeof App !== "undefined" && App._flushDirtyDrafts) {
           try { await App._flushDirtyDrafts(); } catch (e) {}
         }
+        // [오프라인 작업지시서 ❽] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
+        if (typeof App !== "undefined" && App._flushOpLogs) {
+          try { await App._flushOpLogs(); } catch (e) {}
+        }
         // 재연동 토스트(대기 항목이 실제로 있었을 때만)
         if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
           Prompt.toast("☁️ 온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
@@ -2784,6 +2788,9 @@
           '</div>' +
           (isDesigner
             ? '<div class="hub-card-actions">' +
+                '<button class="hub-card-act hub-card-dl" title="오프라인 다운로드" data-act="dl" aria-label="오프라인 다운로드">' +
+                  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>' +
+                '</button>' +
                 '<button class="hub-card-act hub-card-del" title="삭제" data-act="del" aria-label="삭제">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
                 '</button>' +
@@ -2801,6 +2808,24 @@
         // 삭제 버튼
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
+
+        // [오프라인 작업지시서 ❷] 오프라인 다운로드 버튼
+        const dl = card.querySelector('[data-act="dl"]');
+        if (dl) dl.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (typeof OfflineBundle === "undefined") { Prompt.toast("오프라인 모듈 미로드"); return; }
+          const orig = dl.innerHTML;
+          dl.disabled = true; dl.classList.add("busy");
+          try {
+            const m = await OfflineBundle.download(p.id, (done, total, label) => {
+              dl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
+            });
+            const v = await OfflineBundle.verify(p.id);
+            if (v.ok) Prompt.toast("✅ 오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
+            else Prompt.toast("⚠️ 일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
+          } catch (err) { Prompt.toast("❌ " + (err && err.message ? err.message : "다운로드 실패")); }
+          finally { dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig; dl.setAttribute("title", "오프라인 다운로드"); }
+        });
 
         grid.appendChild(card);
       });
@@ -3561,6 +3586,10 @@
       this._cancelDraw();
       this.render();
       this.renderList();
+      // [오프라인 작업지시서 ❻] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        OpLog.recordCurrent("zone", "upsert", zone.id, zone).then(() => persistLocalDeployment()).catch(() => {});
+      }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
 
@@ -3772,6 +3801,10 @@
       if (this._active === id) this._active = null;
       this.render();
       this.renderList();
+      // [오프라인 작업지시서 ❻] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+      }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
 
@@ -5957,6 +5990,10 @@
       UI.renderPinList();
       UI.renderPinsOnMap(wasEditing ? null : pin.id); // 신규만 드롭 애니메이션
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 500);
+      // [오프라인 작업지시서 ❻] 오프라인이면 엔티티 op 기록 + 로컬 스냅샷(온라인은 _autoSave 경로 유지)
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        try { await OpLog.recordCurrent("pin", "upsert", pin.id, pin); await persistLocalDeployment(); } catch (e) {}
+      }
       this._autoSave(); // 버튼 없이 즉시 서버 저장
 
       // 편집 완료면 별도 안내만, 신규면 다음 포인트 연속 배치 안내
@@ -6077,6 +6114,10 @@
       UI.renderPinList();
       UI.renderPinsOnMap();
       Prompt.toast("🗑️ '" + removed.label + "' 삭제됨");
+      // [오프라인 작업지시서 ❻] 오프라인이면 삭제 op 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+      }
       this._autoSave();
     },
 
@@ -6272,7 +6313,10 @@
         $("pano-overlay").classList.remove("hidden");
         PanoViewer.open = true;
         try {
-          const dataURL = await Cloud.fetchImage(pin.imageId);
+          // [오프라인 작업지시서 ❺] 오프라인 번들(IndexedDB) base64 우선 → 온라인 재시도
+          let dataURL = (typeof resolvePanoSource === "function") ? await resolvePanoSource(pin) : null;
+          if (!dataURL) dataURL = await Cloud.fetchImage(pin.imageId);
+          if (!dataURL) throw new Error("이 3D는 오프라인에 다운로드되지 않았습니다.");
           PanoViewer.load(dataURL, pin.label);
         } catch (e) {
           PanoViewer._showError("(클라우드: " + (pin.imageName || pin.imageId) + ")", e.message);
@@ -6546,9 +6590,16 @@
         return await this._restoreDraftLocal();
       }
       try {
-        const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
-        if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
-        const dep = await r.json();
+        // [오프라인 작업지시서 ❹] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
+        let dep = null;
+        if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
+          dep = await OfflineLoad.deployment(deploymentId);
+          if (!dep) { await this._restoreDraftLocal(); return; }
+        } else {
+          const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
+          if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
+          dep = await r.json();
+        }
         let pages = [];
         try { pages = JSON.parse(dep.pages_data || "[]"); } catch { pages = []; }
         if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];
@@ -8494,6 +8545,16 @@
     refresh() { this._render(); this.updateToolbar(); },
     _persist() {
       if (State.mode !== "designer") return;
+      // [오프라인 작업지시서 ❻] 오프라인이면 현재 주석들을 id 단위 upsert op 로 기록 + 로컬 스냅샷
+      if (!navigator.onLine && typeof OpLog !== "undefined") {
+        try {
+          const arr = (State.annotations || []).filter(a => a && a.id != null);
+          (async () => {
+            for (const a of arr) await OpLog.recordCurrent("anno", "upsert", a.id, a);
+            await persistLocalDeployment();
+          })().catch(() => {});
+        } catch (e) {}
+      }
       try { if (typeof App !== "undefined" && App._autoSave) App._autoSave({}); } catch (e) {}
     }
   };
@@ -9338,13 +9399,286 @@
     _esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   };
 
+  /* ══════════════════════════════════════════════════════════════════
+     OFFLINE  — 오프라인 완전작업 (다운로드 → 오프라인편집 → 자동싱크 · 충돌0)
+     작업지시서 SEASTAR_OFFLINE_WORKORDER ❷❸❹❺❻❼❽
+     실식별자 보정: State.depId → State.autoSaveDepId, Auth.currentUser → Auth.user
+     IndexedDB 키(SyncQueue.DRAFT_STORE, keyPath="key"):
+       bundle:manifest:<projectId> / bundle:project:<projectId> / bundle:decks:<projectId>
+       bundle:dep:<deploymentId>  / bundle:pano:<imageId>      / oplog:<deploymentId>
+  ══════════════════════════════════════════════════════════════════ */
+
+  // 현재 열려있는 배포본 id (작업지시서의 State.depId 대응)
+  function _curDepId() {
+    if (typeof State !== "undefined" && State.autoSaveDepId) return State.autoSaveDepId;
+    if (typeof Projects !== "undefined" && Projects.currentDeck && Projects.currentDeck.deployment_id)
+      return Projects.currentDeck.deployment_id;
+    return null;
+  }
+  function _authHeaders() {
+    return (typeof Auth !== "undefined" && Auth.headers) ? Auth.headers() : {};
+  }
+  function _toast(msg) {
+    if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg);
+  }
+
+  /* ── ❷ 온라인: 프로젝트 전체 번들 다운로드 ─────────────────────────── */
+  const OfflineBundle = {
+    /** 프로젝트 전체를 오프라인용으로 다운로드. onProgress(done,total,label) 콜백. */
+    async download(projectId, onProgress) {
+      if (!navigator.onLine) throw new Error("온라인 상태에서만 다운로드할 수 있습니다.");
+      const H = _authHeaders();
+
+      // 1) 프로젝트 메타
+      const proj = await (await fetch("/api/projects", { headers: H })).json();
+      const project = (proj.data || []).find((p) => p.id === projectId);
+      if (!project) throw new Error("프로젝트를 찾을 수 없습니다.");
+      await SyncQueue.saveDraft("bundle:project:" + projectId, project);
+
+      // 2) 데크 목록
+      const decksRes = await (await fetch("/api/projects/" + projectId + "/decks", { headers: H })).json();
+      const decks = decksRes.data || [];
+      await SyncQueue.saveDraft("bundle:decks:" + projectId, decks);
+
+      // 3) 데크가 가리키는 배포본 id 수집(중복 제거)
+      const depIds = Array.from(new Set(decks.map((d) => d.deployment_id).filter(Boolean)));
+      const total = depIds.length;
+      let done = 0;
+      const panoIds = new Set();
+
+      // 4) 각 배포본 + 그 안의 파노 imageId 수집
+      for (const depId of depIds) {
+        const dep = await (await fetch("/tables/deployments/" + depId, { headers: H })).json();
+        await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+        let pins = []; try { pins = JSON.parse(dep.pins || "[]"); } catch (e) {}
+        pins.forEach((p) => { if (p && p.imageId) panoIds.add(p.imageId); });
+        done++; onProgress && onProgress(done, total, "도면 " + (dep.title || depId));
+      }
+
+      // 5) 파노 360 이미지 전부 다운로드 → IndexedDB + 메모리 캐시
+      const panoArr = Array.from(panoIds);
+      for (let i = 0; i < panoArr.length; i++) {
+        const imgId = panoArr[i];
+        try {
+          const rec = await (await fetch("/tables/pano_images/" + imgId, { headers: H })).json();
+          if (rec && rec.image_data) {
+            await SyncQueue.saveDraft("bundle:pano:" + imgId, rec.image_data);
+            if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imgId] = rec.image_data; }
+          }
+        } catch (e) {}
+        onProgress && onProgress(total + i + 1, total + panoArr.length, "3D 비워 " + (i + 1) + "/" + panoArr.length);
+      }
+
+      // 6) 매니페스트 기록(무결성 검증용)
+      const manifest = {
+        projectId, downloadedAt: Date.now(),
+        decks: decks.length, deployments: depIds.length, panos: panoArr.length,
+        depIds, panoIds: panoArr
+      };
+      await SyncQueue.saveDraft("bundle:manifest:" + projectId, manifest);
+      return manifest;
+    },
+
+    /* ── ❸ 번들 무결성 검증 ── */
+    async verify(projectId) {
+      const m = await SyncQueue.loadDraft("bundle:manifest:" + projectId);
+      if (!m) return { ok: false, reason: "매니페스트 없음 — 다운로드 안 됨" };
+      const missing = [];
+      for (const depId of (m.depIds || []))
+        if (!(await SyncQueue.loadDraft("bundle:dep:" + depId))) missing.push("dep:" + depId);
+      for (const imgId of (m.panoIds || []))
+        if (!(await SyncQueue.loadDraft("bundle:pano:" + imgId))) missing.push("pano:" + imgId);
+      return { ok: missing.length === 0, missing, downloadedAt: m.downloadedAt };
+    }
+  };
+
+  /* ── ❹ 오프라인 부팅 — IndexedDB에서 계층 복원 ─────────────────────── */
+  const OfflineLoad = {
+    async projects() { // 프로젝트 목록(오프라인)
+      const keys = await SyncQueue.allDraftKeys();
+      const out = [];
+      for (const k of keys) if (String(k).startsWith("bundle:project:")) out.push(await SyncQueue.loadDraft(k));
+      return out;
+    },
+    async decks(projectId) {
+      return (await SyncQueue.loadDraft("bundle:decks:" + projectId)) || [];
+    },
+    async deployment(depId) {
+      return await SyncQueue.loadDraft("bundle:dep:" + depId);
+    },
+    async pano(imageId) {
+      if (typeof Cloud !== "undefined" && Cloud._cache && Cloud._cache[imageId]) return Cloud._cache[imageId];
+      const d = await SyncQueue.loadDraft("bundle:pano:" + imageId);
+      if (d && typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = d; }
+      return d;
+    }
+  };
+
+  /* ── ❺ 오프라인 3D 비워 소스 결정 ── */
+  async function resolvePanoSource(pin) {
+    if (!pin) return null;
+    if (pin.imageId) {
+      const d = await OfflineLoad.pano(pin.imageId);     // 캐시/IndexedDB 우선
+      if (d) return d;
+    }
+    if (navigator.onLine && pin.imageId && typeof Cloud !== "undefined" && Cloud.fetchImage) {
+      try { return await Cloud.fetchImage(pin.imageId); } catch (e) {}
+    }
+    return null; // 표시 불가
+  }
+
+  /* ── ❻ 오프라인 편집 → op 로그(충돌없는 핵심) ──────────────────────── */
+  const OpLog = {
+    _key(depId) { return "oplog:" + depId; },
+    async _load(depId) { return (await SyncQueue.loadDraft(this._key(depId))) || []; },
+    async _save(depId, arr) {
+      await SyncQueue.saveDraft(this._key(depId), arr);
+      if (SyncQueue._emit) SyncQueue._emit();
+    },
+    _newId() { return "op-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8); },
+
+    /** entity:'pin'|'zone'|'anno', action:'upsert'|'delete' */
+    async record(depId, entity, action, id, data) {
+      if (!depId || !entity || id == null) return;
+      const arr = await this._load(depId);
+      arr.push({
+        opId: this._newId(),
+        entity, action, id,
+        data: action === "delete" ? null : data,
+        ts: Date.now(),
+        author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
+      });
+      await this._save(depId, arr);
+    },
+    // 현재 열린 배포본 기준 간편 기록
+    async recordCurrent(entity, action, id, data) {
+      const depId = _curDepId();
+      if (depId) await this.record(depId, entity, action, id, data);
+    },
+    async pending(depId) { return await this._load(depId); },
+    async clearApplied(depId, appliedOpIds) {
+      const set = new Set(appliedOpIds || []);
+      const arr = (await this._load(depId)).filter((o) => !set.has(o.opId));
+      await this._save(depId, arr);
+    }
+  };
+
+  /** 편집 후 로컬 스냅샷(draft)도 갱신 — 새로고침 대비 */
+  async function persistLocalDeployment(depId) {
+    if (!depId) depId = _curDepId();
+    if (!depId) return;
+    const dep = (await SyncQueue.loadDraft("bundle:dep:" + depId)) || { id: depId };
+    dep.pins = JSON.stringify(State.pins || []);
+    dep.zones = JSON.stringify(State.zones || []);
+    dep.annotations = JSON.stringify(State.annotations || []);
+    await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+  }
+
+  /* ── ❽ 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
+  // 지수 백오프 POST (항구 약전파 대비)
+  async function _postWithRetry(url, body, max) {
+    max = max || 3;
+    for (let i = 0; i < max; i++) {
+      try {
+        const r = await fetch(url, { method: "POST", headers: _authHeaders(), body: JSON.stringify(body) });
+        if (r.ok) return r;
+        if (r.status < 500) return r; // 4xx는 재시도 무의미
+      } catch (e) {}
+      await new Promise((s) => setTimeout(s, Math.pow(2, i) * 1000)); // 1s,2s,4s
+    }
+    return null;
+  }
+
+  // App 에 op 플러시 메서드 부착 (_onReconnect 에서 호출)
+  if (typeof App !== "undefined") {
+    App._flushOpLogs = async function () {
+      if (!navigator.onLine) return;
+      const keys = await SyncQueue.allDraftKeys();
+      const opKeys = keys.filter((k) => String(k).startsWith("oplog:"));
+      for (const k of opKeys) {
+        const depId = String(k).slice("oplog:".length);
+        const ops = await OpLog.pending(depId);
+        if (!ops.length) continue;
+        try {
+          const res = await _postWithRetry(
+            "/tables/deployments/" + encodeURIComponent(depId) + "/ops",
+            { base_version: null, ops }
+          );
+          if (res && res.ok) {
+            const j = await res.json();
+            await OpLog.clearApplied(depId, j.applied || ops.map((o) => o.opId));
+            // 서버 최신본을 로컬 번들에 반영(타 작업자 변경 흡수)
+            if (j.current) await SyncQueue.saveDraft("bundle:dep:" + depId, j.current);
+            // 현재 열려있는 도면이면 화면 갱신(tombstone 제외)
+            if (_curDepId() === depId && j.current) {
+              try {
+                const live = (arr) => (Array.isArray(arr) ? arr.filter((o) => !(o && o._deleted)) : arr);
+                State.pins = live(JSON.parse(j.current.pins || "[]"));
+                State.zones = live(JSON.parse(j.current.zones || "[]"));
+                State.annotations = live(JSON.parse(j.current.annotations || "[]"));
+                State.depVersion = Number(j.current.version) || 0;
+                if (typeof UI !== "undefined") { UI.renderPinList(); UI.renderPinsOnMap(); }
+                if (typeof Zones !== "undefined" && Zones.render) { Zones.render(); Zones.renderList && Zones.renderList(); }
+              } catch (e) {}
+            }
+          }
+        } catch (e) { /* 재단절 → 다음 online 때 op 유지하여 재시도 */ }
+      }
+    };
+  }
+
+  /* ── ❼ 오프라인 상태 UI (배지 + 대기 카운트) ──────────────────────── */
+  async function updateNetBadge() {
+    const badge = document.getElementById("net-badge");
+    if (!badge) return;
+    const text = document.getElementById("net-text");
+    const q = document.getElementById("net-q");
+    let pending = 0;
+    const depId = _curDepId();
+    if (depId) { try { pending = (await OpLog.pending(depId)).length; } catch (e) {} }
+    try { pending += await SyncQueue.count(); } catch (e) {}
+    if (!navigator.onLine) {
+      badge.classList.add("show"); badge.classList.remove("syncing");
+      if (text) text.textContent = "📡 오프라인"; if (q) q.textContent = pending;
+    } else if (pending > 0) {
+      badge.classList.add("show", "syncing");
+      if (text) text.textContent = "☁️ 동기화 중"; if (q) q.textContent = pending;
+    } else {
+      badge.classList.remove("show", "syncing");
+    }
+  }
+
+  // 네트워크 이벤트 + 주기 갱신 연결 (DOM 준비 후 init 에서 한 번 더 호출)
+  const Offline = {
+    Bundle: OfflineBundle,
+    Load: OfflineLoad,
+    OpLog: OpLog,
+    resolvePanoSource: resolvePanoSource,
+    persistLocalDeployment: persistLocalDeployment,
+    updateNetBadge: updateNetBadge,
+    curDepId: _curDepId,
+    init() {
+      try {
+        window.addEventListener("online", updateNetBadge);
+        window.addEventListener("offline", updateNetBadge);
+        if (typeof SyncQueue !== "undefined" && SyncQueue.onChange) SyncQueue.onChange(() => updateNetBadge());
+        setInterval(updateNetBadge, 3000);
+        updateNetBadge();
+      } catch (e) {}
+    }
+  };
+
   /* ── 진입 ── */
   document.addEventListener("DOMContentLoaded", () => {
     App.init();
 
+    // [오프라인 작업지시서 ❼] 오프라인 상태 배지/네트워크 이벤트 연결
+    if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
+
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
       State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
+      Offline, OfflineBundle, OfflineLoad, OpLog,
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

@@ -215,6 +215,10 @@
         if (typeof App !== "undefined" && App._flushDirtyDrafts) {
           try { await App._flushDirtyDrafts(); } catch (e) {}
         }
+        // [오프라인 작업지시서 ❽] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
+        if (typeof App !== "undefined" && App._flushOpLogs) {
+          try { await App._flushOpLogs(); } catch (e) {}
+        }
         // 재연동 토스트(대기 항목이 실제로 있었을 때만)
         if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
           Prompt.toast("☁️ 온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
