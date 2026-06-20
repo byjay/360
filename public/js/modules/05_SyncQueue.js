@@ -194,14 +194,32 @@
 
     /** online 복구 시 자동 일괄 동기화 시작 */
     init() {
-      window.addEventListener("online", () => { this.flush().then(r => {
-        if (r && r.uploaded > 0 && typeof App !== "undefined") App._onSyncDone(r);
-      }); });
+      if (this._inited) return; this._inited = true;
+      // ── [오프라인→온라인 재연동] 인터넷 복구 시: ①첨부 op 일괄 업로드 → ②핀ID 치환 → ③도면 draft 반영 ──
+      window.addEventListener("online", () => this._onReconnect());
       window.addEventListener("offline", () => this._emit());
       // 초기 1회 + 주기적 재시도(앱이 열려 있는 동안 백그라운드 동기화)
       this._emit();
-      if (navigator.onLine) this.flush();
-      setInterval(() => { if (navigator.onLine) this.flush(); }, 30000);
+      if (navigator.onLine) this._onReconnect();
+      setInterval(() => { if (navigator.onLine) this._onReconnect(); }, 30000);
+    },
+
+    /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
+    async _onReconnect() {
+      if (this._reconnecting) return; this._reconnecting = true;
+      try {
+        const r = await this.flush();
+        // map 이 있으면(0건이어도) 핀의 pendingOpId → 서버 imageId/docId 치환
+        if (r && r.map && typeof App !== "undefined" && App._onSyncDone) App._onSyncDone(r);
+        // 오프라인 중 저장된 도면 draft 를 서버에 반영(낙관적 잠금 base_version 포함)
+        if (typeof App !== "undefined" && App._flushDirtyDrafts) {
+          try { await App._flushDirtyDrafts(); } catch (e) {}
+        }
+        // 재연동 토스트(대기 항목이 실제로 있었을 때만)
+        if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
+          Prompt.toast("☁️ 온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
+        }
+      } finally { this._reconnecting = false; this._emit(); }
     }
   };
 

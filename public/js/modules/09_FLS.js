@@ -26,9 +26,6 @@
       if (!p) return;
       p.classList.toggle("hidden", !show);
       if (show) {
-        // 샘플 버튼 바인딩(렌더러 초기화 실패/지연 시에도 동작 보장)
-        const sb = this._el("btn-fls-sample");
-        if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
         this._ensureRenderer();
         setTimeout(() => this._resize(), 30);
       }
@@ -53,35 +50,6 @@
         await this.loadBuffer(buf, name || src);
       } catch (e) {
         this._showError("로드 실패", e.message || String(e));
-      }
-    },
-
-    /** 내장 샘플 포인트클라우드(SEASTAR FSRU)를 불러와 3D 표시 — 기능 즉시 체험용 */
-    async loadSample() {
-      this.showPane(true);
-      const btn = this._el("btn-fls-sample");
-      if (btn) { btn.disabled = true; }
-      try {
-        if (typeof THREE === "undefined") {
-          this._showError("3D 엔진 미로딩", "Three.js 가 로드되지 않았습니다(오프라인 등). 온라인 상태에서 다시 시도하세요.");
-          return;
-        }
-        this._show("fls-loading");
-        const lm = this._el("fls-loading-msg");
-        if (lm) lm.textContent = "SEASTAR FSRU 샘플 로드 중…";
-        const url = "/samples/seastar-fsru.ply";
-        let buf = Cloud && Cloud._cache ? Cloud._cache["fls:sample"] : null;
-        if (!buf) {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error("샘플 다운로드 실패 (HTTP " + res.status + ")");
-          buf = await res.arrayBuffer();
-          if (Cloud && Cloud._cache) Cloud._cache["fls:sample"] = buf; // 재사용 캐시
-        }
-        await this.loadBuffer(buf, "seastar-fsru.ply");
-      } catch (e) {
-        this._showError("샘플 로드 실패", (e && e.message) || String(e));
-      } finally {
-        if (btn) { btn.disabled = false; }
       }
     },
 
@@ -641,8 +609,6 @@
         const pane = this._el("fls-pane");
         if (pane) { pane.classList.toggle("fls-collapsed"); setTimeout(() => this._resize(), 260); }
       });
-      const sb = this._el("btn-fls-sample");
-      if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
       // ── [Navisworks 동작 모방] CAD 툴바 모드 버튼 바인딩 ──
       ["orbit", "pan", "section", "measure"].forEach(m => {
         const b = this._el("btn-cad-" + m);

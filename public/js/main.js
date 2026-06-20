@@ -736,14 +736,32 @@
 
     /** online 복구 시 자동 일괄 동기화 시작 */
     init() {
-      window.addEventListener("online", () => { this.flush().then(r => {
-        if (r && r.uploaded > 0 && typeof App !== "undefined") App._onSyncDone(r);
-      }); });
+      if (this._inited) return; this._inited = true;
+      // ── [오프라인→온라인 재연동] 인터넷 복구 시: ①첨부 op 일괄 업로드 → ②핀ID 치환 → ③도면 draft 반영 ──
+      window.addEventListener("online", () => this._onReconnect());
       window.addEventListener("offline", () => this._emit());
       // 초기 1회 + 주기적 재시도(앱이 열려 있는 동안 백그라운드 동기화)
       this._emit();
-      if (navigator.onLine) this.flush();
-      setInterval(() => { if (navigator.onLine) this.flush(); }, 30000);
+      if (navigator.onLine) this._onReconnect();
+      setInterval(() => { if (navigator.onLine) this._onReconnect(); }, 30000);
+    },
+
+    /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
+    async _onReconnect() {
+      if (this._reconnecting) return; this._reconnecting = true;
+      try {
+        const r = await this.flush();
+        // map 이 있으면(0건이어도) 핀의 pendingOpId → 서버 imageId/docId 치환
+        if (r && r.map && typeof App !== "undefined" && App._onSyncDone) App._onSyncDone(r);
+        // 오프라인 중 저장된 도면 draft 를 서버에 반영(낙관적 잠금 base_version 포함)
+        if (typeof App !== "undefined" && App._flushDirtyDrafts) {
+          try { await App._flushDirtyDrafts(); } catch (e) {}
+        }
+        // 재연동 토스트(대기 항목이 실제로 있었을 때만)
+        if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
+          Prompt.toast("☁️ 온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
+        }
+      } finally { this._reconnecting = false; this._emit(); }
     }
   };
 
@@ -1244,9 +1262,6 @@
       if (!p) return;
       p.classList.toggle("hidden", !show);
       if (show) {
-        // 샘플 버튼 바인딩(렌더러 초기화 실패/지연 시에도 동작 보장)
-        const sb = this._el("btn-fls-sample");
-        if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
         this._ensureRenderer();
         setTimeout(() => this._resize(), 30);
       }
@@ -1271,35 +1286,6 @@
         await this.loadBuffer(buf, name || src);
       } catch (e) {
         this._showError("로드 실패", e.message || String(e));
-      }
-    },
-
-    /** 내장 샘플 포인트클라우드(SEASTAR FSRU)를 불러와 3D 표시 — 기능 즉시 체험용 */
-    async loadSample() {
-      this.showPane(true);
-      const btn = this._el("btn-fls-sample");
-      if (btn) { btn.disabled = true; }
-      try {
-        if (typeof THREE === "undefined") {
-          this._showError("3D 엔진 미로딩", "Three.js 가 로드되지 않았습니다(오프라인 등). 온라인 상태에서 다시 시도하세요.");
-          return;
-        }
-        this._show("fls-loading");
-        const lm = this._el("fls-loading-msg");
-        if (lm) lm.textContent = "SEASTAR FSRU 샘플 로드 중…";
-        const url = "/samples/seastar-fsru.ply";
-        let buf = Cloud && Cloud._cache ? Cloud._cache["fls:sample"] : null;
-        if (!buf) {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error("샘플 다운로드 실패 (HTTP " + res.status + ")");
-          buf = await res.arrayBuffer();
-          if (Cloud && Cloud._cache) Cloud._cache["fls:sample"] = buf; // 재사용 캐시
-        }
-        await this.loadBuffer(buf, "seastar-fsru.ply");
-      } catch (e) {
-        this._showError("샘플 로드 실패", (e && e.message) || String(e));
-      } finally {
-        if (btn) { btn.disabled = false; }
       }
     },
 
@@ -1859,8 +1845,6 @@
         const pane = this._el("fls-pane");
         if (pane) { pane.classList.toggle("fls-collapsed"); setTimeout(() => this._resize(), 260); }
       });
-      const sb = this._el("btn-fls-sample");
-      if (sb && !sb._bound) { sb._bound = true; sb.addEventListener("click", () => this.loadSample()); }
       // ── [Navisworks 동작 모방] CAD 툴바 모드 버튼 바인딩 ──
       ["orbit", "pan", "section", "measure"].forEach(m => {
         const b = this._el("btn-cad-" + m);
@@ -4473,14 +4457,6 @@
 
     /* ── Topbar ── */
     _bindTopbar() {
-      // 샘플 FLS 로드 버튼 — document 위임(패널이 어떤 경로로 열려도 항상 동작)
-      if (!document._flsSampleBound) {
-        document._flsSampleBound = true;
-        document.addEventListener("click", (e) => {
-          const b = e.target && e.target.closest && e.target.closest("#btn-fls-sample, #btn-fls-sample-err");
-          if (b && typeof FLS !== "undefined") { e.preventDefault(); FLS.loadSample(); }
-        });
-      }
       UI.$("btn-back").addEventListener("click", () => {
         State.reset();
         PanoViewer.close();

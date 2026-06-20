@@ -207,14 +207,6 @@
 
     /* ── Topbar ── */
     _bindTopbar() {
-      // 샘플 FLS 로드 버튼 — document 위임(패널이 어떤 경로로 열려도 항상 동작)
-      if (!document._flsSampleBound) {
-        document._flsSampleBound = true;
-        document.addEventListener("click", (e) => {
-          const b = e.target && e.target.closest && e.target.closest("#btn-fls-sample, #btn-fls-sample-err");
-          if (b && typeof FLS !== "undefined") { e.preventDefault(); FLS.loadSample(); }
-        });
-      }
       UI.$("btn-back").addEventListener("click", () => {
         State.reset();
         PanoViewer.close();
