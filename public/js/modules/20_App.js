@@ -22,6 +22,9 @@
       Auth.init();
       Settings.init();
       Designers.init();
+      if (typeof UserMgmt !== "undefined") UserMgmt.init();
+      if (typeof ThetaIntake !== "undefined") ThetaIntake.init();
+      if (typeof PdfPopup !== "undefined") PdfPopup.init();
       Prompt.init();
       Projects.init();
       ProjectHub.init();
@@ -88,8 +91,19 @@
       UI.$("topbar").style.borderBottomColor = isCheckboard ? "rgba(47,109,181,.28)" : (isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)");
       const dot = UI.$("topbar-dot");
       if (dot) dot.style.background = accentVar;
-      UI.text("mode-label", isCheckboard ? "CHECKBOARD MODE" : (isDesigner ? "DESIGNER MODE" : "VIEWER MODE"));
-      UI.$("mode-label").style.color = accentVar;
+      // [마스터 요청 N5] "DESIGNER MODE" 글자 → 아이콘화 (글자 안어울림)
+      const _modeIcon = isCheckboard
+        ? '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'
+        : isDesigner
+        ? '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+      const _ml = UI.$("mode-label");
+      if (_ml) {
+        _ml.innerHTML = _modeIcon;
+        _ml.style.color = accentVar;
+        _ml.title = isCheckboard ? "체크보드 모드" : (isDesigner ? "설계자 모드" : "뷰어 모드");
+        _ml.style.display = "inline-flex"; _ml.style.alignItems = "center";
+      }
 
       // ── 뷰어는 "보기 전용". 업로드/편집/배포 관련 UI는 모두 숨긴다. ──
       //  (사용자 요청: "뷰어는 업로드가 왜 필요하지. 뷰어만 완벽하게 되게 만들어")
@@ -183,7 +197,9 @@
         : "도면 위 원하는 위치를 클릭하세요";
 
       UI.showScreen("screen-app");
-      if (!isDesigner) this.loadLatestDeployment();
+      // [마스터 요청 N4 + 멀티테넌트] 작업 사라짐 수정 + 서브도메인/카드로 특정 프로젝트 지정 시 그 프로젝트 스코프.
+      //   프로젝트가 지정되면(설계자 재진입·서브도메인·카드클릭) 그 프로젝트 배포본, 없으면 최신(일반 뷰어).
+      this.loadLatestDeployment(opts.project || null);
     },
 
     /** 편집(designer) 모드 → 뷰어 모드로 전환 (A안: 홈으로 안 가고 뷰어 화면 유지) */
@@ -290,7 +306,7 @@
           await new Promise((res) => {
             imgEl.onload = () => res();
             imgEl.onerror = () => res();
-            imgEl.src = State.viewerPages[next - 1];
+            imgEl.src = Auth.r2(State.viewerPages[next - 1]);
           });
           this._showMapViewport();
         } else {
@@ -582,17 +598,19 @@
       const ut = UI.$("btn-pin-url-toggle");
       if (ut) ut.addEventListener("click", () => tog("field-pin-url", "btn-pin-url-toggle", "input-pin-url"));
 
-      // 동기화 배지 클릭 → 지금 즉시 동기화
+      // [마스터: 수동 반영] 동기화 배지 클릭 → 지금 즉시 "전체" 동기화(업로드)
       const sb = UI.$("sync-badge");
-      if (sb) sb.addEventListener("click", async () => {
-        if (!navigator.onLine) { alert("현재 오프라인입니다. 인터넷 연결 시 자동으로 업로드됩니다."); return; }
-        const r = await SyncQueue.flush();
-        if (r && r.map) this._onSyncDone(r);
-      });
+      if (sb) sb.addEventListener("click", () => this.syncNow());
 
       UI.$("btn-export-json").addEventListener("click", () => this._exportJson());
       UI.$("btn-deploy").addEventListener("click", () => this._deployToViewer());
       UI.$("btn-reload-deploy").addEventListener("click", () => this.loadLatestDeployment());
+      // [마스터: 수동 저장] '저장' 버튼 → 서버 반영. 미저장 변경 시 이탈 경고.
+      const sbtn = UI.$("btn-save");
+      if (sbtn) sbtn.addEventListener("click", () => this._saveNow({ now: true, withPages: true }));
+      window.addEventListener("beforeunload", (e) => {
+        if (this._dirty && State.mode === "designer") { e.preventDefault(); e.returnValue = ""; }
+      });
     },
 
     _togglePlacing() {
@@ -610,6 +628,12 @@
         State.editingPinId = null;
         this._closePinForm();         // 편집 폼이 떠 있으면 닫고 새 배치 모드
         UI.hide("section-next-point");
+        // [마스터 버그] ISO(원근 3D) 보기에서는 클릭→도면좌표 변환이 틀어져 핀이 엉뚱한 곳에
+        //   찍힌다(perspective 역산 부정확). 정확한 배치를 위해 배치 모드 진입 시 평면 보기로 전환.
+        if (State.isoView && typeof MapCtrl !== "undefined" && MapCtrl._applyIso) {
+          State.isoView = false; State.isoDir = 0; MapCtrl._applyIso();
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📐 정확한 핀 배치를 위해 평면 보기로 전환했습니다 (배치 후 ISO 다시 켜기 가능)");
+        }
       }
       UI.$("btn-place").classList.toggle("active", State.placing);
       UI.$("place-hint").classList.toggle("hidden", !State.placing);
@@ -1013,6 +1037,16 @@
       bind("tb-fit",       () => MapCtrl.fit());
       bind("tb-actual",    () => MapCtrl.actualSize());
       bind("tb-iso",       () => MapCtrl.toggleIso());
+      // [마스터 요청] 포인트 수정 모드 토글 — 켠 뒤 핀 클릭 시 수정/이동/삭제 팝업
+      bind("tb-pin-edit",  () => {
+        State.editMode = !State.editMode;
+        const b = UI.$("tb-pin-edit");
+        if (b) b.classList.toggle("active", State.editMode);
+        document.body.classList.toggle("pin-edit-mode", State.editMode);
+        Prompt && Prompt.toast && Prompt.toast(State.editMode
+          ? "✏️ 포인트 수정 모드 ON — 핀을 클릭해 수정/이동/삭제하세요"
+          : "포인트 수정 모드 OFF — 핀 클릭 시 360 보기");
+      });
       bind("tb-rotate-cw", () => this._rotatePdf(90));
       bind("tb-rotate-ccw",() => this._rotatePdf(-90));
       // 페이지 이동
@@ -1190,8 +1224,18 @@
       MapCtrl.flyTo(pct.x, pct.y, Math.max(State.zoom, 2.2));
 
       this._openPinForm({ editing: false });
-      // 포인트를 추가하면 바로 사진 업로드 다이얼로그를 띄운다 (요청사항)
-      setTimeout(() => { const fi = UI.$("input-pin-file"); if (fi) fi.click(); }, 280);
+      // [THETA 인입] 위치지정 대기 중인 R* 360 사진이 있으면, 파일 선택 없이 그 사진을
+      //   바로 첨부·등록한다(사진-우선 워크플로). 없으면 기존대로 사진 선택 다이얼로그.
+      if (State.intakeFile) {
+        const f = State.intakeFile; State.intakeFile = null;
+        setTimeout(() => {
+          this._acceptPinMediaFile(f, false, true);  // 360 판별 + 자동 _confirmPin → 핀 등록(오프라인 큐잉)
+          if (typeof ThetaIntake !== "undefined") ThetaIntake._afterPlaced();
+        }, 280);
+      } else {
+        // 포인트를 추가하면 바로 사진 업로드 다이얼로그를 띄운다 (요청사항)
+        setTimeout(() => { const fi = UI.$("input-pin-file"); if (fi) fi.click(); }, 280);
+      }
       // 위치명 입력이 표시돼 있을 때만 포커스 (구역 선택 시엔 숨겨짐)
       const addr = UI.$("pf-addr");
       if (addr && !addr.classList.contains("hidden")) UI.$("input-pin-label").focus();
@@ -1235,8 +1279,16 @@
       }, { passive: false });
       canvas.addEventListener("touchend", e => {
         if (!e.touches || e.touches.length < 2) panoPinchDist = null;
+        const wasTap = PanoViewer.wasTap && PanoViewer.wasTap();
         PanoViewer.onPointerUp();
+        // [구면 마커] 탭이면 마커 추가/열기 (changedTouches 좌표 사용)
+        if (wasTap && e.changedTouches && e.changedTouches[0]) {
+          const t = e.changedTouches[0];
+          this._onPanoTap(t.clientX, t.clientY);
+        }
       });
+      // [구면 마커] 마우스 탭(클릭)으로 마커 추가/열기
+      canvas.addEventListener("click", e => { if (PanoViewer.wasTap && PanoViewer.wasTap()) this._onPanoTap(e.clientX, e.clientY); });
 
       // 파노라마 컨트롤 버튼
       UI.$("btn-pano-rotate").addEventListener("click", e => {
@@ -1262,6 +1314,11 @@
       UI.$("btn-pano-zoomin").addEventListener("click",  () => PanoViewer.setFov(-10));
       UI.$("btn-pano-zoomout").addEventListener("click", () => PanoViewer.setFov(10));
       UI.$("btn-pano-reset").addEventListener("click",   () => PanoViewer.resetView());
+      // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
+      UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
+      UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
+      // [마스터: 구면 마커] 추가 모드 토글
+      UI.$("btn-pano-spot") && UI.$("btn-pano-spot").addEventListener("click", () => this.setSpotAddMode());
       // ISO 4-꼭지점 뷰 전환
       document.querySelectorAll("#pano-iso-views .pano-iso-btn").forEach((b) => {
         b.addEventListener("click", (e) => {
@@ -1494,10 +1551,9 @@
       UI.updatePdfPagination();
       UI.updateRotationLabel();
       UI.renderPdfThumbs();
-      // 도면이 화면에 표시되면 버튼 없이 즉시 자동 저장(배포본 생성)
+      // [마스터: 자동저장 OFF] 도면 표시돼도 서버 자동생성 안 함 → dirty 표시(저장 버튼으로 반영)
       if (State.mode === "designer" && !State.autoSaveDepId) {
-        // 이미지의 경우 naturalWidth 가 확정된 직후이므로 약간 지연 후 스냅샷
-        setTimeout(() => this._createInitialSave(), 150);
+        this._markDirty();
       }
     },
 
@@ -1552,6 +1608,13 @@
 
       // 3) 백그라운드 업로드 (await 하지 않음 → 화면 블로킹 없음)
       this._uploadPinImageBg(pin, file, imgName, docs);
+      // [오프라인 작업지시서 ❻] 즉시등록(instant) 핀도 오프라인이면 OpLog 에 기록 →
+      //   재연결 시 ops 엔드포인트로 멱등 replay (기존 instant 경로는 OpLog 누락이었음).
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
+        OpLog.recordCurrent("pin", "upsert", pin.id, pin)
+          .then(() => { try { return persistLocalDeployment(); } catch (e) {} })
+          .catch(() => {});
+      }
       this._autoSave && this._autoSave();
     },
 
@@ -1571,8 +1634,7 @@
         }
         if (!uploaded) {
           const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
-          pin.pendingOpId = opId;
-          Cloud._cache["op:" + opId] = dataURL;
+          if (opId) { pin.pendingOpId = opId; Cloud._cache["op:" + opId] = dataURL; } // null=저장실패(토스트 안내됨)
         }
         // 첨부 문서(있으면)도 백그라운드 처리
         if (docs && docs.length) {
@@ -1585,7 +1647,7 @@
               if (navigator.onLine) { try { docId = await Cloud.uploadDoc(d.name, durl); docOk = true; } catch (e) {} }
               const att = { id: d.tempId, name: d.name, size: d.size, type: d.kind && d.kind.type };
               if (docOk) att.docId = docId;
-              else { const opId = await SyncQueue.enqueue({ kind: "doc", name: d.name, image_data: durl }); att.pendingOpId = opId; att.pendingSync = true; Cloud._cache["op:" + opId] = durl; }
+              else { const opId = await SyncQueue.enqueue({ kind: "doc", name: d.name, image_data: durl }); if (opId) { att.pendingOpId = opId; att.pendingSync = true; Cloud._cache["op:" + opId] = durl; } }
               pin.attachments.push(att);
             } catch (e) {}
           }
@@ -1686,9 +1748,11 @@
             const opId = await SyncQueue.enqueue({
               kind: "image", name: imgName, image_data: dataURL, width, height
             });
-            pin.pendingOpId = opId;     // 동기화 완료 시 imageId 로 치환
-            pin.pendingSync = true;     // 미동기화 표시
-            Cloud._cache["op:" + opId] = dataURL; // 미동기화 미리보기 캐시
+            if (opId) {                   // null=저장실패(공간부족, 토스트 안내됨)
+              pin.pendingOpId = opId;     // 동기화 완료 시 imageId 로 치환
+              pin.pendingSync = true;     // 미동기화 표시
+              Cloud._cache["op:" + opId] = dataURL; // 미동기화 미리보기 캐시
+            } else { status.textContent = "⚠️ 저장공간 부족 — 사진을 임시저장하지 못했습니다"; }
           }
         } else if (url) {
           // URL 직접 입력 (이미지 또는 영상 자동 판별)
@@ -1716,9 +1780,11 @@
             else {
               // 오프라인 큐잉
               const opId = await SyncQueue.enqueue({ kind: "doc", name: d.name, image_data: dataURL });
-              att.pendingOpId = opId; att.pendingSync = true;
-              Cloud._cache["op:" + opId] = dataURL;
-              pin.pendingSync = true;
+              if (opId) {                 // null=저장실패(공간부족, 토스트 안내됨)
+                att.pendingOpId = opId; att.pendingSync = true;
+                Cloud._cache["op:" + opId] = dataURL;
+                pin.pendingSync = true;
+              }
             }
             pin.attachments.push(att);
           }
@@ -1810,7 +1876,11 @@
           delete pin.pendingSync; changed = true;
         }
       });
-      if (changed) { try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {} }
+      if (changed) {
+        try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
+        // [버그수정] imageId/docId 스왑을 서버·로컬에 영속화 — 안 하면 탭 닫을 때 서버엔 죽은 pendingOpId만 남아 사진 영구손실
+        try { this._autoSave && this._autoSave(); } catch (e) {}
+      }
       this._updateSyncBadge();
     },
 
@@ -1828,7 +1898,8 @@
         } else if (n > 0) {
           badge.classList.remove("hidden", "online", "offline");
           badge.classList.add("pending");
-          if (txt) txt.textContent = (online ? "동기화 대기 " : "오프라인 저장 ") + n;
+          // [마스터: 수동 반영] 온라인+대기 → "지금 올리기" 버튼임을 명확히(클릭 시 syncNow)
+          if (txt) txt.textContent = (online ? "↑ 지금 올리기 " : "오프라인 저장 ") + n;
         } else {
           // 온라인 + 대기 0 → 잠시 표시 후 숨김
           badge.classList.remove("offline", "pending");
@@ -1837,6 +1908,85 @@
           // 디자이너 모드에서만 굳이 항상 표시할 필요는 없으나, 일관성 위해 유지
         }
       });
+    },
+
+    /** [마스터: 수동 반영] 지금 즉시 "전체" 동기화 — op 큐(SyncQueue.flush) + 도면 draft
+     *  (_flushDirtyDrafts) + OpLog(_flushOpLogs)까지 한 번에 서버 반영. 사용자가 직접 누름. */
+    async syncNow() {
+      if (this._syncingNow) return;
+      if (!navigator.onLine) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📴 오프라인입니다 — 인터넷 연결 후 다시 눌러주세요. (작업은 안전하게 보관 중)");
+        return;
+      }
+      this._syncingNow = true;
+      const badge = UI.$("sync-badge"), txt = UI.$("sync-text");
+      if (badge) badge.classList.add("syncing");
+      if (txt) txt.textContent = "올리는 중…";
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("☁️ 업로드 중…");
+      let uploaded = 0;
+      try {
+        const r = await SyncQueue.flush();
+        if (r && r.map) this._onSyncDone(r);
+        if (r && typeof r.uploaded === "number") uploaded += r.uploaded;
+        if (this._flushDirtyDrafts) { try { await this._flushDirtyDrafts(); } catch (e) {} }
+        if (this._flushOpLogs) { try { await this._flushOpLogs(); } catch (e) {} }
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 업로드 완료 — 대기 작업 " + uploaded + "건 서버 반영");
+      } catch (e) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("⚠️ 업로드 일부 실패 — 잠시 후 다시 시도하세요. (작업은 보관됨)");
+      } finally {
+        this._syncingNow = false;
+        if (badge) badge.classList.remove("syncing");
+        this._updateSyncBadge();
+      }
+    },
+
+    /* ── [마스터: 구면 안 마커] 360 사진 속 결함/장비 지점 핀 ── */
+    setSpotAddMode(on) {
+      this._spotAdd = (on == null) ? !this._spotAdd : !!on;
+      if (typeof PanoViewer !== "undefined" && PanoViewer.setSpotAddMode) PanoViewer.setSpotAddMode(this._spotAdd);
+      const btn = UI.$("btn-pano-spot"); if (btn) btn.classList.toggle("on", this._spotAdd);
+      if (this._spotAdd && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📍 360 안에서 표시할 지점을 탭하세요 (결함·장비)");
+      return this._spotAdd;
+    },
+    _onPanoTap(x, y) {
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      if (!pin || !PanoViewer.open) return;
+      if (this._spotAdd) {
+        const ll = PanoViewer.screenToLonLat(x, y); if (!ll) return;
+        this._addSpotAt(pin, ll.lon, ll.lat);
+      } else {
+        const id = PanoViewer.hitSpotAt(x, y);
+        if (id) this._openSpot(pin, id);
+      }
+    },
+    async _addSpotAt(pin, lon, lat) {
+      if (!Array.isArray(pin.spots)) pin.spots = [];
+      let label = "";
+      if (typeof Prompt !== "undefined" && Prompt.ask) {
+        const r = await Prompt.ask({ title: "구면 마커 추가", sub: "이 지점에 표시할 내용 (예: 균열·밸브·재작업)", placeholder: "예: 용접부 균열" });
+        if (r == null) return;   // 취소
+        label = String((r && r.value) || "").trim();
+      }
+      const spot = { id: "sp-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), lon, lat, label, note: "", kind: "defect", ts: Date.now() };
+      pin.spots.push(spot);
+      PanoViewer.renderSpots(pin.spots);
+      this._saveSpots(pin);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📍 마커 추가 — " + (label || "무제"));
+    },
+    _openSpot(pin, id) {
+      const s = (pin.spots || []).find((x) => x.id === id); if (!s) return;
+      const idx = (pin.spots || []).indexOf(s) + 1;
+      const del = window.confirm("📍 마커 #" + idx + (s.label ? (" — " + s.label) : "") + "\n\n[확인] = 삭제 / [취소] = 닫기");
+      if (del) {
+        pin.spots = (pin.spots || []).filter((x) => x.id !== id);
+        PanoViewer.renderSpots(pin.spots);
+        this._saveSpots(pin);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 삭제됨");
+      }
+    },
+    _saveSpots(pin) {
+      try { if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {}
+      try { this._autoSave && this._autoSave(); } catch (e) {}
     },
 
     setActivePin(id) {
@@ -1853,7 +2003,8 @@
         State.pdfPage = targetPage;
         if (State.mode === "viewer" && State.viewerPages) {
           const imgEl = UI.$("map-image");
-          await new Promise(res => { imgEl.onload = res; imgEl.src = State.viewerPages[targetPage - 1]; });
+          // [버그수정 BUG5] onerror도 resolve — 이미지 로드 실패 시 Promise 미해결로 focusPin 영구 행 방지
+          await new Promise(res => { imgEl.onload = res; imgEl.onerror = res; imgEl.src = Auth.r2(State.viewerPages[targetPage - 1]); });
           UI.updatePdfPagination();
           UI.renderPinsOnMap();
         } else if (State.pdfDoc) {
@@ -2013,6 +2164,10 @@
       // 현재 핀 기록 + 레이더/네비게이션 갱신 (3DVista radar · 핀 이동 핫스팟)
       State.activePin = pin.id;
       PanoViewer._currentPin = pin;
+      // [구면 마커] 새 360 열 때 추가모드는 항상 꺼진 상태(보기 모드)로 시작
+      this._spotAdd = false;
+      if (PanoViewer.setSpotAddMode) PanoViewer.setSpotAddMode(false);
+      const _sb = UI.$("btn-pano-spot"); if (_sb) _sb.classList.remove("on");
       Radar.update(pin);
       PanoNav.update(pin);
       // FLS 포인트 클라우드가 연결된 핀이면 3D 뷰어를 360과 나란히 표시
@@ -2024,6 +2179,20 @@
       }
       if (typeof Notes !== "undefined") Notes.setPin(pin);  // 이슈/노트 패널 핀 연결
       if (typeof TimeLapse !== "undefined") TimeLapse.setPin(pin);  // 타임랩스 시점 바
+
+      // [마스터 요청] 사진 대신 PDF가 등록된 핀 → 내장 PDF 뷰어로 팝업 표시(파노 오버레이 대신).
+      if (!this.pinHasMedia(pin) && typeof PdfPopup !== "undefined") {
+        const pdfAtt = (pin.attachments || []).find((a) => /\.pdf$/i.test(a.name || "") || a.kind === "pdf" || (a.kind && a.kind.type === "pdf"));
+        if (pdfAtt) {
+          let src = null;
+          try {
+            if (pdfAtt.docId) src = await Cloud.fetchDoc(pdfAtt.docId);
+            else if (pdfAtt.pendingOpId && typeof Cloud !== "undefined") src = Cloud._cache["op:" + pdfAtt.pendingOpId] || null;
+          } catch (e) {}
+          if (src) { PdfPopup.open(src, pin.label); return; }
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("PDF를 불러올 수 없습니다(미동기화/오프라인일 수 있음)");
+        }
+      }
 
       // 노트/첨부만 있고 360° 미디어가 없는 정보 포인트 → 정보 패널만 표시
       if (!this.pinHasMedia(pin) && this.pinHasInfo(pin)) {
@@ -2299,20 +2468,19 @@
         }
         // 2) ★ 도면 교체 지원: 구역에 기존 도면이 있으면 그 배포본을 덮어써서 교체(고아 방지),
         //    없으면 새 배포본 생성. (구역당 도면 1개 유지 — 구역을 여러 개 만들면 도면 다수 등록)
+        // [마스터: 자동저장 OFF] 도면 업로드해도 서버 즉시저장 안 함 → 로컬 보존 + dirty.
+        //   실제 서버 생성/교체·구역연결은 '저장' 버튼(_saveNow)에서 수행.
         const isReplace = !!(deck && deck.deployment_id);
         if (isReplace) {
-          await this._replaceDeckDrawing(deck.deployment_id);      // 기존 배포본 PATCH = 교체
+          State.autoSaveDepId = deck.deployment_id;     // 저장 시 이 배포본을 PATCH(교체)
         } else {
           State.autoSaveDepId = null;
-          await this._createInitialSave();                         // 신규 생성
+          if (deck) this._pendingDeckLink = { deckId: deck.id, deck };  // 저장 시 생성+연결
         }
-        // 3) 생성/교체된 도면 배포본을 현재 구역에 연결 (즉시 + 실패 시 재시도 큐)
-        if (deck && State.autoSaveDepId) {
-          deck.deployment_id = State.autoSaveDepId;
-          Projects._renderDecks();  // 화면엔 즉시 '도면 등록됨'으로 반영(낙관적)
-          await this._linkDeckDeployment(deck.id, State.autoSaveDepId, deck);
-        }
-        Prompt.toast && Prompt.toast((isReplace ? "🔄 도면 교체 완료" : "📄 도면 등록 · 자동저장 완료") + (deck ? " (구역: " + deck.name + ")" : ""));
+        await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지)
+        this._dirtyPages = true; this._markDirty();
+        if (deck) { try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
+        Prompt.toast && Prompt.toast((isReplace ? "🔄 도면 교체됨" : "📄 도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요" + (deck ? " (구역: " + deck.name + ")" : ""));
       } catch (e) { /* 비치명적 */ }
     },
 
@@ -2386,7 +2554,7 @@
           dep = await OfflineLoad.deployment(deploymentId);
           if (!dep) { await this._restoreDraftLocal(); return; }
         } else {
-          const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId));
+          const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId), { headers: Auth.headers() });
           if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
           dep = await r.json();
         }
@@ -2408,11 +2576,15 @@
         try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
 
         const imgEl = UI.$("map-image");
-        imgEl.onload = () => {
+        // ponytail: fired flag prevents double-fire when image is already browser-cached
+        let _ld0 = false;
+        const _r0 = () => {
+          if (_ld0) return; _ld0 = true;
           this._showMapViewport();
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
+        imgEl.onload = _r0;
         // ★[오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
         //   로컬 draft(원본 dataURL)로 폴백하여 도면을 끊김없이 표시.
         imgEl.onerror = () => {
@@ -2420,8 +2592,9 @@
             this._restoreDraftLocal();
           }
         };
-        imgEl.src = pages[0];
+        imgEl.src = Auth.r2(pages[0]);
         imgEl.classList.remove("hidden");
+        if (imgEl.complete && imgEl.naturalWidth) _r0(); // 캐시 히트 시 onload 미발화 대응
 
         State.autoSaveDepId = deploymentId;       // 이후 자동저장은 이 배포본 갱신
         State.currentDeploymentId = deploymentId;
@@ -2450,13 +2623,17 @@
         UI.$("pdf-canvas").classList.add("hidden");
 
         const imgEl = UI.$("map-image");
-        imgEl.onload = () => {
+        let _ld1 = false;
+        const _r1 = () => {
+          if (_ld1) return; _ld1 = true;
           this._showMapViewport();
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
-        imgEl.src = d.pages[0];
+        imgEl.onload = _r1;
+        imgEl.src = Auth.r2(d.pages[0]);
         imgEl.classList.remove("hidden");
+        if (imgEl.complete && imgEl.naturalWidth) _r1();
         if (d.dirty) {
           this._setSaveIndicator(navigator.onLine ? "saving" : "offline");
           if (navigator.onLine) setTimeout(() => this._flushDirtyDrafts(), 400);
@@ -2490,7 +2667,7 @@
             //   서버 핀/구역과 오프라인 작업분을 병합하여 양쪽 모두 보존.
             let baseVer = 0, srvPins = null, srvZones = null;
             try {
-              const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId));
+              const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
               if (cur.ok) {
                 const cj = await cur.json();
                 baseVer = (cj.version != null ? Number(cj.version) : 0);
@@ -2626,34 +2803,80 @@
       } catch (e) {}
     },
 
-    /** 핀/영역 변경 시 디바운스 자동 저장 (도면 스냅샷은 보통 변경 안 되므로 생략) */
+    /** [마스터: 자동저장 OFF] 핀/영역/도면 변경 시 — 서버 즉시저장 대신
+     *  로컬 draft 로 즉시 보존(소실 방지) + 'dirty' 표시 → 실제 서버 반영은 '저장' 버튼(_saveNow). */
     _autoSave(opts) {
       if (State.mode !== "designer") return;
       opts = opts || {};
-      clearTimeout(this._autoSaveTimer);
-      this._autoSaveTimer = setTimeout(async () => {
-        if (this.autoSaving) { this._autoSave(opts); return; } // 진행 중이면 잠시 후 재시도
-        // 배포본이 아직 없으면 먼저 생성
-        if (!State.autoSaveDepId) { await this._createInitialSave(); if (!State.autoSaveDepId) return; }
-        this.autoSaving = true;
-        try {
-          this._setSaveIndicator("saving");
-          const includePages = !!opts.withPages;
-          const pages = includePages ? await this._snapshotPages() : null;
-          // ★ 핀/구역 변경분도 항상 로컬에 먼저 보관(소실 방지)
+      if (opts.withPages) this._dirtyPages = true;        // 도면 페이지도 다음 저장에 포함
+      // 로컬 우선 보관(새로고침/오프라인에도 작업 보존) — 비차단
+      this._saveDraftLocal(opts.withPages ? null : null).catch(() => {});
+      this._markDirty();
+    },
+
+    /** ★ 실제 서버 저장(수동 '저장' 버튼). 배포본 없으면 생성+구역연결, 있으면 PATCH. */
+    async _saveNow(opts) {
+      if (State.mode !== "designer") return;
+      opts = opts || {};
+      if (this.autoSaving) return;
+      this.autoSaving = true;
+      try {
+        this._setSaveIndicator("saving");
+        if (!State.autoSaveDepId) {
+          // 신규: _createInitialSave 가 도면(R2 업로드)+핀 전체를 저장
+          await this._createInitialSave();
+          if (!State.autoSaveDepId) { this._setSaveIndicator(navigator.onLine ? "error" : "offline"); return; }
+          // 도면 업로드로 대기 중이던 구역 연결 마무리
+          if (this._pendingDeckLink) {
+            const p = this._pendingDeckLink; this._pendingDeckLink = null;
+            if (p.deck) { p.deck.deployment_id = State.autoSaveDepId; try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
+            await this._linkDeckDeployment(p.deckId, State.autoSaveDepId, p.deck);
+          }
+        } else {
+          // 기존: PATCH. 도면이 실제로 변경됐을 때만 재스냅샷·R2 재업로드.
+          // 그 외엔 이미 저장된 pages(R2 URL)를 그대로 전달 → 불필요한 재업로드·스냅샷 실패 방지.
+          let pages = null;
+          if (this._dirtyPages) {
+            pages = await this._snapshotPages();
+            if (pages && pages.length) pages = await this._uploadPagesToR2(pages);
+          } else if (State.viewerPages && State.viewerPages.length) {
+            pages = State.viewerPages.filter(p => typeof p === "string" && p.indexOf("blob:") !== 0);
+            if (!pages.length) pages = null;
+          }
           await this._saveDraftLocal(pages);
-          // ★[멀티유저 충돌방지] 낙관적 잠금 PATCH — 409면 병합 후 재시도.
-          //   buildBody 는 (병합으로 State 가 바뀔 수 있으므로) 호출 시점 State 로 payload 재생성.
           const r = await this._patchDeployment(State.autoSaveDepId, () => this._buildSavePayload(pages));
           if (!r.ok) throw new Error("HTTP " + (r.status || "fail"));
           await this._markDraftClean(pages);
-          this._setSaveIndicator("saved");
-        } catch (e) {
-          this._setSaveIndicator(navigator.onLine ? "error" : "offline");
-        } finally {
-          this.autoSaving = false;
         }
-      }, opts.now ? 0 : 700);
+        this._dirty = false; this._dirtyPages = false; this._updateSaveBtn();
+        this._setSaveIndicator("saved");
+        // [마스터: 저장 확인이 안 됨] 명확한 완료 피드백(모바일 토스트)
+        try { Prompt.toast && Prompt.toast("✅ 저장 완료"); } catch (e) {}
+      } catch (e) {
+        this._setSaveIndicator(navigator.onLine ? "error" : "offline");
+        try { Prompt.toast && Prompt.toast(navigator.onLine ? "⚠️ 저장 실패 — 다시 시도해 주세요" : "📥 오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+      } finally {
+        this.autoSaving = false;
+      }
+    },
+
+    /** 미저장 변경 표시 — '저장' 버튼 활성화 */
+    _markDirty() {
+      if (State.mode !== "designer") return;
+      this._dirty = true;
+      this._updateSaveBtn();
+    },
+
+    _updateSaveBtn() {
+      const b = UI.$("btn-save");
+      if (!b) return;
+      if (this._dirty) {
+        b.classList.remove("hidden", "is-clean"); b.classList.add("is-dirty");
+        b.textContent = "💾 저장 *"; b.disabled = false;
+      } else {
+        b.classList.remove("is-dirty"); b.classList.add("is-clean");
+        b.textContent = "💾 저장됨"; b.disabled = true;
+      }
     },
 
     async _deployToViewer() {
@@ -2796,24 +3019,67 @@
     },
 
     /* ── 뷰어: 최신 배포본 자동 로드 ── */
-    async loadLatestDeployment() {
+    async loadLatestDeployment(projectForDesigner) {
       const statusEl = UI.$("viewer-load-status");
-      statusEl.textContent = "배포된 도면 불러오는 중...";
+      statusEl.textContent = "도면 불러오는 중...";
 
       try {
         // [B1] 링크에 배포 ID(?d=)가 있으면 그 배포본을 정확히 로드
         const params = new URLSearchParams(location.search);
-        const wantId = params.get("d");
+        let wantId = params.get("d");
         let latest = null;
 
-        if (wantId) {
-          const r1 = await fetch("/tables/deployments/" + encodeURIComponent(wantId));
-          if (r1.ok) latest = await r1.json();
+        // [N4] 설계자 프로젝트 재진입: 그 프로젝트 deck 의 배포본을 로드(작업 복원)
+        if (!wantId && projectForDesigner) {
+          try {
+            // [W8 오프라인] 끊긴 상태면 서버 대신 다운로드한 데크(IndexedDB)에서 deployment_id 해석.
+            //   [견고화] 온라인이어도 네트워크가 죽으면 6초 타임아웃 후 오프라인 데크로 폴백.
+            let decks = [];
+            if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
+              decks = (await OfflineLoad.decks(projectForDesigner.id)) || [];
+            } else {
+              try {
+                const ctrl = new AbortController();
+                const t = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
+                try {
+                  const dr = await fetch("/api/projects/" + encodeURIComponent(projectForDesigner.id) + "/decks", { headers: Auth.headers(), signal: ctrl.signal });
+                  const dj = await dr.json();
+                  decks = dj.data || [];
+                } finally { clearTimeout(t); }
+              } catch (e) {
+                if (typeof OfflineLoad !== "undefined") decks = (await OfflineLoad.decks(projectForDesigner.id)) || [];
+              }
+            }
+            if (typeof Projects !== "undefined") Projects.decks = decks;
+            const deck = decks.find(d => d.deployment_id);
+            if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck; }
+          } catch (e) {}
+          if (!wantId) {   // 새/빈 프로젝트 → 도면 없음(다른 프로젝트 도면을 잘못 띄우지 않음)
+            statusEl.textContent = "";
+            return;
+          }
         }
 
-        // 없거나 실패 시 최신 배포본으로 폴백
-        if (!latest) {
-          const res = await fetch("/tables/deployments?limit=100");
+        if (wantId) {
+          // [W8 오프라인] 배포본도 캐시에서 우선 복원. [견고화] 온라인이어도 실패/타임아웃 시 캐시 폴백.
+          if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
+            latest = await OfflineLoad.deployment(wantId);
+          } else {
+            try {
+              const ctrl = new AbortController();
+              const t = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
+              try {
+                const r1 = await fetch("/tables/deployments/" + encodeURIComponent(wantId), { headers: Auth.headers(), signal: ctrl.signal });
+                if (r1.ok) latest = await r1.json();
+              } finally { clearTimeout(t); }
+            } catch (e) {}
+            if (!latest && typeof OfflineLoad !== "undefined") latest = await OfflineLoad.deployment(wantId);
+          }
+        }
+
+        // 없거나 실패 시 최신 배포본으로 폴백 (뷰어만 — 설계자는 위에서 프로젝트 스코프)
+        if (!latest && !projectForDesigner) {
+          const res = await fetch("/tables/deployments?limit=100", { headers: Auth.headers() });
           if (!res.ok) throw new Error("HTTP " + res.status);
           const json = await res.json();
           const rows = (json.data || []).filter(r => (r.drawing_data || r.pages_data) && !r.deleted);
@@ -2838,6 +3104,8 @@
         if (!Array.isArray(pages) || pages.length === 0) pages = [latest.drawing_data];
 
         State.currentDeploymentId = latest.id || null;  // 노트/협업 연결
+        // [N4] 설계자 재진입: 이후 편집이 새 배포본을 만들지 않고 이 배포본을 갱신하도록
+        if (projectForDesigner && latest.id) { State.autoSaveDepId = latest.id; State.depVersion = (latest.version != null ? Number(latest.version) : 0); }
         State.fileType   = "image";
         State.viewerPages = pages;
         State.pdfPage    = 1;
@@ -2854,16 +3122,20 @@
         catch { State.annotations = []; }
 
         const imgEl = UI.$("map-image");
-        imgEl.onload = () => {
+        let _ld2 = false;
+        const _r2 = () => {
+          if (_ld2) return; _ld2 = true;
           this._showMapViewport();
           UI.renderPinList();
           UI.renderPinsOnMap();
-          if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }  // 영역 표시
-          if (typeof PdfAnno !== "undefined") PdfAnno.refresh();  // PDF 주석 복원
-          if (typeof Notes !== "undefined") Notes.loadSummary();  // 핀별 이슈 카운트
+          if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
+          if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
+          if (typeof Notes !== "undefined") Notes.loadSummary();
         };
-        imgEl.src = pages[0];
+        imgEl.onload = _r2;
+        imgEl.src = Auth.r2(pages[0]);
         imgEl.classList.remove("hidden");
+        if (imgEl.complete && imgEl.naturalWidth) _r2();
 
         // [C-LOOP1 결함2] 뷰어 첫 진입 어포던스 — 핀 클릭으로 360°가 열림을 명시
         if (State.pins.length > 0) {
