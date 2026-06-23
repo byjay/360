@@ -1,8 +1,9 @@
 # HANDOFF — 360° Location Viewer (SEASTAR)
 
 ## 마지막 커밋
-- HEAD `192dcbf` feat(pin): 핀(호스팟)별 아이콘 선택 + 디자인 스킬 아이콘 10종
-- `5272a7d` feat(tenant): PART0 Tenant Architecture 0013_tenancy.sql / `60a4bf9` fix(pano) / `cc0d11e` fix(viewer/icon)
+- HEAD `1e0dead` feat(ui): 모바일 아이콘/버튼 개선 + 누적 기능 커밋 (2026-06-24)
+- `a1463c2` fix(load): 저장된 구역·도면 로딩 3건 + 설치 버튼 터치 수정
+- `192dcbf` feat(pin): 핀(호스팟)별 아이콘 선택 + 디자인 스킬 아이콘 10종
 
 ## 이번 턴 ⑯: 전수 병렬 버그헌트(4에이전트) + 수술수정 3건 (2026-06-21)
 > 마스터: "한 파일 하나하나 다 검증하고 버그 찾아." 4에이전트(서버+마이그/20_App/클라모듈/HTML·CSS) 전수 헌트. (4번째 레이트리밋.)
