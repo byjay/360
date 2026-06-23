@@ -30,7 +30,8 @@
     _loadImg(src) {
       return new Promise((res, rej) => {
         const im = new Image(); im.crossOrigin = "anonymous";
-        im.onload = () => res(im); im.onerror = rej; im.src = src;
+        im.onload = () => res(im); im.onerror = rej;
+        im.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src;
       });
     },
 

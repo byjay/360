@@ -75,7 +75,7 @@
         img.onload = () => {
           el.classList.add("brand-logo--img");
         };
-        img.src = url;
+        img.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(url) : url;
         el.appendChild(img);
       } else {
         el.classList.add("brand-logo--text");

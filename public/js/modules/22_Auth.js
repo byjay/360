@@ -10,8 +10,16 @@
       const id = (typeof window !== "undefined" && window.WM_GOOGLE_CLIENT_ID) || "";
       return id && id !== "GOOGLE_CLIENT_ID" ? id : "";
     },
-    get isDesigner() { return this.role === "super" || this.role === "designer"; },
+    get isDesigner() { return this.role === "super" || this.role === "admin" || this.role === "designer"; },
     get isSuper() { return this.role === "super"; },
+    // [역할모델] 관리자 = 슈퍼관리자(마스터) 또는 일반관리자. 관리자 패널/모드 접근 기준. 디자이너는 관리자 아님.
+    get isAdmin() { return this.role === "super" || this.role === "admin"; },
+    /** 4티어 역할 한글 라벨 */
+    _roleLabel() {
+      return this.role === "super" ? "슈퍼관리자"
+           : this.role === "admin" ? "관리자"
+           : this.role === "designer" ? "디자이너" : "뷰어";
+    },
 
     init() {
       const $ = (id) => document.getElementById(id);
@@ -28,6 +36,11 @@
       // 허브 인증바
       $("hub-btn-demo-designer") && $("hub-btn-demo-designer").addEventListener("click", () => this.demoLogin("designer"));
       $("hub-btn-demo-viewer")   && $("hub-btn-demo-viewer").addEventListener("click", () => this.demoLogin("viewer"));
+      // [마스터 2026-06-22] 데모 진입 중 본인 Google 계정 로그인 상시 버튼(허브/홈)
+      ["hub-btn-google-login", "btn-google-login"].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener("click", async () => { if (this.firebaseEnabled) await this._doFirebaseLogin(); else this._openGate(); });
+      });
       // 로그인 게이트 내 데모(설계자)
       $("login-gate-demo") && $("login-gate-demo").addEventListener("click", () => this.demoLogin("designer"));
       // 구글 로그인 폴백 버튼
@@ -62,8 +75,32 @@
       } catch (e) {}
 
       this._initGsi();
+      // 서버에 설정된 Google Client ID(CF 시크릿)를 우선 적용 — 빌드파일 수정 없이 운영 주입
+      this._loadServerConfig();
       // 복원된 토큰으로 권한 재확인
       if (this.idToken) this.refresh();
+      // [마스터 2026-06-22] 🔒 로그인 필수 + 첫 화면 = 로그인창. 미인증이면 "즉시"(지연 0)
+      //   로그인 게이트(닫기 없음)를 띄운다 → 허브가 먼저 깜빡이지 않음. (데모 자동진입 제거)
+      else if (!this._hasLocalToken()) {
+        this._openGate();
+      }
+    },
+
+    /** 서버(/api/auth/config)에서 Google Client ID 를 받아 GIS 재초기화.
+     *  · CF 시크릿 GOOGLE_CLIENT_ID 가 있으면 그 값을 사용(인라인보다 우선)
+     *  · 없으면 index.html 의 인라인 WM_GOOGLE_CLIENT_ID 유지 */
+    async _loadServerConfig() {
+      try {
+        const r = await fetch("/api/auth/config");
+        if (!r.ok) return;
+        const cfg = await r.json();
+        const cid = cfg && cfg.google_client_id;
+        if (cid && cid !== window.WM_GOOGLE_CLIENT_ID) {
+          window.WM_GOOGLE_CLIENT_ID = cid;
+          this._gsiInited = false;   // 새 ID 로 재초기화
+          this._initGsi();
+        }
+      } catch (e) { /* 오프라인이면 인라인 값으로 진행 */ }
     },
 
     /** Firebase 팝업 로그인 실행 + 사용자 피드백(토스트/게이트 에러) */
@@ -72,7 +109,7 @@
         Prompt && Prompt.toast && Prompt.toast("🔑 Google 로그인 창을 여는 중…", 1600);
         await this.loginWithFirebase();
         const who = (this.user && (this.user.name || this.user.email)) || "";
-        Prompt && Prompt.toast && Prompt.toast("✅ 로그인 완료 — " + who + " (" + (this.role === "super" ? "슈퍼관리자" : this.role === "designer" ? "디자이너" : "뷰어") + ")", 3000);
+        Prompt && Prompt.toast && Prompt.toast("✅ 로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
       } catch (e) {
         const msg = (e && e.message) ? e.message : String(e);
         Prompt && Prompt.toast && Prompt.toast("로그인 실패: " + msg + " — Firebase 콘솔에서 Google 공급업체와 승인된 도메인을 확인하세요.", 4200);
@@ -187,6 +224,14 @@
       return h;
     },
 
+    /** R2 객체 URL(/api/r2/object/...)에 인증 토큰을 쿼리로 부착 — <img>/텍스처는 헤더를 못 보냄.
+     *  R2 경로가 아니면(blob:/dataURL/외부/이미 부착) 그대로 통과. */
+    r2(u) {
+      if (typeof u !== "string" || u.indexOf("/api/r2/object/") !== 0 || !this.idToken) return u;
+      if (/[?&]t=/.test(u)) return u;
+      return u + (u.indexOf("?") < 0 ? "?" : "&") + "t=" + encodeURIComponent(this.idToken);
+    },
+
     /** 서버에 권한 확인 → UI 갱신
      *  ★ 오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
      *    네트워크 실패(오프라인)이면서 토큰이 있으면 캐시된 권한을 복원.
@@ -278,12 +323,20 @@
         $("user-name") && ($("user-name").textContent = this.user.name || this.user.email);
         const roleEl = $("user-role");
         if (roleEl) {
-          roleEl.textContent = this.role === "super" ? "슈퍼관리자" : this.role === "designer" ? "디자이너" : "뷰어";
+          roleEl.textContent = this._roleLabel();
           roleEl.className = "user-role role-" + this.role;
         }
         const av = $("user-avatar");
         if (av) { if (this.user.picture) { av.src = this.user.picture; av.style.display = ""; } else av.style.display = "none"; }
-        $("btn-manage-designers") && $("btn-manage-designers").classList.toggle("hidden", !this.isSuper);
+        $("btn-manage-designers") && $("btn-manage-designers").classList.toggle("hidden", !this.isAdmin);
+        // [마스터 2026-06-22] 데모 사용자 여부
+        const _isDemo = !!(this.user && /^demo\./.test(this.user.email || ""));
+        // 데모일 때만 'Google 로그인' 버튼 노출(실계정 전환 유도)
+        const _gl = $("btn-google-login");
+        if (_gl) _gl.classList.toggle("hidden", !_isDemo);
+        // [마스터 요청] 데모 진입 시 '설계자/디자이너' 사용자 배지 제거(실제 로그인 시엔 본인 이름 표시)
+        const _badge = signedIn ? signedIn.querySelector(".user-badge") : null;
+        if (_badge) _badge.classList.toggle("hidden", _isDemo);
       } else {
         signedIn && signedIn.classList.add("hidden");
         signedOut && signedOut.classList.remove("hidden");
@@ -352,7 +405,7 @@
         okEl.classList.remove("hidden");
         submitLabel.textContent = "신청 내용 수정";
       } else if (submitLabel) {
-        submitLabel.textContent = "Submit Request";
+        submitLabel.textContent = "사용 신청";
       }
       gate.classList.remove("hidden");
       requestAnimationFrame(() => gate.classList.add("on"));
@@ -441,7 +494,7 @@
       const b = document.createElement("div");
       b.id = "demo-mode-badge";
       b.className = "demo-mode-badge";
-      b.innerHTML = '<span class="demo-dot"></span>데모 모드 — 구글 로그인 없이 체험 중';
+      b.innerHTML = '<span class="demo-dot"></span>설계자 모드 — 도면·핀·프로젝트 편집 중';
       document.body.appendChild(b);
     },
 

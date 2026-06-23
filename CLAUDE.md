@@ -41,3 +41,7 @@
 
 ## 진행 이력
 → `.claude/HANDOFF.md` 참조
+
+
+---
+> 🎀 **Ponytail full 상시 적용** (전역 `~/.claude/CLAUDE.md` 3장 상속, 2026-06-23 박음). 매 태스크: YAGNI → 기존 재사용 → stdlib → 네이티브 → 설치된 의존성 → 한 줄 → 최소 코드. 검증·보안·접근성·근본원인 수정은 절대 양보 금지. 명령: `/ponytail [lite|full|ultra]` `/ponytail-review` `/ponytail-audit`.

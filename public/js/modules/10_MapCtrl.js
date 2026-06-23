@@ -8,6 +8,9 @@
         transform.style.willChange = "transform";
         transform.style.transformOrigin = "0 0";
         transform.style.backfaceVisibility = "hidden";
+        // [마스터 요청] ISO 3D에서 핀이 "서 있게" 보이려면 부모가 3D 컨텍스트를 보존해야 함.
+        //   (없으면 rotateX(54)가 자식을 평면으로 눕혀 핀 역회전이 무효 → 핀이 안 섬)
+        transform.style.transformStyle = "preserve-3d";
       } catch (e) {}
     },
 
@@ -41,6 +44,12 @@
      *  버튼을 누를 때마다 한 단계씩 코너 시점을 회전한다. */
     ISO_LABELS: ["북동", "남동", "남서", "북서"],
     toggleIso() {
+      // [마스터 버그] 배치 모드 중엔 ISO(원근)에서 클릭좌표가 틀어지므로 ISO 진입 금지 → 배치 먼저 종료
+      if (!State.isoView && State.placing && typeof App !== "undefined" && App._togglePlacing) {
+        App._togglePlacing();  // 배치 종료(평면 유지)
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("핀 배치를 끝낸 뒤 ISO 보기를 켜주세요 (정확한 배치 위해)");
+        return;
+      }
       if (!State.isoView) {
         // 평면 → ISO 진입(북동부터)
         State.isoView = true; State.isoDir = 0;
@@ -98,27 +107,40 @@
      *  · ISO 뷰   : 도면 rotateX(54)·rotateZ(θ) 의 역(rotateZ(-θ)·rotateX(-54))을
      *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
      *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
+    /** [마스터] 핀이 줌에 따라 깨지거나(고배율 업스케일) 너무 작아지는 것 방지:
+     *  부모 #map-transform 의 scale(zoom) 을 핀마다 역스케일(1/zoom) 로 상쇄 →
+     *  핀은 항상 "화면상 일정 크기"로 자연 해상도 렌더(업스케일 없음 → 또렷).
+     *  줌아웃(zoom<1) 일 땐 살짝 확대해 항상 잘 보이게. ISO 에선 +세움/가독 확대. */
+    pinScreenScale() {
+      const zoom = State.zoom || 1;
+      let f = (zoom < 1) ? (1 + (1 - zoom) * 0.65) : 1;  // 화면상 핀 크기 계수
+      f = Math.max(0.85, Math.min(1.7, f));
+      return f / zoom;                                    // 부모 zoom 상쇄(+줌아웃 확대)
+    },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
       if (!layer) return;
+      const inv = this.pinScreenScale();
       const ISO_Z = [-32, 58, 148, 238];
       if (State.isoView) {
         const z = ISO_Z[State.isoDir % 4];
-        // CSS .pin-marker 의 기본 translate(-50%, calc(-100% + 2px)) 를 유지하면서
-        // 그 앞에 역회전을 합성(바늘 끝 기준). 도면이 rotateX(54)→rotateZ(z)로
-        // 누우므로 핀은 rotateZ(-z)→rotateX(-54)로 되돌려 화면 수직 복원.
+        // 도면이 rotateX(54)→rotateZ(z)로 누우므로 핀은 rotateZ(-z)→rotateX(-54)로 화면 수직 복원.
+        // + 역스케일(inv)로 화면상 일정 크기, ISO 가독 위해 1.25 추가.
         const billboard =
-          `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-54deg)`;
+          `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-54deg) scale(${(inv * 1.25).toFixed(3)})`;
         layer.style.transformStyle = "preserve-3d";
         for (const m of layer.children) {
-          m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) 기준 회전
+          m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) 기준
           m.style.transform = billboard;
+          m.style.zIndex = "20";                   // 기울인 도면 위로 핀을 띄움
         }
       } else {
-        // 평면 복귀: inline 보정 제거 → CSS 기본 transform 으로 복원
+        // 평면: 역스케일만(화면상 일정 크기 → 또렷 + 줌아웃 시 약간 확대)
+        const flat = `translate(-50%, calc(-100% + 2px)) scale(${inv.toFixed(3)})`;
         for (const m of layer.children) {
-          m.style.transform = "";
-          m.style.transformOrigin = "";
+          m.style.transformOrigin = "50% 100%";
+          m.style.transform = flat;
+          m.style.zIndex = "";
         }
       }
     },

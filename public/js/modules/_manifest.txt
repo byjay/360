@@ -25,6 +25,7 @@
 23b_PinIcons.js
 24_Settings.js
 25_Designers.js
+25c_UserMgmt.js
 26_PdfAnno.js
 27_PinActionPop.js
 28_AdminPanels.js
@@ -32,4 +33,6 @@
 30_Prompt.js
 31_Projects.js
 32_Offline.js
+33_ThetaIntake.js
+34_PdfPopup.js
 99_footer.js

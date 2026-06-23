@@ -27,7 +27,7 @@
       const dep = State.currentDeploymentId;
       if (!dep) { State.noteSummary = {}; return; }
       try {
-        const r = await fetch("/api/notes/summary?deployment_id=" + encodeURIComponent(dep));
+        const r = await fetch("/api/notes/summary?deployment_id=" + encodeURIComponent(dep), { headers: Auth.headers() });
         if (!r.ok) return;
         const j = await r.json();
         State.noteSummary = j.data || {};
@@ -65,7 +65,8 @@
       if (lbl) lbl.textContent = pin ? (pin.label || "이름 없는 위치") : "—";
       this._syncHeaderCount();
       // 패널이 열려 있으면 즉시 다시 로드
-      if (!document.getElementById("pano-notes-panel").classList.contains("hidden")) this.loadForPin();
+      var _np = document.getElementById("pano-notes-panel");
+      if (_np && !_np.classList.contains("hidden")) this.loadForPin();
     },
 
     toggle() {
@@ -98,7 +99,7 @@
       if (!dep || !pin) { if (listEl) listEl.innerHTML = ""; return; }
       if (listEl) listEl.innerHTML = '<div class="pnp-loading">불러오는 중…</div>';
       try {
-        const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(dep) + "&pin_id=" + encodeURIComponent(pin.id));
+        const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(dep) + "&pin_id=" + encodeURIComponent(pin.id), { headers: Auth.headers() });
         const j = await r.json();
         this._list = j.data || [];
       } catch (e) { this._list = []; }

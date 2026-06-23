@@ -47,9 +47,11 @@
       const empty = this.$("pin-empty");
       const badge = this.$("pin-count-badge");
       this._updatePinListCount(State.pins ? State.pins.length : 0);
+      // [버그수정] 도면 미로드 화면(허브 등)에서 Notes.loadSummary→renderPinList 호출 시 요소 부재 → 가드
+      if (!list) return;
       list.innerHTML = "";
 
-      if (State.pins.length === 0) {
+      if (!State.pins || State.pins.length === 0) {
         empty.classList.remove("hidden");
         badge.classList.add("hidden");
         this.hide("section-export");
@@ -198,40 +200,38 @@
           <div class="pin-pin">
             <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
               <defs>
-                <radialGradient id="pgbody${pageIdx}" cx="38%" cy="32%" r="74%">
+                <radialGradient id="pgbody${pageIdx}" cx="38%" cy="30%" r="78%">
                   <stop offset="0%" stop-color="${headFill}"/>
                   <stop offset="100%" stop-color="${headFill2}"/>
                 </radialGradient>
-                <linearGradient id="pgneedle${pageIdx}" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="pgstem${pageIdx}" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stop-color="${headFill2}"/>
-                  <stop offset="55%" stop-color="${needleTip}"/>
-                  <stop offset="100%" stop-color="#1a1a1a"/>
+                  <stop offset="100%" stop-color="${needleTip}"/>
                 </linearGradient>
                 <filter id="pgshadow${pageIdx}" x="-60%" y="-20%" width="220%" height="180%">
-                  <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="rgba(0,0,0,.5)"/>
+                  <feDropShadow dx="0" dy="2.2" stdDeviation="1.7" flood-color="rgba(0,0,0,.5)"/>
                 </filter>
               </defs>
-              <!-- 길고 날카로운 바늘: 머리 하단(13.6/22.4)에서 한 점(18,62)으로 수렴 -->
-              <path d="M13.6 15 L18 62 L22.4 15 Z" fill="url(#pgneedle${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
-              <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 + 흰 테두리 2중 -->
-              <circle cx="18" cy="12" r="11.6" fill="none" stroke="#1a1a1a" stroke-width="3.4" opacity="0.55"/>
-              <!-- 둥근 머리 -->
-              <circle cx="18" cy="12" r="11" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.6"/>
-              <circle cx="18" cy="12" r="7.3" fill="#ffffff" opacity="0.98"/>
-              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill)) || `<text x="18" y="12.3" text-anchor="middle" dominant-baseline="central"
-                    font-family="'Segoe UI',sans-serif" font-size="9.8" font-weight="900"
+              <!-- ISO 접지 그림자(바닥 타원) → 360 뷰포인트가 도면 위에 '서 있는' 입체감 -->
+              <ellipse cx="18" cy="60.5" rx="6.2" ry="2.3" fill="#000" opacity="0.22"/>
+              <!-- 받침대 줄기: 머리에서 접지점(18,60)으로 수렴 -->
+              <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
+              <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"/>
+              <!-- 메달리온 머리 -->
+              <circle cx="18" cy="15" r="11.8" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.4"/>
+              <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
+              <circle cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central"
+                    font-family="'Segoe UI',sans-serif" font-size="13" font-weight="900"
                     fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
-              <ellipse cx="14.5" cy="8" rx="3.6" ry="2.3" fill="#ffffff" opacity="0.5"/>
+              <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
             ${issueDot}
-          </div>
-          <div class="pin-actions">
-            ${hasContent ? '<button class="pin-act pin-act-view" data-act="view" title="360° 보기"><i class="fa-solid fa-panorama"></i></button>' : ''}
-            <button class="pin-act pin-act-move" data-act="move" title="이동(드래그)"><i class="fa-solid fa-up-down-left-right"></i></button>
-            <button class="pin-act pin-act-edit" data-act="edit" title="수정"><i class="fa-solid fa-pen"></i></button>
-            <button class="pin-act pin-act-del" data-act="del" title="삭제"><i class="fa-solid fa-trash"></i></button>
           </div>`;
+          /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
+             수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */
         // ── 디자이너: 포인터 드래그로 핀 위치 이동 (click 과 구분: 이동 임계값) ──
         if (State.mode === "designer") {
           marker.classList.add("draggable");
@@ -298,7 +298,10 @@
             //  · 사진(콘텐츠) 있는 핀  → 곧바로 360° 뷰어(사진만) 열기
             //  · 사진 없는 핀          → 전용 작업 팝업(사진추가/수정/이동/삭제)으로 등록 유도
             //  수정/이동/삭제는 핀의 ✏️/↔/🗑 아이콘(액션바) 또는 빈 핀 팝업으로 분리 제공.
-            if (App.pinHasContent(pin)) {
+            if (State.editMode && typeof PinActionPop !== "undefined") {
+              // [마스터 요청] 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업
+              PinActionPop.open(pin.id);
+            } else if (App.pinHasContent(pin)) {
               App.openPano(pin);
             } else if (typeof PinActionPop !== "undefined") {
               PinActionPop.open(pin.id);

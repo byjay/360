@@ -1,5 +1,5 @@
   const PanoViewer = {
-    S: { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false },
+    S: { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 },
     renderer: null, scene: null, camera: null, mesh: null, texture: null,
     videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
 
@@ -32,7 +32,7 @@
 
     load(src, locationName) {
       const $ = id => document.getElementById(id);
-      this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false };
+      this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
 
       $("pano-location-name").textContent = "360° — " + locationName;
       $("pano-loading").classList.remove("hidden");
@@ -71,6 +71,10 @@
         $("pano-controls").classList.remove("hidden");
         this._resize();
         this._startLoop();
+        // [마스터: 자동 수평] GPano 메타데이터가 있으면 천정 기울기 자동 보정(없으면 무동작)
+        this._applyGPanoLevel(src);
+        // [마스터: 구면 마커] 이 핀에 저장된 360 안 마커 렌더
+        if (this._currentPin) this.renderSpots(this._currentPin.spots || []);
       };
       img.onerror = () => {
         const isExternal = /^https?:\/\//i.test(src) && !src.startsWith(location.origin);
@@ -84,13 +88,13 @@
             "설계자 모드에서 '그림 파일 선택'으로 직접 업로드하면 클라우드 저장되어 항상 표시됩니다.";
         }
       };
-      img.src = src;
+      img.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src;
     },
 
     /** Ricoh THETA 등 360° equirectangular .mp4 → VideoTexture (GPU) */
     loadVideo(src, locationName) {
       const $ = id => document.getElementById(id);
-      this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false };
+      this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
 
       $("pano-location-name").textContent = "360° ▶ " + locationName;
       $("pano-loading").classList.remove("hidden");
@@ -133,7 +137,7 @@
       }, { once: true });
       video.addEventListener("error", () => this._showError(src, "360° 영상을 불러올 수 없습니다 (코덱/CORS 확인)"));
 
-      video.src = src;
+      video.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src;
       video.load();
     },
 
@@ -156,7 +160,8 @@
 
     _resize() {
       if (!this.renderer) return;
-      const W = window.innerWidth, H = window.innerHeight;
+      let W = window.innerWidth, H = window.innerHeight;
+      if (!W || !H) { W = 1280; H = 720; }   // [견고화] 0크기(레이아웃 전) → aspect NaN/레이캐스트 깨짐 방지
       this.renderer.setSize(W, H, false);
       this.camera.aspect = W / H;
       this.camera.updateProjectionMatrix();
@@ -183,6 +188,9 @@
     _renderFrame() {
       if (!this.renderer) return;
       const S = this.S;
+      // [마스터: 360 회전 시 옆으로 비틀어짐] 이미지 천정(zenith)이 기울어진 파노라마를
+      //   수평 보정 — 구 메쉬를 카메라 전방축 기준 roll 회전(고정 월드 보정 → 모든 yaw에서 수평 유지).
+      if (this.mesh) this.mesh.rotation.x = THREE.MathUtils.degToRad(S.roll || 0);
       S.lat = Math.max(-85, Math.min(85, S.lat));
       const phi   = THREE.MathUtils.degToRad(90 - S.lat);
       const theta = THREE.MathUtils.degToRad(S.lon);
@@ -202,7 +210,35 @@
 
     /* ── 컨트롤 ── */
     setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); this._invalidate(); },
-    resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; this._invalidate(); },
+    resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; this.S.roll = 0; this._invalidate(); },
+    /** [마스터: 수평 보정] 천정 기울기 보정 — roll 을 deg 만큼 가감(한계 ±20°). */
+    adjustRoll(deg) { this.S.roll = Math.max(-20, Math.min(20, (this.S.roll || 0) + deg)); this._invalidate();
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("수평 보정 " + (this.S.roll > 0 ? "+" : "") + this.S.roll.toFixed(1) + "°"); },
+
+    /** [마스터: 360 자동 수평] THETA 등이 JPEG XMP(GPano:PoseRollDegrees)에 박는 천정 기울기를
+     *  읽어 자동으로 수평 보정. 메타데이터가 없으면 아무것도 하지 않음(안전). 수동 버튼으로 덮어쓸 수 있음. */
+    async _applyGPanoLevel(src) {
+      try {
+        let bytes;
+        if (typeof src === "string" && src.indexOf("data:") === 0) {
+          const b64 = src.split(",")[1] || ""; const bin = atob(b64); const n = bin.length;
+          bytes = new Uint8Array(n); for (let i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+        } else if (typeof src === "string") {
+          const r = await fetch(src); bytes = new Uint8Array(await r.arrayBuffer());
+        } else { return; }
+        const lim = Math.min(bytes.length, 300000); // XMP 는 보통 파일 앞부분
+        const text = new TextDecoder("latin1").decode(bytes.subarray(0, lim));
+        const m = text.match(/PoseRollDegrees\s*[=>]\s*["']?\s*(-?\d+(?:\.\d+)?)/);
+        if (m) {
+          const roll = parseFloat(m[1]);
+          if (isFinite(roll) && Math.abs(roll) > 0.05 && Math.abs(roll) <= 20) {
+            this.S.roll = -roll;   // 카메라 roll 의 역 → 수평 복원
+            this._invalidate();
+            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자동 수평 보정 적용 (" + roll.toFixed(1) + "°) — 하단 ↺/↻로 미세조정");
+          }
+        }
+      } catch (e) { /* 파싱 실패 시 무시(수동 보정 사용) */ }
+    },
     /** ISO 코너 뷰: 4개 모서리(꼭지점) 시점으로 전환. corner 0~3 = 좌상/우상/우하/좌하 느낌.
      *  부드러운 전환을 위해 목표각으로 애니메이션 보간. */
     setIsoView(corner) {
@@ -295,9 +331,10 @@
       this._gyroBase = null;
     },
 
-    onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; },
+    onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; this._downX = x; this._downY = y; this._moved = false; },
     onPointerMove(x, y) {
       if (!this.S.dragging) return;
+      if (Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) this._moved = true;
       const k = this.S.fov / 500; // FOV 비례 감도
       this.S.lon += (this.S.lx - x) * k;
       this.S.lat += (y - this.S.ly) * k;
@@ -305,11 +342,74 @@
       this._invalidate();
     },
     onPointerUp() { this.S.dragging = false; },
+    /** 마지막 포인터 동작이 '탭'(드래그 아님)이었나 */
+    wasTap() { return !this._moved; },
+
+    /* ══════════════════════════════════════════
+       [마스터: 구면 안 마커] 360 사진 속 특정 지점(결함/장비/이동)에 핀 — Three.js Sprite 레이어
+       · 핀의 spots[{id,lon,lat,label,note,kind}] 를 구면 방향에 빌보드 마커로 렌더.
+       · 화면 탭 → 레이캐스트로 (lon,lat) 산출(추가) 또는 마커 적중판정(열기).
+    ══════════════════════════════════════════ */
+    _ensureSpotGroup() {
+      if (!this._spotGroup && this.scene) { this._spotGroup = new THREE.Group(); this.scene.add(this._spotGroup); }
+      return this._spotGroup;
+    },
+    _spotPos(lon, lat, R) {
+      const phi = THREE.MathUtils.degToRad(90 - lat), theta = THREE.MathUtils.degToRad(lon);
+      return new THREE.Vector3(R * Math.sin(phi) * Math.cos(theta), R * Math.cos(phi), R * Math.sin(phi) * Math.sin(theta));
+    },
+    _spotTexture(spot, idx) {
+      const c = document.createElement("canvas"); c.width = c.height = 128;
+      const g = c.getContext("2d");
+      const col = spot.kind === "nav" ? "#3a97dd" : spot.kind === "equip" ? "#e0b14a" : "#e0503e"; // 이동/장비/결함
+      g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = .92; g.fill(); g.globalAlpha = 1;
+      g.lineWidth = 6; g.strokeStyle = "#fff"; g.stroke();
+      g.fillStyle = "#fff"; g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText(spot.kind === "nav" ? "➤" : String(idx + 1), 64, 70);
+      const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
+    },
+    renderSpots(spots) {
+      const grp = this._ensureSpotGroup(); if (!grp) return;
+      while (grp.children.length) { const ch = grp.children.pop(); if (ch.material) { if (ch.material.map) ch.material.map.dispose(); ch.material.dispose(); } }
+      this._spots = Array.isArray(spots) ? spots : [];
+      this._spots.forEach((s, i) => {
+        const mat = new THREE.SpriteMaterial({ map: this._spotTexture(s, i), depthTest: false, depthWrite: false, transparent: true });
+        const sp = new THREE.Sprite(mat);
+        sp.position.copy(this._spotPos(s.lon || 0, s.lat || 0, 470));
+        sp.scale.set(34, 34, 1);
+        sp.userData.spotId = s.id;
+        sp.renderOrder = 10;
+        grp.add(sp);
+      });
+      this._invalidate();
+    },
+    _ndc(clientX, clientY) {
+      const rect = this.canvas.getBoundingClientRect();
+      return new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    },
+    /** 화면 좌표 → 구면 방향(lon,lat) — 마커 추가용 */
+    screenToLonLat(clientX, clientY) {
+      if (!this.renderer || !this.camera) return null;
+      const rc = new THREE.Raycaster(); rc.setFromCamera(this._ndc(clientX, clientY), this.camera);
+      const d = rc.ray.direction.clone().normalize();
+      const lat = 90 - THREE.MathUtils.radToDeg(Math.acos(Math.max(-1, Math.min(1, d.y))));
+      const lon = THREE.MathUtils.radToDeg(Math.atan2(d.z, d.x));
+      return { lon, lat };
+    },
+    /** 화면 좌표에 마커가 있으면 그 spotId, 없으면 null */
+    hitSpotAt(clientX, clientY) {
+      if (!this._spotGroup || !this.camera || !this._spotGroup.children.length) return null;
+      const rc = new THREE.Raycaster(); rc.setFromCamera(this._ndc(clientX, clientY), this.camera);
+      const hits = rc.intersectObjects(this._spotGroup.children, false);
+      return hits.length ? hits[0].object.userData.spotId : null;
+    },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
 
     close() {
       this.open = false;
       this._currentPin = null;
+      try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
+      this._spotAddMode = false;
       cancelAnimationFrame(this.rafId);
       this._stopGyro();           // [마스터 요청] 자이로 리스너 정리(닫을 때 누수 방지)
       this._disposeVideo();

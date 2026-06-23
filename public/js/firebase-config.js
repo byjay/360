@@ -14,14 +14,17 @@
      실제 보안은 Firestore/Storage 보안 규칙으로 제어합니다 (아래 가이드 참고).
 ════════════════════════════════════════════════════════════ */
 
-/* ── 기본값(코드에 직접 박는 경우) ── */
+/* ── 기본값: SEASTAR 패밀리 공유 Firebase 프로젝트 'sedmsys' ──
+   (sedms_G/.env.local 출처. 웹 apiKey는 공개 식별자 — 비밀 아님.)
+   ⚠️ 신규 배포 도메인(scan.seastar.work)은 Firebase Console(sedmsys)
+      → Authentication → 설정 → 승인된 도메인 에 반드시 추가해야 Google 로그인 작동. */
 var __FB_DEFAULT = {
-  apiKey:            "YOUR_API_KEY",              // ← 콘솔의 apiKey
-  authDomain:        "YOUR_PROJECT.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID"
+  apiKey:            "AIzaSyCUJ8ppTx3jGw8G6D_ut4EMUPEvmoWhDO4",
+  authDomain:        "sedmsys.firebaseapp.com",
+  projectId:         "sedmsys",
+  storageBucket:     "sedmsys.firebasestorage.app",
+  messagingSenderId: "791527222293",
+  appId:             "1:791527222293:web:9b59518bcb58c9ea8ff21c"
 };
 
 /* ────────────────────────────────────────────────────────────

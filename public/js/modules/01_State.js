@@ -1,6 +1,7 @@
   const State = {
     mode:        null,      // 'designer' | 'viewer'
     checkboard:  false,     // 체크보드 모드: 디자이너와 동일하나 핀에 이름 대신 번호만 자동 부여
+    editMode:    false,     // [마스터 요청] 포인트 수정 모드: ON이면 핀 클릭 시 수정/이동/삭제 팝업
     fileType:    null,      // 'pdf' | 'image'
     fileName:    null,
     imageUrl:    null,      // blob URL (revoke on reset)
@@ -20,6 +21,7 @@
     isoView:     false,     // ISO 3D 아이소메트릭 뷰 (평면↔입체 회전)
     isoDir:      0,          // ISO 시점 방향 0~3 (북동/남동/남서/북서) — 4방향 회전
     pending:     null,      // { x, y }
+    intakeFile:  null,      // [THETA 인입] 위치지정 대기 중인 R* 360 사진 파일 (도면 탭 시 핀에 주입)
     pendingFile: null,      // 선택된 360° 그림/영상 파일
     pendingIsVideo: false,
     pendingDocs: [],        // 첨부 문서 후보 [{tempId, file, name, size, kind, status, docId}]

@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword } from './lib/util'
 
 type Bindings = {
   DB: D1Database
@@ -20,8 +21,13 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-app.use('/tables/*', cors())
-app.use('/api/*', cors())
+// [보안] CORS 와이드오픈(*) 차단 — 앱 도메인(localhost/*.pages.dev/*.seastar.work)만 반사.
+//   동일출처 호출은 CORS 비대상이라 영향 없음. 타 사이트의 토큰 도용 반경 축소.
+const corsCfg = cors({
+  origin: (o) => (o && /^https?:\/\/(localhost(:\d+)?|([a-z0-9-]+\.)*pages\.dev|([a-z0-9-]+\.)*seastar\.work)$/i.test(o)) ? o : '',
+})
+app.use('/tables/*', corsCfg)
+app.use('/api/*', corsCfg)
 
 /* ════════════════════════════════════════════
    인증/권한 — Google Identity (JWT) 검증
@@ -36,6 +42,33 @@ const SUPER_ADMIN = SUPER_ADMIN_FALLBACK // 모듈 레벨 데모/문서용 기�
 function superAdmin(c: any): string {
   const v = c?.env?.SUPER_ADMIN_EMAIL
   return (typeof v === 'string' && v.includes('@')) ? v.trim().toLowerCase() : SUPER_ADMIN_FALLBACK
+}
+/** [SEcMS 차용] 슈퍼관리자 이메일 allowlist — 다중 슈퍼관리자 지원.
+ *  env SUPER_ADMIN_EMAILS(쉼표구분) + SUPER_ADMIN_EMAIL(단일) 합산, 기본 designssir@gmail.com.
+ *  SEcMS functions/lib/superAdmin.ts 의 isSuperAdminEmail 패턴과 동일. */
+function superAdminList(c: any): string[] {
+  const out = new Set<string>([SUPER_ADMIN_FALLBACK])
+  const single = c?.env?.SUPER_ADMIN_EMAIL
+  if (typeof single === 'string' && single.includes('@')) out.add(single.trim().toLowerCase())
+  const multi = c?.env?.SUPER_ADMIN_EMAILS
+  if (typeof multi === 'string') multi.split(',').map((s: string) => s.trim().toLowerCase()).filter((e: string) => e.includes('@')).forEach((e: string) => out.add(e))
+  return Array.from(out)
+}
+function isSuperAdmin(c: any, email: string): boolean {
+  const e = String(email || '').trim().toLowerCase()
+  return !!e && superAdminList(c).includes(e)
+}
+/** [역할모델] 일반관리자 allowlist — env ADMIN_EMAILS(쉼표구분). 마스터가 지정.
+ *  슈퍼관리자(마스터)는 항상 관리자에 포함. 기본 비어있으면 관리자=슈퍼(마스터)뿐.
+ *  ⚠️ 정책: 슈퍼관리자=마스터 전용 / 일반관리자=별도 티어 / 디자이너=관리자 아님(설계만) / 뷰어. */
+function adminList(c: any): string[] {
+  const v = c?.env?.ADMIN_EMAILS
+  if (typeof v === 'string') return v.split(',').map((s: string) => s.trim().toLowerCase()).filter((e: string) => e.includes('@'))
+  return []
+}
+function isAdmin(c: any, email: string): boolean {
+  const e = String(email || '').trim().toLowerCase()
+  return !!e && (isSuperAdmin(c, e) || adminList(c).includes(e))
 }
 
 /** 회사 자동 설계자(디자이너) 도메인 — 이 도메인 계정은 로그인 경로(구글/자체가입)와 무관하게
@@ -65,8 +98,9 @@ function isDesignerDomain(c: any, email: string): boolean {
 function demoLoginEnabled(c: any): boolean {
   try { return String(c?.env?.DEMO_LOGIN ?? '1') !== '0' } catch { return true }
 }
-const DEMO_DESIGNER = { email: 'demo.designer@seastargo.com', name: '데모 설계자', picture: '', role: 'designer' as const }
-const DEMO_VIEWER = { email: 'demo.viewer@seastargo.com', name: '데모 열람자', picture: '', role: 'viewer' as const }
+const DEMO_DESIGNER = { email: 'demo.designer@seastargo.com', name: '설계자', picture: '', role: 'designer' as const }
+// 주의: 데모 열람자 이메일은 디자이너 도메인(seastargo.com)이면 안 된다 — isDesignerDomain 으로 designer 승격되어 '뷰어' 의미가 깨짐.
+const DEMO_VIEWER = { email: 'demo.viewer@example.com', name: '데모 열람자', picture: '', role: 'viewer' as const }
 
 const DEMO_SUPER = { email: SUPER_ADMIN, name: '데모 슈퍼관리자', picture: '', role: 'super' as const }
 
@@ -171,7 +205,7 @@ function readDerLen(buf: Uint8Array, p: number): { len: number; hdr: number } {
 }
 
 /** Firebase ID 토큰 검증. 성공 시 payload 반환, 실패 시 null. */
-async function verifyFirebaseToken(token: string): Promise<any | null> {
+async function verifyFirebaseToken(token: string, expectedProjectId?: string): Promise<any | null> {
   try {
     const [h, p, s] = token.split('.')
     if (!h || !p || !s) return null
@@ -180,6 +214,12 @@ async function verifyFirebaseToken(token: string): Promise<any | null> {
     const iss = String(payload.iss || '')
     // Firebase 발급자만 통과 (securetoken.google.com/<projectId>)
     if (!iss.startsWith('https://securetoken.google.com/')) return null
+    // projectId 설정 시(env.FIREBASE_PROJECT_ID): 우리 프로젝트(sedmsys) 토큰만 신뢰
+    //   iss = securetoken.google.com/<projectId> AND aud = <projectId>
+    if (expectedProjectId) {
+      if (iss !== 'https://securetoken.google.com/' + expectedProjectId) return null
+      if (payload.aud && payload.aud !== expectedProjectId) return null
+    }
     if (payload.exp && Date.now() / 1000 > payload.exp) return null
     if (!payload.email) return null
     const certs = await getFirebaseCerts()
@@ -211,9 +251,10 @@ function decodeJwtPart(part: string): any {
 
 /**
  * 구글 ID 토큰(JWT) 검증. 성공 시 payload(이메일 등) 반환, 실패 시 null.
- * audience(clientId)는 선택적으로 검증 (설정돼 있으면).
+ * @param expectedAud  설정되면(예: env.GOOGLE_CLIENT_ID) payload.aud 와 일치 강제(토큰 오용 방지).
+ *                     비어 있으면 aud 검증 생략(하위호환).
  */
-async function verifyGoogleToken(token: string): Promise<any | null> {
+async function verifyGoogleToken(token: string, expectedAud?: string): Promise<any | null> {
   try {
     const [h, p, s] = token.split('.')
     if (!h || !p || !s) return null
@@ -225,6 +266,8 @@ async function verifyGoogleToken(token: string): Promise<any | null> {
     if (iss !== 'accounts.google.com' && iss !== 'https://accounts.google.com') return null
     if (payload.exp && Date.now() / 1000 > payload.exp) return null
     if (!payload.email || payload.email_verified === false) return null
+    // audience 검증(설정 시): 우리 클라이언트 ID 로 발급된 토큰만 신뢰
+    if (expectedAud && payload.aud && payload.aud !== expectedAud) return null
 
     // 서명 검증 (RS256)
     const keys = await getGoogleKeys()
@@ -257,40 +300,8 @@ const ONE_FREE_PROVIDERS = new Set([
   'protonmail.com','proton.me','yandex.com','qq.com','163.com','126.com'
 ])
 
-function normEmail(s: string): string { return String(s || '').trim().toLowerCase() }
-function emailDomain(email: string): string { const i = email.indexOf('@'); return i < 0 ? '' : email.slice(i + 1) }
-function isValidEmail(email: string): boolean { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) }
-function gen6(): string { return String(Math.floor(100000 + Math.random() * 900000)) }
-function randToken(prefix: string): string {
-  const a = new Uint8Array(24); crypto.getRandomValues(a)
-  let h = ''; for (const x of a) h += x.toString(16).padStart(2, '0')
-  return prefix + h
-}
-function bufToHex(buf: ArrayBuffer): string {
-  const a = new Uint8Array(buf); let h = ''
-  for (const x of a) h += x.toString(16).padStart(2, '0')
-  return h
-}
-/** PBKDF2(SHA-256) 비밀번호 해시 */
-async function hashPassword(password: string, saltHex?: string): Promise<{ hash: string; salt: string }> {
-  let salt: Uint8Array
-  if (saltHex) {
-    salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)))
-  } else {
-    salt = new Uint8Array(16); crypto.getRandomValues(salt)
-  }
-  const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, baseKey, 256)
-  return { hash: bufToHex(bits), salt: bufToHex(salt.buffer) }
-}
-async function verifyPassword(password: string, saltHex: string, hashHex: string): Promise<boolean> {
-  const { hash } = await hashPassword(password, saltHex)
-  // 상수시간 비교(간이)
-  if (hash.length !== hashHex.length) return false
-  let diff = 0
-  for (let i = 0; i < hash.length; i++) diff |= hash.charCodeAt(i) ^ hashHex.charCodeAt(i)
-  return diff === 0
-}
+// [리팩토링 1단계] 순수 유틸(normEmail·emailDomain·isValidEmail·gen6·randToken·bufToHex·hashPassword·verifyPassword)
+//   → src/lib/util.ts 로 추출. 상단 import 참조.
 
 /** 허용 도메인 목록(화이트리스트).
  *  projectId 지정 시: 해당 프로젝트 전용 + 전역('*') 도메인을 합산.
@@ -401,8 +412,10 @@ async function resolveLocalSession(c: any, token: string): Promise<any | null> {
 async function getUser(c: any): Promise<any | null> {
   const auth = c.req.header('Authorization') || ''
   const m = auth.match(/^Bearer\s+(.+)$/i)
-  if (!m) return null
-  const token = m[1]
+  // ponytail: <img>/텍스처는 Authorization 헤더를 못 보내므로 ?t= 쿼리토큰 폴백 허용(R2 객체용).
+  //   같은 자격증명이라 권한 동일. 한계: 토큰이 URL/로그에 남음 → 로컬세션 토큰 만료·취소로 상쇄.
+  const token = m ? m[1] : (c.req.query('t') || '')
+  if (!token) return null
   // 데모 토큰 우선 처리 (구글 로그인 없이 바로 진입/테스트)
   const demo = demoUserFromToken(c, token)
   if (demo) return demo
@@ -412,16 +425,16 @@ async function getUser(c: any): Promise<any | null> {
     if (lu) return lu
     return null
   }
-  // 1) 표준 Google ID 토큰(GIS) 검증
-  let payload = await verifyGoogleToken(token)
-  // 2) 실패 시 Firebase ID 토큰 검증 (마스터가 Firebase ID만 연결하면 바로 로그인)
-  if (!payload) payload = await verifyFirebaseToken(token)
+  // 1) 표준 Google ID 토큰(GIS) 검증 — env.GOOGLE_CLIENT_ID 설정 시 audience 강제
+  let payload = await verifyGoogleToken(token, (c.env && c.env.GOOGLE_CLIENT_ID) || undefined)
+  // 2) 실패 시 Firebase ID 토큰 검증 — env.FIREBASE_PROJECT_ID(sedmsys) 설정 시 해당 프로젝트만 신뢰
+  if (!payload) payload = await verifyFirebaseToken(token, (c.env && c.env.FIREBASE_PROJECT_ID) || undefined)
   if (!payload) return null
   return { email: String(payload.email).toLowerCase(), name: payload.name || payload.display_name || '', picture: payload.picture || '' }
 }
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
-  if (email === superAdmin(c)) return true
+  if (isAdmin(c, email)) return true   // 관리자(슈퍼/일반)는 설계 권한도 보유(관리자 ≥ 디자이너)
   if (demoLoginEnabled(c) && email === DEMO_DESIGNER.email) return true
   // 회사 도메인(@seastargo.com 등) 계정은 로그인 경로와 무관하게 설계자 권한 (자체가입과 정책 일치)
   if (isDesignerDomain(c, email)) {
@@ -441,9 +454,10 @@ async function isDesigner(c: any, email: string): Promise<boolean> {
   return !!row
 }
 
-function roleOf(c: any, email: string, designer: boolean): 'super' | 'designer' | 'viewer' {
-  if (email === superAdmin(c)) return 'super'
-  if (designer) return 'designer'
+function roleOf(c: any, email: string, designer: boolean): 'super' | 'admin' | 'designer' | 'viewer' {
+  if (isSuperAdmin(c, email)) return 'super'   // 슈퍼관리자 = 마스터 전용
+  if (isAdmin(c, email)) return 'admin'        // 일반관리자 = 마스터가 지정한 별도 티어
+  if (designer) return 'designer'              // 디자이너 = 관리자 아님, 설계만
   return 'viewer'
 }
 
@@ -469,6 +483,20 @@ app.get('/api/auth/me', async (c) => {
   // 실제 로그인(데모 제외)만 로그 기록
   if (!user._demo) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role, local: !!user._local } })
   return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, request_status, super_admin: superAdmin(c) })
+})
+
+/* ── 클라이언트 인증 설정(공개 가능 값만) ──
+ * Google OAuth Client ID 는 "공개 식별자"라 프론트 노출 OK(시크릿 아님).
+ * 운영 주입: `npx wrangler pages secret put GOOGLE_CLIENT_ID` (빌드 파일 수정 불필요)
+ * 미설정 시 빈 문자열 → 클라는 index.html 의 인라인 WM_GOOGLE_CLIENT_ID 로 폴백.
+ */
+app.get('/api/auth/config', (c) => {
+  return c.json({
+    google_client_id: (c.env && c.env.GOOGLE_CLIENT_ID) || '',
+    demo_login: demoLoginEnabled(c),
+    primary_domain: (c.env && c.env.PRIMARY_DOMAIN) || 'scan.seastar.work',
+    firebase_project_id: (c.env && c.env.FIREBASE_PROJECT_ID) || '',
+  })
 })
 
 /* ════════════════════════════════════════════
@@ -655,6 +683,14 @@ app.post('/api/signup/verify', async (c) => {
      ON CONFLICT(email) DO UPDATE SET name = excluded.name, company = excluded.company, department = excluded.department, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, email_verified = 1, updated_at = excluded.updated_at, deleted = 0`
   ).bind(email, name || email.split('@')[0], emailDomain(email), company || (invite && invite.company) || '', department || '', hash, salt, now, now).run()
 
+  // [보안 H1] 자체가입자를 기본 테넌트 멤버로 등록 — tenant_members 미삽입 시 테넌트 격리 스코프 누락
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO tenant_members (tenant_id, email, role, created_at) VALUES ('tnt_default', ?, 'viewer', ?)
+       ON CONFLICT(tenant_id, email) DO NOTHING`
+    ).bind(email, now).run()
+  } catch (e) {}
+
   // 회사 도메인(@seastargo.com 등) 계정은 설계자(디자이너) 권한 자동 부여 — 단일 정책(designerDomains)
   if (isDesignerDomain(c, email)) {
     await c.env.DB.prepare(
@@ -729,7 +765,7 @@ app.post('/api/signup/logout', async (c) => {
    · POST   /api/allowed-domains  { domain, project_id?, note? }
    · DELETE /api/allowed-domains/:id  (단건 삭제 by id) */
 app.get('/api/allowed-domains', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const projectId = c.req.query('project_id')
   let rows: any
@@ -745,7 +781,7 @@ app.get('/api/allowed-domains', async (c) => {
   return c.json({ data: rows.results || [] })
 })
 app.post('/api/allowed-domains', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
@@ -761,18 +797,18 @@ app.post('/api/allowed-domains', async (c) => {
   return c.json({ success: true, domain, project_id: projectId })
 })
 app.delete('/api/allowed-domains/:id', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const id = decodeURIComponent(c.req.param('id'))
   // id 또는 (하위호환) domain 으로 삭제 허용
-  await c.env.DB.prepare('UPDATE allowed_domains SET deleted = 1 WHERE id = ? OR domain = ?').bind(id, id.toLowerCase()).run()
+  await c.env.DB.prepare('UPDATE allowed_domains SET deleted = 1 WHERE id = ?').bind(id).run()  // [보안 M4] id 단건만 — 'OR domain' 제거(도메인명으로 전 프로젝트 일괄삭제 방지)
   await logActivity(c, 'domain.remove', { actor: su, targetType: 'domain', targetId: id })
   return c.json({ success: true })
 })
 
 /* ── 가입 사용자 목록(슈퍼관리자 전용) — 로그인 기록과 함께 관리 ── */
 app.get('/api/local-users', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const { results } = await c.env.DB.prepare(
     'SELECT email, name, domain, company, created_at, last_login_at FROM local_users WHERE deleted = 0 ORDER BY created_at DESC'
@@ -785,7 +821,7 @@ app.get('/api/local-users', async (c) => {
    · POST   /api/invites  { email, company?, role?, note?, project_id? }
    · DELETE /api/invites/:email */
 app.get('/api/invites', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const { results } = await c.env.DB.prepare(
     'SELECT email, company, role, note, invited_by, project_id, created_at, used FROM invited_users WHERE deleted = 0 ORDER BY created_at DESC'
@@ -793,7 +829,7 @@ app.get('/api/invites', async (c) => {
   return c.json({ data: results || [] })
 })
 app.post('/api/invites', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
@@ -814,7 +850,7 @@ app.post('/api/invites', async (c) => {
   return c.json({ success: true, email, role, company, already_registered: !!exist })
 })
 app.delete('/api/invites/:email', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const email = decodeURIComponent(c.req.param('email')).toLowerCase()
   await c.env.DB.prepare('UPDATE invited_users SET deleted = 1 WHERE email = ?').bind(email).run()
@@ -844,7 +880,7 @@ app.get('/api/app-settings', async (c) => {
   } catch (e: any) { return c.json({ scope, settings: {}, value: {} }) }
 })
 app.put('/api/app-settings', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
@@ -885,7 +921,7 @@ app.post('/api/client-log', async (c) => {
 })
 
 app.delete('/api/local-users/:email', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const email = decodeURIComponent(c.req.param('email')).toLowerCase()
   await c.env.DB.prepare('UPDATE local_users SET deleted = 1, updated_at = ? WHERE email = ?').bind(Date.now(), email).run()
@@ -914,7 +950,7 @@ async function logActivity(
     const actor = opts.actor ?? (await getUser(c).catch(() => null))
     let role = 'guest'
     if (actor) {
-      role = actor.email === superAdmin(c)
+      role = isSuperAdmin(c, actor.email)
         ? 'super'
         : (await isDesigner(c, actor.email).catch(() => false)) ? 'designer' : 'viewer'
     }
@@ -940,13 +976,20 @@ async function logActivity(
 ════════════════════════════════════════════ */
 async function requireSuper(c: any): Promise<any | null> {
   const user = await getUser(c)
-  if (!user || user.email !== superAdmin(c)) return null
+  if (!user || !isSuperAdmin(c, user.email)) return null
+  return user
+}
+/** [역할모델] 관리자(슈퍼 또는 일반관리자) 게이트 — 관리자 모드/패널 접근용.
+ *  기본(ADMIN_EMAILS 미설정) = 슈퍼관리자(마스터)뿐 → "관리자는 오직 마스터". 디자이너는 통과 못 함. */
+async function requireAdmin(c: any): Promise<any | null> {
+  const user = await getUser(c)
+  if (!user || !isAdmin(c, user.email)) return null
   return user
 }
 
 app.get('/api/designers', async (c) => {
   const user = await getUser(c)
-  if (!user || user.email !== superAdmin(c)) return c.json({ error: 'forbidden' }, 403)
+  if (!user || !isSuperAdmin(c, user.email)) return c.json({ error: 'forbidden' }, 403)
   const { results } = await c.env.DB.prepare(
     'SELECT email, name, added_by, created_at FROM designers WHERE deleted = 0 ORDER BY created_at DESC'
   ).all()
@@ -954,13 +997,13 @@ app.get('/api/designers', async (c) => {
 })
 
 app.post('/api/designers', async (c) => {
-  const su = await requireSuper(c)
-  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const su = await requireSuper(c)   // [보안 C1] 디자이너 지정=권한부여 → 슈퍼관리자(마스터) 전용(일반관리자 escalation 차단)
+  if (!su) return c.json({ error: 'forbidden — super admin only' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const email = String(body.email || '').trim().toLowerCase()
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: 'invalid email' }, 400)
-  if (email === superAdmin(c)) return c.json({ error: 'super admin is always designer' }, 400)
+  if (isSuperAdmin(c, email)) return c.json({ error: 'super admin is always designer' }, 400)
   const now = Date.now()
   await c.env.DB.prepare(
     `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted)
@@ -971,8 +1014,8 @@ app.post('/api/designers', async (c) => {
 })
 
 app.delete('/api/designers/:email', async (c) => {
-  const su = await requireSuper(c)
-  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const su = await requireSuper(c)   // [보안 C1] 디자이너 해제도 슈퍼관리자(마스터) 전용
+  if (!su) return c.json({ error: 'forbidden — super admin only' }, 403)
   const email = decodeURIComponent(c.req.param('email')).toLowerCase()
   await c.env.DB.prepare('UPDATE designers SET deleted = 1, updated_at = ? WHERE email = ?')
     .bind(Date.now(), email).run()
@@ -1041,7 +1084,7 @@ app.get('/api/access-requests/me', async (c) => {
 
 // 신청 목록 (슈퍼관리자 전용)
 app.get('/api/access-requests', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const status = c.req.query('status')
   const sql = status
@@ -1054,7 +1097,7 @@ app.get('/api/access-requests', async (c) => {
 
 // 신청 승인 → designers 등록 (슈퍼관리자 전용)
 app.post('/api/access-requests/:id/approve', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const id = c.req.param('id')
   const row: any = await c.env.DB.prepare('SELECT * FROM access_requests WHERE id = ? AND deleted = 0').bind(id).first()
@@ -1074,7 +1117,7 @@ app.post('/api/access-requests/:id/approve', async (c) => {
 
 // 신청 거절 (슈퍼관리자 전용)
 app.post('/api/access-requests/:id/reject', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const id = c.req.param('id')
   const now = Date.now()
@@ -1098,7 +1141,7 @@ function mapLog(r: any) {
 
 // 로그 목록 조회 (슈퍼관리자 전용) — 필터: action, actor, q(검색), 페이지네이션 limit/offset
 app.get('/api/activity-logs', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const action = c.req.query('action') || ''
   const actor  = c.req.query('actor') || ''
@@ -1132,7 +1175,7 @@ app.get('/api/activity-logs', async (c) => {
 
 // 로그 액션 종류 요약(필터 UI용)
 app.get('/api/activity-logs/actions', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   try {
     const { results } = await c.env.DB.prepare(
@@ -1144,7 +1187,7 @@ app.get('/api/activity-logs/actions', async (c) => {
 
 // 로그 단건 삭제 (슈퍼관리자 전용, soft delete)
 app.delete('/api/activity-logs/:id', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const id = c.req.param('id')
   await c.env.DB.prepare('UPDATE activity_log SET deleted = 1 WHERE id = ?').bind(id).run()
@@ -1153,7 +1196,7 @@ app.delete('/api/activity-logs/:id', async (c) => {
 
 // 로그 일괄 정리 (슈퍼관리자 전용) — before(ms) 이전 또는 전체 비우기(?all=1)
 app.delete('/api/activity-logs', async (c) => {
-  const su = await requireSuper(c)
+  const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const all = c.req.query('all') === '1'
   const before = parseInt(c.req.query('before') || '0', 10) || 0
@@ -1196,7 +1239,7 @@ async function tenantOf(c: any, user: any): Promise<string | null> {
   try {
     if (!user || !user.email) return DEFAULT_TENANT
     // 슈퍼관리자는 전 테넌트 접근
-    if (user.email === superAdmin(c)) return null
+    if (isSuperAdmin(c, user.email)) return null
     const row = await c.env.DB.prepare(
       'SELECT tenant_id FROM tenant_members WHERE email = ? LIMIT 1'
     ).bind(user.email).first()
@@ -1210,18 +1253,67 @@ async function tenantOf(c: any, user: any): Promise<string | null> {
 }
 
 function mapProject(r: any) {
-  return { id: r.id, name: r.name, description: r.description, owner: r.owner, created_at: r.created_at, updated_at: r.updated_at }
+  return { id: r.id, name: r.name, description: r.description, owner: r.owner, created_at: r.created_at, updated_at: r.updated_at,
+    published: !!r.published, published_at: r.published_at || null, published_by: r.published_by || null,
+    subdomain: r.subdomain || null }
 }
 function mapDeck(r: any) {
   return { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, created_at: r.created_at, updated_at: r.updated_at }
 }
 
 // 프로젝트 목록 (누구나 조회 가능 — 뷰어도 탐색)
+/* ── [PART 0 · 프로젝트별 접근제어 헬퍼] ────────────────────────────
+ * 정책(하위호환 우선):
+ *  - superAdmin → 전 프로젝트
+ *  - 그 외 → ① 내가 멤버인 프로젝트 ② 내가 소유(생성)한 프로젝트
+ *           ③ 아무에게도 배정 안 된 "공개" 프로젝트(=멤버 0명, 기존 데이터 보존)
+ *  → 관리자가 어떤 프로젝트에 멤버를 1명이라도 배정하면 그 프로젝트는 즉시 '제한'되어
+ *    멤버/소유자/슈퍼에게만 보인다. 기존 프로젝트는 배정 전까지 종전처럼 모두 보임. */
+async function visibleProjectFilter(c: any, user: any): Promise<((p: any) => boolean) | null> {
+  if (user && isSuperAdmin(c, user.email)) return null  // null = 필터 없음(전체)
+  const email = user ? user.email : ''
+  // 내 프로젝트별 역할 맵 (project_id → role)
+  const myRole = new Map<string, string>()
+  if (email) {
+    const mr: any = await c.env.DB.prepare('SELECT project_id, role FROM project_members WHERE email = ?').bind(email).all()
+    for (const r of (mr.results || [])) myRole.set(String(r.project_id), String(r.role))
+  }
+  const ar: any = await c.env.DB.prepare('SELECT DISTINCT project_id FROM project_members').all()
+  const restricted = new Set<string>((ar.results || []).map((r: any) => String(r.project_id)))
+  // 전역 설계자 여부(회사도메인/슈퍼/designers 테이블) — 설계자는 미배포 프로젝트도 봐야 편집/배포 가능
+  const globalDesigner = email ? await isDesigner(c, email) : false
+  return (p: any) => {
+    const role = myRole.get(p.id)
+    const isOwner = !!email && p.owner === email
+    // (턴④) 기본 가시성: 멤버 OR 미배정(공개) OR 소유자
+    const baseVisible = role != null || !restricted.has(p.id) || isOwner
+    if (!baseVisible) return false
+    // 설계자(전역 designer / 소유자 / designer·editor 역할 멤버)는 미배포 포함 전체 열람(편집·배포 위해)
+    const isProjectDesigner = globalDesigner || isOwner || role === 'designer' || role === 'editor'
+    if (isProjectDesigner) return true
+    // 순수 뷰어 → 배포(published)된 프로젝트만
+    return !!p.published
+  }
+}
+
+/** 사용자가 특정 프로젝트의 멤버를 관리(배정/해제)할 수 있는가: 슈퍼 또는 소유자 또는 designer-역할 멤버 */
+async function canManageProject(c: any, user: any, projectId: string): Promise<boolean> {
+  if (!user) return false
+  if (isSuperAdmin(c, user.email)) return true
+  const own: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ? AND deleted = 0').bind(projectId).first()
+  if (own && own.owner === user.email) return true
+  const m: any = await c.env.DB.prepare("SELECT role FROM project_members WHERE project_id = ? AND email = ?").bind(projectId, user.email).first()
+  return !!(m && m.role === 'designer')
+}
+
 app.get('/api/projects', async (c) => {
+  const user = await getUser(c)
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM projects WHERE deleted = 0 ORDER BY created_at DESC'
   ).all()
-  return c.json({ data: (results || []).map(mapProject) })
+  const filter = await visibleProjectFilter(c, user)
+  const list = filter ? (results || []).filter(filter) : (results || [])
+  return c.json({ data: list.map(mapProject) })
 })
 
 // 프로젝트 생성 (디자이너)
@@ -1232,6 +1324,15 @@ app.post('/api/projects', async (c) => {
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const name = String(body.name || '').trim()
   if (!name) return c.json({ error: 'name required' }, 400)
+  // [수익화] 요금제 프로젝트 한도 게이팅 — 슈퍼관리자는 면제, 한도 초과면 402(업그레이드 안내)
+  if (!isSuperAdmin(c, user.email)) {
+    const tid = await tenantOf(c, user)
+    const plan = await tenantPlanInfo(c, tid)
+    const usage = await tenantUsage(c, tid)
+    if (plan.maxProjects >= 0 && usage.projects >= plan.maxProjects) {
+      return c.json({ error: `요금제 한도 초과 — ${plan.name} 플랜은 프로젝트 ${plan.maxProjects}개까지입니다. 업그레이드가 필요합니다.`, upgrade: true, planId: plan.planId, limit: plan.maxProjects }, 402)
+    }
+  }
   const id = genId('prj')
   const now = Date.now()
   await c.env.DB.prepare(
@@ -1247,6 +1348,8 @@ app.delete('/api/projects/:id', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden' }, 403)
   const id = c.req.param('id')
+  // [버그수정 H3] 소유권/관리권 체크 — 아무 디자이너나 남의 프로젝트를 삭제하던 것 차단
+  if (!(await canManageProject(c, user, id))) return c.json({ error: 'forbidden — not project owner/admin' }, 403)
   const now = Date.now()
   await c.env.DB.prepare('UPDATE projects SET deleted = 1, updated_at = ? WHERE id = ?').bind(now, id).run()
   await c.env.DB.prepare('UPDATE decks SET deleted = 1, updated_at = ? WHERE project_id = ?').bind(now, id).run()
@@ -1254,8 +1357,208 @@ app.delete('/api/projects/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// 데크 목록 (프로젝트별, 누구나)
+/* ════════════════════════════════════════════════════════════
+   [마스터: 멀티테넌트 서브도메인] <subdomain>.seastar.work → 프로젝트 직접 진입
+   · 슈퍼/관리자가 프로젝트에 슬러그 부여 → 와일드카드 DNS(*.seastar.work)+호스트라우팅으로 직접 접속
+   ════════════════════════════════════════════════════════════ */
+const RESERVED_SUBDOMAINS = new Set(['scan', 'scan360', 'www', 'app', 'api', 'admin', 'mail', 'cdn', 'static', 'assets', 'm', 'dev', 'staging'])
+function baseDomainOf(c: any): string {
+  const pd = String((c.env && c.env.PRIMARY_DOMAIN) || 'scan.seastar.work')
+  const parts = pd.split('.')
+  return parts.length >= 2 ? parts.slice(-2).join('.') : pd   // scan.seastar.work → seastar.work
+}
+function subdomainFromHost(host: string, base: string): string | null {
+  if (!host) return null
+  const h = host.split(':')[0].toLowerCase()
+  if (!h.endsWith('.' + base)) return null
+  const sub = h.slice(0, h.length - base.length - 1)
+  if (!sub || sub.indexOf('.') !== -1) return null
+  if (RESERVED_SUBDOMAINS.has(sub)) return null
+  return sub
+}
+function normalizeSubdomain(raw: string): string {
+  return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+}
+// 현재 호스트(또는 ?host=)가 가리키는 프로젝트 해석 — 클라 자동진입용(공개 조회)
+app.get('/api/tenant/resolve', async (c) => {
+  const base = baseDomainOf(c)
+  const host = String(c.req.query('host') || c.req.header('host') || '')
+  const sub = subdomainFromHost(host, base)
+  if (!sub) return c.json({ matched: false, base })
+  const row: any = await c.env.DB.prepare(
+    'SELECT id, name, subdomain, published FROM projects WHERE subdomain = ? AND deleted = 0'
+  ).bind(sub).first()
+  if (!row) return c.json({ matched: false, base, subdomain: sub })
+  return c.json({ matched: true, base, subdomain: sub, project: { id: row.id, name: row.name, published: !!row.published } })
+})
+// 슈퍼/관리자: 프로젝트에 서브도메인 부여(도메인 이름만 입력 → 세팅). null/빈값이면 해제.
+app.post('/api/projects/:id/subdomain', async (c) => {
+  const user = await requireAdmin(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  let body: any; try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  if (body.subdomain === null || String(body.subdomain || '').trim() === '') {
+    await c.env.DB.prepare('UPDATE projects SET subdomain = NULL, updated_at = ? WHERE id = ?').bind(Date.now(), id).run()
+    return c.json({ success: true, subdomain: null })
+  }
+  const sub = normalizeSubdomain(body.subdomain)
+  if (sub.length < 2 || sub.length > 40) return c.json({ error: '서브도메인은 2~40자(영문/숫자/하이픈)' }, 400)
+  if (RESERVED_SUBDOMAINS.has(sub)) return c.json({ error: '예약된 이름입니다' }, 400)
+  const dup: any = await c.env.DB.prepare('SELECT id FROM projects WHERE subdomain = ? AND deleted = 0 AND id <> ?').bind(sub, id).first()
+  if (dup) return c.json({ error: '이미 사용 중인 서브도메인입니다' }, 409)
+  await c.env.DB.prepare('UPDATE projects SET subdomain = ?, updated_at = ? WHERE id = ?').bind(sub, Date.now(), id).run()
+  await logActivity(c, 'project.subdomain', { actor: user, targetType: 'project', targetId: id, detail: { subdomain: sub } })
+  const fqdn = sub + '.' + baseDomainOf(c)
+  // [자동 세팅] CF Pages 커스텀 도메인 자동 추가 — 시크릿(CF_API_TOKEN+CF_ACCOUNT_ID) 설정 시
+  //   <slug>.seastar.work 를 Pages 프로젝트에 등록 → 1분 내 SSL 발급+활성(도메인 이름만 입력=자동 세팅).
+  //   미설정 시 슬러그만 저장(앱 호스트라우팅은 동작, 도메인은 수동 1회 추가 필요).
+  let domain = 'slug-saved (CF 시크릿 미설정 → 도메인 수동추가 필요)'
+  try {
+    const tok = (c.env as any).CF_API_TOKEN, acc = (c.env as any).CF_ACCOUNT_ID
+    const proj = (c.env as any).CF_PAGES_PROJECT || 'scan360'
+    if (tok && acc) {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc}/pages/projects/${proj}/domains`, {
+        method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: fqdn })
+      })
+      const j: any = await r.json().catch(() => ({}))
+      domain = (j && j.success) ? 'provisioning (1분 내 활성)' : ('error: ' + JSON.stringify(j && (j.errors || j.messages)))
+    }
+  } catch (e: any) { domain = 'exception: ' + (e && e.message) }
+  return c.json({ success: true, subdomain: sub, url: 'https://' + fqdn, domain })
+})
+
+/* ════════════════════════════════════════════════════════════
+   [마스터: 수익화] 과금/구독(Billing) — 테넌트(고객사)별 요금제 + 사용량 게이팅
+   · 결제 PG(Toss 등)는 키 설정 후 결합. 지금은 요금제 정의/구독상태/한도/관리자 수동설정.
+   ════════════════════════════════════════════════════════════ */
+const PLANS: Record<string, any> = {
+  free:       { id: 'free',       name: 'Free',       price: 0,      currency: 'KRW', maxProjects: 1,  maxMembers: 3,  maxPanos: 50,   features: ['기본 뷰어', '오프라인', '1 프로젝트'] },
+  team:       { id: 'team',       name: 'Team',       price: 49000,  currency: 'KRW', maxProjects: 10, maxMembers: 25, maxPanos: 2000, features: ['전 기능', '전용 도메인', '10 프로젝트', '우선 지원'] },
+  enterprise: { id: 'enterprise', name: 'Enterprise', price: 199000, currency: 'KRW', maxProjects: -1, maxMembers: -1, maxPanos: -1,   features: ['무제한 프로젝트/멤버', 'SSO', '전담 지원', 'SLA'] },
+}
+function planOf(planId: string): any { return PLANS[planId] || PLANS.free }
+async function tenantPlanInfo(c: any, tid: string | null): Promise<any> {
+  if (!tid) return { ...planOf('free'), planId: 'free', status: 'active', current_period_end: null }
+  const t: any = await c.env.DB.prepare('SELECT plan, status, current_period_end, trial_ends_at FROM tenants WHERE id = ?').bind(tid).first().catch(() => null)
+  const planId = (t && t.plan) || 'free'
+  return { ...planOf(planId), planId, status: (t && t.status) || 'active', current_period_end: (t && t.current_period_end) || null, trial_ends_at: (t && t.trial_ends_at) || null }
+}
+async function tenantUsage(c: any, tid: string | null): Promise<any> {
+  if (!tid) return { projects: 0, members: 0 }
+  const pj: any = await c.env.DB.prepare('SELECT COUNT(*) n FROM projects WHERE (tenant_id = ? OR tenant_id IS NULL) AND deleted = 0').bind(tid).first().catch(() => null)
+  const mb: any = await c.env.DB.prepare('SELECT COUNT(*) n FROM tenant_members WHERE tenant_id = ?').bind(tid).first().catch(() => null)
+  return { projects: (pj && pj.n) || 0, members: (mb && mb.n) || 0 }
+}
+// 요금제 카탈로그(공개 — 가격 페이지)
+app.get('/api/billing/plans', (c) => c.json({ plans: Object.values(PLANS) }))
+// 내 테넌트의 구독 상태 + 사용량 + 한도(로그인 필요)
+app.get('/api/billing/me', async (c) => {
+  const user = await getUser(c); if (!user) return c.json({ error: 'unauthorized' }, 401)
+  const tid = await tenantOf(c, user)
+  const plan = await tenantPlanInfo(c, tid)
+  const usage = await tenantUsage(c, tid)
+  const over = {
+    projects: plan.maxProjects >= 0 && usage.projects >= plan.maxProjects,
+    members: plan.maxMembers >= 0 && usage.members >= plan.maxMembers,
+  }
+  return c.json({ tenant: tid, plan, usage, over, super_admin: isSuperAdmin(c, user.email) })
+})
+// 슈퍼관리자: 테넌트 요금제 수동 설정(결제 PG 전 수동 과금/강제변경)
+app.post('/api/admin/billing/plan', async (c) => {
+  const user = await requireSuper(c); if (!user) return c.json({ error: 'forbidden' }, 403)
+  let body: any; try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const tid = String(body.tenant_id || DEFAULT_TENANT)
+  const plan = String(body.plan || 'free')
+  if (!PLANS[plan]) return c.json({ error: 'unknown plan' }, 400)
+  const status = String(body.status || 'active')
+  const periodEnd = body.current_period_end != null ? Number(body.current_period_end) : null
+  const tname = String(body.name || tid)
+  // UPSERT — 테넌트가 없으면 생성하며 요금제 설정(신규 고객사도 즉시 과금 적용)
+  await c.env.DB.prepare(
+    `INSERT INTO tenants (id, name, plan, status, current_period_end, created_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, 0)
+     ON CONFLICT(id) DO UPDATE SET plan = excluded.plan, status = excluded.status, current_period_end = excluded.current_period_end`
+  ).bind(tid, tname, plan, status, periodEnd, Date.now()).run()
+  await logActivity(c, 'billing.plan', { actor: user, targetType: 'tenant', targetId: tid, detail: { plan, status } })
+  return c.json({ success: true, tenant: tid, plan, status })
+})
+
+/* ── 프로젝트 멤버 관리 (어느 프로젝트에 누구를 배정) ──
+ * 마스터 요구: 관리자가 프로젝트별로 사용자+역할 세팅 → 뷰어는 배정받은 프로젝트만 열람. */
+// 멤버 목록
+app.get('/api/projects/:id/members', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT email, role, granted_by, created_at FROM project_members WHERE project_id = ? ORDER BY created_at'
+  ).bind(pid).all()
+  return c.json({ data: results || [] })
+})
+
+// 멤버 배정/수정 (email + role)
+app.post('/api/projects/:id/members', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = normEmail(body.email)
+  const role = ['viewer', 'editor', 'designer'].includes(body.role) ? body.role : 'viewer'
+  if (!email || !isValidEmail(email)) return c.json({ error: 'valid email required' }, 400)
+  await c.env.DB.prepare(
+    `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`
+  ).bind(pid, email, role, user.email, Date.now()).run()
+  await logActivity(c, 'project.member.add', { actor: user, targetType: 'project', targetId: pid, detail: { email, role } })
+  return c.json({ success: true, email, role })
+})
+
+// 멤버 해제
+app.delete('/api/projects/:id/members/:email', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const email = normEmail(decodeURIComponent(c.req.param('email')))
+  await c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').bind(pid, email).run()
+  await logActivity(c, 'project.member.remove', { actor: user, targetType: 'project', targetId: pid, detail: { email } })
+  return c.json({ success: true })
+})
+
+/* ── 프로젝트 배포(Publish) / 배포취소 ──
+ * 마스터 워크플로: 설계자 모드에서 설계·핀·등록 완료 → 배포 → 권한받은 뷰어가 그 프로젝트 열람.
+ * 배포 전(published=0)에는 설계자/소유자/슈퍼만 보이고, 배포 후에만 뷰어에게 노출된다(visibleProjectFilter). */
+app.post('/api/projects/:id/publish', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const now = Date.now()
+  await c.env.DB.prepare('UPDATE projects SET published = 1, published_at = ?, published_by = ?, updated_at = ? WHERE id = ? AND deleted = 0')
+    .bind(now, user.email, now, pid).run()
+  await logActivity(c, 'project.publish', { actor: user, targetType: 'project', targetId: pid })
+  const row: any = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(pid).first()
+  return c.json({ success: true, project: row ? mapProject(row) : null })
+})
+
+app.post('/api/projects/:id/unpublish', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const now = Date.now()
+  await c.env.DB.prepare('UPDATE projects SET published = 0, updated_at = ? WHERE id = ? AND deleted = 0').bind(now, pid).run()
+  await logActivity(c, 'project.unpublish', { actor: user, targetType: 'project', targetId: pid })
+  return c.json({ success: true })
+})
+
+// 데크 목록 (프로젝트별, 로그인 사용자)
 app.get('/api/projects/:id/decks', async (c) => {
+  if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)  // [보안] 무인증 프로젝트 구조 열람 차단
   const pid = c.req.param('id')
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM decks WHERE project_id = ? AND deleted = 0 ORDER BY COALESCE(level_no, 999999), created_at'
@@ -1352,18 +1655,41 @@ function mapDeployment(r: any) {
 
 // 목록
 app.get('/tables/pano_images', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized' }, 401)   // [보안 H4] 360 이미지 무인증 열거 차단
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM pano_images WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
-  ).bind(limit).all()
-  return c.json({ data: (results || []).map(mapImage), total: (results || []).length })
+  // [Tenant 격리] 자신의 테넌트 360만 열거(슈퍼/마이그레이션전은 전체). NULL 구행은 기본테넌트 귀속.
+  const tid = await tenantOf(c, user)
+  let results: any[] = []
+  if (tid) {
+    const includeNull = (tid === DEFAULT_TENANT)
+    const sql = includeNull
+      ? 'SELECT * FROM pano_images WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
+      : 'SELECT * FROM pano_images WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
+    const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
+    results = r.results || []
+  } else {
+    const r = await c.env.DB.prepare(
+      'SELECT * FROM pano_images WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
+    ).bind(limit).all()
+    results = r.results || []
+  }
+  return c.json({ data: results.map(mapImage), total: results.length })
 })
 
 // 단건 조회
 app.get('/tables/pano_images/:id', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized' }, 401)   // [보안 H4] 로그인 사용자만 360 이미지 조회
   const id = c.req.param('id')
   const row = await c.env.DB.prepare('SELECT * FROM pano_images WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
+  // [Tenant 격리] 타 테넌트 360 조회 차단. NULL 구행은 기본테넌트로 간주(하위호환).
+  const tid = await tenantOf(c, user)
+  if (tid) {
+    const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
+    if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+  }
   return c.json(mapImage(row))
 })
 
@@ -1377,16 +1703,17 @@ app.post('/tables/pano_images', async (c) => {
 
   const id = genId('img')
   const now = Date.now()
+  const ownTid = (await tenantOf(c, user)) || DEFAULT_TENANT  // [Tenant] 생성자 테넌트로 귀속
   await c.env.DB.prepare(
-    `INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
+    `INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted, tenant_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`
   ).bind(
     id,
     body.name || '',
     body.image_data,
     body.width || null,
     body.height || null,
-    now, now
+    now, now, ownTid
   ).run()
 
   return c.json(mapImage({
@@ -1434,12 +1761,17 @@ app.put('/api/r2/upload', async (c) => {
 // 다운로드 — /api/r2/object/assets/xxxx.png
 app.get('/api/r2/object/*', async (c) => {
   if (!c.env.R2) return c.json({ error: 'R2 미구성' }, 501)
+  // [보안] 로그인 필수 — 도면/파노 바이너리가 URL만으로 공개되던 구멍 차단.
+  //   tenant 교차는 S2(pin.imageUrl 이 tenant 격리된 deployment 에서만 나옴)로 차단됨.
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
   const key = c.req.path.replace('/api/r2/object/', '')
   const obj = await c.env.R2.get(key)
   if (!obj) return c.notFound()
   const headers = new Headers()
   headers.set('Content-Type', obj.httpMetadata?.contentType || 'application/octet-stream')
-  headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  // private: 인증된 콘텐츠가 공유 엣지캐시에 남지 않도록(브라우저 캐시는 유지)
+  headers.set('Cache-Control', 'private, max-age=31536000, immutable')
   headers.set('ETag', obj.httpEtag)
   return new Response(obj.body, { headers })
 })
@@ -1652,6 +1984,8 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       if (cur && !cur._deleted) {
         const merged = Object.assign({}, cur, op.data, { id: op.id, ts: Math.max(opTs, Number(cur.ts || 0)) })
         m.set(String(op.id), merged)
+      } else if (cur && cur._deleted && opTs < Number(cur.ts || 0)) {
+        // [버그수정] 더 최신 삭제(tombstone)는 옛 upsert(ts 더 과거)로 부활 금지 — 삭제 유지
       } else {
         m.set(String(op.id), Object.assign({}, op.data, { id: op.id, ts: opTs }))
       }
@@ -1715,23 +2049,34 @@ app.post('/api/sync/batch', async (c) => {
   const ops = Array.isArray(body?.ops) ? body.ops : []
   if (ops.length === 0) return c.json({ ok: true, results: [] })
 
+  const ownTid = (await tenantOf(c, user)) || DEFAULT_TENANT  // [Tenant] 업로더 테넌트로 귀속
   const results: any[] = []
   for (const op of ops) {
     try {
       if (!op || !op.image_data) {
-        results.push({ opId: op?.opId, ok: false, error: 'image_data required' })
+        // 결정적(영구) 거부 — 클라가 큐에서 제거해도 됨(재시도해도 같은 실패)
+        results.push({ opId: op?.opId, ok: false, permanent: true, error: 'image_data required' })
         continue
+      }
+      // [멱등] 같은 opId 가 이미 저장됐으면(응답유실 후 재전송) 새로 만들지 말고 기존 id 반환
+      if (op.opId) {
+        const ex: any = await c.env.DB.prepare(
+          `SELECT id FROM pano_images WHERE source_op_id = ? AND deleted = 0 LIMIT 1`
+        ).bind(op.opId).first()
+        if (ex && ex.id) { results.push({ opId: op.opId, ok: true, id: ex.id, dedup: true }); continue }
       }
       const id = genId('img')
       const now = Date.now()
       const name = (op.kind === 'doc' ? '[doc] ' : '') + (op.name || '')
       await c.env.DB.prepare(
-        `INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
-      ).bind(id, name, op.image_data, op.width || null, op.height || null, now, now).run()
+        `INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted, source_op_id, tenant_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+      ).bind(id, name, op.image_data, op.width || null, op.height || null, now, now, op.opId || null, ownTid).run()
       results.push({ opId: op.opId, ok: true, id })
     } catch (e: any) {
-      results.push({ opId: op?.opId, ok: false, error: String(e?.message || e) })
+      // 일시적 오류(D1 장애/타임아웃 등) — permanent 아님. 클라는 큐를 보존하고 다음 동기화 때 재시도
+      //   → 일시 오류로 360 사진이 영구 삭제되던 데이터손실 차단.
+      results.push({ opId: op?.opId, ok: false, permanent: false, error: String(e?.message || e) })
     }
   }
   return c.json({ ok: true, results })
@@ -1765,6 +2110,7 @@ function mapNote(r: any) {
 
 // 노트 목록 — deployment_id 필수, pin_id 선택, status 선택
 app.get('/api/notes', async (c) => {
+  if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2] 노트(이슈)는 로그인 사용자만
   const dep = c.req.query('deployment_id')
   if (!dep) return c.json({ error: 'deployment_id required' }, 400)
   const pin = c.req.query('pin_id')
@@ -1782,6 +2128,7 @@ app.get('/api/notes', async (c) => {
 
 // 배포 단위 노트 요약(핀별 카운트/상태) — 도면 위 뱃지 표시용
 app.get('/api/notes/summary', async (c) => {
+  if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2]
   const dep = c.req.query('deployment_id')
   if (!dep) return c.json({ error: 'deployment_id required' }, 400)
   const { results } = await c.env.DB.prepare(
@@ -1820,7 +2167,7 @@ app.post('/api/notes', async (c) => {
   const user = await getUser(c)
   const author = user ? (user.name || user.email) : (String(body.author || '').trim() || '익명')
   const author_email = user ? user.email : null
-  const author_role = user ? (await isDesigner(c, user.email) ? (user.email === superAdmin(c) ? 'super' : 'designer') : 'viewer') : 'guest'
+  const author_role = user ? (await isDesigner(c, user.email) ? (isSuperAdmin(c, user.email) ? 'super' : 'designer') : 'viewer') : 'guest'
 
   const id = genId('note')
   const now = Date.now()
@@ -1902,9 +2249,21 @@ app.all('*', async (c) => {
   if (assets && assets.fetch) {
     // 원 요청 경로의 자산을 시도, 없으면 index.html로 폴백(SPA 진입)
     const url = new URL(c.req.url)
-    const direct = await assets.fetch(new Request(c.req.url, { method: 'GET' }))
-    if (direct.status !== 404) return direct
-    return assets.fetch(new Request(url.origin + '/index.html', { method: 'GET' }))
+    let res = await assets.fetch(new Request(c.req.url, { method: 'GET' }))
+    if (res.status === 404) {
+      res = await assets.fetch(new Request(url.origin + '/index.html', { method: 'GET' }))
+    }
+    // [근본수정] 앱 셸(HTML/JS/CSS/SW/manifest)을 항상 재검증(no-cache) → 배포 즉시 반영 +
+    //   HTML/JS/CSS 버전 일치(옛 JS+새 CSS 불일치로 스타일 깨지는 문제 차단).
+    //   ⚠ _worker.js(Advanced Mode)에선 _headers 가 무시되므로 워커에서 직접 헤더를 씌운다.
+    //   CF ASSETS 기본 max-age=14400(4시간)이 "배포해도 새로고침 안 됨 + 깨짐"의 원인이었다.
+    const p = url.pathname
+    const isShell = p === '/' || p === '/sw.js' || p === '/manifest.webmanifest' || /\.(html|css|js)$/i.test(p)
+    if (isShell) {
+      res = new Response(res.body, res)   // 헤더 수정 가능하도록 복제
+      res.headers.set('Cache-Control', 'no-cache, must-revalidate')
+    }
+    return res
   }
   return c.text('Not Found', 404)
 })

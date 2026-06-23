@@ -5,7 +5,7 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v11';
+const CACHE = 'wm-shell-v15';   // [캐시버스트] 새 로고/파비콘(favicon.svg) 셸 추가 + 옛 캐시 정리
 const SHELL = [
   './',
   'index.html',
@@ -14,6 +14,7 @@ const SHELL = [
   'manifest.webmanifest',
   'vendor/pdf.worker.min.js',                 // ★ 오프라인 PDF 로드 핵심 — 로컬 워커(1MB) 반드시 캐시
   'images/logo.png',
+  'images/favicon.svg',
   'images/icon-64.png',
   'images/icon-192.png',
   'images/icon-512.png',
@@ -29,7 +30,9 @@ self.addEventListener('install', (e) => {
   self.skipWaiting();
   e.waitUntil(
     caches.open(CACHE).then((c) =>
-      Promise.allSettled(SHELL.map((u) => c.add(u))) // 일부 실패해도 설치 진행
+      // [자가치유] cache:'reload' = 브라우저 HTTP 캐시 우회 → 항상 "최신" 셸을 캐시.
+      //   (마스터가 강제 새로고침 안 해도, 새 SW 설치 시 옛 4시간 캐시 대신 최신을 받음)
+      Promise.allSettled(SHELL.map((u) => c.add(new Request(u, { cache: 'reload' }))))
     )
   );
 });
@@ -37,7 +40,8 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      // 'wm-shared'(공유 임시저장)는 유지 — 공유 직후 클라가 읽어가야 함
+      Promise.all(keys.filter((k) => k !== CACHE && k !== 'wm-shared').map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
@@ -66,9 +70,33 @@ function isApi(url) {
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET') return; // 쓰기 요청은 패스(네트워크 직행)
   let url;
   try { url = new URL(req.url); } catch { return; }
+
+  // ── [마스터: 사진 파일이 들어오면 트리거] Web Share Target ──
+  //   폰에서 THETA 360 촬영 → 갤러리/THETA앱 "공유 → SEASTAR" → 이 POST 로 파일이 들어옴.
+  //   파일을 임시 캐시에 저장하고 ?shared=1 로 앱을 열면, 클라(ThetaIntake)가 자동 인입한다.
+  if (req.method === 'POST' && /(^|\/)share-target$/.test(url.pathname)) {
+    e.respondWith((async () => {
+      try {
+        const form = await req.formData();
+        const files = form.getAll('photos').filter((f) => f && f.type && f.type.indexOf('image/') === 0);
+        const cache = await caches.open('wm-shared');
+        const ids = [], names = [];
+        for (let i = 0; i < files.length; i++) {
+          const key = '/__shared__/' + Date.now() + '-' + i;
+          await cache.put(new Request(key), new Response(files[i], { headers: { 'Content-Type': files[i].type || 'image/jpeg' } }));
+          ids.push(key); names.push(files[i].name || ('shared-' + i + '.jpg'));
+        }
+        await cache.put(new Request('/__shared__/index'),
+          new Response(JSON.stringify({ ids, names, at: Date.now() }), { headers: { 'Content-Type': 'application/json' } }));
+      } catch (err) { /* 무시 — 빈 손으로라도 앱은 열어줌 */ }
+      return Response.redirect('./?shared=1', 303);
+    })());
+    return;
+  }
+
+  if (req.method !== 'GET') return; // 그 외 쓰기 요청은 패스(네트워크 직행)
 
   // ── [오프라인 모바일 핵심] 네비게이션 요청은 항상 앱 셸로 폴백 ──
   //   모바일 PWA를 오프라인으로 처음 열거나, /projects 등 라우트로 진입할 때
@@ -123,8 +151,10 @@ self.addEventListener('fetch', (e) => {
   const sameOrigin = (url.origin === self.location.origin);
   const isShellCode = sameOrigin && /\.(html|css|js)$/i.test(url.pathname) || url.pathname === '/' ;
   if (isShellCode) {
+    // [자가치유] 셸 코드는 HTTP 캐시 우회(reload)로 항상 서버 최신을 우선 → 옛 4시간 캐시 무력화
+    const freshReq = new Request(req, { cache: 'reload' });
     e.respondWith(
-      fetch(req).then((res) => {
+      fetch(freshReq).then((res) => {
         if (res && res.status === 200 && (res.type === 'basic' || res.type === 'cors')) {
           const clone = res.clone();
           caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {});

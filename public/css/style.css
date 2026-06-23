@@ -327,6 +327,17 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: background .15s, color .15s, border-color .15s;
 }
 .hub-card-del:hover { background: rgba(248,113,113,.16); border-color: rgba(248,113,113,.5); color: var(--red); }
+/* 배포(Publish) 버튼 — 미배포=중립, 배포됨=골드 강조 */
+.hub-card-pub:hover { background: rgba(201,150,42,.18); border-color: rgba(201,150,42,.55); color: var(--gold); }
+.hub-card-pub.is-pub { background: rgba(201,150,42,.22); border-color: rgba(201,150,42,.6); color: var(--gold); }
+.hub-card-act.busy { opacity: .5; pointer-events: none; }
+/* 배포됨 배지 (카드 이름 옆) */
+.hub-pub-badge {
+  display: inline-block; vertical-align: middle; margin-left: 6px;
+  font-size: 11px; font-weight: 700; color: var(--gold);
+  background: rgba(201,150,42,.14); border: 1px solid rgba(201,150,42,.4);
+  border-radius: 999px; padding: 1px 8px; line-height: 1.5;
+}
 
 /* + 새 프로젝트 카드 */
 .hub-card-add {
@@ -3201,20 +3212,24 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     gap: 2px; padding: 6px 2px;
     background: transparent; border: none; cursor: pointer;
     color: #6b6457; font-family: var(--font-ui); font-size: 10px; font-weight: 700;
-    -webkit-tap-highlight-color: transparent;
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
   }
   .mnav-btn svg { width: 22px; height: 22px; }
-  .mnav-btn:active { color: var(--accent, #f59e0b); transform: scale(.94); }
-  .mnav-btn.active { color: var(--accent, #f59e0b); }
+  .mnav-btn:active { color: var(--gold, #c9962a); transform: scale(.94); background: rgba(201,150,42,.10); border-radius: 8px; }
+  .mnav-btn.active {
+    color: var(--gold, #c9962a);
+    background: rgba(201,150,42,.10);
+    border-radius: 8px;
+  }
   /* 중앙 포인트 추가 = 강조 FAB */
   .mnav-fab { position: relative; }
   .mnav-fab svg {
     width: 30px; height: 30px; padding: 9px; box-sizing: content-box;
     margin-top: -22px; border-radius: 50%;
-    background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;
-    box-shadow: 0 6px 16px rgba(217,119,6,.45); border: 3px solid #faf7f0;
+    background: linear-gradient(135deg, #d8a83e, #c08e2a); color: #1a1208;
+    box-shadow: 0 6px 16px rgba(201,150,42,.45); border: 3px solid #faf7f0;
   }
-  .mnav-fab span { margin-top: -2px; color: #d97706; }
+  .mnav-fab span { margin-top: -2px; color: var(--gold, #c9962a); }
   /* 뷰어 모드에선 designer-only 버튼 숨김 */
   body.role-viewer .mnav-btn.designer-only { display: none; }
 

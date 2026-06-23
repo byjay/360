@@ -144,7 +144,8 @@
     _cache: {},
     async fetchImage(id) {
       if (this._cache[id]) return this._cache[id];
-      const res = await fetch("/tables/pano_images/" + encodeURIComponent(id));
+      // [보안 H4] pano_images 인증 게이트 동반 — 헤더 미전송 시 401
+      const res = await fetch("/tables/pano_images/" + encodeURIComponent(id), { headers: (typeof Auth !== "undefined" ? Auth.headers() : {}) });
       if (!res.ok) throw new Error("저장된 이미지를 불러올 수 없습니다 (HTTP " + res.status + ")");
       const rec = await res.json();
       if (!rec.image_data) throw new Error("이미지 데이터가 비어 있습니다");
@@ -198,7 +199,7 @@
     /** docId → dataURL */
     async fetchDoc(id) {
       if (this._cache[id]) return this._cache[id];
-      const res = await fetch("/tables/pano_images/" + encodeURIComponent(id));
+      const res = await fetch("/tables/pano_images/" + encodeURIComponent(id), { headers: (typeof Auth !== "undefined" ? Auth.headers() : {}) });
       if (!res.ok) throw new Error("첨부 문서를 불러올 수 없습니다 (HTTP " + res.status + ")");
       const rec = await res.json();
       if (!rec.image_data) throw new Error("문서 데이터가 비어 있습니다");

@@ -55,7 +55,12 @@
         SF._authCbs.forEach((cb) => { try { cb(u); } catch (e) {} });
       });
 
+      // [SEcMS 검증 로직 이식] services/firebase.ts signInWithGoogle 패턴
       SF.loginGoogle = async () => {
+        // ① 전체화면 위에서는 OS 구글 팝업이 가려지거나 차단됨 → 팝업 직전 전체화면 해제 (SEcMS Fix#131)
+        try { if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen(); } catch (e) {}
+        // ② 매번 계정 선택 UI 강제 (자동 단일계정 진입 방지)
+        try { provider.setCustomParameters({ prompt: "select_account" }); } catch (e) {}
         const res = await authMod.signInWithPopup(SF._auth, provider);
         return res.user;
       };

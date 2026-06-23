@@ -101,7 +101,7 @@
     /* ── localStorage 폴백 ── */
     _lsKey() { return "wm_sync_ops"; },
     _lsAll() { try { return JSON.parse(localStorage.getItem(this._lsKey()) || "[]"); } catch (e) { return []; } },
-    _lsSet(arr) { try { localStorage.setItem(this._lsKey(), JSON.stringify(arr)); } catch (e) {} },
+    _lsSet(arr) { try { localStorage.setItem(this._lsKey(), JSON.stringify(arr)); return true; } catch (e) { return false; } },
 
     /** op 추가 — {opId, kind:'image'|'doc', name, image_data, width?, height?, meta?} */
     async enqueue(op) {
@@ -109,14 +109,29 @@
       op.createdAt = Date.now();
       op.status = "pending";
       const db = await this._open();
+      // [버그수정 A] IDB 트랜잭션이 동기 throw(InvalidStateError: 모바일 백그라운드/versionchange)하면
+      //   op이 큐에도 안 들어가 영구손실 → try/catch + localStorage 폴백으로 항상 저장 보장.
+      let stored = false;
       if (db) {
-        await new Promise((res, rej) => {
-          const tx = db.transaction(this.STORE, "readwrite");
-          tx.objectStore(this.STORE).put(op);
-          tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-        });
-      } else {
-        const all = this._lsAll(); all.push(op); this._lsSet(all);
+        try {
+          await new Promise((res, rej) => {
+            const tx = db.transaction(this.STORE, "readwrite");
+            tx.objectStore(this.STORE).put(op);
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+          });
+          stored = true;
+        } catch (e) { /* IDB 실패 → 아래 localStorage 폴백 */ }
+      }
+      if (!stored) {
+        const all = this._lsAll(); all.push(op); stored = this._lsSet(all);
+      }
+      if (!stored) {
+        // [무신호 손실 차단] IDB·localStorage 모두 실패(저장공간 부족/차단) →
+        //   기존엔 opId 를 반환해 배지엔 떴지만 영영 전송 못 하는 '유령 op' 였다.
+        //   이제 사용자에게 명시 신호 + null 반환 → 호출부가 pendingOpId 를 세팅하지 않도록.
+        try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("⚠️ 오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
+        this._emit();
+        return null;
       }
       this._emit();
       return op.opId;
@@ -183,7 +198,19 @@
           const data = await res.json();
           for (const r of (data.results || [])) {
             if (r.ok && r.id) { map[r.opId] = r.id; uploaded++; await this._remove(r.opId); }
-            else { failed++; }
+            else if (r.permanent === true) {
+              // [데이터손실 차단] 결정적 거부(검증실패/용량초과 등)만 dead-letter 제거 →
+              //   매 동기화 무한재시도("동기화 중" 영구표시) 방지. 서버가 permanent=true 로 명시할 때만.
+              failed++;
+              await this._remove(r.opId);
+              try { console.warn("[SyncQueue] op 영구거부 → 제거:", r.opId, (r && r.error) || ""); } catch (e) {}
+            } else {
+              // [데이터손실 차단 — 핵심] 일시적 실패(DB장애/타임아웃 등)는 큐 '보존'.
+              //   기존 코드는 일시 오류도 무조건 제거해 360 사진이 영구 소실됐다.
+              //   → 다음 수동 동기화 때 재시도. (서버 멱등 source_op_id 로 중복생성도 0)
+              failed++;
+              try { console.warn("[SyncQueue] op 일시실패 → 큐 보존(재시도):", r.opId, (r && r.error) || ""); } catch (e) {}
+            }
           }
         }
       } finally {
@@ -192,16 +219,14 @@
       return { ok: failed === 0, uploaded, failed, map };
     },
 
-    /** online 복구 시 자동 일괄 동기화 시작 */
+    /** [마스터: 수동 반영] 인터넷이 복구돼도 자동 업로드하지 않는다.
+     *  오프라인 큐는 영속 보관 + 배지로 "↑ 지금 올리기 N" 안내 → 사용자가 직접 눌러야
+     *  (App.syncNow) 서버에 반영. (온라인 일반 저장은 큐를 거치지 않고 즉시 직접 업로드되므로 무관) */
     init() {
       if (this._inited) return; this._inited = true;
-      // ── [오프라인→온라인 재연동] 인터넷 복구 시: ①첨부 op 일괄 업로드 → ②핀ID 치환 → ③도면 draft 반영 ──
-      window.addEventListener("online", () => this._onReconnect());
+      window.addEventListener("online", () => this._emit());
       window.addEventListener("offline", () => this._emit());
-      // 초기 1회 + 주기적 재시도(앱이 열려 있는 동안 백그라운드 동기화)
       this._emit();
-      if (navigator.onLine) this._onReconnect();
-      setInterval(() => { if (navigator.onLine) this._onReconnect(); }, 30000);
     },
 
     /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */

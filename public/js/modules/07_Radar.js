@@ -6,8 +6,13 @@
       this._pin = pin;
       const box = document.getElementById("pano-radar");
       if (!box) return;
+      // [마스터 요청 N9] 미니맵 접기/펼치기 토글 (1회 바인딩)
+      if (!this._toggleBound) {
+        const tb = document.getElementById("pano-radar-toggle");
+        if (tb) { tb.addEventListener("click", (e) => { e.stopPropagation(); box.classList.toggle("collapsed"); }); this._toggleBound = true; }
+      }
       // 현재 페이지의 도면 이미지 소스 확보 (뷰어/디자이너 공통)
-      const mapSrc = this._currentMapSrc();
+      const mapSrc = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(this._currentMapSrc()) : this._currentMapSrc();
       if (!mapSrc) { this.hide(); return; }
 
       const page = pin.page || 1;
@@ -33,6 +38,35 @@
       // 시야 부채꼴을 현재 핀 위치로 이동
       const cone = document.getElementById("pano-radar-cone");
       if (cone) { cone.style.left = pin.x + "%"; cone.style.top = pin.y + "%"; }
+
+      // [마스터 요청 #3] 핀이 영역(구역) 내부면 그 구역만 확대해서 미니맵 표시
+      const stage = document.getElementById("pano-radar-stage");
+      if (stage) {
+        let view = null;
+        try {
+          if (typeof Zones !== "undefined" && Zones._bbox) {
+            // [N8] 핀↔구역 매칭: pinIds 명시적 링크 우선, 없으면 기하학적 포함 판정
+            const z = (State.zones || []).find(zz => (zz.page || 1) === page && (
+              (Array.isArray(zz.pinIds) && zz.pinIds.indexOf(pin.id) >= 0) ||
+              (Zones._contains && Zones._contains(zz, pin.x, pin.y))
+            ));
+            if (z) {
+              const bb = Zones._bbox(z), pad = 8;
+              view = {
+                x: Math.max(0, bb.x - pad), y: Math.max(0, bb.y - pad),
+                w: Math.min(100, bb.w + pad * 2), h: Math.min(100, bb.h + pad * 2)
+              };
+            }
+          }
+        } catch (e) {}
+        if (view && view.w > 3 && view.h > 3) {
+          const s = Math.min(100 / view.w, 100 / view.h);   // 더 큰 축 기준 fit
+          stage.style.transformOrigin = "0 0";
+          stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-view.x).toFixed(2) + "%, " + (-view.y).toFixed(2) + "%)";
+        } else {
+          stage.style.transform = "";   // 구역 밖이면 전체 도면
+        }
+      }
 
       box.classList.remove("hidden");
     },

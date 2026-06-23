@@ -1,5 +1,5 @@
   const Designers = {
-    _tab: "designers",
+    _tab: "users",
     _reqStatus: "pending",
     _reqCache: [],
     init() {
@@ -11,6 +11,7 @@
       const inp = $("designer-email-input");
       if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.add(); } });
       // 탭 전환
+      $("adm-tab-users") && $("adm-tab-users").addEventListener("click", () => this.switchTab("users"));
       $("adm-tab-designers") && $("adm-tab-designers").addEventListener("click", () => this.switchTab("designers"));
       $("adm-tab-requests") && $("adm-tab-requests").addEventListener("click", () => this.switchTab("requests"));
       $("adm-tab-domains") && $("adm-tab-domains").addEventListener("click", () => this.switchTab("domains"));
@@ -45,14 +46,15 @@
     },
     switchTab(tab) {
       this._tab = tab;
-      const tabs = { designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs" };
-      const panels = { designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs" };
+      const tabs = { users: "adm-tab-users", designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs" };
+      const panels = { users: "adm-panel-users", designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs" };
       Object.keys(tabs).forEach((k) => {
         const tEl = document.getElementById(tabs[k]);
         const pEl = document.getElementById(panels[k]);
         if (tEl) tEl.classList.toggle("active", k === tab);
         if (pEl) pEl.classList.toggle("hidden", k !== tab);
       });
+      if (tab === "users" && typeof UserMgmt !== "undefined") UserMgmt.load();
       if (tab === "requests") this.loadRequests();
       if (tab === "domains") this.loadDomains();
       if (tab === "members") this.loadMembers();

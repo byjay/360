@@ -27,12 +27,12 @@
 
     /** 핀 머리 안에 들어갈 아이콘 SVG 문자열(흰 원 중심 18,12 / 반경≈7.3 기준).
      *  number 이면 null 반환(호출측에서 숫자 text 를 그린다). */
-    headMarkup(iconId, color) {
+    headMarkup(iconId, color, cy) {
       const d = this.def(iconId);
       if (!d.body) return null;
-      // 24x24 아이콘을 약 13px(원지름 14.6) 안에 들어가게: scale≈0.54, 중심(18,12)로 평행이동
-      // translate = (18 - 12*0.54, 12 - 12*0.54) = (11.52, 5.52)
-      const s = 0.54, tx = 18 - 12 * s, ty = 12 - 12 * s;
+      // 24x24 아이콘을 핀 머리 흰 원 안에 배치. cy = 머리 중심 y(기본 12, 360-ISO 마커는 15).
+      const cyc = (typeof cy === 'number') ? cy : 12;
+      const s = 0.56, tx = 18 - 12 * s, ty = cyc - 12 * s;
       return `<g transform="translate(${tx} ${ty}) scale(${s})"
                  fill="none" stroke="${color || '#065f46'}" stroke-width="2.2"
                  stroke-linecap="round" stroke-linejoin="round">${d.body}</g>`;

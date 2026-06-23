@@ -15,7 +15,8 @@
     /** 디자이너 진입 시 호출 */
     async load() {
       try {
-        const r = await fetch("/api/projects");
+        // [버그수정] 인증헤더 필수 — /api/projects 는 멤버십/배포 스코프 필터(미전송=익명→누락)
+        const r = await fetch("/api/projects", { headers: Auth.headers() });
         const { data } = await r.json();
         this.list = data || [];
       } catch (e) { this.list = []; }

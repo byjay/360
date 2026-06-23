@@ -47,5 +47,17 @@
       "url": "./?action=new",
       "icons": [{ "src": "images/icon-192.png", "sizes": "192x192" }]
     }
-  ]
+  ],
+  "share_target": {
+    "action": "share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "files": [
+        { "name": "photos", "accept": ["image/jpeg", "image/png", "image/*"] }
+      ]
+    }
+  }
 }
