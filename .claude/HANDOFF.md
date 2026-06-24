@@ -1,9 +1,28 @@
 # HANDOFF — 360° Location Viewer (SEASTAR)
 
 ## 마지막 커밋
-- HEAD `1e0dead` feat(ui): 모바일 아이콘/버튼 개선 + 누적 기능 커밋 (2026-06-24)
+- HEAD `cfa34cc` feat(access): 프로젝트별 접근 신청 흐름 구현 SEcMS 패턴 (2026-06-24)
+- `1e0dead` feat(ui): 모바일 아이콘/버튼 개선 + 누적 기능 커밋 (2026-06-24)
 - `a1463c2` fix(load): 저장된 구역·도면 로딩 3건 + 설치 버튼 터치 수정
 - `192dcbf` feat(pin): 핀(호스팟)별 아이콘 선택 + 디자인 스킬 아이콘 10종
+
+## 이번 턴 ⑰: 프로젝트별 접근 신청 흐름 구현 (2026-06-24)
+> 마스터: "swcms같이 프로젝트공별로 구글 로그인시 사용신청하게하고 관리자가 미리등록했다면 바로입장"
+- ✅ `migrations/0019_project_access_requests.sql` — `project_access_requests` 테이블 + 인덱스
+- ✅ `GET /api/projects` 교체: 배포 프로젝트는 비멤버도 보임(잠금 상태), `is_member` + `my_request` 필드 추가
+- ✅ `POST /api/projects/:id/request-access` — 비멤버 접근 신청 (upsert, 중복 신청 → pending 재활성화)
+- ✅ `GET /api/projects/:id/access-requests` — 관리자용 신청 목록
+- ✅ `POST /api/projects/:id/access-requests/:rid/approve|reject` — 승인(viewer 자동배정) / 거절
+- ✅ `GET /api/admin/project-access-requests` — 관리자 전체 신청 뷰(슈퍼=전체, 일반=내 프로젝트)
+- ✅ `12_ProjectHub.js`: 비멤버 카드에 잠금 오버레이 + hover 시 CTA, `openAccessReq()` 모달
+- ✅ `proj-members-modal` 안에 접근 신청 대기 섹션 (관리자가 바로 승인/거절)
+- ✅ Designers 모달에 "프로젝트 신청" 탭 추가 + `loadProjRequests()`
+- ✅ CSS: 잠금 오버레이, 신청 모달, 관리 패널 스타일
+- ✅ assemble + vite build EXIT:0 + MIRROR 완료
+- **배포 주의**: D1에 `migrations/0019_project_access_requests.sql` 를 마스터가 직접 wrangler로 실행 필요
+  ```
+  npx wrangler d1 execute webapp-production --file=migrations/0019_project_access_requests.sql
+  ```
 
 ## 이번 턴 ⑯: 전수 병렬 버그헌트(4에이전트) + 수술수정 3건 (2026-06-21)
 > 마스터: "한 파일 하나하나 다 검증하고 버그 찾아." 4에이전트(서버+마이그/20_App/클라모듈/HTML·CSS) 전수 헌트. (4번째 레이트리밋.)
