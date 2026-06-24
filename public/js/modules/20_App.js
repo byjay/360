@@ -1995,6 +1995,46 @@
       UI.renderPinsOnMap();
     },
 
+    /** [마스터] 핀 선택 → 자동 ISO 전환 + 해당 구역(zone)만큼 확대 포커스.
+     *  구역이 없으면 핀 주변 영역으로 확대. 이후 사용자는 휠/버튼으로 자유 확대·축소.
+     *  뷰어·디자이너 공통. */
+    focusPinIso(pin) {
+      if (!pin) return;
+      State.activePin = pin.id;
+      const page = pin.page || 1;
+      const zones = (State.zones || []).filter(z => (z.page || 1) === page);
+      // 1순위: 이 핀이 연결된 구역, 2순위: 핀 좌표를 포함하는 구역
+      let zone = zones.find(z => (z.pinIds || []).includes(pin.id));
+      if (!zone && typeof Zones !== "undefined" && Zones._contains)
+        zone = zones.find(z => Zones._contains(z, pin.x, pin.y));
+      let bbox;
+      if (zone) {
+        bbox = { x: zone.x, y: zone.y, w: zone.w, h: zone.h };
+      } else {
+        // 구역 미지정 핀 → 핀 주변 가상 영역(±16%)으로 확대
+        const R = 16;
+        const x = Math.max(0, pin.x - R), y = Math.max(0, pin.y - R);
+        bbox = { x, y, w: Math.min(R * 2, 100 - x), h: Math.min(R * 2, 100 - y) };
+      }
+      UI.renderPinList();
+      UI.renderPinsOnMap();
+      MapCtrl.focusZoneIso(bbox);
+      if (typeof Prompt !== "undefined" && Prompt.toast)
+        Prompt.toast(zone ? ("🧊 '" + (zone.label || "구역") + "' 확대 — 다시 누르면 360°") : "🧊 ISO 확대 — 다시 누르면 360°", 2200);
+    },
+
+    /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):
+     *  ① 첫 탭(미포커스) → ISO 전환 + 구역 확대
+     *  ② 같은 핀 둘째 탭(ISO 포커스 상태) → 콘텐츠(360°/정보) 열기 */
+    onPinTap(pin) {
+      if (!pin) return;
+      const focused = State.activePin === pin.id && State.isoView;
+      if (!focused) { this.focusPinIso(pin); return; }
+      if (this.pinHasContent(pin)) this.openPano(pin);
+      else if (State.mode === "designer" && typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
+      else this.openPano(pin); // 뷰어: 미디어 없으면 openPano 가 안내 표시
+    },
+
     /** 핀 리스트 클릭 → 해당 페이지로 전환 + 플라이투 (+뷰어는 파노라마 오픈) */
     async focusPin(pin, openAfter) {
       State.activePin = pin.id;

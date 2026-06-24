@@ -2140,9 +2140,8 @@
       State.isoDir = ((dir % 4) + 4) % 4;
       this._applyIso();
     },
-    _applyIso() {
-      const vp = this.viewport, tr = this.transform;
-      // ★ 하단 nav 버튼(btn-iso) + 상단 툴바 버튼(tb-iso) 모두 동기화 + 방향 라벨 표시
+    /** ISO 버튼/뷰포트 클래스 동기화(공용 — toggleIso·focusZoneIso 둘 다 사용) */
+    _syncIsoButtons() {
       ["btn-iso", "tb-iso"].forEach((bid) => {
         const btn = document.getElementById(bid);
         if (!btn) return;
@@ -2152,7 +2151,11 @@
           btn.setAttribute("title", State.isoView ? (base + " · " + this.ISO_LABELS[State.isoDir]) : base);
         } catch (e) {}
       });
-      if (vp) vp.classList.toggle("iso-active", State.isoView);
+      if (this.viewport) this.viewport.classList.toggle("iso-active", State.isoView);
+    },
+    _applyIso() {
+      const vp = this.viewport, tr = this.transform;
+      this._syncIsoButtons();
       // ISO 방향 표시 토스트
       try {
         if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
@@ -2396,6 +2399,46 @@
       const cx = bbox.x + bbox.w / 2;
       const cy = bbox.y + bbox.h / 2;
       this.flyTo(cx, cy, z, duration);
+      return z;
+    },
+
+    /** [핀 선택 → ISO 영역확대] ISO 3D를 켜고, 구역(bbox %)이 화면 중앙에 꽉 차도록 줌/팬.
+     *  fitZone 과 달리 ISO 변형(rotateX54·rotateZθ, transform-origin 0 0, 직교투영)을
+     *  역산해 정확히 중앙 정렬한다. 회전·팬·줌을 CSS transition 으로 한 번에 부드럽게.
+     *  bbox:{x,y,w,h}(%), pad: 여백(0.2=20%). 이후 사용자는 휠/버튼으로 자유 확대·축소. */
+    focusZoneIso(bbox, pad = 0.2, duration = 700) {
+      if (!bbox || !(bbox.w > 0) || !(bbox.h > 0)) return;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      if (!vw || !vh || !cw || !ch) return;
+      // ISO 켜기(이미 켜져 있으면 현재 코너 시점 유지, 새로 진입하면 북동=0)
+      if (!State.isoView) { State.isoView = true; State.isoDir = 0; }
+      const ISO_Z = [-32, 58, 148, 238];
+      const th = ISO_Z[State.isoDir % 4] * Math.PI / 180;
+      const cs = Math.cos(th), sn = Math.sin(th);
+      const cosX = Math.cos(54 * Math.PI / 180); // rotateX(54°) → 화면 Y 단축계수(≈0.588)
+      // 구역의 도면 로컬 px(줌1 기준)
+      const lw = (bbox.w / 100) * cw, lh = (bbox.h / 100) * ch;
+      // rotateZ 회전 후 화면정렬 바운딩 박스(Y는 rotateX 로 단축)
+      const bw = Math.abs(lw * cs) + Math.abs(lh * sn);
+      const bh = (Math.abs(lw * sn) + Math.abs(lh * cs)) * cosX;
+      const padK = 1 - Math.max(0, Math.min(0.4, pad));
+      let z = Math.min((vw * padK) / bw, (vh * padK) / bh);
+      z = Math.max(0.3, Math.min(8, z)); // 줌 한계 내
+      // 구역 중심의 로컬 px → ISO 변환 후 화면좌표(origin 0,0): 직교투영이라 Z 무시
+      const lx = ((bbox.x + bbox.w / 2) / 100) * cw;
+      const ly = ((bbox.y + bbox.h / 2) / 100) * ch;
+      const sx = lx * cs - ly * sn;
+      const sy = (lx * sn + ly * cs) * cosX;
+      // 중심을 뷰포트 중앙(vw/2,vh/2)에 두는 pan (translate 는 scale·rotate 바깥)
+      this.cancelFly();
+      State.zoom = z;
+      State.pan = { x: vw / 2 - z * sx, y: vh / 2 - z * sy };
+      const tr = this.transform;
+      try { tr.style.transition = "transform " + (duration / 1000) + "s cubic-bezier(.22,.61,.36,1)"; } catch (e) {}
+      this.applyTransform();
+      this._syncIsoButtons();
+      setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} }, duration + 40);
       return z;
     }
   };
@@ -2698,18 +2741,13 @@
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
             if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
-            App.setActivePin(pin.id);
-            // ── [마스터 요청·항목3] 클릭하면 "사진부터" 보이게 ──
-            //  · 사진(콘텐츠) 있는 핀  → 곧바로 360° 뷰어(사진만) 열기
-            //  · 사진 없는 핀          → 전용 작업 팝업(사진추가/수정/이동/삭제)으로 등록 유도
-            //  수정/이동/삭제는 핀의 ✏️/↔/🗑 아이콘(액션바) 또는 빈 핀 팝업으로 분리 제공.
+            // ── 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업(기존 유지) ──
             if (State.editMode && typeof PinActionPop !== "undefined") {
-              // [마스터 요청] 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업
+              App.setActivePin(pin.id);
               PinActionPop.open(pin.id);
-            } else if (App.pinHasContent(pin)) {
-              App.openPano(pin);
-            } else if (typeof PinActionPop !== "undefined") {
-              PinActionPop.open(pin.id);
+            } else {
+              // ── [마스터 요청] 핀 선택 → ISO 전환 + 구역 확대(첫 탭), 같은 핀 둘째 탭 → 360° ──
+              App.onPinTap(pin);
             }
           });
           // ── 길게 누르기(롱프레스) → 사진 있는 핀도 작업 팝업(수정/이동/삭제) 진입 ──
@@ -2750,7 +2788,8 @@
         } else {
           marker.addEventListener("click", e => {
             e.stopPropagation();
-            App.openPano(pin); // 뷰어: 미디어 없으면 openPano가 안내 표시
+            // [마스터 요청] 뷰어도 동일: 첫 탭 → ISO+구역 확대, 둘째 탭 → 360°
+            App.onPinTap(pin);
           });
         }
         layer.appendChild(marker);
@@ -6761,6 +6800,46 @@
       State.activePin = State.activePin === id ? null : id;
       UI.renderPinList();
       UI.renderPinsOnMap();
+    },
+
+    /** [마스터] 핀 선택 → 자동 ISO 전환 + 해당 구역(zone)만큼 확대 포커스.
+     *  구역이 없으면 핀 주변 영역으로 확대. 이후 사용자는 휠/버튼으로 자유 확대·축소.
+     *  뷰어·디자이너 공통. */
+    focusPinIso(pin) {
+      if (!pin) return;
+      State.activePin = pin.id;
+      const page = pin.page || 1;
+      const zones = (State.zones || []).filter(z => (z.page || 1) === page);
+      // 1순위: 이 핀이 연결된 구역, 2순위: 핀 좌표를 포함하는 구역
+      let zone = zones.find(z => (z.pinIds || []).includes(pin.id));
+      if (!zone && typeof Zones !== "undefined" && Zones._contains)
+        zone = zones.find(z => Zones._contains(z, pin.x, pin.y));
+      let bbox;
+      if (zone) {
+        bbox = { x: zone.x, y: zone.y, w: zone.w, h: zone.h };
+      } else {
+        // 구역 미지정 핀 → 핀 주변 가상 영역(±16%)으로 확대
+        const R = 16;
+        const x = Math.max(0, pin.x - R), y = Math.max(0, pin.y - R);
+        bbox = { x, y, w: Math.min(R * 2, 100 - x), h: Math.min(R * 2, 100 - y) };
+      }
+      UI.renderPinList();
+      UI.renderPinsOnMap();
+      MapCtrl.focusZoneIso(bbox);
+      if (typeof Prompt !== "undefined" && Prompt.toast)
+        Prompt.toast(zone ? ("🧊 '" + (zone.label || "구역") + "' 확대 — 다시 누르면 360°") : "🧊 ISO 확대 — 다시 누르면 360°", 2200);
+    },
+
+    /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):
+     *  ① 첫 탭(미포커스) → ISO 전환 + 구역 확대
+     *  ② 같은 핀 둘째 탭(ISO 포커스 상태) → 콘텐츠(360°/정보) 열기 */
+    onPinTap(pin) {
+      if (!pin) return;
+      const focused = State.activePin === pin.id && State.isoView;
+      if (!focused) { this.focusPinIso(pin); return; }
+      if (this.pinHasContent(pin)) this.openPano(pin);
+      else if (State.mode === "designer" && typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
+      else this.openPano(pin); // 뷰어: 미디어 없으면 openPano 가 안내 표시
     },
 
     /** 핀 리스트 클릭 → 해당 페이지로 전환 + 플라이투 (+뷰어는 파노라마 오픈) */

@@ -68,9 +68,8 @@
       State.isoDir = ((dir % 4) + 4) % 4;
       this._applyIso();
     },
-    _applyIso() {
-      const vp = this.viewport, tr = this.transform;
-      // ★ 하단 nav 버튼(btn-iso) + 상단 툴바 버튼(tb-iso) 모두 동기화 + 방향 라벨 표시
+    /** ISO 버튼/뷰포트 클래스 동기화(공용 — toggleIso·focusZoneIso 둘 다 사용) */
+    _syncIsoButtons() {
       ["btn-iso", "tb-iso"].forEach((bid) => {
         const btn = document.getElementById(bid);
         if (!btn) return;
@@ -80,7 +79,11 @@
           btn.setAttribute("title", State.isoView ? (base + " · " + this.ISO_LABELS[State.isoDir]) : base);
         } catch (e) {}
       });
-      if (vp) vp.classList.toggle("iso-active", State.isoView);
+      if (this.viewport) this.viewport.classList.toggle("iso-active", State.isoView);
+    },
+    _applyIso() {
+      const vp = this.viewport, tr = this.transform;
+      this._syncIsoButtons();
       // ISO 방향 표시 토스트
       try {
         if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
@@ -324,6 +327,46 @@
       const cx = bbox.x + bbox.w / 2;
       const cy = bbox.y + bbox.h / 2;
       this.flyTo(cx, cy, z, duration);
+      return z;
+    },
+
+    /** [핀 선택 → ISO 영역확대] ISO 3D를 켜고, 구역(bbox %)이 화면 중앙에 꽉 차도록 줌/팬.
+     *  fitZone 과 달리 ISO 변형(rotateX54·rotateZθ, transform-origin 0 0, 직교투영)을
+     *  역산해 정확히 중앙 정렬한다. 회전·팬·줌을 CSS transition 으로 한 번에 부드럽게.
+     *  bbox:{x,y,w,h}(%), pad: 여백(0.2=20%). 이후 사용자는 휠/버튼으로 자유 확대·축소. */
+    focusZoneIso(bbox, pad = 0.2, duration = 700) {
+      if (!bbox || !(bbox.w > 0) || !(bbox.h > 0)) return;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      if (!vw || !vh || !cw || !ch) return;
+      // ISO 켜기(이미 켜져 있으면 현재 코너 시점 유지, 새로 진입하면 북동=0)
+      if (!State.isoView) { State.isoView = true; State.isoDir = 0; }
+      const ISO_Z = [-32, 58, 148, 238];
+      const th = ISO_Z[State.isoDir % 4] * Math.PI / 180;
+      const cs = Math.cos(th), sn = Math.sin(th);
+      const cosX = Math.cos(54 * Math.PI / 180); // rotateX(54°) → 화면 Y 단축계수(≈0.588)
+      // 구역의 도면 로컬 px(줌1 기준)
+      const lw = (bbox.w / 100) * cw, lh = (bbox.h / 100) * ch;
+      // rotateZ 회전 후 화면정렬 바운딩 박스(Y는 rotateX 로 단축)
+      const bw = Math.abs(lw * cs) + Math.abs(lh * sn);
+      const bh = (Math.abs(lw * sn) + Math.abs(lh * cs)) * cosX;
+      const padK = 1 - Math.max(0, Math.min(0.4, pad));
+      let z = Math.min((vw * padK) / bw, (vh * padK) / bh);
+      z = Math.max(0.3, Math.min(8, z)); // 줌 한계 내
+      // 구역 중심의 로컬 px → ISO 변환 후 화면좌표(origin 0,0): 직교투영이라 Z 무시
+      const lx = ((bbox.x + bbox.w / 2) / 100) * cw;
+      const ly = ((bbox.y + bbox.h / 2) / 100) * ch;
+      const sx = lx * cs - ly * sn;
+      const sy = (lx * sn + ly * cs) * cosX;
+      // 중심을 뷰포트 중앙(vw/2,vh/2)에 두는 pan (translate 는 scale·rotate 바깥)
+      this.cancelFly();
+      State.zoom = z;
+      State.pan = { x: vw / 2 - z * sx, y: vh / 2 - z * sy };
+      const tr = this.transform;
+      try { tr.style.transition = "transform " + (duration / 1000) + "s cubic-bezier(.22,.61,.36,1)"; } catch (e) {}
+      this.applyTransform();
+      this._syncIsoButtons();
+      setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} }, duration + 40);
       return z;
     }
   };

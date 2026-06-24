@@ -293,18 +293,13 @@
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
             if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
-            App.setActivePin(pin.id);
-            // ── [마스터 요청·항목3] 클릭하면 "사진부터" 보이게 ──
-            //  · 사진(콘텐츠) 있는 핀  → 곧바로 360° 뷰어(사진만) 열기
-            //  · 사진 없는 핀          → 전용 작업 팝업(사진추가/수정/이동/삭제)으로 등록 유도
-            //  수정/이동/삭제는 핀의 ✏️/↔/🗑 아이콘(액션바) 또는 빈 핀 팝업으로 분리 제공.
+            // ── 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업(기존 유지) ──
             if (State.editMode && typeof PinActionPop !== "undefined") {
-              // [마스터 요청] 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업
+              App.setActivePin(pin.id);
               PinActionPop.open(pin.id);
-            } else if (App.pinHasContent(pin)) {
-              App.openPano(pin);
-            } else if (typeof PinActionPop !== "undefined") {
-              PinActionPop.open(pin.id);
+            } else {
+              // ── [마스터 요청] 핀 선택 → ISO 전환 + 구역 확대(첫 탭), 같은 핀 둘째 탭 → 360° ──
+              App.onPinTap(pin);
             }
           });
           // ── 길게 누르기(롱프레스) → 사진 있는 핀도 작업 팝업(수정/이동/삭제) 진입 ──
@@ -345,7 +340,8 @@
         } else {
           marker.addEventListener("click", e => {
             e.stopPropagation();
-            App.openPano(pin); // 뷰어: 미디어 없으면 openPano가 안내 표시
+            // [마스터 요청] 뷰어도 동일: 첫 탭 → ISO+구역 확대, 둘째 탭 → 360°
+            App.onPinTap(pin);
           });
         }
         layer.appendChild(marker);
