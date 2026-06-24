@@ -2199,13 +2199,19 @@
       const ISO_Z = [-32, 58, 148, 238];
       if (State.isoView) {
         const z = ISO_Z[State.isoDir % 4];
-        // 도면이 rotateX(54)→rotateZ(z)로 누우므로 핀은 rotateZ(-z)→rotateX(-54)로 화면 수직 복원.
-        // + 역스케일(inv)로 화면상 일정 크기, ISO 가독 위해 1.25 추가.
+        // ── [마스터] 진짜 3D 박힌 핀(2D 카드 아님) ──
+        //  도면은 rotateX(54)·rotateZ(z)로 기운다. 핀을 화면 정면으로 완전히 눕히면(rotateX(-54))
+        //  납작한 2D 카드가 된다. 대신:
+        //   · rotateZ(-z): 시점(평면 법선)축 회전만 상쇄 → 번호는 항상 정면(어느 ISO 방향서도 동일).
+        //   · rotateX(-22): 도면 pitch(54)를 부분만 상쇄 → 최종 화면 pitch 54-22 = 32° 기립.
+        //  결과: 바늘 tip(하단)은 땅(도면 평면)에 박히고, 머리는 평면 위로 솟아 "서 있는" 입체.
+        //  preserve-3d + origin 하단 → 머리가 +Z로 떠 도면 위로 입체감(시점 무관 32° 동일, 행렬 검증).
         const billboard =
-          `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-54deg) scale(${(inv * 1.25).toFixed(3)})`;
+          `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-22deg) scale(${(inv * 1.18).toFixed(3)})`;
         layer.style.transformStyle = "preserve-3d";
         for (const m of layer.children) {
-          m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) 기준
+          m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) = 땅에 박히는 지점
+          m.style.transformStyle = "preserve-3d"; // 마커 내부도 3D 보존(머리가 +Z로 솟음)
           m.style.transform = billboard;
           m.style.zIndex = "20";                   // 기울인 도면 위로 핀을 띄움
         }
