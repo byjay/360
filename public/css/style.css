@@ -4304,3 +4304,62 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 .net-badge.syncing{background:var(--blue)}
 .net-q{background:rgba(0,0,0,.25);color:#fff;padding:2px 8px;border-radius:10px;
   font:700 11px var(--font-mono)}
+
+/* ── 프로젝트 잠금(접근제어) 오버레이 ─────────────────── */
+.hub-card-thumb{position:relative;overflow:hidden}
+.hub-card-lock{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:6px;background:rgba(0,0,0,.6);
+  opacity:0;transition:opacity .18s;pointer-events:none;border-radius:inherit}
+.hub-card-lock .hub-lock-ico{color:#fff}
+.hub-card-lock .hub-lock-txt{
+  color:#fff;font-size:12px;font-weight:700;letter-spacing:.02em;
+  background:rgba(255,255,255,.15);padding:3px 10px;border-radius:10px}
+.hub-card-locked:hover .hub-card-lock,
+.hub-card-locked:focus .hub-card-lock{opacity:1}
+.hub-card-locked{cursor:pointer}
+.hub-card-locked .hub-card-thumb::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.18)}
+.hub-card-req-badge{
+  font-size:10px;font-weight:700;color:var(--gold,#c9962a);
+  background:rgba(201,150,42,.12);padding:2px 7px;border-radius:8px;margin-left:4px}
+
+/* ── 접근 신청 모달 (비멤버) ──────────────────────────── */
+.par-proj-name{display:block;margin-top:4px;font-size:15px}
+.par-textarea{resize:vertical;min-height:72px;font:inherit}
+.par-pending-msg{
+  margin:8px 0;padding:10px 14px;border-radius:8px;
+  background:rgba(201,150,42,.12);color:var(--gold,#c9962a);font-size:13px}
+
+/* ── 멤버 관리 모달: 접근 신청 섹션 ──────────────────── */
+.pm-access-reqs{margin-top:16px;border-top:1px solid var(--border,#e4e7eb);padding-top:12px}
+.pm-access-reqs-head{font-size:12px;font-weight:700;color:var(--text-muted,#6b7280);
+  margin-bottom:8px;letter-spacing:.04em}
+.par-row{display:flex;align-items:center;gap:8px;padding:8px 0;
+  border-bottom:1px solid var(--border,#e4e7eb);flex-wrap:wrap}
+.par-email{font-size:13px;font-weight:500;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.par-msg{font-size:12px;color:var(--text-muted,#6b7280);flex:2;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.par-date{font-size:11px;color:var(--text-muted,#6b7280);white-space:nowrap}
+.par-btn-approve,.par-btn-reject{font-size:12px;padding:3px 10px}
+
+/* ── 관리자 프로젝트 신청 패널 ─────────────────────────── */
+.req-list{display:flex;flex-direction:column;gap:0}
+.req-row{display:flex;align-items:center;gap:8px;padding:10px 0;
+  border-bottom:1px solid var(--border,#e4e7eb);flex-wrap:wrap;font-size:13px}
+.req-col-project{font-weight:700;min-width:100px;max-width:140px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.req-col-email{flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.req-col-msg{flex:2;min-width:80px;color:var(--text-muted,#6b7280);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.req-col-date{font-size:11px;color:var(--text-muted,#6b7280);white-space:nowrap}
+.req-btn{font-size:12px;padding:3px 10px}
+.req-status-label{font-size:12px;font-weight:600;padding:2px 8px;border-radius:8px}
+.req-status-approved{color:#047857;background:rgba(4,120,87,.1)}
+.req-status-rejected{color:#b91c1c;background:rgba(185,28,28,.1)}
+@media(prefers-color-scheme:dark){
+  .req-status-approved{color:#3fb950;background:rgba(63,185,80,.12)}
+  .req-status-rejected{color:#f85149;background:rgba(248,81,73,.12)}
+}

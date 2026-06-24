@@ -8,6 +8,10 @@
       // hub 인증바 버튼들 (홈 인증바와 동일 동작)
       $("hub-btn-signout") && $("hub-btn-signout").addEventListener("click", () => Auth.signOut());
       $("hub-btn-manage-designers") && $("hub-btn-manage-designers").addEventListener("click", () => Designers.open());
+      // 접근 신청 모달
+      $("par-cancel") && $("par-cancel").addEventListener("click", () => this.closeAccessReq());
+      $("par-backdrop") && $("par-backdrop").addEventListener("click", () => this.closeAccessReq());
+      $("par-submit") && $("par-submit").addEventListener("click", () => this.submitAccessReq());
       // [P3] 프로젝트별 멤버 배정 모달
       $("pm-close") && $("pm-close").addEventListener("click", () => this.closeMembers());
       const pmBd = document.querySelector("#proj-members-modal .admin-gate-backdrop");
@@ -75,7 +79,7 @@
         if (p.subdomain && t && t.base) this._renderSubdomainStatus(p.subdomain, "https://" + p.subdomain + "." + t.base);
       } catch (e) {}
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
-      await this.loadMembers();
+      await Promise.all([this.loadMembers(), this.loadAccessReqs()]);
     },
     closeMembers() {
       const m = document.getElementById("proj-members-modal");
@@ -104,6 +108,100 @@
         });
       } catch (e) { if (list) list.innerHTML = '<div class="designers-empty">목록을 불러올 수 없습니다(소유자/관리자만 가능).</div>'; }
     },
+    async loadAccessReqs() {
+      const p = this._memProject; if (!p) return;
+      const sec = document.getElementById("pm-access-reqs");
+      const list = document.getElementById("pm-access-reqs-list");
+      if (!sec || !list) return;
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/access-requests?status=pending", { headers: Auth.headers() });
+        if (!r.ok) { sec.classList.add("hidden"); return; }
+        const { data } = await r.json();
+        if (!data || !data.length) { sec.classList.add("hidden"); return; }
+        sec.classList.remove("hidden");
+        const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(s) : s;
+        list.innerHTML = "";
+        data.forEach((req) => {
+          const d = new Date(req.created_at);
+          const dateStr = d.getFullYear() + "." + String(d.getMonth()+1).padStart(2,"0") + "." + String(d.getDate()).padStart(2,"0");
+          const row = document.createElement("div");
+          row.className = "par-row";
+          row.innerHTML = '<span class="par-email" title="' + esc(req.email) + '">' + esc(req.email) + '</span>' +
+            (req.message ? '<span class="par-msg">' + esc(req.message) + '</span>' : '') +
+            '<span class="par-date">' + dateStr + '</span>' +
+            '<button class="admin-gate-btn primary par-btn-approve" data-rid="' + esc(req.id) + '" type="button">승인</button>' +
+            '<button class="admin-gate-btn danger par-btn-reject" data-rid="' + esc(req.id) + '" type="button">거절</button>';
+          row.querySelector(".par-btn-approve").addEventListener("click", () => this._handleAccessReq(req.id, "approve"));
+          row.querySelector(".par-btn-reject").addEventListener("click", () => this._handleAccessReq(req.id, "reject"));
+          list.appendChild(row);
+        });
+      } catch (e) { sec.classList.add("hidden"); }
+    },
+    async _handleAccessReq(rid, action) {
+      const p = this._memProject; if (!p) return;
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/access-requests/" + encodeURIComponent(rid) + "/" + action,
+          { method: "POST", headers: Auth.headers() });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const label = action === "approve" ? "승인" : "거절";
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + label + " 처리됨");
+        await this.loadAccessReqs();
+        if (action === "approve") await this.loadMembers();
+      } catch (e) { alert("처리 실패: " + (e && e.message ? e.message : "오류")); }
+    },
+
+    // 접근 신청 모달 (비멤버 사용자)
+    openAccessReq(p) {
+      this._reqProject = p;
+      const m = document.getElementById("proj-access-req-modal"); if (!m) return;
+      const nm = document.getElementById("par-proj-name"); if (nm) nm.textContent = p.name || p.id;
+      const msg = document.getElementById("par-message"); if (msg) msg.value = "";
+      const err = document.getElementById("par-error"); if (err) err.classList.add("hidden");
+      const sub = document.getElementById("par-submit");
+      const pendingMsg = document.getElementById("par-pending-msg");
+      if (p.my_request === "pending") {
+        if (pendingMsg) pendingMsg.classList.remove("hidden");
+        if (msg) msg.classList.add("hidden");
+        if (sub) { sub.textContent = "다시 신청"; sub.disabled = false; }
+      } else {
+        if (pendingMsg) pendingMsg.classList.add("hidden");
+        if (msg) msg.classList.remove("hidden");
+        if (sub) { sub.textContent = "신청하기"; sub.disabled = false; }
+      }
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeAccessReq() {
+      const m = document.getElementById("proj-access-req-modal"); if (!m) return;
+      m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200);
+    },
+    async submitAccessReq() {
+      const p = this._reqProject; if (!p) return;
+      const sub = document.getElementById("par-submit");
+      const err = document.getElementById("par-error"); if (err) err.classList.add("hidden");
+      const message = (document.getElementById("par-message") || {}).value || "";
+      if (sub) { sub.disabled = true; sub.textContent = "신청 중…"; }
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/request-access",
+          { method: "POST", headers: Auth.headers(), body: JSON.stringify({ message }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok && r.status !== 409) {
+          if (err) { err.textContent = j.error || "신청 실패"; err.classList.remove("hidden"); }
+          if (sub) { sub.disabled = false; sub.textContent = "신청하기"; }
+          return;
+        }
+        // 성공 또는 409(already member)
+        p.my_request = "pending";
+        this.closeAccessReq();
+        const label = r.status === 409 ? "이미 멤버입니다." : "접근 신청이 접수되었습니다. 관리자 승인을 기다려 주세요.";
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + label, 3000);
+        // 카드 상태 갱신
+        this.render();
+      } catch (e) {
+        if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); }
+        if (sub) { sub.disabled = false; sub.textContent = "신청하기"; }
+      }
+    },
+
     async addMember() {
       const p = this._memProject; if (!p) return;
       const inp = document.getElementById("pm-email");
@@ -234,19 +332,29 @@
       empty && empty.classList.add("hidden");
 
       this.list.forEach((p) => {
+        // is_member: 명시적으로 false = 비멤버(잠금), undefined/true = 멤버(정상)
+        const isLocked = Auth.idToken && p.is_member === false;
+        const isPending = isLocked && p.my_request === "pending";
         const card = document.createElement("div");
-        card.className = "hub-card";
+        card.className = "hub-card" + (isLocked ? " hub-card-locked" : "");
         card.setAttribute("role", "listitem");
         card.tabIndex = 0;
         const deckTxt = (p.deck_count != null) ? (p.deck_count + " DECKS") : "";
         const dateTxt = this._fmtDate(p.created_at);
         const code = "SS-" + String(Math.abs(this._hash(p.id || p.name)) % 9000 + 1000);
+        const lockOverlay = isLocked
+          ? '<div class="hub-card-lock" aria-hidden="true">' +
+              '<svg class="hub-lock-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+              '<span class="hub-lock-txt">' + (isPending ? "⏳ 심사 중" : "접근 신청") + '</span>' +
+            '</div>'
+          : '';
         card.innerHTML =
           '<div class="hub-card-thumb">' +
             '<div class="hub-thumb-grid"></div>' +
             '<div class="hub-thumb-scan"></div>' +
             this._iconSvg(p) +
             '<span class="hub-thumb-code">' + code + '</span>' +
+            lockOverlay +
           '</div>' +
           '<div class="hub-card-body">' +
             '<div class="hub-card-name">' + UI.escapeHtml(p.name) +
@@ -255,9 +363,10 @@
             '<div class="hub-card-meta">' +
               (deckTxt ? '<span class="hub-card-decks">' + deckTxt + '</span>' : '') +
               (dateTxt ? '<span class="hub-card-date">' + dateTxt + '</span>' : '') +
+              (isPending ? '<span class="hub-card-req-badge">⏳ 신청 접수됨</span>' : '') +
             '</div>' +
           '</div>' +
-          (isDesigner
+          (isDesigner && !isLocked
             ? '<div class="hub-card-actions">' +
                 '<button class="hub-card-act hub-card-pub' + (p.published ? ' is-pub' : '') + '" title="' + (p.published ? '배포됨 — 클릭 시 배포취소(뷰어 비공개)' : '뷰어에게 배포(공개)') + '" data-act="pub" aria-label="배포">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>' +
@@ -274,13 +383,18 @@
               '</div>'
             : '');
 
-        // 카드 클릭 → 진입
+        // 카드 클릭
         card.addEventListener("click", (e) => {
-          if (e.target.closest("[data-act]")) return; // 액션 버튼은 제외
+          if (e.target.closest("[data-act]")) return;
+          if (isLocked) { this.openAccessReq(p); return; }
           this.openProject(p);
         });
         card.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.openProject(p); }
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (isLocked) { this.openAccessReq(p); return; }
+            this.openProject(p);
+          }
         });
         // 삭제 버튼
         const del = card.querySelector('[data-act="del"]');

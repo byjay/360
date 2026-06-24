@@ -1308,12 +1308,33 @@ async function canManageProject(c: any, user: any, projectId: string): Promise<b
 
 app.get('/api/projects', async (c) => {
   const user = await getUser(c)
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM projects WHERE deleted = 0 ORDER BY created_at DESC'
-  ).all()
-  const filter = await visibleProjectFilter(c, user)
-  const list = filter ? (results || []).filter(filter) : (results || [])
-  return c.json({ data: list.map(mapProject) })
+  const email = user?.email || ''
+  const isSuperUser = !!(user && isSuperAdmin(c, user.email))
+  const { results } = await c.env.DB.prepare('SELECT * FROM projects WHERE deleted = 0 ORDER BY created_at DESC').all()
+  // 멤버십 + 신청 상태 맵 구성
+  const myRole = new Map<string, string>()
+  const myReqStatus = new Map<string, string>()
+  let globalDesigner = false
+  if (email) {
+    const [mr, rr]: any[] = await Promise.all([
+      c.env.DB.prepare('SELECT project_id, role FROM project_members WHERE email = ?').bind(email).all(),
+      c.env.DB.prepare('SELECT project_id, status FROM project_access_requests WHERE email = ?').bind(email).all(),
+    ])
+    for (const r of (mr.results || [])) myRole.set(String(r.project_id), String(r.role))
+    for (const r of (rr.results || [])) myReqStatus.set(String(r.project_id), String(r.status))
+    globalDesigner = await isDesigner(c, email)
+  }
+  const list = (results || []).filter((p: any) => {
+    if (isSuperUser) return true
+    const isOwner = !!email && p.owner === email
+    if (globalDesigner || isOwner || myRole.has(p.id)) return true
+    return !!p.published  // 비멤버도 배포된 프로젝트는 보임(잠금 상태로)
+  })
+  return c.json({ data: list.map((p: any) => {
+    const isOwner = !!email && p.owner === email
+    const isMember = !!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
+    return { ...mapProject(p), is_member: isMember, my_request: myReqStatus.get(p.id) || null }
+  }) })
 })
 
 // 프로젝트 생성 (디자이너)
@@ -1527,6 +1548,109 @@ app.delete('/api/projects/:id/members/:email', async (c) => {
   await c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').bind(pid, email).run()
   await logActivity(c, 'project.member.remove', { actor: user, targetType: 'project', targetId: pid, detail: { email } })
   return c.json({ success: true })
+})
+
+// ── 프로젝트 접근 신청 / 관리 ──────────────────────────────────────────────
+
+// 비멤버 → 접근 신청 (POST, 로그인 필수)
+app.post('/api/projects/:id/request-access', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const pid = c.req.param('id')
+  const proj: any = await c.env.DB.prepare('SELECT id, published FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
+  if (!proj || !proj.published) return c.json({ error: 'not found' }, 404)
+  // 이미 멤버면 신청 불필요
+  const existing: any = await c.env.DB.prepare('SELECT role FROM project_members WHERE project_id = ? AND email = ?').bind(pid, user.email).first()
+  if (existing) return c.json({ error: 'already a member', status: 'member' }, 409)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const message = String(body.message || '').slice(0, 500)
+  const now = Date.now()
+  const rid = genId('par')
+  await c.env.DB.prepare(
+    `INSERT INTO project_access_requests (id, project_id, email, message, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'pending', ?, ?)
+     ON CONFLICT(project_id, email) DO UPDATE SET message = excluded.message, status = 'pending', updated_at = excluded.updated_at`
+  ).bind(rid, pid, user.email, message, now, now).run()
+  await logActivity(c, 'project.access.request', { actor: user, targetType: 'project', targetId: pid, detail: { email: user.email } })
+  return c.json({ success: true, status: 'pending' })
+})
+
+// 접근 신청 목록 조회 (프로젝트 관리자 — canManageProject)
+app.get('/api/projects/:id/access-requests', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const status = c.req.query('status') || 'pending'
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM project_access_requests WHERE project_id = ? AND status = ? ORDER BY created_at DESC'
+  ).bind(pid, status).all()
+  return c.json({ data: results || [] })
+})
+
+// 신청 승인 → viewer 자동 배정
+app.post('/api/projects/:id/access-requests/:rid/approve', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const rid = c.req.param('rid')
+  const req: any = await c.env.DB.prepare('SELECT * FROM project_access_requests WHERE id = ? AND project_id = ?').bind(rid, pid).first()
+  if (!req) return c.json({ error: 'not found' }, 404)
+  const now = Date.now()
+  await c.env.DB.prepare("UPDATE project_access_requests SET status = 'approved', handled_by = ?, updated_at = ? WHERE id = ?")
+    .bind(user.email, now, rid).run()
+  await c.env.DB.prepare(
+    `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, 'viewer', ?, ?)
+     ON CONFLICT(project_id, email) DO UPDATE SET role = 'viewer', granted_by = excluded.granted_by`
+  ).bind(pid, req.email, user.email, now).run()
+  await logActivity(c, 'project.access.approved', { actor: user, targetType: 'project', targetId: pid, detail: { email: req.email } })
+  return c.json({ success: true })
+})
+
+// 신청 거절
+app.post('/api/projects/:id/access-requests/:rid/reject', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const rid = c.req.param('rid')
+  const req: any = await c.env.DB.prepare('SELECT id FROM project_access_requests WHERE id = ? AND project_id = ?').bind(rid, pid).first()
+  if (!req) return c.json({ error: 'not found' }, 404)
+  const now = Date.now()
+  await c.env.DB.prepare("UPDATE project_access_requests SET status = 'rejected', handled_by = ?, updated_at = ? WHERE id = ?")
+    .bind(user.email, now, rid).run()
+  await logActivity(c, 'project.access.rejected', { actor: user, targetType: 'project', targetId: pid, detail: { email: req.email } })
+  return c.json({ success: true })
+})
+
+// 전체 프로젝트 접근 신청 목록 (관리자 전용)
+app.get('/api/admin/project-access-requests', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const status = c.req.query('status') || 'pending'
+  if (isSuperAdmin(c, user.email)) {
+    const { results } = await c.env.DB.prepare(
+      "SELECT r.*, p.name as project_name FROM project_access_requests r JOIN projects p ON p.id = r.project_id WHERE r.status = ? ORDER BY r.created_at DESC"
+    ).bind(status).all()
+    return c.json({ data: results || [] })
+  }
+  // 내가 관리하는 프로젝트만 (소유자 OR designer 역할)
+  const [owned, designerOf]: any[] = await Promise.all([
+    c.env.DB.prepare("SELECT id FROM projects WHERE owner = ? AND deleted = 0").bind(user.email).all(),
+    c.env.DB.prepare("SELECT project_id FROM project_members WHERE email = ? AND role = 'designer'").bind(user.email).all(),
+  ])
+  const myPids = [...new Set<string>([
+    ...(owned.results || []).map((p: any) => String(p.id)),
+    ...(designerOf.results || []).map((r: any) => String(r.project_id)),
+  ])]
+  if (!myPids.length) return c.json({ data: [] })
+  const ph = myPids.map(() => '?').join(',')
+  const { results } = await c.env.DB.prepare(
+    `SELECT r.*, p.name as project_name FROM project_access_requests r JOIN projects p ON p.id = r.project_id WHERE r.project_id IN (${ph}) AND r.status = ? ORDER BY r.created_at DESC`
+  ).bind(...myPids, status).all()
+  return c.json({ data: results || [] })
 })
 
 /* ── 프로젝트 배포(Publish) / 배포취소 ──

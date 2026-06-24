@@ -2,6 +2,7 @@
     _tab: "users",
     _reqStatus: "pending",
     _reqCache: [],
+    _projReqStatus: "pending",
     init() {
       const $ = (id) => document.getElementById(id);
       $("designers-close") && $("designers-close").addEventListener("click", () => this.close());
@@ -17,6 +18,15 @@
       $("adm-tab-domains") && $("adm-tab-domains").addEventListener("click", () => this.switchTab("domains"));
       $("adm-tab-members") && $("adm-tab-members").addEventListener("click", () => this.switchTab("members"));
       $("adm-tab-logs") && $("adm-tab-logs").addEventListener("click", () => this.switchTab("logs"));
+      $("adm-tab-proj-req") && $("adm-tab-proj-req").addEventListener("click", () => this.switchTab("proj-req"));
+      $("proj-req-refresh") && $("proj-req-refresh").addEventListener("click", () => this.loadProjRequests(true));
+      document.querySelectorAll("#adm-panel-proj-req .adm-filter-item").forEach((b) => {
+        b.addEventListener("click", () => {
+          this._projReqStatus = b.dataset.status || "pending";
+          document.querySelectorAll("#adm-panel-proj-req .adm-filter-item").forEach((x) => x.classList.toggle("active", x === b));
+          this.loadProjRequests(true);
+        });
+      });
       // 도메인 관리
       $("domain-add-btn") && $("domain-add-btn").addEventListener("click", () => this.addDomain());
       const dinp = $("domain-input");
@@ -46,8 +56,8 @@
     },
     switchTab(tab) {
       this._tab = tab;
-      const tabs = { users: "adm-tab-users", designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs" };
-      const panels = { users: "adm-panel-users", designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs" };
+      const tabs = { users: "adm-tab-users", designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs", "proj-req": "adm-tab-proj-req" };
+      const panels = { users: "adm-panel-users", designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs", "proj-req": "adm-panel-proj-req" };
       Object.keys(tabs).forEach((k) => {
         const tEl = document.getElementById(tabs[k]);
         const pEl = document.getElementById(panels[k]);
@@ -58,6 +68,7 @@
       if (tab === "requests") this.loadRequests();
       if (tab === "domains") this.loadDomains();
       if (tab === "members") this.loadMembers();
+      if (tab === "proj-req") this.loadProjRequests(true);
       if (tab === "logs") { this.loadLogActions(); this.loadLogs(true); }
     },
 
@@ -285,6 +296,53 @@
         await fetch("/api/designers/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.render();
       } catch (e) {}
+    },
+
+    /* ── 프로젝트 접근 신청 관리 ── */
+    async loadProjRequests(reset) {
+      const list = document.getElementById("proj-req-list"); if (!list) return;
+      if (reset) list.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
+      try {
+        const r = await fetch("/api/admin/project-access-requests?status=" + encodeURIComponent(this._projReqStatus), { headers: Auth.headers() });
+        if (!r.ok) { list.innerHTML = '<div class="designers-empty">로드 실패</div>'; return; }
+        const { data } = await r.json();
+        // 배지 갱신
+        const badge = document.getElementById("adm-proj-req-badge");
+        const pending = data ? data.filter((x) => x.status === "pending") : [];
+        if (badge) { if (pending.length) { badge.textContent = pending.length; badge.classList.remove("hidden"); } else { badge.classList.add("hidden"); } }
+        if (!data || !data.length) { list.innerHTML = '<div class="designers-empty">신청 없음</div>'; return; }
+        const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(s) : s;
+        list.innerHTML = "";
+        data.forEach((req) => {
+          const d = new Date(req.created_at);
+          const dateStr = d.getFullYear() + "." + String(d.getMonth()+1).padStart(2,"0") + "." + String(d.getDate()).padStart(2,"0");
+          const row = document.createElement("div");
+          row.className = "req-row";
+          row.innerHTML =
+            '<span class="req-col-project" title="' + esc(req.project_name || req.project_id) + '">' + esc(req.project_name || req.project_id) + '</span>' +
+            '<span class="req-col-email" title="' + esc(req.email) + '">' + esc(req.email) + '</span>' +
+            (req.message ? '<span class="req-col-msg">' + esc(req.message) + '</span>' : '<span class="req-col-msg"></span>') +
+            '<span class="req-col-date">' + dateStr + '</span>' +
+            (req.status === "pending"
+              ? '<button class="admin-gate-btn primary req-btn" data-act="approve" type="button">승인</button>' +
+                '<button class="admin-gate-btn danger req-btn" data-act="reject" type="button">거절</button>'
+              : '<span class="req-status-label req-status-' + esc(req.status) + '">' + (req.status === "approved" ? "승인됨" : "거절됨") + '</span>');
+          if (req.status === "pending") {
+            row.querySelector('[data-act="approve"]').addEventListener("click", () => this._handleProjReq(req.id, req.project_id, "approve"));
+            row.querySelector('[data-act="reject"]').addEventListener("click", () => this._handleProjReq(req.id, req.project_id, "reject"));
+          }
+          list.appendChild(row);
+        });
+      } catch (e) { list.innerHTML = '<div class="designers-empty">오류: ' + (e && e.message ? e.message : "네트워크 오류") + '</div>'; }
+    },
+    async _handleProjReq(rid, projectId, action) {
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/access-requests/" + encodeURIComponent(rid) + "/" + action,
+          { method: "POST", headers: Auth.headers() });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + (action === "approve" ? "승인" : "거절") + " 처리됨");
+        await this.loadProjRequests(true);
+      } catch (e) { alert("처리 실패"); }
     },
 
     /* ── 사용 신청(access requests) 관리 ── */

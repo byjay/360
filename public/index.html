@@ -1430,6 +1430,9 @@
         <button id="adm-tab-logs" class="adm-tab" type="button" role="tab">
           <i class="fa-solid fa-clock-rotate-left"></i> 활동 로그
         </button>
+        <button id="adm-tab-proj-req" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-door-open"></i> 프로젝트 신청 <span id="adm-proj-req-badge" class="adm-req-badge hidden">0</span>
+        </button>
       </nav>
 
       <!-- 패널: 사용자 관리 (SECMS 관리자 사용자관리 차용 — 디자이너/뷰어 권한) -->
@@ -1615,6 +1618,17 @@
         </div>
       </section>
 
+      <!-- 패널: 프로젝트 접근 신청 (관리자/소유자 — 본인 프로젝트 신청 승인/거절) -->
+      <section id="adm-panel-proj-req" class="adm-panel hidden">
+        <div class="adm-filter-bar">
+          <button class="adm-filter-item active" data-status="pending" type="button">대기</button>
+          <button class="adm-filter-item" data-status="approved" type="button">승인됨</button>
+          <button class="adm-filter-item" data-status="rejected" type="button">거절됨</button>
+          <button id="proj-req-refresh" class="admin-gate-btn ghost" style="margin-left:auto" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <div id="proj-req-list" class="req-list"></div>
+      </section>
+
       <div class="admin-gate-actions">
         <button id="designers-close" class="admin-gate-btn ghost" type="button">닫기</button>
       </div>
@@ -1657,6 +1671,12 @@
       <div id="pm-add-error" class="admin-gate-error hidden"></div>
       <div id="pm-list" class="members-list"></div>
 
+      <!-- 접근 신청 대기 목록 (관리자용) -->
+      <div id="pm-access-reqs" class="pm-access-reqs hidden">
+        <div class="pm-access-reqs-head">⏳ 접근 신청 대기</div>
+        <div id="pm-access-reqs-list"></div>
+      </div>
+
       <!-- [마스터: 멀티테넌트] 프로젝트별 서브도메인 — 도메인 이름만 입력하면 세팅 -->
       <div class="pm-subdomain-block">
         <div class="pm-sub-head">🌐 전용 도메인 (멀티테넌트)</div>
@@ -1671,6 +1691,22 @@
 
       <div class="admin-gate-actions">
         <button id="pm-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 프로젝트 접근 신청 모달 (비멤버 사용자) -->
+  <div id="proj-access-req-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="par-title">
+    <div class="admin-gate-backdrop" id="par-backdrop"></div>
+    <div class="admin-gate-card">
+      <h2 id="par-title" class="admin-gate-title">프로젝트 접근 신청</h2>
+      <p class="admin-gate-sub">관리자 승인 후 열람할 수 있습니다.<br><b id="par-proj-name" class="par-proj-name"></b></p>
+      <div id="par-pending-msg" class="par-pending-msg hidden">⏳ 이미 신청이 접수되었습니다. 관리자 심사를 기다려 주세요.</div>
+      <textarea id="par-message" class="admin-gate-input par-textarea" rows="3" placeholder="신청 메시지(선택 사항)" aria-label="신청 메시지"></textarea>
+      <div id="par-error" class="admin-gate-error hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="par-cancel" class="admin-gate-btn ghost" type="button">취소</button>
+        <button id="par-submit" class="admin-gate-btn primary" type="button">신청하기</button>
       </div>
     </div>
   </div>
