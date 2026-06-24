@@ -1433,6 +1433,12 @@
         <button id="adm-tab-proj-req" class="adm-tab" type="button" role="tab">
           <i class="fa-solid fa-door-open"></i> 프로젝트 신청 <span id="adm-proj-req-badge" class="adm-req-badge hidden">0</span>
         </button>
+        <button id="adm-tab-matrix" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-table-cells"></i> 권한 매트릭스
+        </button>
+        <button id="adm-tab-flags" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-toggle-on"></i> 시스템 설정
+        </button>
       </nav>
 
       <!-- 패널: 사용자 관리 (SECMS 관리자 사용자관리 차용 — 디자이너/뷰어 권한) -->
@@ -1627,6 +1633,23 @@
           <button id="proj-req-refresh" class="admin-gate-btn ghost" style="margin-left:auto" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
         </div>
         <div id="proj-req-list" class="req-list"></div>
+      </section>
+
+      <!-- 패널: 권한 매트릭스 (사용자 × 프로젝트) -->
+      <section id="adm-panel-matrix" class="adm-panel hidden">
+        <div class="matrix-toolbar">
+          <input id="matrix-filter-user" class="matrix-filter-input" type="text" placeholder="이메일 필터…" aria-label="사용자 필터" />
+          <span id="matrix-dirty-count" class="matrix-dirty-count hidden">변경: 0건</span>
+          <button id="matrix-save" class="admin-gate-btn primary hidden" type="button">저장</button>
+          <button id="matrix-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <div id="matrix-container" class="matrix-container"></div>
+        <p class="matrix-hint">셀 클릭: 없음 → 뷰어 → 설계자 → 없음 순환. 저장 버튼으로 일괄 반영.</p>
+      </section>
+
+      <!-- 패널: 시스템 설정 플래그 (슈퍼 관리자 전용) -->
+      <section id="adm-panel-flags" class="adm-panel hidden">
+        <div id="flags-list" class="flags-list"></div>
       </section>
 
       <div class="admin-gate-actions">

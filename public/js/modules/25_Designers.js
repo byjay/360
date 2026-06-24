@@ -3,6 +3,8 @@
     _reqStatus: "pending",
     _reqCache: [],
     _projReqStatus: "pending",
+    _matrixData: null,
+    _matrixDirty: null,
     init() {
       const $ = (id) => document.getElementById(id);
       $("designers-close") && $("designers-close").addEventListener("click", () => this.close());
@@ -19,6 +21,12 @@
       $("adm-tab-members") && $("adm-tab-members").addEventListener("click", () => this.switchTab("members"));
       $("adm-tab-logs") && $("adm-tab-logs").addEventListener("click", () => this.switchTab("logs"));
       $("adm-tab-proj-req") && $("adm-tab-proj-req").addEventListener("click", () => this.switchTab("proj-req"));
+      $("adm-tab-matrix") && $("adm-tab-matrix").addEventListener("click", () => this.switchTab("matrix"));
+      $("adm-tab-flags") && $("adm-tab-flags").addEventListener("click", () => this.switchTab("flags"));
+      $("matrix-refresh") && $("matrix-refresh").addEventListener("click", () => this.loadMatrix());
+      $("matrix-save") && $("matrix-save").addEventListener("click", () => this.saveMatrix());
+      const mf = $("matrix-filter-user");
+      if (mf) mf.addEventListener("input", () => this.renderMatrix());
       $("proj-req-refresh") && $("proj-req-refresh").addEventListener("click", () => this.loadProjRequests(true));
       document.querySelectorAll("#adm-panel-proj-req .adm-filter-item").forEach((b) => {
         b.addEventListener("click", () => {
@@ -56,8 +64,8 @@
     },
     switchTab(tab) {
       this._tab = tab;
-      const tabs = { users: "adm-tab-users", designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs", "proj-req": "adm-tab-proj-req" };
-      const panels = { users: "adm-panel-users", designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs", "proj-req": "adm-panel-proj-req" };
+      const tabs = { users: "adm-tab-users", designers: "adm-tab-designers", requests: "adm-tab-requests", domains: "adm-tab-domains", members: "adm-tab-members", logs: "adm-tab-logs", "proj-req": "adm-tab-proj-req", matrix: "adm-tab-matrix", flags: "adm-tab-flags" };
+      const panels = { users: "adm-panel-users", designers: "adm-panel-designers", requests: "adm-panel-requests", domains: "adm-panel-domains", members: "adm-panel-members", logs: "adm-panel-logs", "proj-req": "adm-panel-proj-req", matrix: "adm-panel-matrix", flags: "adm-panel-flags" };
       Object.keys(tabs).forEach((k) => {
         const tEl = document.getElementById(tabs[k]);
         const pEl = document.getElementById(panels[k]);
@@ -69,6 +77,8 @@
       if (tab === "domains") this.loadDomains();
       if (tab === "members") this.loadMembers();
       if (tab === "proj-req") this.loadProjRequests(true);
+      if (tab === "matrix") this.loadMatrix();
+      if (tab === "flags") this.loadFlags();
       if (tab === "logs") { this.loadLogActions(); this.loadLogs(true); }
     },
 
@@ -296,6 +306,145 @@
         await fetch("/api/designers/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.render();
       } catch (e) {}
+    },
+
+    /* ── 권한 매트릭스 (사용자 × 프로젝트) ── */
+    async loadMatrix() {
+      const container = document.getElementById("matrix-container"); if (!container) return;
+      this._matrixDirty = new Map();
+      this._updateMatrixDirtyUI();
+      container.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
+      try {
+        const r = await fetch("/api/admin/access-matrix", { headers: Auth.headers() });
+        if (!r.ok) { container.innerHTML = '<div class="designers-empty">로드 실패 (관리자/소유자 전용)</div>'; return; }
+        this._matrixData = await r.json();
+        this.renderMatrix();
+      } catch (e) { container.innerHTML = '<div class="designers-empty">네트워크 오류</div>'; }
+    },
+    renderMatrix() {
+      const container = document.getElementById("matrix-container"); if (!container || !this._matrixData) return;
+      const { users, projects, cells } = this._matrixData;
+      const filterVal = ((document.getElementById("matrix-filter-user") || {}).value || "").toLowerCase().trim();
+      const filteredUsers = filterVal ? users.filter((u) => u.email.toLowerCase().includes(filterVal)) : users;
+      if (!filteredUsers.length || !projects.length) {
+        container.innerHTML = '<div class="designers-empty">데이터 없음</div>'; return;
+      }
+      const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(String(s || "")) : String(s || "");
+      const cellMap = new Map();
+      for (const c of cells) cellMap.set(c.email + "::" + c.project_id, c.role);
+      if (this._matrixDirty) for (const [k, v] of this._matrixDirty) cellMap.set(k, v);
+      let html = '<table class="matrix-table"><thead><tr><th class="matrix-email-col">이메일</th>';
+      for (const p of projects) html += '<th class="matrix-proj-col" title="' + esc(p.name) + '">' + esc(p.name.length > 10 ? p.name.slice(0, 10) + "…" : p.name) + '</th>';
+      html += '</tr></thead><tbody>';
+      for (const u of filteredUsers) {
+        html += '<tr><td class="matrix-email-cell" title="' + esc(u.email) + '">' + esc(u.email) + '</td>';
+        for (const p of projects) {
+          const key = u.email + "::" + p.id;
+          const role = cellMap.get(key) || "none";
+          const dirty = this._matrixDirty && this._matrixDirty.has(key);
+          html += '<td class="matrix-cell' + (dirty ? " dirty" : "") + '" data-email="' + esc(u.email) + '" data-pid="' + esc(p.id) + '" data-role="' + esc(role) + '">' + this._mxBadge(role) + '</td>';
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+      container.addEventListener("click", (e) => {
+        const cell = e.target.closest(".matrix-cell"); if (!cell) return;
+        const next = { none: "viewer", viewer: "designer", designer: "none" }[cell.dataset.role] || "viewer";
+        const key = cell.dataset.email + "::" + cell.dataset.pid;
+        if (!this._matrixDirty) this._matrixDirty = new Map();
+        this._matrixDirty.set(key, next);
+        cell.dataset.role = next;
+        cell.innerHTML = this._mxBadge(next);
+        cell.classList.add("dirty");
+        this._updateMatrixDirtyUI();
+      }, { once: false });
+    },
+    _mxBadge(role) {
+      if (!role || role === "none") return '<span class="mx-none">—</span>';
+      if (role === "viewer") return '<span class="mx-viewer">뷰어</span>';
+      return '<span class="mx-designer">설계자</span>';
+    },
+    _updateMatrixDirtyUI() {
+      const n = this._matrixDirty ? this._matrixDirty.size : 0;
+      const cnt = document.getElementById("matrix-dirty-count");
+      const btn = document.getElementById("matrix-save");
+      if (cnt) { cnt.textContent = "변경: " + n + "건"; cnt.classList.toggle("hidden", n === 0); }
+      if (btn) btn.classList.toggle("hidden", n === 0);
+    },
+    async saveMatrix() {
+      if (!this._matrixDirty || !this._matrixDirty.size) return;
+      const btn = document.getElementById("matrix-save");
+      if (btn) { btn.disabled = true; btn.textContent = "저장 중…"; }
+      const updates = [];
+      for (const [key, role] of this._matrixDirty) {
+        const sep = key.indexOf("::");
+        updates.push({ email: key.slice(0, sep), project_id: key.slice(sep + 2), role });
+      }
+      try {
+        const r = await fetch("/api/admin/access-matrix", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ updates }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || "저장 실패");
+        this._matrixDirty = new Map();
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 권한 매트릭스 저장 — " + j.updated + "건");
+        await this.loadMatrix();
+      } catch (e) {
+        alert("저장 실패: " + (e && e.message || "오류"));
+        if (btn) { btn.disabled = false; btn.textContent = "저장"; }
+      }
+    },
+
+    /* ── 시스템 플래그 ── */
+    async loadFlags() {
+      const list = document.getElementById("flags-list"); if (!list) return;
+      list.innerHTML = '<div class="designers-loading">불러오는 중...</div>';
+      const FLAG_DEFS = [
+        { key: "AI_ENABLED",               label: "AI 채팅 활성화",       desc: "AI 기능 마스터 스위치 — OFF 시 /api/ai/* 전체 비활성화", danger: true },
+        { key: "ACCESS_REQUEST_ENABLED",    label: "프로젝트 접근 신청",   desc: "비멤버가 프로젝트 접근 신청할 수 있는 기능" },
+        { key: "OFFLINE_ENABLED",           label: "오프라인 다운로드",    desc: "오프라인 번들 다운로드 및 캐시 기능" },
+        { key: "ALLOW_VIEWER_SIGNUP",       label: "자체가입 허용",        desc: "회사 이메일로 직접 가입 허용 (allowed_domains 화이트리스트 필요)" },
+        { key: "PANO_VIEWER_ENABLED",       label: "360° 파노라마 뷰어",   desc: "파노라마 뷰어 기능 활성화" },
+      ];
+      try {
+        const r = await fetch("/api/admin/system-flags", { headers: Auth.headers() });
+        if (!r.ok) { list.innerHTML = '<div class="designers-empty">슈퍼 관리자 전용</div>'; return; }
+        const { data } = await r.json();
+        const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(String(s || "")) : String(s || "");
+        const savedMap = new Map((data || []).map((row) => [row.skey.replace("flag:", ""), row.value]));
+        list.innerHTML = "";
+        FLAG_DEFS.forEach((def) => {
+          const raw = savedMap.get(def.key);
+          const isOn = raw === undefined ? true : raw === "true";
+          const row = document.createElement("div");
+          row.className = "flag-row" + (def.danger ? " flag-danger" : "");
+          row.innerHTML =
+            '<div class="flag-info">' +
+              '<span class="flag-label">' + (def.danger ? "🔴 " : "") + esc(def.label) + '</span>' +
+              '<span class="flag-desc">' + esc(def.desc) + '</span>' +
+              '<span class="flag-key">' + esc(def.key) + '</span>' +
+            '</div>' +
+            '<button class="flag-toggle' + (isOn ? " on" : "") + '" data-key="' + esc(def.key) + '" data-val="' + isOn + '" type="button" aria-label="' + (isOn ? "켜짐, 클릭해서 끄기" : "꺼짐, 클릭해서 켜기") + '" aria-pressed="' + isOn + '">' +
+              '<span class="flag-thumb"></span>' +
+            '</button>';
+          row.querySelector(".flag-toggle").addEventListener("click", (e) => this.toggleFlag(e.currentTarget));
+          list.appendChild(row);
+        });
+      } catch (e) { list.innerHTML = '<div class="designers-empty">오류: ' + (e && e.message || "네트워크 오류") + '</div>'; }
+    },
+    async toggleFlag(btn) {
+      const key = btn.dataset.key;
+      const newVal = btn.dataset.val !== "true";
+      btn.disabled = true;
+      try {
+        const r = await fetch("/api/admin/system-flags", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ key, value: String(newVal) }) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        btn.dataset.val = String(newVal);
+        btn.classList.toggle("on", newVal);
+        btn.setAttribute("aria-pressed", newVal);
+        btn.setAttribute("aria-label", newVal ? "켜짐, 클릭해서 끄기" : "꺼짐, 클릭해서 켜기");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + key + " = " + (newVal ? "ON" : "OFF"));
+      } catch (e) { alert("설정 실패"); }
+      finally { btn.disabled = false; }
     },
 
     /* ── 프로젝트 접근 신청 관리 ── */

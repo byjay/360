@@ -1653,6 +1653,99 @@ app.get('/api/admin/project-access-requests', async (c) => {
   return c.json({ data: results || [] })
 })
 
+// ── 권한 매트릭스 (프로젝트 × 사용자 2D 뷰) ─────────────────────────────
+
+app.get('/api/admin/access-matrix', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const superUser = isSuperAdmin(c, user.email)
+  // 사용자 목록: project_members + local_users + access_requests 합집합
+  const [pm, lu, ar]: any[] = await Promise.all([
+    c.env.DB.prepare('SELECT DISTINCT email FROM project_members ORDER BY email').all(),
+    c.env.DB.prepare('SELECT email, name FROM local_users WHERE deleted = 0 ORDER BY email').all(),
+    c.env.DB.prepare('SELECT DISTINCT email FROM project_access_requests ORDER BY email').all(),
+  ])
+  const userMap = new Map<string, {email: string, name?: string}>()
+  for (const r of (pm.results || [])) userMap.set(r.email, { email: r.email })
+  for (const r of (lu.results || [])) userMap.set(r.email, { email: r.email, name: r.name || undefined })
+  for (const r of (ar.results || [])) if (!userMap.has(r.email)) userMap.set(r.email, { email: r.email })
+  const users = [...userMap.values()]
+  // 프로젝트 목록
+  let projects: any[]
+  if (superUser) {
+    const { results } = await c.env.DB.prepare('SELECT id, name FROM projects WHERE deleted = 0 ORDER BY name').all()
+    projects = results || []
+  } else {
+    const [owned, dof]: any[] = await Promise.all([
+      c.env.DB.prepare('SELECT id, name FROM projects WHERE owner = ? AND deleted = 0').bind(user.email).all(),
+      c.env.DB.prepare("SELECT p.id, p.name FROM projects p JOIN project_members m ON m.project_id = p.id WHERE m.email = ? AND m.role = 'designer' AND p.deleted = 0").bind(user.email).all(),
+    ])
+    const seen = new Set<string>()
+    projects = []
+    for (const p of [...(owned.results || []), ...(dof.results || [])]) {
+      if (!seen.has(p.id)) { seen.add(p.id); projects.push(p) }
+    }
+  }
+  const { results: cells } = await c.env.DB.prepare('SELECT project_id, email, role FROM project_members').all()
+  return c.json({ users, projects, cells: cells || [] })
+})
+
+app.post('/api/admin/access-matrix', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const updates: {email: string, project_id: string, role: string}[] = body.updates || []
+  if (!updates.length) return c.json({ success: true, updated: 0 })
+  const now = Date.now()
+  let count = 0
+  for (const u of updates) {
+    if (!isSuperAdmin(c, user.email) && !(await canManageProject(c, user, u.project_id))) continue
+    const email = normEmail(u.email)
+    if (!email || !isValidEmail(email)) continue
+    if (u.role === 'none') {
+      await c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').bind(u.project_id, email).run()
+    } else {
+      const role = ['viewer', 'editor', 'designer'].includes(u.role) ? u.role : 'viewer'
+      await c.env.DB.prepare(
+        `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`
+      ).bind(u.project_id, email, role, user.email, now).run()
+    }
+    count++
+  }
+  await logActivity(c, 'admin.access.matrix.update', { actor: user, targetType: 'matrix', targetId: '*', detail: { count } })
+  return c.json({ success: true, updated: count })
+})
+
+// ── 시스템 플래그 (app_settings scope='*' skey='flag:KEY') ───────────────
+
+app.get('/api/admin/system-flags', async (c) => {
+  const user = await getUser(c)
+  if (!user || !isSuperAdmin(c, user.email)) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    "SELECT skey, value, updated_by, updated_at FROM app_settings WHERE scope = '*' AND skey LIKE 'flag:%' ORDER BY skey"
+  ).all()
+  return c.json({ data: results || [] })
+})
+
+app.put('/api/admin/system-flags', async (c) => {
+  const user = await getUser(c)
+  if (!user || !isSuperAdmin(c, user.email)) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const key = String(body.key || '')
+  const value = String(body.value ?? 'false')
+  if (!/^[A-Z_]+$/.test(key)) return c.json({ error: 'invalid key' }, 400)
+  const skey = 'flag:' + key
+  const now = Date.now()
+  await c.env.DB.prepare(
+    "INSERT INTO app_settings (scope, skey, value, updated_by, updated_at) VALUES ('*', ?, ?, ?, ?) ON CONFLICT(scope, skey) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
+  ).bind(skey, value, user.email, now).run()
+  await logActivity(c, 'admin.flag.set', { actor: user, targetType: 'system', targetId: key, detail: { value } })
+  return c.json({ success: true, key, value })
+})
+
 /* ── 프로젝트 배포(Publish) / 배포취소 ──
  * 마스터 워크플로: 설계자 모드에서 설계·핀·등록 완료 → 배포 → 권한받은 뷰어가 그 프로젝트 열람.
  * 배포 전(published=0)에는 설계자/소유자/슈퍼만 보이고, 배포 후에만 뷰어에게 노출된다(visibleProjectFilter). */
