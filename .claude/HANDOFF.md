@@ -1,8 +1,32 @@
 # HANDOFF — 360° Location Viewer (SEASTAR)
 
 ## 마지막 커밋
-- HEAD `cfa34cc` feat(access): 프로젝트별 접근 신청 흐름 구현 SEcMS 패턴 (2026-06-24)
-- `1e0dead` feat(ui): 모바일 아이콘/버튼 개선 + 누적 기능 커밋 (2026-06-24)
+- HEAD `4053b05` feat(invite): 멤버 초대 — 계정 자동생성(비번1)+역할+편집권한+비번변경 (2026-06-25)
+- `7286232` fix(hub): 프로젝트 카드 액션 아이콘 축소
+- `7488c31` feat(design): 골드 잉크 토큰(--gold-ink) + 모바일 active 인디케이터
+- `4206776` fix(mobile): 하단 네비 active 대비/FAB 겹침
+- `d28635f` fix(mobile): 메뉴/팝업 화면 가림 결함 + 핵심 도구 하단 아이콘화
+- `3fcce81` feat(viewer): 핀 진짜 3D 박힌 핀(ISO 32° 기립)
+- `dbd1029` feat(viewer): 핀 선택 자동 ISO + 구역 확대
+- `cfa34cc` feat(access): 프로젝트별 접근 신청 흐름 (SEcMS 패턴)
+- `1e0dead` feat(ui): 모바일 아이콘/버튼 개선
+
+## ⚠️ 배포 전 D1 마이그레이션 적용 필요 (마스터 직접)
+```
+npx wrangler d1 execute webapp-production --file=migrations/0019_project_access_requests.sql
+npx wrangler d1 execute webapp-production --file=migrations/0020_must_change_password.sql
+```
+미적용 시: 0019→접근신청 API 오류, 0020→비번변경 강제 미작동(코드는 SELECT * 라 로그인 자체는 안전).
+
+## 이번 턴 ⑱: 멤버 초대(계정 자동생성+비번1+역할+편집권한) (2026-06-25)
+> 마스터: "초대하면 그 메일로 바로 로그인(비번 처음 1, 사용자 변경), 뷰어/디자이너 선택, 로그인만으로 프로젝트 접근, 디자이너=모든 구역 세팅, designssir만 최고관리자"
+- ✅ POST /api/projects/:id/members 확장: 로컬계정 없으면 비번 '1' 자동생성(must_change=1) + role
+- ✅ migration 0020: local_users.must_change_password
+- ✅ POST /api/account/password: 본인 비번 변경(로컬계정) → must_change=0
+- ✅ login/세션 응답 must_change 노출 → 첫 로그인 시 비번변경 모달 강제(#pwchange-modal, 닫기 없음)
+- ✅ designer 초대 → designers 테이블 등록(requireDesigner 통과 = 모든 구역 편집). viewer 재배정 시 project-invite designer 회수. (deployment 는 project_id 없이 tenant 단위라 전역 designer 부여로 해결)
+- ✅ designssir 최고관리자 불변(isSuperAdmin)
+- 검증: tsc(src 클린, _code-export/_archive 무관), vite build EXIT 0(99kB). 라이브(로그인+초대 흐름)는 D1 migration 후 마스터 확인 필요.
 - `a1463c2` fix(load): 저장된 구역·도면 로딩 3건 + 설치 버튼 터치 수정
 - `192dcbf` feat(pin): 핀(호스팟)별 아이콘 선택 + 디자인 스킬 아이콘 10종
 
