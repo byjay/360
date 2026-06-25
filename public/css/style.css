@@ -14,7 +14,8 @@
   --text2:     #6b6457;   /* 보조 텍스트 */
   --text3:     #938a78;   /* 흐린 텍스트 */
   --text4:     #c4b9a3;   /* 가장 흐린 텍스트/플레이스홀더 */
-  --gold:      #c9962a;   /* 따뜻한 골드 (강조) */
+  --gold:      #c9962a;   /* 따뜻한 골드 (강조 — 다크 배경/골드칩 위에서 사용) */
+  --gold-ink:  #7e5d12;   /* 밝은 배경(#fff·베이지) 위 골드 글자/아이콘 — 대비 5:1+ (WCAG) */
   --green:     #2f9e6f;   /* 차분한 그린 */
   --red:       #c4462f;   /* 차분한 레드 */
   --blue:      #2f6db5;   /* 차분한 블루 */
@@ -3207,6 +3208,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     box-shadow: 0 -4px 18px rgba(43,40,32,.14);
   }
   .mnav-btn {
+    position: relative;
     flex: 1 1 0; min-width: 40px; min-height: 44px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 2px; padding: 6px 1px;
@@ -3214,13 +3216,18 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     color: #6b6457; font-family: var(--font-ui); font-size: 9px; font-weight: 700;
     -webkit-tap-highlight-color: transparent; touch-action: manipulation;
   }
+  /* active 상단 인디케이터 바 — 색(골드)에만 의존하지 않게 위치 단서 추가(색맹 8% 대응) */
+  .mnav-btn.active:not(.mnav-fab)::after {
+    content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 18px; height: 3px; border-radius: 0 0 4px 4px; background: var(--gold-ink);
+  }
   .mnav-btn span { white-space: nowrap; line-height: 1; }
   .mnav-btn svg { width: 20px; height: 20px; }
   /* [대비수정] active 골드 #c9962a 는 베이지 배경서 2.1~2.5:1(미달) → 진한 골드 #7e5d12
      (밝은배경 5.67:1 · 틴트칸 4.76:1, 둘 다 본문 4.5:1 통과). 상태표시는 색+틴트박스 병행. */
-  .mnav-btn:active { color: #7e5d12; transform: scale(.94); background: rgba(201,150,42,.12); border-radius: 8px; }
+  .mnav-btn:active { color: var(--gold-ink); transform: scale(.94); background: rgba(201,150,42,.12); border-radius: 8px; }
   .mnav-btn.active {
-    color: #7e5d12;
+    color: var(--gold-ink);
     background: rgba(201,150,42,.12);
     border-radius: 8px;
   }
@@ -3232,7 +3239,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     background: linear-gradient(135deg, #d8a83e, #c08e2a); color: #1a1208;
     box-shadow: 0 6px 16px rgba(201,150,42,.45); border: 3px solid #faf7f0;
   }
-  .mnav-fab span { margin-top: -2px; color: #7e5d12; }
+  .mnav-fab span { margin-top: -2px; color: var(--gold-ink); }
   /* 뷰어 모드에선 designer-only 버튼 숨김 */
   body.role-viewer .mnav-btn.designer-only { display: none; }
 
@@ -3598,7 +3605,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   border-bottom:1px solid var(--border,#e4dccb);
 }
 .pin-grid-head-left{ display:flex; align-items:center; gap:7px; min-width:0; }
-.pin-grid-head-left > i{ color:var(--gold,#c9962a); font-size:14px; }
+.pin-grid-head-left > i{ color:var(--gold-ink,#7e5d12); font-size:14px; }
 .pin-grid-title{ font-weight:700; font-size:13.5px; color:var(--text,#2b2820); white-space:nowrap; }
 .pin-grid-page-badge{
   font-size:11px; font-weight:700; color:#fff; background:var(--blue,#2f6db5);
@@ -3654,8 +3661,8 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pin-grid-row{ cursor:pointer; transition:background .12s; }
 .pin-grid-row > td{ padding:8px 8px; }
 .pin-grid-row:hover{ background:var(--bg3,#efe9dc); }
-.pin-grid-row.active{ background:rgba(201,150,42,.14); box-shadow:inset 3px 0 0 var(--gold,#c9962a); }
-.pin-grid-row td.pgt-no{ text-align:center; font-weight:700; color:var(--gold,#c9962a); }
+.pin-grid-row.active{ background:rgba(201,150,42,.14); box-shadow:inset 3px 0 0 var(--gold-ink,#7e5d12); }
+.pin-grid-row td.pgt-no{ text-align:center; font-weight:700; color:var(--gold-ink,#7e5d12); }
 .pin-grid-row td.pgt-page{ text-align:center; color:var(--text2,#6b6457); font-weight:600; }
 .pin-grid-name-cell{ display:flex; flex-direction:column; gap:2px; min-width:0; }
 .pin-grid-name-txt{
