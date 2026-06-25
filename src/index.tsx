@@ -401,10 +401,11 @@ async function resolveLocalSession(c: any, token: string): Promise<any | null> {
     ).bind(token).first()
     if (!sess || sess.revoked || (sess.expires_at && Date.now() > sess.expires_at)) return null
     const u: any = await c.env.DB.prepare(
-      'SELECT email, name FROM local_users WHERE email = ? AND deleted = 0'
+      'SELECT * FROM local_users WHERE email = ? AND deleted = 0'
     ).bind(sess.email).first()
     if (!u) return null
-    return { email: String(u.email).toLowerCase(), name: u.name || '', picture: '', _local: true }
+    // SELECT * 라 must_change_password 컬럼 미적용(migration 전)이면 undefined→false 로 안전
+    return { email: String(u.email).toLowerCase(), name: u.name || '', picture: '', _local: true, must_change: Number(u.must_change_password || 0) === 1 }
   } catch { return null }
 }
 
@@ -733,7 +734,7 @@ app.post('/api/signup/login', async (c) => {
   if (!isValidEmail(email) || !password) return c.json({ error: '이메일과 비밀번호를 입력해 주세요.' }, 400)
 
   const u: any = await c.env.DB.prepare(
-    'SELECT email, name, pw_hash, pw_salt FROM local_users WHERE email = ? AND deleted = 0'
+    'SELECT * FROM local_users WHERE email = ? AND deleted = 0'
   ).bind(email).first().catch(() => null)
   if (!u) return c.json({ error: '가입되지 않은 이메일이거나 비밀번호가 올바르지 않습니다.' }, 401)
   const ok = await verifyPassword(password, u.pw_salt, u.pw_hash)
@@ -749,7 +750,9 @@ app.post('/api/signup/login', async (c) => {
     .bind(token, email, now, exp).run()
   await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
   // auth.login 은 /api/auth/me 에서 기록되므로 여기선 세션 발급만
-  return c.json({ success: true, token, email: u.email, name: u.name || u.email.split('@')[0], role: 'viewer' })
+  // must_change: 초대 계정(비번 '1')의 첫 로그인 → 클라가 비번 변경 모달을 띄운다
+  const mustChange = Number(u.must_change_password || 0) === 1
+  return c.json({ success: true, token, email: u.email, name: u.name || u.email.split('@')[0], role: 'viewer', must_change: mustChange })
 })
 
 // 4) 로그아웃(세션 무효화)
@@ -1530,12 +1533,66 @@ app.post('/api/projects/:id/members', async (c) => {
   const email = normEmail(body.email)
   const role = ['viewer', 'editor', 'designer'].includes(body.role) ? body.role : 'viewer'
   if (!email || !isValidEmail(email)) return c.json({ error: 'valid email required' }, 400)
+  const now = Date.now()
+  // 1) 프로젝트 멤버 등록(접근 권한 + 역할)
   await c.env.DB.prepare(
     `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`
-  ).bind(pid, email, role, user.email, Date.now()).run()
-  await logActivity(c, 'project.member.add', { actor: user, targetType: 'project', targetId: pid, detail: { email, role } })
-  return c.json({ success: true, email, role })
+  ).bind(pid, email, role, user.email, now).run()
+
+  // 2) [마스터] 초대 = 그 이메일로 바로 로그인 가능하게 — 로컬 계정이 없으면 비번 '1'로 자동 생성.
+  //    must_change_password=1 → 첫 로그인 후 본인이 변경. (이미 가입된 계정은 건드리지 않음)
+  let created = false
+  const existsUser: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ?').bind(email).first()
+  if (!existsUser) {
+    const { hash, salt } = await hashPassword('1')
+    const domain = email.split('@')[1] || ''
+    await c.env.DB.prepare(
+      `INSERT INTO local_users (email, name, domain, pw_hash, pw_salt, email_verified, must_change_password, created_at, updated_at, deleted)
+       VALUES (?, '', ?, ?, ?, 1, 1, ?, ?, 0)
+       ON CONFLICT(email) DO NOTHING`
+    ).bind(email, domain, hash, salt, now, now).run()
+    created = true
+  }
+
+  // 3) [마스터] 디자이너로 초대 → 모든 구역 세팅 권한. deployment 는 project_id 가 없고 tenant 단위라
+  //    프로젝트별 스코프 가드가 불가 → 전역 designers 등록으로 편집권한 부여(requireDesigner 통과).
+  //    뷰어는 등록하지 않음(열람만). 최고관리자는 designssir 만(isSuperAdmin)으로 별개 유지.
+  if (role === 'designer') {
+    await c.env.DB.prepare(
+      `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, '', ?, ?, ?, 0)
+       ON CONFLICT(email) DO UPDATE SET deleted = 0`
+    ).bind(email, 'project-invite:' + pid + ' by ' + user.email, now, now).run()
+  } else {
+    // viewer 로 (재)배정 시, 과거 designer 로 받았던 전역 권한은 회수(이 프로젝트 한정 의도)
+    // — 단, 다른 경로(도메인/슈퍼)로 designer 인 경우 isDesigner 가 여전히 true 이므로 안전.
+    await c.env.DB.prepare("UPDATE designers SET deleted = 1 WHERE email = ? AND added_by LIKE 'project-invite:%'").bind(email).run().catch(() => {})
+  }
+
+  await logActivity(c, 'project.member.add', { actor: user, targetType: 'project', targetId: pid, detail: { email, role, created } })
+  return c.json({ success: true, email, role, created })
+})
+
+// [마스터] 비밀번호 변경 — 로그인한 로컬 계정 본인(초대 계정의 초기 비번 '1' 변경 포함)
+app.post('/api/account/password', async (c) => {
+  const user = await getUser(c)
+  if (!user || !user._local) return c.json({ error: '로컬 계정만 비밀번호를 변경할 수 있습니다.' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const newPw = String(body.newPassword || '')
+  if (newPw.length < 4) return c.json({ error: '새 비밀번호는 4자 이상이어야 합니다.' }, 400)
+  const u: any = await c.env.DB.prepare('SELECT pw_hash, pw_salt FROM local_users WHERE email = ? AND deleted = 0').bind(user.email).first()
+  if (!u) return c.json({ error: 'not found' }, 404)
+  // 현재 비번이 전달되면 검증(자발적 변경). 강제 변경(must_change)일 땐 세션 인증으로 충분하므로 선택적.
+  if (body.currentPassword != null && String(body.currentPassword) !== '') {
+    const ok = await verifyPassword(String(body.currentPassword), u.pw_salt, u.pw_hash)
+    if (!ok) return c.json({ error: '현재 비밀번호가 올바르지 않습니다.' }, 401)
+  }
+  const { hash, salt } = await hashPassword(newPw)
+  await c.env.DB.prepare('UPDATE local_users SET pw_hash = ?, pw_salt = ?, must_change_password = 0, updated_at = ? WHERE email = ?')
+    .bind(hash, salt, Date.now(), user.email).run()
+  await logActivity(c, 'account.password_change', { actor: user, targetType: 'local_user', targetId: user.email })
+  return c.json({ success: true })
 })
 
 // 멤버 해제

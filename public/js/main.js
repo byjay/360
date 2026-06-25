@@ -3128,7 +3128,11 @@
         if (!r.ok) { if (err) { err.textContent = j.error || "배정 실패"; err.classList.remove("hidden"); } return; }
         inp.value = "";
         await this.loadMembers();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + email + " 배정(" + (role === "designer" ? "디자이너" : "뷰어") + ")");
+        if (typeof Prompt !== "undefined" && Prompt.toast) {
+          const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
+          if (j.created) Prompt.toast("✅ " + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
+          else Prompt.toast("✅ " + email + " 배정(" + roleLabel + ")");
+        }
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
     },
     async removeMember(email) {
@@ -10539,6 +10543,10 @@
       $("cg-create") && $("cg-create").addEventListener("click", () => this._verify());
       // 로그인 흐름
       $("cg-login-btn") && $("cg-login-btn").addEventListener("click", () => this._login());
+      // 비밀번호 변경(초대 계정 첫 로그인)
+      $("pwc-submit") && $("pwc-submit").addEventListener("click", () => this._submitPwChange());
+      const pwc2 = $("pwc-new2");
+      if (pwc2) pwc2.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this._submitPwChange(); } });
     },
     _projectId() {
       try { return (typeof Projects !== "undefined" && Projects.currentProject) ? Projects.currentProject.id : null; }
@@ -10680,9 +10688,52 @@
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "로그인에 실패했습니다."); return; }
+        // [마스터] 초대 계정(비번 '1') 첫 로그인 → 비밀번호 변경 강제
+        if (j.must_change) {
+          try { sessionStorage.setItem("wm_id_token", j.token); localStorage.setItem("wm_local_token", j.token); } catch (e) {}
+          if (typeof Auth !== "undefined") Auth.idToken = j.token;
+          this._pendingName = j.name || j.email;
+          this._openPwChange();
+          return;
+        }
         this._onAuthed(j.token, j.name || j.email);
       } catch (e) {
         this._err("네트워크 오류로 로그인에 실패했습니다.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = orig; }
+      }
+    },
+
+    /* ── 비밀번호 변경 (초대 계정 첫 로그인 강제) ── */
+    _openPwChange() {
+      const m = document.getElementById("pwchange-modal");
+      if (!m) { this._onAuthed(Auth.idToken, this._pendingName || ""); return; }
+      const e = document.getElementById("pwc-error"); if (e) e.classList.add("hidden");
+      const a = document.getElementById("pwc-new"), b = document.getElementById("pwc-new2");
+      if (a) a.value = ""; if (b) b.value = "";
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+      setTimeout(() => { a && a.focus(); }, 120);
+    },
+    async _submitPwChange() {
+      const $ = (id) => document.getElementById(id);
+      const err = $("pwc-error"); if (err) err.classList.add("hidden");
+      const np = ($("pwc-new").value || ""), np2 = ($("pwc-new2").value || "");
+      const showErr = (msg) => { if (err) { err.textContent = msg; err.classList.remove("hidden"); } };
+      if (np.length < 4) { showErr("새 비밀번호는 4자 이상이어야 합니다."); return; }
+      if (np !== np2) { showErr("두 비밀번호가 일치하지 않습니다."); return; }
+      const btn = $("pwc-submit"); const orig = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "변경 중..."; }
+      try {
+        const r = await fetch("/api/account/password", {
+          method: "POST", headers: Auth.headers(), body: JSON.stringify({ newPassword: np })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showErr(j.error || "변경에 실패했습니다."); return; }
+        const m = $("pwchange-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
+        Prompt && Prompt.toast && Prompt.toast("✅ 비밀번호가 변경되었습니다.");
+        this._onAuthed(Auth.idToken, this._pendingName || "");
+      } catch (e) {
+        showErr("네트워크 오류로 변경에 실패했습니다.");
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = orig; }
       }

@@ -217,7 +217,11 @@
         if (!r.ok) { if (err) { err.textContent = j.error || "배정 실패"; err.classList.remove("hidden"); } return; }
         inp.value = "";
         await this.loadMembers();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + email + " 배정(" + (role === "designer" ? "디자이너" : "뷰어") + ")");
+        if (typeof Prompt !== "undefined" && Prompt.toast) {
+          const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
+          if (j.created) Prompt.toast("✅ " + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
+          else Prompt.toast("✅ " + email + " 배정(" + roleLabel + ")");
+        }
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
     },
     async removeMember(email) {
