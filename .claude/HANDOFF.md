@@ -1,7 +1,21 @@
 # HANDOFF — 360° Location Viewer (SEASTAR)
 
 ## 마지막 커밋
-- HEAD `4053b05` feat(invite): 멤버 초대 — 계정 자동생성(비번1)+역할+편집권한+비번변경 (2026-06-25)
+- HEAD `(pdf)` perf(pdf): 멀티페이지 썸네일 지연 렌더 (2026-06-25)
+- `(zone+deck)` fix: 영역 ISO 좌표왜곡 + 구역목록 인증헤더 누락
+- `4053b05` feat(invite): 멤버 초대 — 계정 자동생성(비번1)+역할+편집권한+비번변경
+
+## 🔴 미완료 (마스터 한 메시지 5건 중 3건 완료, 2건 남음 — 다음 턴 우선)
+1. ✅ 영역(zone) 지정 망가짐 → ISO 가드(pickShape 평면강제 + toggleIso drawingZone 금지)
+2. ✅ 구역(deck) 생성 안 보임 → loadDecks GET 에 Auth.headers() 추가(401 회귀)
+3. ✅ PDF 로딩 느림 → 썸네일 지연 렌더(첫 8장 즉시, 나머지 idle)
+4. ❌ **멀티페이지 썸네일 삭제/복사** — pdf-thumb-strip 에 페이지 삭제/복사 버튼.
+   주의: pdfDoc(원본) ↔ viewerPages(배포본 dataURL 배열) 동기화 + pages_data 재저장 필요.
+   배포본은 교체만 지원 → 데이터 모델 신중. (11_UI.renderPdfThumbs, 20_App pages_data)
+5. ❌ **사이드바 도구 전체 → 상단 메뉴 + SECMS 스타일** — 큰 레이아웃 변경.
+   창고 검색 "topnav" 0건 → SECMS 메뉴 스타일 정확 위치 재조사 선행(_warehouse/14-ops-docs-skills,
+   또는 SEcMS 프로젝트 직접). 사이드바 항목(프로젝트/구역/체크보드/포인트/영역도구/포인트목록)
+   재배치 설계 후 적용.
 - `7286232` fix(hub): 프로젝트 카드 액션 아이콘 축소
 - `7488c31` feat(design): 골드 잉크 토큰(--gold-ink) + 모바일 active 인디케이터
 - `4206776` fix(mobile): 하단 네비 active 대비/FAB 겹침
