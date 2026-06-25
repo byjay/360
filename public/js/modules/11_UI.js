@@ -414,7 +414,10 @@
       // 최초 1회만 썸네일 캐시 생성 (페이지 전환 시 재생성 방지)
       if (this._thumbDocId !== State.pdfDoc || strip.childElementCount !== State.pdfPages) {
         this._thumbDocId = State.pdfDoc;
+        const docRef = State.pdfDoc;
         strip.innerHTML = "";
+        // 1) 버튼(틀)은 전부 즉시 생성 — 클릭/번호는 곧바로 동작
+        const items = [];
         for (let p = 1; p <= State.pdfPages; p++) {
           const item = document.createElement("button");
           item.className = "pdf-thumb-item";
@@ -424,8 +427,21 @@
             `<canvas class="pdf-thumb-canvas"></canvas><span class="pdf-thumb-no">${p}</span>`;
           item.addEventListener("click", () => App._gotoPage(p));
           strip.appendChild(item);
-          // 작은 썸네일 렌더 (비차단, 순차)
-          this._renderThumbInto(item.querySelector("canvas"), p);
+          items.push(item);
+        }
+        // 2) [성능] 모든 페이지를 한꺼번에 순차 렌더하면 1~3초 지연 → 처음 보이는 8장만 즉시,
+        //    나머지는 유휴 시간에 한 장씩(도면이 바뀌면 즉시 중단). 첫 표시 체감 즉각.
+        const FIRST = 8;
+        const head = Math.min(FIRST, State.pdfPages);
+        for (let p = 1; p <= head; p++) this._renderThumbInto(items[p - 1].querySelector("canvas"), p);
+        if (State.pdfPages > FIRST) {
+          const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+          const step = (p) => {
+            if (this._thumbDocId !== docRef || p > State.pdfPages) return; // 도면 전환/끝 → 중단
+            this._renderThumbInto(items[p - 1].querySelector("canvas"), p);
+            idle(() => step(p + 1));
+          };
+          idle(() => step(FIRST + 1));
         }
       }
       // 현재 페이지 하이라이트
