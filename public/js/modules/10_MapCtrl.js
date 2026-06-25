@@ -70,7 +70,7 @@
     },
     /** ISO 버튼/뷰포트 클래스 동기화(공용 — toggleIso·focusZoneIso 둘 다 사용) */
     _syncIsoButtons() {
-      ["btn-iso", "tb-iso"].forEach((bid) => {
+      ["btn-iso", "tb-iso", "mnav-iso"].forEach((bid) => {
         const btn = document.getElementById(bid);
         if (!btn) return;
         btn.classList.toggle("active", State.isoView);

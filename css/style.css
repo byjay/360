@@ -3207,14 +3207,15 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     box-shadow: 0 -4px 18px rgba(43,40,32,.14);
   }
   .mnav-btn {
-    flex: 1 1 0; min-width: 44px; min-height: 44px;
+    flex: 1 1 0; min-width: 40px; min-height: 44px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2px; padding: 6px 2px;
+    gap: 2px; padding: 6px 1px;
     background: transparent; border: none; cursor: pointer;
-    color: #6b6457; font-family: var(--font-ui); font-size: 10px; font-weight: 700;
+    color: #6b6457; font-family: var(--font-ui); font-size: 9px; font-weight: 700;
     -webkit-tap-highlight-color: transparent; touch-action: manipulation;
   }
-  .mnav-btn svg { width: 22px; height: 22px; }
+  .mnav-btn span { white-space: nowrap; line-height: 1; }
+  .mnav-btn svg { width: 20px; height: 20px; }
   .mnav-btn:active { color: var(--gold, #c9962a); transform: scale(.94); background: rgba(201,150,42,.10); border-radius: 8px; }
   .mnav-btn.active {
     color: var(--gold, #c9962a);
@@ -3238,7 +3239,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     position: fixed; left: 0; right: 0;
     bottom: calc(58px + env(safe-area-inset-bottom, 0px));
     top: auto; width: 100% !important;
-    max-height: 64vh; height: auto;
+    max-height: 52vh; height: auto;
     border-right: none; border-top: 1px solid var(--border2);
     border-radius: 18px 18px 0 0;
     box-shadow: 0 -14px 44px rgba(0,0,0,.4);
@@ -3254,9 +3255,11 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     border-radius: 99px; background: rgba(107,100,87,.35);
   }
   body.sidebar-open .sidebar { transform: translateY(0); }
+  /* [결함수정] 메뉴 시트가 열려도 도면이 보이게 — 백드롭은 어둡게 가리지 않고
+     '바깥 탭 = 닫기' 히트영역만 담당(투명). 시트는 화면 하단 절반 이하만 차지. */
   body.sidebar-open .sidebar-backdrop {
     display: block; position: fixed; inset: 0; z-index: 142;
-    background: rgba(8,12,20,.42); backdrop-filter: blur(1px);
+    background: transparent;
   }
 
   /* 3) 맵 영역이 풀스크린(사이드바가 자리 차지 안 함) + 하단 네비 높이만큼 패딩 */
@@ -3278,6 +3281,16 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 
   /* 6) 빈 화면 탭 등록 CTA 강조 */
   .drop-tap-cta { display: inline-flex !important; }
+
+  /* 7) [결함수정] 포인트 작업 팝업이 화면을 전부 덮지 않게 — 하단 시트로 전환.
+     백드롭은 거의 투명(도면 보임), 카드는 하단 네비 위에 슬라이드. */
+  .pin-action-pop { place-items: end center; }
+  .pin-action-backdrop { background: rgba(8,12,22,.18) !important; backdrop-filter: none !important; }
+  .pin-action-card {
+    width: 100%; max-width: 560px;
+    border-radius: 16px 16px 0 0;
+    margin-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* 탭하여 등록 CTA — 기본은 데스크톱에서도 보이되 부드럽게 */

@@ -2142,7 +2142,7 @@
     },
     /** ISO 버튼/뷰포트 클래스 동기화(공용 — toggleIso·focusZoneIso 둘 다 사용) */
     _syncIsoButtons() {
-      ["btn-iso", "tb-iso"].forEach((bid) => {
+      ["btn-iso", "tb-iso", "mnav-iso"].forEach((bid) => {
         const btn = document.getElementById(bid);
         if (!btn) return;
         btn.classList.toggle("active", State.isoView);
@@ -5683,6 +5683,18 @@
         } else if (typeof AllPins !== "undefined" && AllPins.show) {
           AllPins.show();
         }
+      });
+
+      // ISO 3D 토글 (공통) — 메뉴/툴바에 묻혀 있던 ISO 를 하단 아이콘으로 직접 노출
+      const iso = $("mnav-iso");
+      if (iso) iso.addEventListener("click", () => { closeSheet(); MapCtrl.toggleIso(); });
+
+      // 포인트 수정 모드 토글 (디자이너) — 기존 tb-pin-edit 동작 위임
+      const edit = $("mnav-edit");
+      if (edit) edit.addEventListener("click", () => {
+        closeSheet();
+        const b = $("tb-pin-edit"); if (b) b.click();
+        edit.classList.toggle("active", document.body.classList.contains("pin-edit-mode"));
       });
 
       // 화면 맞춤
