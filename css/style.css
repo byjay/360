@@ -3216,10 +3216,12 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   }
   .mnav-btn span { white-space: nowrap; line-height: 1; }
   .mnav-btn svg { width: 20px; height: 20px; }
-  .mnav-btn:active { color: var(--gold, #c9962a); transform: scale(.94); background: rgba(201,150,42,.10); border-radius: 8px; }
+  /* [대비수정] active 골드 #c9962a 는 베이지 배경서 2.1~2.5:1(미달) → 진한 골드 #7e5d12
+     (밝은배경 5.67:1 · 틴트칸 4.76:1, 둘 다 본문 4.5:1 통과). 상태표시는 색+틴트박스 병행. */
+  .mnav-btn:active { color: #7e5d12; transform: scale(.94); background: rgba(201,150,42,.12); border-radius: 8px; }
   .mnav-btn.active {
-    color: var(--gold, #c9962a);
-    background: rgba(201,150,42,.10);
+    color: #7e5d12;
+    background: rgba(201,150,42,.12);
     border-radius: 8px;
   }
   /* 중앙 포인트 추가 = 강조 FAB */
@@ -3230,7 +3232,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     background: linear-gradient(135deg, #d8a83e, #c08e2a); color: #1a1208;
     box-shadow: 0 6px 16px rgba(201,150,42,.45); border: 3px solid #faf7f0;
   }
-  .mnav-fab span { margin-top: -2px; color: var(--gold, #c9962a); }
+  .mnav-fab span { margin-top: -2px; color: #7e5d12; }
   /* 뷰어 모드에선 designer-only 버튼 숨김 */
   body.role-viewer .mnav-btn.designer-only { display: none; }
 
@@ -3291,6 +3293,14 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     border-radius: 16px 16px 0 0;
     margin-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
   }
+}
+
+/* 초소형 폰(<=360px): 7버튼(디자이너)이 빡빡 → 중앙 FAB 원(48px>셀45.7) 좌우 겹침.
+   FAB·아이콘·라벨을 한 단계 축소해 겹침 방지(터치타깃 min-height 44 유지). */
+@media (max-width: 360px) {
+  .mnav-fab svg { width: 26px; height: 26px; padding: 7px; margin-top: -18px; }
+  .mnav-btn { font-size: 8px; padding: 6px 0; }
+  .mnav-btn svg { width: 19px; height: 19px; }
 }
 
 /* 탭하여 등록 CTA — 기본은 데스크톱에서도 보이되 부드럽게 */
