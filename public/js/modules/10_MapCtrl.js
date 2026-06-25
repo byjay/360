@@ -43,7 +43,18 @@
      *  평면 → 북동(0) → 남동(1) → 남서(2) → 북서(3) → 평면 …
      *  버튼을 누를 때마다 한 단계씩 코너 시점을 회전한다. */
     ISO_LABELS: ["북동", "남동", "남서", "북서"],
+    /** ISO → 평면 강제 복귀(영역 그리기 등 평면 좌표가 필요한 작업 진입 시) */
+    exitIso() {
+      if (!State.isoView) return;
+      State.isoView = false; State.isoDir = 0;
+      this._applyIso();
+    },
     toggleIso() {
+      // [마스터 버그] 영역 그리는 중엔 ISO(원근)에서 클릭좌표가 틀어지므로 ISO 진입 금지
+      if (!State.isoView && State.drawingZone) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("영역을 다 그린 뒤 ISO 보기를 켜주세요 (정확한 좌표 위해)");
+        return;
+      }
       // [마스터 버그] 배치 모드 중엔 ISO(원근)에서 클릭좌표가 틀어지므로 ISO 진입 금지 → 배치 먼저 종료
       if (!State.isoView && State.placing && typeof App !== "undefined" && App._togglePlacing) {
         App._togglePlacing();  // 배치 종료(평면 유지)

@@ -30,6 +30,12 @@
     /** 도형 선택 → 그리기 모드 토글 */
     pickShape(shape) {
       if (!this.isDesigner()) return;
+      // [마스터 버그] ISO 3D 에서는 영역 그리기 좌표가 회전 때문에 왜곡(commit 실패/도형 깨짐) →
+      //   영역 도구를 켤 때 평면으로 강제 전환. (핀 선택 자동 ISO 의 부작용 차단)
+      if (State.isoView && typeof MapCtrl !== "undefined" && MapCtrl.exitIso) {
+        MapCtrl.exitIso();
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🗺️ 평면 뷰로 전환 — 영역을 그린 뒤 ISO 로 돌아가세요");
+      }
       // 같은 도형 다시 누르면 끄기
       if (State.drawingZone && this._shape === shape) { this._cancelDraw(); return; }
       this._shape = shape;

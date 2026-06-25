@@ -72,7 +72,10 @@
       if (!reqPid) { this.decks = []; this._renderDecks(); return; }
       let data = [];
       try {
-        const r = await fetch("/api/projects/" + reqPid + "/decks");
+        // [버그수정] GET /decks 는 인증 필수(401) — Auth.headers() 누락 시 빈 목록 → "구역 없음".
+        //   createDeck(POST)는 헤더가 있어 생성되지만, 직후 loadDecks 가 401 로 빈 목록을 받아
+        //   "생성해도 구역이 안 나오는" 회귀였다. (도면 등록 시 ensureDeck 도 동일 증상)
+        const r = await fetch("/api/projects/" + reqPid + "/decks", { headers: Auth.headers() });
         const j = await r.json();
         data = j.data || [];
       } catch (e) { data = []; }
