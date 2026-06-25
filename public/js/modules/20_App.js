@@ -920,6 +920,66 @@
           setTimeout(closeSheet, 120);
         }
       });
+
+      // ═══ [마스터] 모바일 그룹 도크 — 칩으로 도구 그룹 전환, 펼치면 도면을 위로 밀어 절대 가리지 않음 ═══
+      const dock = $("mobile-dock");
+      if (dock) {
+        const rows = dock.querySelectorAll(".mdock-row");
+        const grpChips = dock.querySelectorAll("[data-grp]");
+        let curGrp = null;
+        // 도면 영역 하단 패딩 = 도크 실제 높이 → 트레이를 펼쳐도 도면이 위로 밀려 절대 가려지지 않음(오버레이 아님).
+        const setPad = () => {
+          const ma = $("map-area"); if (!ma) return;
+          if (window.matchMedia && window.matchMedia("(max-width:760px)").matches) ma.style.paddingBottom = dock.offsetHeight + "px";
+          else ma.style.paddingBottom = ""; // 데스크톱: CSS 기본 복원
+        };
+        const closeTray = () => {
+          dock.classList.remove("tray-open");
+          rows.forEach((r) => r.classList.remove("active"));
+          grpChips.forEach((c) => c.classList.remove("active"));
+          curGrp = null;
+          setPad(); setTimeout(setPad, 300);
+        };
+        // 그룹 칩 → 그 그룹 도구 한 줄만 펼침(다른 그룹은 숨김), 같은 칩 재탭 → 접힘
+        grpChips.forEach((chip) => {
+          chip.addEventListener("click", () => {
+            const g = chip.dataset.grp;
+            if (curGrp === g) { closeTray(); return; }
+            closeSheet();
+            curGrp = g;
+            rows.forEach((r) => r.classList.toggle("active", r.dataset.group === g));
+            grpChips.forEach((c) => c.classList.toggle("active", c === chip));
+            dock.classList.add("tray-open");
+            setPad(); setTimeout(setPad, 300);
+          });
+        });
+        // 메뉴 칩 → 사이드바 시트(프로젝트/구역/체크보드/360 등)
+        const menuChip = dock.querySelector('[data-act="menu"]');
+        if (menuChip) menuChip.addEventListener("click", () => {
+          closeTray();
+          toggleSheet();
+          menuChip.classList.toggle("active", document.body.classList.contains("sidebar-open"));
+        });
+        // 목록 칩 → 포인트 그리드(화면 가리지 않는 바텀시트)
+        const listChip = dock.querySelector('[data-act="list"]');
+        if (listChip) listChip.addEventListener("click", () => {
+          closeTray();
+          const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
+          if (hasDrawing && typeof PinGrid !== "undefined") { PinGrid.render(); PinGrid.setCollapsed(!PinGrid.collapsed ? true : false); }
+          else if (typeof AllPins !== "undefined" && AllPins.show) AllPins.show();
+        });
+        // 도구 → 기존 핸들러에 click 위임(재구현 0). 토글형은 원본 active 상태 동기화.
+        dock.querySelectorAll(".mdock-tool").forEach((tool) => {
+          tool.addEventListener("click", () => {
+            const t = $(tool.dataset.deleg);
+            if (t) t.click();
+            const sync = tool.dataset.sync;
+            if (sync) { const src = $(sync); if (src) requestAnimationFrame(() => tool.classList.toggle("active", src.classList.contains("active"))); }
+          });
+        });
+        requestAnimationFrame(setPad);
+        window.addEventListener("resize", setPad);
+      }
     },
 
     /* ── Map ── */

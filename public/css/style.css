@@ -3156,7 +3156,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
    📱 모바일 하단 네비 + 바텀시트 사이드바 (메뉴가 콘텐츠 안 가림)
    딥리서치: bottom navigation(NN/G) · bottom sheet · 44px 터치 타깃
 ════════════════════════════════════════════════════════════ */
-.mobile-nav { display: none; }
+.mobile-nav, .mobile-dock { display: none; }
 .sidebar-backdrop { display: none; }
 
 /* ★ 상단 빠른 도구 아이콘 (데스크톱: 좌측 사이드바 핵심 기능을 상단에서 바로) */
@@ -3197,8 +3197,44 @@ body.role-viewer #btn-checkboard-toggle,
 body.role-viewer #btn-checkboard-enter { display: none !important; }
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
 @media (max-width: 760px) { .topbar-quick { display: none; } }
+/* 모바일: 상단 PDF 가로스크롤 툴바 숨김 — 도구는 하단 그룹 도크로 통합(tb-* 버튼은 DOM 유지=위임 동작) */
+@media (max-width: 760px) { .pdf-toolbar { display: none !important; } }
 
 @media (max-width: 760px) {
+  /* ═══ 모바일 그룹 도크 — 칩 바 + 펼침 트레이(도면을 밀어내므로 절대 가리지 않음) ═══ */
+  .mobile-dock{display:block;position:fixed;left:0;right:0;bottom:0;z-index:140;
+    background:linear-gradient(180deg,#faf7f0 0%,#f1ebdf 100%);
+    border-top:1px solid var(--border2);box-shadow:0 -4px 18px rgba(43,40,32,.14);
+    padding-bottom:env(safe-area-inset-bottom,0px);}
+  .mdock-bar{display:flex;align-items:stretch;height:54px;}
+  .mdock-chip{position:relative;flex:1 1 0;min-width:40px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:2px;padding:6px 1px;
+    background:transparent;border:none;cursor:pointer;color:#6b6457;
+    font-family:var(--font-ui);font-size:9px;font-weight:700;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+  .mdock-chip span{white-space:nowrap;line-height:1;}
+  .mdock-chip svg{width:21px;height:21px;}
+  .mdock-chip:active{transform:scale(.94);color:var(--gold-ink);}
+  .mdock-chip.active{color:var(--gold-ink);}
+  .mdock-chip.active::after{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+    width:18px;height:3px;border-radius:0 0 4px 4px;background:var(--gold-ink);}
+  .mdock-tray{max-height:0;overflow:hidden;transition:max-height .26s cubic-bezier(.2,.9,.25,1);}
+  .mobile-dock.tray-open .mdock-tray{max-height:64px;border-bottom:1px solid var(--border2);}
+  .mdock-row{display:none;align-items:stretch;height:64px;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .mdock-row::-webkit-scrollbar{height:0;}
+  .mdock-row.active{display:flex;}
+  .mdock-tool{flex:1 0 auto;min-width:56px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;padding:0 6px;
+    background:transparent;border:none;cursor:pointer;color:#5a5347;
+    font-family:var(--font-ui);font-size:9.5px;font-weight:600;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+  .mdock-tool span{white-space:nowrap;line-height:1;}
+  .mdock-tool svg{width:22px;height:22px;}
+  .mdock-tool:active{transform:scale(.92);color:var(--gold-ink);}
+  .mdock-tool.active{color:var(--gold-ink);}
+  body.role-viewer .mdock-chip.designer-only,
+  body.role-viewer .mdock-row.designer-only{display:none;}
+
   /* 1) 하단 네비게이션 바 — 항상 화면 하단 고정, 콘텐츠 위가 아닌 별도 영역 */
   .mobile-nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 140;
