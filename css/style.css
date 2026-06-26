@@ -3225,6 +3225,11 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   .mdock-fab span{margin-top:-2px;color:var(--gold-ink);}
   .mdock-fab.active svg{background:linear-gradient(135deg,#c08e2a,#a8791f);}
   .mdock-fab.active::after{display:none;}
+  /* 페이지 칩 현재 n/N 배지 */
+  .mdock-page-badge{position:absolute;top:4px;right:6px;min-width:13px;padding:1px 3px;
+    border-radius:7px;background:var(--gold-ink);color:#fff;
+    font:700 8px var(--font-ui);line-height:1.2;}
+  .mdock-page-badge.hidden{display:none;}
   .mdock-tray{max-height:0;overflow:hidden;transition:max-height .26s cubic-bezier(.2,.9,.25,1);}
   .mobile-dock.tray-open .mdock-tray{max-height:72px;border-bottom:1px solid var(--border2);}
   .mdock-row{display:none;align-items:stretch;height:64px;overflow-x:auto;-webkit-overflow-scrolling:touch;}

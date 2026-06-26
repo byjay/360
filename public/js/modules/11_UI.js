@@ -376,6 +376,12 @@
       setDis("tb-prev",  State.pdfPage <= 1);
       setDis("tb-next",  State.pdfPage >= (total || 1));
       setDis("tb-last",  State.pdfPage >= (total || 1));
+      // 모바일 도크 '페이지' 칩에 현재 n/N 배지 (멀티페이지만)
+      const pageBadge = this.$("mdock-page-badge");
+      if (pageBadge) {
+        if ((total || 1) > 1) { pageBadge.textContent = State.pdfPage + "/" + total; pageBadge.classList.remove("hidden"); }
+        else pageBadge.classList.add("hidden");
+      }
     },
 
     /** 좌측 썸네일 도킹 패널 토글 (ezPDF 스타일) */
