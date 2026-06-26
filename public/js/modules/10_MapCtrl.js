@@ -104,7 +104,8 @@
       } catch (e) {}
       const size = this._contentSize();
       if (tr) {
-        tr.style.transition = "transform .75s cubic-bezier(.22,.61,.36,1)";
+        tr.style.transition = "transform 1s cubic-bezier(.16,1,.3,1)";
+        { const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.add("iso-animating"); }
         if (State.isoView && size) {
           const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
           const z = Math.min(vw / size.w, vh / size.h) * 0.62; // 입체 변형 고려 여유 축소
@@ -112,7 +113,7 @@
           State.pan = { x: (vw - size.w * z) / 2, y: (vh - size.h * z) / 2 + vh * 0.04 };
         }
         this.applyTransform();
-        setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} }, 800);
+        setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.remove("iso-animating"); }, 1050);
       }
     },
 
@@ -380,10 +381,11 @@
       State.zoom = z;
       State.pan = { x: vw / 2 - z * sx, y: vh / 2 - z * sy };
       const tr = this.transform;
-      try { tr.style.transition = "transform " + (duration / 1000) + "s cubic-bezier(.22,.61,.36,1)"; } catch (e) {}
+      try { tr.style.transition = "transform " + (duration / 1000) + "s cubic-bezier(.16,1,.3,1)"; } catch (e) {}
+      { const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.add("iso-animating"); }
       this.applyTransform();
       this._syncIsoButtons();
-      setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} }, duration + 40);
+      setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.remove("iso-animating"); }, duration + 40);
       return z;
     }
   };

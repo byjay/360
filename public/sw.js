@@ -5,7 +5,7 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v15';   // [캐시버스트] 새 로고/파비콘(favicon.svg) 셸 추가 + 옛 캐시 정리
+const CACHE = 'wm-shell-v16';   // [아이콘 견고화] FontAwesome(CSS+웹폰트) 셸 프리캐시 추가 → 오프라인/CDN차단서도 아이콘 유지
 const SHELL = [
   './',
   'index.html',
@@ -23,7 +23,11 @@ const SHELL = [
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   'https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js',
   'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css',
-  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap'
+  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap',
+  // ★[아이콘 누락 방지] FontAwesome CSS + 웹폰트 — 어떤 상황(오프라인/CDN차단)에서도 fa-* 아이콘 유지
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.woff2',
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-regular-400.woff2'
 ];
 
 self.addEventListener('install', (e) => {
