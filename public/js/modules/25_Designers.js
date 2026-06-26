@@ -144,6 +144,8 @@
       const domain = (inp.value || "").trim().toLowerCase().replace(/^@/, "");
       const projectId = sel ? (sel.value || "*") : "*";
       if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) { err.textContent = "올바른 도메인을 입력하세요. (예: company.com)"; err.classList.remove("hidden"); return; }
+      if (this._domBusy) return;            // [버그수정] 더블서밋 방지
+      this._domBusy = true;
       try {
         const r = await fetch("/api/allowed-domains", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ domain, project_id: projectId }) });
         const j = await r.json();
@@ -151,6 +153,7 @@
         inp.value = "";
         await this.loadDomains();
       } catch (e) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); }
+      finally { this._domBusy = false; }
     },
     async removeDomain(id) {
       try {
@@ -234,6 +237,8 @@
       const email = (inp.value || "").trim().toLowerCase();
       const role = sel ? sel.value : "viewer";
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { if (err) { err.textContent = "올바른 이메일을 입력하세요."; err.classList.remove("hidden"); } return; }
+      if (this._invBusy) return;            // [버그수정] 더블서밋 방지
+      this._invBusy = true;
       try {
         const r = await fetch("/api/invites", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ email, role }) });
         const j = await r.json();
@@ -242,6 +247,7 @@
         if (j.already_registered && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미 가입된 사용자입니다. 권한만 갱신됩니다.");
         await this.loadInvites();
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
+      finally { this._invBusy = false; }
     },
     async removeInvite(email) {
       try {
@@ -564,6 +570,8 @@
       });
     },
     async approve(q) {
+      if (this._reqBusy) return;            // [버그수정] 더블클릭 시 승인 2회 호출 방지
+      this._reqBusy = true;
       try {
         const r = await fetch("/api/access-requests/" + encodeURIComponent(q.id) + "/approve", { method: "POST", headers: Auth.headers() });
         if (!r.ok) { Prompt.toast("승인 실패"); return; }
@@ -571,9 +579,12 @@
         await this.loadRequests();
         await this.render();
       } catch (e) { Prompt.toast("네트워크 오류"); }
+      finally { this._reqBusy = false; }
     },
     async reject(q) {
+      if (this._reqBusy) return;
       if (!confirm((q.name || q.email) + " 의 신청을 거절/회수할까요?")) return;
+      this._reqBusy = true;
       try {
         const r = await fetch("/api/access-requests/" + encodeURIComponent(q.id) + "/reject", { method: "POST", headers: Auth.headers() });
         if (!r.ok) { Prompt.toast("처리 실패"); return; }
@@ -581,6 +592,7 @@
         await this.loadRequests();
         await this.render();
       } catch (e) { Prompt.toast("네트워크 오류"); }
+      finally { this._reqBusy = false; }
     },
 
     /* ── 활동 로그(슈퍼관리자 전용) ── */

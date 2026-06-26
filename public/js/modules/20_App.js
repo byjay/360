@@ -185,9 +185,9 @@
       }
 
       // 체크보드 모드 UI 반영: 토글 버튼 활성 + 배치 버튼 라벨 변경
-      const cbBtn = UI.$("btn-checkboard-toggle");
+      const cbBtn = UI.$("btn-checkboard-enter");
       if (cbBtn) cbBtn.classList.toggle("active", isCheckboard);
-      const cbLabel = UI.$("btn-checkboard-label");
+      const cbLabel = UI.$("btn-checkboard-enter-label");
       if (cbLabel) cbLabel.textContent = isCheckboard ? "디자이너 모드로 복귀" : "체크보드 모드";
       const placeBtn = UI.$("btn-place");
       if (placeBtn) placeBtn.textContent = isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
