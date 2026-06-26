@@ -581,6 +581,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 /* ── topbar 설정/전환 버튼 ── */
 .btn-settings, .btn-exit-edit, .btn-enter-edit {
   display: flex; align-items: center; gap: 6px; margin-left: 8px;
+  white-space: nowrap; flex-shrink: 0;   /* [밀림수정] 좁은 헤더에서 글자 세로 쪼개짐 방지 */
   /* [마스터 요청] 우상단 버튼 가시성 — 패딩/글자 키우고 굵게 */
   padding: 9px 15px; border-radius: 8px; cursor: pointer;
   font-size: 13.5px; font-weight: 700; letter-spacing: .5px; font-family: var(--font-ui);
@@ -3196,7 +3197,7 @@ body.role-viewer #section-checkboard,
 body.role-viewer #btn-checkboard-toggle,
 body.role-viewer #btn-checkboard-enter { display: none !important; }
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
-@media (max-width: 760px) { .topbar-quick { display: none; } }
+@media (max-width: 760px) { .topbar-quick { display: none; } .btn-settings span { display: none; } }
 /* 모바일: 상단 PDF 가로스크롤 툴바 숨김 — 도구는 하단 그룹 도크로 통합(tb-* 버튼은 DOM 유지=위임 동작) */
 @media (max-width: 760px) { .pdf-toolbar { display: none !important; } }
 
