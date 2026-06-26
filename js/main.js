@@ -5870,6 +5870,10 @@
           // 핀(또는 액션버튼) 위 터치는 배치보다 핀 클릭을 우선 (체크보드 핀 클릭 보장)
           if (e.target && e.target.closest(".pin-marker")) { return; }
           if (State.placing) { this._handlePlaceTouch(e); return; }
+          // [버그복원] 모바일 영역 그리기 — 데스크톱 mousedown 과 동일하게 터치에서도 onDrawStart
+          if (State.drawingZone && typeof Zones !== "undefined") {
+            if (Zones.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
+          }
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
       }, { passive: false });
@@ -5891,6 +5895,12 @@
           e.preventDefault();
           return;
         }
+        // [버그복원] 영역 그리는 중엔 팬 대신 onDrawMove
+        if (e.touches.length === 1 && State.drawingZone && typeof Zones !== "undefined" && (Zones._drag || Zones._shape === "poly")) {
+          Zones.onDrawMove(e.touches[0].clientX, e.touches[0].clientY);
+          e.preventDefault();
+          return;
+        }
         if (e.touches.length === 1 && lastTouch) {
           State.pan.x += e.touches[0].clientX - lastTouch.x;
           State.pan.y += e.touches[0].clientY - lastTouch.y;
@@ -5905,6 +5915,13 @@
         if (pinch && (!e.touches || e.touches.length < 2)) pinch = null;
         // 손가락이 0개면 팬도 종료
         if (!e.touches || e.touches.length === 0) {
+          // [버그복원] 영역 그리기(rect/circle) 종료 우선 — poly 는 onDrawStart 탭 누적이라 제외
+          if (State.drawingZone && typeof Zones !== "undefined" && Zones._drag) {
+            const dt = (e.changedTouches && e.changedTouches[0]);
+            if (dt) Zones.onDrawEnd(dt.clientX, dt.clientY);
+            lastTouch = null;
+            return;
+          }
           // 더블탭 줌 감지 (touchend 시점, 직전 탭과 시간·위치 근접)
           const t = (e.changedTouches && e.changedTouches[0]) || null;
           if (t && !State.placing) {
