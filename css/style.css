@@ -3218,6 +3218,13 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   .mdock-chip.active{color:var(--gold-ink);}
   .mdock-chip.active::after{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
     width:18px;height:3px;border-radius:0 0 4px 4px;background:var(--gold-ink);}
+  /* 포인트 추가 = 중앙 강조 FAB(1탭) — 디자이너 최빈 동작 빠르게 */
+  .mdock-fab svg{width:30px;height:30px;padding:9px;box-sizing:content-box;
+    margin-top:-20px;border-radius:50%;background:linear-gradient(135deg,#d8a83e,#c08e2a);
+    color:#1a1208;box-shadow:0 6px 16px rgba(201,150,42,.45);border:3px solid #faf7f0;}
+  .mdock-fab span{margin-top:-2px;color:var(--gold-ink);}
+  .mdock-fab.active svg{background:linear-gradient(135deg,#c08e2a,#a8791f);}
+  .mdock-fab.active::after{display:none;}
   .mdock-tray{max-height:0;overflow:hidden;transition:max-height .26s cubic-bezier(.2,.9,.25,1);}
   .mobile-dock.tray-open .mdock-tray{max-height:72px;border-bottom:1px solid var(--border2);}
   .mdock-row{display:none;align-items:stretch;height:64px;overflow-x:auto;-webkit-overflow-scrolling:touch;}

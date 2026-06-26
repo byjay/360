@@ -4986,11 +4986,11 @@
         const dSub  = UI.$("drop-sub"),  dCta  = UI.$("drop-tap-cta");
         if (dCta) { dCta.classList.toggle("hidden", !isDesigner); dCta.style.display = isDesigner ? "" : "none"; }
         if (isDesigner) {
-          if (dIcon) dIcon.textContent = "📄";
+          if (dIcon) dIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="30" height="30" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
           if (dText) dText.textContent = "도면을 업로드하세요";
           if (dSub)  dSub.textContent  = "PDF · PNG · JPG 지원";
         } else {
-          if (dIcon) dIcon.textContent = "🗂️";
+          if (dIcon) dIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="30" height="30" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
           if (dText) dText.textContent = "배포된 도면을 기다리는 중";
           if (dSub)  dSub.textContent  = "설계자가 도면을 배포하면 자동으로 표시됩니다";
         }
@@ -5809,6 +5809,13 @@
           closeTray();
           toggleSheet();
           menuChip.classList.toggle("active", document.body.classList.contains("sidebar-open"));
+        });
+        // 포인트 FAB(1탭) → 기존 배치 토글에 위임 + State.placing 동기화
+        const placeChip = dock.querySelector('[data-act="place"]');
+        if (placeChip) placeChip.addEventListener("click", () => {
+          closeTray();
+          const b = $("btn-place"); if (b) b.click();
+          requestAnimationFrame(() => placeChip.classList.toggle("active", !!(typeof State !== "undefined" && State.placing)));
         });
         // 목록 칩 → 포인트 그리드(화면 가리지 않는 바텀시트)
         const listChip = dock.querySelector('[data-act="list"]');
@@ -7834,10 +7841,10 @@
       if (!b) return;
       if (this._dirty) {
         b.classList.remove("hidden", "is-clean"); b.classList.add("is-dirty");
-        b.textContent = "💾 저장 *"; b.disabled = false;
+        b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장 *'; b.disabled = false;
       } else {
         b.classList.remove("is-dirty"); b.classList.add("is-clean");
-        b.textContent = "💾 저장됨"; b.disabled = true;
+        b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장됨'; b.disabled = true;
       }
     },
 
@@ -7873,7 +7880,7 @@
         this._onSyncDone(r);
         if (State.pins.some(p => p.pendingOpId || (p.attachments || []).some(a => a.pendingOpId))) {
           alert("일부 핀 업로드에 실패했습니다. 네트워크를 확인하고 다시 시도해 주세요.");
-          btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+          btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
           return;
         }
       }
@@ -7898,12 +7905,12 @@
         }
       } catch (e) {
         alert("도면 스냅샷 생성 실패: " + e.message);
-        btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
         return;
       }
       if (pagesData.length === 0) {
         alert("도면이 없습니다. 먼저 도면을 업로드하세요.");
-        btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
         return;
       }
 
@@ -7955,7 +7962,7 @@
         status.classList.add("error");
         status.classList.remove("hidden");
       } finally {
-        btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
       }
     },
 
@@ -8186,12 +8193,14 @@
     },
 
     _kindBadge(pin) {
+      // 이모지 → 인라인 SVG(앱 아이콘 톤 일치). I()로 중복 최소화.
+      const I = (p) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true">' + p + '</svg>';
       if (pin.isVideo || (pin.imageUrl && /\.(mp4|webm|mov)(\?|$)/i.test(pin.imageUrl)))
-        return { ico: "🎬", cls: "video", txt: "360° 영상" };
-      if (pin.imageId || pin.imageUrl) return { ico: "🌐", cls: "pano", txt: "360° 파노라마" };
-      if (pin.attachments && pin.attachments.length) return { ico: "📎", cls: "doc", txt: pin.attachments.length + "개 첨부" };
-      if (pin.note) return { ico: "📝", cls: "note", txt: "노트" };
-      return { ico: "📍", cls: "empty", txt: "콘텐츠 없음" };
+        return { ico: I('<rect x="2" y="2" width="20" height="20" rx="2"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/>'), cls: "video", txt: "360° 영상" };
+      if (pin.imageId || pin.imageUrl) return { ico: I('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'), cls: "pano", txt: "360° 파노라마" };
+      if (pin.attachments && pin.attachments.length) return { ico: I('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'), cls: "doc", txt: pin.attachments.length + "개 첨부" };
+      if (pin.note) return { ico: I('<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>'), cls: "note", txt: "노트" };
+      return { ico: I('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'), cls: "empty", txt: "콘텐츠 없음" };
     },
 
     _sorted() {

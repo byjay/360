@@ -386,7 +386,7 @@
       <!-- 프로젝트 / 구역 관리 (designer only) -->
       <div id="section-projects" class="sidebar-section hidden">
         <div class="sidebar-section-head">
-          <span class="sidebar-section-title">📁 프로젝트</span>
+          <span class="sidebar-section-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>프로젝트</span>
           <button id="btn-new-project" class="btn-mini" type="button" title="프로젝트 생성">+ 생성</button>
         </div>
         <!-- 현재 프로젝트명 표시(이동 기능 제거: 드롭다운 전환 없음) -->
@@ -397,7 +397,7 @@
 
         <div id="decks-block" class="decks-block hidden">
           <div class="sidebar-section-head">
-            <span class="sidebar-section-title">🗂️ 구역</span>
+            <span class="sidebar-section-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>구역</span>
             <button id="btn-new-deck" class="btn-mini" type="button" title="구역 생성">+ 생성</button>
           </div>
           <div id="decks-list" class="decks-list"></div>
@@ -520,7 +520,7 @@
 
       <!-- Export (designer only) -->
       <div id="section-export" class="sidebar-section hidden">
-        <button id="btn-deploy" class="btn-deploy">🚀 뷰어로 배포</button>
+        <button id="btn-deploy" class="btn-deploy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포</button>
         <button id="btn-export-json" class="btn-upload">↓ JSON 내보내기</button>
         <p id="deploy-status" class="deploy-status hidden"></p>
       </div>
@@ -800,6 +800,9 @@
       </button>
       <button class="mdock-chip designer-only" data-grp="edit" type="button" aria-label="편집 도구">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg><span>편집</span>
+      </button>
+      <button class="mdock-chip mdock-fab designer-only" data-act="place" type="button" aria-label="포인트 추가">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg><span>포인트</span>
       </button>
       <button class="mdock-chip" data-grp="page" type="button" aria-label="페이지 이동">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg><span>페이지</span>

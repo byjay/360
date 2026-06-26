@@ -136,11 +136,11 @@
         const dSub  = UI.$("drop-sub"),  dCta  = UI.$("drop-tap-cta");
         if (dCta) { dCta.classList.toggle("hidden", !isDesigner); dCta.style.display = isDesigner ? "" : "none"; }
         if (isDesigner) {
-          if (dIcon) dIcon.textContent = "📄";
+          if (dIcon) dIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="30" height="30" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
           if (dText) dText.textContent = "도면을 업로드하세요";
           if (dSub)  dSub.textContent  = "PDF · PNG · JPG 지원";
         } else {
-          if (dIcon) dIcon.textContent = "🗂️";
+          if (dIcon) dIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="30" height="30" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
           if (dText) dText.textContent = "배포된 도면을 기다리는 중";
           if (dSub)  dSub.textContent  = "설계자가 도면을 배포하면 자동으로 표시됩니다";
         }
@@ -959,6 +959,13 @@
           closeTray();
           toggleSheet();
           menuChip.classList.toggle("active", document.body.classList.contains("sidebar-open"));
+        });
+        // 포인트 FAB(1탭) → 기존 배치 토글에 위임 + State.placing 동기화
+        const placeChip = dock.querySelector('[data-act="place"]');
+        if (placeChip) placeChip.addEventListener("click", () => {
+          closeTray();
+          const b = $("btn-place"); if (b) b.click();
+          requestAnimationFrame(() => placeChip.classList.toggle("active", !!(typeof State !== "undefined" && State.placing)));
         });
         // 목록 칩 → 포인트 그리드(화면 가리지 않는 바텀시트)
         const listChip = dock.querySelector('[data-act="list"]');
@@ -2984,10 +2991,10 @@
       if (!b) return;
       if (this._dirty) {
         b.classList.remove("hidden", "is-clean"); b.classList.add("is-dirty");
-        b.textContent = "💾 저장 *"; b.disabled = false;
+        b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장 *'; b.disabled = false;
       } else {
         b.classList.remove("is-dirty"); b.classList.add("is-clean");
-        b.textContent = "💾 저장됨"; b.disabled = true;
+        b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장됨'; b.disabled = true;
       }
     },
 
@@ -3023,7 +3030,7 @@
         this._onSyncDone(r);
         if (State.pins.some(p => p.pendingOpId || (p.attachments || []).some(a => a.pendingOpId))) {
           alert("일부 핀 업로드에 실패했습니다. 네트워크를 확인하고 다시 시도해 주세요.");
-          btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+          btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
           return;
         }
       }
@@ -3048,12 +3055,12 @@
         }
       } catch (e) {
         alert("도면 스냅샷 생성 실패: " + e.message);
-        btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
         return;
       }
       if (pagesData.length === 0) {
         alert("도면이 없습니다. 먼저 도면을 업로드하세요.");
-        btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
         return;
       }
 
@@ -3105,7 +3112,7 @@
         status.classList.add("error");
         status.classList.remove("hidden");
       } finally {
-        btn.disabled = false; btn.textContent = "🚀 뷰어로 배포";
+        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
       }
     },
 
