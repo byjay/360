@@ -376,6 +376,9 @@
       <span class="tb-label">포인트</span>
     </button>
   </div>
+  <!-- [버그복원] 다각형 완료 버튼 — 모바일엔 더블클릭/Enter 가 없어 poly 를 닫을 수 없던 문제 해결.
+       poly 그리는 중(점 3개 이상)에만 표시. -->
+  <button id="btn-poly-finish" class="btn-poly-finish hidden" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> 다각형 완료</button>
 
   <!-- Body -->
   <div class="app-body">
@@ -417,7 +420,7 @@
       <!-- Viewer: 배포본 로딩 상태 -->
       <div id="section-viewer-load" class="sidebar-section hidden">
         <div id="viewer-load-status" class="viewer-load-status">배포된 도면 확인 중...</div>
-        <button id="btn-reload-deploy" class="btn-upload secondary">↻ 최신 배포본 다시 불러오기</button>
+        <button id="btn-reload-deploy" class="btn-upload secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>최신 배포본 다시 불러오기</button>
       </div>
 
       <!-- Place pin (designer only) -->
@@ -461,8 +464,8 @@
         <!-- [중복 제거] 체크보드 토글은 위 section-checkboard 카드(btn-checkboard-enter)로 일원화 -->
         <details id="zone-tools-wrap" class="zone-tools-wrap" open>
         <summary class="zone-tools-label">
-          <span class="ztl-text"><i class="fa-solid fa-draw-polygon ztl-ico"></i> 영역 지정 도구</span>
-          <i class="fa-solid fa-chevron-down ztl-chevron" aria-hidden="true"></i>
+          <span class="ztl-text"><svg class="ztl-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true"><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg> 영역 지정 도구</span>
+          <svg class="ztl-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
         </summary>
         <div id="zone-tools" class="zone-tools">
           <button id="btn-zone-rect" class="zone-tool" data-shape="rect" title="사각형 영역" aria-label="사각형 영역">
@@ -498,7 +501,7 @@
       <!-- 다음 포인트 안내 (저장 후, section-place 아래 인라인) -->
       <div id="section-next-point" class="sidebar-section hidden">
         <div id="pin-saved-msg" class="pin-saved-msg">✅ 포인트 저장 완료</div>
-        <button id="btn-next-point" class="btn-place">＋ 다음 포인트 지정</button>
+        <button id="btn-next-point" class="btn-place"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>다음 포인트 지정</button>
       </div>
 
       <!-- Pin list (포인트 목록 — 아이콘 토글식: 평소 접힘, 누르면 펼침) -->
@@ -512,7 +515,7 @@
           <svg class="pin-list-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div id="pin-list-body" class="pin-list-body">
-          <button id="pin-list-close" class="pin-list-close" type="button" title="포인트 목록 닫기">✕ 닫기</button>
+          <button id="pin-list-close" class="pin-list-close" type="button" title="포인트 목록 닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>닫기</button>
           <div id="pin-list" class="pin-list"></div>
           <div id="pin-empty" class="pin-empty">포인트를 추가하세요</div>
         </div>
@@ -521,7 +524,7 @@
       <!-- Export (designer only) -->
       <div id="section-export" class="sidebar-section hidden">
         <button id="btn-deploy" class="btn-deploy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포</button>
-        <button id="btn-export-json" class="btn-upload">↓ JSON 내보내기</button>
+        <button id="btn-export-json" class="btn-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>JSON 내보내기</button>
         <p id="deploy-status" class="deploy-status hidden"></p>
       </div>
 

@@ -2561,7 +2561,7 @@
         item.className = "pin-item" + (State.activePin === pin.id ? " active" : "");
         item.dataset.id = pin.id;
         const pageTag = (totalPages > 1) ? ` · P${pin.page || 1}` : "";
-        const cloudTag = pin.imageId ? " ☁" : "";
+        const cloudTag = pin.imageId ? ' <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true" style="vertical-align:-1px;opacity:.7"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>' : "";
         // 노트/첨부 메타 아이콘
         const noteIco = pin.note ? `<svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>` : "";
         const attCount = pin.attachments ? pin.attachments.length : 0;
@@ -2609,7 +2609,7 @@
               <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}${issueBadge}</div>
               <div class="pin-coords">${pin.x.toFixed(1)}%, ${pin.y.toFixed(1)}%${pageTag}</div>
             </div>
-            <span class="pin-arrow">▶</span>`;
+            <span class="pin-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></span>`;
           item.addEventListener("click", () => App.focusPin(pin, true));
         }
         list.appendChild(item);
@@ -4015,6 +4015,9 @@
         if (e.key === "Enter" && this._shape === "poly" && this._poly && this._poly.length >= 3) { e.preventDefault(); this._finishPoly(); }
         if (e.key === "Escape") { this._cancelDraw(); }
       });
+      // [버그복원] 모바일 다각형 완료 — 더블클릭/Enter 가 없어 닫을 수 없던 문제 해결
+      const pf = $("btn-poly-finish");
+      if (pf) pf.addEventListener("click", () => { if (this._poly && this._poly.length >= 3) this._finishPoly(); });
     },
 
     isDesigner() { return !!(typeof Auth !== "undefined" && Auth.isDesigner); },
@@ -4090,7 +4093,7 @@
         this._poly = this._poly || [];
         if (this._poly.length >= 3) {
           const s = this._poly[0];
-          if (Math.hypot(pct.x - s.x, pct.y - s.y) < 2.2) { this._finishPoly(); return true; }
+          if (Math.hypot(pct.x - s.x, pct.y - s.y) < 4.5) { this._finishPoly(); return true; }
         }
         this._poly.push({ x: +pct.x.toFixed(3), y: +pct.y.toFixed(3) });
         this._renderDraft();
@@ -4117,7 +4120,7 @@
       if (!pct) return;
       const x = Math.min(start.sx, pct.x), y = Math.min(start.sy, pct.y);
       const w = Math.abs(pct.x - start.sx), h = Math.abs(pct.y - start.sy);
-      if (w < 1.5 || h < 1.5) { this._cancelDraw(); return; } // 너무 작은 영역 무시
+      if (w < 0.8 || h < 0.8) { this._cancelDraw(); return; } // 너무 작은 영역만 무시(모바일 드래그 완화)
       let geom;
       if (this._shape === "circle") {
         const cx = (start.sx + pct.x) / 2, cy = (start.sy + pct.y) / 2;
@@ -4200,6 +4203,8 @@
       if (svg) { const d = svg.querySelector(".zone-draft-svg"); if (d) d.remove(); }
       const legacy = document.getElementById("zone-draft");
       if (legacy) { legacy.classList.add("hidden"); }
+      const pf = document.getElementById("btn-poly-finish");
+      if (pf) pf.classList.add("hidden");
     },
     _renderDraft() {
       const svg = document.getElementById("zones-svg");
@@ -4226,6 +4231,9 @@
       }
       d.innerHTML = inner;
       svg.appendChild(d);
+      // 다각형 완료 버튼: 점 3개 이상일 때만 노출
+      const pf = document.getElementById("btn-poly-finish");
+      if (pf) pf.classList.toggle("hidden", !(State.drawingZone && this._shape === "poly" && this._poly && this._poly.length >= 3));
     },
 
     _shapeLabel(z) { return z.shape === "circle" ? "원형" : z.shape === "poly" ? "다각형" : "사각형"; },
@@ -11121,7 +11129,7 @@
           ? '<span class="deck-hasdoc" title="도면 등록됨"><i class="fa-solid fa-file-lines"></i></span>'
           : '<span class="deck-nodoc" title="도면 미등록"><i class="fa-regular fa-folder-open"></i></span>';
         row.innerHTML = `<span class="deck-tree-guide">└</span><span class="deck-name">${dot}${this._esc(d.name)}</span>
-          <button class="deck-del" title="삭제">✕</button>`;
+          <button class="deck-del" title="삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
         row.querySelector(".deck-name").addEventListener("click", () => this.selectDeck(d));
         row.querySelector(".deck-del").addEventListener("click", (e) => { e.stopPropagation(); this.deleteDeck(d.id, d.name); });
         listEl.appendChild(row);
