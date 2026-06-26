@@ -5400,34 +5400,18 @@
         files.forEach(f => this._addPendingDoc(f));
       });
 
-      // 핀 폼: 3D 포인트 클라우드(FLS/E57/LAS/PLY 등) 첨부
+      // 핀 폼: 동영상 첨부 (3D 포인트클라우드는 E57 등 웹에서 못 읽어 동영상으로 대체).
+      //   기존 영상 파이프라인(_acceptPinMediaFile → pendingIsVideo)을 재사용한다.
       const flsBtn = UI.$("btn-pin-fls");
       if (flsBtn) flsBtn.addEventListener("click", () => UI.$("input-pin-fls").click());
       const flsInput = UI.$("input-pin-fls");
-      if (flsInput) flsInput.addEventListener("change", async e => {
+      if (flsInput) flsInput.addEventListener("change", e => {
         const f = e.target.files[0];
         e.target.value = "";
         if (!f) return;
-        if (typeof FLS !== "undefined" && !FLS.isSupported(f.name)) {
-          Prompt.toast && Prompt.toast("지원 형식: .fls .e57 .las .laz .ply .pcd .xyz .pts");
-        }
-        try {
-          const ab = await this._readAsArrayBuffer(f);
-          // 로컬 캐시에 보관(즉시 미리보기/저장은 배포 시 처리)
-          const lid = "f" + Date.now() + Math.random().toString(36).slice(2, 6);
-          Cloud._cache = Cloud._cache || {};
-          Cloud._cache["fls:" + lid] = ab;
-          State.pendingFls = { localId: lid, name: f.name, size: f.size };
-          const info = UI.$("pin-file-info");
-          if (info) {
-            const prev = info.classList.contains("hidden") ? "" : info.textContent + "  ·  ";
-            info.textContent = prev + "🧊 " + f.name + " (" + (f.size / 1024 / 1024).toFixed(1) + " MB)";
-            info.classList.remove("hidden");
-          }
-          this._updateConfirmEnabled();
-        } catch (err) {
-          Prompt.toast && Prompt.toast("3D 파일 읽기 실패: " + (err.message || err));
-        }
+        const isVid = (f.type && f.type.startsWith("video/")) || /\.(mp4|webm|mov)$/i.test(f.name);
+        if (!isVid) { Prompt.toast && Prompt.toast("동영상 파일(mp4·webm·mov)을 선택하세요"); return; }
+        this._acceptPinMediaFile(f, true, false);
       });
 
       UI.$("input-pin-url").addEventListener("input", () => this._updateConfirmEnabled());
