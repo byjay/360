@@ -971,6 +971,15 @@
         requestAnimationFrame(setPad);
         window.addEventListener("resize", setPad);
       }
+
+      // [사이드바 재구성] 컴팩트 도구바 — 기존 버튼에 click 위임(재구현 0), 토글형 active 동기화
+      document.querySelectorAll("#side-toolbar .stb-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var t = UI.$(btn.dataset.deleg); if (t) t.click();
+          var sync = btn.dataset.sync;
+          if (sync) { var src = UI.$(sync); if (src) requestAnimationFrame(function () { btn.classList.toggle("active", src.classList.contains("active")); }); }
+        });
+      });
     },
 
     /* ── Map ── */

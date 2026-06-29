@@ -2616,6 +2616,81 @@
       });
       if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
       if (typeof PinGrid !== "undefined") PinGrid.render();
+      this.renderTree();
+    },
+
+    /* [사이드바 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리.
+       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임. */
+    renderTree() {
+      const host = this.$("side-tree");
+      if (!host) return;
+      const esc = (s) => this.escapeHtml(s);
+      const C = '<svg class="tree-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+      const ICO = {
+        deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+        doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+        pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
+      };
+      const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
+      host.innerHTML = "";
+      if (!decks.length) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+      const pinNode = (p) => {
+        const n = document.createElement("button");
+        n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
+        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>';
+        n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
+        return n;
+      };
+      decks.forEach((deck) => {
+        const isCur = typeof Projects !== "undefined" && Projects.currentDeck && Projects.currentDeck.id === deck.id;
+        const g = document.createElement("div");
+        g.className = "tree-deck" + (isCur ? " open" : "");
+        const head = document.createElement("button");
+        head.className = "tree-node tree-node-deck" + (isCur ? " active" : "");
+        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + (deck.deployment_id ? "" : '<span class="tree-tag">도면없음</span>');
+        head.addEventListener("click", () => {
+          if (isCur) { g.classList.toggle("open"); }
+          else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
+        });
+        g.appendChild(head);
+        if (isCur) {
+          const kids = document.createElement("div");
+          kids.className = "tree-children";
+          const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
+          if (fname) {
+            const dn = document.createElement("div");
+            dn.className = "tree-node tree-node-doc";
+            dn.innerHTML = ICO.doc + '<span class="tree-label">' + esc(fname) + '</span>';
+            kids.appendChild(dn);
+          }
+          const page = State.pdfPage || 1;
+          const zones = (State.zones || []).filter((z) => (z.page || 1) === page);
+          const pins = (State.pins || []).filter((p) => (p.page || 1) === page);
+          const used = new Set();
+          zones.forEach((zone) => {
+            const zpins = pins.filter((p) => (typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false);
+            zpins.forEach((p) => used.add(p.id));
+            const zn = document.createElement("div");
+            zn.className = "tree-zone open";
+            const zh = document.createElement("button");
+            zh.className = "tree-node tree-node-zone";
+            zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span><span class="tree-cnt">' + zpins.length + '</span>';
+            zh.addEventListener("click", (e) => {
+              if (e.target.closest(".tree-caret")) { zn.classList.toggle("open"); return; }
+              if (typeof Zones !== "undefined" && Zones.focus) Zones.focus(zone.id);
+            });
+            zn.appendChild(zh);
+            const zc = document.createElement("div");
+            zc.className = "tree-children";
+            zpins.forEach((p) => zc.appendChild(pinNode(p)));
+            zn.appendChild(zc);
+            kids.appendChild(zn);
+          });
+          pins.filter((p) => !used.has(p.id)).forEach((p) => kids.appendChild(pinNode(p)));
+          g.appendChild(kids);
+        }
+        host.appendChild(g);
+      });
     },
 
     renderPinsOnMap(dropPinId) {
@@ -4293,6 +4368,7 @@
       });
       // 구역 페이저(전체+구역 탭) 갱신
       try { if (typeof App !== "undefined" && App._renderZonePager) App._renderZonePager(); } catch (e) {}
+      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
     /* ── 사이드바 목록 ── */
@@ -5837,6 +5913,15 @@
         requestAnimationFrame(setPad);
         window.addEventListener("resize", setPad);
       }
+
+      // [사이드바 재구성] 컴팩트 도구바 — 기존 버튼에 click 위임(재구현 0), 토글형 active 동기화
+      document.querySelectorAll("#side-toolbar .stb-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var t = UI.$(btn.dataset.deleg); if (t) t.click();
+          var sync = btn.dataset.sync;
+          if (sync) { var src = UI.$(sync); if (src) requestAnimationFrame(function () { btn.classList.toggle("active", src.classList.contains("active")); }); }
+        });
+      });
     },
 
     /* ── Map ── */
@@ -11146,6 +11231,7 @@
           listEl.appendChild(sub);
         }
       });
+      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
     /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */

@@ -188,6 +188,7 @@
           listEl.appendChild(sub);
         }
       });
+      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
     /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */

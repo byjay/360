@@ -4448,6 +4448,38 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 .btn-poly-finish.hidden{display:none;}
 @media(max-width:760px){.btn-poly-finish{bottom:calc(70px + env(safe-area-inset-bottom,0px));}}
 
+/* ═══ [사이드바 재구성] 컴팩트 도구바 + 구역>도면>영역>포인트 트리 ═══ */
+.side-toolbar{display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;border-bottom:1px solid var(--border2);}
+.stb-btn{flex:0 0 auto;width:38px;height:36px;display:flex;align-items:center;justify-content:center;
+  background:var(--bg3,#f1ece0);border:1px solid var(--border2);border-radius:8px;cursor:pointer;color:var(--text2,#6b6457);
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:background .14s,border-color .14s,color .14s,transform .1s;}
+.stb-btn:hover{border-color:var(--gold);color:var(--gold-ink);}
+.stb-btn:active{transform:scale(.94);}
+.stb-btn.active{background:rgba(201,150,42,.16);border-color:var(--gold);color:var(--gold-ink);}
+.stb-sep{flex:0 0 auto;width:1px;align-self:stretch;background:var(--border2);margin:2px;}
+.side-tree{padding:8px 6px;}
+.tree-empty{color:var(--text3);font-size:12px;padding:12px 10px;text-align:center;line-height:1.6;}
+.tree-node{display:flex;align-items:center;gap:6px;width:100%;padding:7px 6px;background:transparent;border:none;cursor:pointer;
+  color:var(--text);font-family:var(--font-ui);font-size:12.5px;text-align:left;border-radius:6px;-webkit-tap-highlight-color:transparent;}
+.tree-node:hover{background:rgba(201,150,42,.08);}
+.tree-node.active{background:rgba(201,150,42,.16);color:var(--gold-ink);}
+.tree-node svg{flex:0 0 auto;}
+.tree-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tree-node-deck{font-weight:700;}
+.tree-node-doc{font-size:11.5px;color:var(--text2);}
+.tree-node-pin{font-size:12px;color:var(--text2);}
+.tree-caret{width:13px;height:13px;transition:transform .18s;color:var(--text3);}
+.tree-deck:not(.open) .tree-node-deck .tree-caret,.tree-zone:not(.open) .tree-node-zone .tree-caret{transform:rotate(-90deg);}
+.tree-deck:not(.open) > .tree-children{display:none;}
+.tree-zone:not(.open) > .tree-children{display:none;}
+.tree-children{padding-left:12px;border-left:1px solid var(--border2);margin-left:10px;}
+.tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
+.tree-cnt{min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
+  background:var(--gold);color:#1a1206;font-size:9px;font-weight:700;flex:0 0 auto;}
+.tree-tag{font-size:9px;color:var(--text3);background:var(--bg3,#f1ece0);padding:1px 6px;border-radius:6px;flex:0 0 auto;}
+/* 기존 흩어진 목록/도구 섹션 숨김 — 도구바+트리로 통합(요소는 DOM 유지=위임 동작) */
+#decks-block,#section-upload,#section-checkboard,#section-place,#section-zones,#section-next-point,#section-pin-list{display:none!important;}
+
 /* [시네마틱 ISO] 평면↔ISO 전환 동안만 핀도 도면과 함께 부드럽게 이동(끊김 제거).
    줌/팬 중엔 클래스가 없어 즉시 따라가고, 전환 동안만 적용. */
 #pins-layer.iso-animating .pin-marker { transition: transform 1s cubic-bezier(.16,1,.3,1); }

@@ -301,6 +301,7 @@
       });
       // 구역 페이저(전체+구역 탭) 갱신
       try { if (typeof App !== "undefined" && App._renderZonePager) App._renderZonePager(); } catch (e) {}
+      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
     /* ── 사이드바 목록 ── */
