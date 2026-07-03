@@ -41,3 +41,10 @@ core
 _archive/
 _code-export/
 /2ND*.JPG
+
+# 참고자료/목업 — 실제 파노라마·도면은 R2에 저장되므로 로컬 샘플은 저장소에 불필요
+public/samples/
+_design-export/
+seastar360-source.zip
+images/pano-sample.jpg
+public/images/pano-sample.jpg
