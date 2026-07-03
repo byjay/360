@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "webapp",
+  "compatibility_date": "2025-05-01",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  // ⚠️ 배포 전 필수: 아래 database_id 를 실제 값으로 교체하세요.
+  //   1) npx wrangler d1 create webapp-production
+  //   2) 출력된 database_id 를 "local-dev-placeholder" 자리에 붙여넣기
+  //   3) npx wrangler d1 migrations apply webapp-production   (프로덕션 마이그레이션)
+  // 로컬 개발(--local)은 placeholder 그대로도 .wrangler/state SQLite로 동작합니다.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "webapp-production",
+      "database_id": "7052225b-4dfd-4ffa-a27d-745aacb9f691"
+    }
+  ],
+  // 슈퍼관리자 이메일(보안): 운영에서는 secret 권장
+  //   npx wrangler pages secret put SUPER_ADMIN_EMAIL
+  "vars": {
+    "SUPER_ADMIN_EMAIL": "designssir@gmail.com",
+    // [SEcMS 차용] 다중 슈퍼관리자 allowlist(쉼표구분). 비우면 SUPER_ADMIN_EMAIL 단일.
+    "SUPER_ADMIN_EMAILS": "designssir@gmail.com",
+    // SEASTAR 패밀리 공유 Firebase 프로젝트 — 이 프로젝트가 발급한 ID토큰만 신뢰(verifyFirebaseToken)
+    "FIREBASE_PROJECT_ID": "sedmsys",
+    // 운영 도메인(설계자/스캔 대시보드). 공유링크·뷰어 URL 기준. ⚠️ Firebase Console(sedmsys) 승인도메인 추가 필요.
+    "PRIMARY_DOMAIN": "scan.seastar.work"
+  },
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "seastar-assets"
+    }
+  ]
+}

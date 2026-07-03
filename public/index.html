@@ -1,0 +1,2041 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>360° Location Viewer System — We:are Marine</title>
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="360 Viewer" />
+  <meta name="application-name" content="360 Viewer" />
+  <link rel="icon" type="image/svg+xml" href="images/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="images/icon-192.png" />
+  <!-- [버그수정] FontAwesome 미로드로 fa-solid 아이콘 58곳이 백지였음 → CDN 로드 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <!-- 본문 UI: Pretendard(한글 최적 모던 산세리프) · 수치/좌표: JetBrains Mono(CAD 가독성) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- SEASTAR 패밀리룩(구조패턴) 헬퍼 — 기존 스타일 위 가산. 컴포넌트가 .fl-* opt-in -->
+  <link rel="stylesheet" href="css/seastar-family-tokens.css" />
+  <!-- [마스터] 다크 메탈릭 3D 스킨 — 외형만 가산 오버레이(맨 아래 로드) -->
+  <link rel="stylesheet" href="css/seastar-3d-skin.css" />
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>
+    /* ───────────────────────────────────────────────
+       Google OAuth 클라이언트 ID (설정 필요)
+       · Google Cloud Console에서 발급한 "웹 애플리케이션" 클라이언트 ID로 교체하세요.
+       · 형식: xxxxxxxx-xxxx.apps.googleusercontent.com
+       · 승인된 JavaScript 원본에 이 사이트 주소를 등록해야 합니다.
+    ─────────────────────────────────────────────── */
+    window.WM_GOOGLE_CLIENT_ID = "GOOGLE_CLIENT_ID";  // ← 여기를 교체
+
+    /* ───────────────────────────────────────────────
+       브랜딩 설정 (회사 로고 · 회사명 · 테마색)
+       · logoUrl  : 회사 로고 이미지 경로(권장: /images/logo.png, 투명 PNG/SVG)
+                    값이 비어 있으면 텍스트 워드마크로 대체됩니다.
+       · company  : 회사명 (헤더/푸터 표기)
+       · product  : 제품명 (홈 타이틀)
+       · accent   : 강조색(HEX). 비우면 기본 골드(#f59e0b) 사용.
+       ─────────────────────────────────────────────── */
+    window.WM_BRAND = {
+      // 회사 로고 (SEASTAR Inc.) — 실패 시 텍스트 워드마크로 자동 폴백
+      logoUrl:     "images/logo.png",
+      company:     "SEASTAR Inc.",
+      companyShort:"SEASTAR",
+      product:     "360° Location Viewer",
+      tagline:     "WORLD SHIPBUILDING & OFFSHORE DESIGN PROVIDER",
+      accent:      "#1b75bb"  /* SEASTAR 로고 블루 */
+    };
+  </script>
+</head>
+<body>
+
+<!-- [오프라인 작업지시서 ] 네트워크 상태 배지(오프라인/동기화중 + 대기 op 수) -->
+<div id="net-badge" class="net-badge"><span id="net-text">오프라인</span><span id="net-q" class="net-q">0</span></div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: PROJECTS  (첫 화면 — 프로젝트 선택 대시보드)
+════════════════════════════════════════════ -->
+<div id="screen-projects" class="screen active">
+  <div class="home-bg"></div>
+
+  <!-- 상단 인증 바 (홈과 동일 구성, 별도 슬롯) -->
+  <header class="hub-authbar">
+    <div id="hub-brand-logo" class="brand-logo brand-logo-top" aria-hidden="true"></div>
+    <div class="hub-authbar-spacer"></div>
+    <div id="hub-auth-signed-out" class="auth-signed-out">
+      <span class="auth-hint">설계자 기능은 로그인이 필요합니다</span>
+      <div id="hub-google-signin-btn" class="google-signin-btn"></div>
+      <!-- [마스터 요청 N2] "설계자 모드" 버튼 제거 — 기본 자동 진입(N1)이라 불필요 -->
+      <button id="hub-btn-demo-viewer" class="btn-demo btn-demo-viewer" type="button" title="로그인 없이 열람자로 둘러보기">
+        둘러보기
+      </button>
+    </div>
+    <div id="hub-auth-signed-in" class="auth-signed-in hidden">
+      <div class="user-badge">
+        <img id="hub-user-avatar" class="user-avatar" alt="" />
+        <div class="user-meta">
+          <span id="hub-user-name" class="user-name"></span>
+          <span id="hub-user-role" class="user-role"></span>
+        </div>
+      </div>
+      <button id="hub-btn-manage-designers" class="btn-manage hidden" type="button" title="디자이너 지정 관리">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        디자이너 관리
+      </button>
+      <!-- [마스터 2026-06-22] 데모(자동진입) 중 본인 Google 계정으로 로그인하는 상시 버튼 -->
+      <button id="hub-btn-google-login" class="btn-google-login hidden" type="button" title="본인 Google 계정으로 로그인 (데모 → 실계정)">
+        <svg class="g-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        <span>Google 로그인</span>
+      </button>
+      <button id="hub-btn-signout" class="btn-signout" type="button">로그아웃</button>
+    </div>
+  </header>
+
+  <main class="hub-content">
+    <div class="hub-head">
+      <div>
+        <div id="hub-badge" class="hub-badge">PROJECTS</div>
+        <h1 id="hub-title" class="hub-title">프로젝트 선택</h1>
+        <p id="hub-sub" class="hub-sub">열람할 프로젝트를 선택하세요. 설계자는 로그인 후 프로젝트를 생성·편집할 수 있습니다.</p>
+      </div>
+      <button id="hub-btn-new" class="hub-btn-new hidden" type="button">
+        <span class="hub-btn-new-plus">+</span> 새 프로젝트
+      </button>
+    </div>
+
+    <div id="hub-grid" class="hub-grid" role="list">
+      <!-- ProjectHub.render()가 카드 채움 -->
+    </div>
+    <div id="hub-empty" class="hub-empty hidden">
+      <div class="hub-empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="40" height="40" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
+      <p class="hub-empty-text">아직 등록된 프로젝트가 없습니다.</p>
+      <p id="hub-empty-hint" class="hub-empty-hint">설계자로 로그인하면 새 프로젝트를 만들 수 있습니다.</p>
+    </div>
+  </main>
+
+  <div id="hub-footer" class="home-footer hub-footer">POWERED BY SEASTAR INC.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: HOME  (모드 선택 — 현재 흐름에서는 사용 안 함, 보존)
+════════════════════════════════════════════ -->
+<div id="screen-home" class="screen">
+  <div class="home-bg"></div>
+
+  <!-- 상단 인증 바: 구글 로그인 / 사용자 배지 -->
+  <div class="home-authbar">
+    <div id="auth-signed-out" class="auth-signed-out">
+      <span class="auth-hint">설계자 기능은 로그인이 필요합니다</span>
+      <div id="google-signin-btn" class="google-signin-btn"></div>
+    </div>
+    <div id="auth-signed-in" class="auth-signed-in hidden">
+      <div class="user-badge">
+        <img id="user-avatar" class="user-avatar" alt="" />
+        <div class="user-meta">
+          <span id="user-name" class="user-name"></span>
+          <span id="user-role" class="user-role"></span>
+        </div>
+      </div>
+      <button id="btn-manage-designers" class="btn-manage hidden" type="button" title="디자이너 지정 관리">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        디자이너 관리
+      </button>
+      <button id="btn-signout" class="btn-signout" type="button">로그아웃</button>
+    </div>
+  </div>
+
+  <div class="home-content">
+    <div class="home-brand">
+      <div id="brand-logo-home" class="brand-logo brand-logo-home" aria-hidden="true"></div>
+      <div id="home-badge" class="home-badge">We:are · Marine Inspection</div>
+      <h1 id="home-title" class="home-title">360° Location<br>Viewer System</h1>
+      <p id="home-sub" class="home-sub">GA DRAWING · PANORAMIC INTEGRATION</p>
+    </div>
+    <div class="mode-cards">
+      <div class="mode-card designer locked" data-mode="designer" tabindex="0" role="button" title="구글 로그인 — 디자이너 권한 필요">
+        <div class="card-lock" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div class="card-icon"><svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg></div>
+        <div class="card-badge">DESIGNER</div>
+        <div class="card-title">설계자 모드</div>
+        <div class="card-desc">구글 로그인(디자이너) 후<br>프로젝트·데크 생성 및<br>도면·360° 포인트 배치</div>
+      </div>
+      <div class="mode-card viewer" data-mode="viewer" tabindex="0" role="button">
+        <div class="card-icon"><svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/></svg></div>
+        <div class="card-badge">VIEWER</div>
+        <div class="card-title">뷰어 모드</div>
+        <div class="card-desc">배포된 도면에서<br>포인트 클릭으로<br>360° 현장 확인</div>
+      </div>
+    </div>
+    <div id="home-footer" class="home-footer">POWERED BY We:are ENGINEERING PLATFORM</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: APP (designer / viewer)
+════════════════════════════════════════════ -->
+<div id="screen-app" class="screen">
+
+  <!-- Topbar -->
+  <header id="topbar" class="topbar">
+    <button id="btn-back" class="btn-icon" title="홈으로" aria-label="홈으로"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+    <div id="brand-logo-top" class="brand-logo brand-logo-top" title="" aria-hidden="true"></div>
+    <div id="topbar-dot" class="topbar-dot"></div>
+    <span id="mode-label" class="mode-label">DESIGNER MODE</span>
+    <span class="topbar-sep">·</span>
+    <span id="file-name-label" class="file-name-label">도면 없음</span>
+
+    <!-- 수동 저장 버튼 (자동저장 OFF — 마스터 요청) -->
+    <button id="btn-save" class="btn-save hidden" type="button" title="작업 내용을 서버에 저장"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장</button>
+    <span id="autosave-indicator" class="autosave-indicator hidden" title="저장 상태">
+      <span class="autosave-dot"></span>
+      <span id="autosave-text" class="autosave-text">저장됨</span>
+    </span>
+
+    <!-- PDF pagination -->
+    <div id="pdf-pagination" class="pdf-pagination hidden">
+      <button id="btn-first-page" class="btn-page" title="첫 페이지 (Home)" aria-label="첫 페이지">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+      </button>
+      <button id="btn-prev-page" class="btn-page" title="이전 페이지 (←)" aria-label="이전">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="page-jump">
+        <input id="input-page-jump" class="page-jump-input" type="text" inputmode="numeric" value="1" aria-label="페이지 번호" />
+        <span class="page-total" id="page-total">/ 1</span>
+      </span>
+      <button id="btn-next-page" class="btn-page" title="다음 페이지 (→)" aria-label="다음">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <button id="btn-last-page" class="btn-page" title="마지막 페이지 (End)" aria-label="마지막">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+      </button>
+      <span id="page-info" class="page-info hidden">1 / 1</span>
+    </div>
+
+    <!-- 동기화 상태 배지 (오프라인 큐 / 온라인 업로드) -->
+    <button id="sync-badge" class="sync-badge hidden" type="button" title="동기화 상태 — 클릭 시 지금 동기화">
+      <span id="sync-dot" class="sync-dot"></span>
+      <span id="sync-text" class="sync-text">온라인</span>
+    </button>
+
+    <div id="pin-count-badge" class="pin-count-badge hidden"></div>
+    <button id="btn-all-pins" class="btn-allpins hidden" title="전체 핀 리스트 보기 (P)" aria-label="전체 핀 리스트">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
+      <span>전체 핀</span>
+    </button>
+
+    <!-- 뷰어 → 편집 모드 전환(편집 모드일 때 표시) -->
+    <button id="btn-exit-edit" class="btn-exit-edit hidden" type="button" title="뷰어로 돌아가기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 3 3 8 8 8"/></svg>
+      <span>뷰어로</span>
+    </button>
+
+    <!-- 설계자 모드로 전환 — 설계자 권한이 있는데 뷰어 모드일 때만 노출(회귀 방지) -->
+    <button id="btn-enter-edit" class="btn-enter-edit hidden" type="button" title="설계자 편집 모드로 전환 (도면 업로드·핀·사진)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      <span>설계자 모드</span>
+    </button>
+
+    <!-- 상단 빠른 도구 아이콘 (데스크톱: 좌측 사이드바 핵심 기능을 상단에서 바로) -->
+    <div id="topbar-quick" class="topbar-quick" role="group" aria-label="빠른 도구">
+      <button id="tq-menu" class="tq-btn" type="button" title="메뉴(사이드바 열기/닫기)" aria-label="메뉴">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <button id="tq-upload" class="tq-btn designer-only" type="button" title="도면 등록(교체)" aria-label="도면 등록">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </button>
+      <button id="tq-place" class="tq-btn designer-only" type="button" title="포인트 추가" aria-label="포인트 추가">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>
+      </button>
+      <button id="tq-pins" class="tq-btn" type="button" title="포인트 리스트 열기" aria-label="포인트 리스트">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor"/><circle cx="3.5" cy="12" r="1.3" fill="currentColor"/><circle cx="3.5" cy="18" r="1.3" fill="currentColor"/></svg>
+      </button>
+      <button id="tq-fit" class="tq-btn" type="button" title="화면 맞춤" aria-label="화면 맞춤">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+      </button>
+    </div>
+
+    <!-- 설정() — 로그인/편집 전환/디자이너 관리 진입 -->
+    <button id="btn-settings" class="btn-settings" type="button" title="설정 (로그인·편집 모드)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>설정</span>
+    </button>
+  </header>
+
+  <!-- ═══ ezPDF 스타일 도구 툴바 (가로 일렬) — 도면 로드 시 표시 ═══ -->
+  <div id="pdf-toolbar" class="pdf-toolbar hidden" role="toolbar" aria-label="PDF 도구">
+    <!-- 썸네일 패널 토글 -->
+    <button id="tb-thumbs" class="tb-btn" title="페이지 썸네일 (T)" aria-label="썸네일 패널">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 페이지 이동 -->
+    <button id="tb-first" class="tb-btn" title="첫 페이지 (Home)" aria-label="첫 페이지">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+    </button>
+    <button id="tb-prev" class="tb-btn" title="이전 페이지 (←)" aria-label="이전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <span class="tb-page">
+      <input id="tb-page-input" class="tb-page-input" type="text" inputmode="numeric" value="1" aria-label="페이지 번호" />
+      <span id="tb-page-total" class="tb-page-total">/ 1</span>
+    </span>
+    <button id="tb-next" class="tb-btn" title="다음 페이지 (→)" aria-label="다음">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <button id="tb-last" class="tb-btn" title="마지막 페이지 (End)" aria-label="마지막">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 줌 -->
+    <button id="tb-zoom-out" class="tb-btn" title="축소 (－)" aria-label="축소">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <button id="tb-zoom-level" class="tb-zoom-level" title="현재 배율 · 클릭 시 100%">100%</button>
+    <button id="tb-zoom-in" class="tb-btn" title="확대 (＋)" aria-label="확대">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 맞춤 / 실제크기 -->
+    <button id="tb-fit" class="tb-btn tb-btn-wide" title="화면 맞춤 (F)" aria-label="화면 맞춤">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg>
+      <span class="tb-label">맞춤</span>
+    </button>
+    <button id="tb-actual" class="tb-btn tb-btn-wide" title="실제 크기 (1)" aria-label="실제 크기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="16" font-size="9" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="700">1:1</text></svg>
+      <span class="tb-label">1:1</span>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- 회전 -->
+    <button id="tb-rotate-ccw" class="tb-btn" title="왼쪽 회전 (Shift+←)" aria-label="왼쪽 회전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>
+    </button>
+    <button id="tb-rotate-cw" class="tb-btn" title="오른쪽 회전 (Shift+→)" aria-label="오른쪽 회전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 4 21 9 16 9"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- ISO 3D 뷰 -->
+    <button id="tb-iso" class="tb-btn" title="ISO 3D 뷰 (평면 ↔ 입체)" aria-label="ISO 3D 뷰">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5L12 2z"/><path d="M2 7.5V16l10 5.5V13" opacity=".85"/><path d="M22 7.5V16l-10 5.5" opacity=".55"/></svg>
+    </button>
+    <!-- [마스터 요청] 포인트 수정 모드: 켠 뒤 핀을 클릭하면 수정/이동/삭제 팝업 (디자이너 전용) -->
+    <button id="tb-pin-edit" class="tb-btn" title="포인트 수정 모드 — 켠 뒤 핀을 클릭해 수정/이동/삭제" aria-label="포인트 수정">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+
+    <!-- ═══ PDF 주석 도구 (최소 ezPDF · 설계자 전용) ═══ -->
+    <span id="tb-anno-group" class="tb-anno-group hidden" role="group" aria-label="주석 도구">
+      <button id="tb-anno-cursor" class="tb-btn tb-anno active" data-tool="cursor" title="선택/이동 (V)" aria-label="선택">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 8-6 1.5L11 19 5 3z"/></svg>
+      </button>
+      <button id="tb-anno-hl" class="tb-btn tb-anno" data-tool="highlight" title="형광펜 (영역 강조)" aria-label="형광펜">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h6"/><path d="M15 5l4 4L9 19l-5 1 1-5L15 5z"/></svg>
+      </button>
+      <button id="tb-anno-rect" class="tb-btn tb-anno" data-tool="rect" title="사각형" aria-label="사각형">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
+      </button>
+      <button id="tb-anno-pen" class="tb-btn tb-anno" data-tool="pen" title="자유선 그리기" aria-label="자유선">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c4-8 7 4 11-3s4 1 7-2"/></svg>
+      </button>
+      <button id="tb-anno-text" class="tb-btn tb-anno" data-tool="text" title="텍스트 메모" aria-label="텍스트 메모">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+      </button>
+      <input id="tb-anno-color" class="tb-anno-color" type="color" value="#ff3b30" title="주석 색상" aria-label="주석 색상" />
+      <button id="tb-anno-undo" class="tb-btn tb-anno" title="실행취소 (마지막 주석 삭제)" aria-label="실행취소">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/></svg>
+      </button>
+      <button id="tb-anno-clear" class="tb-btn tb-anno" title="현재 페이지 주석 모두 삭제" aria-label="모두 삭제">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>
+    </span>
+
+    <span class="tb-flex"></span>
+
+    <!-- 우측: 포인트 마킹 (설계자 전용) -->
+    <button id="tb-mark" class="tb-btn tb-btn-accent hidden" title="포인트 마킹 (M)" aria-label="포인트 마킹">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span class="tb-label">포인트</span>
+    </button>
+  </div>
+  <!-- [버그복원] 다각형 완료 버튼 — 모바일엔 더블클릭/Enter 가 없어 poly 를 닫을 수 없던 문제 해결.
+       poly 그리는 중(점 3개 이상)에만 표시. -->
+  <button id="btn-poly-finish" class="btn-poly-finish hidden" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> 다각형 완료</button>
+
+  <!-- Body -->
+  <div class="app-body">
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+
+      <!-- 프로젝트 / 구역 관리 (designer only) -->
+      <div id="section-projects" class="sidebar-section hidden">
+        <div class="sidebar-section-head">
+          <span class="sidebar-section-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>프로젝트</span>
+          <button id="btn-new-project" class="btn-mini" type="button" title="프로젝트 생성">+ 생성</button>
+        </div>
+        <!-- 현재 프로젝트명 표시(이동 기능 제거: 드롭다운 전환 없음) -->
+        <div id="project-current" class="project-current">— 프로젝트 선택 —</div>
+        <div id="project-actions" class="project-actions hidden">
+          <button id="btn-delete-project" class="btn-mini danger" type="button" title="프로젝트 삭제">프로젝트 삭제</button>
+        </div>
+
+        <div id="decks-block" class="decks-block hidden">
+          <div class="sidebar-section-head">
+            <span class="sidebar-section-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>구역</span>
+            <button id="btn-new-deck" class="btn-mini" type="button" title="구역 생성">+ 생성</button>
+          </div>
+          <div id="decks-list" class="decks-list"></div>
+          <div id="decks-empty" class="decks-empty">구역이 없습니다. + 생성으로 추가하세요.</div>
+        </div>
+      </div>
+
+      <!-- [트리 재구성] 컴팩트 도구바 — 기존 버튼에 위임(재구현 0). 디자이너 전용 -->
+      <!-- [마스터] 기능별 그룹화 — 무조건 한 덩어리로 묶지 말고 구역/도면/포인트/영역/입력으로 라벨 분리 -->
+      <!-- [마스터] 모바일: 도구를 드롭다운으로 접어 화면 30% 이내 (데스크톱은 항상 펼침) -->
+      <button id="stb-toggle" class="stb-toggle designer-only" type="button" aria-expanded="false" aria-controls="side-toolbar">
+        <span>도구</span>
+        <span class="stb-caret" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </button>
+      <div id="side-toolbar" class="side-toolbar designer-only">
+        <div class="stb-group" data-g="구역">
+          <button class="stb-btn" data-deleg="btn-new-deck" type="button" title="구역 생성" aria-label="구역 생성"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg></button>
+        </div>
+        <div class="stb-group" data-g="도면">
+          <button class="stb-btn" data-deleg="btn-upload-drawing" type="button" title="도면 등록" aria-label="도면 등록"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+        </div>
+        <div class="stb-group" data-g="포인트">
+          <button class="stb-btn" data-deleg="btn-place" type="button" title="포인트 추가" aria-label="포인트 추가"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg></button>
+        </div>
+        <div class="stb-group" data-g="영역">
+          <button class="stb-btn" data-deleg="btn-zone-rect" data-sync="btn-zone-rect" type="button" title="사각 영역" aria-label="사각 영역"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg></button>
+          <button class="stb-btn" data-deleg="btn-zone-circle" data-sync="btn-zone-circle" type="button" title="원형 영역" aria-label="원형 영역"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="8.5"/></svg></button>
+          <button class="stb-btn" data-deleg="btn-zone-poly" data-sync="btn-zone-poly" type="button" title="다각 영역" aria-label="다각 영역"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg></button>
+        </div>
+        <div class="stb-group" data-g="입력">
+          <button class="stb-btn" data-deleg="btn-theta-intake" type="button" title="360 사진 인입" aria-label="360 사진 인입"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></button>
+          <button class="stb-btn" data-deleg="btn-checkboard-enter" data-sync="btn-checkboard-enter" type="button" title="체크보드 모드" aria-label="체크보드 모드"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+        </div>
+      </div>
+      <!-- [트리 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리 -->
+      <div id="side-tree" class="side-tree"></div>
+
+      <!-- Upload — 선택된 구역에 도면(PDF) 등록 (designer only) -->
+      <div id="section-upload" class="sidebar-section">
+        <button id="btn-upload-drawing" class="btn-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>구역 도면 등록 (PDF/PNG/JPG)</button>
+        <input id="input-drawing" type="file" accept=".pdf,.png,.jpg,.jpeg" hidden />
+        <p id="upload-zone-hint" class="place-hint">구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.</p>
+        <button id="btn-import-json" class="btn-upload secondary hidden">JSON 포인트 가져오기</button>
+        <input id="input-json" type="file" accept=".json" hidden />
+      </div>
+
+      <!-- Viewer: 배포본 로딩 상태 -->
+      <div id="section-viewer-load" class="sidebar-section hidden">
+        <div id="viewer-load-status" class="viewer-load-status">배포된 도면 확인 중...</div>
+        <button id="btn-reload-deploy" class="btn-upload secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>최신 배포본 다시 불러오기</button>
+      </div>
+
+      <!-- Place pin (designer only) -->
+      <!-- 체크보드 모드: 디자이너 전용 상설 메뉴 (도면 등록 + 번호만 부여) -->
+      <div id="section-checkboard" class="sidebar-section hidden">
+        <div class="checkboard-menu-card">
+          <div class="checkboard-menu-head">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span class="checkboard-menu-title">체크보드</span>
+          </div>
+          <p class="checkboard-menu-desc">도면(구역)을 등록하고 핀에 <b>번호만</b> 매기는 모드입니다. 사진·이름 입력 없이 클릭만으로 번호가 자동 부여됩니다.</p>
+          <div class="checkboard-start-row">
+            <label for="input-checkboard-start" class="checkboard-start-label">현재 구역 시작 번호</label>
+            <input id="input-checkboard-start" class="checkboard-start-input" type="number" min="1" step="1" value="1" inputmode="numeric" title="이 구역(페이지)에서 시작할 번호. 클릭마다 1씩 증가합니다." />
+          </div>
+          <button id="btn-checkboard-enter" class="btn-checkboard-toggle" type="button" title="체크보드 모드: 도면 위를 클릭하면 번호 핀이 바로 찍힙니다 (이름·사진 없이)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span id="btn-checkboard-enter-label">체크보드 모드 시작</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="section-place" class="sidebar-section hidden">
+        <button id="btn-place" class="btn-place"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>위치 포인트 추가</button>
+        <p id="place-hint" class="place-hint hidden">도면 위 원하는 위치를 클릭하세요</p>
+
+        <!-- [마스터: THETA R* 360 인입] 오프라인 THETA 360 사진을 가져와 도면에 위치 지정 등록 -->
+        <button id="btn-theta-intake" class="btn-place btn-theta-intake" type="button"
+                title="THETA로 찍은 R* 360 사진을 가져와 도면에 위치를 지정해 등록 (오프라인 가능)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>360 사진 인입 (THETA R*)
+        </button>
+        <input id="input-theta-intake" type="file" accept="image/jpeg,image/png,image/*" hidden multiple />
+        <div id="theta-tray" class="theta-tray hidden">
+          <div class="theta-tray-head">
+            <span class="theta-tray-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>미배치 360 <span id="theta-tray-count" class="theta-tray-count">0</span></span>
+            <button id="theta-tray-close" class="theta-tray-close" type="button" aria-label="접기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          </div>
+          <p class="theta-tray-hint">사진을 누르고 <b>도면에서 위치를 탭</b>하면 그 자리에 360 핀으로 등록됩니다. (오프라인 시 큐에 보관 → 온라인서 ‘↑ 지금 올리기’)</p>
+          <div id="theta-tray-list" class="theta-tray-list"></div>
+        </div>
+        <!-- [중복 제거] 체크보드 토글은 위 section-checkboard 카드(btn-checkboard-enter)로 일원화 -->
+        <details id="zone-tools-wrap" class="zone-tools-wrap" open>
+        <summary class="zone-tools-label">
+          <span class="ztl-text"><svg class="ztl-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true"><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg> 영역 지정 도구</span>
+          <svg class="ztl-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div id="zone-tools" class="zone-tools">
+          <button id="btn-zone-rect" class="zone-tool" data-shape="rect" title="사각형 영역" aria-label="사각형 영역">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg>
+            <span>사각형</span>
+          </button>
+          <button id="btn-zone-circle" class="zone-tool" data-shape="circle" title="원형 영역" aria-label="원형 영역">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/></svg>
+            <span>원형</span>
+          </button>
+          <button id="btn-zone-poly" class="zone-tool" data-shape="poly" title="선 그리기(닫으면 구역)" aria-label="선 그리기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg>
+            <span>선/다각형</span>
+          </button>
+        </div>
+        </details>
+        <p id="zone-hint" class="place-hint hidden">도면 위에서 드래그해 영역(구역)을 그리세요</p>
+        <p id="zone-poly-hint" class="place-hint hidden">클릭으로 점을 추가하고, 시작점을 다시 클릭하면 구역이 닫힙니다 (더블클릭/Enter로 완료)</p>
+      </div>
+
+      <!-- 영역(Zone) 목록 (디자이너/뷰어 공통) -->
+      <div id="section-zones" class="sidebar-section hidden">
+        <div class="zone-list-head">
+          <span class="form-label zone-list-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18" opacity=".45"/></svg>
+            영역 (구역)
+          </span>
+          <span id="zone-count" class="zone-count">0</span>
+        </div>
+        <div id="zone-list" class="zone-list"></div>
+      </div>
+
+      <!-- 다음 포인트 안내 (저장 후, section-place 아래 인라인) -->
+      <div id="section-next-point" class="sidebar-section hidden">
+        <div id="pin-saved-msg" class="pin-saved-msg">포인트 저장 완료</div>
+        <button id="btn-next-point" class="btn-place"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>다음 포인트 지정</button>
+      </div>
+
+      <!-- Pin list (포인트 목록 — 아이콘 토글식: 평소 접힘, 누르면 펼침) -->
+      <div id="section-pin-list" class="sidebar-section pin-list-wrap collapsed">
+        <button id="pin-list-toggle" class="pin-list-head" type="button" aria-expanded="false" aria-controls="pin-list-body" title="포인트 목록 펼치기/접기">
+          <span class="form-label pin-list-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.4"/></svg>
+            포인트 목록
+            <span id="pin-list-count" class="pin-list-count hidden">0</span>
+          </span>
+          <svg class="pin-list-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="pin-list-body" class="pin-list-body">
+          <button id="pin-list-close" class="pin-list-close" type="button" title="포인트 목록 닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>닫기</button>
+          <div id="pin-list" class="pin-list"></div>
+          <div id="pin-empty" class="pin-empty">포인트를 추가하세요</div>
+        </div>
+      </div>
+
+      <!-- Export (designer only) -->
+      <div id="section-export" class="sidebar-section hidden">
+        <button id="btn-deploy" class="btn-deploy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포</button>
+        <button id="btn-export-json" class="btn-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>JSON 내보내기</button>
+        <p id="deploy-status" class="deploy-status hidden"></p>
+      </div>
+
+    </aside>
+
+    <!-- Map area -->
+    <main id="map-area" class="map-area">
+      <!-- 구역 페이저: 전체 도면 + 각 구역(crop-view 페이지) 탭 -->
+      <nav id="zone-pager" class="zone-pager hidden" aria-label="구역 페이지 전환"></nav>
+
+      <div id="drop-hint" class="drop-hint">
+        <div id="drop-icon" class="drop-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="30" height="30" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <div id="drop-text" class="drop-text">도면을 업로드하세요</div>
+        <div id="drop-sub" class="drop-sub">PDF · PNG · JPG 지원</div>
+        <!-- 도면 등록 CTA는 디자이너 전용. 뷰어 모드에서는 JS가 숨김 처리 -->
+        <div id="drop-tap-cta" class="drop-tap-cta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>탭하여 도면 등록</div>
+      </div>
+
+      <div id="pdf-loading" class="state-overlay hidden">
+        <div class="spinner"></div>
+        <span>PDF 렌더링 중...</span>
+      </div>
+
+      <div id="pdf-error" class="state-overlay hidden">
+        <div style="font-size:2rem"></div>
+        <div id="pdf-error-msg" class="error-msg"></div>
+      </div>
+
+      <!-- Map viewport (zoom/pan) -->
+      <div id="map-viewport" class="map-viewport hidden">
+        <div id="map-transform" class="map-transform">
+          <!-- PDF canvas injected here -->
+          <canvas id="pdf-canvas" class="pdf-canvas hidden"></canvas>
+          <!-- Image -->
+          <img id="map-image" class="map-image hidden" alt="도면" draggable="false" />
+          <!-- Zones layer (영역 하이라이트) — 핀 레이어 아래에 배치 -->
+          <div id="zones-layer" class="zones-layer"></div>
+          <!-- Zones SVG overlay (원/다각형/사각형 영역 + 드래그 미리보기) — viewBox 0 0 100 100 (% 좌표) -->
+          <svg id="zones-svg" class="zones-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <!-- PDF 주석 레이어 (형광펜/사각형/자유선) — viewBox 0 0 1000 1000 (정밀 % 좌표) -->
+          <svg id="anno-svg" class="anno-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <!-- 텍스트 메모 레이어 -->
+          <div id="anno-text-layer" class="anno-text-layer"></div>
+          <!-- Pins layer -->
+          <div id="pins-layer" class="pins-layer"></div>
+          <!-- Pending pin pulse -->
+          <div id="pending-pin" class="pending-pin hidden"></div>
+          <!-- Zone 그리기 중 임시 사각형(레거시) -->
+          <div id="zone-draft" class="zone-draft hidden"></div>
+        </div>
+      </div>
+
+      <!-- 멀티페이지 PDF 썸네일 스트립 (디자이너 PDF 전용) -->
+      <div id="pdf-thumb-strip" class="pdf-thumb-strip hidden"></div>
+
+      <!-- Placing crosshair overlay -->
+      <div id="crosshair-overlay" class="crosshair-overlay hidden">
+        <div class="crosshair-msg">도면 위 원하는 위치를 클릭하세요</div>
+      </div>
+
+      <!-- ── 포인트 편집 플로팅 패널 (도면 위 부동 — 사이드바를 가리지 않음) ── -->
+      <div id="section-pin-form" class="pin-form-float hidden" aria-label="포인트 편집">
+        <div class="pin-form compact">
+          <!-- 헤더: 새 포인트 + 닫기 -->
+          <div class="pf-head">
+            <span class="pf-title"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg> <span id="pf-title-text">새 포인트</span></span>
+            <button id="btn-cancel-pin" class="pf-close" type="button" title="취소" aria-label="취소">✕</button>
+          </div>
+
+          <!-- 위치명 주소창 — 구역+포인트 흐름에서는 기본 숨김(번호 자동부여), 필요시에만 표시 -->
+          <div id="pf-addr" class="pf-addr hidden">
+            <svg class="pf-addr-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="input-pin-label" type="text" placeholder="위치명 (선택 · 비우면 번호 자동부여)" autocomplete="off" />
+          </div>
+
+          <!-- 아이콘 툴바: 사진/영상 · 문서 · 노트 · URL -->
+          <div class="pf-tools" role="group" aria-label="첨부 도구">
+            <button id="btn-pin-file" class="pf-tool" type="button" title="360° 사진/영상 업로드">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/><path d="M8 5l1.2-2h5.6L16 5"/></svg>
+              <span>사진</span>
+            </button>
+            <button id="btn-pin-theta" class="pf-tool pf-tool-theta" type="button" title="RICOH THETA 360° 촬영/불러오기 (삼성폰)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><path d="M12 3v18"/></svg>
+              <span>360</span>
+            </button>
+            <button id="btn-pin-doc" class="pf-tool" type="button" title="문서 첨부 (PDF·Word)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6" opacity=".6"/></svg>
+              <span>문서</span>
+            </button>
+            <button id="btn-pin-note-toggle" class="pf-tool" type="button" title="노트 메모">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+              <span>노트</span>
+            </button>
+            <button id="btn-pin-fls" class="pf-tool" type="button" title="동영상 첨부 (MP4·WebM·MOV) — 현장 영상">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 9 6-3v12l-6-3z"/></svg>
+              <span>동영상</span>
+            </button>
+            <button id="btn-pin-url-toggle" class="pf-tool" type="button" title="URL 직접 입력">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+              <span>URL</span>
+            </button>
+          </div>
+
+          <!-- [마스터 요청] 핀(호스팟)별 아이콘 선택 — 머리 안에 표시 -->
+          <div id="pf-icon-section" class="pf-icon-section">
+            <div class="pf-icon-label">핀 아이콘</div>
+            <div id="pf-icon-grid" class="pf-icon-grid" role="group" aria-label="핀 아이콘 선택"></div>
+          </div>
+
+          <input id="input-pin-file" type="file" accept="image/*,video/mp4,video/webm,.mov" hidden />
+          <!-- RICOH THETA 360: 삼성폰 갤러리(THETA 앱이 저장한 360 JPG) 또는 카메라 직접 선택 -->
+          <input id="input-pin-theta" type="file" accept="image/jpeg,image/png,image/*" hidden />
+          <input id="input-pin-doc" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden multiple />
+          <input id="input-pin-fls" type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" hidden />
+
+          <!-- 선택 파일 정보 / 첨부 칩 / 접이식 필드 -->
+          <div id="pin-file-info" class="pin-file-info hidden"></div>
+          <div id="field-pin-imgname" class="pf-collapse hidden">
+            <input id="input-pin-imgname" type="text" placeholder="그림 저장 이름 (예: cargo_tank_no5_360)" autocomplete="off" />
+          </div>
+          <div id="field-pin-url" class="pf-collapse hidden">
+            <input id="input-pin-url" type="url" placeholder="https://... (.jpg 또는 .mp4)" autocomplete="off" />
+          </div>
+          <div id="field-pin-note" class="pf-collapse hidden">
+            <textarea id="input-pin-note" class="pin-note-input" rows="2" placeholder="메모·점검 사항·설명" autocomplete="off"></textarea>
+          </div>
+          <div id="pin-doc-list" class="pin-doc-list"></div>
+
+          <div id="pin-upload-status" class="pin-upload-status hidden"></div>
+
+          <!-- 즉시 저장 버튼 (사진 업로드 후 바로) -->
+          <button id="btn-confirm-pin" class="pf-save" type="button" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+            <span id="pf-save-label">저장하기</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ── 플로팅 네비게이션 툴바 (전문 도면뷰어 스타일) ── -->
+      <div id="nav-toolbar" class="nav-toolbar hidden">
+        <button id="btn-zoom-in" class="nav-btn" title="확대 (＋)" aria-label="확대">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <div id="zoom-level" class="zoom-level" title="현재 배율 · 클릭 시 100%">100%</div>
+        <button id="btn-zoom-out" class="nav-btn" title="축소 (－)" aria-label="축소">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <div class="nav-sep"></div>
+        <button id="btn-fit" class="nav-btn" title="화면 맞춤 (F)" aria-label="화면 맞춤">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></svg>
+        </button>
+        <button id="btn-actual" class="nav-btn" title="실제 크기 (1)" aria-label="실제 크기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="16" font-size="9" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="700">1:1</text></svg>
+        </button>
+        <div class="nav-sep"></div>
+        <!-- ISO 3D 아이소메트릭 뷰 토글 -->
+        <button id="btn-iso" class="nav-btn nav-btn-iso" title="ISO 3D 뷰 (평면 ↔ 입체 회전)" aria-label="ISO 3D 뷰">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5L12 2z"/><path d="M2 7.5V16l10 5.5V13" opacity=".85"/><path d="M22 7.5V16l-10 5.5" opacity=".55"/></svg>
+        </button>
+        <div id="rotate-group" class="rotate-group hidden">
+          <div class="nav-sep"></div>
+          <button id="btn-rotate-ccw" class="nav-btn" title="왼쪽 회전 (Shift+←)" aria-label="왼쪽 회전">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>
+          </button>
+          <div id="rotate-level" class="rotate-level" title="회전 각도">0°</div>
+          <button id="btn-rotate-cw" class="nav-btn" title="오른쪽 회전 (Shift+→)" aria-label="오른쪽 회전">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 4 21 9 16 9"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ═══ CAD 인스펙터 — 구역/포인트 상세(우측 슬라이드 팝업) ═══ -->
+      <aside id="inspector" class="inspector hidden" aria-label="상세 정보">
+        <div class="inspector-head">
+          <div class="inspector-head-left">
+            <span id="inspector-kind" class="inspector-kind">ZONE</span>
+            <span id="inspector-title" class="inspector-title">—</span>
+          </div>
+          <button id="inspector-close" class="inspector-close" type="button" aria-label="닫기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </button>
+        </div>
+        <div id="inspector-body" class="inspector-body"><!-- 동적 --></div>
+      </aside>
+
+      <!-- ═══════════════════════════════════════════
+           PIN GRID (오른쪽 엑셀형 포인트 리스트)
+           현재 PDF 페이지의 포인터(핀)를 표 형식으로 표시.
+           행 클릭 → 해당 PDF 페이지 이동 + 핀 포커스 + 360° 뷰어 자동 실행
+      ════════════════════════════════════════════ -->
+      <aside id="pin-grid-panel" class="pin-grid-panel hidden" aria-label="포인트 리스트(엑셀)">
+        <div class="pin-grid-head">
+          <div class="pin-grid-head-left">
+            <i class="fa-solid fa-table-list"></i>
+            <span class="pin-grid-title">포인트 리스트</span>
+            <span id="pin-grid-page-badge" class="pin-grid-page-badge">P1</span>
+            <span id="pin-grid-count" class="pin-grid-count">0</span>
+          </div>
+          <div class="pin-grid-head-acts">
+            <button id="pin-grid-csv" class="pin-grid-iconbtn" type="button" title="CSV 내보내기" aria-label="CSV 내보내기"><i class="fa-solid fa-file-csv"></i></button>
+            <button id="pin-grid-toggle" class="pin-grid-iconbtn" type="button" title="패널 접기/펴기" aria-label="패널 접기"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="pin-grid-search-wrap">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="pin-grid-search" class="pin-grid-search" type="text" placeholder="포인트 이름 검색…" autocomplete="off" />
+        </div>
+        <div class="pin-grid-scroll">
+          <table class="pin-grid-table">
+            <thead>
+              <tr>
+                <th class="pgt-no">#</th>
+                <th class="pgt-name">이름</th>
+                <th class="pgt-page">P</th>
+                <th class="pgt-coord">좌표 (X%, Y%)</th>
+                <th class="pgt-360">360°</th>
+              </tr>
+            </thead>
+            <tbody id="pin-grid-body"><!-- 동적 --></tbody>
+          </table>
+          <div id="pin-grid-empty" class="pin-grid-empty hidden">현재 페이지에 등록된 포인트가 없습니다.</div>
+        </div>
+      </aside>
+      <button id="pin-grid-reopen" class="pin-grid-reopen hidden" type="button" title="포인트 리스트 열기" aria-label="포인트 리스트 열기">
+        <i class="fa-solid fa-table-list"></i>
+        <span class="pin-grid-reopen-label">포인트</span>
+      </button>
+    </main>
+  </div>
+
+  <!-- ═══ 모바일 사이드바 백드롭 (바텀시트 열림 시 맵 클릭으로 닫기) ═══ -->
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+  <!-- ═══ 모바일 하단 네비게이션 바 (메뉴가 콘텐츠를 가리지 않도록 하단 고정) ═══ -->
+  <!-- ═══ 모바일 그룹 도크 — 칩으로 도구 그룹 전환, 펼치면 도면을 위로 밀어 절대 가리지 않음 ═══ -->
+  <nav id="mobile-dock" class="mobile-dock" aria-label="모바일 도구 도크">
+    <!-- 펼침 트레이: 선택한 그룹의 도구만 한 줄로 (기존 도구에 click 위임) -->
+    <div id="mdock-tray" class="mdock-tray">
+      <div class="mdock-row" data-group="view">
+        <button class="mdock-tool" data-deleg="tb-fit" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg><span>맞춤</span></button>
+        <button class="mdock-tool" data-deleg="tb-zoom-out" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>축소</span></button>
+        <button class="mdock-tool" data-deleg="tb-zoom-in" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>확대</span></button>
+        <button class="mdock-tool" data-deleg="tb-actual" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="16" font-size="9" text-anchor="middle" fill="currentColor" stroke="none" font-weight="700">1:1</text></svg><span>실제</span></button>
+        <button class="mdock-tool" data-deleg="tb-iso" data-sync="tb-iso" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5L12 2z"/><path d="M2 7.5V16l10 5.5V13" opacity=".85"/><path d="M22 7.5V16l-10 5.5" opacity=".55"/></svg><span>ISO</span></button>
+        <button class="mdock-tool" data-deleg="tb-rotate-cw" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 4 21 9 16 9"/></svg><span>회전</span></button>
+      </div>
+      <div class="mdock-row designer-only" data-group="edit">
+        <button class="mdock-tool" data-deleg="btn-place" data-sync="btn-place" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg><span>포인트</span></button>
+        <button class="mdock-tool" data-deleg="tb-pin-edit" data-sync="tb-pin-edit" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg><span>수정</span></button>
+        <button class="mdock-tool" data-deleg="btn-zone-rect" data-sync="btn-zone-rect" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg><span>사각</span></button>
+        <button class="mdock-tool" data-deleg="btn-zone-circle" data-sync="btn-zone-circle" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/></svg><span>원형</span></button>
+        <button class="mdock-tool" data-deleg="btn-zone-poly" data-sync="btn-zone-poly" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg><span>다각</span></button>
+        <button class="mdock-tool" data-deleg="btn-upload-drawing" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>등록</span></button>
+      </div>
+      <div class="mdock-row" data-group="page">
+        <button class="mdock-tool" data-deleg="tb-first" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg><span>처음</span></button>
+        <button class="mdock-tool" data-deleg="tb-prev" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg><span>이전</span></button>
+        <button class="mdock-tool" data-deleg="tb-next" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg><span>다음</span></button>
+        <button class="mdock-tool" data-deleg="tb-last" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg><span>끝</span></button>
+      </div>
+      <div class="mdock-row designer-only" data-group="anno">
+        <button class="mdock-tool" data-deleg="tb-anno-hl" data-sync="tb-anno-hl" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h6"/><path d="M15 5l4 4L9 19l-5 1 1-5L15 5z"/></svg><span>형광</span></button>
+        <button class="mdock-tool" data-deleg="tb-anno-rect" data-sync="tb-anno-rect" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="1"/></svg><span>사각</span></button>
+        <button class="mdock-tool" data-deleg="tb-anno-pen" data-sync="tb-anno-pen" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c4-8 7 4 11-3s4 1 7-2"/></svg><span>펜</span></button>
+        <button class="mdock-tool" data-deleg="tb-anno-text" data-sync="tb-anno-text" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg><span>텍스트</span></button>
+        <button class="mdock-tool" data-deleg="tb-anno-undo" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/></svg><span>취소</span></button>
+      </div>
+    </div>
+    <!-- 그룹 칩 바 (항상 표시) -->
+    <div class="mdock-bar">
+      <button class="mdock-chip" data-act="menu" type="button" aria-label="메뉴">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg><span>메뉴</span>
+      </button>
+      <button class="mdock-chip" data-grp="view" type="button" aria-label="보기 도구">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/></svg><span>보기</span>
+      </button>
+      <button class="mdock-chip designer-only" data-grp="edit" type="button" aria-label="편집 도구">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg><span>편집</span>
+      </button>
+      <button class="mdock-chip mdock-fab designer-only" data-act="place" type="button" aria-label="포인트 추가">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg><span>포인트</span>
+      </button>
+      <button class="mdock-chip" data-grp="page" type="button" aria-label="페이지 이동">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg><span>페이지</span><span id="mdock-page-badge" class="mdock-page-badge hidden">1/1</span>
+      </button>
+      <button class="mdock-chip designer-only" data-grp="anno" type="button" aria-label="주석 도구">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l4 4L9 19l-5 1 1-5L15 5z"/></svg><span>주석</span>
+      </button>
+      <button class="mdock-chip" data-act="list" type="button" aria-label="포인트 목록">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor"/><circle cx="3.5" cy="12" r="1.3" fill="currentColor"/><circle cx="3.5" cy="18" r="1.3" fill="currentColor"/></svg><span>목록</span>
+      </button>
+    </div>
+  </nav>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     ALL-PINS DRAWER (전체 핀 리스트 보기)
+════════════════════════════════════════════ -->
+<div id="allpins-drawer" class="allpins-drawer hidden">
+  <div id="allpins-backdrop" class="allpins-backdrop"></div>
+  <aside class="allpins-panel" role="dialog" aria-label="전체 핀 리스트">
+    <header class="allpins-head">
+      <div class="allpins-title">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        <span>전체 포인트</span>
+        <span id="allpins-count" class="allpins-count">0</span>
+      </div>
+      <button id="btn-allpins-close" class="btn-allpins-close" title="닫기 (Esc)" aria-label="닫기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
+    </header>
+    <div class="allpins-tools">
+      <div class="allpins-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input id="allpins-search-input" type="text" placeholder="이름으로 검색..." autocomplete="off" />
+      </div>
+      <div class="allpins-sort">
+        <button class="allpins-sort-btn active" data-sort="page" title="페이지·번호순">번호순</button>
+        <button class="allpins-sort-btn" data-sort="name" title="이름(가나다)순">이름순</button>
+      </div>
+    </div>
+    <div id="allpins-list" class="allpins-list"></div>
+    <div id="allpins-empty" class="allpins-empty hidden">표시할 포인트가 없습니다</div>
+  </aside>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     360° PANORAMA VIEWER OVERLAY
+════════════════════════════════════════════ -->
+<div id="pano-overlay" class="pano-overlay hidden">
+  <div id="pano-header" class="pano-header">
+    <div class="pano-brand">
+      <div id="brand-logo-pano" class="brand-logo brand-logo-pano" aria-hidden="true"></div>
+      <div class="pano-dot"></div>
+      <span id="pano-location-name" class="pano-location">—</span>
+    </div>
+    <div class="pano-header-actions">
+      <div id="pano-iso-views" class="pano-iso-views" role="group" aria-label="ISO 4-꼭지점 뷰 전환">
+        <span class="pano-iso-label">ISO</span>
+        <button class="pano-iso-btn" data-iso="0" title="좌상단 꼭지점 뷰 (↖)" aria-label="좌상단 뷰"><span class="iso-corner iso-tl">◤</span></button>
+        <button class="pano-iso-btn" data-iso="1" title="우상단 꼭지점 뷰 (↗)" aria-label="우상단 뷰"><span class="iso-corner iso-tr">◥</span></button>
+        <button class="pano-iso-btn" data-iso="2" title="우하단 꼭지점 뷰 (↘)" aria-label="우하단 뷰"><span class="iso-corner iso-br">◢</span></button>
+        <button class="pano-iso-btn" data-iso="3" title="좌하단 꼭지점 뷰 (↙)" aria-label="좌하단 뷰"><span class="iso-corner iso-bl">◣</span></button>
+      </div>
+      <button id="btn-pano-notes" class="btn-pano-notes" title="이슈/필드노트 (현장 협업)" aria-label="이슈 노트">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>이슈</span>
+        <span id="pano-notes-count" class="pano-notes-count hidden">0</span>
+      </button>
+      <button id="btn-pano-close" class="btn-pano-close" title="뷰어 닫기 (Esc)" aria-label="닫기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        <span>닫기</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 이슈/필드노트 협업 패널 (우측 슬라이드) -->
+  <aside id="pano-notes-panel" class="pano-notes-panel hidden" aria-label="이슈 노트 패널">
+    <header class="pnp-head">
+      <div class="pnp-title-wrap">
+        <h3 class="pnp-title">이슈 · 필드노트</h3>
+        <span id="pnp-pin-label" class="pnp-pin-label">—</span>
+      </div>
+      <button id="pnp-close" class="pnp-close" aria-label="패널 닫기" title="닫기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
+    </header>
+    <div id="pnp-filter" class="pnp-filter">
+      <button class="pnp-fbtn active" data-f="all">전체</button>
+      <button class="pnp-fbtn" data-f="open">미해결</button>
+      <button class="pnp-fbtn" data-f="progress">진행중</button>
+      <button class="pnp-fbtn" data-f="done">완료</button>
+    </div>
+    <div id="pnp-list" class="pnp-list"><!-- Notes.render() --></div>
+    <div id="pnp-empty" class="pnp-empty hidden">
+      <div class="pnp-empty-ico"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg></div>
+      <p>이 위치에 등록된 이슈가 없습니다.</p>
+      <p class="pnp-empty-hint">아래에 새 이슈/노트를 작성하세요.</p>
+    </div>
+    <form id="pnp-form" class="pnp-form">
+      <textarea id="pnp-input" class="pnp-input" rows="2" maxlength="4000" placeholder="이슈/메모를 입력하세요 (예: 도장 벗겨짐, 용접 확인 필요…)"></textarea>
+      <div class="pnp-form-row">
+        <input id="pnp-assignee" class="pnp-assignee" type="text" maxlength="80" placeholder="담당자(선택)" />
+        <select id="pnp-status-sel" class="pnp-status-sel" title="상태">
+          <option value="open">미해결</option>
+          <option value="progress">진행중</option>
+          <option value="done">완료</option>
+        </select>
+        <button type="submit" id="pnp-submit" class="pnp-submit">등록</button>
+      </div>
+      <div id="pnp-author-row" class="pnp-author-row hidden">
+        <input id="pnp-author" class="pnp-author" type="text" maxlength="40" placeholder="작성자 이름(미로그인)" />
+      </div>
+    </form>
+  </aside>
+
+  <div id="pano-loading" class="pano-state">
+    <div class="spinner gold"></div>
+    <span>360° 파노라마 로딩 중...</span>
+  </div>
+
+  <div id="pano-error" class="pano-state hidden">
+    <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--gold)"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div class="pano-error-msg">이미지를 불러올 수 없습니다</div>
+    <div id="pano-error-url" class="pano-error-url"></div>
+    <div class="pano-error-hint">CORS 정책 또는 잘못된 URL을 확인하세요</div>
+  </div>
+
+  <canvas id="pano-canvas" class="pano-canvas hidden"></canvas>
+
+  <!-- 노트 · 첨부 문서 정보 패널 -->
+  <div id="pano-info-panel" class="pano-info-panel hidden"></div>
+
+  <!-- [FARO Markers] 마커 호버 툴팁 -->
+  <div id="pano-spot-tip" class="pano-spot-tip hidden"></div>
+
+  <!-- [FARO Markers] 마커 리스트 패널(테이블 형식) -->
+  <div id="pano-spot-list" class="pano-spot-list hidden">
+    <div class="psl-head">
+      <span class="psl-title">마커 목록</span>
+      <button id="pano-spot-list-close" class="psl-close" type="button" aria-label="닫기"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="pano-spot-list-body" class="psl-body"></div>
+  </div>
+
+  <div id="pano-controls" class="pano-controls hidden">
+    <button id="btn-pano-rotate"  class="btn-pano-ctrl" title="자동 회전 켜기/끄기" aria-label="자동 회전">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
+      <span>자동회전</span>
+    </button>
+    <button id="btn-pano-gyro"    class="btn-pano-ctrl" title="자이로(폰 기울임)로 둘러보기" aria-label="자이로 둘러보기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.6"/><ellipse cx="12" cy="12" rx="3.6" ry="9"/></svg>
+      <span>자이로</span>
+    </button>
+    <!-- [마스터: 구면 안 마커] 360 안 결함/장비 지점 표시 -->
+    <button id="btn-pano-spot"    class="btn-pano-ctrl" title="360 안에 마커 추가 — 종류를 고르고 화면을 탭하세요" aria-label="구면 마커">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 12-9 12s-9-5-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span>마커</span>
+    </button>
+    <button id="btn-pano-spotlist" class="btn-pano-ctrl" title="이 사진의 마커 목록 보기" aria-label="마커 목록">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
+      <span>목록</span>
+    </button>
+    <!-- [FARO Markers] 마커 종류 선택 칩 — 종류를 고른 뒤 화면을 탭하면 그 종류로 마커가 찍힌다 -->
+    <div id="pano-spot-kinds" class="pano-spot-kinds hidden" role="group" aria-label="마커 종류 선택">
+      <button class="psk-chip" data-kind="defect" type="button"><span class="psk-dot" style="background:#e0503e"></span>결함</button>
+      <button class="psk-chip" data-kind="equip"  type="button"><span class="psk-dot" style="background:#e0b14a"></span>장비</button>
+      <button class="psk-chip" data-kind="safety" type="button"><span class="psk-dot" style="background:#f2820a"></span>안전</button>
+      <button class="psk-chip" data-kind="note"   type="button"><span class="psk-dot" style="background:#3a97dd"></span>메모</button>
+    </div>
+    <div class="pano-ctrl-sep"></div>
+    <button id="btn-pano-zoomout" class="btn-pano-ctrl icon-only" title="축소" aria-label="축소">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <button id="btn-pano-zoomin"  class="btn-pano-ctrl icon-only" title="확대" aria-label="확대">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <div class="pano-ctrl-sep"></div>
+    <!-- [마스터: 360 회전 시 옆으로 비틀어짐] 천정 수평 보정 -->
+    <button id="btn-pano-level-l" class="btn-pano-ctrl icon-only" title="수평 보정 — 왼쪽으로" aria-label="수평 왼쪽">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M7 8l-4 4 4 4"/></svg>
+    </button>
+    <button id="btn-pano-level-r" class="btn-pano-ctrl icon-only" title="수평 보정 — 오른쪽으로" aria-label="수평 오른쪽">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M17 8l4 4-4 4"/></svg>
+    </button>
+    <div class="pano-ctrl-sep"></div>
+    <button id="btn-pano-reset"   class="btn-pano-ctrl" title="초기 시점으로 (수평 보정도 초기화)" aria-label="초기 시점">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><polyline points="3 3 3 8 8 8"/></svg>
+      <span>초기시점</span>
+    </button>
+    <button id="btn-pano-full"    class="btn-pano-ctrl" title="전체화면" aria-label="전체화면">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      <span>전체화면</span>
+    </button>
+  </div>
+
+  <!-- 레이더 미니맵 — 도면 위 핀 위치 + 현재 시야 방향(부채꼴). 3DVista radar 참고 -->
+  <div id="pano-radar" class="pano-radar hidden" title="현재 위치 · 시야 방향">
+    <div class="pano-radar-head">
+      <span class="pano-radar-title">위치</span>
+      <span id="pano-radar-page" class="pano-radar-page"></span>
+      <!-- [마스터 요청 N9] PDF/미니맵 열었다 닫았다 토글 -->
+      <button id="pano-radar-toggle" class="pano-radar-toggle" type="button" title="미니맵 접기/펼치기" aria-label="미니맵 토글">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+    <div id="pano-radar-stage" class="pano-radar-stage">
+      <img id="pano-radar-map" class="pano-radar-map" alt="" />
+      <div id="pano-radar-pins" class="pano-radar-pins"></div>
+      <!-- 현재 핀의 시야 부채꼴 -->
+      <div id="pano-radar-cone" class="pano-radar-cone">
+        <div class="pano-radar-fan"></div>
+        <div class="pano-radar-dot"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 핀 간 이동 (이전/다음) — OpenSpace/3DVista 탐색 핫스팟 참고 -->
+  <div id="pano-nav" class="pano-nav hidden">
+    <button id="btn-pano-prev" class="btn-pano-nav" type="button" title="이전 포인트 (←)" aria-label="이전 포인트">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div id="pano-nav-label" class="pano-nav-label">1 / 1</div>
+    <button id="btn-pano-next" class="btn-pano-nav" type="button" title="다음 포인트 (→)" aria-label="다음 포인트">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
+
+  <!-- 타임랩스 비교 — 같은 위치의 시점별(전/후) 파노라마 토글. 시야 각도 유지 -->
+  <div id="pano-timeline" class="pano-timeline hidden">
+    <button id="btn-tl-prev" class="tl-arrow" type="button" title="이전 시점" aria-label="이전 시점">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div class="tl-body">
+      <div class="tl-head">
+        <span class="tl-ico"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+        <span class="tl-title">타임랩스</span>
+        <span id="tl-current" class="tl-current">—</span>
+        <button id="btn-tl-compare" class="tl-compare-btn" type="button" title="전/후 분할 비교">⇄ 분할비교</button>
+      </div>
+      <div id="tl-chips" class="tl-chips"><!-- TimeLapse.render() --></div>
+    </div>
+    <button id="btn-tl-next" class="tl-arrow" type="button" title="다음 시점" aria-label="다음 시점">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
+
+  <!-- 분할 비교 오버레이 (좌=과거, 우=현재) — 슬라이더로 경계 이동 -->
+  <div id="pano-compare" class="pano-compare hidden" aria-label="전/후 분할 비교">
+    <canvas id="cmp-canvas-a" class="cmp-canvas"></canvas>
+    <div id="cmp-clip" class="cmp-clip"><canvas id="cmp-canvas-b" class="cmp-canvas"></canvas></div>
+    <div id="cmp-divider" class="cmp-divider"><div class="cmp-handle">⇄</div></div>
+    <div class="cmp-label cmp-label-a" id="cmp-label-a">과거</div>
+    <div class="cmp-label cmp-label-b" id="cmp-label-b">현재</div>
+    <button id="btn-cmp-close" class="cmp-close" type="button" title="분할 비교 닫기">✕ 비교 종료</button>
+  </div>
+
+  <div id="pano-hint" class="pano-hint hidden">
+    <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>드래그: 시점 이동</span>
+    <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>휠: 줌 조절</span>
+    <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>스와이프: 이동</span>
+  </div>
+
+  <!-- ════ FLS 포인트클라우드 뷰어 (3D LiDAR) — 360 파노라마와 나란히 표시 ════ -->
+  <section id="fls-pane" class="fls-pane hidden" aria-label="FLS 포인트 클라우드 뷰어">
+    <header class="fls-head">
+      <div class="fls-head-title">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span>FLS 포인트 클라우드</span>
+        <span id="fls-fmt-badge" class="fls-fmt-badge"></span>
+      </div>
+      <div class="fls-head-actions">
+        <!-- ── [마스터 요청] Navisworks풍 3D 검토 도구 (SEASTAR 오리지널 아이콘) ── -->
+        <div class="cad-toolbar" role="toolbar" aria-label="3D 검토 도구">
+          <button id="btn-cad-orbit" class="cad-tool active" data-mode="orbit" type="button" title="오비트 (3D 회전)" aria-label="오비트">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3.2"/>
+              <ellipse cx="12" cy="12" rx="9.5" ry="4"/>
+              <ellipse cx="12" cy="12" rx="4" ry="9.5"/>
+            </svg>
+          </button>
+          <button id="btn-cad-pan" class="cad-tool" data-mode="pan" type="button" title="팬 (평행 이동)" aria-label="팬">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>
+            </svg>
+          </button>
+          <button id="btn-cad-section" class="cad-tool" data-mode="section" type="button" title="단면 (잘라보기)" aria-label="단면">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 8l18-4v12L3 20z" opacity=".55"/><path d="M9 6.7v12.6" stroke-dasharray="2.5 2.5"/>
+            </svg>
+          </button>
+          <button id="btn-cad-measure" class="cad-tool" data-mode="measure" type="button" title="측정 (거리)" aria-label="측정">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7l4-4 14 14-4 4z"/><path d="M7 7l1.5 1.5M10 10l1.5 1.5M13 13l1.5 1.5"/>
+            </svg>
+          </button>
+        </div>
+        <button id="btn-fls-reset" class="fls-ctrl" title="시점 초기화">초기화</button>
+        <button id="btn-fls-collapse" class="fls-ctrl" title="3D 패널 접기/펼치기">⇔</button>
+      </div>
+    </header>
+    <div id="fls-stage" class="fls-stage">
+      <canvas id="fls-canvas" class="fls-canvas"></canvas>
+      <div id="fls-loading" class="fls-state hidden">
+        <div class="spinner gold"></div>
+        <span id="fls-loading-msg">포인트 클라우드 파싱 중…</span>
+        <div id="fls-progress" class="fls-progress"><i></i></div>
+      </div>
+      <div id="fls-empty" class="fls-state">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="color:var(--gold)"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <p class="fls-empty-t">연결된 3D 포인트 클라우드가 없습니다</p>
+        <p class="fls-empty-h">디자이너 모드에서 핀에 .e57/.las/.laz/.ply/.pcd/.xyz/.pts 또는 .fls 파일을 첨부하세요.</p>
+      </div>
+      <div id="fls-error" class="fls-state hidden">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="color:var(--gold)"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <p id="fls-error-t" class="fls-empty-t">포인트 클라우드를 불러올 수 없습니다</p>
+        <p id="fls-error-h" class="fls-empty-h"></p>
+      </div>
+      <div id="fls-stats" class="fls-stats hidden"></div>
+      <div id="fls-measure-label" class="fls-measure-label hidden"></div>
+    </div>
+  </section>
+</div>
+
+<!-- PDF.js (fixed version — worker must match) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Three.js (WebGL 360° panorama — UMD build) -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<!-- Firebase (본인 Google 계정 저장 — 설정 시 자동 활성화) -->
+<script src="js/firebase-config.js"></script>
+<script type="module" src="js/firebase-init.js"></script>
+<script src="js/main.js"></script>
+<!-- Service Worker 등록 (PWA 오프라인 앱 셸) — 새 버전 자동 감지·즉시 적용 -->
+<script>
+  if ('serviceWorker' in navigator) {
+    // 새 SW가 제어권을 가져가면(=새 버전 활성화) 한 번만 새로고침해서
+    // 마스터 화면이 즉시 최신 CSS/JS를 받도록 한다.
+    var swRefreshed = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (swRefreshed) return;
+      swRefreshed = true;
+      window.location.reload();
+    });
+
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // 등록 즉시 업데이트 확인(캐시된 옛 SW 강제 교체)
+        try { reg.update(); } catch (e) {}
+
+        // 새 SW가 설치되면 대기 없이 즉시 활성화 요청
+        function promote(sw) {
+          if (!sw) return;
+          sw.addEventListener('statechange', function () {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              // 이미 페이지를 제어하는 SW가 있다 = 업데이트 상황 → skipWaiting 트리거
+              try { sw.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+            }
+          });
+        }
+        if (reg.waiting) { try { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {} }
+        if (reg.installing) promote(reg.installing);
+        reg.addEventListener('updatefound', function () { promote(reg.installing); });
+      }).catch(function () { /* 등록 실패 무시 */ });
+    });
+  }
+
+  /* ═══ PWA 설치(Add to Home Screen) — beforeinstallprompt 캡처 + 설치 버튼 ═══
+     · 설치 가능 시 우하단에 "앱 설치" 버튼 노출 → 클릭 시 네이티브 설치 프롬프트
+     · 이미 설치(standalone)거나 설치 완료되면 버튼 숨김 */
+  (function () {
+    var deferredPrompt = null;
+    var isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true
+      || (new URLSearchParams(location.search)).get('source') === 'pwa';
+
+    function makeBtn() {
+      if (document.getElementById('pwa-install-btn')) return document.getElementById('pwa-install-btn');
+      var b = document.createElement('button');
+      b.id = 'pwa-install-btn';
+      b.type = 'button';
+      b.setAttribute('aria-label', '앱 설치');
+      b.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>앱 설치</span>';
+      b.style.cssText = 'position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:10000;display:none;align-items:center;gap:8px;'
+        + 'padding:10px 16px;border:none;border-radius:999px;cursor:pointer;font:600 14px/1 var(--sea-font-ui,system-ui,sans-serif);'
+        + 'color:#fff;background:#1b75bb;box-shadow:0 8px 24px rgba(43,40,32,.18),0 2px 8px rgba(43,40,32,.12);'
+        + 'transition:transform .15s ease,filter .15s ease;touch-action:manipulation;';
+      b.onmouseenter = function () { b.style.filter = 'brightness(1.08)'; b.style.transform = 'translateY(-1px)'; };
+      b.onmouseleave = function () { b.style.filter = ''; b.style.transform = ''; };
+      b.addEventListener('click', function () {
+        if (!deferredPrompt) {
+          try { if (window.Prompt && Prompt.toast) Prompt.toast('브라우저 메뉴 → "홈 화면에 추가"를 이용하세요.', 4000); } catch(e) {}
+          return;
+        }
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then(function () { deferredPrompt = null; b.style.display = 'none'; });
+      });
+      document.body.appendChild(b);
+      return b;
+    }
+
+    if (!isStandalone) {
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        deferredPrompt = e;
+        var b = makeBtn();
+        b.style.display = 'inline-flex';
+      });
+    }
+    window.addEventListener('appinstalled', function () {
+      deferredPrompt = null;
+      var b = document.getElementById('pwa-install-btn');
+      if (b) b.style.display = 'none';
+      try { if (window.Prompt && Prompt.toast) Prompt.toast('앱이 설치되었습니다. 홈 화면에서 실행하세요.', 3000); } catch (e) {}
+    });
+  })();
+</script>
+<!-- ═══ 전역 오버레이 모달 (화면 전환과 무관하게 동작) ═══ -->
+
+  <!-- ═══ 핀 작업 전용 팝업 (디자이너: 핀 선택 시 — 이동/수정/사진추가/삭제) ═══ -->
+  <div id="pin-action-pop" class="pin-action-pop hidden" role="dialog" aria-modal="true" aria-labelledby="pap-title">
+    <div class="pin-action-backdrop"></div>
+    <div class="pin-action-card">
+      <div class="pap-head">
+        <span class="pap-no" id="pap-no">#1</span>
+        <h3 id="pap-title" class="pap-title">포인트</h3>
+        <button id="pap-close" class="pap-close" type="button" aria-label="닫기">×</button>
+      </div>
+      <div id="pap-meta" class="pap-meta">위치명 없음 · 미디어 없음</div>
+      <div class="pap-actions">
+        <button id="pap-view" class="pap-btn pap-view" type="button">
+          <i class="fa-solid fa-panorama"></i><span>360° 보기</span>
+        </button>
+        <button id="pap-move" class="pap-btn pap-move" type="button">
+          <i class="fa-solid fa-up-down-left-right"></i><span>위치 이동</span>
+        </button>
+        <button id="pap-edit" class="pap-btn pap-edit" type="button">
+          <i class="fa-solid fa-pen"></i><span>수정 / 사진 추가</span>
+        </button>
+        <button id="pap-note" class="pap-btn pap-note" type="button">
+          <i class="fa-solid fa-note-sticky"></i><span>노트 등록</span>
+        </button>
+        <button id="pap-del" class="pap-btn pap-del" type="button">
+          <i class="fa-solid fa-trash"></i><span>삭제</span>
+        </button>
+      </div>
+      <p class="pap-hint">‘위치 이동’을 누른 뒤 도면에서 핀을 드래그하면 위치가 바뀝니다. 모든 변경은 자동 저장됩니다.</p>
+    </div>
+  </div>
+
+  <!-- 로그인 안내 모달 (디자이너 모드 진입 시 미로그인/권한없음) -->
+  <!-- [마스터: 로그인 필수 + SECMS 로그인창 차용] 동영상 제거 / scan360 로고 상단 / 씨스타 로고 하단 -->
+  <div id="login-gate" class="signin-gate login-required hidden" role="dialog" aria-modal="true" aria-labelledby="login-gate-title">
+    <div class="signin-gate-backdrop"></div>
+    <div class="signin-gate-card login-card">
+      <!-- 상단: scan360 로고 (단일) -->
+      <div class="login-logo-top" aria-hidden="true">
+        <svg viewBox="0 0 252 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="scan360">
+          <defs>
+            <linearGradient id="s360-blue" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#5cb6f2"/><stop offset="1" stop-color="#2b76bd"/>
+            </linearGradient>
+            <linearGradient id="s360-gold" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#f3c869"/><stop offset="1" stop-color="#d29a30"/>
+            </linearGradient>
+            <radialGradient id="s360-lens" cx="38%" cy="30%" r="75%">
+              <stop offset="0" stop-color="#1d2c47"/><stop offset=".7" stop-color="#101a2b"/><stop offset="1" stop-color="#0a111d"/>
+            </radialGradient>
+            <linearGradient id="s360-sweep" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#7fd0ff" stop-opacity="0"/><stop offset="1" stop-color="#7fd0ff" stop-opacity=".85"/>
+            </linearGradient>
+          </defs>
+          <g transform="translate(33,32)">
+            <!-- 렌즈 본체 -->
+            <circle r="23" fill="url(#s360-lens)"/>
+            <circle r="23" fill="none" stroke="url(#s360-blue)" stroke-width="2.4"/>
+            <!-- 파노라마 자오선 그리드 (360 사진) -->
+            <g fill="none" stroke="#3f9be0" stroke-width="1.5">
+              <ellipse rx="23" ry="8.5" opacity=".8"/>
+              <ellipse rx="8.5" ry="23" opacity=".55"/>
+              <ellipse rx="17" ry="23" opacity=".3"/>
+              <line x1="-23" y1="0" x2="23" y2="0" opacity=".5"/>
+            </g>
+            <!-- 레이더 스캔 스윕 (scan) -->
+            <path d="M0,0 L21,0 A21,21 0 0 0 6.49,-19.97 Z" fill="url(#s360-sweep)"/>
+            <line x1="0" y1="0" x2="6.49" y2="-19.97" stroke="#bfe6ff" stroke-width="1.6" stroke-linecap="round"/>
+            <!-- 360 캡처 궤도 + 카메라 노드 -->
+            <g transform="rotate(-24)">
+              <ellipse rx="28" ry="10.5" fill="none" stroke="url(#s360-gold)" stroke-width="2" opacity=".95"/>
+              <circle cx="28" cy="0" r="3" fill="url(#s360-gold)"/>
+            </g>
+            <!-- 초점(나디르) 노드 -->
+            <circle r="3.2" fill="#0a111d" stroke="url(#s360-blue)" stroke-width="1.6"/>
+            <circle r="1.1" fill="#bfe6ff"/>
+          </g>
+          <text x="68" y="41" font-family="'Pretendard','Inter',sans-serif" font-size="31" letter-spacing="-1.2">
+            <tspan font-weight="600" fill="#eaf1fa">scan</tspan><tspan font-weight="800" fill="url(#s360-gold)">360</tspan><tspan font-weight="700" font-size="19" fill="#5cb6f2">°</tspan>
+          </text>
+        </svg>
+      </div>
+      <h2 id="login-gate-title" class="signin-title">로그인</h2>
+      <p id="login-gate-sub" class="signin-sub">Google 계정으로 로그인하세요. (로그인해야 입장됩니다)</p>
+
+      <!-- 구글 로그인 (필수) -->
+      <div id="login-gate-signin" class="signin-gsi"></div>
+      <button id="login-gate-google-fallback" class="signin-google-btn" type="button">
+        <svg class="g-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        <span>Google 계정으로 로그인</span>
+      </button>
+
+      <div id="login-gate-error" class="signin-error hidden">이 계정은 권한이 없습니다. 관리자에게 문의하세요.</div>
+
+      <div class="signin-or"><span>또는</span></div>
+      <button id="login-gate-company" class="signin-company-btn" type="button" title="회사 이메일로 가입/로그인하여 열람">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        회사 이메일로 가입 / 로그인
+      </button>
+
+      <div class="signin-footer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        Contact Admin (<span class="signin-admin-mail">designssir@gmail.com</span>)
+      </div>
+
+      <!-- 하단: 씨스타 로고 (동영상 자리 대체) -->
+      <div class="login-logo-bottom">
+        <img src="images/logo.png" alt="SEASTAR" />
+        <span class="login-corp">© SEASTAR Inc.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 회사 이메일 자체가입 / 로그인 (User Details) ═══ -->
+  <div id="company-gate" class="company-gate hidden" role="dialog" aria-modal="true" aria-labelledby="company-gate-title">
+    <div class="company-gate-backdrop"></div>
+    <div class="company-gate-card">
+      <h2 id="company-gate-title" class="company-title">User Details</h2>
+      <p id="company-gate-sub" class="company-sub">회사 이메일로 인증코드를 받아 가입하세요.</p>
+
+      <div class="company-tabs">
+        <button id="company-tab-signup" class="company-tab active" type="button" data-tab="signup">회원가입</button>
+        <button id="company-tab-login" class="company-tab" type="button" data-tab="login">로그인</button>
+      </div>
+
+      <!-- ── 회원가입 패널 ── -->
+      <div id="company-panel-signup" class="company-panel">
+        <div id="company-step-email" class="company-step">
+          <label class="company-field">
+            <span class="company-label">회사 이메일 주소</span>
+            <input id="cg-email" class="company-input" type="email" placeholder="you@yourcompany.com" autocomplete="email" />
+          </label>
+          <p id="cg-policy-note" class="company-note">회사 이메일(@회사도메인)로만 가입할 수 있습니다.</p>
+          <button id="cg-send-code" class="company-primary-btn" type="button">인증코드 받기</button>
+        </div>
+        <div id="company-step-verify" class="company-step hidden">
+          <div class="company-verified-line">
+            <span id="cg-verify-email" class="company-verified-email"></span>
+            <button id="cg-change-email" class="company-change-btn" type="button">이메일 변경</button>
+          </div>
+          <label class="company-field">
+            <span class="company-label">인증코드 (6자리)</span>
+            <input id="cg-code" class="company-input company-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+          </label>
+          <div id="cg-dev-code" class="company-devcode hidden"></div>
+          <div id="cg-invited-badge" class="company-invited-badge hidden">관리자가 사전 등록한 계정입니다. 회사·이름만 입력하면 바로 가입됩니다.</div>
+          <label class="company-field">
+            <span class="company-label">이름</span>
+            <input id="cg-name" class="company-input" type="text" placeholder="홍길동" autocomplete="name" />
+          </label>
+          <label class="company-field">
+            <span id="cg-company-label" class="company-label">회사명</span>
+            <input id="cg-company" class="company-input" type="text" placeholder="(주)씨스타" autocomplete="organization" />
+          </label>
+          <label class="company-field">
+            <span class="company-label">부서 / 소속</span>
+            <input id="cg-dept" class="company-input" type="text" placeholder="예: 설계1팀 / 해양플랜트사업부" autocomplete="organization-title" />
+          </label>
+          <label class="company-field">
+            <span class="company-label">비밀번호 (8자 이상)</span>
+            <input id="cg-pw" class="company-input" type="password" placeholder="새 비밀번호" autocomplete="new-password" />
+          </label>
+          <label class="company-field">
+            <span class="company-label">비밀번호 확인</span>
+            <input id="cg-pw2" class="company-input" type="password" placeholder="비밀번호 확인" autocomplete="new-password" />
+          </label>
+          <button id="cg-resend" class="company-link-btn" type="button">코드 재발송</button>
+          <button id="cg-create" class="company-primary-btn" type="button">가입 완료</button>
+        </div>
+      </div>
+
+      <!-- ── 로그인 패널 ── -->
+      <div id="company-panel-login" class="company-panel hidden">
+        <label class="company-field">
+          <span class="company-label">회사 이메일 주소</span>
+          <input id="cg-login-email" class="company-input" type="email" placeholder="you@yourcompany.com" autocomplete="email" />
+        </label>
+        <label class="company-field">
+          <span class="company-label">비밀번호</span>
+          <input id="cg-login-pw" class="company-input" type="password" placeholder="비밀번호" autocomplete="current-password" />
+        </label>
+        <button id="cg-login-btn" class="company-primary-btn" type="button">로그인</button>
+      </div>
+
+      <div id="company-gate-error" class="company-error hidden"></div>
+      <p class="company-footer-note"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> 이메일은 열람 권한 관리에만 사용되며 제3자에게 공유되지 않습니다.</p>
+      <button id="company-gate-cancel" class="company-cancel" type="button">닫기</button>
+    </div>
+  </div>
+
+  <!-- ═══ 권한 없음 / 사용 신청(Request Access) — Genspark 모방 ═══ -->
+  <!-- 디자이너 권한이 없는 구글 계정으로 로그인하면 이 화면으로 연결 -->
+  <div id="access-gate" class="access-gate hidden" role="dialog" aria-modal="true" aria-labelledby="access-gate-title">
+    <div class="access-gate-backdrop"></div>
+    <div class="access-gate-card">
+      <!-- 잠금 + 열쇠 아이콘 -->
+      <div class="access-gate-lock" aria-hidden="true">
+        <svg viewBox="0 0 48 48" fill="none">
+          <rect x="11" y="22" width="26" height="18" rx="3" fill="#f59e0b"/>
+          <path d="M16 22v-5a8 8 0 0 1 16 0v5" stroke="#f59e0b" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+          <circle cx="24" cy="30" r="2.6" fill="#1a2238"/>
+          <rect x="23" y="31" width="2" height="5" rx="1" fill="#1a2238"/>
+          <circle cx="35" cy="14" r="3.2" fill="none" stroke="#fbbf24" stroke-width="2.2"/>
+          <path d="M35 17v6m0-2h3" stroke="#fbbf24" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <h2 id="access-gate-title" class="access-gate-title">Request Access</h2>
+      <div id="access-gate-email" class="access-gate-email">designssir@gmail.com</div>
+      <p class="access-gate-sub">Access will be granted after administrator review.</p>
+
+      <!-- 신청 폼 -->
+      <form id="access-gate-form" class="access-form" autocomplete="off">
+        <label class="access-field">
+          <span class="access-label">Name <i class="req">*</i></span>
+          <input id="ar-name" class="access-input" type="text" placeholder="이름을 입력하세요" required />
+        </label>
+        <label class="access-field">
+          <span class="access-label">Company name <i class="req">*</i></span>
+          <input id="ar-company" class="access-input" type="text" placeholder="Enter your company or organization" required />
+        </label>
+        <label class="access-field">
+          <span class="access-label">국가 / Country <i class="req">*</i></span>
+          <input id="ar-country" class="access-input" type="text" placeholder="예: Korea, Japan, China" required />
+        </label>
+        <label class="access-field">
+          <span class="access-label">Phone <i class="req">*</i></span>
+          <input id="ar-phone" class="access-input" type="tel" placeholder="+1-000-000-0000" required />
+        </label>
+        <!-- 읽기전용 본인 이메일 -->
+        <div class="access-field">
+          <div class="access-input readonly">
+            <svg class="access-mail-ico" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+            <span id="ar-email-readonly" class="access-readonly-text">designssir@gmail.com</span>
+          </div>
+        </div>
+
+        <div id="access-gate-error" class="access-error hidden"></div>
+        <div id="access-gate-success" class="access-success hidden"></div>
+
+        <button id="ar-submit" class="access-submit" type="submit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/><path d="M6 7V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/></svg>
+          <span id="ar-submit-label">사용 신청</span>
+        </button>
+      </form>
+
+      <button id="access-gate-cancel" class="access-cancel" type="button">취소</button>
+    </div>
+  </div>
+
+  <!-- 디자이너 지정 관리 (슈퍼관리자 전용) -->
+  <div id="designers-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="designers-modal-title">
+    <div class="admin-gate-backdrop" data-close="designers"></div>
+    <div class="admin-gate-card wide">
+      <h2 id="designers-modal-title" class="admin-gate-title">접근 권한 관리</h2>
+      <p class="admin-gate-sub">슈퍼관리자(<span id="super-admin-email"></span>)가 디자이너 권한과 사용 신청을 관리합니다.</p>
+
+      <!-- 탭 -->
+      <nav class="adm-tabs" role="tablist">
+        <button id="adm-tab-users" class="adm-tab active" type="button" role="tab">
+          <i class="fa-solid fa-user-shield"></i> 사용자 관리
+        </button>
+        <button id="adm-tab-designers" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-users-gear"></i> 디자이너 관리
+        </button>
+        <button id="adm-tab-requests" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-inbox"></i> 사용 신청 <span id="adm-req-badge" class="adm-req-badge hidden">0</span>
+        </button>
+        <button id="adm-tab-domains" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-at"></i> 회사 도메인
+        </button>
+        <button id="adm-tab-members" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-user-check"></i> 가입 사용자
+        </button>
+        <button id="adm-tab-logs" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-clock-rotate-left"></i> 활동 로그
+        </button>
+        <button id="adm-tab-proj-req" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-door-open"></i> 프로젝트 신청 <span id="adm-proj-req-badge" class="adm-req-badge hidden">0</span>
+        </button>
+        <button id="adm-tab-matrix" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-table-cells"></i> 권한 매트릭스
+        </button>
+        <button id="adm-tab-flags" class="adm-tab" type="button" role="tab">
+          <i class="fa-solid fa-toggle-on"></i> 시스템 설정
+        </button>
+      </nav>
+
+      <!-- 패널: 사용자 관리 (SECMS 관리자 사용자관리 차용 — 디자이너/뷰어 권한) -->
+      <section id="adm-panel-users" class="adm-panel">
+        <div class="um-grid">
+          <aside class="um-rail">
+            <div class="um-rail-h">사용자 관리</div>
+            <button class="um-filter-item active" data-filter="active" type="button">
+              <span class="um-dot active"></span> 사용자 현황 <span class="um-cnt" id="um-cnt-active">0</span>
+            </button>
+            <button class="um-filter-item" data-filter="designer" type="button">
+              <span class="um-dot designer"></span> 디자이너 <span class="um-cnt" id="um-cnt-designer">0</span>
+            </button>
+            <button class="um-filter-item" data-filter="pending" type="button">
+              <span class="um-dot pending"></span> 신청 대기 <span class="um-cnt" id="um-cnt-pending">0</span>
+            </button>
+            <button class="um-filter-item" data-filter="rejected" type="button">
+              <span class="um-dot rejected"></span> 거절 대상 <span class="um-cnt" id="um-cnt-rejected">0</span>
+            </button>
+            <button class="um-filter-item" data-filter="all" type="button">
+              <span class="um-dot all"></span> 전체 <span class="um-cnt" id="um-cnt-all">0</span>
+            </button>
+          </aside>
+          <div class="um-main">
+            <div class="um-toolbar">
+              <input id="um-search" class="admin-gate-input um-search" type="text" autocomplete="off" placeholder="이름·이메일·회사 검색" aria-label="사용자 검색" />
+              <input id="um-add-input" class="admin-gate-input um-add" type="email" autocomplete="off" placeholder="디자이너 직접 추가 (email)" aria-label="디자이너 추가" />
+              <button id="um-add-btn" class="admin-gate-btn primary" type="button">＋ 디자이너</button>
+              <button id="um-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+              <select id="um-pagesize" class="admin-gate-input um-pagesize" aria-label="페이지당 표시 수">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
+            <div id="um-add-error" class="admin-gate-error hidden"></div>
+            <!-- 일괄 작업 바 (선택 시 노출) -->
+            <div id="um-bulkbar" class="um-bulkbar hidden">
+              <span class="um-bulk-info">선택 <b id="um-sel-count">0</b>명</span>
+              <button id="um-bulk-designer" class="um-bulk-btn designer" type="button">디자이너 지정</button>
+              <button id="um-bulk-viewer" class="um-bulk-btn viewer" type="button">뷰어 지정</button>
+              <button id="um-bulk-del" class="um-bulk-btn del" type="button">가입 취소</button>
+            </div>
+            <div class="um-tablewrap">
+              <table class="um-table um-xls">
+                <thead><tr>
+                  <th class="um-c-ck"><input type="checkbox" id="um-all" aria-label="전체 선택" /></th>
+                  <th class="um-c-id">아이디</th>
+                  <th class="um-c-name">이름 · 이메일</th>
+                  <th class="um-c-co">소속</th>
+                  <th class="um-c-role">역할(권한)</th>
+                  <th class="um-c-status">상태</th>
+                  <th class="um-c-proj">호선</th>
+                  <th class="um-c-login">최근 접속</th>
+                  <th class="um-c-date">가입일</th>
+                  <th class="um-c-act">관리</th>
+                </tr></thead>
+                <tbody id="um-tbody"></tbody>
+              </table>
+            </div>
+            <div id="um-pager" class="um-pager"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 패널: 디자이너 관리 -->
+      <section id="adm-panel-designers" class="adm-panel hidden">
+        <div class="designer-add">
+          <input id="designer-email-input" class="admin-gate-input" type="email" autocomplete="off" placeholder="designer@gmail.com" aria-label="디자이너 이메일" />
+          <button id="designer-add-btn" class="admin-gate-btn primary" type="button">추가</button>
+        </div>
+        <div id="designer-add-error" class="admin-gate-error hidden"></div>
+        <div id="designers-list" class="designers-list"></div>
+      </section>
+
+      <!-- 패널: 사용 신청 (CABLE 데이터그리드풍 좌측 필터 + 표) -->
+      <section id="adm-panel-requests" class="adm-panel hidden">
+        <div class="adm-grid">
+          <aside class="adm-filter-rail">
+            <div class="adm-filter-h">상태 필터</div>
+            <button class="adm-filter-item active" data-status="pending" type="button">
+              <span class="adm-dot pending"></span> 대기 중 <span class="adm-filter-cnt" id="adm-cnt-pending">0</span>
+            </button>
+            <button class="adm-filter-item" data-status="approved" type="button">
+              <span class="adm-dot approved"></span> 승인됨 <span class="adm-filter-cnt" id="adm-cnt-approved">0</span>
+            </button>
+            <button class="adm-filter-item" data-status="rejected" type="button">
+              <span class="adm-dot rejected"></span> 거절됨 <span class="adm-filter-cnt" id="adm-cnt-rejected">0</span>
+            </button>
+            <button class="adm-filter-item" data-status="all" type="button">
+              <span class="adm-dot all"></span> 전체 <span class="adm-filter-cnt" id="adm-cnt-all">0</span>
+            </button>
+          </aside>
+          <div class="adm-grid-main">
+            <div class="adm-grid-head">
+              <span class="adm-col-name">신청자</span>
+              <span class="adm-col-company">회사 · 국가</span>
+              <span class="adm-col-contact">연락처</span>
+              <span class="adm-col-status">상태</span>
+              <span class="adm-col-act">처리</span>
+            </div>
+            <div id="adm-req-list" class="adm-req-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 패널: 회사 도메인 (프로젝트별 허용 도메인 권한 세팅) -->
+      <section id="adm-panel-domains" class="adm-panel hidden">
+        <p class="adm-domain-intro">
+          허용된 회사 도메인의 이메일을 가진 사람만 인증코드로 가입·열람할 수 있습니다.
+          <b>프로젝트별로</b> 허용 도메인을 다르게 지정할 수 있고, <b>전체 공통</b>(모든 프로젝트)으로도 추가할 수 있습니다.
+          도메인이 하나도 없으면 개인용 무료 메일을 제외한 모든 회사 메일이 허용됩니다.
+        </p>
+        <div class="domain-add">
+          <select id="domain-project-select" class="admin-gate-input" aria-label="대상 프로젝트">
+            <option value="*">전체 공통 (모든 프로젝트)</option>
+          </select>
+          <input id="domain-input" class="admin-gate-input" type="text" autocomplete="off" placeholder="company.com" aria-label="회사 도메인" />
+          <button id="domain-add-btn" class="admin-gate-btn primary" type="button">추가</button>
+        </div>
+        <div id="domain-add-error" class="admin-gate-error hidden"></div>
+        <div id="domains-list" class="domains-list"></div>
+      </section>
+
+      <!-- 패널: 가입 사용자 (회사 이메일 자체가입자 목록 + 로그인 기록) -->
+      <section id="adm-panel-members" class="adm-panel hidden">
+        <!-- ── 사전 등록(초대): 메일 미리 등록 → 사용자는 회사/이름만 입력 후 즉시 가입 ── -->
+        <div class="invite-block">
+          <div class="invite-intro">
+            <b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/></svg> 사용자 사전 등록</b>
+            <span>이메일을 미리 등록해 두면, 해당 사용자는 <b>회사·이름만 입력하고 바로 가입</b>됩니다(도메인 제한 무시).</span>
+          </div>
+          <div class="invite-add">
+            <input id="invite-email-input" class="admin-gate-input" type="email" autocomplete="off" placeholder="user@partner.co.kr" aria-label="초대 이메일" />
+            <select id="invite-role-select" class="admin-gate-input invite-role" aria-label="권한">
+              <option value="viewer">뷰어</option>
+              <option value="designer">디자이너</option>
+            </select>
+            <button id="invite-add-btn" class="admin-gate-btn primary" type="button">＋ 등록</button>
+          </div>
+          <div id="invite-add-error" class="admin-gate-error hidden"></div>
+          <div id="invites-list" class="invites-list"></div>
+        </div>
+
+        <div class="members-toolbar">
+          <span class="members-subtitle">가입 완료된 사용자</span>
+          <span id="members-total" class="log-total">0명</span>
+          <button id="members-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <div class="member-grid-head">
+          <span class="mem-col-email">이메일</span>
+          <span class="mem-col-name">이름</span>
+          <span class="mem-col-company">회사</span>
+          <span class="mem-col-login">최근 로그인</span>
+          <span class="mem-col-act"></span>
+        </div>
+        <div id="members-list" class="members-list"></div>
+      </section>
+
+      <!-- 패널: 활동 로그 (슈퍼관리자 전용 — 모든 기록 관리) -->
+      <section id="adm-panel-logs" class="adm-panel hidden">
+        <div class="log-toolbar">
+          <input id="log-search" class="log-search" type="text" placeholder="검색(액션·이메일·대상)…" aria-label="로그 검색" />
+          <select id="log-action-filter" class="log-action-filter" aria-label="액션 필터">
+            <option value="">모든 액션</option>
+          </select>
+          <button id="log-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+          <span class="log-flex"></span>
+          <span id="log-total" class="log-total">0건</span>
+          <button id="log-purge" class="admin-gate-btn danger" type="button" title="로그 비우기"><i class="fa-solid fa-trash-can"></i> 정리</button>
+        </div>
+        <div class="log-grid-head">
+          <span class="log-col-time">시각</span>
+          <span class="log-col-actor">행위자</span>
+          <span class="log-col-action">액션</span>
+          <span class="log-col-target">대상</span>
+          <span class="log-col-act"></span>
+        </div>
+        <div id="log-list" class="log-list"></div>
+        <div id="log-more-wrap" class="log-more-wrap hidden">
+          <button id="log-more" class="admin-gate-btn ghost" type="button">더 보기</button>
+        </div>
+      </section>
+
+      <!-- 패널: 프로젝트 접근 신청 (관리자/소유자 — 본인 프로젝트 신청 승인/거절) -->
+      <section id="adm-panel-proj-req" class="adm-panel hidden">
+        <div class="adm-filter-bar">
+          <button class="adm-filter-item active" data-status="pending" type="button">대기</button>
+          <button class="adm-filter-item" data-status="approved" type="button">승인됨</button>
+          <button class="adm-filter-item" data-status="rejected" type="button">거절됨</button>
+          <button id="proj-req-refresh" class="admin-gate-btn ghost" style="margin-left:auto" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <div id="proj-req-list" class="req-list"></div>
+      </section>
+
+      <!-- 패널: 권한 매트릭스 (사용자 × 프로젝트) -->
+      <section id="adm-panel-matrix" class="adm-panel hidden">
+        <div class="matrix-toolbar">
+          <input id="matrix-filter-user" class="matrix-filter-input" type="text" placeholder="이메일 필터…" aria-label="사용자 필터" />
+          <span id="matrix-dirty-count" class="matrix-dirty-count hidden">변경: 0건</span>
+          <button id="matrix-save" class="admin-gate-btn primary hidden" type="button">저장</button>
+          <button id="matrix-refresh" class="admin-gate-btn ghost" type="button" title="새로고침"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <div id="matrix-container" class="matrix-container"></div>
+        <p class="matrix-hint">셀 클릭: 없음 → 뷰어 → 설계자 → 없음 순환. 저장 버튼으로 일괄 반영.</p>
+      </section>
+
+      <!-- 패널: 시스템 설정 플래그 (슈퍼 관리자 전용) -->
+      <section id="adm-panel-flags" class="adm-panel hidden">
+        <div id="flags-list" class="flags-list"></div>
+      </section>
+
+      <div class="admin-gate-actions">
+        <button id="designers-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- [마스터: 사진 대신 PDF 등록 시] 내장 PDF 뷰어 팝업 -->
+  <div id="pdf-popup" class="pdf-popup hidden" role="dialog" aria-modal="true" aria-labelledby="pdf-popup-title">
+    <div class="pdf-popup-backdrop"></div>
+    <div class="pdf-popup-card">
+      <div class="pdf-popup-head">
+        <span id="pdf-popup-title" class="pdf-popup-title">PDF</span>
+        <div class="pdf-popup-nav">
+          <button id="pdf-popup-prev" class="pdf-popup-btn" type="button" aria-label="이전 페이지">‹</button>
+          <span id="pdf-popup-page" class="pdf-popup-page">1 / 1</span>
+          <button id="pdf-popup-next" class="pdf-popup-btn" type="button" aria-label="다음 페이지">›</button>
+          <button id="pdf-popup-close" class="pdf-popup-close" type="button" aria-label="닫기">×</button>
+        </div>
+      </div>
+      <div class="pdf-popup-body">
+        <canvas id="pdf-popup-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- [P3] 프로젝트별 멤버 배정 모달 -->
+  <div id="proj-members-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+    <div class="admin-gate-backdrop"></div>
+    <div class="admin-gate-card">
+      <h2 id="pm-title" class="admin-gate-title">멤버 관리 — <span id="pm-proj-name"></span></h2>
+      <p class="admin-gate-sub">이메일로 초대하면 그 계정으로 바로 로그인됩니다(초기 비밀번호 <b>1</b>, 첫 로그인 후 변경). <b>디자이너</b>=모든 구역 세팅 · <b>뷰어</b>=열람만</p>
+      <div class="pm-add-row">
+        <input id="pm-email" class="admin-gate-input" type="email" autocomplete="off" placeholder="user@company.com" aria-label="배정할 이메일" />
+        <select id="pm-role" class="admin-gate-input pm-role-sel" aria-label="권한">
+          <option value="viewer">뷰어</option>
+          <option value="designer">디자이너</option>
+        </select>
+        <button id="pm-add-btn" class="admin-gate-btn primary" type="button">＋ 초대</button>
+      </div>
+      <div id="pm-add-error" class="admin-gate-error hidden"></div>
+      <div id="pm-list" class="members-list"></div>
+
+      <!-- 접근 신청 대기 목록 (관리자용) -->
+      <div id="pm-access-reqs" class="pm-access-reqs hidden">
+        <div class="pm-access-reqs-head">⏳ 접근 신청 대기</div>
+        <div id="pm-access-reqs-list"></div>
+      </div>
+
+      <!-- [마스터: 멀티테넌트] 프로젝트별 서브도메인 — 도메인 이름만 입력하면 세팅 -->
+      <div class="pm-subdomain-block">
+        <div class="pm-sub-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/></svg> 전용 도메인 (멀티테넌트)</div>
+        <p class="pm-sub-hint">이름만 입력하면 <b><span id="pm-sub-preview">name</span>.<span id="pm-sub-base">seastar.work</span></b> 로 이 프로젝트에 바로 접속됩니다.</p>
+        <div class="pm-add-row">
+          <input id="pm-subdomain" class="admin-gate-input" type="text" autocomplete="off" placeholder="예: hanwha-fsr" aria-label="서브도메인" />
+          <button id="pm-subdomain-btn" class="admin-gate-btn primary" type="button">＋ 도메인 부여</button>
+        </div>
+        <div id="pm-subdomain-status" class="pm-sub-status"></div>
+        <div id="pm-subdomain-error" class="admin-gate-error hidden"></div>
+      </div>
+
+      <div class="admin-gate-actions">
+        <button id="pm-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 프로젝트 접근 신청 모달 (비멤버 사용자) -->
+  <div id="proj-access-req-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="par-title">
+    <div class="admin-gate-backdrop" id="par-backdrop"></div>
+    <div class="admin-gate-card">
+      <h2 id="par-title" class="admin-gate-title">프로젝트 접근 신청</h2>
+      <p class="admin-gate-sub">관리자 승인 후 열람할 수 있습니다.<br><b id="par-proj-name" class="par-proj-name"></b></p>
+      <div id="par-pending-msg" class="par-pending-msg hidden">⏳ 이미 신청이 접수되었습니다. 관리자 심사를 기다려 주세요.</div>
+      <textarea id="par-message" class="admin-gate-input par-textarea" rows="3" placeholder="신청 메시지(선택 사항)" aria-label="신청 메시지"></textarea>
+      <div id="par-error" class="admin-gate-error hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="par-cancel" class="admin-gate-btn ghost" type="button">취소</button>
+        <button id="par-submit" class="admin-gate-btn primary" type="button">신청하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 비밀번호 변경 모달 (초대 계정 첫 로그인 강제 — 닫기/백드롭 클릭 없음) -->
+  <div id="pwchange-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="pwc-title">
+    <div class="admin-gate-backdrop"></div>
+    <div class="admin-gate-card">
+      <h2 id="pwc-title" class="admin-gate-title">비밀번호 변경</h2>
+      <p class="admin-gate-sub">초대받은 계정의 초기 비밀번호(<b>1</b>)를 새 비밀번호로 변경하세요.</p>
+      <input id="pwc-new" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 (4자 이상)" aria-label="새 비밀번호" />
+      <input id="pwc-new2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인" style="margin-top:10px" />
+      <div id="pwc-error" class="admin-gate-error hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="pwc-submit" class="admin-gate-btn primary full" type="button">변경하고 시작</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 범용 입력 모달 (프로젝트/데크 생성) -->
+  <div id="prompt-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
+    <div class="admin-gate-backdrop" data-close="prompt"></div>
+    <div class="admin-gate-card">
+      <h2 id="prompt-modal-title" class="admin-gate-title">입력</h2>
+      <p id="prompt-modal-sub" class="admin-gate-sub"></p>
+      <input id="prompt-modal-input" class="admin-gate-input" type="text" autocomplete="off" />
+      <input id="prompt-modal-input2" class="admin-gate-input hidden" type="text" inputmode="numeric" placeholder="층 번호(선택, 정렬용)" style="margin-top:10px" />
+      <div id="prompt-modal-error" class="admin-gate-error hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="prompt-modal-cancel" class="admin-gate-btn ghost" type="button">취소</button>
+        <button id="prompt-modal-ok" class="admin-gate-btn primary" type="button">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- [도면 연결 복구] 구역에 연결할 도면(deployment) 선택 -->
+  <div id="deck-link-modal" class="admin-gate hidden" role="dialog" aria-modal="true">
+    <div class="admin-gate-backdrop" id="deck-link-backdrop"></div>
+    <div class="admin-gate-card">
+      <h2 class="admin-gate-title">구역에 연결할 도면 선택</h2>
+      <p id="deck-link-sub" class="admin-gate-sub"></p>
+      <div id="deck-link-list" class="deck-link-list"></div>
+      <div class="admin-gate-actions">
+        <button id="deck-link-cancel" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설정 패널 — 로그인 / 편집 모드 전환 / 디자이너 관리 -->
+  <div id="settings-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="admin-gate-backdrop" data-close="settings"></div>
+    <div class="admin-gate-card">
+      <div class="settings-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </div>
+      <h2 id="settings-title" class="admin-gate-title">설정</h2>
+
+      <!-- 미로그인 -->
+      <div id="settings-loggedout" class="settings-block">
+        <p class="admin-gate-sub">편집(설계자) 기능은 <b>디자이너로 지정된 구글 계정</b>만 사용할 수 있습니다.<br>구글 계정으로 로그인하세요. 로그인하지 않아도 뷰어는 그대로 사용됩니다.</p>
+        <div id="settings-signin" class="login-gate-signin"></div>
+        <div id="settings-noclient" class="admin-gate-error hidden">구글 로그인이 아직 설정되지 않았습니다(관리자 클라이언트 ID 필요).</div>
+      </div>
+
+      <!-- 로그인됨 -->
+      <div id="settings-loggedin" class="settings-block hidden">
+        <div class="settings-user">
+          <img id="settings-avatar" class="user-avatar" alt="" />
+          <div class="user-meta">
+            <span id="settings-name" class="user-name"></span>
+            <span id="settings-role" class="user-role"></span>
+            <span id="settings-email" class="settings-email"></span>
+          </div>
+        </div>
+
+        <div id="settings-designer-actions" class="settings-actions hidden">
+          <button id="btn-go-edit" class="admin-gate-btn primary full" type="button"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg> 편집 모드로 전환</button>
+          <div class="settings-pincolor-row">
+            <span class="settings-pincolor-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>핀 기본 색상</span>
+            <div id="settings-pincolor" class="settings-pincolor-swatches"></div>
+          </div>
+        </div>
+        <div id="settings-viewer-note" class="settings-note hidden">
+          이 계정은 <b>디자이너 권한이 없습니다</b>. 편집하려면 슈퍼관리자에게 디자이너 지정을 요청하세요.
+        </div>
+        <div id="settings-super-actions" class="settings-actions hidden">
+          <button id="btn-open-designers" class="admin-gate-btn ghost full" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>디자이너 지정 · 사용자 관리</button>
+          <button id="btn-open-features" class="admin-gate-btn ghost full" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>기능 · 메뉴 관장</button>
+          <button id="btn-open-ai" class="admin-gate-btn ghost full" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>AI API 설정</button>
+          <button id="btn-open-firebase" class="admin-gate-btn ghost full" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>Firebase 연결 (내 Google 계정)</button>
+          <button id="btn-open-codemap" class="admin-gate-btn ghost full" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>코드 구조 · 파일 설명</button>
+        </div>
+
+        <button id="btn-settings-signout" class="btn-signout full" type="button">로그아웃</button>
+      </div>
+
+      <div class="admin-gate-actions">
+        <button id="settings-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 기능·메뉴 관장 (최상위 관리자 전용) ═══ -->
+  <div id="features-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="features-title">
+    <div class="admin-gate-backdrop" data-close="features"></div>
+    <div class="admin-gate-card">
+      <h2 id="features-title" class="admin-gate-title"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> 기능 · 메뉴 관장</h2>
+      <p class="admin-gate-sub">이 프로젝트에서 보일 기능/메뉴를 켜고 끕니다. 끄면 모든 사용자 화면에서 숨겨집니다.</p>
+      <div class="feat-scope-line">
+        <label class="feat-scope-label">적용 범위</label>
+        <select id="feat-scope-select" class="admin-gate-input">
+          <option value="*">전체 공통(모든 프로젝트)</option>
+        </select>
+      </div>
+      <div id="features-list" class="features-list"></div>
+      <div id="features-save-note" class="features-save-note hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="features-save" class="admin-gate-btn primary" type="button">저장</button>
+        <button id="features-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ AI API 설정 (최상위 관리자 전용) ═══ -->
+  <div id="ai-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="ai-title">
+    <div class="admin-gate-backdrop" data-close="ai"></div>
+    <div class="admin-gate-card">
+      <h2 id="ai-title" class="admin-gate-title"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="2"/><path d="M12 7V3M8 3h8"/><circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/></svg> AI API 설정</h2>
+      <p class="admin-gate-sub">OpenAI 호환 엔드포인트(Groq 등)를 설정합니다. <b>API 키는 보안상 Cloudflare Secret으로만</b> 저장됩니다(여기서 직접 저장하지 않음).</p>
+      <div id="ai-status-line" class="ai-status-line">상태 확인 중…</div>
+      <label class="company-field"><span class="company-label">Base URL</span>
+        <input id="ai-base-url" class="company-input" type="text" placeholder="https://api.groq.com/openai/v1" /></label>
+      <label class="company-field"><span class="company-label">모델</span>
+        <input id="ai-model" class="company-input" type="text" placeholder="openai/gpt-oss-120b" /></label>
+      <div class="ai-key-note">
+        <b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.5 12.5 21 2m-4.5 4.5 2 2m-5 1 2 2"/></svg> API 키 변경 방법(키는 코드/DB에 저장 안 함):</b>
+        <code id="ai-secret-cmd">npx wrangler pages secret put AI_API_KEY</code>
+        <span>배포 환경에서 위 명령으로 키를 넣으면 즉시 활성화됩니다. Base URL·모델은 아래 저장 버튼으로 저장됩니다.</span>
+      </div>
+      <div id="ai-save-note" class="features-save-note hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="ai-save" class="admin-gate-btn primary" type="button">Base URL·모델 저장</button>
+        <button id="ai-test" class="admin-gate-btn ghost" type="button">연결 테스트</button>
+        <button id="ai-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Firebase 연결 (내 Google 계정으로 자동 세팅) ═══ -->
+  <div id="firebase-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="firebase-title">
+    <div class="admin-gate-backdrop" data-close="firebase"></div>
+    <div class="admin-gate-card">
+      <h2 id="firebase-title" class="admin-gate-title"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.4-.5-2-1-3-1.1-2.1-.2-4 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.2.4-2.3 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg> Firebase 연결</h2>
+      <p class="admin-gate-sub">본인 Google 계정의 Firebase 프로젝트에 바로 연결합니다. <b>코드 수정 없이</b> 아래에 값을 넣고 저장하면 즉시 활성화됩니다.</p>
+
+      <div id="firebase-status-line" class="ai-status-line">상태 확인 중…</div>
+
+      <details class="fb-guide">
+        <summary><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> 3분 안내 — Firebase Console에서 값 얻기</summary>
+        <ol class="fb-guide-list">
+          <li><a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> 접속 → 본인 Google ID 로그인</li>
+          <li>"프로젝트 추가" → 이름 입력(예: seastar-viewer)</li>
+          <li>좌측 톱니바퀴 → 프로젝트 설정 → "내 앱" → 웹앱(<b>&lt;/&gt;</b>) 추가</li>
+          <li>표시되는 <code>firebaseConfig = { ... }</code> 전체를 복사 → 아래에 붙여넣기</li>
+          <li>Authentication → 시작하기 → <b>Google</b> 공급업체 사용 설정</li>
+          <li>Firestore Database → 데이터베이스 만들기</li>
+        </ol>
+      </details>
+
+      <label class="company-field"><span class="company-label">① firebaseConfig 붙여넣기 (콘솔에서 복사한 그대로)</span>
+        <textarea id="fb-paste" class="company-input" rows="6" placeholder='const firebaseConfig = {
+  apiKey: "AIza...",
+  authDomain: "myproj.firebaseapp.com",
+  projectId: "myproj",
+  storageBucket: "myproj.appspot.com",
+  messagingSenderId: "1234567890",
+  appId: "1:1234:web:abcd"
+};'></textarea></label>
+
+      <label class="company-field"><span class="company-label">② 내 Google 계정 이메일 (슈퍼관리자로 등록)</span>
+        <input id="fb-owner-email" class="company-input" type="email" placeholder="designssir@gmail.com" /></label>
+
+      <div id="firebase-save-note" class="features-save-note hidden"></div>
+
+      <div class="admin-gate-actions">
+        <button id="firebase-save" class="admin-gate-btn primary" type="button"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장하고 활성화</button>
+        <button id="firebase-login" class="admin-gate-btn ghost" type="button"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.5 12.5 21 2m-4.5 4.5 2 2m-5 1 2 2"/></svg> Google 로그인 테스트</button>
+        <button id="firebase-clear" class="admin-gate-btn ghost" type="button">연결 해제</button>
+        <button id="firebase-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 코드 구조 · 파일 설명 대시보드 (최상위 관리자 전용) ═══ -->
+  <div id="codemap-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="codemap-title">
+    <div class="admin-gate-backdrop" data-close="codemap"></div>
+    <div class="admin-gate-card wide">
+      <h2 id="codemap-title" class="admin-gate-title"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><path d="M20 20a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-2H4a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1z"/></svg> 코드 구조 · 파일 설명</h2>
+      <p class="admin-gate-sub">이 프로젝트를 구성하는 파일들이 각각 무슨 기능을 하는지 한눈에 확인합니다.</p>
+      <div class="codemap-search-line">
+        <input id="codemap-search" class="admin-gate-input" type="text" placeholder="파일·기능 검색…" />
+      </div>
+      <div id="codemap-tree" class="codemap-tree"></div>
+      <div class="admin-gate-actions">
+        <button id="codemap-close" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

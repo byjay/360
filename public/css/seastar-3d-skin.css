@@ -1,0 +1,176 @@
+/* ════════════════════════════════════════════════════════════
+   seastar-3d-skin.css  —  SEASTAR 360° Viewer "다크 메탈릭 3D" 스킨
+   ────────────────────────────────────────────────────────────
+   ● 이 파일은 외형(스타일)만 바꿉니다. HTML 구조·JS·기능은 전혀 건드리지 않음.
+   ● 기존 스타일 위에 "가산(additive)"으로 덮어쓰는 오버레이입니다.
+
+   ▶ 적용법 (index.html <head>, 기존 CSS 링크들 "맨 아래"에 1줄 추가):
+       <link rel="stylesheet" href="css/style.css" />
+       <link rel="stylesheet" href="css/seastar-family-tokens.css" />
+       <link rel="stylesheet" href="css/seastar-3d-skin.css" />   ← 이 줄만 추가
+     (public/css/ 에 이 파일을 넣고, MIRROR 규칙대로 css/ 에도 복사)
+
+   ▶ 되돌리기: 위 <link> 한 줄만 지우면 원래 아이보리 테마로 복귀.
+   ════════════════════════════════════════════════════════════ */
+
+:root{
+  /* ── 다크 토큰 remap (style.css 의 var 들을 다크로 치환) ── */
+  --bg:        #15171b;
+  --bg2:       #1d2025;
+  --bg3:       #23262c;
+  --border:    #2c3036;
+  --border2:   #3a3e45;
+  --text:      #e9eaee;
+  --text2:     #9095a0;
+  --text3:     #6b7079;
+  --text4:     #51565e;
+  --gold:      #e0b14a;
+  --green:     #46c08a;
+  --red:       #e0705e;
+  --blue:      #3a97dd;
+  --panel:     #1d2025;
+  --panel-2:   #23262c;
+
+  /* ── 3D 메탈릭 베벨 레시피(스킨 전용) ── */
+  --m3d-raise:  0 1px 0 rgba(255,255,255,.13) inset, 0 -2px 2px rgba(0,0,0,.4) inset, 0 2px 3px rgba(0,0,0,.5), 0 7px 16px rgba(0,0,0,.4);
+  --m3d-press:  inset 0 3px 8px rgba(0,0,0,.72), inset 0 1px 0 rgba(255,255,255,.04);
+  --m3d-dark:   linear-gradient(180deg,#3c4047,#2c2f35 52%,#1b1d21);
+  --m3d-gold:   linear-gradient(180deg,#e7bd56,#c9962a 55%,#9c7320);
+  --m3d-gold-sh:0 1px 0 rgba(255,255,255,.45) inset, 0 -3px 6px rgba(110,80,20,.5) inset, 0 2px 5px rgba(0,0,0,.5), 0 0 16px rgba(201,150,42,.4);
+  --m3d-inset:  linear-gradient(180deg,#0d0f13,#181b20);
+  --m3d-inset-sh: inset 0 3px 7px rgba(0,0,0,.68), inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+/* ── 베이스 면 ── */
+body{ background:#0e1014 !important; color:var(--text) !important; }
+.home-bg{ background:radial-gradient(130% 100% at 50% -5%,#2a2f37,#0a0b0e 72%) !important; }
+.screen{ color:var(--text); }
+
+/* ════ 1차 액션(골드 메탈릭) ════ */
+.btn-demo-designer,.hub-btn-new,.signin-invite-btn,.access-submit,.btn-deploy,
+.btn-place,.btn-next-point,.tb-btn-accent,.pnp-submit,.checkboard-start-input + *,
+.btn-checkboard-toggle{
+  background:var(--m3d-gold) !important;
+  border:none !important;
+  color:#1a1208 !important;
+  box-shadow:var(--m3d-gold-sh) !important;
+  text-shadow:0 1px 0 rgba(255,255,255,.25);
+  transition:filter .1s ease, box-shadow .1s ease, transform .08s ease !important;
+}
+.btn-demo-designer:hover,.hub-btn-new:hover,.signin-invite-btn:hover,.access-submit:hover,
+.btn-deploy:hover,.btn-place:hover,.tb-btn-accent:hover,.pnp-submit:hover,.btn-checkboard-toggle:hover{
+  filter:brightness(1.07) !important; transform:none !important;
+}
+.btn-demo-designer:active,.hub-btn-new:active,.btn-deploy:active,.btn-place:active,
+.tb-btn-accent:active,.pnp-submit:active,.btn-checkboard-toggle:active{
+  box-shadow:var(--m3d-press) !important; transform:translateY(1px) !important;
+}
+
+/* ════ 중립 입체 버튼(다크 글로시 베벨) ════ */
+.btn-icon,.btn-page,.tq-btn,.tb-btn,.btn-settings,.btn-allpins,.btn-manage,
+.btn-signout,.btn-demo-viewer,.access-cancel,.btn-mini,.zone-tool,.btn-upload,
+.btn-pano-ctrl,.btn-pano-nav,.btn-pano-notes,.btn-pano-close,.pano-iso-btn,
+.hub-card-act,.pnp-fbtn,.pnp-close,.pano-radar-toggle,.btn-enter-edit,.btn-exit-edit,
+.btn-reload-deploy,.btn-import-json{
+  background:var(--m3d-dark) !important;
+  border:none !important;
+  color:var(--text2) !important;
+  box-shadow:var(--m3d-raise) !important;
+  transition:filter .1s ease, box-shadow .1s ease, transform .08s ease !important;
+}
+.btn-icon:hover,.btn-page:hover,.tq-btn:hover,.tb-btn:hover,.btn-settings:hover,
+.btn-allpins:hover,.btn-manage:hover,.btn-signout:hover,.btn-demo-viewer:hover,
+.access-cancel:hover,.btn-mini:hover,.zone-tool:hover,.btn-upload:hover,
+.btn-pano-ctrl:hover,.btn-pano-nav:hover,.btn-pano-notes:hover,.btn-pano-close:hover,
+.pano-iso-btn:hover,.hub-card-act:hover,.pnp-fbtn:hover,.btn-enter-edit:hover,
+.btn-exit-edit:hover{
+  filter:brightness(1.12) !important; color:var(--text) !important;
+}
+.btn-icon:active,.btn-page:active,.tq-btn:active,.tb-btn:active,.btn-settings:active,
+.btn-allpins:active,.btn-mini:active,.zone-tool:active,.btn-pano-ctrl:active,
+.btn-pano-nav:active,.pano-iso-btn:active,.hub-card-act:active,.pnp-fbtn:active{
+  box-shadow:var(--m3d-press) !important; transform:translateY(1px) !important;
+}
+
+/* 활성/선택 상태 — 블루 강조 유지 */
+.tb-anno.active,.pnp-fbtn.active,.pano-iso-btn.active,.tb-btn.active{
+  background:linear-gradient(180deg,#5aa6e0,#1b6bb0) !important;
+  color:#fff !important;
+  box-shadow:0 1px 0 rgba(255,255,255,.42) inset,0 -3px 7px rgba(16,69,110,.55) inset,0 2px 6px rgba(0,0,0,.45),0 0 18px rgba(47,143,214,.5) !important;
+}
+.hub-card-pub.is-pub{
+  background:var(--m3d-gold) !important; color:#1a1208 !important;
+  box-shadow:var(--m3d-gold-sh) !important;
+}
+
+/* ════ 패널/바 면 (다크) ════ */
+.topbar,.pdf-toolbar,.hub-authbar,.home-authbar,.pano-header,.pano-controls,
+.pano-radar,.pnp-head,.pnp-filter,.pnp-form,.pano-notes-panel,.net-badge,.sync-badge,
+.pin-count-badge,.topbar-quick,.page-jump{
+  background:var(--panel) !important;
+  border-color:rgba(0,0,0,.45) !important;
+  box-shadow:0 1px 0 rgba(255,255,255,.1) inset, 0 -1px 0 rgba(0,0,0,.5) inset, 0 6px 18px rgba(0,0,0,.4) !important;
+}
+.sidebar{ background:var(--bg2) !important; border-color:var(--border) !important; }
+.app-body{ background:var(--bg) !important; }
+
+/* ════ 카드 (입체) ════ */
+.hub-card{
+  background:linear-gradient(160deg,#23262c,#191b20) !important;
+  border:none !important;
+  box-shadow:var(--m3d-raise) !important;
+}
+.hub-card:hover,.hub-card:focus-visible{
+  transform:translateY(-3px) !important;
+  box-shadow:0 1px 0 rgba(255,255,255,.13) inset, 0 14px 30px rgba(0,0,0,.55), 0 0 0 1px rgba(47,143,214,.4) !important;
+}
+.hub-card-thumb{
+  background:radial-gradient(ellipse at 50% 120%, rgba(47,143,214,.32), transparent 70%), linear-gradient(135deg,#0e1c2a,#0a121b) !important;
+  border-bottom:1px solid rgba(0,0,0,.45) !important;
+}
+.mode-card{ box-shadow:var(--m3d-raise) !important; }
+.mode-card.designer{ background:linear-gradient(135deg,#23262c,#191b20) !important; border:none !important; }
+.hub-card-add{ background:transparent !important; border:1.5px dashed var(--border2) !important; box-shadow:none !important; }
+
+/* ════ 입력/인셋 면 ════ */
+.page-jump-input,.tb-page-input,.pnp-input,.pnp-assignee,.pnp-author,.pnp-status-sel,
+.checkboard-start-input,.tb-zoom-level,.project-current{
+  background:var(--m3d-inset) !important;
+  border:none !important;
+  color:var(--text) !important;
+  box-shadow:var(--m3d-inset-sh) !important;
+}
+.page-jump-input:focus,.tb-page-input:focus,.pnp-input:focus{
+  outline:1px solid rgba(47,143,214,.5) !important;
+}
+
+/* ════ 관리자/리스트 행 (다크 카드) ════ */
+.designer-row,.member-row,.domain-row,.invite-row,.adm-req-row,.log-row{
+  background:#1d2025 !important;
+  border:1px solid var(--border) !important;
+  border-left:3px solid var(--gold) !important;
+  box-shadow:0 2px 6px rgba(0,0,0,.3) !important;
+  color:var(--text) !important;
+}
+.designer-row:hover,.member-row:hover,.domain-row:hover,.invite-row:hover,
+.adm-req-row:hover,.log-row:hover{ background:#23262c !important; }
+.designer-row .dz-email,.member-row .mem-col-email,.domain-name{ color:var(--text) !important; }
+
+/* ════ 도면/파노 스테이지 ════ */
+#screen-app .app-body, #drawing-canvas, .canvas-wrap, .stage{ background:radial-gradient(120% 90% at 50% 40%,#1a1d22,#0e1014) !important; }
+.pano-overlay,#pano-overlay{ background:radial-gradient(120% 90% at 50% 45%,#1c222b,#0c0f14 75%) !important; }
+.pano-info-panel,.pano-state{ color:var(--text) !important; }
+
+/* ════ 하드코딩 다크텍스트 → 라이트 보정(다크 위 가독성) ════ */
+.card-title,.brand-wm-2,.file-name-label,.hub-title,.home-title,
+.pnp-title,.pano-location,.sidebar-section-title,.zone-list-title{
+  color:var(--text) !important;
+}
+.fl-btn{ background:var(--m3d-dark) !important; border:none !important; color:var(--text2) !important; box-shadow:var(--m3d-raise) !important; }
+.fl-btn.fl-btn-primary{ background:var(--m3d-gold) !important; color:#1a1208 !important; box-shadow:var(--m3d-gold-sh) !important; }
+.fl-table thead th{ background:#23262c !important; color:var(--text2) !important; }
+.fl-table tbody td{ color:var(--text) !important; }
+.fl-chip{ color:var(--gold) !important; background:rgba(201,150,42,.16) !important; border-color:rgba(201,150,42,.4) !important; }
+
+/* ════ 스크롤바 ════ */
+::-webkit-scrollbar-thumb{ background:#3a3e45 !important; border:2px solid #15171b !important; }

@@ -1,0 +1,24 @@
+name: seastar_viewer
+description: SEASTAR 360° Location Viewer - 모바일 연동 앱 (도면 핀 + 360 파노라마 + 3D 포인트클라우드)
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  http: ^1.2.0                 # REST API
+  provider: ^6.1.2             # 상태관리
+  photo_view: ^0.15.0          # 도면 핀치줌/팬
+  panorama_viewer: ^2.0.4      # 360 파노라마(자이로/드래그)
+  cached_network_image: ^3.3.1 # 이미지 캐시
+  url_launcher: ^6.2.5         # 외부 링크(첨부문서 등)
+
+dev_dependencies:
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
