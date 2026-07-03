@@ -599,3 +599,4 @@ E2E: 생성 3개→마커/목록 3, 이동 좌표 반영, 삭제 후 2개 — **
 - `GET/POST/DELETE /api/allowed-domains` — 프로젝트별(`project_id`, `*`=전체) 도메인 화이트리스트
 - `POST /api/signup/{send-code,verify,login,logout}` — 회사 이메일 자체가입
 - `GET/DELETE /api/local-users` — 가입 사용자 관리(관리자)
+# 360
