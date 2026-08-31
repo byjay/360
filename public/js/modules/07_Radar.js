@@ -35,8 +35,11 @@
             db.classList.toggle("active", this._dirAdjust);
             db.title = this._dirAdjust ? "방향 조절 끄기" : "미니맵에서 방향 조절";
             box.classList.toggle("dir-adjust-mode", this._dirAdjust);
+            if (this._dirAdjust && typeof Prompt !== "undefined" && Prompt.toast) {
+              Prompt.toast("지금 보고 있는 방향을 도면에서 클릭하세요 (예: 선수 방향)");
+            }
           });
-          this._bindDirDrag(stage);
+          this._bindDirClick(stage, db, box);
           this._dirBound = true;
         }
       }
@@ -112,7 +115,6 @@
 
     /** 시야 방향(yaw=lon) + FOV에 맞춰 부채꼴 회전/너비 */
     spin(lon, fov) {
-      if (this._dirDragging) return; // 미니맵 드래그 조절 중에는 카메라 렌더 루프가 부채꼴을 덮어쓰지 않게
       const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
       if (!fan) return;
       // lon(deg): 0 = +Z 방향. 360 사진마다 촬영 시작 방향(lon=0)이 제각각이라
@@ -124,8 +126,8 @@
       fan.style.transform = "rotate(" + (effectiveLon) + "deg)";
     },
 
-    /** [마스터 요청] 미니맵 위 드래그로 부채꼴(시야 방향) 직접 조절 — pointerdown/move/up 바인딩 (1회) */
-    _bindDirDrag(stage) {
+    /** [마스터 요청] 미니맵 클릭 1회로 부채꼴(시야 방향) 즉시 보정 — "지금 보는 방향 = 여기" 클릭 */
+    _bindDirClick(stage, db, box) {
       // 각도 규약: spin()과 동일 — 0deg=위(북,12시), 시계방향 +, 90deg=오른쪽(동).
       // 화면좌표 dx=오른쪽+, dy=아래쪽+ 이므로 atan2(dy,dx)는 "오른쪽=0,시계방향+" 기준각.
       // 그 기준각에 +90 하면 "위=0,시계방향+" 기준으로 정렬된다(우측 기준각 0→ +90=90, 상단 기준각 -90→ +90=0).
@@ -140,41 +142,26 @@
         let a = Math.atan2(dy, dx) * 180 / Math.PI + 90;
         return ((a % 360) + 360) % 360;
       };
-      const onDown = (e) => {
+      stage.addEventListener("click", (e) => {
         if (!this._dirAdjust) return;
-        this._dirDragging = true;
         e.preventDefault(); e.stopPropagation();
-        this._applyFanAngle(angleFromEvent(e));
-      };
-      const onMove = (e) => {
-        if (!this._dirDragging) return;
-        e.preventDefault();
-        this._applyFanAngle(angleFromEvent(e));
-      };
-      const onUp = (e) => {
-        if (!this._dirDragging) return;
-        this._dirDragging = false;
         this._commitAngle(angleFromEvent(e));
-      };
-      stage.addEventListener("pointerdown", onDown);
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
+        // 클릭 1회로 완료 — 방향 조절 모드 자동 종료
+        this._dirAdjust = false;
+        if (db) { db.classList.remove("active"); db.title = "미니맵에서 방향 조절"; }
+        if (box) box.classList.remove("dir-adjust-mode");
+      });
     },
 
-    /** 드래그 중 실시간 시각 피드백만(저장 안 함) */
-    _applyFanAngle(angleDeg) {
-      const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
-      if (fan) fan.style.transform = "rotate(" + angleDeg + "deg)";
-    },
-
-    /** 드래그 종료 시 최종 각도를 pin.dirOffset으로 환산해 저장(토스트 1회) */
+    /** 클릭 각도를 pin.dirOffset으로 환산해 즉시 저장 + 부채꼴 갱신(토스트 1회) */
     _commitAngle(angleDeg) {
       const pin = this._pin;
       if (!pin) return;
       const lon = (typeof PanoViewer !== "undefined" && PanoViewer.S) ? PanoViewer.S.lon : 0;
       // spin()의 effectiveLon = lon - dirOffset 이 angleDeg가 되도록 역산.
       pin.dirOffset = lon - angleDeg;
-      this._applyFanAngle(angleDeg);
+      const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
+      if (fan) fan.style.transform = "rotate(" + angleDeg + "deg)";
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("시야 방향이 조정되었습니다");
     },
