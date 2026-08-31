@@ -368,9 +368,7 @@
       if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
       if (typeof Zones !== "undefined" && Zones.render) Zones.render();
       this._renderZonePager();
-      try {
-        Prompt && Prompt.toast && Prompt.toast("구역 페이지: " + (z.label || "구역") + " — 이 안에서 상세 등록·수정. ‘전체’ 탭으로 복귀");
-      } catch (e) {}
+      // [토스트 스팸 제거·마스터 지시] 구역 선택 결과는 페이저 탭 활성 + 도면 필터로 이미 화면에 보인다.
     },
 
     /** 전체 도면 복귀 — 모든 핀/구역 표시 */
@@ -531,11 +529,8 @@
         if (State.placing) this._togglePlacing();
         const next = State.checkboard ? "designer" : "checkboard";
         App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
-        Prompt && Prompt.toast && Prompt.toast(
-          next === "checkboard"
-            ? "체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다"
-            : "편집모드로 복귀"
-        );
+        // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
+        if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
         if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
       };
       const cbBtn = UI.$("btn-checkboard-toggle");
@@ -549,7 +544,8 @@
         const applyStart = () => {
           const n = this._setCheckboardStart(State.pdfPage || 1, cbStart.value);
           cbStart.value = String(n);
-          Prompt && Prompt.toast && Prompt.toast("이 구역 시작 번호: " + n);
+          // [토스트 스팸 제거] change+blur 두 이벤트에 물려 있어 한 번 입력에 2회 발화했다.
+          // 적용된 값은 입력창에 그대로 보인다 → 토스트 불필요.
         };
         cbStart.addEventListener("change", applyStart);
         cbStart.addEventListener("blur", applyStart);
@@ -1189,9 +1185,7 @@
         const b = UI.$("tb-pin-edit");
         if (b) b.classList.toggle("active", State.editMode);
         document.body.classList.toggle("pin-edit-mode", State.editMode);
-        Prompt && Prompt.toast && Prompt.toast(State.editMode
-          ? "포인트 수정 모드 ON — 핀을 클릭해 수정/이동/삭제하세요"
-          : "포인트 수정 모드 OFF — 핀 클릭 시 360 보기");
+        // [토스트 스팸 제거] 버튼 active 상태 + body.pin-edit-mode 스타일로 결과가 이미 보인다.
       });
       bind("tb-rotate-cw", () => this._rotatePdf(90));
       bind("tb-rotate-ccw",() => this._rotatePdf(-90));
@@ -2095,7 +2089,7 @@
       const badge = UI.$("sync-badge"), txt = UI.$("sync-text");
       if (badge) badge.classList.add("syncing");
       if (txt) txt.textContent = "올리는 중…";
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 중…");
+      // [토스트 스팸 제거] sync-badge 가 이미 "올리는 중…" 을 표시한다. 완료/실패 토스트는 아래 유지.
       let uploaded = 0;
       try {
         const r = await SyncQueue.flush();
@@ -2284,8 +2278,8 @@
       UI.renderPinList();
       UI.renderPinsOnMap();
       MapCtrl.focusZoneIso(bbox);
-      if (typeof Prompt !== "undefined" && Prompt.toast)
-        Prompt.toast(zone ? ("'" + (zone.label || "구역") + "' 확대 — 다시 누르면 360°") : "ISO 확대 — 다시 누르면 360°", 2200);
+      // [토스트 스팸 제거] 핀 탭마다(2-tap 1단계) 발화해 가장 많이 쌓이던 토스트.
+      // 확대 애니메이션 자체가 결과를 보여준다.
     },
 
     /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):

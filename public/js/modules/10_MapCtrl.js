@@ -97,13 +97,8 @@
     _applyIso() {
       const vp = this.viewport, tr = this.transform;
       this._syncIsoButtons();
-      // ISO 방향 표시 토스트
-      try {
-        if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
-        else if (!State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("평면 뷰로 복귀");
-      } catch (e) {}
+      // [토스트 스팸 제거] ISO 시점/평면 복귀는 화면 자체가 즉시 바뀌어 결과가 보인다.
+      // 버튼 반복 클릭(4방향 회전)마다 토스트가 쌓여 검은 박스 스택의 주범이었다 → 제거.
       const size = this._contentSize();
       if (tr) {
         tr.style.transition = "transform 1s cubic-bezier(.16,1,.3,1)";
@@ -128,11 +123,15 @@
      *  부모 #map-transform 의 scale(zoom) 을 핀마다 역스케일(1/zoom) 로 상쇄 →
      *  핀은 항상 "화면상 일정 크기"로 자연 해상도 렌더(업스케일 없음 → 또렷).
      *  줌아웃(zoom<1) 일 땐 살짝 확대해 항상 잘 보이게. ISO 에선 +세움/가독 확대. */
+    /** [마스터] 핀 기본 크기 배율 — "포인트는 지금보다 2배 정도만 크게".
+     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유하므로 여기 한 곳만 바꾸면
+     *  핀 바늘 SVG·번호 텍스트·라벨이 모두 같은 비율로 커진다(숫자만 작게 남는 문제 없음). */
+    PIN_SCALE: 2,
     pinScreenScale() {
       const zoom = State.zoom || 1;
       let f = (zoom < 1) ? (1 + (1 - zoom) * 0.65) : 1;  // 화면상 핀 크기 계수
       f = Math.max(0.85, Math.min(1.7, f));
-      return f / zoom;                                    // 부모 zoom 상쇄(+줌아웃 확대)
+      return (f * this.PIN_SCALE) / zoom;                 // 부모 zoom 상쇄(+줌아웃 확대)
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");

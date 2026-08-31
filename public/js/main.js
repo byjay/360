@@ -1051,8 +1051,9 @@
       this._spotRaf = requestAnimationFrame(step);
     },
     /** [마스터: 수평 보정] 천정 기울기 보정 — roll 을 deg 만큼 가감(한계 ±20°). */
-    adjustRoll(deg) { this.S.roll = Math.max(-20, Math.min(20, (this.S.roll || 0) + deg)); this._invalidate();
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("수평 보정 " + (this.S.roll > 0 ? "+" : "") + this.S.roll.toFixed(1) + "°"); },
+    // [토스트 스팸 제거] ↺/↻ 는 0.7°씩 연타하는 버튼이라 클릭마다 토스트가 쌓였다.
+    // 보정 결과는 화면이 기울어지는 것으로 즉시 보이므로 토스트 불필요.
+    adjustRoll(deg) { this.S.roll = Math.max(-20, Math.min(20, (this.S.roll || 0) + deg)); this._invalidate(); },
 
     /** [마스터: 360 자동 수평] THETA 등이 JPEG XMP(GPano:PoseRollDegrees)에 박는 천정 기울기를
      *  읽어 자동으로 수평 보정. 메타데이터가 없으면 아무것도 하지 않음(안전). 수동 버튼으로 덮어쓸 수 있음. */
@@ -1110,9 +1111,18 @@
     /* ── [마스터 요청] 자이로(폰 기울임) 둘러보기 — 삼성폰 DeviceOrientation ── */
     isGyroSupported() { return typeof window !== "undefined" && "DeviceOrientationEvent" in window; },
 
-    /** 자이로 켜기/끄기 토글. iOS는 권한요청 필요(삼성폰=Android는 즉시 동작). 반환: 켜짐 여부 */
+    /** 자이로 켜기/끄기 토글. iOS는 권한요청 필요(삼성폰=Android는 즉시 동작). 반환: 켜짐 여부
+     *  [근본원인 수정] 데스크톱 Chrome/Edge/Safari 는 센서가 없어도 window.DeviceOrientationEvent 를
+     *  정의해 둔다 → isGyroSupported() 가 true 를 반환해 "켜짐" 표시만 나고 실제로는 이벤트가
+     *  한 번도 오지 않아 화면이 전혀 움직이지 않았다(= 마스터가 본 "아무 반응 없음").
+     *  API 존재 여부가 아니라 실제 이벤트 수신 여부로 판정하고, 어느 쪽이든 피드백 1회를 보장한다. */
     async toggleGyro() {
-      if (this._gyroOn) { this._stopGyro(); return false; }
+      if (this._gyroBusy) return !!this._gyroOn;   // 프로브 중 연타 방지
+      if (this._gyroOn) {
+        this._stopGyro();
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 끔");
+        return false;
+      }
       if (!this.isGyroSupported()) {
         if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 기기는 자이로 센서를 지원하지 않습니다");
         return false;
@@ -1129,19 +1139,45 @@
         }
       } catch (e) {/* Android는 requestPermission 없음 → 무시 */}
       this._startGyro();
+      // 실제 센서 데이터가 오는지 최대 1.2초 동안 확인. 안 오면 센서 없는 기기 → 정직하게 알린다.
+      this._gyroBusy = true;
+      let live = false;
+      try { live = await this._probeGyro(1200); } finally { this._gyroBusy = false; }
+      if (!live) {
+        this._stopGyro();
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 기기는 자이로 센서가 없습니다 — 드래그로 둘러보세요");
+        return false;
+      }
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 켜짐 — 기기를 돌려 둘러보세요");
       return true;
+    },
+
+    /** deviceorientation 이벤트가 실제로 도착하는지 ms 동안 폴링. 도착=true. */
+    _probeGyro(ms) {
+      return new Promise((resolve) => {
+        const t0 = Date.now();
+        const tick = () => {
+          if (this._gyroLive) return resolve(true);
+          if (!this._gyroHandler) return resolve(false);   // 그 사이 꺼졌으면 중단
+          if (Date.now() - t0 >= ms) return resolve(false);
+          setTimeout(tick, 80);
+        };
+        tick();
+      });
     },
 
     _startGyro() {
       if (this._gyroHandler) this._stopGyro();
+      this._gyroLive = false;    // 실제 센서 이벤트 수신 플래그(프로브용)
       this.S.autoRotate = false; // 자이로 중엔 자동회전 끔(충돌 방지)
       this._gyroBase = null;     // 첫 측정값을 기준으로 상대 이동
       this._gyroHandler = (e) => {
-        if (!this.open || this.S.dragging) return;
         // alpha=나침반(yaw), beta=앞뒤기울임(pitch). 가로/세로 회전 보정은 화면방향 고려.
         const alpha = (e.alpha == null) ? null : e.alpha;
         const beta  = (e.beta  == null) ? null : e.beta;
-        if (alpha == null && beta == null) return;
+        if (alpha == null && beta == null) return;   // 값 없는 껍데기 이벤트 = 센서 없음
+        this._gyroLive = true;                       // 유효 데이터 도착 → 프로브 통과
+        if (!this.open || this.S.dragging) return;
         if (!this._gyroBase) {
           this._gyroBase = { alpha: alpha || 0, beta: beta || 0, lon: this.S.lon, lat: this.S.lat };
           return;
@@ -1158,7 +1194,7 @@
       };
       window.addEventListener("deviceorientation", this._gyroHandler, true);
       this._gyroOn = true;
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 켜짐 — 폰을 돌려 둘러보세요");
+      // 켜짐 안내는 toggleGyro() 가 센서 실동작을 확인한 뒤 1회만 낸다(거짓 "켜짐" 방지).
     },
 
     _stopGyro() {
@@ -1168,6 +1204,7 @@
       }
       this._gyroOn = false;
       this._gyroBase = null;
+      this._gyroLive = false;
     },
 
     onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; this._downX = x; this._downY = y; this._moved = false; },
@@ -2244,13 +2281,8 @@
     _applyIso() {
       const vp = this.viewport, tr = this.transform;
       this._syncIsoButtons();
-      // ISO 방향 표시 토스트
-      try {
-        if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
-        else if (!State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("평면 뷰로 복귀");
-      } catch (e) {}
+      // [토스트 스팸 제거] ISO 시점/평면 복귀는 화면 자체가 즉시 바뀌어 결과가 보인다.
+      // 버튼 반복 클릭(4방향 회전)마다 토스트가 쌓여 검은 박스 스택의 주범이었다 → 제거.
       const size = this._contentSize();
       if (tr) {
         tr.style.transition = "transform 1s cubic-bezier(.16,1,.3,1)";
@@ -2275,11 +2307,15 @@
      *  부모 #map-transform 의 scale(zoom) 을 핀마다 역스케일(1/zoom) 로 상쇄 →
      *  핀은 항상 "화면상 일정 크기"로 자연 해상도 렌더(업스케일 없음 → 또렷).
      *  줌아웃(zoom<1) 일 땐 살짝 확대해 항상 잘 보이게. ISO 에선 +세움/가독 확대. */
+    /** [마스터] 핀 기본 크기 배율 — "포인트는 지금보다 2배 정도만 크게".
+     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유하므로 여기 한 곳만 바꾸면
+     *  핀 바늘 SVG·번호 텍스트·라벨이 모두 같은 비율로 커진다(숫자만 작게 남는 문제 없음). */
+    PIN_SCALE: 2,
     pinScreenScale() {
       const zoom = State.zoom || 1;
       let f = (zoom < 1) ? (1 + (1 - zoom) * 0.65) : 1;  // 화면상 핀 크기 계수
       f = Math.max(0.85, Math.min(1.7, f));
-      return f / zoom;                                    // 부모 zoom 상쇄(+줌아웃 확대)
+      return (f * this.PIN_SCALE) / zoom;                 // 부모 zoom 상쇄(+줌아웃 확대)
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
@@ -5461,9 +5497,7 @@
       if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
       if (typeof Zones !== "undefined" && Zones.render) Zones.render();
       this._renderZonePager();
-      try {
-        Prompt && Prompt.toast && Prompt.toast("구역 페이지: " + (z.label || "구역") + " — 이 안에서 상세 등록·수정. ‘전체’ 탭으로 복귀");
-      } catch (e) {}
+      // [토스트 스팸 제거·마스터 지시] 구역 선택 결과는 페이저 탭 활성 + 도면 필터로 이미 화면에 보인다.
     },
 
     /** 전체 도면 복귀 — 모든 핀/구역 표시 */
@@ -5624,11 +5658,8 @@
         if (State.placing) this._togglePlacing();
         const next = State.checkboard ? "designer" : "checkboard";
         App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
-        Prompt && Prompt.toast && Prompt.toast(
-          next === "checkboard"
-            ? "체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다"
-            : "편집모드로 복귀"
-        );
+        // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
+        if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
         if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
       };
       const cbBtn = UI.$("btn-checkboard-toggle");
@@ -5642,7 +5673,8 @@
         const applyStart = () => {
           const n = this._setCheckboardStart(State.pdfPage || 1, cbStart.value);
           cbStart.value = String(n);
-          Prompt && Prompt.toast && Prompt.toast("이 구역 시작 번호: " + n);
+          // [토스트 스팸 제거] change+blur 두 이벤트에 물려 있어 한 번 입력에 2회 발화했다.
+          // 적용된 값은 입력창에 그대로 보인다 → 토스트 불필요.
         };
         cbStart.addEventListener("change", applyStart);
         cbStart.addEventListener("blur", applyStart);
@@ -6282,9 +6314,7 @@
         const b = UI.$("tb-pin-edit");
         if (b) b.classList.toggle("active", State.editMode);
         document.body.classList.toggle("pin-edit-mode", State.editMode);
-        Prompt && Prompt.toast && Prompt.toast(State.editMode
-          ? "포인트 수정 모드 ON — 핀을 클릭해 수정/이동/삭제하세요"
-          : "포인트 수정 모드 OFF — 핀 클릭 시 360 보기");
+        // [토스트 스팸 제거] 버튼 active 상태 + body.pin-edit-mode 스타일로 결과가 이미 보인다.
       });
       bind("tb-rotate-cw", () => this._rotatePdf(90));
       bind("tb-rotate-ccw",() => this._rotatePdf(-90));
@@ -7188,7 +7218,7 @@
       const badge = UI.$("sync-badge"), txt = UI.$("sync-text");
       if (badge) badge.classList.add("syncing");
       if (txt) txt.textContent = "올리는 중…";
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 중…");
+      // [토스트 스팸 제거] sync-badge 가 이미 "올리는 중…" 을 표시한다. 완료/실패 토스트는 아래 유지.
       let uploaded = 0;
       try {
         const r = await SyncQueue.flush();
@@ -7377,8 +7407,8 @@
       UI.renderPinList();
       UI.renderPinsOnMap();
       MapCtrl.focusZoneIso(bbox);
-      if (typeof Prompt !== "undefined" && Prompt.toast)
-        Prompt.toast(zone ? ("'" + (zone.label || "구역") + "' 확대 — 다시 누르면 360°") : "ISO 확대 — 다시 누르면 360°", 2200);
+      // [토스트 스팸 제거] 핀 탭마다(2-tap 1단계) 발화해 가장 많이 쌓이던 토스트.
+      // 확대 애니메이션 자체가 결과를 보여준다.
     },
 
     /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):
@@ -8907,7 +8937,7 @@
     /** Firebase 팝업 로그인 실행 + 사용자 피드백(토스트/게이트 에러) */
     async _doFirebaseLogin() {
       try {
-        Prompt && Prompt.toast && Prompt.toast("Google 로그인 창을 여는 중…", 1600);
+        // [토스트 스팸 제거] 팝업 창이 실제로 뜨는 것이 곧 피드백이다(성공/실패 토스트는 아래 유지).
         await this.loginWithFirebase();
         const who = (this.user && (this.user.name || this.user.email)) || "";
         Prompt && Prompt.toast && Prompt.toast("로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
@@ -9454,7 +9484,7 @@
         if (!sw) return;
         PinPrefs.set(sw.getAttribute("data-pincolor"));
         this._renderPinColor();
-        Prompt && Prompt.toast && Prompt.toast("핀 색상 변경됨");
+        // [토스트 스팸 제거] 색상 스와치 선택 결과가 핀에 즉시 반영돼 눈에 보인다.
       });
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
@@ -10006,7 +10036,7 @@
         btn.classList.toggle("on", newVal);
         btn.setAttribute("aria-pressed", newVal);
         btn.setAttribute("aria-label", newVal ? "켜짐, 클릭해서 끄기" : "꺼짐, 클릭해서 켜기");
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + key + " = " + (newVal ? "ON" : "OFF"));
+        // [토스트 스팸 제거] 스위치 .on 상태 + aria-pressed 로 결과가 이미 드러난다.
       } catch (e) { alert("설정 실패"); }
       finally { btn.disabled = false; }
     },
@@ -11447,6 +11477,10 @@
       const inp = $("prompt-modal-input");
       if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this._submit(); } if (e.key === "Escape") this._close(null); });
     },
+    /** [스팸 방지] 동시에 화면에 떠 있을 수 있는 토스트 최대 개수.
+     *  이 캡이 없으면 버튼 연타·연쇄 액션 시 토스트가 세로로 무한정 쌓여
+     *  360 뷰어 컨트롤바를 가리는 "검은 박스 스택"이 된다(마스터 스크린샷 실측). */
+    TOAST_MAX: 2,
     /** 가벼운 토스트 알림 (화면 하단 중앙, 자동 소멸) */
     toast(msg, ms) {
       let host = document.getElementById("wm-toast-host");
@@ -11456,12 +11490,31 @@
         host.className = "wm-toast-host";
         document.body.appendChild(host);
       }
+      const life = ms || 2200;
+      const kill = (el) => {
+        if (el._wmT) { clearTimeout(el._wmT); el._wmT = null; }
+        if (el._wmT2) { clearTimeout(el._wmT2); el._wmT2 = null; }
+        el.remove();
+      };
+      const arm = (el, dur) => {
+        if (el._wmT) clearTimeout(el._wmT);
+        el._wmT = setTimeout(() => {
+          el.classList.remove("on");
+          el._wmT2 = setTimeout(() => el.remove(), 280);
+        }, dur);
+      };
+      // ① 같은 메시지가 이미 떠 있으면 새로 쌓지 말고 수명만 연장(중복 스택 차단)
+      const dup = Array.prototype.filter.call(host.children, (n) => n.dataset && n.dataset.wmMsg === String(msg))[0];
+      if (dup) { arm(dup, life); return; }
+      // ② 캡 초과분은 가장 오래된 것부터 즉시 제거 — 어떤 호출부가 남아 있어도 무한 스택 불가
+      while (host.children.length >= this.TOAST_MAX) kill(host.firstElementChild);
       const t = document.createElement("div");
       t.className = "wm-toast";
       t.textContent = msg;
+      t.dataset.wmMsg = String(msg);
       host.appendChild(t);
       requestAnimationFrame(() => t.classList.add("on"));
-      setTimeout(() => { t.classList.remove("on"); setTimeout(() => t.remove(), 280); }, ms || 2200);
+      arm(t, life);
     },
     /** opts: { title, sub, placeholder, second } → Promise<string|{value,second}|null> */
     ask(opts) {
