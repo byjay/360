@@ -19,6 +19,7 @@
   --green:     #2f9e6f;   /* 차분한 그린 */
   --red:       #c4462f;   /* 차분한 레드 */
   --blue:      #2f6db5;   /* 차분한 블루 */
+  --checkboard-color: #2f6db5; /* 체크보드 모드 핀 전용 색(블루) — 체크보드 모드 강조색과 통일 */
   --panel:     #faf7f0;   /* 패널 표면 */
   --panel-2:   #f2ece0;   /* 패널 대체 표면 */
   --font-mono: 'JetBrains Mono', 'Share Tech Mono', 'Courier New', monospace;  /* 기술 수치/좌표 전용 */
@@ -2402,6 +2403,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .zone-item-shape svg { width: 13px; height: 13px; }
 .zone-box-label {
   position: absolute; top: -1px; left: -1px;
+  transform-origin: 0 0; /* 역스케일(줌 상쇄) 시 좌상단 고정 앵커 — 위치 안 밀림 */
   background: var(--zc, #f59e0b); color: #efe9dc; font-size: 11px; font-weight: 800;
   padding: 2px 8px; border-radius: 4px 0 6px 0; white-space: nowrap;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis;
@@ -4330,6 +4332,11 @@ button { font-family: var(--font-ui); }
 /* 체크보드 모드일 때 상단 모드 표시 강조(파랑) */
 body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }
 
+/* [체크보드 핀 색상구분] 체크보드 모드로 찍은 핀은 일반 핀(초록=사진없음/빨강=사진있음)과
+   시각적으로 구분되도록 블루 계열로 표시(색상은 JS 11_UI.js renderPinsOnMap의 SVG 그라디언트에서 적용,
+   여기 클래스는 부가 강조용). */
+.pin-marker.checkboard .pin-marker-issue{ background:var(--checkboard-color,#2f6db5); }
+
 /* ════════════════════════════════════════════
    설정 패널 — 핀 기본 색상 선택 (기본 그린)
 ════════════════════════════════════════════ */
@@ -4360,8 +4367,11 @@ body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }
   background:rgba(20,28,38,.86); backdrop-filter:blur(10px);
   box-shadow:0 6px 22px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.08);
   scrollbar-width:thin;
+  /* [마스터] 상단 항상고정 → 활성 구역 근처 팝업 + 자동소멸 */
+  opacity:0; pointer-events:none; transition:opacity .32s ease;
 }
 .zone-pager.hidden{ display:none; }
+.zone-pager.pager-visible{ opacity:1; pointer-events:auto; }
 .zone-pager::-webkit-scrollbar{ height:5px; }
 .zone-pager::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.25); border-radius:3px; }
 .zpager-tab{

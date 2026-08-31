@@ -256,6 +256,7 @@
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
+        if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
         // ── [마스터 요청] 체크보드 핀은 저장된 실제 번호(pin.label = 시작번호+순번)를
         //   표시한다. 일반 핀은 페이지 내 순번(pageIdx)을 표시. ──
@@ -270,10 +271,12 @@
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
         const _pc = (typeof PinPrefs !== "undefined") ? PinPrefs.color() : { head:'#10b981', head2:'#047857', needle:'#064e3b', text:'#065f46' };
-        const headFill  = hasContent ? _pc.head   : '#ef4444';
-        const headFill2 = hasContent ? _pc.head2  : '#b91c1c';
-        const needleTip = hasContent ? _pc.needle : '#7f1d1d';
-        const txtFill   = hasContent ? _pc.text   : '#991b1b';
+        // ── [체크보드 핀 색상구분] 체크보드 모드 핀은 콘텐츠 유무와 무관하게 --checkboard-color(블루) 계열로 통일 ──
+        const _cb = { head:'#2f6db5', head2:'#1e4a7a', needle:'#123356', text:'#1e4a7a' };
+        const headFill  = pin.checkboard ? _cb.head   : (hasContent ? _pc.head   : '#ef4444');
+        const headFill2 = pin.checkboard ? _cb.head2  : (hasContent ? _pc.head2  : '#b91c1c');
+        const needleTip = pin.checkboard ? _cb.needle : (hasContent ? _pc.needle : '#7f1d1d');
+        const txtFill   = pin.checkboard ? _cb.text   : (hasContent ? _pc.text   : '#991b1b');
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">

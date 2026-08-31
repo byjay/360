@@ -2177,6 +2177,8 @@
       //   도면(map-transform)이 rotateX/rotateZ 로 눕는 만큼, 핀 마커에
       //   역회전(rotateZ -각 → rotateX -54deg)을 걸어 화면 기준 수직으로 세운다.
       this._applyPinBillboard();
+      // [마스터] 구역 라벨도 핀처럼 부모 zoom 을 상쇄 → 확대해도 흐려지지 않고 크리스프
+      try { if (typeof Zones !== "undefined" && Zones.updateLabelScale) Zones.updateLabelScale(); } catch (e) {}
       this._updateZoomLabel();
       // ── 벡터 PDF 화질 보존: 줌이 오르면 그 배율로 PDF 를 다시 래스터화 ──
       // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
@@ -2798,6 +2800,7 @@
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
+        if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
         // ── [마스터 요청] 체크보드 핀은 저장된 실제 번호(pin.label = 시작번호+순번)를
         //   표시한다. 일반 핀은 페이지 내 순번(pageIdx)을 표시. ──
@@ -2812,10 +2815,12 @@
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
         const _pc = (typeof PinPrefs !== "undefined") ? PinPrefs.color() : { head:'#10b981', head2:'#047857', needle:'#064e3b', text:'#065f46' };
-        const headFill  = hasContent ? _pc.head   : '#ef4444';
-        const headFill2 = hasContent ? _pc.head2  : '#b91c1c';
-        const needleTip = hasContent ? _pc.needle : '#7f1d1d';
-        const txtFill   = hasContent ? _pc.text   : '#991b1b';
+        // ── [체크보드 핀 색상구분] 체크보드 모드 핀은 콘텐츠 유무와 무관하게 --checkboard-color(블루) 계열로 통일 ──
+        const _cb = { head:'#2f6db5', head2:'#1e4a7a', needle:'#123356', text:'#1e4a7a' };
+        const headFill  = pin.checkboard ? _cb.head   : (hasContent ? _pc.head   : '#ef4444');
+        const headFill2 = pin.checkboard ? _cb.head2  : (hasContent ? _pc.head2  : '#b91c1c');
+        const needleTip = pin.checkboard ? _cb.needle : (hasContent ? _pc.needle : '#7f1d1d');
+        const txtFill   = pin.checkboard ? _cb.text   : (hasContent ? _pc.text   : '#991b1b');
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -4497,6 +4502,20 @@
       // 구역 페이저(전체+구역 탭) 갱신
       try { if (typeof App !== "undefined" && App._renderZonePager) App._renderZonePager(); } catch (e) {}
       if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
+      this.updateLabelScale();
+    },
+
+    /** [마스터] 확대해도 흐려지지 않게: 부모 #map-transform 의 scale(zoom) 을
+     *  라벨마다 역스케일(1/zoom) 로 상쇄 → 라벨은 항상 "화면상 일정 크기"로
+     *  자연 해상도 렌더(업스케일 없음 → 크리스프). 핀 마커의 pinScreenScale()과 동일 원리. */
+    updateLabelScale() {
+      const layer = document.getElementById("zones-layer");
+      if (!layer) return;
+      const zoom = (typeof State !== "undefined" && State.zoom) || 1;
+      const inv = (1 / zoom).toFixed(3);
+      layer.querySelectorAll(".zone-box-label").forEach(el => {
+        el.style.transform = `scale(${inv})`;
+      });
     },
 
     /* ── 사이드바 목록 ── */
@@ -5486,6 +5505,48 @@
           else this.enterZoneView(zid);
         });
       });
+      // [마스터] 상단 항상고정 대신 활성 구역 근처에 팝업 + 자동소멸(2.8초)
+      this._positionZonePager(bar, cur);
+      this._showZonePagerThenFade(bar);
+    },
+
+    /** 구역 페이저를 활성 구역 도형(zone-shape) 바로 아래에 배치. 없으면 상단 중앙 기본값 */
+    _positionZonePager(bar, activeZoneId) {
+      const area = UI.$("map-area");
+      if (!area) return;
+      const shape = activeZoneId ? document.querySelector('.zone-shape[data-zone="' + activeZoneId + '"]') : null;
+      if (!shape) {
+        // 활성 구역 없음(전체 도면) — 기본 상단 중앙
+        bar.style.top = "10px"; bar.style.left = "50%"; bar.style.right = ""; bar.style.transform = "translateX(-50%)";
+        return;
+      }
+      const areaRect = area.getBoundingClientRect();
+      const sRect = shape.getBoundingClientRect();
+      let top = (sRect.bottom - areaRect.top) + 8;
+      let left = (sRect.left + sRect.width / 2) - areaRect.left;
+      // 화면 하단을 벗어나면 구역 위쪽에 배치
+      const barH = bar.offsetHeight || 40;
+      if (top + barH > areaRect.height - 8) top = Math.max(8, (sRect.top - areaRect.top) - barH - 8);
+      // 좌우 클램프(대략 절반 너비 확보)
+      const halfW = (bar.offsetWidth || 200) / 2;
+      left = Math.min(Math.max(left, halfW + 8), areaRect.width - halfW - 8);
+      bar.style.top = top + "px"; bar.style.left = left + "px"; bar.style.right = ""; bar.style.transform = "translateX(-50%)";
+    },
+
+    /** 페이저를 잠깐 보여준 뒤 자동 fade-out. 호버 중엔 타이머 정지, 벗어나면 재시작 */
+    _showZonePagerThenFade(bar) {
+      bar.classList.add("pager-visible");
+      const clearTimer = () => { if (this._zonePagerTimer) { clearTimeout(this._zonePagerTimer); this._zonePagerTimer = null; } };
+      const startTimer = () => {
+        clearTimer();
+        this._zonePagerTimer = setTimeout(() => bar.classList.remove("pager-visible"), 2800);
+      };
+      if (!bar._pagerHoverBound) {
+        bar._pagerHoverBound = true;
+        bar.addEventListener("mouseenter", clearTimer);
+        bar.addEventListener("mouseleave", startTimer);
+      }
+      startTimer();
     },
 
     /* ── Sidebar ── */
