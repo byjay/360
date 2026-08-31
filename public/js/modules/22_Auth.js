@@ -1,3 +1,7 @@
+  // [마스터 2026-08-31] 디자이너 기능은 로그인 없이 바로 진입, 관리자만 구글 로그인 필요.
+  //   마스터가 "다시 로그인 필수로" 지시하면 이 값을 false 로 바꾸면 즉시 원복(로그인 게이트 필수).
+  const AUTO_DESIGNER_ENTRY = true;
+
   const Auth = {
     idToken: null,
     user: null,           // { email, name, picture, role }
@@ -5,6 +9,7 @@
     superAdmin: "designssir@gmail.com",
     _pendingDesigner: null,
     _gsiInited: false,
+    _suppressDemoBadge: false,
 
     get clientId() {
       const id = (typeof window !== "undefined" && window.WM_GOOGLE_CLIENT_ID) || "";
@@ -79,10 +84,12 @@
       this._loadServerConfig();
       // 복원된 토큰으로 권한 재확인
       if (this.idToken) this.refresh();
-      // [마스터 2026-06-22] 🔒 로그인 필수 + 첫 화면 = 로그인창. 미인증이면 "즉시"(지연 0)
-      //   로그인 게이트(닫기 없음)를 띄운다 → 허브가 먼저 깜빡이지 않음. (데모 자동진입 제거)
+      // 저장된 로그인 정보가 전혀 없을 때만:
+      //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(데모 배지 숨김)
+      //  · AUTO_DESIGNER_ENTRY=false → [마스터 2026-06-22] 로그인 필수, 즉시 로그인 게이트
       else if (!this._hasLocalToken()) {
-        this._openGate();
+        if (AUTO_DESIGNER_ENTRY) this.demoLogin("designer", { silent: true });
+        else this._openGate();
       }
     },
 
@@ -106,10 +113,10 @@
     /** Firebase 팝업 로그인 실행 + 사용자 피드백(토스트/게이트 에러) */
     async _doFirebaseLogin() {
       try {
-        Prompt && Prompt.toast && Prompt.toast("🔑 Google 로그인 창을 여는 중…", 1600);
+        Prompt && Prompt.toast && Prompt.toast("Google 로그인 창을 여는 중…", 1600);
         await this.loginWithFirebase();
         const who = (this.user && (this.user.name || this.user.email)) || "";
-        Prompt && Prompt.toast && Prompt.toast("✅ 로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
+        Prompt && Prompt.toast && Prompt.toast("로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
       } catch (e) {
         const msg = (e && e.message) ? e.message : String(e);
         Prompt && Prompt.toast && Prompt.toast("로그인 실패: " + msg + " — Firebase 콘솔에서 Google 공급업체와 승인된 도메인을 확인하세요.", 4200);
@@ -118,7 +125,7 @@
 
     _initGsi() {
       if (this._gsiInited) return;
-      // ★ Firebase가 연결돼 있으면 GIS(클라이언트 ID) 없이도 Google 로그인 가능
+      // Firebase가 연결돼 있으면 GIS(클라이언트 ID) 없이도 Google 로그인 가능
       if (this.firebaseEnabled) {
         const hint = document.querySelector(".auth-hint");
         if (hint) hint.textContent = "Google 계정으로 로그인 (Firebase 연결됨)";
@@ -163,7 +170,7 @@
       return !!(window.FIREBASE_ENABLED && window.SeaFirebase);
     },
 
-    /** ★ Firebase Google 로그인 → 앱 Auth 연결 (마스터: ID만 넣으면 바로 로그인)
+    /** Firebase Google 로그인 → 앱 Auth 연결 (마스터: ID만 넣으면 바로 로그인)
      *  1) Firebase 팝업으로 Google 로그인
      *  2) Firebase ID 토큰을 받아 this.idToken 에 저장
      *  3) refresh() 로 서버에 권한 확인 → 앱 전체 로그인 상태 반영
@@ -233,7 +240,7 @@
     },
 
     /** 서버에 권한 확인 → UI 갱신
-     *  ★ 오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
+     *  오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
      *    네트워크 실패(오프라인)이면서 토큰이 있으면 캐시된 권한을 복원.
      *    → 비행기·현장 등 오프라인에서도 디자이너/슈퍼 권한이 유지됨. */
     async refresh() {
@@ -262,7 +269,7 @@
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
-        this._saveAuthCache(data);   // ★ 성공 시 권한 스냅샷 저장
+        this._saveAuthCache(data);   // 성공 시 권한 스냅샷 저장
       } else if (!netFail) {
         // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
         this.user = null; this.role = "viewer"; this.idToken = null;
@@ -446,11 +453,11 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
         if (okEl) {
-          okEl.textContent = "✅ 사용 신청이 접수되었습니다. 관리자(" + (this.user && this.user.email ? "" : "") + "admin) 승인 후 설계자 기능을 사용할 수 있습니다.";
+          okEl.textContent = "사용 신청이 접수되었습니다. 관리자(" + (this.user && this.user.email ? "" : "") + "admin) 승인 후 설계자 기능을 사용할 수 있습니다.";
           okEl.classList.remove("hidden");
         }
         if (this.user) this.user.request_status = "pending";
-        Prompt && Prompt.toast && Prompt.toast("📩 사용 신청이 관리자에게 전달되었습니다.", 2800);
+        Prompt && Prompt.toast && Prompt.toast("사용 신청이 관리자에게 전달되었습니다.", 2800);
       } catch (e) {
         if (errEl) { errEl.textContent = "신청 실패: " + (e && e.message ? e.message : "네트워크 오류"); errEl.classList.remove("hidden"); }
       } finally {
@@ -466,8 +473,10 @@
     },
 
     /** 데모 진입 — 구글 로그인 없이 바로 권한 부여(서버가 demo 토큰 인식).
-     *  role: 'designer' | 'viewer' */
-    async demoLogin(role) {
+     *  role: 'designer' | 'viewer'
+     *  opts.silent: true 면 데모 안내 배지를 띄우지 않음(AUTO_DESIGNER_ENTRY 자동입장 전용) */
+    async demoLogin(role, opts) {
+      this._suppressDemoBadge = !!(opts && opts.silent);
       this.idToken = role === "super" ? "demo-super" : (role === "designer" ? "demo-designer" : "demo-viewer");
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
       await this.refresh();  // 서버가 demo 토큰을 검증해 role/user 세팅
@@ -484,6 +493,12 @@
 
     /** 데모 모드 안내 배지(허브 상단) */
     _showDemoBadge() {
+      if (this._suppressDemoBadge) {
+        // AUTO_DESIGNER_ENTRY 자동입장 — 로그인 없이 그냥 디자이너로 보이게(배지 없음)
+        const ex = document.getElementById("demo-mode-badge");
+        if (ex) ex.remove();
+        return;
+      }
       if (!this.user || !this.user.email || this.user.email.indexOf("demo.") !== 0) {
         // 데모가 아니면 배지 제거
         const ex = document.getElementById("demo-mode-badge");
@@ -510,8 +525,9 @@
         }
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
+      this._suppressDemoBadge = false;  // 다음 수동 데모 로그인 시 배지 정상 표시되도록 초기화
       try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
-      this._clearAuthCache();   // ★ 오프라인 권한 캐시도 함께 정리
+      this._clearAuthCache();   // 오프라인 권한 캐시도 함께 정리
       this._applyUi();
       this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
@@ -522,7 +538,7 @@
   };
 
   /* ══════════════════════════════════════════
-     SETTINGS — 설정 패널 (A안: 접속=뷰어, ⚙️ 설정 → 로그인 → 편집)
+     SETTINGS — 설정 패널 (A안: 접속=뷰어, 설정 → 로그인 → 편집)
   ══════════════════════════════════════════ */
   /* ══════════════════════════════════════════
      PinPrefs — 핀 색상 환경설정 (기본=그린, 설정에서 변경)

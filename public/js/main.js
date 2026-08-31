@@ -64,7 +64,7 @@
     pinEditUnlocked: null,  // '수정' 버튼으로 이동/편집 잠금 해제된 핀 id (이 id만 드래그 이동 가능)
     autoSaveDepId: null,    // 자동 저장된 배포본(작업본) id — 도면 업로드 즉시 생성
     autoSaving: false,      // 자동 저장 진행 중 플래그
-    depVersion: 0,          // ★[멀티유저 충돌방지] 현재 로드된 배포본의 서버 version(낙관적 잠금 기준값)
+    depVersion: 0,          // [멀티유저 충돌방지] 현재 로드된 배포본의 서버 version(낙관적 잠금 기준값)
     activePin:   null,
     zoom:        1,
     pan:         { x: 0, y: 0 },
@@ -338,7 +338,7 @@
       // 1순위: createImageBitmap — 디코딩과 동시에 다운스케일하여 메모리 폭증/탭 크래시 방지.
       //  (THETA 등 5376×2688↑ 초고해상도 JPEG를 원본 그대로 디코딩하면 메모리 한계로 크래시)
       if (typeof createImageBitmap === "function") {
-        // ⚠️ THETA 등 초고해상도 JPEG(6720×3360 등)를 createImageBitmap(file) 으로
+        // THETA 등 초고해상도 JPEG(6720×3360 등)를 createImageBitmap(file) 으로
         //    "원본 그대로" 디코딩하면 메모리 한계로 탭이 크래시(=업로드 hang)된다.
         //    따라서 절대 풀해상도 probe 를 하지 않고, 처음부터 resizeWidth 만 지정해
         //    비율을 유지한 채 축소 디코딩한다. (360° 도면은 가로가 장변인 2:1 파노라마)
@@ -566,7 +566,7 @@
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 2);   // ★ v2: drafts 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 2);   // v2: drafts 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
@@ -676,7 +676,7 @@
         // [무신호 손실 차단] IDB·localStorage 모두 실패(저장공간 부족/차단) →
         //   기존엔 opId 를 반환해 배지엔 떴지만 영영 전송 못 하는 '유령 op' 였다.
         //   이제 사용자에게 명시 신호 + null 반환 → 호출부가 pendingOpId 를 세팅하지 않도록.
-        try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("⚠️ 오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
+        try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
         this._emit();
         return null;
       }
@@ -787,13 +787,13 @@
         if (typeof App !== "undefined" && App._flushDirtyDrafts) {
           try { await App._flushDirtyDrafts(); } catch (e) {}
         }
-        // [오프라인 작업지시서 ❽] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
+        // [오프라인 작업지시서 ] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
         if (typeof App !== "undefined" && App._flushOpLogs) {
           try { await App._flushOpLogs(); } catch (e) {}
         }
         // 재연동 토스트(대기 항목이 실제로 있었을 때만)
         if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("☁️ 온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
+          Prompt.toast("온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
         }
       } finally { this._reconnecting = false; this._emit(); }
     }
@@ -871,7 +871,7 @@
       }
 
       const img = new Image();
-      // 🔴 [핵심 버그 수정] crossOrigin 은 "외부 http(s) 출처" 일 때만 설정.
+      // [핵심 버그 수정] crossOrigin 은 "외부 http(s) 출처" 일 때만 설정.
       //   data:/blob:/same-origin 에 crossOrigin="anonymous" 를 붙이면 일부 모바일
       //   브라우저가 WebGL 텍스처 보안정책으로 onerror 처리 → "이미지를 불러올 수 없습니다".
       if (/^https?:\/\//i.test(src) && !src.startsWith(location.origin)) {
@@ -1033,6 +1033,23 @@
     /* ── 컨트롤 ── */
     setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); this._invalidate(); },
     resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; this.S.roll = 0; this._invalidate(); },
+    /** [FARO Markers] 특정 마커(lon/lat)로 시점을 부드럽게 이동(최단 회전 경로) */
+    lookAtSpot(lon, lat) {
+      const startLon = this.S.lon, startLat = this.S.lat;
+      const dLon = ((lon - (startLon % 360)) + 540) % 360 - 180;
+      const tLat = Math.max(-85, Math.min(85, lat || 0));
+      const t0 = performance.now(), dur = 500;
+      if (this._spotRaf) cancelAnimationFrame(this._spotRaf);
+      const step = (now) => {
+        const k = Math.min(1, (now - t0) / dur);
+        const e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        this.S.lon = startLon + dLon * e;
+        this.S.lat = startLat + (tLat - startLat) * e;
+        this._invalidate();
+        if (k < 1) this._spotRaf = requestAnimationFrame(step);
+      };
+      this._spotRaf = requestAnimationFrame(step);
+    },
     /** [마스터: 수평 보정] 천정 기울기 보정 — roll 을 deg 만큼 가감(한계 ±20°). */
     adjustRoll(deg) { this.S.roll = Math.max(-20, Math.min(20, (this.S.roll || 0) + deg)); this._invalidate();
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("수평 보정 " + (this.S.roll > 0 ? "+" : "") + this.S.roll.toFixed(1) + "°"); },
@@ -1056,7 +1073,7 @@
           if (isFinite(roll) && Math.abs(roll) > 0.05 && Math.abs(roll) <= 20) {
             this.S.roll = -roll;   // 카메라 roll 의 역 → 수평 복원
             this._invalidate();
-            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자동 수평 보정 적용 (" + roll.toFixed(1) + "°) — 하단 ↺/↻로 미세조정");
+            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자동 수평 보정 적용 (" + roll.toFixed(1) + "°) — 하단 ↺/↻로 미세조정");
           }
         }
       } catch (e) { /* 파싱 실패 시 무시(수동 보정 사용) */ }
@@ -1141,7 +1158,7 @@
       };
       window.addEventListener("deviceorientation", this._gyroHandler, true);
       this._gyroOn = true;
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자이로 켜짐 — 폰을 돌려 둘러보세요");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 켜짐 — 폰을 돌려 둘러보세요");
     },
 
     _stopGyro() {
@@ -1183,11 +1200,11 @@
     _spotTexture(spot, idx) {
       const c = document.createElement("canvas"); c.width = c.height = 128;
       const g = c.getContext("2d");
-      const col = spot.kind === "nav" ? "#3a97dd" : spot.kind === "equip" ? "#e0b14a" : "#e0503e"; // 이동/장비/결함
+      const col = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd", nav: "#3a97dd" }[spot.kind] || "#e0503e"; // 결함/장비/안전/메모/이동
       g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = .92; g.fill(); g.globalAlpha = 1;
       g.lineWidth = 6; g.strokeStyle = "#fff"; g.stroke();
       g.fillStyle = "#fff"; g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-      g.fillText(spot.kind === "nav" ? "➤" : String(idx + 1), 64, 70);
+      g.fillText(spot.kind === "nav" ? "" : String(idx + 1), 64, 70);
       const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
     },
     renderSpots(spots) {
@@ -1319,7 +1336,13 @@
           stage.style.transformOrigin = "0 0";
           stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-view.x).toFixed(2) + "%, " + (-view.y).toFixed(2) + "%)";
         } else {
-          stage.style.transform = "";   // 구역 밖이면 전체 도면
+          // [마스터] 구역이 없어도 현재 핀 주변을 확대 — 전체 도면을 작게 보여주지 말고 항상 "크게"
+          const r = 18;                                      // 핀 중심 ±18% (≈36% 영역)
+          const vx = Math.max(0, Math.min(100 - r * 2, pin.x - r));
+          const vy = Math.max(0, Math.min(100 - r * 2, pin.y - r));
+          const s = 100 / (r * 2);
+          stage.style.transformOrigin = "0 0";
+          stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-vx).toFixed(2) + "%, " + (-vy).toFixed(2) + "%)";
         }
       }
 
@@ -1954,7 +1977,7 @@
         this._measure.line = line;
         const dist = a.distanceTo(b);
         const lab = this._el("fls-measure-label");
-        if (lab) { lab.textContent = "📏 " + dist.toFixed(3) + " m"; lab.classList.remove("hidden"); }
+        if (lab) { lab.textContent = "" + dist.toFixed(3) + " m"; lab.classList.remove("hidden"); }
       }
     },
 
@@ -2170,9 +2193,9 @@
       // ISO 방향 표시 토스트
       try {
         if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("🧊 ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
+          Prompt.toast("ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
         else if (!State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("🗺️ 평면 뷰로 복귀");
+          Prompt.toast("평면 뷰로 복귀");
       } catch (e) {}
       const size = this._contentSize();
       if (tr) {
@@ -2491,7 +2514,7 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     },
 
-    /** ★ [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
+    /** [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
     togglePinList(force) {
       const wrap = this.$("section-pin-list");
       const toggle = this.$("pin-list-toggle");
@@ -2637,7 +2660,9 @@
       const pinNode = (p) => {
         const n = document.createElement("button");
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
-        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>';
+        const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
+        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + noteIco;
+        if (p.note) n.title = "" + p.note;
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
@@ -2653,7 +2678,9 @@
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
-        if (isCur) {
+        // [버그수정] State(도면/영역/핀)는 전역이라, 도면이 다르거나 없는 구역을 펼치면
+        //   직전 구역의 도면·핀이 잔존 표시된다 → 이 구역의 도면이 '실제로 로드된 도면'일 때만 하위 표시.
+        if (isCur && deck.deployment_id && deck.deployment_id === State.currentDeploymentId) {
           const kids = document.createElement("div");
           kids.className = "tree-children";
           const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
@@ -2810,7 +2837,7 @@
               if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
               UI.renderPinList();
               if (typeof Zones !== "undefined") Zones.render();
-              Prompt.toast("📍 '" + pin.label + "' 위치 이동됨 · 자동저장");
+              Prompt.toast("'" + pin.label + "' 위치 이동됨 · 자동저장");
               App._autoSave();
             }
           };
@@ -2819,7 +2846,7 @@
             if (State.isoView) { Prompt.toast("ISO 3D 뷰에서는 위치 이동이 불가합니다. 평면 뷰로 전환하세요."); return; }
             // ── 요청사항 #6: '수정' 버튼으로 잠금 해제한 핀만 드래그 이동 가능 ──
             if (State.pinEditUnlocked !== pin.id) {
-              // 잠긴 상태 → 클릭으로만 동작(보기). 이동하려면 ✏ 수정 버튼을 눌러야 함.
+              // 잠긴 상태 → 클릭으로만 동작(보기). 이동하려면 수정 버튼을 눌러야 함.
               return;
             }
             startX = ev.touches ? ev.touches[0].clientX : ev.clientX;
@@ -2869,7 +2896,7 @@
                 // ── #6: 이동 잠금 해제 후 드래그 안내 ──
                 State.pinEditUnlocked = pin.id;
                 marker.classList.add("edit-unlocked");
-                Prompt.toast("🔓 '" + pin.label + "' 이동 잠금 해제 — 핀을 드래그하세요");
+                Prompt.toast("'" + pin.label + "' 이동 잠금 해제 — 핀을 드래그하세요");
               }
               else if (act === "edit") {
                 // ── #6: 수정 버튼 → 편집 폼 + 이동 잠금 해제(사진추가/위치이동 가능) ──
@@ -3067,7 +3094,7 @@
         if (!r.ok) { if (err) { err.textContent = j.error || "설정 실패"; err.classList.remove("hidden"); } return; }
         p.subdomain = j.subdomain || null;
         this._renderSubdomainStatus(j.subdomain, j.url);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(j.subdomain ? ("✅ 전용 도메인 설정: " + (j.url || j.subdomain)) : "도메인 해제됨");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(j.subdomain ? ("전용 도메인 설정: " + (j.url || j.subdomain)) : "도메인 해제됨");
         // 카드 목록도 갱신
         this.refreshIfVisible && this.refreshIfVisible();
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
@@ -3165,7 +3192,7 @@
           { method: "POST", headers: Auth.headers() });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const label = action === "approve" ? "승인" : "거절";
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + label + " 처리됨");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + label + " 처리됨");
         await this.loadAccessReqs();
         if (action === "approve") await this.loadMembers();
       } catch (e) { alert("처리 실패: " + (e && e.message ? e.message : "오류")); }
@@ -3214,7 +3241,7 @@
         p.my_request = "pending";
         this.closeAccessReq();
         const label = r.status === 409 ? "이미 멤버입니다." : "접근 신청이 접수되었습니다. 관리자 승인을 기다려 주세요.";
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + label, 3000);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + label, 3000);
         // 카드 상태 갱신
         this.render();
       } catch (e) {
@@ -3240,8 +3267,8 @@
         await this.loadMembers();
         if (typeof Prompt !== "undefined" && Prompt.toast) {
           const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
-          if (j.created) Prompt.toast("✅ " + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
-          else Prompt.toast("✅ " + email + " 배정(" + roleLabel + ")");
+          if (j.created) Prompt.toast("" + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
+          else Prompt.toast("" + email + " 배정(" + roleLabel + ")");
         }
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
     },
@@ -3270,7 +3297,7 @@
           this.list = (await OfflineLoad.projects()).filter(Boolean);
           this._offline = true;
           if (typeof Prompt !== "undefined" && Prompt.toast && this.list.length)
-            Prompt.toast("📴 오프라인 — 다운로드한 프로젝트 " + this.list.length + "개 표시");
+            Prompt.toast("오프라인 — 다운로드한 프로젝트 " + this.list.length + "개 표시");
         } catch (e) { this.list = []; }
         this._loaded = true; this.render(); return;
       }
@@ -3425,7 +3452,7 @@
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
 
-        // [오프라인 작업지시서 ❷] 오프라인 다운로드 버튼
+        // [오프라인 작업지시서 ] 오프라인 다운로드 버튼
         const dl = card.querySelector('[data-act="dl"]');
         if (dl) dl.addEventListener("click", async (e) => {
           e.stopPropagation();
@@ -3437,9 +3464,9 @@
               dl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
             });
             const v = await OfflineBundle.verify(p.id);
-            if (v.ok) Prompt.toast("✅ 오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
-            else Prompt.toast("⚠️ 일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
-          } catch (err) { Prompt.toast("❌ " + (err && err.message ? err.message : "다운로드 실패")); }
+            if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
+            else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
+          } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
           finally { dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig; dl.setAttribute("title", "오프라인 다운로드"); }
         });
 
@@ -3475,7 +3502,7 @@
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
-      // ★ 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
+      // 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
       //   isDesigner가 false인 채로 카드를 누르면 뷰어로 진입 → "PDF 업로드가 안 된다"는
       //   회귀 느낌을 준다. 토큰이 있으면 권한 재확인을 한 번 await 한 뒤 모드를 결정한다.
       if (!Auth.isDesigner && Auth.idToken) {
@@ -3520,7 +3547,7 @@
         const r = await fetch("/api/projects/" + p.id + "/" + (willPublish ? "publish" : "unpublish"), { method: "POST", headers: Auth.headers() });
         if (!r.ok) throw new Error("HTTP " + r.status);
         p.published = willPublish;
-        Prompt && Prompt.toast && Prompt.toast(willPublish ? "🚀 '" + p.name + "' 배포 완료 — 뷰어가 열람할 수 있습니다." : "🔒 '" + p.name + "' 배포 취소 — 뷰어에게 비공개.", 2800);
+        Prompt && Prompt.toast && Prompt.toast(willPublish ? "'" + p.name + "' 배포 완료 — 뷰어가 열람할 수 있습니다." : "'" + p.name + "' 배포 취소 — 뷰어에게 비공개.", 2800);
         await this.load();
       } catch (e) {
         Prompt && Prompt.toast && Prompt.toast("배포 처리 실패: " + (e && e.message ? e.message : "네트워크 오류"), 3200);
@@ -3663,7 +3690,17 @@
       const listEl = document.getElementById("pnp-list");
       const emptyEl = document.getElementById("pnp-empty");
       if (!listEl) return;
-      let items = this._list;
+      // [마스터] 필터 탭에 상태별 카운트 표시 (전체/미해결/진행중/완료 N)
+      const counts = { all: this._list.length, open: 0, progress: 0, done: 0 };
+      this._list.forEach((n) => { const s = n.status || "open"; if (counts[s] != null) counts[s]++; });
+      document.querySelectorAll("#pnp-filter .pnp-fbtn").forEach((b) => {
+        const base = { all: "전체", open: "미해결", progress: "진행중", done: "완료" }[b.dataset.f] || b.dataset.f;
+        const c = counts[b.dataset.f] || 0;
+        b.textContent = c > 0 ? base + " " + c : base;
+      });
+      // [마스터] 최신순 정렬(최근 이슈가 위로)
+      const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
+      let items = this._list.slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
       if (this._filter !== "all") items = items.filter((n) => n.status === this._filter);
       if (items.length === 0) {
         listEl.innerHTML = "";
@@ -3680,7 +3717,7 @@
       listEl.innerHTML = items.map((n) => {
         const st = n.status || "open";
         const stLabel = this.STATUS[st] || st;
-        const assignee = n.assignee ? `<span class="pnp-assignee-tag">👤 ${UI.escapeHtml(n.assignee)}</span>` : "";
+        const assignee = n.assignee ? `<span class="pnp-assignee-tag">${UI.escapeHtml(n.assignee)}</span>` : "";
         const editable = canEdit(n);
         const stBtns = editable ? `
           <div class="pnp-status-actions">
@@ -4104,7 +4141,7 @@
       //   영역 도구를 켤 때 평면으로 강제 전환. (핀 선택 자동 ISO 의 부작용 차단)
       if (State.isoView && typeof MapCtrl !== "undefined" && MapCtrl.exitIso) {
         MapCtrl.exitIso();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🗺️ 평면 뷰로 전환 — 영역을 그린 뒤 ISO 로 돌아가세요");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("평면 뷰로 전환 — 영역을 그린 뒤 ISO 로 돌아가세요");
       }
       // 같은 도형 다시 누르면 끄기
       if (State.drawingZone && this._shape === shape) { this._cancelDraw(); return; }
@@ -4227,7 +4264,9 @@
         label = prompt("영역 이름", defLabel) || "";
         if (!label) { this._cancelDraw(); return; }
       }
-      const color = ZONE_COLORS[State.zones.length % ZONE_COLORS.length];
+      // [버그수정] 라벨은 현재 페이지 기준인데 색상이 전체 기준이라 페이지별 색이 불일치 → 페이지 기준으로 통일
+      const _pgZones = State.zones.filter(z => (z.page||1)===(State.pdfPage||1)).length;
+      const color = ZONE_COLORS[_pgZones % ZONE_COLORS.length];
       const bb = this._bbox(geom);
       const zone = Object.assign({
         id: this._newId(), page: State.pdfPage || 1,
@@ -4239,7 +4278,7 @@
       this._cancelDraw();
       this.render();
       this.renderList();
-      // [오프라인 작업지시서 ❻] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         OpLog.recordCurrent("zone", "upsert", zone.id, zone).then(() => persistLocalDeployment()).catch(() => {});
       }
@@ -4444,9 +4483,13 @@
       this.highlight(id);
     },
     _flyToZone(zone) {
-      const cx = zone.x + zone.w / 2, cy = zone.y + zone.h / 2;
+      const bb = this._bbox(zone);   // rect/circle/poly 모두 {x,y,w,h}
+      // [버그수정] ISO 활성 시 평면 flyTo 는 rotateX(54°) 때문에 화면 아래로 빗나간다(줌이 영역 밑으로 이동).
+      //   ISO 좌표를 정확히 역산하는 focusZoneIso 로 분기.
+      if (State.isoView && MapCtrl.focusZoneIso) { MapCtrl.focusZoneIso(bb); return; }
+      const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       // 영역 크기에 맞춰 줌 (작은 영역일수록 더 확대)
-      const span = Math.max(zone.w, zone.h);
+      const span = Math.max(bb.w, bb.h);
       const z = Math.max(1, Math.min(4.5, 60 / Math.max(span, 8)));
       if (MapCtrl.flyTo) MapCtrl.flyTo(cx, cy, z, 650);
     },
@@ -4460,7 +4503,7 @@
       if (this._active === id) this._active = null;
       this.render();
       this.renderList();
-      // [오프라인 작업지시서 ❻] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }
@@ -4586,7 +4629,7 @@
         ${z.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(z.note)}</div></div>` : ""}
 
         <div class="insp-actions">
-          <button class="insp-btn primary" data-act="zoom">📄 구역 페이지 열기</button>
+          <button class="insp-btn primary" data-act="zoom">구역 페이지 열기</button>
           <button class="insp-btn ghost" data-act="fly">화면 이동</button>
           ${designer ? `<button class="insp-btn ghost" data-act="rename">이름 변경</button>
           <button class="insp-btn danger" data-act="del">구역 삭제</button>` : ""}
@@ -4648,7 +4691,7 @@
         </div>
 
         ${p.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(p.note)}</div></div>` : ""}
-        ${docs.length ? `<div class="insp-section"><div class="insp-section-h">첨부 자료 <span class="insp-count">${docs.length}</span></div><div class="insp-docs">${docs.map(d => `<span class="insp-doc">📎 ${UI.escapeHtml(d.name || "자료")}</span>`).join("")}</div></div>` : ""}
+        ${docs.length ? `<div class="insp-section"><div class="insp-section-h">첨부 자료 <span class="insp-count">${docs.length}</span></div><div class="insp-docs">${docs.map(d => `<span class="insp-doc">${UI.escapeHtml(d.name || "자료")}</span>`).join("")}</div></div>` : ""}
 
         <div class="insp-actions">
           ${has360 ? `<button class="insp-btn primary" data-act="open">360° 열기</button>` : ""}
@@ -4775,7 +4818,7 @@
      현재 PDF 페이지의 핀을 표로 표시. 행 클릭 → 페이지 이동 + 핀 포커스 + 360° 자동 실행.
   ══════════════════════════════════════════ */
   const PinGrid = {
-    collapsed: true,        // ★ 기본 접힘 — 버튼(리스트 열기)을 눌러야만 표시(마스터 요청)
+    collapsed: true,        // 기본 접힘 — 버튼(리스트 열기)을 눌러야만 표시(마스터 요청)
     query: "",
 
     /** 모바일/태블릿(터치) 또는 좁은 화면이면 true → 화면 가리지 않는 바텀시트(드롭다운) 모드.
@@ -4842,7 +4885,7 @@
         if (reopen) reopen.classList.add("hidden");
         return;
       }
-      // ★ 데스크톱·모바일 모두: 기본 접힘. 사용자가 '포인트 리스트 열기' 버튼을 눌러야만 펼쳐짐.
+      // 데스크톱·모바일 모두: 기본 접힘. 사용자가 '포인트 리스트 열기' 버튼을 눌러야만 펼쳐짐.
       panel.classList.remove("hidden");
       // 접힌 상태면 패널은 숨고 리오픈 탭만
       if (this.collapsed) {
@@ -4909,7 +4952,7 @@
       // focusPin(pin, true): 페이지 전환 → flyTo → openPano(360°) 까지 일괄 처리
       App.focusPin(pin, !!hasContent);
       if (!hasContent && typeof Prompt !== "undefined" && Prompt.toast) {
-        Prompt.toast("ℹ️ 이 포인트에는 등록된 360° 미디어가 없습니다.");
+        Prompt.toast("ℹ 이 포인트에는 등록된 360° 미디어가 없습니다.");
       }
     },
 
@@ -4933,7 +4976,7 @@
       a.download = "seastar_points_P" + (State.pdfPage || 1) + ".csv";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      if (typeof Prompt !== "undefined") Prompt.toast("📋 CSV 내보내기 완료");
+      if (typeof Prompt !== "undefined") Prompt.toast("CSV 내보내기 완료");
     }
   };
 
@@ -4986,7 +5029,7 @@
       SyncQueue.onChange(() => this._updateSyncBadge());
       SyncQueue.init();
       this._updateSyncBadge();
-      // ★ 온라인 복귀 시 로컬에 보관된(dirty) 도면 draft 를 서버로 자동 업로드
+      // 온라인 복귀 시 로컬에 보관된(dirty) 도면 draft 를 서버로 자동 업로드
       //   + [마스터 요청] 미연결 도면↔구역 연결도 함께 재시도(중지/새로고침 복구)
       window.addEventListener("online", () => {
         setTimeout(() => this._flushDirtyDrafts(), 600);
@@ -5089,7 +5132,12 @@
       } catch (e) {}
 
       if (isDesigner) {
-        Projects.load();                            // 프로젝트 목록 로드
+        // [버그수정] 프로젝트 진입 시 구역(deck) 목록을 '즉시' 로드.
+        //   기존엔 list만 로드하고 loadDecks 를 안 불러 → 처음 들어가면 구역이 안 보이고,
+        //   새 구역을 만들어야(createDeck→loadDecks) 그제서야 전체가 보이는 회귀였다.
+        Promise.resolve(Projects.load()).then(() => {
+          if (Projects.currentProject && Projects.loadDecks) return Projects.loadDecks();
+        }).catch(() => {});
         // [마스터 요청] 디자이너 진입 시 미연결 도면↔구역 연결 재시도(복구)
         setTimeout(() => this._flushDeckLinkQueue(), 1200);
       }
@@ -5106,7 +5154,7 @@
         : "배포된 포인트를 불러오는 중...";
 
       // ── A안 topbar 버튼 ──
-      // ⚙️ 설정 버튼은 항상 노출(로그인·편집 전환 진입점)
+      // 설정 버튼은 항상 노출(로그인·편집 전환 진입점)
       const btnSettings = UI.$("btn-settings");
       if (btnSettings) btnSettings.classList.remove("hidden");
       // "뷰어로" 버튼은 편집(designer) 모드에서만
@@ -5303,7 +5351,7 @@
       if (typeof Zones !== "undefined" && Zones.render) Zones.render();
       this._renderZonePager();
       try {
-        Prompt && Prompt.toast && Prompt.toast("🔍 구역 페이지: " + (z.label || "구역") + " — 이 안에서 상세 등록·수정. ‘전체’ 탭으로 복귀");
+        Prompt && Prompt.toast && Prompt.toast("구역 페이지: " + (z.label || "구역") + " — 이 안에서 상세 등록·수정. ‘전체’ 탭으로 복귀");
       } catch (e) {}
     },
 
@@ -5350,7 +5398,7 @@
 
     /* ── Sidebar ── */
     _bindSidebar() {
-      // ★ [항목3] 포인트 목록 아이콘 토글 + 닫기 버튼
+      // [항목3] 포인트 목록 아이콘 토글 + 닫기 버튼
       const plToggle = document.getElementById("pin-list-toggle");
       const plClose  = document.getElementById("pin-list-close");
       if (plToggle) plToggle.addEventListener("click", () => UI.togglePinList());
@@ -5363,7 +5411,7 @@
           const decks = Projects.decks || [];
           // 1) 구역이 0개 → 업로드 차단 + 구역 생성 유도
           if (decks.length === 0) {
-            Prompt.toast && Prompt.toast("⛔ 먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다. 구역을 생성하세요.");
+            Prompt.toast && Prompt.toast("먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다. 구역을 생성하세요.");
             const db = document.getElementById("decks-block");
             if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
             // 구역 생성 다이얼로그 바로 띄움
@@ -5378,7 +5426,7 @@
               Projects.currentDeck = Projects.decks[0];
               if (Projects._renderDecks) Projects._renderDecks();
             } else {
-              Prompt.toast && Prompt.toast("⚠️ 도면을 등록할 ‘구역’을 먼저 선택하세요.");
+              Prompt.toast && Prompt.toast("도면을 등록할 ‘구역’을 먼저 선택하세요.");
               const db = document.getElementById("decks-block");
               if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
               return;
@@ -5425,8 +5473,8 @@
         App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
         Prompt && Prompt.toast && Prompt.toast(
           next === "checkboard"
-            ? "🔢 체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다"
-            : "🎨 디자이너 모드로 복귀"
+            ? "체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다"
+            : "디자이너 모드로 복귀"
         );
         if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
       };
@@ -5441,7 +5489,7 @@
         const applyStart = () => {
           const n = this._setCheckboardStart(State.pdfPage || 1, cbStart.value);
           cbStart.value = String(n);
-          Prompt && Prompt.toast && Prompt.toast("🔢 이 구역 시작 번호: " + n);
+          Prompt && Prompt.toast && Prompt.toast("이 구역 시작 번호: " + n);
         };
         cbStart.addEventListener("change", applyStart);
         cbStart.addEventListener("blur", applyStart);
@@ -5471,7 +5519,7 @@
       const btnTheta = UI.$("btn-pin-theta");
       if (btnTheta) btnTheta.addEventListener("click", () => {
         if (Prompt && Prompt.toast)
-          Prompt.toast("🌐 RICOH THETA 360 — 삼성폰 갤러리에서 360 사진을 고르거나 촬영하세요");
+          Prompt.toast("RICOH THETA 360 — 삼성폰 갤러리에서 360 사진을 고르거나 촬영하세요");
         UI.$("input-pin-theta").click();
       });
       const inputTheta = UI.$("input-pin-theta");
@@ -5558,7 +5606,7 @@
         //   찍힌다(perspective 역산 부정확). 정확한 배치를 위해 배치 모드 진입 시 평면 보기로 전환.
         if (State.isoView && typeof MapCtrl !== "undefined" && MapCtrl._applyIso) {
           State.isoView = false; State.isoDir = 0; MapCtrl._applyIso();
-          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📐 정확한 핀 배치를 위해 평면 보기로 전환했습니다 (배치 후 ISO 다시 켜기 가능)");
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("정확한 핀 배치를 위해 평면 보기로 전환했습니다 (배치 후 ISO 다시 켜기 가능)");
         }
       }
       UI.$("btn-place").classList.toggle("active", State.placing);
@@ -5761,6 +5809,13 @@
       const closeSheet = () => document.body.classList.remove("sidebar-open");
       const toggleSheet = () => document.body.classList.toggle("sidebar-open");
 
+      // [마스터] 모바일 도구 드롭다운 토글 — 접이식으로 화면 30% 이내 유지
+      const stbT = $("stb-toggle");
+      if (stbT) stbT.addEventListener("click", () => {
+        const open = document.body.classList.toggle("tools-open");
+        stbT.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+
       const menu = $("mnav-menu");
       if (menu) menu.addEventListener("click", () => {
         toggleSheet();
@@ -5814,7 +5869,7 @@
       const fit = $("mnav-fit");
       if (fit) fit.addEventListener("click", () => { closeSheet(); MapCtrl.fit(); });
 
-      // ★ 상단 빠른 도구(데스크톱) — 모바일 nav 와 동일 액션 위임
+      // 상단 빠른 도구(데스크톱) — 모바일 nav 와 동일 액션 위임
       const tqMenu = $("tq-menu");
       if (tqMenu) tqMenu.addEventListener("click", () => {
         toggleSheet();
@@ -6075,7 +6130,7 @@
         if (b) b.classList.toggle("active", State.editMode);
         document.body.classList.toggle("pin-edit-mode", State.editMode);
         Prompt && Prompt.toast && Prompt.toast(State.editMode
-          ? "✏️ 포인트 수정 모드 ON — 핀을 클릭해 수정/이동/삭제하세요"
+          ? "포인트 수정 모드 ON — 핀을 클릭해 수정/이동/삭제하세요"
           : "포인트 수정 모드 OFF — 핀 클릭 시 360 보기");
       });
       bind("tb-rotate-cw", () => this._rotatePdf(90));
@@ -6129,7 +6184,7 @@
       State.pendingIs360 = false; // 검사 후 갱신
       const info = UI.$("pin-file-info");
       const sizeMB = (f.size / 1024 / 1024).toFixed(1);
-      info.textContent = (isVid ? "🎬 " : "🖼 ") + f.name + " (" + sizeMB + " MB)";
+      info.textContent = (isVid ? "" : "") + f.name + " (" + sizeMB + " MB)";
       info.classList.remove("hidden");
       UI.show("field-pin-imgname");
       const autoName = this._zoneImageName();
@@ -6140,9 +6195,9 @@
       if (!isVid && f.type.startsWith("image/")) {
         this._detect360(f, (is360, w, h) => {
           State.pendingIs360 = is360;
-          const badge = is360 ? "  🌐 360° 파노라마" : (viaTheta ? "  ⚠ 360 비율 아님(일반 사진)" : "");
+          const badge = is360 ? "  360° 파노라마" : (viaTheta ? "  360 비율 아님(일반 사진)" : "");
           if (badge) {
-            info.textContent = (is360 ? "🌐 " : "🖼 ") + f.name + " (" + sizeMB + " MB)" + badge;
+            info.textContent = (is360 ? "" : "") + f.name + " (" + sizeMB + " MB)" + badge;
           }
           if (is360 && !autoName) {
             // 360이면 이름 끝에 _360 힌트
@@ -6150,7 +6205,7 @@
             if (cur && !/_360$/i.test(cur)) UI.$("input-pin-imgname").value = cur + "_360";
           }
           if (is360 && Prompt && Prompt.toast)
-            Prompt.toast("🌐 360° 사진 감지(" + w + "×" + h + ") — 둘러보기 뷰어로 표시됩니다");
+            Prompt.toast("360° 사진 감지(" + w + "×" + h + ") — 둘러보기 뷰어로 표시됩니다");
         });
       }
 
@@ -6218,7 +6273,7 @@
       if (typeof PinGrid !== "undefined") PinGrid.render();
       this._updateSyncBadge && this._updateSyncBadge();
       this._autoSave && this._autoSave();
-      Prompt && Prompt.toast && Prompt.toast("📍 체크 포인트 #" + no + " 추가 · 자동저장");
+      Prompt && Prompt.toast && Prompt.toast("체크 포인트 #" + no + " 추가 · 자동저장");
     },
 
     _handlePlaceClick(e) {
@@ -6240,7 +6295,7 @@
       UI.$("crosshair-overlay").classList.add("hidden");
       UI.$("map-viewport").style.cursor = "grab";
 
-      // ⚠️ _resetPinForm이 pending-pin을 hidden 처리 + State.pending=null 로 만들므로
+      // _resetPinForm이 pending-pin을 hidden 처리 + State.pending=null 로 만들므로
       //    반드시 먼저 폼을 리셋한 뒤, 그 다음에 임시 핀을 표시/좌표 설정한다.
       State.editingPinId = null;
       this._resetPinForm(false);
@@ -6286,6 +6341,9 @@
       canvas.addEventListener("mousedown", e => PanoViewer.onPointerDown(e.clientX, e.clientY));
       window.addEventListener("mousemove", e => PanoViewer.onPointerMove(e.clientX, e.clientY));
       window.addEventListener("mouseup",   () => PanoViewer.onPointerUp());
+      // [FARO Markers] 마커 위 마우스오버 → 내용 툴팁
+      canvas.addEventListener("mousemove", e => this._panoHover(e.clientX, e.clientY));
+      canvas.addEventListener("mouseleave", () => this._hideSpotTip());
       canvas.addEventListener("wheel", e => PanoViewer.onWheel(e), { passive: false });
       // ═══ 360 뷰어 터치: 1손가락 회전 + 2손가락 핀치 줌(FOV) ═══
       let panoPinchDist = null;
@@ -6349,7 +6407,23 @@
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
       // [마스터: 구면 마커] 추가 모드 토글
-      UI.$("btn-pano-spot") && UI.$("btn-pano-spot").addEventListener("click", () => this.setSpotAddMode());
+      // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드
+      UI.$("btn-pano-spot") && UI.$("btn-pano-spot").addEventListener("click", () => {
+        const bar = UI.$("pano-spot-kinds");
+        if (!bar) { this.setSpotAddMode(); return; }
+        if (this._spotAdd) { this.setSpotAddMode(false); return; }   // 켜져 있으면 끄기
+        bar.classList.toggle("hidden");
+      });
+      document.querySelectorAll("#pano-spot-kinds .psk-chip").forEach((ch) => {
+        ch.addEventListener("click", () => {
+          this._spotKind = ch.dataset.kind || "defect";
+          document.querySelectorAll("#pano-spot-kinds .psk-chip").forEach((x) => x.classList.toggle("on", x === ch));
+          this.setSpotAddMode(true);
+        });
+      });
+      // [FARO Markers] 마커 목록(테이블) 패널 토글
+      UI.$("btn-pano-spotlist") && UI.$("btn-pano-spotlist").addEventListener("click", () => this.toggleSpotList());
+      UI.$("pano-spot-list-close") && UI.$("pano-spot-list-close").addEventListener("click", () => { const p = UI.$("pano-spot-list"); if (p) p.classList.add("hidden"); });
       // ISO 4-꼭지점 뷰 전환
       document.querySelectorAll("#pano-iso-views .pano-iso-btn").forEach((b) => {
         b.addEventListener("click", (e) => {
@@ -6452,12 +6526,12 @@
         e.preventDefault(); e.stopPropagation();
         setOver(false);
         if (State.mode !== "designer") {
-          if (typeof Prompt !== "undefined") Prompt.toast("ℹ️ 도면 업로드는 디자이너 모드에서만 가능합니다.");
+          if (typeof Prompt !== "undefined") Prompt.toast("ℹ 도면 업로드는 디자이너 모드에서만 가능합니다.");
           return;
         }
         const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
         if (!accept(f)) {
-          if (typeof Prompt !== "undefined") Prompt.toast("⚠️ PDF · PNG · JPG 파일만 업로드할 수 있습니다.");
+          if (typeof Prompt !== "undefined") Prompt.toast("PDF · PNG · JPG 파일만 업로드할 수 있습니다.");
           return;
         }
         this._loadDrawing(f);
@@ -6465,11 +6539,11 @@
     },
 
     async _loadDrawing(file) {
-      // ── 🔴 [마스터 규칙·권한] 뷰어는 도면을 등록할 수 없다(보기 전용) ──
+      // ── [마스터 규칙·권한] 뷰어는 도면을 등록할 수 없다(보기 전용) ──
       //  도면 등록의 모든 진입 경로(버튼/단축키/드래그앤드롭/mnav/시트)는 결국 이 함수로 모이므로,
       //  여기서 한 번에 권한을 강제한다. 설계자 권한 + 디자이너 모드일 때만 통과.
       if (State.mode !== "designer" || (typeof Auth !== "undefined" && !Auth.isDesigner)) {
-        Prompt && Prompt.toast && Prompt.toast("👁️ 뷰어는 도면을 등록할 수 없습니다. 설계자 모드에서만 가능합니다.");
+        Prompt && Prompt.toast && Prompt.toast("뷰어는 도면을 등록할 수 없습니다. 설계자 모드에서만 가능합니다.");
         return;
       }
       // ── [마스터 규칙] 구역(deck) 선행 등록 강제: 프로젝트에 구역이 없거나 미선택이면 도면 로드 차단 ──
@@ -6477,7 +6551,7 @@
       if (typeof Projects !== "undefined" && Projects.currentProject) {
         const decks = Projects.decks || [];
         if (decks.length === 0) {
-          Prompt && Prompt.toast && Prompt.toast("⛔ 먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다.");
+          Prompt && Prompt.toast && Prompt.toast("먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다.");
           const db = document.getElementById("decks-block");
           if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
           try { const created = await Projects.createDeck(); if (!created) return; } catch (e) { return; }
@@ -6485,7 +6559,7 @@
         if (!Projects.currentDeck) {
           if ((Projects.decks || []).length === 1) { Projects.currentDeck = Projects.decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
           else {
-            Prompt && Prompt.toast && Prompt.toast("⚠️ 도면을 등록할 ‘구역’을 먼저 선택하세요.");
+            Prompt && Prompt.toast && Prompt.toast("도면을 등록할 ‘구역’을 먼저 선택하세요.");
             const db = document.getElementById("decks-block");
             if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
             return;
@@ -6633,13 +6707,13 @@
       if (typeof PinGrid !== "undefined") PinGrid.render();
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 450);
       this._updateSyncBadge();
-      Prompt && Prompt.toast && Prompt.toast("📍 '" + label + "' 등록 · " + (navigator.onLine ? "백그라운드 업로드 중" : "오프라인 임시저장"));
-      UI.text && UI.text("pin-saved-msg", "📍 '" + label + "' 등록됨 · 업로드는 백그라운드로 진행됩니다");
+      Prompt && Prompt.toast && Prompt.toast("'" + label + "' 등록 · " + (navigator.onLine ? "백그라운드 업로드 중" : "오프라인 임시저장"));
+      UI.text && UI.text("pin-saved-msg", "'" + label + "' 등록됨 · 업로드는 백그라운드로 진행됩니다");
       UI.show && UI.show("section-next-point");
 
       // 3) 백그라운드 업로드 (await 하지 않음 → 화면 블로킹 없음)
       this._uploadPinImageBg(pin, file, imgName, docs);
-      // [오프라인 작업지시서 ❻] 즉시등록(instant) 핀도 오프라인이면 OpLog 에 기록 →
+      // [오프라인 작업지시서 ] 즉시등록(instant) 핀도 오프라인이면 OpLog 에 기록 →
       //   재연결 시 ops 엔드포인트로 멱등 replay (기존 instant 경로는 OpLog 누락이었음).
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         OpLog.recordCurrent("pin", "upsert", pin.id, pin)
@@ -6688,7 +6762,7 @@
         if (!pin.pendingOpId && !(pin.attachments || []).some(a => a.pendingOpId)) delete pin.pendingSync;
         // 로컬 미리보기 정리(서버 이미지로 대체됨) — 죽은 blob URL 이 서버에 남지 않도록 제거
         if (pin.imageId && pin.localPreview) { try { URL.revokeObjectURL(pin.localPreview); } catch (e) {} delete pin.localPreview; }
-        // 🔴 [핵심 버그 수정] 업로드 완료 후 imageId(또는 pendingOpId)를 서버에 반드시 영속화.
+        // [핵심 버그 수정] 업로드 완료 후 imageId(또는 pendingOpId)를 서버에 반드시 영속화.
         //   이전: _confirmPinInstant 에서 blob localPreview 만 저장되고, 업로드 성공 후 재저장이
         //         없어 서버에는 죽은 blob URL 만 남았다 → 재접속 시 "이미지를 불러올 수 없습니다".
         //   이제: 업로드 결과(imageId)를 담아 다시 _autoSave 로 서버에 반영한다.
@@ -6697,7 +6771,7 @@
         }
       } catch (e) {
         pin.uploading = false;
-        Prompt && Prompt.toast && Prompt.toast("⚠ '" + pin.label + "' 업로드 지연 — 동기화 대기에 보관됨");
+        Prompt && Prompt.toast && Prompt.toast("'" + pin.label + "' 업로드 지연 — 동기화 대기에 보관됨");
       }
       try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
       this._updateSyncBadge && this._updateSyncBadge();
@@ -6747,7 +6821,7 @@
       try {
         if (file && State.pendingIsVideo) {
           // 360° 영상: 테이블 용량 제한으로 클라우드 저장 불가 → 로컬 blob URL (현재 세션 미리보기)
-          status.textContent = "🎬 360° 영상 연결 중...";
+          status.textContent = "360° 영상 연결 중...";
           status.classList.remove("hidden", "error");
           const vidName = UI.val("input-pin-imgname").trim() || file.name.replace(/\.[^.]+$/, "");
           pin.videoUrl  = URL.createObjectURL(file);
@@ -6766,7 +6840,7 @@
           let uploaded = false;
           if (navigator.onLine) {
             try {
-              status.textContent = "☁ 클라우드 업로드 중... (" + (dataURL.length / 1024 / 1024).toFixed(1) + " MB)";
+              status.textContent = "클라우드 업로드 중... (" + (dataURL.length / 1024 / 1024).toFixed(1) + " MB)";
               const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
               pin.imageId = imageId;
               Cloud._cache[imageId] = dataURL; // 즉시 미리보기용 캐시
@@ -6775,7 +6849,7 @@
           }
           if (!uploaded) {
             // 오프라인/실패: 로컬에 즉시 저장하고 인터넷 복구 시 일괄 업로드
-            status.textContent = "📥 오프라인 — 휴대폰에 임시 저장 (인터넷 복구 시 자동 업로드)";
+            status.textContent = "오프라인 — 휴대폰에 임시 저장 (인터넷 복구 시 자동 업로드)";
             const opId = await SyncQueue.enqueue({
               kind: "image", name: imgName, image_data: dataURL, width, height
             });
@@ -6783,7 +6857,7 @@
               pin.pendingOpId = opId;     // 동기화 완료 시 imageId 로 치환
               pin.pendingSync = true;     // 미동기화 표시
               Cloud._cache["op:" + opId] = dataURL; // 미동기화 미리보기 캐시
-            } else { status.textContent = "⚠️ 저장공간 부족 — 사진을 임시저장하지 못했습니다"; }
+            } else { status.textContent = "저장공간 부족 — 사진을 임시저장하지 못했습니다"; }
           }
         } else if (url) {
           // URL 직접 입력 (이미지 또는 영상 자동 판별)
@@ -6800,7 +6874,7 @@
             let docOk = false, docId = null;
             if (navigator.onLine) {
               try {
-                status.textContent = `📎 첨부 업로드 중... (${i + 1}/${docs.length}) ${d.name}`;
+                status.textContent = `첨부 업로드 중... (${i + 1}/${docs.length}) ${d.name}`;
                 status.classList.remove("hidden", "error");
                 docId = await Cloud.uploadDoc(d.name, dataURL);
                 docOk = true;
@@ -6831,7 +6905,7 @@
           pin.has3D      = true;
         }
       } catch (e) {
-        status.textContent = "❌ 업로드 실패: " + e.message;
+        status.textContent = "업로드 실패: " + e.message;
         status.classList.add("error");
         status.classList.remove("hidden");
         btn.disabled = false;
@@ -6852,7 +6926,7 @@
       UI.renderPinList();
       UI.renderPinsOnMap(wasEditing ? null : pin.id); // 신규만 드롭 애니메이션
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 500);
-      // [오프라인 작업지시서 ❻] 오프라인이면 엔티티 op 기록 + 로컬 스냅샷(온라인은 _autoSave 경로 유지)
+      // [오프라인 작업지시서 ] 오프라인이면 엔티티 op 기록 + 로컬 스냅샷(온라인은 _autoSave 경로 유지)
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         try { await OpLog.recordCurrent("pin", "upsert", pin.id, pin); await persistLocalDeployment(); } catch (e) {}
       }
@@ -6861,19 +6935,19 @@
       // 편집 완료면 별도 안내만, 신규면 다음 포인트 연속 배치 안내
       if (wasEditing) {
         State.pinEditUnlocked = null; // 수정 완료 → 다시 잠금
-        Prompt.toast("✅ '" + label + "' 수정 완료 · 자동저장");
+        Prompt.toast("'" + label + "' 수정 완료 · 자동저장");
         return;
       }
-      let savedNote = (pin.pendingSync ? "📥 '" : "✅ '") + label + (pin.pendingSync ? "' 임시 저장 (오프라인)" : "' 저장 완료");
+      let savedNote = (pin.pendingSync ? "'" : "'") + label + (pin.pendingSync ? "' 임시 저장 (오프라인)" : "' 저장 완료");
       const tags = [];
-      if (pin.imageId)        tags.push("☁ 360° 그림");
-      else if (pin.pendingOpId) tags.push("📥 360° 그림(대기)");
-      else if (pin.isVideo && pin.videoUrl) tags.push("🎬 영상(로컬)");
-      else if (pin.isVideo)   tags.push("🎬 360° 영상");
-      else if (pin.imageUrl)  tags.push("🔗 URL");
-      if (pin.note)           tags.push("📝 노트");
-      if (pin.has3D)          tags.push("🧊 3D 클라우드");
-      if (pin.attachments && pin.attachments.length) tags.push("📎 첨부 " + pin.attachments.length);
+      if (pin.imageId)        tags.push("360° 그림");
+      else if (pin.pendingOpId) tags.push("360° 그림(대기)");
+      else if (pin.isVideo && pin.videoUrl) tags.push("영상(로컬)");
+      else if (pin.isVideo)   tags.push("360° 영상");
+      else if (pin.imageUrl)  tags.push("URL");
+      if (pin.note)           tags.push("노트");
+      if (pin.has3D)          tags.push("3D 클라우드");
+      if (pin.attachments && pin.attachments.length) tags.push("첨부 " + pin.attachments.length);
       if (tags.length) savedNote += " (" + tags.join(" · ") + ")";
       UI.text("pin-saved-msg", savedNote);
       UI.show("section-next-point");
@@ -6946,14 +7020,14 @@
     async syncNow() {
       if (this._syncingNow) return;
       if (!navigator.onLine) {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📴 오프라인입니다 — 인터넷 연결 후 다시 눌러주세요. (작업은 안전하게 보관 중)");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인입니다 — 인터넷 연결 후 다시 눌러주세요. (작업은 안전하게 보관 중)");
         return;
       }
       this._syncingNow = true;
       const badge = UI.$("sync-badge"), txt = UI.$("sync-text");
       if (badge) badge.classList.add("syncing");
       if (txt) txt.textContent = "올리는 중…";
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("☁️ 업로드 중…");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 중…");
       let uploaded = 0;
       try {
         const r = await SyncQueue.flush();
@@ -6961,9 +7035,9 @@
         if (r && typeof r.uploaded === "number") uploaded += r.uploaded;
         if (this._flushDirtyDrafts) { try { await this._flushDirtyDrafts(); } catch (e) {} }
         if (this._flushOpLogs) { try { await this._flushOpLogs(); } catch (e) {} }
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 업로드 완료 — 대기 작업 " + uploaded + "건 서버 반영");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 완료 — 대기 작업 " + uploaded + "건 서버 반영");
       } catch (e) {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("⚠️ 업로드 일부 실패 — 잠시 후 다시 시도하세요. (작업은 보관됨)");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 일부 실패 — 잠시 후 다시 시도하세요. (작업은 보관됨)");
       } finally {
         this._syncingNow = false;
         if (badge) badge.classList.remove("syncing");
@@ -6976,7 +7050,15 @@
       this._spotAdd = (on == null) ? !this._spotAdd : !!on;
       if (typeof PanoViewer !== "undefined" && PanoViewer.setSpotAddMode) PanoViewer.setSpotAddMode(this._spotAdd);
       const btn = UI.$("btn-pano-spot"); if (btn) btn.classList.toggle("on", this._spotAdd);
-      if (this._spotAdd && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📍 360 안에서 표시할 지점을 탭하세요 (결함·장비)");
+      const bar = UI.$("pano-spot-kinds");
+      if (!this._spotAdd) {   // 끌 때 칩바·선택 표시 정리
+        if (bar) bar.classList.add("hidden");
+        document.querySelectorAll("#pano-spot-kinds .psk-chip").forEach((x) => x.classList.remove("on"));
+      } else if (bar) bar.classList.add("hidden");   // 켜지면 칩바 닫고 추가 대기
+      if (this._spotAdd && typeof Prompt !== "undefined" && Prompt.toast) {
+        const kn = { defect: "결함", equip: "장비", safety: "안전", note: "메모" }[this._spotKind || "defect"] || "마커";
+        Prompt.toast("" + kn + " 마커 — 360 안에서 지점을 탭하세요");
+      }
       return this._spotAdd;
     },
     _onPanoTap(x, y) {
@@ -6992,32 +7074,116 @@
     },
     async _addSpotAt(pin, lon, lat) {
       if (!Array.isArray(pin.spots)) pin.spots = [];
-      let label = "";
+      const kind = this._spotKind || "defect";
+      const kn = { defect: "결함", equip: "장비", safety: "안전", note: "메모" }[kind] || "마커";
+      let label = "", note = "";
       if (typeof Prompt !== "undefined" && Prompt.ask) {
-        const r = await Prompt.ask({ title: "구면 마커 추가", sub: "이 지점에 표시할 내용 (예: 균열·밸브·재작업)", placeholder: "예: 용접부 균열" });
+        // [FARO Markers] 종류별 마커 + 이름/상세 노트
+        const r = await Prompt.ask({
+          title: kn + " 마커 추가",
+          sub: "이 지점의 이름과 상세 노트를 입력하세요",
+          placeholder: "이름 (예: 3번 밸브 · 용접부 균열)",
+          second: "상세 노트 (선택)"
+        });
         if (r == null) return;   // 취소
         label = String((r && r.value) || "").trim();
+        note  = String((r && r.second) || "").trim();
       }
-      const spot = { id: "sp-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), lon, lat, label, note: "", kind: "defect", ts: Date.now() };
+      const spot = { id: "sp-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), lon, lat, label, note, kind: kind, ts: Date.now() };
       pin.spots.push(spot);
       PanoViewer.renderSpots(pin.spots);
       this._saveSpots(pin);
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📍 마커 추가 — " + (label || "무제"));
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("노트 추가 — " + (label || "무제"));
     },
-    _openSpot(pin, id) {
+    async _openSpot(pin, id) {
       const s = (pin.spots || []).find((x) => x.id === id); if (!s) return;
-      const idx = (pin.spots || []).indexOf(s) + 1;
-      const del = window.confirm("📍 마커 #" + idx + (s.label ? (" — " + s.label) : "") + "\n\n[확인] = 삭제 / [취소] = 닫기");
-      if (del) {
+      if (typeof Prompt === "undefined" || !Prompt.ask) return;
+      // [마스터] 클릭 시 노트 보기/편집 — 이름·노트 모두 비우고 확인하면 삭제
+      const r = await Prompt.ask({
+        title: "360° 노트",
+        sub: "내용을 수정하세요 · 이름과 노트를 모두 비우고 확인하면 삭제됩니다",
+        placeholder: "이름",
+        value: s.label || "",
+        second: "상세 노트",
+        secondValue: s.note || "",
+        allowEmpty: true
+      });
+      if (r == null) return;
+      const label = String((r.value) || "").trim();
+      const note  = String((r.second) || "").trim();
+      if (!label && !note) {
         pin.spots = (pin.spots || []).filter((x) => x.id !== id);
         PanoViewer.renderSpots(pin.spots);
         this._saveSpots(pin);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 삭제됨");
+        if (Prompt.toast) Prompt.toast("노트 삭제됨");
+        return;
       }
+      s.label = label; s.note = note;
+      PanoViewer.renderSpots(pin.spots);
+      this._saveSpots(pin);
+      if (Prompt.toast) Prompt.toast("노트 저장됨");
     },
     _saveSpots(pin) {
       try { if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {}
       try { this._autoSave && this._autoSave(); } catch (e) {}
+      const p = UI.$("pano-spot-list"); if (p && !p.classList.contains("hidden")) this.renderSpotList();
+    },
+    /* ── [FARO Markers] 마커 위 마우스오버 → 내용 툴팁 ── */
+    _panoHover(x, y) {
+      if (typeof PanoViewer === "undefined" || !PanoViewer.open) return;
+      if (PanoViewer.S && PanoViewer.S.dragging) { this._hideSpotTip(); return; }
+      const pin = PanoViewer._currentPin;
+      const id = (pin && PanoViewer.hitSpotAt) ? PanoViewer.hitSpotAt(x, y) : null;
+      const canvas = UI.$("pano-canvas");
+      const s = id ? (pin.spots || []).find((sp) => sp.id === id) : null;
+      if (!s) { this._hideSpotTip(); if (canvas) canvas.style.cursor = ""; return; }
+      if (canvas) canvas.style.cursor = "pointer";
+      const tip = UI.$("pano-spot-tip"); if (!tip) return;
+      const KN = { defect: "결함", equip: "장비", safety: "안전", note: "메모" };
+      const COL = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd" };
+      const col = COL[s.kind] || "#e0503e";
+      tip.innerHTML = '<div class="pst-kind"><span class="psk-dot" style="background:' + col + '"></span>' +
+        UI.escapeHtml(s.label || (KN[s.kind] || "마커")) + '</div>' +
+        (s.note ? '<div class="pst-note">' + UI.escapeHtml(s.note) + '</div>' : '');
+      tip.style.left = "0px"; tip.style.top = "0px"; tip.classList.remove("hidden");
+      const tw = tip.offsetWidth, th = tip.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+      let lx = x + 14, ty = y + 14;
+      if (lx + tw > vw - 8) lx = x - tw - 14;
+      if (ty + th > vh - 8) ty = y - th - 14;
+      tip.style.left = lx + "px"; tip.style.top = ty + "px";
+    },
+    _hideSpotTip() { const t = UI.$("pano-spot-tip"); if (t) t.classList.add("hidden"); },
+    /* ── [FARO Markers] 마커 리스트(테이블) — 행 클릭 시 그 마커로 시점 이동 ── */
+    toggleSpotList() {
+      const p = UI.$("pano-spot-list"); if (!p) return;
+      if (p.classList.contains("hidden")) { this.renderSpotList(); p.classList.remove("hidden"); }
+      else p.classList.add("hidden");
+    },
+    renderSpotList() {
+      const body = UI.$("pano-spot-list-body"); if (!body) return;
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      const spots = (pin && pin.spots) || [];
+      if (!spots.length) {
+        body.innerHTML = '<div class="psl-empty">등록된 마커가 없습니다.<br>‘마커’ 버튼으로 360 안에 추가하세요.</div>';
+        return;
+      }
+      const KN = { defect: "결함", equip: "장비", safety: "안전", note: "메모" };
+      const COL = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd" };
+      const rows = spots.map((s, i) => {
+        const col = COL[s.kind] || "#e0503e";
+        return '<tr class="psl-row" data-id="' + s.id + '">' +
+          '<td><span class="psl-num" style="background:' + col + '">' + (i + 1) + '</span></td>' +
+          '<td>' + (KN[s.kind] || "마커") + '</td>' +
+          '<td>' + UI.escapeHtml(s.label || "-") + '</td>' +
+          '<td>' + UI.escapeHtml(s.note || "") + '</td></tr>';
+      }).join("");
+      body.innerHTML = '<table class="psl-table"><thead><tr><th>#</th><th>종류</th><th>이름</th><th>노트</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      body.querySelectorAll(".psl-row").forEach((r) => {
+        r.addEventListener("click", () => {
+          const s = spots.find((x) => x.id === r.dataset.id);
+          if (s && PanoViewer.lookAtSpot) PanoViewer.lookAtSpot(s.lon, s.lat);
+        });
+      });
     },
 
     setActivePin(id) {
@@ -7051,7 +7217,7 @@
       UI.renderPinsOnMap();
       MapCtrl.focusZoneIso(bbox);
       if (typeof Prompt !== "undefined" && Prompt.toast)
-        Prompt.toast(zone ? ("🧊 '" + (zone.label || "구역") + "' 확대 — 다시 누르면 360°") : "🧊 ISO 확대 — 다시 누르면 360°", 2200);
+        Prompt.toast(zone ? ("'" + (zone.label || "구역") + "' 확대 — 다시 누르면 360°") : "ISO 확대 — 다시 누르면 360°", 2200);
     },
 
     /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):
@@ -7100,8 +7266,8 @@
       if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
       UI.renderPinList();
       UI.renderPinsOnMap();
-      Prompt.toast("🗑️ '" + removed.label + "' 삭제됨");
-      // [오프라인 작업지시서 ❻] 오프라인이면 삭제 op 기록 + 로컬 스냅샷
+      Prompt.toast("'" + removed.label + "' 삭제됨");
+      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }
@@ -7173,7 +7339,7 @@
       const dlIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
       let html = `
         <div class="pano-info-title">
-          <span>📋 ${UI.escapeHtml(pin.label)}</span>
+          <span>${UI.escapeHtml(pin.label)}</span>
           <button class="pano-info-close" id="pano-info-close" title="닫기" aria-label="닫기">✕</button>
         </div>`;
       if (pin.note) html += `<div class="pano-note-text">${UI.escapeHtml(pin.note)}</div>`;
@@ -7268,7 +7434,7 @@
       // 노트/첨부만 있고 360° 미디어가 없는 정보 포인트 → 정보 패널만 표시
       if (!this.pinHasMedia(pin) && this.pinHasInfo(pin)) {
         const $ = id => document.getElementById(id);
-        $("pano-location-name").textContent = "📋 " + pin.label;
+        $("pano-location-name").textContent = "" + pin.label;
         $("pano-loading").classList.add("hidden");
         $("pano-error").classList.add("hidden");
         $("pano-canvas").classList.add("hidden");
@@ -7283,11 +7449,11 @@
       // 1) 로컬 영상 blob
       if (pin.videoUrl) { PanoViewer.loadVideo(pin.videoUrl, pin.label); return; }
       // 1.3) 즉시등록 로컬 미리보기(업로드 진행 중) — imageId 준비 전이라도 바로 표시
-      //   ⚠ blob: URL 은 이 세션에서 만든 것만 유효(재접속하면 죽음). 메모리 캐시(현 세션)를
+      //   blob: URL 은 이 세션에서 만든 것만 유효(재접속하면 죽음). 메모리 캐시(현 세션)를
       //      우선 사용하고, 죽은 blob 이면 명확히 안내한다.
       if (!pin.imageId && (pin.localPreview || (typeof Cloud !== "undefined" && (Cloud._cache["op-preview:" + pin.id] || Cloud._cache["local:" + pin.id])))) {
         const $ = id => document.getElementById(id);
-        // 🔴 [핵심 버그 수정] 현 세션 메모리 캐시(살아있는 dataURL)를 "유일한 신뢰원"으로 사용.
+        // [핵심 버그 수정] 현 세션 메모리 캐시(살아있는 dataURL)를 "유일한 신뢰원"으로 사용.
         //   pin.localPreview 는 blob: 인 경우 재접속하면 죽은 URL → 절대 fallback 으로 쓰지 않는다.
         //   (blob 이 아닌 dataURL localPreview 만 예외적으로 허용)
         const memSrc = (typeof Cloud !== "undefined" && (Cloud._cache["op-preview:" + pin.id] || Cloud._cache["local:" + pin.id])) || null;
@@ -7331,7 +7497,7 @@
         $("pano-overlay").classList.remove("hidden");
         PanoViewer.open = true;
         try {
-          // [오프라인 작업지시서 ❺] 오프라인 번들(IndexedDB) base64 우선 → 온라인 재시도
+          // [오프라인 작업지시서 ] 오프라인 번들(IndexedDB) base64 우선 → 온라인 재시도
           let dataURL = (typeof resolvePanoSource === "function") ? await resolvePanoSource(pin) : null;
           if (!dataURL) dataURL = await Cloud.fetchImage(pin.imageId);
           if (!dataURL) throw new Error("이 3D는 오프라인에 다운로드되지 않았습니다.");
@@ -7458,7 +7624,7 @@
         let j = null; try { j = await res.json(); } catch (e) {}
         if (j && j.current) {
           this._mergeConflict(j.current);
-          Prompt && Prompt.toast && Prompt.toast("🔄 다른 사용자의 변경을 병합했습니다 — 다시 저장합니다");
+          Prompt && Prompt.toast && Prompt.toast("다른 사용자의 변경을 병합했습니다 — 다시 저장합니다");
           res = await send(); // 병합된 State + 최신 version 으로 재시도
         }
       }
@@ -7472,7 +7638,7 @@
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
-        // 🔴 [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
+        // [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
         //   서버/배포본에 저장하면 재접속 시 죽은 blob 으로 "이미지를 불러올 수 없습니다".
         //   localPreview(blob) 와 일시 상태 플래그는 직렬화에서 제거한다.
         //   (실제 이미지는 imageId(클라우드) 또는 pendingOpId(동기화 대기)로만 보존)
@@ -7537,7 +7703,7 @@
         if (typeof Projects !== "undefined" && Projects.currentProject) {
           deck = await Projects.ensureDeck();
         }
-        // 2) ★ 도면 교체 지원: 구역에 기존 도면이 있으면 그 배포본을 덮어써서 교체(고아 방지),
+        // 2) 도면 교체 지원: 구역에 기존 도면이 있으면 그 배포본을 덮어써서 교체(고아 방지),
         //    없으면 새 배포본 생성. (구역당 도면 1개 유지 — 구역을 여러 개 만들면 도면 다수 등록)
         // [마스터: 자동저장 OFF] 도면 업로드해도 서버 즉시저장 안 함 → 로컬 보존 + dirty.
         //   실제 서버 생성/교체·구역연결은 '저장' 버튼(_saveNow)에서 수행.
@@ -7551,12 +7717,45 @@
         await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지)
         this._dirtyPages = true; this._markDirty();
         if (deck) { try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
-        Prompt.toast && Prompt.toast((isReplace ? "🔄 도면 교체됨" : "📄 도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요" + (deck ? " (구역: " + deck.name + ")" : ""));
+        Prompt.toast && Prompt.toast((isReplace ? "도면 교체됨" : "도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요" + (deck ? " (구역: " + deck.name + ")" : ""));
       } catch (e) { /* 비치명적 */ }
     },
 
     /** ── [마스터 요청] 도면↔구역 연결을 즉시 시도하고, 실패하면 재시도 큐에 넣어
      *  앱이 중지/새로고침돼도 다음 기회에 반드시 연결되도록 보장한다. ── */
+    /** [도면 연결 복구] 구역에 연결된 도면이 없을 때 — 도면 목록에서 골라 연결 */
+    async offerDeckDrawingLink(deck) {
+      if (!deck) return;
+      let deps = [];
+      try {
+        const r = await fetch("/tables/deployments", { headers: Auth.headers() });
+        const j = await r.json();
+        deps = (j && (j.data || j)) || [];
+        if (!Array.isArray(deps)) deps = [];
+      } catch (e) { deps = []; }
+      const modal = UI.$("deck-link-modal"), list = UI.$("deck-link-list"), sub = UI.$("deck-link-sub");
+      if (!modal || !list) return;
+      if (sub) sub.textContent = "구역 ‘" + (deck.name || "") + "’에 표시할 도면을 고르세요.";
+      if (!deps.length) {
+        list.innerHTML = '<div class="psl-empty">등록된 도면이 없습니다.<br>‘도면’ 도구로 먼저 업로드하세요.</div>';
+      } else {
+        list.innerHTML = deps.map((d) => '<button class="dl-item" data-id="' + d.id + '">' + UI.escapeHtml(d.file_name || d.title || d.id) + '</button>').join("");
+      }
+      modal.classList.remove("hidden");
+      const close = () => modal.classList.add("hidden");
+      const cancel = UI.$("deck-link-cancel"); if (cancel) cancel.onclick = close;
+      const bd = UI.$("deck-link-backdrop"); if (bd) bd.onclick = close;
+      list.querySelectorAll(".dl-item").forEach((b) => {
+        b.addEventListener("click", async () => {
+          close();
+          deck.deployment_id = b.dataset.id;
+          try { await this._linkDeckDeployment(deck.id, b.dataset.id, deck); } catch (e) {}
+          if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks();
+          try { await this.loadDeckDrawing(b.dataset.id); } catch (e) {}
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("도면 연결됨");
+        });
+      });
+    },
     async _linkDeckDeployment(deckId, depId, deckObj) {
       if (!deckId || !depId) return false;
       const body = {
@@ -7619,7 +7818,7 @@
         return await this._restoreDraftLocal();
       }
       try {
-        // [오프라인 작업지시서 ❹] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
+        // [오프라인 작업지시서 ] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
         let dep = null;
         if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
           dep = await OfflineLoad.deployment(deploymentId);
@@ -7656,7 +7855,7 @@
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
         imgEl.onload = _r0;
-        // ★[오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
+        // [오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
         //   로컬 draft(원본 dataURL)로 폴백하여 도면을 끊김없이 표시.
         imgEl.onerror = () => {
           if (/^\/api\/r2\/object\//.test(pages[0] || "")) {
@@ -7669,11 +7868,11 @@
 
         State.autoSaveDepId = deploymentId;       // 이후 자동저장은 이 배포본 갱신
         State.currentDeploymentId = deploymentId;
-        State.depVersion = (dep.version != null ? Number(dep.version) : 0); // ★[충돌방지] 로드 시점 버전 기록
+        State.depVersion = (dep.version != null ? Number(dep.version) : 0); // [충돌방지] 로드 시점 버전 기록
       } catch (e) { await this._restoreDraftLocal(); }   // 네트워크 오류 → 로컬 폴백
     },
 
-    /** ★ 로컬(IndexedDB) draft 로부터 도면+핀+구역 복원 — 서버 실패/오프라인/새로고침 대응 */
+    /** 로컬(IndexedDB) draft 로부터 도면+핀+구역 복원 — 서버 실패/오프라인/새로고침 대응 */
     async _restoreDraftLocal() {
       try {
         if (typeof SyncQueue === "undefined") return false;
@@ -7709,12 +7908,12 @@
           this._setSaveIndicator(navigator.onLine ? "saving" : "offline");
           if (navigator.onLine) setTimeout(() => this._flushDirtyDrafts(), 400);
         }
-        Prompt && Prompt.toast && Prompt.toast("💾 로컬에 보관된 도면을 복원했습니다" + (d.dirty ? " (서버 동기화 대기 중)" : ""));
+        Prompt && Prompt.toast && Prompt.toast("로컬에 보관된 도면을 복원했습니다" + (d.dirty ? " (서버 동기화 대기 중)" : ""));
         return true;
       } catch (e) { return false; }
     },
 
-    /** ★ 온라인 복귀 시 dirty draft 를 서버로 자동 업로드 */
+    /** 온라인 복귀 시 dirty draft 를 서버로 자동 업로드 */
     async _flushDirtyDrafts() {
       if (!navigator.onLine) return;
       if (typeof SyncQueue === "undefined") return;
@@ -7733,7 +7932,7 @@
           };
           let res;
           if (d.depId) {
-            // ★[멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
+            // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
             //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
             //   서버 핀/구역과 오프라인 작업분을 병합하여 양쪽 모두 보존.
             let baseVer = 0, srvPins = null, srvZones = null;
@@ -7767,7 +7966,7 @@
           await SyncQueue.saveDraft(key, d);
           if (key === this._draftKey() && d.depId) {
             State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId;
-            if (rec && rec.version != null) State.depVersion = Number(rec.version); // ★ 버전 동기화
+            if (rec && rec.version != null) State.depVersion = Number(rec.version); // 버전 동기화
             this._setSaveIndicator("saved");
           }
         } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
@@ -7782,7 +7981,7 @@
       return pid + "::" + did;
     },
 
-    /** ★ 도면 스냅샷+핀+구역을 로컬(IndexedDB)에 영속 저장 — 오프라인/서버실패에도 절대 소실 안 됨 */
+    /** 도면 스냅샷+핀+구역을 로컬(IndexedDB)에 영속 저장 — 오프라인/서버실패에도 절대 소실 안 됨 */
     async _saveDraftLocal(pages) {
       try {
         if (typeof SyncQueue === "undefined") return false;
@@ -7803,7 +8002,7 @@
       } catch (e) { return false; }
     },
 
-    /** ★ 기존 구역 도면을 새 도면으로 교체(같은 배포본 ID 덮어쓰기) — 고아 배포본 방지 */
+    /** 기존 구역 도면을 새 도면으로 교체(같은 배포본 ID 덮어쓰기) — 고아 배포본 방지 */
     async _replaceDeckDrawing(depId) {
       if (State.mode !== "designer" || !depId) return;
       State.autoSaveDepId = depId;
@@ -7816,7 +8015,7 @@
         await this._saveDraftLocal(pages);                       // 로컬 우선 보관(원본 dataURL)
         // [마스터 요청 (나)] 교체 도면도 R2 업로드 후 URL 저장(실패 시 base64 폴백)
         const r2pages = await this._uploadPagesToR2(pages);
-        // ★[멀티유저 충돌방지] 낙관적 잠금 PATCH — 409면 병합 후 재시도
+        // [멀티유저 충돌방지] 낙관적 잠금 PATCH — 409면 병합 후 재시도
         const r = await this._patchDeployment(depId, () => this._buildSavePayload(r2pages));
         if (!r.ok) throw new Error("HTTP " + (r.status || "fail"));
         await this._markDraftClean(pages);
@@ -7836,7 +8035,7 @@
         this._setSaveIndicator("saving");
         pages = await this._snapshotPages();
         if (!pages.length) { this._setSaveIndicator("error"); return; }
-        // ★ 먼저 로컬에 무조건 보관(서버 성공 여부와 무관하게 도면 소실 방지) — 원본 dataURL 보존
+        // 먼저 로컬에 무조건 보관(서버 성공 여부와 무관하게 도면 소실 방지) — 원본 dataURL 보존
         await this._saveDraftLocal(pages);
         // [마스터 요청 (나)] 도면 바이너리를 R2에 올리고 URL로 치환(실패 시 base64 폴백)
         const r2pages = await this._uploadPagesToR2(pages);
@@ -7885,7 +8084,7 @@
       this._markDirty();
     },
 
-    /** ★ 실제 서버 저장(수동 '저장' 버튼). 배포본 없으면 생성+구역연결, 있으면 PATCH. */
+    /** 실제 서버 저장(수동 '저장' 버튼). 배포본 없으면 생성+구역연결, 있으면 PATCH. */
     async _saveNow(opts) {
       if (State.mode !== "designer") return;
       opts = opts || {};
@@ -7902,6 +8101,13 @@
             const p = this._pendingDeckLink; this._pendingDeckLink = null;
             if (p.deck) { p.deck.deployment_id = State.autoSaveDepId; try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
             await this._linkDeckDeployment(p.deckId, State.autoSaveDepId, p.deck);
+          } else if (typeof Projects !== "undefined" && Projects.currentDeck && !Projects.currentDeck.deployment_id && State.autoSaveDepId) {
+            // [견고화] _pendingDeckLink 가 소실(새로고침 등)됐어도 현재 구역에 새 도면을 자동 연결
+            //   → "도면을 등록·저장했는데 구역에 안 붙어 도면없음으로 보이는" 회귀 방지
+            const cd = Projects.currentDeck;
+            cd.deployment_id = State.autoSaveDepId;
+            try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {}
+            await this._linkDeckDeployment(cd.id, State.autoSaveDepId, cd);
           }
         } else {
           // 기존: PATCH. 도면이 실제로 변경됐을 때만 재스냅샷·R2 재업로드.
@@ -7922,10 +8128,10 @@
         this._dirty = false; this._dirtyPages = false; this._updateSaveBtn();
         this._setSaveIndicator("saved");
         // [마스터: 저장 확인이 안 됨] 명확한 완료 피드백(모바일 토스트)
-        try { Prompt.toast && Prompt.toast("✅ 저장 완료"); } catch (e) {}
+        try { Prompt.toast && Prompt.toast("저장 완료"); } catch (e) {}
       } catch (e) {
         this._setSaveIndicator(navigator.onLine ? "error" : "offline");
-        try { Prompt.toast && Prompt.toast(navigator.onLine ? "⚠️ 저장 실패 — 다시 시도해 주세요" : "📥 오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+        try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
       } finally {
         this.autoSaving = false;
       }
@@ -8041,26 +8247,50 @@
         const rec = await res.json();
         const depId = (rec && rec.id) ? rec.id : null;
 
-        const viewerUrl = location.origin + location.pathname +
+        // [버그수정] '뷰어로 배포'가 '저장'과 별개 경로로 새 배포본을 만들면서 구역↔도면 연결을
+        //   전혀 안 해 — 저장을 안 누르고 배포만 눌러도 성공해버려 구역엔 영원히 '도면없음'이 남았다.
+        //   배포로 만든 배포본도 여기서 반드시 구역에 연결(또는 대기 연결 마무리)한다.
+        if (depId) {
+          State.autoSaveDepId = depId; State.currentDeploymentId = depId;
+          try {
+            if (this._pendingDeckLink) {
+              const p = this._pendingDeckLink; this._pendingDeckLink = null;
+              if (p.deck) p.deck.deployment_id = depId;
+              await this._linkDeckDeployment(p.deckId, depId, p.deck);
+            } else if (typeof Projects !== "undefined" && Projects.currentDeck && !Projects.currentDeck.deployment_id) {
+              const cd = Projects.currentDeck;
+              cd.deployment_id = depId;
+              await this._linkDeckDeployment(cd.id, depId, cd);
+            }
+            if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks();
+          } catch (e) {}
+        }
+
+        // [버그수정] location.origin 은 배포별 임시 서브도메인(xxxx.scan360.pages.dev)일 수 있어
+        //   그 링크는 '옛 코드'를 영구히 가리킨다(401 등) → 고정 production 도메인으로 정규화.
+        let _origin = location.origin;
+        const _m = _origin.match(/^https?:\/\/[a-f0-9]{6,}\.(scan360\.pages\.dev)$/i);
+        if (_m) _origin = "https://" + _m[1];
+        const viewerUrl = _origin + location.pathname +
           "?mode=viewer" + (depId ? "&d=" + encodeURIComponent(depId) : "");
         // [C-LOOP1 결함1] 공유가 목적인 시스템 → 원클릭 링크 복사 버튼 제공
         status.innerHTML =
-          "✅ 배포 완료! (" + pagesData.length + "페이지 / " + State.pins.length + "핀)<br>" +
+          "배포 완료! (" + pagesData.length + "페이지 / " + State.pins.length + "핀)<br>" +
           "뷰어 전용 링크:<br>" +
           "<a id='deploy-link' href='" + viewerUrl + "' target='_blank' style='color:#10b981;word-break:break-all'>" + viewerUrl + "</a><br>" +
-          "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>📋 링크 복사</button>";
+          "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>링크 복사</button>";
         status.classList.remove("hidden");
         // 복사 버튼 핸들러 (clipboard API + execCommand 폴백)
         const copyBtn = document.getElementById("btn-copy-link");
         if (copyBtn) {
           copyBtn.addEventListener("click", async () => {
             const ok = await App._copyToClipboard(viewerUrl);
-            copyBtn.textContent = ok ? "✅ 복사됨!" : "⚠ 복사 실패 — 링크를 길게 눌러 복사하세요";
-            setTimeout(() => { copyBtn.textContent = "📋 링크 복사"; }, 2200);
+            copyBtn.textContent = ok ? "복사됨!" : "복사 실패 — 링크를 길게 눌러 복사하세요";
+            setTimeout(() => { copyBtn.textContent = "링크 복사"; }, 2200);
           });
         }
       } catch (e) {
-        status.textContent = "❌ 배포 실패: " + e.message;
+        status.textContent = "배포 실패: " + e.message;
         status.classList.add("error");
         status.classList.remove("hidden");
       } finally {
@@ -8211,14 +8441,14 @@
         // [C-LOOP1 결함2] 뷰어 첫 진입 어포던스 — 핀 클릭으로 360°가 열림을 명시
         if (State.pins.length > 0) {
           statusEl.innerHTML =
-            "✅ 로드 완료 (" + pages.length + "페이지 / " + State.pins.length + "개 포인트)<br>" +
-            "<span style='color:var(--green)'>📍 도면 위 번호 핀을 클릭하면 360° 파노라마가 열립니다.</span>";
+            "로드 완료 (" + pages.length + "페이지 / " + State.pins.length + "개 포인트)<br>" +
+            "<span style='color:var(--green)'>도면 위 번호 핀을 클릭하면 360° 파노라마가 열립니다.</span>";
         } else {
-          statusEl.textContent = "✅ 배포본 로드 완료 (" + pages.length + "페이지 / 포인트 없음)";
+          statusEl.textContent = "배포본 로드 완료 (" + pages.length + "페이지 / 포인트 없음)";
         }
         UI.renderPinList();
       } catch (e) {
-        statusEl.textContent = "❌ 불러오기 실패: " + e.message;
+        statusEl.textContent = "불러오기 실패: " + e.message;
       }
     },
 
@@ -8391,6 +8621,10 @@
      · 디자이너로 지정된 구글 계정 = 설계자 기능
      · 슈퍼관리자(designssir@gmail.com) = 디자이너 지정 + 모든 권한
   ══════════════════════════════════════════ */
+  // [마스터 2026-08-31] 디자이너 기능은 로그인 없이 바로 진입, 관리자만 구글 로그인 필요.
+  //   마스터가 "다시 로그인 필수로" 지시하면 이 값을 false 로 바꾸면 즉시 원복(로그인 게이트 필수).
+  const AUTO_DESIGNER_ENTRY = true;
+
   const Auth = {
     idToken: null,
     user: null,           // { email, name, picture, role }
@@ -8398,6 +8632,7 @@
     superAdmin: "designssir@gmail.com",
     _pendingDesigner: null,
     _gsiInited: false,
+    _suppressDemoBadge: false,
 
     get clientId() {
       const id = (typeof window !== "undefined" && window.WM_GOOGLE_CLIENT_ID) || "";
@@ -8472,10 +8707,12 @@
       this._loadServerConfig();
       // 복원된 토큰으로 권한 재확인
       if (this.idToken) this.refresh();
-      // [마스터 2026-06-22] 🔒 로그인 필수 + 첫 화면 = 로그인창. 미인증이면 "즉시"(지연 0)
-      //   로그인 게이트(닫기 없음)를 띄운다 → 허브가 먼저 깜빡이지 않음. (데모 자동진입 제거)
+      // 저장된 로그인 정보가 전혀 없을 때만:
+      //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(데모 배지 숨김)
+      //  · AUTO_DESIGNER_ENTRY=false → [마스터 2026-06-22] 로그인 필수, 즉시 로그인 게이트
       else if (!this._hasLocalToken()) {
-        this._openGate();
+        if (AUTO_DESIGNER_ENTRY) this.demoLogin("designer", { silent: true });
+        else this._openGate();
       }
     },
 
@@ -8499,10 +8736,10 @@
     /** Firebase 팝업 로그인 실행 + 사용자 피드백(토스트/게이트 에러) */
     async _doFirebaseLogin() {
       try {
-        Prompt && Prompt.toast && Prompt.toast("🔑 Google 로그인 창을 여는 중…", 1600);
+        Prompt && Prompt.toast && Prompt.toast("Google 로그인 창을 여는 중…", 1600);
         await this.loginWithFirebase();
         const who = (this.user && (this.user.name || this.user.email)) || "";
-        Prompt && Prompt.toast && Prompt.toast("✅ 로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
+        Prompt && Prompt.toast && Prompt.toast("로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
       } catch (e) {
         const msg = (e && e.message) ? e.message : String(e);
         Prompt && Prompt.toast && Prompt.toast("로그인 실패: " + msg + " — Firebase 콘솔에서 Google 공급업체와 승인된 도메인을 확인하세요.", 4200);
@@ -8511,7 +8748,7 @@
 
     _initGsi() {
       if (this._gsiInited) return;
-      // ★ Firebase가 연결돼 있으면 GIS(클라이언트 ID) 없이도 Google 로그인 가능
+      // Firebase가 연결돼 있으면 GIS(클라이언트 ID) 없이도 Google 로그인 가능
       if (this.firebaseEnabled) {
         const hint = document.querySelector(".auth-hint");
         if (hint) hint.textContent = "Google 계정으로 로그인 (Firebase 연결됨)";
@@ -8556,7 +8793,7 @@
       return !!(window.FIREBASE_ENABLED && window.SeaFirebase);
     },
 
-    /** ★ Firebase Google 로그인 → 앱 Auth 연결 (마스터: ID만 넣으면 바로 로그인)
+    /** Firebase Google 로그인 → 앱 Auth 연결 (마스터: ID만 넣으면 바로 로그인)
      *  1) Firebase 팝업으로 Google 로그인
      *  2) Firebase ID 토큰을 받아 this.idToken 에 저장
      *  3) refresh() 로 서버에 권한 확인 → 앱 전체 로그인 상태 반영
@@ -8626,7 +8863,7 @@
     },
 
     /** 서버에 권한 확인 → UI 갱신
-     *  ★ 오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
+     *  오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
      *    네트워크 실패(오프라인)이면서 토큰이 있으면 캐시된 권한을 복원.
      *    → 비행기·현장 등 오프라인에서도 디자이너/슈퍼 권한이 유지됨. */
     async refresh() {
@@ -8655,7 +8892,7 @@
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
-        this._saveAuthCache(data);   // ★ 성공 시 권한 스냅샷 저장
+        this._saveAuthCache(data);   // 성공 시 권한 스냅샷 저장
       } else if (!netFail) {
         // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
         this.user = null; this.role = "viewer"; this.idToken = null;
@@ -8839,11 +9076,11 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
         if (okEl) {
-          okEl.textContent = "✅ 사용 신청이 접수되었습니다. 관리자(" + (this.user && this.user.email ? "" : "") + "admin) 승인 후 설계자 기능을 사용할 수 있습니다.";
+          okEl.textContent = "사용 신청이 접수되었습니다. 관리자(" + (this.user && this.user.email ? "" : "") + "admin) 승인 후 설계자 기능을 사용할 수 있습니다.";
           okEl.classList.remove("hidden");
         }
         if (this.user) this.user.request_status = "pending";
-        Prompt && Prompt.toast && Prompt.toast("📩 사용 신청이 관리자에게 전달되었습니다.", 2800);
+        Prompt && Prompt.toast && Prompt.toast("사용 신청이 관리자에게 전달되었습니다.", 2800);
       } catch (e) {
         if (errEl) { errEl.textContent = "신청 실패: " + (e && e.message ? e.message : "네트워크 오류"); errEl.classList.remove("hidden"); }
       } finally {
@@ -8859,8 +9096,10 @@
     },
 
     /** 데모 진입 — 구글 로그인 없이 바로 권한 부여(서버가 demo 토큰 인식).
-     *  role: 'designer' | 'viewer' */
-    async demoLogin(role) {
+     *  role: 'designer' | 'viewer'
+     *  opts.silent: true 면 데모 안내 배지를 띄우지 않음(AUTO_DESIGNER_ENTRY 자동입장 전용) */
+    async demoLogin(role, opts) {
+      this._suppressDemoBadge = !!(opts && opts.silent);
       this.idToken = role === "super" ? "demo-super" : (role === "designer" ? "demo-designer" : "demo-viewer");
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
       await this.refresh();  // 서버가 demo 토큰을 검증해 role/user 세팅
@@ -8877,6 +9116,12 @@
 
     /** 데모 모드 안내 배지(허브 상단) */
     _showDemoBadge() {
+      if (this._suppressDemoBadge) {
+        // AUTO_DESIGNER_ENTRY 자동입장 — 로그인 없이 그냥 디자이너로 보이게(배지 없음)
+        const ex = document.getElementById("demo-mode-badge");
+        if (ex) ex.remove();
+        return;
+      }
       if (!this.user || !this.user.email || this.user.email.indexOf("demo.") !== 0) {
         // 데모가 아니면 배지 제거
         const ex = document.getElementById("demo-mode-badge");
@@ -8903,8 +9148,9 @@
         }
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
+      this._suppressDemoBadge = false;  // 다음 수동 데모 로그인 시 배지 정상 표시되도록 초기화
       try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
-      this._clearAuthCache();   // ★ 오프라인 권한 캐시도 함께 정리
+      this._clearAuthCache();   // 오프라인 권한 캐시도 함께 정리
       this._applyUi();
       this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
@@ -8915,7 +9161,7 @@
   };
 
   /* ══════════════════════════════════════════
-     SETTINGS — 설정 패널 (A안: 접속=뷰어, ⚙️ 설정 → 로그인 → 편집)
+     SETTINGS — 설정 패널 (A안: 접속=뷰어, 설정 → 로그인 → 편집)
   ══════════════════════════════════════════ */
   /* ══════════════════════════════════════════
      PinPrefs — 핀 색상 환경설정 (기본=그린, 설정에서 변경)
@@ -9002,7 +9248,7 @@
 
     init() {
       const $ = (id) => document.getElementById(id);
-      // ⚙️ 설정 버튼 → 패널 열기
+      // 설정 버튼 → 패널 열기
       $("btn-settings") && $("btn-settings").addEventListener("click", () => this.open());
       // 핀 색상 선택(설정 패널 내) — 위임 바인딩
       const wrap = $("settings-pincolor");
@@ -9011,7 +9257,7 @@
         if (!sw) return;
         PinPrefs.set(sw.getAttribute("data-pincolor"));
         this._renderPinColor();
-        Prompt && Prompt.toast && Prompt.toast("🎨 핀 색상 변경됨");
+        Prompt && Prompt.toast && Prompt.toast("핀 색상 변경됨");
       });
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
@@ -9507,7 +9753,7 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || "저장 실패");
         this._matrixDirty = new Map();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 권한 매트릭스 저장 — " + j.updated + "건");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("권한 매트릭스 저장 — " + j.updated + "건");
         await this.loadMatrix();
       } catch (e) {
         alert("저장 실패: " + (e && e.message || "오류"));
@@ -9540,7 +9786,7 @@
           row.className = "flag-row" + (def.danger ? " flag-danger" : "");
           row.innerHTML =
             '<div class="flag-info">' +
-              '<span class="flag-label">' + (def.danger ? "🔴 " : "") + esc(def.label) + '</span>' +
+              '<span class="flag-label">' + (def.danger ? "" : "") + esc(def.label) + '</span>' +
               '<span class="flag-desc">' + esc(def.desc) + '</span>' +
               '<span class="flag-key">' + esc(def.key) + '</span>' +
             '</div>' +
@@ -9563,7 +9809,7 @@
         btn.classList.toggle("on", newVal);
         btn.setAttribute("aria-pressed", newVal);
         btn.setAttribute("aria-label", newVal ? "켜짐, 클릭해서 끄기" : "꺼짐, 클릭해서 켜기");
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + key + " = " + (newVal ? "ON" : "OFF"));
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + key + " = " + (newVal ? "ON" : "OFF"));
       } catch (e) { alert("설정 실패"); }
       finally { btn.disabled = false; }
     },
@@ -9610,7 +9856,7 @@
         const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/access-requests/" + encodeURIComponent(rid) + "/" + action,
           { method: "POST", headers: Auth.headers() });
         if (!r.ok) throw new Error("HTTP " + r.status);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + (action === "approve" ? "승인" : "거절") + " 처리됨");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + (action === "approve" ? "승인" : "거절") + " 처리됨");
         await this.loadProjRequests(true);
       } catch (e) { alert("처리 실패"); }
     },
@@ -10352,7 +10598,7 @@
     refresh() { this._render(); this.updateToolbar(); },
     _persist() {
       if (State.mode !== "designer") return;
-      // [오프라인 작업지시서 ❻] 오프라인이면 현재 주석들을 id 단위 upsert op 로 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 현재 주석들을 id 단위 upsert op 로 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         try {
           const arr = (State.annotations || []).filter(a => a && a.id != null);
@@ -10392,13 +10638,31 @@
         UI.renderPinsOnMap();
         const m = document.querySelector('.pin-marker[data-id="' + pin.id + '"]');
         if (m) m.classList.add("edit-unlocked");
-        Prompt.toast && Prompt.toast("🔓 '" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
+        Prompt.toast && Prompt.toast("'" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
       });
       $("pap-edit") && $("pap-edit").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;
         State.pinEditUnlocked = pin.id;
         this.close();
         App.editPin(pin.id);
+      });
+      $("pap-note") && $("pap-note").addEventListener("click", async () => {
+        const pin = this._pin(); if (!pin) return;
+        this.close();
+        const r = await Prompt.ask({
+          title: "노트 등록",
+          sub: "이 포인트에 남길 노트를 입력하세요 (비우고 확인하면 삭제)",
+          placeholder: "예: 도장 박리 / 재검사 필요",
+          value: pin.note || "",
+          allowEmpty: true
+        });
+        if (!r) return;
+        const note = (r.value || "").trim();
+        if (note) pin.note = note; else delete pin.note;
+        UI.renderPinsOnMap && UI.renderPinsOnMap();
+        UI.renderPinList && UI.renderPinList();
+        App._autoSave && App._autoSave();
+        Prompt.toast && Prompt.toast(note ? "노트 저장됨" : "노트 삭제됨");
       });
       $("pap-del") && $("pap-del").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;
@@ -10524,7 +10788,7 @@
       try {
         const r = await fetch("/api/app-settings", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ scope: this._featScope, key: "features", value }) });
         if (!r.ok) throw new Error("fail");
-        if (note) { note.textContent = "✅ 저장되었습니다. 화면에 즉시 반영됩니다."; note.className = "features-save-note ok"; }
+        if (note) { note.textContent = "저장되었습니다. 화면에 즉시 반영됩니다."; note.className = "features-save-note ok"; }
         // 전체 공통 저장 시 현재 화면에도 즉시 반영
         if (this._featScope === "*") { this._features = value; this._reflect(); }
       } catch (e) { if (note) { note.textContent = "저장 실패(권한 필요)"; note.className = "features-save-note err"; } }
@@ -10538,7 +10802,7 @@
       try {
         const r = await fetch("/api/ai/config", { headers: Auth.headers() });
         const j = await r.json();
-        if (statusEl) { statusEl.textContent = j.enabled ? "🟢 활성화됨 (API 키 설정됨)" : "🔴 비활성 — API 키(AI_API_KEY) 미설정"; statusEl.className = "ai-status-line " + (j.enabled ? "on" : "off"); }
+        if (statusEl) { statusEl.textContent = j.enabled ? "활성화됨 (API 키 설정됨)" : "비활성 — API 키(AI_API_KEY) 미설정"; statusEl.className = "ai-status-line " + (j.enabled ? "on" : "off"); }
         const bu = document.getElementById("ai-base-url"); if (bu) bu.value = j.base_url || "";
         const md = document.getElementById("ai-model"); if (md) md.value = j.model || "";
       } catch (e) { if (statusEl) statusEl.textContent = "상태를 불러올 수 없습니다."; }
@@ -10553,7 +10817,7 @@
       try {
         const r = await fetch("/api/app-settings", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ scope: "*", key: "ai", value }) });
         if (!r.ok) throw new Error("fail");
-        if (note) { note.textContent = "✅ Base URL·모델 저장됨. (키는 wrangler secret으로 별도 설정)"; note.className = "features-save-note ok"; }
+        if (note) { note.textContent = "Base URL·모델 저장됨. (키는 wrangler secret으로 별도 설정)"; note.className = "features-save-note ok"; }
       } catch (e) { if (note) { note.textContent = "저장 실패(권한 필요)"; note.className = "features-save-note err"; } }
     },
     async testAI() {
@@ -10562,8 +10826,8 @@
       try {
         const r = await fetch("/api/ai/chat", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ messages: [{ role: "user", content: "연결 테스트입니다. OK라고만 답해주세요." }], max_tokens: 16 }) });
         const j = await r.json();
-        if (r.ok) { if (note) { note.textContent = "✅ 연결 성공: " + (j.content || "(응답)"); note.className = "features-save-note ok"; } }
-        else { if (note) { note.textContent = "⚠️ " + (j.error || "실패") + (j.hint ? " — " + j.hint : ""); note.className = "features-save-note err"; } }
+        if (r.ok) { if (note) { note.textContent = "연결 성공: " + (j.content || "(응답)"); note.className = "features-save-note ok"; } }
+        else { if (note) { note.textContent = "" + (j.error || "실패") + (j.hint ? " — " + j.hint : ""); note.className = "features-save-note err"; } }
       } catch (e) { if (note) { note.textContent = "네트워크 오류"; note.className = "features-save-note err"; } }
     },
 
@@ -10626,11 +10890,11 @@
       if (on) {
         const u = (window.SeaFirebase && window.SeaFirebase.currentUser && window.SeaFirebase.currentUser());
         el.textContent = ready
-          ? (u ? "🟢 연결됨 · 로그인: " + (u.email || u.uid) : "🟢 연결됨 · (로그인 대기)")
-          : "🟢 설정 저장됨 · 새로고침 후 완전 활성화";
+          ? (u ? "연결됨 · 로그인: " + (u.email || u.uid) : "연결됨 · (로그인 대기)")
+          : "설정 저장됨 · 새로고침 후 완전 활성화";
         el.className = "ai-status-line on";
       } else {
-        el.textContent = "🔴 미연결 — 아래에 firebaseConfig 를 붙여넣고 저장하세요.";
+        el.textContent = "미연결 — 아래에 firebaseConfig 를 붙여넣고 저장하세요.";
         el.className = "ai-status-line off";
       }
     },
@@ -10648,7 +10912,7 @@
         return;
       }
       window.SeaFirebaseConfig.save(cfg, email);
-      setNote("✅ 저장 완료! 새로고침하면 Firebase가 자동 활성화됩니다. (3초 후 자동 새로고침)", true);
+      setNote("저장 완료! 새로고침하면 Firebase가 자동 활성화됩니다. (3초 후 자동 새로고침)", true);
       this._firebaseStatus();
       setTimeout(() => { try { location.reload(); } catch (e) {} }, 3000);
     },
@@ -10660,14 +10924,14 @@
         return;
       }
       try {
-        // ★ 단순 테스트가 아니라 앱 전체 로그인으로 연결 (Auth.loginWithFirebase)
+        // 단순 테스트가 아니라 앱 전체 로그인으로 연결 (Auth.loginWithFirebase)
         if (typeof Auth !== "undefined" && Auth.loginWithFirebase) {
           const role = await Auth.loginWithFirebase();
           const who = (Auth.user && (Auth.user.name || Auth.user.email)) || "";
-          setNote("✅ 로그인 완료: " + who + " · 권한=" + (role === "super" ? "슈퍼관리자" : role === "designer" ? "디자이너" : "뷰어"), true);
+          setNote("로그인 완료: " + who + " · 권한=" + (role === "super" ? "슈퍼관리자" : role === "designer" ? "디자이너" : "뷰어"), true);
         } else {
           const u = await window.SeaFirebase.loginGoogle();
-          setNote("✅ Google 로그인 성공: " + (u.email || u.uid), true);
+          setNote("Google 로그인 성공: " + (u.email || u.uid), true);
         }
         this._firebaseStatus();
       } catch (e) {
@@ -10707,23 +10971,23 @@
 
   /* 코드 구조 설명 데이터 — 관리자 대시보드용(파일별 기능 설명) */
   const CODE_MAP = [
-    { group: "🖥️ 서버 / API (Hono on Cloudflare Workers)", items: [
+    { group: "서버 / API (Hono on Cloudflare Workers)", items: [
       { path: "src/index.tsx", kind: "서버", desc: "모든 백엔드 API·SSR 진입점. 인증·프로젝트·핀·배포·도메인·초대·설정·AI 라우트를 한 파일에 정의.", detail: "주요: /api/auth/me, /api/projects, /api/pins, /api/deploy, /api/signup/*, /api/allowed-domains, /api/invites, /api/app-settings, /api/ai/*" },
       { path: "src/renderer.tsx", kind: "서버", desc: "Hono JSX 렌더러(HTML 셸 구성)." }
     ]},
-    { group: "🎨 클라이언트 (public/)", items: [
+    { group: "클라이언트 (public/)", items: [
       { path: "public/index.html", kind: "마크업", desc: "앱 전체 화면 구조 — 상단바·사이드바·맵 뷰포트·각종 모달(로그인/가입/관리자/설정/기능/AI/코드맵)." },
       { path: "public/js/main.js", kind: "로직", desc: "클라이언트 전체 로직. 모듈 집합으로 구성.", detail: "App(부트), MapCtrl(줌·팬·핀치), PanoViewer(360), PDF(렌더), PdfAnno(주석), Zones(구역), Pins/PinGrid/PinActionPop(핀), Auth/CompanyAuth(인증·가입), Designers(권한·도메인·멤버·초대·로그), Settings/AdminPanels(설정·기능관장·AI·코드맵), SyncQueue(오프라인 큐)." },
       { path: "public/css/style.css", kind: "스타일", desc: "전체 디자인·반응형(모바일 바텀시트·하단네비)·주석/관리자 UI 스타일." }
     ]},
-    { group: "📱 PWA / 오프라인", items: [
+    { group: "PWA / 오프라인", items: [
       { path: "public/sw.js", kind: "서비스워커", desc: "앱 셸 캐시(stale-while-revalidate). /api/·/tables/ 는 절대 가로채지 않음 → 데이터는 항상 최신.", detail: "오프라인에서 화면 로딩 가능. PDF.js·Three.js CDN도 캐시." },
       { path: "public/manifest.webmanifest", kind: "PWA", desc: "홈 화면 설치용 매니페스트(이름·아이콘·표시 모드)." }
     ]},
-    { group: "🗄️ 데이터 (Cloudflare D1 / R2)", items: [
+    { group: "데이터 (Cloudflare D1 / R2)", items: [
       { path: "migrations/0001~0008_*.sql", kind: "DB", desc: "스키마 마이그레이션.", detail: "핀/배포(0001), 인증·프로젝트·구역(0002), 핀노트(0003), 구역(0004), 사용신청(0005), 활동로그(0006), 회사가입·도메인(0007), 초대·앱설정(0008)." }
     ]},
-    { group: "⚙️ 빌드 / 운영", items: [
+    { group: "빌드 / 운영", items: [
       { path: "vite.config.ts", kind: "빌드", desc: "Cloudflare Pages용 Vite 빌드 → dist/_worker.js 생성." },
       { path: "wrangler.jsonc", kind: "설정", desc: "CF Pages 설정(D1·R2 바인딩, nodejs_compat)." },
       { path: "ecosystem.config.cjs", kind: "운영", desc: "PM2 개발 서버(wrangler pages dev) 구동 설정." },
@@ -10842,13 +11106,13 @@
         // dev-fallback 코드 표시(메일 미설정 시)
         const dc = $("cg-dev-code");
         if (j.dev_code) {
-          dc.innerHTML = "📧 메일 발송 미설정 — 개발/시연용 인증코드: <b>" + j.dev_code + "</b>";
+          dc.innerHTML = "메일 발송 미설정 — 개발/시연용 인증코드: <b>" + j.dev_code + "</b>";
           dc.classList.remove("hidden");
           $("cg-code").value = j.dev_code;
         } else {
           dc.classList.add("hidden"); dc.textContent = "";
           const mins = j.valid_minutes || 60;
-          Prompt.toast && Prompt.toast("📧 인증코드를 이메일로 발송했습니다. (" + mins + "분 이내 입력)");
+          Prompt.toast && Prompt.toast("인증코드를 이메일로 발송했습니다. (" + mins + "분 이내 입력)");
         }
       } catch (e) {
         this._err("네트워크 오류로 코드 발송에 실패했습니다.");
@@ -10946,7 +11210,7 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { showErr(j.error || "변경에 실패했습니다."); return; }
         const m = $("pwchange-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
-        Prompt && Prompt.toast && Prompt.toast("✅ 비밀번호가 변경되었습니다.");
+        Prompt && Prompt.toast && Prompt.toast("비밀번호가 변경되었습니다.");
         this._onAuthed(Auth.idToken, this._pendingName || "");
       } catch (e) {
         showErr("네트워크 오류로 변경에 실패했습니다.");
@@ -10962,7 +11226,7 @@
       } catch (e) {}
       if (typeof Auth !== "undefined") Auth.idToken = token;
       this.close();
-      Prompt.toast && Prompt.toast("✅ " + displayName + " 님으로 로그인되었습니다.");
+      Prompt.toast && Prompt.toast("" + displayName + " 님으로 로그인되었습니다.");
       // 인증 상태 갱신 후 뷰어로
       if (typeof Auth !== "undefined" && Auth.refresh) {
         Auth.refresh().then(() => { if (App.openApp) App.openApp("viewer"); }).catch(() => { if (App.openApp) App.openApp("viewer"); });
@@ -11009,9 +11273,10 @@
         document.getElementById("prompt-modal-title").textContent = opts.title || "입력";
         document.getElementById("prompt-modal-sub").textContent = opts.sub || "";
         const inp = document.getElementById("prompt-modal-input");
-        inp.value = ""; inp.placeholder = opts.placeholder || "";
+        inp.value = opts.value || ""; inp.placeholder = opts.placeholder || ""; this._allowEmpty = !!opts.allowEmpty;
         const inp2 = document.getElementById("prompt-modal-input2");
-        inp2.value = "";
+        inp2.value = opts.secondValue || "";
+        inp2.placeholder = (typeof opts.second === "string") ? opts.second : "";
         inp2.classList.toggle("hidden", !opts.second);
         document.getElementById("prompt-modal-error").classList.add("hidden");
         const m = document.getElementById("prompt-modal");
@@ -11025,7 +11290,7 @@
       const inp2 = document.getElementById("prompt-modal-input2");
       const err = document.getElementById("prompt-modal-error");
       const val = (inp.value || "").trim();
-      if (!val) { err.textContent = "값을 입력하세요."; err.classList.remove("hidden"); return; }
+      if (!val && !this._allowEmpty) { err.textContent = "값을 입력하세요."; err.classList.remove("hidden"); return; }
       const second = inp2.classList.contains("hidden") ? undefined : (inp2.value || "").trim();
       this._close({ value: val, second });
     },
@@ -11033,6 +11298,8 @@
       const m = document.getElementById("prompt-modal");
       m.classList.remove("on");
       setTimeout(() => m.classList.add("hidden"), 200);
+      // [버그수정] 에러 텍스트 잔류 정리 — 다음 ask 모달에 이전 오류가 깜빡이지 않게
+      const err = document.getElementById("prompt-modal-error"); if (err) { err.textContent = ""; err.classList.add("hidden"); }
       const r = this._resolve; this._resolve = null;
       if (r) r(result);
     }
@@ -11146,7 +11413,7 @@
       if (!name) { alert("구역 이름을 입력하세요."); return null; }
       const dup = (this.decks || []).find((x) => String(x.name).trim().toLowerCase() === name.toLowerCase());
       if (dup) {
-        Prompt.toast && Prompt.toast("⚠️ 이미 '" + name + "' 구역이 있습니다 — 그 구역을 선택합니다");
+        Prompt.toast && Prompt.toast("이미 '" + name + "' 구역이 있습니다 — 그 구역을 선택합니다");
         this.currentDeck = dup; this._renderDecks();
         return dup; // 중복 생성하지 않고 기존 구역 반환
       }
@@ -11188,10 +11455,12 @@
     async selectDeck(d) {
       this.currentDeck = d;
       this._renderDecks();
-      Prompt.toast && Prompt.toast("🗂️ 구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
-      // 연결된 도면이 있으면 로드
+      Prompt.toast && Prompt.toast("구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
+      // 연결된 도면이 있으면 로드, 없으면(끊김/미연결) 도면 연결 선택 띄움(디자이너)
       if (d.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {
         await App.loadDeckDrawing(d.deployment_id);
+      } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
+        App.offerDeckDrawingLink(d);
       }
     },
 
@@ -11247,8 +11516,8 @@
       btn.setAttribute("aria-disabled", locked ? "true" : "false");
       if (locked) {
         btn.dataset.origText = btn.dataset.origText || btn.textContent;
-        btn.textContent = "🔒 먼저 구역을 등록하세요";
-        if (hint) hint.textContent = "도면을 올리려면 위 ‘🗂️ 구역’에서 + 생성으로 구역을 먼저 만드세요.";
+        btn.textContent = "먼저 구역을 등록하세요";
+        if (hint) hint.textContent = "도면을 올리려면 위 ‘구역’에서 + 생성으로 구역을 먼저 만드세요.";
       } else {
         if (btn.dataset.origText) btn.textContent = btn.dataset.origText;
         if (hint) hint.textContent = "구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.";
@@ -11260,7 +11529,7 @@
 
   /* ══════════════════════════════════════════════════════════════════
      OFFLINE  — 오프라인 완전작업 (다운로드 → 오프라인편집 → 자동싱크 · 충돌0)
-     작업지시서 SEASTAR_OFFLINE_WORKORDER ❷❸❹❺❻❼❽
+     작업지시서 SEASTAR_OFFLINE_WORKORDER 
      실식별자 보정: State.depId → State.autoSaveDepId, Auth.currentUser → Auth.user
      IndexedDB 키(SyncQueue.DRAFT_STORE, keyPath="key"):
        bundle:manifest:<projectId> / bundle:project:<projectId> / bundle:decks:<projectId>
@@ -11281,7 +11550,7 @@
     if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg);
   }
 
-  /* ── ❷ 온라인: 프로젝트 전체 번들 다운로드 ─────────────────────────── */
+  /* ── 온라인: 프로젝트 전체 번들 다운로드 ─────────────────────────── */
   const OfflineBundle = {
     /** 프로젝트 전체를 오프라인용으로 다운로드. onProgress(done,total,label) 콜백. */
     async download(projectId, onProgress) {
@@ -11338,7 +11607,7 @@
       return manifest;
     },
 
-    /* ── ❸ 번들 무결성 검증 ── */
+    /* ── 번들 무결성 검증 ── */
     async verify(projectId) {
       const m = await SyncQueue.loadDraft("bundle:manifest:" + projectId);
       if (!m) return { ok: false, reason: "매니페스트 없음 — 다운로드 안 됨" };
@@ -11351,7 +11620,7 @@
     }
   };
 
-  /* ── ❹ 오프라인 부팅 — IndexedDB에서 계층 복원 ─────────────────────── */
+  /* ── 오프라인 부팅 — IndexedDB에서 계층 복원 ─────────────────────── */
   const OfflineLoad = {
     async projects() { // 프로젝트 목록(오프라인)
       const keys = await SyncQueue.allDraftKeys();
@@ -11373,7 +11642,7 @@
     }
   };
 
-  /* ── ❺ 오프라인 3D 비워 소스 결정 ── */
+  /* ── 오프라인 3D 비워 소스 결정 ── */
   async function resolvePanoSource(pin) {
     if (!pin) return null;
     if (pin.imageId) {
@@ -11386,7 +11655,7 @@
     return null; // 표시 불가
   }
 
-  /* ── ❻ 오프라인 편집 → op 로그(충돌없는 핵심) ──────────────────────── */
+  /* ── 오프라인 편집 → op 로그(충돌없는 핵심) ──────────────────────── */
   const OpLog = {
     _key(depId) { return "oplog:" + depId; },
     async _load(depId) { return (await SyncQueue.loadDraft(this._key(depId))) || []; },
@@ -11433,7 +11702,7 @@
     await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
   }
 
-  /* ── ❽ 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
+  /* ── 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
   // 지수 백오프 POST (항구 약전파 대비)
   async function _postWithRetry(url, body, max) {
     max = max || 3;
@@ -11486,7 +11755,7 @@
     };
   }
 
-  /* ── ❼ 오프라인 상태 UI (배지 + 대기 카운트) ──────────────────────── */
+  /* ── 오프라인 상태 UI (배지 + 대기 카운트) ──────────────────────── */
   async function updateNetBadge() {
     const badge = document.getElementById("net-badge");
     if (!badge) return;
@@ -11498,10 +11767,10 @@
     try { pending += await SyncQueue.count(); } catch (e) {}
     if (!navigator.onLine) {
       badge.classList.add("show"); badge.classList.remove("syncing");
-      if (text) text.textContent = "📡 오프라인"; if (q) q.textContent = pending;
+      if (text) text.textContent = "오프라인"; if (q) q.textContent = pending;
     } else if (pending > 0) {
       badge.classList.add("show", "syncing");
-      if (text) text.textContent = "☁️ 동기화 중"; if (q) q.textContent = pending;
+      if (text) text.textContent = "동기화 중"; if (q) q.textContent = pending;
     } else {
       badge.classList.remove("show", "syncing");
     }
@@ -11582,7 +11851,7 @@
     },
 
     openPicker() {
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🌐 THETA로 찍은 R* 360 사진을 선택하세요 (여러 장 가능)");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("THETA로 찍은 R* 360 사진을 선택하세요 (여러 장 가능)");
       const inp = document.getElementById("input-theta-intake");
       if (inp) inp.click();
     },
@@ -11639,7 +11908,7 @@
       await this._persist();
       this.renderTray(); this.showTray();
       if (typeof Prompt !== "undefined" && Prompt.toast)
-        Prompt.toast("🌐 360 인입 " + accepted + "장" + (skipped ? " · 제외 " + skipped + "장(R*/360 아님)" : "") + (accepted ? " — 사진을 눌러 도면에 위치를 지정하세요" : ""));
+        Prompt.toast("360 인입 " + accepted + "장" + (skipped ? " · 제외 " + skipped + "장(R*/360 아님)" : "") + (accepted ? " — 사진을 눌러 도면에 위치를 지정하세요" : ""));
     },
 
     renderTray() {
@@ -11677,7 +11946,7 @@
       State.intakeFile = file;
       this.hideTray();
       if (!State.placing) App._togglePlacing();   // 배치 모드 ON (도면 탭 대기)
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📍 '" + item.name + "' — 도면에서 이 사진의 위치를 탭하세요");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("'" + item.name + "' — 도면에서 이 사진의 위치를 탭하세요");
     },
 
     /** App._handlePlaceClick 에서 인입 사진을 핀에 주입·등록한 직후 호출 — 트레이에서 제거·진행 */
@@ -11688,10 +11957,10 @@
       this.renderTray();
       if (this._pending.length) {
         this.showTray();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 등록 — 남은 360 인입 " + this._pending.length + "장. 계속 지정하세요");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("등록 — 남은 360 인입 " + this._pending.length + "장. 계속 지정하세요");
       } else {
         this.hideTray();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 360 인입 사진 위치 등록 완료" + (navigator.onLine ? "" : " — 온라인 시 '↑ 지금 올리기'로 반영"));
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 인입 사진 위치 등록 완료" + (navigator.onLine ? "" : " — 온라인 시 '↑ 지금 올리기'로 반영"));
       }
     },
 
@@ -11815,7 +12084,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     App.init();
 
-    // [오프라인 작업지시서 ❼] 오프라인 상태 배지/네트워크 이벤트 연결
+    // [오프라인 작업지시서 ] 오프라인 상태 배지/네트워크 이벤트 연결
     if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
