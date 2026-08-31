@@ -1,6 +1,6 @@
   /* ══════════════════════════════════════════════════════════════════
      OFFLINE  — 오프라인 완전작업 (다운로드 → 오프라인편집 → 자동싱크 · 충돌0)
-     작업지시서 SEASTAR_OFFLINE_WORKORDER ❷❸❹❺❻❼❽
+     작업지시서 SEASTAR_OFFLINE_WORKORDER 
      실식별자 보정: State.depId → State.autoSaveDepId, Auth.currentUser → Auth.user
      IndexedDB 키(SyncQueue.DRAFT_STORE, keyPath="key"):
        bundle:manifest:<projectId> / bundle:project:<projectId> / bundle:decks:<projectId>
@@ -21,7 +21,7 @@
     if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg);
   }
 
-  /* ── ❷ 온라인: 프로젝트 전체 번들 다운로드 ─────────────────────────── */
+  /* ── 온라인: 프로젝트 전체 번들 다운로드 ─────────────────────────── */
   const OfflineBundle = {
     /** 프로젝트 전체를 오프라인용으로 다운로드. onProgress(done,total,label) 콜백. */
     async download(projectId, onProgress) {
@@ -78,7 +78,7 @@
       return manifest;
     },
 
-    /* ── ❸ 번들 무결성 검증 ── */
+    /* ── 번들 무결성 검증 ── */
     async verify(projectId) {
       const m = await SyncQueue.loadDraft("bundle:manifest:" + projectId);
       if (!m) return { ok: false, reason: "매니페스트 없음 — 다운로드 안 됨" };
@@ -91,7 +91,7 @@
     }
   };
 
-  /* ── ❹ 오프라인 부팅 — IndexedDB에서 계층 복원 ─────────────────────── */
+  /* ── 오프라인 부팅 — IndexedDB에서 계층 복원 ─────────────────────── */
   const OfflineLoad = {
     async projects() { // 프로젝트 목록(오프라인)
       const keys = await SyncQueue.allDraftKeys();
@@ -113,7 +113,7 @@
     }
   };
 
-  /* ── ❺ 오프라인 3D 비워 소스 결정 ── */
+  /* ── 오프라인 3D 비워 소스 결정 ── */
   async function resolvePanoSource(pin) {
     if (!pin) return null;
     if (pin.imageId) {
@@ -126,7 +126,7 @@
     return null; // 표시 불가
   }
 
-  /* ── ❻ 오프라인 편집 → op 로그(충돌없는 핵심) ──────────────────────── */
+  /* ── 오프라인 편집 → op 로그(충돌없는 핵심) ──────────────────────── */
   const OpLog = {
     _key(depId) { return "oplog:" + depId; },
     async _load(depId) { return (await SyncQueue.loadDraft(this._key(depId))) || []; },
@@ -173,7 +173,7 @@
     await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
   }
 
-  /* ── ❽ 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
+  /* ── 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
   // 지수 백오프 POST (항구 약전파 대비)
   async function _postWithRetry(url, body, max) {
     max = max || 3;
@@ -226,7 +226,7 @@
     };
   }
 
-  /* ── ❼ 오프라인 상태 UI (배지 + 대기 카운트) ──────────────────────── */
+  /* ── 오프라인 상태 UI (배지 + 대기 카운트) ──────────────────────── */
   async function updateNetBadge() {
     const badge = document.getElementById("net-badge");
     if (!badge) return;
@@ -238,10 +238,10 @@
     try { pending += await SyncQueue.count(); } catch (e) {}
     if (!navigator.onLine) {
       badge.classList.add("show"); badge.classList.remove("syncing");
-      if (text) text.textContent = "📡 오프라인"; if (q) q.textContent = pending;
+      if (text) text.textContent = "오프라인"; if (q) q.textContent = pending;
     } else if (pending > 0) {
       badge.classList.add("show", "syncing");
-      if (text) text.textContent = "☁️ 동기화 중"; if (q) q.textContent = pending;
+      if (text) text.textContent = "동기화 중"; if (q) q.textContent = pending;
     } else {
       badge.classList.remove("show", "syncing");
     }

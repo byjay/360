@@ -32,7 +32,7 @@
     pinEditUnlocked: null,  // '수정' 버튼으로 이동/편집 잠금 해제된 핀 id (이 id만 드래그 이동 가능)
     autoSaveDepId: null,    // 자동 저장된 배포본(작업본) id — 도면 업로드 즉시 생성
     autoSaving: false,      // 자동 저장 진행 중 플래그
-    depVersion: 0,          // ★[멀티유저 충돌방지] 현재 로드된 배포본의 서버 version(낙관적 잠금 기준값)
+    depVersion: 0,          // [멀티유저 충돌방지] 현재 로드된 배포본의 서버 version(낙관적 잠금 기준값)
     activePin:   null,
     zoom:        1,
     pan:         { x: 0, y: 0 },

@@ -9,7 +9,7 @@
       // 1순위: createImageBitmap — 디코딩과 동시에 다운스케일하여 메모리 폭증/탭 크래시 방지.
       //  (THETA 등 5376×2688↑ 초고해상도 JPEG를 원본 그대로 디코딩하면 메모리 한계로 크래시)
       if (typeof createImageBitmap === "function") {
-        // ⚠️ THETA 등 초고해상도 JPEG(6720×3360 등)를 createImageBitmap(file) 으로
+        // THETA 등 초고해상도 JPEG(6720×3360 등)를 createImageBitmap(file) 으로
         //    "원본 그대로" 디코딩하면 메모리 한계로 탭이 크래시(=업로드 hang)된다.
         //    따라서 절대 풀해상도 probe 를 하지 않고, 처음부터 resizeWidth 만 지정해
         //    비율을 유지한 채 축소 디코딩한다. (360° 도면은 가로가 장변인 2:1 파노라마)
