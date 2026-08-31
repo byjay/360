@@ -118,6 +118,13 @@
         await this.loadDecks();
         const created = this.decks.find((x) => x.id === d.id) || d;
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
+        // ── [마스터 요청] 구역 생성 직후 곧바로 도면 등록 흐름으로 연결 ──
+        // ensureDeck() 자동생성 경로(무한루프 방지)는 askDrawing:false 로 이 단계를 건너뜀.
+        if (opts.askDrawing !== false) {
+          Prompt.toast && Prompt.toast("구역 '" + name + "' 생성됨 — 이 구역에 등록할 도면을 선택하세요");
+          const uploadBtn = document.getElementById("btn-upload-drawing");
+          if (uploadBtn) uploadBtn.click();
+        }
         return created;
       } catch (e) { alert("네트워크 오류"); return null; }
       finally { this._creatingDeck = false; }
@@ -127,8 +134,8 @@
     async ensureDeck() {
       if (this.currentDeck) return this.currentDeck;
       if (this.decks.length) { this.currentDeck = this.decks[0]; this._renderDecks(); return this.currentDeck; }
-      // 구역이 전혀 없음 → 강제 생성
-      const created = await this.createDeck({ name: "구역 1", select: true });
+      // 구역이 전혀 없음 → 강제 생성 (도면 등록 흐름 중 자동생성 — 파일창을 또 띄우면 무한루프)
+      const created = await this.createDeck({ name: "구역 1", select: true, askDrawing: false });
       return created;
     },
 

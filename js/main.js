@@ -1233,6 +1233,22 @@
           this._expandBound = true;
         }
       }
+      // [마스터 요청] 미니맵에서 드래그로 직접 시야 방향(부채꼴) 조절 (1회 바인딩)
+      if (!this._dirBound) {
+        const db = document.getElementById("pano-radar-dir");
+        const stage = document.getElementById("pano-radar-stage");
+        if (db && stage) {
+          db.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this._dirAdjust = !this._dirAdjust;
+            db.classList.toggle("active", this._dirAdjust);
+            db.title = this._dirAdjust ? "방향 조절 끄기" : "미니맵에서 방향 조절";
+            box.classList.toggle("dir-adjust-mode", this._dirAdjust);
+          });
+          this._bindDirDrag(stage);
+          this._dirBound = true;
+        }
+      }
       // 현재 페이지의 도면 이미지 소스 확보 (뷰어/디자이너 공통)
       const mapSrc = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(this._currentMapSrc()) : this._currentMapSrc();
       if (!mapSrc) { this.hide(); return; }
@@ -1253,7 +1269,11 @@
           dot.style.left = p.x + "%";
           dot.style.top  = p.y + "%";
           dot.title = p.label || "";
-          dot.addEventListener("click", (e) => { e.stopPropagation(); if (p.id !== pin.id && App.pinHasContent(p)) App.openPano(p); });
+          dot.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (this._dirAdjust) return; // 방향 조절 모드에서는 다른 핀 이동 금지
+            if (p.id !== pin.id && App.pinHasContent(p)) App.openPano(p);
+          });
           pinsLayer.appendChild(dot);
         });
       }
@@ -1301,6 +1321,7 @@
 
     /** 시야 방향(yaw=lon) + FOV에 맞춰 부채꼴 회전/너비 */
     spin(lon, fov) {
+      if (this._dirDragging) return; // 미니맵 드래그 조절 중에는 카메라 렌더 루프가 부채꼴을 덮어쓰지 않게
       const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
       if (!fan) return;
       // lon(deg): 0 = +Z 방향. 360 사진마다 촬영 시작 방향(lon=0)이 제각각이라
@@ -1310,6 +1331,61 @@
       const effectiveLon = lon - offset;
       // conic-gradient가 -35°~+35°(약 70°) 부채꼴이므로 회전만 적용.
       fan.style.transform = "rotate(" + (effectiveLon) + "deg)";
+    },
+
+    /** [마스터 요청] 미니맵 위 드래그로 부채꼴(시야 방향) 직접 조절 — pointerdown/move/up 바인딩 (1회) */
+    _bindDirDrag(stage) {
+      // 각도 규약: spin()과 동일 — 0deg=위(북,12시), 시계방향 +, 90deg=오른쪽(동).
+      // 화면좌표 dx=오른쪽+, dy=아래쪽+ 이므로 atan2(dy,dx)는 "오른쪽=0,시계방향+" 기준각.
+      // 그 기준각에 +90 하면 "위=0,시계방향+" 기준으로 정렬된다(우측 기준각 0→ +90=90, 상단 기준각 -90→ +90=0).
+      const angleFromEvent = (e) => {
+        const cone = document.getElementById("pano-radar-cone");
+        const rect = cone.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const px = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+        const py = (e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY);
+        const dx = px - cx, dy = py - cy;
+        let a = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+        return ((a % 360) + 360) % 360;
+      };
+      const onDown = (e) => {
+        if (!this._dirAdjust) return;
+        this._dirDragging = true;
+        e.preventDefault(); e.stopPropagation();
+        this._applyFanAngle(angleFromEvent(e));
+      };
+      const onMove = (e) => {
+        if (!this._dirDragging) return;
+        e.preventDefault();
+        this._applyFanAngle(angleFromEvent(e));
+      };
+      const onUp = (e) => {
+        if (!this._dirDragging) return;
+        this._dirDragging = false;
+        this._commitAngle(angleFromEvent(e));
+      };
+      stage.addEventListener("pointerdown", onDown);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+
+    /** 드래그 중 실시간 시각 피드백만(저장 안 함) */
+    _applyFanAngle(angleDeg) {
+      const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
+      if (fan) fan.style.transform = "rotate(" + angleDeg + "deg)";
+    },
+
+    /** 드래그 종료 시 최종 각도를 pin.dirOffset으로 환산해 저장(토스트 1회) */
+    _commitAngle(angleDeg) {
+      const pin = this._pin;
+      if (!pin) return;
+      const lon = (typeof PanoViewer !== "undefined" && PanoViewer.S) ? PanoViewer.S.lon : 0;
+      // spin()의 effectiveLon = lon - dirOffset 이 angleDeg가 되도록 역산.
+      pin.dirOffset = lon - angleDeg;
+      this._applyFanAngle(angleDeg);
+      if (typeof App !== "undefined" && App._autoSave) App._autoSave();
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("시야 방향이 조정되었습니다");
     },
 
     /** 현재 표시 중인 도면(페이지) 이미지 src */
@@ -2203,19 +2279,20 @@
      *  · ISO 뷰   : 도면 rotateX(54)·rotateZ(θ) 의 역(rotateZ(-θ)·rotateX(-54))을
      *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
      *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
-    /** [마스터] 핀이 줌에 따라 깨지거나(고배율 업스케일) 너무 작아지는 것 방지:
-     *  부모 #map-transform 의 scale(zoom) 을 핀마다 역스케일(1/zoom) 로 상쇄 →
-     *  핀은 항상 "화면상 일정 크기"로 자연 해상도 렌더(업스케일 없음 → 또렷).
-     *  줌아웃(zoom<1) 일 땐 살짝 확대해 항상 잘 보이게. ISO 에선 +세움/가독 확대. */
-    /** [마스터] 핀 기본 크기 배율 — "포인트는 지금보다 2배 정도만 크게".
-     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유하므로 여기 한 곳만 바꾸면
-     *  핀 바늘 SVG·번호 텍스트·라벨이 모두 같은 비율로 커진다(숫자만 작게 남는 문제 없음). */
-    PIN_SCALE: 2,
+    /** [마스터 2026-08-31] 핀 크기 = 도면 대비 "완전 고정"(1/zoom 전체 상쇄)이 아니라
+     *  "부분 보정"(1/zoom 의 지수 k 승)으로 바꿈. 이유: 완전 고정이면 줌아웃 시 핀이
+     *  도면과 함께 작아지지 않아 도면 대비 과도하게 커 보임(마스터 스샷 1번 지적).
+     *  대신 지수 k(0~1)만큼만 상쇄 → 줌아웃하면 핀도 어느 정도 같이 작아지되(k<1이라
+     *  1/zoom 만큼 다 커지진 않음), 줌인해도 너무 작아지지 않는 절충.
+     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유 → 상수만 바꾸면 전체 반영. */
+    PIN_SCALE: 2,           // 기준 줌(zoom=1)에서의 핀 배율 — 마스터가 "적당하다"고 한 크기
+    PIN_SCALE_EXP: 0.6,     // 줌 보정 지수(0=보정 없음=도면과 완전히 같이 축소, 1=기존처럼 화면상 완전 고정)
+    PIN_MIN_SCALE: 0.8,     // 최종 배율 하한 — 줌인해도 핀이 이보다 작아지지 않음(가독성 하한)
+    PIN_MAX_SCALE: 4.5,     // 최종 배율 상한 — 줌아웃해도 핀이 이보다 커지지 않음(도면 대비 과대 방지)
     pinScreenScale() {
       const zoom = State.zoom || 1;
-      let f = (zoom < 1) ? (1 + (1 - zoom) * 0.65) : 1;  // 화면상 핀 크기 계수
-      f = Math.max(0.85, Math.min(1.7, f));
-      return (f * this.PIN_SCALE) / zoom;                 // 부모 zoom 상쇄(+줌아웃 확대)
+      const raw = this.PIN_SCALE * Math.pow(1 / zoom, this.PIN_SCALE_EXP); // 부분 역스케일
+      return Math.max(this.PIN_MIN_SCALE, Math.min(this.PIN_MAX_SCALE, raw));
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
@@ -5508,8 +5585,10 @@
             const db = document.getElementById("decks-block");
             if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
             // 구역 생성 다이얼로그 바로 띄움
+            // askDrawing:false — 이 핸들러가 아래(494행)에서 직접 input-drawing.click()을
+            // 호출하므로, createDeck 내부의 자동 파일창 트리거는 건너뛰어 중복 다이얼로그를 방지.
             try {
-              const created = await Projects.createDeck();
+              const created = await Projects.createDeck({ askDrawing: false });
               if (!created) return; // 사용자가 취소 → 업로드도 중단
             } catch (e) { return; }
           }
@@ -6637,7 +6716,8 @@
           Prompt && Prompt.toast && Prompt.toast("먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다.");
           const db = document.getElementById("decks-block");
           if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
-          try { const created = await Projects.createDeck(); if (!created) return; } catch (e) { return; }
+          // askDrawing:false — 이미 파일(file 인자)이 선택된 상태로 로드 중이므로 파일창을 또 띄우지 않음.
+          try { const created = await Projects.createDeck({ askDrawing: false }); if (!created) return; } catch (e) { return; }
         }
         if (!Projects.currentDeck) {
           if ((Projects.decks || []).length === 1) { Projects.currentDeck = Projects.decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
@@ -11570,6 +11650,13 @@
         await this.loadDecks();
         const created = this.decks.find((x) => x.id === d.id) || d;
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
+        // ── [마스터 요청] 구역 생성 직후 곧바로 도면 등록 흐름으로 연결 ──
+        // ensureDeck() 자동생성 경로(무한루프 방지)는 askDrawing:false 로 이 단계를 건너뜀.
+        if (opts.askDrawing !== false) {
+          Prompt.toast && Prompt.toast("구역 '" + name + "' 생성됨 — 이 구역에 등록할 도면을 선택하세요");
+          const uploadBtn = document.getElementById("btn-upload-drawing");
+          if (uploadBtn) uploadBtn.click();
+        }
         return created;
       } catch (e) { alert("네트워크 오류"); return null; }
       finally { this._creatingDeck = false; }
@@ -11579,8 +11666,8 @@
     async ensureDeck() {
       if (this.currentDeck) return this.currentDeck;
       if (this.decks.length) { this.currentDeck = this.decks[0]; this._renderDecks(); return this.currentDeck; }
-      // 구역이 전혀 없음 → 강제 생성
-      const created = await this.createDeck({ name: "구역 1", select: true });
+      // 구역이 전혀 없음 → 강제 생성 (도면 등록 흐름 중 자동생성 — 파일창을 또 띄우면 무한루프)
+      const created = await this.createDeck({ name: "구역 1", select: true, askDrawing: false });
       return created;
     },
 

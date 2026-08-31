@@ -473,8 +473,10 @@
             const db = document.getElementById("decks-block");
             if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
             // 구역 생성 다이얼로그 바로 띄움
+            // askDrawing:false — 이 핸들러가 아래(494행)에서 직접 input-drawing.click()을
+            // 호출하므로, createDeck 내부의 자동 파일창 트리거는 건너뛰어 중복 다이얼로그를 방지.
             try {
-              const created = await Projects.createDeck();
+              const created = await Projects.createDeck({ askDrawing: false });
               if (!created) return; // 사용자가 취소 → 업로드도 중단
             } catch (e) { return; }
           }
@@ -1602,7 +1604,8 @@
           Prompt && Prompt.toast && Prompt.toast("먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다.");
           const db = document.getElementById("decks-block");
           if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
-          try { const created = await Projects.createDeck(); if (!created) return; } catch (e) { return; }
+          // askDrawing:false — 이미 파일(file 인자)이 선택된 상태로 로드 중이므로 파일창을 또 띄우지 않음.
+          try { const created = await Projects.createDeck({ askDrawing: false }); if (!created) return; } catch (e) { return; }
         }
         if (!Projects.currentDeck) {
           if ((Projects.decks || []).length === 1) { Projects.currentDeck = Projects.decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
