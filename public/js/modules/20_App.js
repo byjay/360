@@ -412,6 +412,48 @@
           else this.enterZoneView(zid);
         });
       });
+      // [마스터] 상단 항상고정 대신 활성 구역 근처에 팝업 + 자동소멸(2.8초)
+      this._positionZonePager(bar, cur);
+      this._showZonePagerThenFade(bar);
+    },
+
+    /** 구역 페이저를 활성 구역 도형(zone-shape) 바로 아래에 배치. 없으면 상단 중앙 기본값 */
+    _positionZonePager(bar, activeZoneId) {
+      const area = UI.$("map-area");
+      if (!area) return;
+      const shape = activeZoneId ? document.querySelector('.zone-shape[data-zone="' + activeZoneId + '"]') : null;
+      if (!shape) {
+        // 활성 구역 없음(전체 도면) — 기본 상단 중앙
+        bar.style.top = "10px"; bar.style.left = "50%"; bar.style.right = ""; bar.style.transform = "translateX(-50%)";
+        return;
+      }
+      const areaRect = area.getBoundingClientRect();
+      const sRect = shape.getBoundingClientRect();
+      let top = (sRect.bottom - areaRect.top) + 8;
+      let left = (sRect.left + sRect.width / 2) - areaRect.left;
+      // 화면 하단을 벗어나면 구역 위쪽에 배치
+      const barH = bar.offsetHeight || 40;
+      if (top + barH > areaRect.height - 8) top = Math.max(8, (sRect.top - areaRect.top) - barH - 8);
+      // 좌우 클램프(대략 절반 너비 확보)
+      const halfW = (bar.offsetWidth || 200) / 2;
+      left = Math.min(Math.max(left, halfW + 8), areaRect.width - halfW - 8);
+      bar.style.top = top + "px"; bar.style.left = left + "px"; bar.style.right = ""; bar.style.transform = "translateX(-50%)";
+    },
+
+    /** 페이저를 잠깐 보여준 뒤 자동 fade-out. 호버 중엔 타이머 정지, 벗어나면 재시작 */
+    _showZonePagerThenFade(bar) {
+      bar.classList.add("pager-visible");
+      const clearTimer = () => { if (this._zonePagerTimer) { clearTimeout(this._zonePagerTimer); this._zonePagerTimer = null; } };
+      const startTimer = () => {
+        clearTimer();
+        this._zonePagerTimer = setTimeout(() => bar.classList.remove("pager-visible"), 2800);
+      };
+      if (!bar._pagerHoverBound) {
+        bar._pagerHoverBound = true;
+        bar.addEventListener("mouseenter", clearTimer);
+        bar.addEventListener("mouseleave", startTimer);
+      }
+      startTimer();
     },
 
     /* ── Sidebar ── */
