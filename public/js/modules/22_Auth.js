@@ -1,6 +1,11 @@
   // [마스터 2026-08-31] 디자이너 기능은 로그인 없이 바로 진입, 관리자만 구글 로그인 필요.
   //   마스터가 "다시 로그인 필수로" 지시하면 이 값을 false 로 바꾸면 즉시 원복(로그인 게이트 필수).
   const AUTO_DESIGNER_ENTRY = true;
+  // 자동입장 전용 토큰 — 데모 토큰(demo-*)과 완전히 별개 경로다.
+  //   데모 토큰은 P0 보안조치(CF 시크릿 DEMO_LOGIN=0)로 서버에서 영구 거부되므로 자동입장에 쓸 수 없다.
+  //   이 문자열은 서버 src/index.tsx 의 AUTO_DESIGNER_TOKEN 과 반드시 정확히 일치해야 한다.
+  //   서버는 이 토큰에 'designer' 역할만 부여하며 관리자/슈퍼로는 절대 승격되지 않는다.
+  const AUTO_DESIGNER_TOKEN = "auto-designer-entry-360";
 
   const Auth = {
     idToken: null,
@@ -26,7 +31,7 @@
            : this.role === "designer" ? "디자이너" : "뷰어";
     },
 
-    init() {
+    async init() {
       const $ = (id) => document.getElementById(id);
       // 로그아웃
       $("btn-signout") && $("btn-signout").addEventListener("click", () => this.signOut());
@@ -83,12 +88,17 @@
       // 서버에 설정된 Google Client ID(CF 시크릿)를 우선 적용 — 빌드파일 수정 없이 운영 주입
       this._loadServerConfig();
       // 복원된 토큰으로 권한 재확인
-      if (this.idToken) this.refresh();
-      // 저장된 로그인 정보가 전혀 없을 때만:
-      //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(데모 배지 숨김)
+      if (this.idToken) await this.refresh();
+      // 유효한 로그인이 없을 때만:
+      //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(배지 숨김)
       //  · AUTO_DESIGNER_ENTRY=false → [마스터 2026-06-22] 로그인 필수, 즉시 로그인 게이트
-      else if (!this._hasLocalToken()) {
-        if (AUTO_DESIGNER_ENTRY) this.demoLogin("designer", { silent: true });
+      // [버그②수정 2026-08-31] 종전에는 `else if` 라, 세션에 남은 폐기 토큰(예: 봉인된 demo-designer)이
+      //   복원되면 refresh()가 이를 거부·삭제한 뒤에도 자동입장/게이트 어느 쪽도 타지 않아
+      //   권한 없는 빈 화면에 갇혔다. 이제 refresh 결과(this.user)로 판단한다.
+      // [버그①수정 2026-08-31] await 누락으로 ProjectHub.load()가 토큰 세팅 전에 실행돼
+      //   "등록된 프로젝트가 없습니다"로 렌더되던 레이스 제거 — 토큰세팅+refresh 완료를 반드시 기다린다.
+      if (!this.user && !this._hasLocalToken()) {
+        if (AUTO_DESIGNER_ENTRY) await this._autoDesignerEntry();
         else this._openGate();
       }
     },
@@ -489,6 +499,32 @@
       }
       // 데모 모드 안내 배지 표시
       this._showDemoBadge();
+    },
+
+    /** [마스터 2026-08-31] 로그인 없는 디자이너 자동입장.
+     *  데모 토큰(demo-designer)은 서버에서 봉인(DEMO_LOGIN=0)되어 쓸 수 없으므로,
+     *  디자이너 권한만 가지는 전용 토큰(AUTO_DESIGNER_TOKEN)으로 서버 검증을 받는다.
+     *  서버 스위치(AUTO_DESIGNER_TOKEN_ENABLED)가 꺼져 있으면 인증 실패 → 기존 로그인 게이트로 폴백.
+     *  @returns {Promise<boolean>} 디자이너 진입 성공 여부 */
+    async _autoDesignerEntry() {
+      this._suppressDemoBadge = true;                    // 자동입장은 데모 배지를 띄우지 않는다
+      this.idToken = AUTO_DESIGNER_TOKEN;
+      try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
+      await this.refresh();                              // 서버가 전용 토큰을 검증해 role='designer' 세팅
+      if (!this.user) {                                  // 서버 스위치 off/네트워크 실패 → 정직하게 로그인 게이트
+        this.idToken = null;
+        try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
+        this._openGate();
+        return false;
+      }
+      this._closeGate();
+      if (this._pendingDesigner) {
+        const cb = this._pendingDesigner;
+        this._pendingDesigner = null;
+        if (this.isDesigner) cb();
+      }
+      this._showDemoBadge();                             // _suppressDemoBadge=true → 잔여 배지 제거만 수행
+      return this.isDesigner;
     },
 
     /** 데모 모드 안내 배지(허브 상단) */

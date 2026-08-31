@@ -39,6 +39,33 @@ app.use('/api/*', corsCfg)
  *  운영 배포 시: wrangler.jsonc vars 또는 `wrangler pages secret put SUPER_ADMIN_EMAIL` 권장. */
 const SUPER_ADMIN_FALLBACK = 'designssir@gmail.com'
 const SUPER_ADMIN = SUPER_ADMIN_FALLBACK // 모듈 레벨 데모/문서용 기본값
+
+// [마스터 2026-08-31 지시] 구글 로그인 재개 전까지 테넌트 구분 없이 전체 프로젝트/도면 노출.
+//   AUTO_DESIGNER_ENTRY(로그인 없는 데모 디자이너 자동입장)와 짝을 이루는 임시 스위치.
+//   구글 로그인을 재개하면 이 값을 false 로 되돌려 테넌트 격리를 즉시 복원한다.
+//   권한 체크(requireDesigner/requireAdmin/isSuperAdmin)는 절대 건드리지 않음 — "보이는 범위"만 확장.
+const TEMP_OPEN_ALL_TENANTS = true
+
+/* ══ [마스터 2026-08-31] 로그인 없는 디자이너 자동입장 전용 토큰 ═════════════
+ * 배경: 데모 토큰 패밀리(demo-super/demo-designer/demo-viewer)는 2026-06-23 P0 보안조치로
+ *   CF 시크릿 DEMO_LOGIN='0' 봉인됨(demo-super 로 슈퍼관리자 탈취 가능했던 구멍). 그 봉인은 유지한다.
+ * 따라서 자동입장은 데모 경로를 재개방하지 않고, **디자이너 권한만 가능한 별도 토큰**으로 처리한다.
+ * 불변식(코드로 강제):
+ *   ① 이 토큰의 이메일은 isSuperAdmin/isAdmin 에서 **항상 false** (아래 하드 denylist) → super/admin 승격 불가.
+ *   ② roleOf 는 super/admin 을 통과하지 못하므로 결과가 언제나 'designer'.
+ *   ③ demoLoginEnabled(c) 와 완전히 독립 — 이 스위치 하나로만 열고 닫는다.
+ * 되돌리기: 아래 ENABLED=false + 클라 public/js/modules/22_Auth.js 의 AUTO_DESIGNER_ENTRY=false. */
+const AUTO_DESIGNER_TOKEN_ENABLED = true   // 2026-08-31 마스터 지시: 로그인 없이 디자이너 진입. 구글로그인 재개 시 false.
+const AUTO_DESIGNER_TOKEN = 'auto-designer-entry-360'
+const AUTO_DESIGNER_EMAIL = 'auto.designer@seastargo.com'   // 예약 계정(실사용자 아님)
+const AUTO_DESIGNER_USER = { email: AUTO_DESIGNER_EMAIL, name: '설계자', picture: '', role: 'designer' as const }
+/** 자동입장 전용 토큰이면 디자이너 고정 사용자 반환, 아니면 null. 스위치 off 면 무조건 null. */
+function autoDesignerFromToken(token: string): any | null {
+  if (!AUTO_DESIGNER_TOKEN_ENABLED) return null
+  if (token !== AUTO_DESIGNER_TOKEN) return null
+  return { ...AUTO_DESIGNER_USER, _auto: true }
+}
+
 function superAdmin(c: any): string {
   const v = c?.env?.SUPER_ADMIN_EMAIL
   return (typeof v === 'string' && v.includes('@')) ? v.trim().toLowerCase() : SUPER_ADMIN_FALLBACK
@@ -56,6 +83,7 @@ function superAdminList(c: any): string[] {
 }
 function isSuperAdmin(c: any, email: string): boolean {
   const e = String(email || '').trim().toLowerCase()
+  if (e === AUTO_DESIGNER_EMAIL) return false   // [불변식①] 자동입장 예약계정은 슈퍼관리자가 될 수 없다
   return !!e && superAdminList(c).includes(e)
 }
 /** [역할모델] 일반관리자 allowlist — env ADMIN_EMAILS(쉼표구분). 마스터가 지정.
@@ -68,6 +96,7 @@ function adminList(c: any): string[] {
 }
 function isAdmin(c: any, email: string): boolean {
   const e = String(email || '').trim().toLowerCase()
+  if (e === AUTO_DESIGNER_EMAIL) return false   // [불변식①] 자동입장 예약계정은 관리자가 될 수 없다(ADMIN_EMAILS 에 넣어도 무효)
   return !!e && (isSuperAdmin(c, e) || adminList(c).includes(e))
 }
 
@@ -420,6 +449,9 @@ async function getUser(c: any): Promise<any | null> {
   // 데모 토큰 우선 처리 (구글 로그인 없이 바로 진입/테스트)
   const demo = demoUserFromToken(c, token)
   if (demo) return demo
+  // 로그인 없는 디자이너 자동입장 전용 토큰 (데모 봉인 DEMO_LOGIN=0 과 무관한 별도 경로, designer 고정)
+  const autoD = autoDesignerFromToken(token)
+  if (autoD) return autoD
   // 회사 이메일 자체가입 로컬 세션 토큰 ("local-...")
   if (token.startsWith('local-')) {
     const lu = await resolveLocalSession(c, token)
@@ -435,6 +467,8 @@ async function getUser(c: any): Promise<any | null> {
 }
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
+  // 자동입장 예약계정: 스위치가 켜져 있을 때만 디자이너. designers 테이블 self-heal INSERT 도 타지 않게 최상단 처리.
+  if (String(email || '').trim().toLowerCase() === AUTO_DESIGNER_EMAIL) return AUTO_DESIGNER_TOKEN_ENABLED
   if (isAdmin(c, email)) return true   // 관리자(슈퍼/일반)는 설계 권한도 보유(관리자 ≥ 디자이너)
   if (demoLoginEnabled(c) && email === DEMO_DESIGNER.email) return true
   // 회사 도메인(@seastargo.com 등) 계정은 로그인 경로와 무관하게 설계자 권한 (자체가입과 정책 일치)
@@ -469,7 +503,7 @@ app.get('/api/auth/me', async (c) => {
   const designer = await isDesigner(c, user.email)
   const role = roleOf(c, user.email, designer)
   // 로그인 시 디자이너의 표시 이름 갱신(존재 시, 데모 계정 제외)
-  if (role === 'designer' && !user._demo) {
+  if (role === 'designer' && !user._demo && !user._auto) {
     await c.env.DB.prepare('UPDATE designers SET name = ?, updated_at = ? WHERE email = ?')
       .bind(user.name, Date.now(), user.email).run()
   }
@@ -481,9 +515,9 @@ app.get('/api/auth/me', async (c) => {
     ).bind(user.email).first().catch(() => null)
     if (rr) request_status = rr.status
   }
-  // 실제 로그인(데모 제외)만 로그 기록
-  if (!user._demo) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role, local: !!user._local } })
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, request_status, super_admin: superAdmin(c) })
+  // 실제 로그인(데모/자동입장 제외)만 로그 기록 — 자동입장은 방문마다 발생해 로그를 오염시킨다
+  if (!user._demo && !user._auto) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role, local: !!user._local } })
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, auto: !!user._auto, request_status, super_admin: superAdmin(c) })
 })
 
 /* ── 클라이언트 인증 설정(공개 가능 값만) ──
@@ -1327,7 +1361,7 @@ app.get('/api/projects', async (c) => {
     for (const r of (rr.results || [])) myReqStatus.set(String(r.project_id), String(r.status))
     globalDesigner = await isDesigner(c, email)
   }
-  const list = (results || []).filter((p: any) => {
+  const list = TEMP_OPEN_ALL_TENANTS ? (results || []) : (results || []).filter((p: any) => {
     if (isSuperUser) return true
     const isOwner = !!email && p.owner === email
     if (globalDesigner || isOwner || myRole.has(p.id)) return true
@@ -1713,8 +1747,11 @@ app.get('/api/admin/project-access-requests', async (c) => {
 // ── 권한 매트릭스 (프로젝트 × 사용자 2D 뷰) ─────────────────────────────
 
 app.get('/api/admin/access-matrix', async (c) => {
-  const user = await getUser(c)
-  if (!user) return c.json({ error: 'login required' }, 401)
+  // [보안 2026-08-31] 종전에는 "로그인만 하면" 통과라, 이 응답의 users(=local_users+멤버+신청자 전체 이메일)를
+  //   디자이너/뷰어 누구나 열람할 수 있었다. 자동입장 토큰 도입으로 익명에게까지 노출되므로 관리자 전용으로 좁힌다.
+  //   호출부는 관리자 패널(25_Designers.loadMatrix) 뿐이고 짝 POST 는 이미 슈퍼 전용 → UX 회귀 없음.
+  const user = await requireAdmin(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
   const superUser = isSuperAdmin(c, user.email)
   // 사용자 목록: project_members + local_users + access_requests 합집합
   const [pm, lu, ar]: any[] = await Promise.all([
@@ -1933,20 +1970,28 @@ app.get('/tables/pano_images', async (c) => {
   if (!user) return c.json({ error: 'unauthorized' }, 401)   // [보안 H4] 360 이미지 무인증 열거 차단
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
   // [Tenant 격리] 자신의 테넌트 360만 열거(슈퍼/마이그레이션전은 전체). NULL 구행은 기본테넌트 귀속.
-  const tid = await tenantOf(c, user)
+  //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 필터 생략 — 전체 열거(deleted=0 유지).
   let results: any[] = []
-  if (tid) {
-    const includeNull = (tid === DEFAULT_TENANT)
-    const sql = includeNull
-      ? 'SELECT * FROM pano_images WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
-      : 'SELECT * FROM pano_images WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
-    const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
-    results = r.results || []
-  } else {
+  if (TEMP_OPEN_ALL_TENANTS) {
     const r = await c.env.DB.prepare(
       'SELECT * FROM pano_images WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
     ).bind(limit).all()
     results = r.results || []
+  } else {
+    const tid = await tenantOf(c, user)
+    if (tid) {
+      const includeNull = (tid === DEFAULT_TENANT)
+      const sql = includeNull
+        ? 'SELECT * FROM pano_images WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
+        : 'SELECT * FROM pano_images WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
+      const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
+      results = r.results || []
+    } else {
+      const r = await c.env.DB.prepare(
+        'SELECT * FROM pano_images WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
+      ).bind(limit).all()
+      results = r.results || []
+    }
   }
   return c.json({ data: results.map(mapImage), total: results.length })
 })
@@ -1959,10 +2004,13 @@ app.get('/tables/pano_images/:id', async (c) => {
   const row = await c.env.DB.prepare('SELECT * FROM pano_images WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
   // [Tenant 격리] 타 테넌트 360 조회 차단. NULL 구행은 기본테넌트로 간주(하위호환).
-  const tid = await tenantOf(c, user)
-  if (tid) {
-    const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
-    if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+  //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 체크 생략.
+  if (!TEMP_OPEN_ALL_TENANTS) {
+    const tid = await tenantOf(c, user)
+    if (tid) {
+      const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
+      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+    }
   }
   return c.json(mapImage(row))
 })
@@ -2070,21 +2118,29 @@ app.get('/tables/deployments', async (c) => {
   if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
   // [PART 0 · Tenant 격리] 자신의 테넌트 배포본만 열거(슈퍼/마이그레이션전은 전체)
-  const tid = await tenantOf(c, user)
+  //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 필터 생략 — 전체 열거(deleted=0 유지).
   let results: any[] = []
-  if (tid) {
-    // tenant_id 가 NULL 인 구버전 행도 기본 테넌트 사용자에게는 함께 보이도록(하위호환)
-    const includeNull = (tid === DEFAULT_TENANT)
-    const sql = includeNull
-      ? 'SELECT * FROM deployments WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
-      : 'SELECT * FROM deployments WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
-    const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
-    results = r.results || []
-  } else {
+  if (TEMP_OPEN_ALL_TENANTS) {
     const r = await c.env.DB.prepare(
       'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
     ).bind(limit).all()
     results = r.results || []
+  } else {
+    const tid = await tenantOf(c, user)
+    if (tid) {
+      // tenant_id 가 NULL 인 구버전 행도 기본 테넌트 사용자에게는 함께 보이도록(하위호환)
+      const includeNull = (tid === DEFAULT_TENANT)
+      const sql = includeNull
+        ? 'SELECT * FROM deployments WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
+        : 'SELECT * FROM deployments WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
+      const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
+      results = r.results || []
+    } else {
+      const r = await c.env.DB.prepare(
+        'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
+      ).bind(limit).all()
+      results = r.results || []
+    }
   }
   return c.json({ data: results.map(mapDeployment), total: results.length })
 })
@@ -2100,10 +2156,13 @@ app.get('/tables/deployments/:id', async (c) => {
   if (!row) return c.json({ error: 'not found' }, 404)
   // [PART 0 · Tenant 격리] 타 테넌트 자원 접근 차단(슈퍼/마이그레이션전 제외).
   //   tenant_id NULL 구행은 기본 테넌트로 간주(하위호환).
-  const tid = await tenantOf(c, user)
-  if (tid) {
-    const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
-    if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+  //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 체크 생략.
+  if (!TEMP_OPEN_ALL_TENANTS) {
+    const tid = await tenantOf(c, user)
+    if (tid) {
+      const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
+      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+    }
   }
   return c.json(mapDeployment(row))
 })
