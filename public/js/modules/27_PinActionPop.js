@@ -20,13 +20,31 @@
         UI.renderPinsOnMap();
         const m = document.querySelector('.pin-marker[data-id="' + pin.id + '"]');
         if (m) m.classList.add("edit-unlocked");
-        Prompt.toast && Prompt.toast("🔓 '" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
+        Prompt.toast && Prompt.toast("'" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
       });
       $("pap-edit") && $("pap-edit").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;
         State.pinEditUnlocked = pin.id;
         this.close();
         App.editPin(pin.id);
+      });
+      $("pap-note") && $("pap-note").addEventListener("click", async () => {
+        const pin = this._pin(); if (!pin) return;
+        this.close();
+        const r = await Prompt.ask({
+          title: "노트 등록",
+          sub: "이 포인트에 남길 노트를 입력하세요 (비우고 확인하면 삭제)",
+          placeholder: "예: 도장 박리 / 재검사 필요",
+          value: pin.note || "",
+          allowEmpty: true
+        });
+        if (!r) return;
+        const note = (r.value || "").trim();
+        if (note) pin.note = note; else delete pin.note;
+        UI.renderPinsOnMap && UI.renderPinsOnMap();
+        UI.renderPinList && UI.renderPinList();
+        App._autoSave && App._autoSave();
+        Prompt.toast && Prompt.toast(note ? "노트 저장됨" : "노트 삭제됨");
       });
       $("pap-del") && $("pap-del").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;

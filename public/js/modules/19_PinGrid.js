@@ -1,5 +1,5 @@
   const PinGrid = {
-    collapsed: true,        // ★ 기본 접힘 — 버튼(리스트 열기)을 눌러야만 표시(마스터 요청)
+    collapsed: true,        // 기본 접힘 — 버튼(리스트 열기)을 눌러야만 표시(마스터 요청)
     query: "",
 
     /** 모바일/태블릿(터치) 또는 좁은 화면이면 true → 화면 가리지 않는 바텀시트(드롭다운) 모드.
@@ -66,7 +66,7 @@
         if (reopen) reopen.classList.add("hidden");
         return;
       }
-      // ★ 데스크톱·모바일 모두: 기본 접힘. 사용자가 '포인트 리스트 열기' 버튼을 눌러야만 펼쳐짐.
+      // 데스크톱·모바일 모두: 기본 접힘. 사용자가 '포인트 리스트 열기' 버튼을 눌러야만 펼쳐짐.
       panel.classList.remove("hidden");
       // 접힌 상태면 패널은 숨고 리오픈 탭만
       if (this.collapsed) {
@@ -133,7 +133,7 @@
       // focusPin(pin, true): 페이지 전환 → flyTo → openPano(360°) 까지 일괄 처리
       App.focusPin(pin, !!hasContent);
       if (!hasContent && typeof Prompt !== "undefined" && Prompt.toast) {
-        Prompt.toast("ℹ️ 이 포인트에는 등록된 360° 미디어가 없습니다.");
+        Prompt.toast("ℹ 이 포인트에는 등록된 360° 미디어가 없습니다.");
       }
     },
 
@@ -157,7 +157,7 @@
       a.download = "seastar_points_P" + (State.pdfPage || 1) + ".csv";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      if (typeof Prompt !== "undefined") Prompt.toast("📋 CSV 내보내기 완료");
+      if (typeof Prompt !== "undefined") Prompt.toast("CSV 내보내기 완료");
     }
   };
 

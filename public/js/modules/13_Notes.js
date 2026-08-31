@@ -110,7 +110,17 @@
       const listEl = document.getElementById("pnp-list");
       const emptyEl = document.getElementById("pnp-empty");
       if (!listEl) return;
-      let items = this._list;
+      // [마스터] 필터 탭에 상태별 카운트 표시 (전체/미해결/진행중/완료 N)
+      const counts = { all: this._list.length, open: 0, progress: 0, done: 0 };
+      this._list.forEach((n) => { const s = n.status || "open"; if (counts[s] != null) counts[s]++; });
+      document.querySelectorAll("#pnp-filter .pnp-fbtn").forEach((b) => {
+        const base = { all: "전체", open: "미해결", progress: "진행중", done: "완료" }[b.dataset.f] || b.dataset.f;
+        const c = counts[b.dataset.f] || 0;
+        b.textContent = c > 0 ? base + " " + c : base;
+      });
+      // [마스터] 최신순 정렬(최근 이슈가 위로)
+      const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
+      let items = this._list.slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
       if (this._filter !== "all") items = items.filter((n) => n.status === this._filter);
       if (items.length === 0) {
         listEl.innerHTML = "";
@@ -127,7 +137,7 @@
       listEl.innerHTML = items.map((n) => {
         const st = n.status || "open";
         const stLabel = this.STATUS[st] || st;
-        const assignee = n.assignee ? `<span class="pnp-assignee-tag">👤 ${UI.escapeHtml(n.assignee)}</span>` : "";
+        const assignee = n.assignee ? `<span class="pnp-assignee-tag">${UI.escapeHtml(n.assignee)}</span>` : "";
         const editable = canEdit(n);
         const stBtns = editable ? `
           <div class="pnp-status-actions">

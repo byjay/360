@@ -37,7 +37,7 @@
       //   영역 도구를 켤 때 평면으로 강제 전환. (핀 선택 자동 ISO 의 부작용 차단)
       if (State.isoView && typeof MapCtrl !== "undefined" && MapCtrl.exitIso) {
         MapCtrl.exitIso();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🗺️ 평면 뷰로 전환 — 영역을 그린 뒤 ISO 로 돌아가세요");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("평면 뷰로 전환 — 영역을 그린 뒤 ISO 로 돌아가세요");
       }
       // 같은 도형 다시 누르면 끄기
       if (State.drawingZone && this._shape === shape) { this._cancelDraw(); return; }
@@ -160,7 +160,9 @@
         label = prompt("영역 이름", defLabel) || "";
         if (!label) { this._cancelDraw(); return; }
       }
-      const color = ZONE_COLORS[State.zones.length % ZONE_COLORS.length];
+      // [버그수정] 라벨은 현재 페이지 기준인데 색상이 전체 기준이라 페이지별 색이 불일치 → 페이지 기준으로 통일
+      const _pgZones = State.zones.filter(z => (z.page||1)===(State.pdfPage||1)).length;
+      const color = ZONE_COLORS[_pgZones % ZONE_COLORS.length];
       const bb = this._bbox(geom);
       const zone = Object.assign({
         id: this._newId(), page: State.pdfPage || 1,
@@ -172,7 +174,7 @@
       this._cancelDraw();
       this.render();
       this.renderList();
-      // [오프라인 작업지시서 ❻] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         OpLog.recordCurrent("zone", "upsert", zone.id, zone).then(() => persistLocalDeployment()).catch(() => {});
       }
@@ -377,9 +379,13 @@
       this.highlight(id);
     },
     _flyToZone(zone) {
-      const cx = zone.x + zone.w / 2, cy = zone.y + zone.h / 2;
+      const bb = this._bbox(zone);   // rect/circle/poly 모두 {x,y,w,h}
+      // [버그수정] ISO 활성 시 평면 flyTo 는 rotateX(54°) 때문에 화면 아래로 빗나간다(줌이 영역 밑으로 이동).
+      //   ISO 좌표를 정확히 역산하는 focusZoneIso 로 분기.
+      if (State.isoView && MapCtrl.focusZoneIso) { MapCtrl.focusZoneIso(bb); return; }
+      const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       // 영역 크기에 맞춰 줌 (작은 영역일수록 더 확대)
-      const span = Math.max(zone.w, zone.h);
+      const span = Math.max(bb.w, bb.h);
       const z = Math.max(1, Math.min(4.5, 60 / Math.max(span, 8)));
       if (MapCtrl.flyTo) MapCtrl.flyTo(cx, cy, z, 650);
     },
@@ -393,7 +399,7 @@
       if (this._active === id) this._active = null;
       this.render();
       this.renderList();
-      // [오프라인 작업지시서 ❻] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }

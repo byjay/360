@@ -91,7 +91,7 @@
         ${z.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(z.note)}</div></div>` : ""}
 
         <div class="insp-actions">
-          <button class="insp-btn primary" data-act="zoom">📄 구역 페이지 열기</button>
+          <button class="insp-btn primary" data-act="zoom">구역 페이지 열기</button>
           <button class="insp-btn ghost" data-act="fly">화면 이동</button>
           ${designer ? `<button class="insp-btn ghost" data-act="rename">이름 변경</button>
           <button class="insp-btn danger" data-act="del">구역 삭제</button>` : ""}
@@ -153,7 +153,7 @@
         </div>
 
         ${p.note ? `<div class="insp-section"><div class="insp-section-h">메모</div><div class="insp-note">${UI.escapeHtml(p.note)}</div></div>` : ""}
-        ${docs.length ? `<div class="insp-section"><div class="insp-section-h">첨부 자료 <span class="insp-count">${docs.length}</span></div><div class="insp-docs">${docs.map(d => `<span class="insp-doc">📎 ${UI.escapeHtml(d.name || "자료")}</span>`).join("")}</div></div>` : ""}
+        ${docs.length ? `<div class="insp-section"><div class="insp-section-h">첨부 자료 <span class="insp-count">${docs.length}</span></div><div class="insp-docs">${docs.map(d => `<span class="insp-doc">${UI.escapeHtml(d.name || "자료")}</span>`).join("")}</div></div>` : ""}
 
         <div class="insp-actions">
           ${has360 ? `<button class="insp-btn primary" data-act="open">360° 열기</button>` : ""}
