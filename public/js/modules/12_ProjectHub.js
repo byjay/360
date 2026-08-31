@@ -46,7 +46,7 @@
         if (!r.ok) { if (err) { err.textContent = j.error || "설정 실패"; err.classList.remove("hidden"); } return; }
         p.subdomain = j.subdomain || null;
         this._renderSubdomainStatus(j.subdomain, j.url);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(j.subdomain ? ("✅ 전용 도메인 설정: " + (j.url || j.subdomain)) : "도메인 해제됨");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(j.subdomain ? ("전용 도메인 설정: " + (j.url || j.subdomain)) : "도메인 해제됨");
         // 카드 목록도 갱신
         this.refreshIfVisible && this.refreshIfVisible();
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
@@ -144,7 +144,7 @@
           { method: "POST", headers: Auth.headers() });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const label = action === "approve" ? "승인" : "거절";
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + label + " 처리됨");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + label + " 처리됨");
         await this.loadAccessReqs();
         if (action === "approve") await this.loadMembers();
       } catch (e) { alert("처리 실패: " + (e && e.message ? e.message : "오류")); }
@@ -193,7 +193,7 @@
         p.my_request = "pending";
         this.closeAccessReq();
         const label = r.status === 409 ? "이미 멤버입니다." : "접근 신청이 접수되었습니다. 관리자 승인을 기다려 주세요.";
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + label, 3000);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + label, 3000);
         // 카드 상태 갱신
         this.render();
       } catch (e) {
@@ -219,8 +219,8 @@
         await this.loadMembers();
         if (typeof Prompt !== "undefined" && Prompt.toast) {
           const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
-          if (j.created) Prompt.toast("✅ " + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
-          else Prompt.toast("✅ " + email + " 배정(" + roleLabel + ")");
+          if (j.created) Prompt.toast("" + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
+          else Prompt.toast("" + email + " 배정(" + roleLabel + ")");
         }
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
     },
@@ -239,6 +239,14 @@
       Auth._applyUi();          // 인증바 상태 동기화 (hub 슬롯 포함)
       Auth._renderHubSignin();  // 미로그인 시 hub 로그인 버튼 렌더
       await this.load();
+      // [마스터 2026-08-31] AUTO_DESIGNER_ENTRY 자동입장 연장 — 프로젝트 선택 화면(카드 클릭) 단계를
+      //   건너뛰고 가장 최근 프로젝트로 바로 진입. 서버가 created_at DESC로 정렬해 오므로 list[0] = 최신.
+      //   세션당 1회만(뒤로가기로 재방문 시 _autoEntered가 이미 true → 정상적으로 선택 화면 유지, 전환 경로 보존).
+      //   스위치 false면 이 블록 전체 무시 → 기존처럼 항상 선택 화면.
+      if (typeof AUTO_DESIGNER_ENTRY !== "undefined" && AUTO_DESIGNER_ENTRY && !this._autoEntered && this.list.length > 0 && Auth.isDesigner) {
+        this._autoEntered = true;
+        this.openProject(this.list[0]);
+      }
     },
 
     async load() {
@@ -249,7 +257,7 @@
           this.list = (await OfflineLoad.projects()).filter(Boolean);
           this._offline = true;
           if (typeof Prompt !== "undefined" && Prompt.toast && this.list.length)
-            Prompt.toast("📴 오프라인 — 다운로드한 프로젝트 " + this.list.length + "개 표시");
+            Prompt.toast("오프라인 — 다운로드한 프로젝트 " + this.list.length + "개 표시");
         } catch (e) { this.list = []; }
         this._loaded = true; this.render(); return;
       }
@@ -404,7 +412,7 @@
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
 
-        // [오프라인 작업지시서 ❷] 오프라인 다운로드 버튼
+        // [오프라인 작업지시서 ] 오프라인 다운로드 버튼
         const dl = card.querySelector('[data-act="dl"]');
         if (dl) dl.addEventListener("click", async (e) => {
           e.stopPropagation();
@@ -416,9 +424,9 @@
               dl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
             });
             const v = await OfflineBundle.verify(p.id);
-            if (v.ok) Prompt.toast("✅ 오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
-            else Prompt.toast("⚠️ 일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
-          } catch (err) { Prompt.toast("❌ " + (err && err.message ? err.message : "다운로드 실패")); }
+            if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
+            else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
+          } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
           finally { dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig; dl.setAttribute("title", "오프라인 다운로드"); }
         });
 
@@ -454,7 +462,7 @@
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
-      // ★ 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
+      // 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
       //   isDesigner가 false인 채로 카드를 누르면 뷰어로 진입 → "PDF 업로드가 안 된다"는
       //   회귀 느낌을 준다. 토큰이 있으면 권한 재확인을 한 번 await 한 뒤 모드를 결정한다.
       if (!Auth.isDesigner && Auth.idToken) {
@@ -499,7 +507,7 @@
         const r = await fetch("/api/projects/" + p.id + "/" + (willPublish ? "publish" : "unpublish"), { method: "POST", headers: Auth.headers() });
         if (!r.ok) throw new Error("HTTP " + r.status);
         p.published = willPublish;
-        Prompt && Prompt.toast && Prompt.toast(willPublish ? "🚀 '" + p.name + "' 배포 완료 — 뷰어가 열람할 수 있습니다." : "🔒 '" + p.name + "' 배포 취소 — 뷰어에게 비공개.", 2800);
+        Prompt && Prompt.toast && Prompt.toast(willPublish ? "'" + p.name + "' 배포 완료 — 뷰어가 열람할 수 있습니다." : "'" + p.name + "' 배포 취소 — 뷰어에게 비공개.", 2800);
         await this.load();
       } catch (e) {
         Prompt && Prompt.toast && Prompt.toast("배포 처리 실패: " + (e && e.message ? e.message : "네트워크 오류"), 3200);
