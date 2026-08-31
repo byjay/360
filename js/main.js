@@ -3039,6 +3039,8 @@
        · 로그인 안 함/뷰어: 카드 클릭 → 뷰어로 해당 프로젝트 열람
        · 디자이너/슈퍼: "+새 프로젝트" + 카드 편집/삭제, 카드 클릭 → 디자이너 작업
   ══════════════════════════════════════════ */
+  const ASK_ENTRY_MODE = false; // 2026-08 마스터 지시: 지금은 묻지 말고 무조건 편집모드. 뷰어 배포 후 true 로 바꾸면 다시 선택 모달이 뜬다.
+
   const ProjectHub = {
     list: [],
     _loaded: false,
@@ -3511,6 +3513,10 @@
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
       this._modeSelectProject = p;
+      if (!ASK_ENTRY_MODE) { // 스위치 OFF: 묻지 않고 무조건 편집모드로 바로 진입
+        await this._enterAsDesigner();
+        return;
+      }
       const m = document.getElementById("proj-mode-select-modal");
       if (!m) { // 모달 마크업이 없으면(구버전) 안전 폴백 — 기존 자동판정 동작 유지
         if (Auth.isDesigner) App.openApp("designer", { project: p });
