@@ -1417,6 +1417,16 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   border-radius: 50%; background: var(--gold);
   box-shadow: 0 0 8px rgba(245,158,11,.9);
 }
+/* [마스터 요청] 미니맵 헤드 아이콘 버튼 톤(기존 무스타일 상태를 명시화·대비 확보) + 방향 조절 토글 */
+.pano-radar-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border-radius: 5px;
+  background: transparent; border: none; color: rgba(255,255,255,.72);
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.pano-radar-toggle:hover { background: rgba(245,158,11,.18); color: #fff; }
+.pano-radar-toggle.active { color: var(--gold); background: rgba(245,158,11,.22); }
+.pano-radar.dir-adjust-mode .pano-radar-stage { cursor: crosshair; }
 
 /* ── 핀 간 이동 (이전/다음) ── */
 .pano-nav {
