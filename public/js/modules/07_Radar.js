@@ -64,7 +64,13 @@
           stage.style.transformOrigin = "0 0";
           stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-view.x).toFixed(2) + "%, " + (-view.y).toFixed(2) + "%)";
         } else {
-          stage.style.transform = "";   // 구역 밖이면 전체 도면
+          // [마스터] 구역이 없어도 현재 핀 주변을 확대 — 전체 도면을 작게 보여주지 말고 항상 "크게"
+          const r = 18;                                      // 핀 중심 ±18% (≈36% 영역)
+          const vx = Math.max(0, Math.min(100 - r * 2, pin.x - r));
+          const vy = Math.max(0, Math.min(100 - r * 2, pin.y - r));
+          const s = 100 / (r * 2);
+          stage.style.transformOrigin = "0 0";
+          stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-vx).toFixed(2) + "%, " + (-vy).toFixed(2) + "%)";
         }
       }
 

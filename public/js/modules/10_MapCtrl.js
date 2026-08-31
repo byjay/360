@@ -98,9 +98,9 @@
       // ISO 방향 표시 토스트
       try {
         if (State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("🧊 ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
+          Prompt.toast("ISO 3D · " + this.ISO_LABELS[State.isoDir] + " 시점 (버튼 반복 → 4방향 회전, 평면 복귀)");
         else if (!State.isoView && typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("🗺️ 평면 뷰로 복귀");
+          Prompt.toast("평면 뷰로 복귀");
       } catch (e) {}
       const size = this._contentSize();
       if (tr) {

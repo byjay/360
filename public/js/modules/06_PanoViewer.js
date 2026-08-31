@@ -49,7 +49,7 @@
       }
 
       const img = new Image();
-      // 🔴 [핵심 버그 수정] crossOrigin 은 "외부 http(s) 출처" 일 때만 설정.
+      // [핵심 버그 수정] crossOrigin 은 "외부 http(s) 출처" 일 때만 설정.
       //   data:/blob:/same-origin 에 crossOrigin="anonymous" 를 붙이면 일부 모바일
       //   브라우저가 WebGL 텍스처 보안정책으로 onerror 처리 → "이미지를 불러올 수 없습니다".
       if (/^https?:\/\//i.test(src) && !src.startsWith(location.origin)) {
@@ -211,6 +211,23 @@
     /* ── 컨트롤 ── */
     setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); this._invalidate(); },
     resetView()   { this.S.lon = 0; this.S.lat = 0; this.S.fov = 75; this.S.roll = 0; this._invalidate(); },
+    /** [FARO Markers] 특정 마커(lon/lat)로 시점을 부드럽게 이동(최단 회전 경로) */
+    lookAtSpot(lon, lat) {
+      const startLon = this.S.lon, startLat = this.S.lat;
+      const dLon = ((lon - (startLon % 360)) + 540) % 360 - 180;
+      const tLat = Math.max(-85, Math.min(85, lat || 0));
+      const t0 = performance.now(), dur = 500;
+      if (this._spotRaf) cancelAnimationFrame(this._spotRaf);
+      const step = (now) => {
+        const k = Math.min(1, (now - t0) / dur);
+        const e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        this.S.lon = startLon + dLon * e;
+        this.S.lat = startLat + (tLat - startLat) * e;
+        this._invalidate();
+        if (k < 1) this._spotRaf = requestAnimationFrame(step);
+      };
+      this._spotRaf = requestAnimationFrame(step);
+    },
     /** [마스터: 수평 보정] 천정 기울기 보정 — roll 을 deg 만큼 가감(한계 ±20°). */
     adjustRoll(deg) { this.S.roll = Math.max(-20, Math.min(20, (this.S.roll || 0) + deg)); this._invalidate();
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("수평 보정 " + (this.S.roll > 0 ? "+" : "") + this.S.roll.toFixed(1) + "°"); },
@@ -234,7 +251,7 @@
           if (isFinite(roll) && Math.abs(roll) > 0.05 && Math.abs(roll) <= 20) {
             this.S.roll = -roll;   // 카메라 roll 의 역 → 수평 복원
             this._invalidate();
-            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자동 수평 보정 적용 (" + roll.toFixed(1) + "°) — 하단 ↺/↻로 미세조정");
+            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자동 수평 보정 적용 (" + roll.toFixed(1) + "°) — 하단 ↺/↻로 미세조정");
           }
         }
       } catch (e) { /* 파싱 실패 시 무시(수동 보정 사용) */ }
@@ -319,7 +336,7 @@
       };
       window.addEventListener("deviceorientation", this._gyroHandler, true);
       this._gyroOn = true;
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🧭 자이로 켜짐 — 폰을 돌려 둘러보세요");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 켜짐 — 폰을 돌려 둘러보세요");
     },
 
     _stopGyro() {
@@ -361,11 +378,11 @@
     _spotTexture(spot, idx) {
       const c = document.createElement("canvas"); c.width = c.height = 128;
       const g = c.getContext("2d");
-      const col = spot.kind === "nav" ? "#3a97dd" : spot.kind === "equip" ? "#e0b14a" : "#e0503e"; // 이동/장비/결함
+      const col = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd", nav: "#3a97dd" }[spot.kind] || "#e0503e"; // 결함/장비/안전/메모/이동
       g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = .92; g.fill(); g.globalAlpha = 1;
       g.lineWidth = 6; g.strokeStyle = "#fff"; g.stroke();
       g.fillStyle = "#fff"; g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-      g.fillText(spot.kind === "nav" ? "➤" : String(idx + 1), 64, 70);
+      g.fillText(spot.kind === "nav" ? "" : String(idx + 1), 64, 70);
       const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
     },
     renderSpots(spots) {
