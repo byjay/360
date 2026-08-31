@@ -304,6 +304,20 @@
       // 구역 페이저(전체+구역 탭) 갱신
       try { if (typeof App !== "undefined" && App._renderZonePager) App._renderZonePager(); } catch (e) {}
       if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
+      this.updateLabelScale();
+    },
+
+    /** [마스터] 확대해도 흐려지지 않게: 부모 #map-transform 의 scale(zoom) 을
+     *  라벨마다 역스케일(1/zoom) 로 상쇄 → 라벨은 항상 "화면상 일정 크기"로
+     *  자연 해상도 렌더(업스케일 없음 → 크리스프). 핀 마커의 pinScreenScale()과 동일 원리. */
+    updateLabelScale() {
+      const layer = document.getElementById("zones-layer");
+      if (!layer) return;
+      const zoom = (typeof State !== "undefined" && State.zoom) || 1;
+      const inv = (1 / zoom).toFixed(3);
+      layer.querySelectorAll(".zone-box-label").forEach(el => {
+        el.style.transform = `scale(${inv})`;
+      });
     },
 
     /* ── 사이드바 목록 ── */
