@@ -1366,9 +1366,13 @@
     spin(lon, fov) {
       const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
       if (!fan) return;
-      // lon(deg): 0 = +Z 방향. 도면 위 "위(12시)"를 기준으로 회전시킨다.
+      // lon(deg): 0 = +Z 방향. 360 사진마다 촬영 시작 방향(lon=0)이 제각각이라
+      // 도면 위 "위(12시)"와 일치한다는 보장이 없음 — 핀별 보정값(dirOffset)으로 상쇄.
+      // [마스터: 방향 설정] pin.dirOffset = 사용자가 도면 위쪽으로 지정한 순간의 lon 값.
+      const offset = (this._pin && this._pin.dirOffset) || 0;
+      const effectiveLon = lon - offset;
       // conic-gradient가 -35°~+35°(약 70°) 부채꼴이므로 회전만 적용.
-      fan.style.transform = "rotate(" + (lon) + "deg)";
+      fan.style.transform = "rotate(" + (effectiveLon) + "deg)";
     },
 
     /** 현재 표시 중인 도면(페이지) 이미지 src */
@@ -6494,6 +6498,14 @@
       // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
+      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 위쪽" 기준으로 저장
+      UI.$("btn-pano-setdir") && UI.$("btn-pano-setdir").addEventListener("click", () => {
+        const pin = PanoViewer._currentPin;
+        if (!pin) return;
+        pin.dirOffset = PanoViewer.S.lon;
+        this._autoSave && this._autoSave();
+        Prompt && Prompt.toast && Prompt.toast("방향이 저장되었습니다");
+      });
       // [마스터: 구면 마커] 추가 모드 토글
       // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드
       UI.$("btn-pano-spot") && UI.$("btn-pano-spot").addEventListener("click", () => {

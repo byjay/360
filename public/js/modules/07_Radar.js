@@ -94,9 +94,13 @@
     spin(lon, fov) {
       const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
       if (!fan) return;
-      // lon(deg): 0 = +Z 방향. 도면 위 "위(12시)"를 기준으로 회전시킨다.
+      // lon(deg): 0 = +Z 방향. 360 사진마다 촬영 시작 방향(lon=0)이 제각각이라
+      // 도면 위 "위(12시)"와 일치한다는 보장이 없음 — 핀별 보정값(dirOffset)으로 상쇄.
+      // [마스터: 방향 설정] pin.dirOffset = 사용자가 도면 위쪽으로 지정한 순간의 lon 값.
+      const offset = (this._pin && this._pin.dirOffset) || 0;
+      const effectiveLon = lon - offset;
       // conic-gradient가 -35°~+35°(약 70°) 부채꼴이므로 회전만 적용.
-      fan.style.transform = "rotate(" + (lon) + "deg)";
+      fan.style.transform = "rotate(" + (effectiveLon) + "deg)";
     },
 
     /** 현재 표시 중인 도면(페이지) 이미지 src */

@@ -1424,6 +1424,14 @@
       // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
+      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 위쪽" 기준으로 저장
+      UI.$("btn-pano-setdir") && UI.$("btn-pano-setdir").addEventListener("click", () => {
+        const pin = PanoViewer._currentPin;
+        if (!pin) return;
+        pin.dirOffset = PanoViewer.S.lon;
+        this._autoSave && this._autoSave();
+        Prompt && Prompt.toast && Prompt.toast("방향이 저장되었습니다");
+      });
       // [마스터: 구면 마커] 추가 모드 토글
       // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드
       UI.$("btn-pano-spot") && UI.$("btn-pano-spot").addEventListener("click", () => {
