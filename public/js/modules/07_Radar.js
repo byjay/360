@@ -109,17 +109,52 @@
       // 디자이너 모드: 이미지 도면이면 그대로
       const mapImg = document.getElementById("map-image");
       if (mapImg && !mapImg.classList.contains("hidden") && mapImg.src) return mapImg.src;
-      // PDF 캔버스 → dataURL 캐시 (한 번만 생성)
+      // PDF → 미니맵 전용 고해상도 스냅샷 캐시 (페이지당 1회만 생성)
+      // [마스터 지적] 화면표시용 #pdf-canvas(줌 배율에 따라 저해상도일 수 있음)를 그대로
+      // 스냅샷하면 미니맵 확대(최대 3~5배)에서 블록/모자이크로 깨짐 → 별도 고해상도 오프스크린
+      // 렌더링(page.render, 화면 캔버스와 무관)으로 대체. 기존 _pdfCache 캐싱 구조는 그대로 재사용.
       const pdfCanvas = document.getElementById("pdf-canvas");
       if (pdfCanvas && !pdfCanvas.classList.contains("hidden")) {
         try {
-          const key = "p" + (State.pdfPage || 1);
+          const pageNum = State.pdfPage || 1;
+          const key = "p" + pageNum;
           this._pdfCache = this._pdfCache || {};
-          if (!this._pdfCache[key]) this._pdfCache[key] = pdfCanvas.toDataURL("image/jpeg", 0.6);
-          return this._pdfCache[key];
+          if (this._pdfCache[key]) return this._pdfCache[key];
+          this._buildHiResSnapshot(pageNum, key); // 비동기 생성 → 완료 시 미니맵에 자동 반영
+          return pdfCanvas.toDataURL("image/jpeg", 0.85); // 생성 완료 전 임시 표시(빈 미니맵 방지)
         } catch (e) { return null; }
       }
       return null;
+    },
+
+    /** 미니맵 전용 고해상도 PDF 스냅샷을 오프스크린에서 새로 래스터화(화면용 #pdf-canvas 미변경).
+     *  긴 변 ≈2400px(최대 3배)로 렌더 → 미니맵 5배 확대에도 선명. 완료되면 _pdfCache에 저장하고,
+     *  아직 같은 페이지를 보고 있으면 <img>를 즉시 교체한다. */
+    async _buildHiResSnapshot(pageNum, key) {
+      if (this._pdfCache[key] || this._buildingKey === key) return;
+      if (typeof State === "undefined" || !State.pdfDoc) return;
+      this._buildingKey = key;
+      try {
+        const page = await State.pdfDoc.getPage(pageNum);
+        const rot = ((page.rotate || 0) + (State.pdfRotation || 0)) % 360;
+        const base = page.getViewport({ scale: 1, rotation: rot });
+        const scale = Math.min(2400 / Math.max(base.width, base.height), 3);
+        const vp = page.getViewport({ scale, rotation: rot });
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+        const ctx = cv.getContext("2d", { alpha: false });
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        this._pdfCache[key] = cv.toDataURL("image/jpeg", 0.85);
+        if ((State.pdfPage || 1) === pageNum) {
+          const imgEl = document.getElementById("pano-radar-map");
+          if (imgEl) {
+            const src = this._pdfCache[key];
+            imgEl.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src;
+          }
+        }
+      } catch (e) { /* 실패 시 임시(저해상도) 스냅샷 유지 */ }
+      this._buildingKey = null;
     },
 
     hide() { const b = document.getElementById("pano-radar"); if (b) b.classList.add("hidden"); }
