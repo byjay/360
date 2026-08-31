@@ -1337,6 +1337,8 @@ async function visibleProjectFilter(c: any, user: any): Promise<((p: any) => boo
 async function canManageProject(c: any, user: any, projectId: string): Promise<boolean> {
   if (!user) return false
   if (isSuperAdmin(c, user.email)) return true
+  // [임시개방] 완성 전까지만. 구글로그인 재개 시 TEMP_OPEN_ALL_TENANTS=false 로 되돌리면 소유자/슈퍼만 관리 가능하도록 복원됨
+  if (TEMP_OPEN_ALL_TENANTS) return true
   const own: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ? AND deleted = 0').bind(projectId).first()
   if (own && own.owner === user.email) return true
   const m: any = await c.env.DB.prepare("SELECT role FROM project_members WHERE project_id = ? AND email = ?").bind(projectId, user.email).first()
