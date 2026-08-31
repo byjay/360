@@ -766,9 +766,9 @@
       return { ok: failed === 0, uploaded, failed, map };
     },
 
-    /** [마스터: 수동 반영] 인터넷이 복구돼도 자동 업로드하지 않는다.
-     *  오프라인 큐는 영속 보관 + 배지로 "↑ 지금 올리기 N" 안내 → 사용자가 직접 눌러야
-     *  (App.syncNow) 서버에 반영. (온라인 일반 저장은 큐를 거치지 않고 즉시 직접 업로드되므로 무관) */
+    /** [마스터: 자동 반영] 인터넷 복구 시 App 의 online 핸들러가 _onReconnect() 를 호출해
+     *  오프라인 큐(첨부 사진/PDF)를 자동 업로드한다. 배지 "↑ 지금 올리기 N" 은 자동 flush 실패/
+     *  대기 중 수동 재시도용으로 그대로 유지. (온라인 일반 저장은 큐를 거치지 않고 즉시 직접 업로드) */
     init() {
       if (this._inited) return; this._inited = true;
       window.addEventListener("online", () => this._emit());
@@ -5029,14 +5029,15 @@
       SyncQueue.onChange(() => this._updateSyncBadge());
       SyncQueue.init();
       this._updateSyncBadge();
-      // 온라인 복귀 시 로컬에 보관된(dirty) 도면 draft 를 서버로 자동 업로드
+      // 온라인 복귀 시 로컬에 보관된(dirty) 도면 draft + 오프라인 첨부(사진/PDF) 큐를 서버로 자동 업로드
       //   + [마스터 요청] 미연결 도면↔구역 연결도 함께 재시도(중지/새로고침 복구)
+      //   SyncQueue._onReconnect() 가 첨부 flush(_syncing 가드)+도면 draft+OpLog 를 순서대로 처리(기존 가드 재사용).
       window.addEventListener("online", () => {
-        setTimeout(() => this._flushDirtyDrafts(), 600);
+        setTimeout(() => SyncQueue._onReconnect(), 600);
         setTimeout(() => this._flushDeckLinkQueue(), 800);
       });
       if (navigator.onLine) {
-        setTimeout(() => this._flushDirtyDrafts(), 1500);
+        setTimeout(() => SyncQueue._onReconnect(), 1500);
         setTimeout(() => this._flushDeckLinkQueue(), 1800);
       }
     },

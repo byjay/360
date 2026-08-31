@@ -19,7 +19,7 @@
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 2);   // ★ v2: drafts 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 2);   // v2: drafts 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
@@ -129,7 +129,7 @@
         // [무신호 손실 차단] IDB·localStorage 모두 실패(저장공간 부족/차단) →
         //   기존엔 opId 를 반환해 배지엔 떴지만 영영 전송 못 하는 '유령 op' 였다.
         //   이제 사용자에게 명시 신호 + null 반환 → 호출부가 pendingOpId 를 세팅하지 않도록.
-        try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("⚠️ 오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
+        try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
         this._emit();
         return null;
       }
@@ -219,9 +219,9 @@
       return { ok: failed === 0, uploaded, failed, map };
     },
 
-    /** [마스터: 수동 반영] 인터넷이 복구돼도 자동 업로드하지 않는다.
-     *  오프라인 큐는 영속 보관 + 배지로 "↑ 지금 올리기 N" 안내 → 사용자가 직접 눌러야
-     *  (App.syncNow) 서버에 반영. (온라인 일반 저장은 큐를 거치지 않고 즉시 직접 업로드되므로 무관) */
+    /** [마스터: 자동 반영] 인터넷 복구 시 App 의 online 핸들러가 _onReconnect() 를 호출해
+     *  오프라인 큐(첨부 사진/PDF)를 자동 업로드한다. 배지 "↑ 지금 올리기 N" 은 자동 flush 실패/
+     *  대기 중 수동 재시도용으로 그대로 유지. (온라인 일반 저장은 큐를 거치지 않고 즉시 직접 업로드) */
     init() {
       if (this._inited) return; this._inited = true;
       window.addEventListener("online", () => this._emit());
@@ -240,13 +240,13 @@
         if (typeof App !== "undefined" && App._flushDirtyDrafts) {
           try { await App._flushDirtyDrafts(); } catch (e) {}
         }
-        // [오프라인 작업지시서 ❽] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
+        // [오프라인 작업지시서 ] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
         if (typeof App !== "undefined" && App._flushOpLogs) {
           try { await App._flushOpLogs(); } catch (e) {}
         }
         // 재연동 토스트(대기 항목이 실제로 있었을 때만)
         if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("☁️ 온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
+          Prompt.toast("온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
         }
       } finally { this._reconnecting = false; this._emit(); }
     }
