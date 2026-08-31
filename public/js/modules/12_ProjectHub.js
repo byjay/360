@@ -21,6 +21,11 @@
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
       // [멀티테넌트] 서브도메인 부여
       $("pm-subdomain-btn") && $("pm-subdomain-btn").addEventListener("click", () => this.setSubdomain());
+      // [마스터 요청] 디자이너/뷰어 선택 모달
+      $("pms-cancel") && $("pms-cancel").addEventListener("click", () => this.closeModeSelect());
+      $("pms-backdrop") && $("pms-backdrop").addEventListener("click", () => this.closeModeSelect());
+      $("pms-btn-designer") && $("pms-btn-designer").addEventListener("click", () => this._enterAsDesigner());
+      $("pms-btn-viewer") && $("pms-btn-viewer").addEventListener("click", () => this._enterAsViewer());
       const pmSub = $("pm-subdomain");
       if (pmSub) {
         pmSub.addEventListener("input", () => {
@@ -455,24 +460,48 @@
       }
     },
 
-    /** 프로젝트 진입: 디자이너면 편집, 아니면 뷰어 */
+    /** 프로젝트 진입: Auth.isDesigner 자동판정으로 조용히 결정하지 않고,
+     *  항상 "디자이너로 열기"/"뷰어로 열기" 선택 모달을 띄워 사용자가 직접 고른다.
+     *  (AUTO_DESIGNER_ENTRY로 자동입장한 경우에도 이 선택 단계는 건너뛰지 않는다.) */
     async openProject(p) {
       // 선택 프로젝트를 Projects 모듈과 공유 (작업화면 사이드바 동기화용)
       Projects.list = this.list;
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
+      this._modeSelectProject = p;
+      const m = document.getElementById("proj-mode-select-modal");
+      if (!m) { // 모달 마크업이 없으면(구버전) 안전 폴백 — 기존 자동판정 동작 유지
+        if (Auth.isDesigner) App.openApp("designer", { project: p });
+        else App.openApp("viewer", { project: p });
+        return;
+      }
+      const nm = document.getElementById("pms-proj-name"); if (nm) nm.textContent = p.name || p.id;
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeModeSelect() {
+      const m = document.getElementById("proj-mode-select-modal");
+      if (!m) return; m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200);
+    },
+    async _enterAsDesigner() {
+      const p = this._modeSelectProject; if (!p) return;
+      this.closeModeSelect();
       // 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
-      //   isDesigner가 false인 채로 카드를 누르면 뷰어로 진입 → "PDF 업로드가 안 된다"는
-      //   회귀 느낌을 준다. 토큰이 있으면 권한 재확인을 한 번 await 한 뒤 모드를 결정한다.
+      //   isDesigner가 false인 채로 진입하면 "PDF 업로드가 안 된다"는 회귀 느낌을 준다.
+      //   토큰이 있으면 권한 재확인을 한 번 await 한 뒤 게이트를 판단한다.
       if (!Auth.isDesigner && Auth.idToken) {
         try { await Auth.refresh(); } catch (e) {}
       }
-      if (Auth.isDesigner) {
-        App.openApp("designer", { project: p });
-      } else {
-        App.openApp("viewer", { project: p });
-      }
+      // AUTO_DESIGNER_ENTRY 등으로 이미 디자이너 권한이 있으면 게이트 없이 바로 진입,
+      //   없으면 기존 로그인 게이트 경로(Auth.requireDesigner) 유지.
+      if (Auth.isDesigner) App.openApp("designer", { project: p });
+      else Auth.requireDesigner(() => App.openApp("designer", { project: p }));
+    },
+    _enterAsViewer() {
+      const p = this._modeSelectProject; if (!p) return;
+      this.closeModeSelect();
+      // 뷰어는 로그인 불필요 — 기존 동작 유지
+      App.openApp("viewer", { project: p });
     },
 
     async createProject() {
