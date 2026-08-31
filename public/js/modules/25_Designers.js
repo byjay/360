@@ -392,7 +392,7 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || "저장 실패");
         this._matrixDirty = new Map();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 권한 매트릭스 저장 — " + j.updated + "건");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("권한 매트릭스 저장 — " + j.updated + "건");
         await this.loadMatrix();
       } catch (e) {
         alert("저장 실패: " + (e && e.message || "오류"));
@@ -425,7 +425,7 @@
           row.className = "flag-row" + (def.danger ? " flag-danger" : "");
           row.innerHTML =
             '<div class="flag-info">' +
-              '<span class="flag-label">' + (def.danger ? "🔴 " : "") + esc(def.label) + '</span>' +
+              '<span class="flag-label">' + (def.danger ? "" : "") + esc(def.label) + '</span>' +
               '<span class="flag-desc">' + esc(def.desc) + '</span>' +
               '<span class="flag-key">' + esc(def.key) + '</span>' +
             '</div>' +
@@ -448,7 +448,7 @@
         btn.classList.toggle("on", newVal);
         btn.setAttribute("aria-pressed", newVal);
         btn.setAttribute("aria-label", newVal ? "켜짐, 클릭해서 끄기" : "꺼짐, 클릭해서 켜기");
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + key + " = " + (newVal ? "ON" : "OFF"));
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + key + " = " + (newVal ? "ON" : "OFF"));
       } catch (e) { alert("설정 실패"); }
       finally { btn.disabled = false; }
     },
@@ -495,7 +495,7 @@
         const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/access-requests/" + encodeURIComponent(rid) + "/" + action,
           { method: "POST", headers: Auth.headers() });
         if (!r.ok) throw new Error("HTTP " + r.status);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ " + (action === "approve" ? "승인" : "거절") + " 처리됨");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + (action === "approve" ? "승인" : "거절") + " 처리됨");
         await this.loadProjRequests(true);
       } catch (e) { alert("처리 실패"); }
     },

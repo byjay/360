@@ -103,7 +103,7 @@
       if (!name) { alert("구역 이름을 입력하세요."); return null; }
       const dup = (this.decks || []).find((x) => String(x.name).trim().toLowerCase() === name.toLowerCase());
       if (dup) {
-        Prompt.toast && Prompt.toast("⚠️ 이미 '" + name + "' 구역이 있습니다 — 그 구역을 선택합니다");
+        Prompt.toast && Prompt.toast("이미 '" + name + "' 구역이 있습니다 — 그 구역을 선택합니다");
         this.currentDeck = dup; this._renderDecks();
         return dup; // 중복 생성하지 않고 기존 구역 반환
       }
@@ -145,10 +145,12 @@
     async selectDeck(d) {
       this.currentDeck = d;
       this._renderDecks();
-      Prompt.toast && Prompt.toast("🗂️ 구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
-      // 연결된 도면이 있으면 로드
+      Prompt.toast && Prompt.toast("구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
+      // 연결된 도면이 있으면 로드, 없으면(끊김/미연결) 도면 연결 선택 띄움(디자이너)
       if (d.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {
         await App.loadDeckDrawing(d.deployment_id);
+      } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
+        App.offerDeckDrawingLink(d);
       }
     },
 
@@ -204,8 +206,8 @@
       btn.setAttribute("aria-disabled", locked ? "true" : "false");
       if (locked) {
         btn.dataset.origText = btn.dataset.origText || btn.textContent;
-        btn.textContent = "🔒 먼저 구역을 등록하세요";
-        if (hint) hint.textContent = "도면을 올리려면 위 ‘🗂️ 구역’에서 + 생성으로 구역을 먼저 만드세요.";
+        btn.textContent = "먼저 구역을 등록하세요";
+        if (hint) hint.textContent = "도면을 올리려면 위 ‘구역’에서 + 생성으로 구역을 먼저 만드세요.";
       } else {
         if (btn.dataset.origText) btn.textContent = btn.dataset.origText;
         if (hint) hint.textContent = "구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.";

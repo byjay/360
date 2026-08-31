@@ -105,13 +105,13 @@
         // dev-fallback 코드 표시(메일 미설정 시)
         const dc = $("cg-dev-code");
         if (j.dev_code) {
-          dc.innerHTML = "📧 메일 발송 미설정 — 개발/시연용 인증코드: <b>" + j.dev_code + "</b>";
+          dc.innerHTML = "메일 발송 미설정 — 개발/시연용 인증코드: <b>" + j.dev_code + "</b>";
           dc.classList.remove("hidden");
           $("cg-code").value = j.dev_code;
         } else {
           dc.classList.add("hidden"); dc.textContent = "";
           const mins = j.valid_minutes || 60;
-          Prompt.toast && Prompt.toast("📧 인증코드를 이메일로 발송했습니다. (" + mins + "분 이내 입력)");
+          Prompt.toast && Prompt.toast("인증코드를 이메일로 발송했습니다. (" + mins + "분 이내 입력)");
         }
       } catch (e) {
         this._err("네트워크 오류로 코드 발송에 실패했습니다.");
@@ -209,7 +209,7 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { showErr(j.error || "변경에 실패했습니다."); return; }
         const m = $("pwchange-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
-        Prompt && Prompt.toast && Prompt.toast("✅ 비밀번호가 변경되었습니다.");
+        Prompt && Prompt.toast && Prompt.toast("비밀번호가 변경되었습니다.");
         this._onAuthed(Auth.idToken, this._pendingName || "");
       } catch (e) {
         showErr("네트워크 오류로 변경에 실패했습니다.");
@@ -225,7 +225,7 @@
       } catch (e) {}
       if (typeof Auth !== "undefined") Auth.idToken = token;
       this.close();
-      Prompt.toast && Prompt.toast("✅ " + displayName + " 님으로 로그인되었습니다.");
+      Prompt.toast && Prompt.toast("" + displayName + " 님으로 로그인되었습니다.");
       // 인증 상태 갱신 후 뷰어로
       if (typeof Auth !== "undefined" && Auth.refresh) {
         Auth.refresh().then(() => { if (App.openApp) App.openApp("viewer"); }).catch(() => { if (App.openApp) App.openApp("viewer"); });

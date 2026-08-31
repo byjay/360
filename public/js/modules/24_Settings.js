@@ -3,7 +3,7 @@
 
     init() {
       const $ = (id) => document.getElementById(id);
-      // ⚙️ 설정 버튼 → 패널 열기
+      // 설정 버튼 → 패널 열기
       $("btn-settings") && $("btn-settings").addEventListener("click", () => this.open());
       // 핀 색상 선택(설정 패널 내) — 위임 바인딩
       const wrap = $("settings-pincolor");
@@ -12,7 +12,7 @@
         if (!sw) return;
         PinPrefs.set(sw.getAttribute("data-pincolor"));
         this._renderPinColor();
-        Prompt && Prompt.toast && Prompt.toast("🎨 핀 색상 변경됨");
+        Prompt && Prompt.toast && Prompt.toast("핀 색상 변경됨");
       });
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());

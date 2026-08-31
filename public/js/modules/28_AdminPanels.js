@@ -69,7 +69,7 @@
       try {
         const r = await fetch("/api/app-settings", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ scope: this._featScope, key: "features", value }) });
         if (!r.ok) throw new Error("fail");
-        if (note) { note.textContent = "✅ 저장되었습니다. 화면에 즉시 반영됩니다."; note.className = "features-save-note ok"; }
+        if (note) { note.textContent = "저장되었습니다. 화면에 즉시 반영됩니다."; note.className = "features-save-note ok"; }
         // 전체 공통 저장 시 현재 화면에도 즉시 반영
         if (this._featScope === "*") { this._features = value; this._reflect(); }
       } catch (e) { if (note) { note.textContent = "저장 실패(권한 필요)"; note.className = "features-save-note err"; } }
@@ -83,7 +83,7 @@
       try {
         const r = await fetch("/api/ai/config", { headers: Auth.headers() });
         const j = await r.json();
-        if (statusEl) { statusEl.textContent = j.enabled ? "🟢 활성화됨 (API 키 설정됨)" : "🔴 비활성 — API 키(AI_API_KEY) 미설정"; statusEl.className = "ai-status-line " + (j.enabled ? "on" : "off"); }
+        if (statusEl) { statusEl.textContent = j.enabled ? "활성화됨 (API 키 설정됨)" : "비활성 — API 키(AI_API_KEY) 미설정"; statusEl.className = "ai-status-line " + (j.enabled ? "on" : "off"); }
         const bu = document.getElementById("ai-base-url"); if (bu) bu.value = j.base_url || "";
         const md = document.getElementById("ai-model"); if (md) md.value = j.model || "";
       } catch (e) { if (statusEl) statusEl.textContent = "상태를 불러올 수 없습니다."; }
@@ -98,7 +98,7 @@
       try {
         const r = await fetch("/api/app-settings", { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ scope: "*", key: "ai", value }) });
         if (!r.ok) throw new Error("fail");
-        if (note) { note.textContent = "✅ Base URL·모델 저장됨. (키는 wrangler secret으로 별도 설정)"; note.className = "features-save-note ok"; }
+        if (note) { note.textContent = "Base URL·모델 저장됨. (키는 wrangler secret으로 별도 설정)"; note.className = "features-save-note ok"; }
       } catch (e) { if (note) { note.textContent = "저장 실패(권한 필요)"; note.className = "features-save-note err"; } }
     },
     async testAI() {
@@ -107,8 +107,8 @@
       try {
         const r = await fetch("/api/ai/chat", { method: "POST", headers: Auth.headers(), body: JSON.stringify({ messages: [{ role: "user", content: "연결 테스트입니다. OK라고만 답해주세요." }], max_tokens: 16 }) });
         const j = await r.json();
-        if (r.ok) { if (note) { note.textContent = "✅ 연결 성공: " + (j.content || "(응답)"); note.className = "features-save-note ok"; } }
-        else { if (note) { note.textContent = "⚠️ " + (j.error || "실패") + (j.hint ? " — " + j.hint : ""); note.className = "features-save-note err"; } }
+        if (r.ok) { if (note) { note.textContent = "연결 성공: " + (j.content || "(응답)"); note.className = "features-save-note ok"; } }
+        else { if (note) { note.textContent = "" + (j.error || "실패") + (j.hint ? " — " + j.hint : ""); note.className = "features-save-note err"; } }
       } catch (e) { if (note) { note.textContent = "네트워크 오류"; note.className = "features-save-note err"; } }
     },
 
@@ -171,11 +171,11 @@
       if (on) {
         const u = (window.SeaFirebase && window.SeaFirebase.currentUser && window.SeaFirebase.currentUser());
         el.textContent = ready
-          ? (u ? "🟢 연결됨 · 로그인: " + (u.email || u.uid) : "🟢 연결됨 · (로그인 대기)")
-          : "🟢 설정 저장됨 · 새로고침 후 완전 활성화";
+          ? (u ? "연결됨 · 로그인: " + (u.email || u.uid) : "연결됨 · (로그인 대기)")
+          : "설정 저장됨 · 새로고침 후 완전 활성화";
         el.className = "ai-status-line on";
       } else {
-        el.textContent = "🔴 미연결 — 아래에 firebaseConfig 를 붙여넣고 저장하세요.";
+        el.textContent = "미연결 — 아래에 firebaseConfig 를 붙여넣고 저장하세요.";
         el.className = "ai-status-line off";
       }
     },
@@ -193,7 +193,7 @@
         return;
       }
       window.SeaFirebaseConfig.save(cfg, email);
-      setNote("✅ 저장 완료! 새로고침하면 Firebase가 자동 활성화됩니다. (3초 후 자동 새로고침)", true);
+      setNote("저장 완료! 새로고침하면 Firebase가 자동 활성화됩니다. (3초 후 자동 새로고침)", true);
       this._firebaseStatus();
       setTimeout(() => { try { location.reload(); } catch (e) {} }, 3000);
     },
@@ -205,14 +205,14 @@
         return;
       }
       try {
-        // ★ 단순 테스트가 아니라 앱 전체 로그인으로 연결 (Auth.loginWithFirebase)
+        // 단순 테스트가 아니라 앱 전체 로그인으로 연결 (Auth.loginWithFirebase)
         if (typeof Auth !== "undefined" && Auth.loginWithFirebase) {
           const role = await Auth.loginWithFirebase();
           const who = (Auth.user && (Auth.user.name || Auth.user.email)) || "";
-          setNote("✅ 로그인 완료: " + who + " · 권한=" + (role === "super" ? "슈퍼관리자" : role === "designer" ? "디자이너" : "뷰어"), true);
+          setNote("로그인 완료: " + who + " · 권한=" + (role === "super" ? "슈퍼관리자" : role === "designer" ? "디자이너" : "뷰어"), true);
         } else {
           const u = await window.SeaFirebase.loginGoogle();
-          setNote("✅ Google 로그인 성공: " + (u.email || u.uid), true);
+          setNote("Google 로그인 성공: " + (u.email || u.uid), true);
         }
         this._firebaseStatus();
       } catch (e) {
@@ -252,23 +252,23 @@
 
   /* 코드 구조 설명 데이터 — 관리자 대시보드용(파일별 기능 설명) */
   const CODE_MAP = [
-    { group: "🖥️ 서버 / API (Hono on Cloudflare Workers)", items: [
+    { group: "서버 / API (Hono on Cloudflare Workers)", items: [
       { path: "src/index.tsx", kind: "서버", desc: "모든 백엔드 API·SSR 진입점. 인증·프로젝트·핀·배포·도메인·초대·설정·AI 라우트를 한 파일에 정의.", detail: "주요: /api/auth/me, /api/projects, /api/pins, /api/deploy, /api/signup/*, /api/allowed-domains, /api/invites, /api/app-settings, /api/ai/*" },
       { path: "src/renderer.tsx", kind: "서버", desc: "Hono JSX 렌더러(HTML 셸 구성)." }
     ]},
-    { group: "🎨 클라이언트 (public/)", items: [
+    { group: "클라이언트 (public/)", items: [
       { path: "public/index.html", kind: "마크업", desc: "앱 전체 화면 구조 — 상단바·사이드바·맵 뷰포트·각종 모달(로그인/가입/관리자/설정/기능/AI/코드맵)." },
       { path: "public/js/main.js", kind: "로직", desc: "클라이언트 전체 로직. 모듈 집합으로 구성.", detail: "App(부트), MapCtrl(줌·팬·핀치), PanoViewer(360), PDF(렌더), PdfAnno(주석), Zones(구역), Pins/PinGrid/PinActionPop(핀), Auth/CompanyAuth(인증·가입), Designers(권한·도메인·멤버·초대·로그), Settings/AdminPanels(설정·기능관장·AI·코드맵), SyncQueue(오프라인 큐)." },
       { path: "public/css/style.css", kind: "스타일", desc: "전체 디자인·반응형(모바일 바텀시트·하단네비)·주석/관리자 UI 스타일." }
     ]},
-    { group: "📱 PWA / 오프라인", items: [
+    { group: "PWA / 오프라인", items: [
       { path: "public/sw.js", kind: "서비스워커", desc: "앱 셸 캐시(stale-while-revalidate). /api/·/tables/ 는 절대 가로채지 않음 → 데이터는 항상 최신.", detail: "오프라인에서 화면 로딩 가능. PDF.js·Three.js CDN도 캐시." },
       { path: "public/manifest.webmanifest", kind: "PWA", desc: "홈 화면 설치용 매니페스트(이름·아이콘·표시 모드)." }
     ]},
-    { group: "🗄️ 데이터 (Cloudflare D1 / R2)", items: [
+    { group: "데이터 (Cloudflare D1 / R2)", items: [
       { path: "migrations/0001~0008_*.sql", kind: "DB", desc: "스키마 마이그레이션.", detail: "핀/배포(0001), 인증·프로젝트·구역(0002), 핀노트(0003), 구역(0004), 사용신청(0005), 활동로그(0006), 회사가입·도메인(0007), 초대·앱설정(0008)." }
     ]},
-    { group: "⚙️ 빌드 / 운영", items: [
+    { group: "빌드 / 운영", items: [
       { path: "vite.config.ts", kind: "빌드", desc: "Cloudflare Pages용 Vite 빌드 → dist/_worker.js 생성." },
       { path: "wrangler.jsonc", kind: "설정", desc: "CF Pages 설정(D1·R2 바인딩, nodejs_compat)." },
       { path: "ecosystem.config.cjs", kind: "운영", desc: "PM2 개발 서버(wrangler pages dev) 구동 설정." },
