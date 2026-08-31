@@ -1272,7 +1272,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .map-image   { display: block; max-width: none; user-select: none; }
 
 /* Pins layer (마커 스타일은 파일 하단 ENHANCED PIN MARKER 섹션 참조) */
-.pins-layer { position: absolute; inset: 0; pointer-events: none; }
+.pins-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; } /* 영역 레이어(z-index:1)보다 항상 위 — 핀 클릭이 영역 도형/라벨에 가려지지 않게 */
 .pin-marker { pointer-events: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 /* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭 */
 .pin-marker::after {
@@ -2354,9 +2354,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 
 /* ══════════ 영역(Zone) 하이라이트 ══════════ */
-.zones-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.zones-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; } /* 항상 핀 레이어(.pins-layer z-index:3) 뒤 — 핀 클릭 간섭 방지 */
 /* SVG 도형 오버레이 — 도면 전체를 덮고 % 좌표(viewBox 0~100)로 그림 */
-.zones-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.zones-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; } /* 항상 핀 레이어 뒤 */
 .zone-shape {
   pointer-events: auto; cursor: pointer;
   fill: color-mix(in srgb, var(--zc, #f59e0b) 14%, transparent);
