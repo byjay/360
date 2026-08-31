@@ -119,19 +119,20 @@
      *  · ISO 뷰   : 도면 rotateX(54)·rotateZ(θ) 의 역(rotateZ(-θ)·rotateX(-54))을
      *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
      *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
-    /** [마스터] 핀이 줌에 따라 깨지거나(고배율 업스케일) 너무 작아지는 것 방지:
-     *  부모 #map-transform 의 scale(zoom) 을 핀마다 역스케일(1/zoom) 로 상쇄 →
-     *  핀은 항상 "화면상 일정 크기"로 자연 해상도 렌더(업스케일 없음 → 또렷).
-     *  줌아웃(zoom<1) 일 땐 살짝 확대해 항상 잘 보이게. ISO 에선 +세움/가독 확대. */
-    /** [마스터] 핀 기본 크기 배율 — "포인트는 지금보다 2배 정도만 크게".
-     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유하므로 여기 한 곳만 바꾸면
-     *  핀 바늘 SVG·번호 텍스트·라벨이 모두 같은 비율로 커진다(숫자만 작게 남는 문제 없음). */
-    PIN_SCALE: 2,
+    /** [마스터 2026-08-31] 핀 크기 = 도면 대비 "완전 고정"(1/zoom 전체 상쇄)이 아니라
+     *  "부분 보정"(1/zoom 의 지수 k 승)으로 바꿈. 이유: 완전 고정이면 줌아웃 시 핀이
+     *  도면과 함께 작아지지 않아 도면 대비 과도하게 커 보임(마스터 스샷 1번 지적).
+     *  대신 지수 k(0~1)만큼만 상쇄 → 줌아웃하면 핀도 어느 정도 같이 작아지되(k<1이라
+     *  1/zoom 만큼 다 커지진 않음), 줌인해도 너무 작아지지 않는 절충.
+     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유 → 상수만 바꾸면 전체 반영. */
+    PIN_SCALE: 2,           // 기준 줌(zoom=1)에서의 핀 배율 — 마스터가 "적당하다"고 한 크기
+    PIN_SCALE_EXP: 0.6,     // 줌 보정 지수(0=보정 없음=도면과 완전히 같이 축소, 1=기존처럼 화면상 완전 고정)
+    PIN_MIN_SCALE: 0.8,     // 최종 배율 하한 — 줌인해도 핀이 이보다 작아지지 않음(가독성 하한)
+    PIN_MAX_SCALE: 4.5,     // 최종 배율 상한 — 줌아웃해도 핀이 이보다 커지지 않음(도면 대비 과대 방지)
     pinScreenScale() {
       const zoom = State.zoom || 1;
-      let f = (zoom < 1) ? (1 + (1 - zoom) * 0.65) : 1;  // 화면상 핀 크기 계수
-      f = Math.max(0.85, Math.min(1.7, f));
-      return (f * this.PIN_SCALE) / zoom;                 // 부모 zoom 상쇄(+줌아웃 확대)
+      const raw = this.PIN_SCALE * Math.pow(1 / zoom, this.PIN_SCALE_EXP); // 부분 역스케일
+      return Math.max(this.PIN_MIN_SCALE, Math.min(this.PIN_MAX_SCALE, raw));
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
