@@ -11,6 +11,19 @@
         const tb = document.getElementById("pano-radar-toggle");
         if (tb) { tb.addEventListener("click", (e) => { e.stopPropagation(); box.classList.toggle("collapsed"); }); this._toggleBound = true; }
       }
+      // [마스터 요청] 미니맵 크게 보기 토글 (1회 바인딩) — 크기만 전환, 기존 로직 그대로
+      if (!this._expandBound) {
+        const eb = document.getElementById("pano-radar-expand");
+        if (eb) {
+          eb.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const large = box.classList.toggle("pano-radar-large");
+            eb.classList.toggle("active", large);
+            eb.title = large ? "미니맵 작게 보기" : "미니맵 크게 보기";
+          });
+          this._expandBound = true;
+        }
+      }
       // 현재 페이지의 도면 이미지 소스 확보 (뷰어/디자이너 공통)
       const mapSrc = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(this._currentMapSrc()) : this._currentMapSrc();
       if (!mapSrc) { this.hide(); return; }

@@ -199,7 +199,14 @@
 .pano-radar-toggle:hover { opacity: 1; }
 .pano-radar.collapsed .pano-radar-stage { display: none !important; }
 .pano-radar.collapsed { width: auto !important; min-width: 0 !important; }
-.pano-radar.collapsed .pano-radar-toggle svg { transform: rotate(180deg); }
+.pano-radar.collapsed #pano-radar-toggle svg { transform: rotate(180deg); }
+
+/* [마스터 요청] 미니맵 크게 보기 — 크기만 확대, 기존 기능(핀/부채꼴/클릭이동) 로직 변경 없음 */
+.pano-radar.pano-radar-large { width: min(52vw, 520px); }
+.pano-radar-expand.active { opacity: 1; color: var(--gold, #f59e0b); }
+@media (max-width: 640px) {
+  .pano-radar.pano-radar-large { width: min(78vw, 420px); }
+}
 
 /* [마스터 요청 N3] 로고 세로 잘림 수정 — 전체가 다 보이게 */
 .brand-logo, .brand-logo-top, #hub-brand-logo, .signin-brand-mark {
