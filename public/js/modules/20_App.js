@@ -1437,36 +1437,22 @@
       UI.$("btn-pano-rotate").addEventListener("click", e => {
         const on = PanoViewer.toggleAuto();
         e.currentTarget.classList.toggle("on", on);
-        // 자동회전 켜면 자이로 끔(충돌 방지) — 버튼 상태 동기화
-        if (on) { const g = UI.$("btn-pano-gyro"); if (g) g.classList.remove("on"); }
       });
-      // ── [마스터 요청] 자이로(폰 기울임) 둘러보기 토글 ──
-      const gyroBtn = UI.$("btn-pano-gyro");
-      if (gyroBtn) {
-        // 자이로 미지원 기기에선 버튼 숨김(혼란 방지)
-        if (typeof PanoViewer !== "undefined" && !PanoViewer.isGyroSupported()) {
-          gyroBtn.style.display = "none";
-        }
-        gyroBtn.addEventListener("click", async (e) => {
-          const on = await PanoViewer.toggleGyro();
-          e.currentTarget.classList.toggle("on", on);
-          // 자이로 켜면 자동회전 버튼 표시 동기화
-          if (on) { const r = UI.$("btn-pano-rotate"); if (r) r.classList.remove("on"); }
-        });
-      }
       UI.$("btn-pano-zoomin").addEventListener("click",  () => PanoViewer.setFov(-10));
       UI.$("btn-pano-zoomout").addEventListener("click", () => PanoViewer.setFov(10));
       UI.$("btn-pano-reset").addEventListener("click",   () => PanoViewer.resetView());
       // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
-      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 위쪽" 기준으로 저장
+      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 오른쪽(3시)" 기준으로 저장
+      // Radar.spin()의 effectiveLon = lon - dirOffset, rotate(effectiveLon deg)는 CSS 기준 시계방향(0deg=위/북, 90deg=오른쪽/동).
+      // 사용자가 지금 보는 방향을 "오른쪽"으로 지정 → effectiveLon이 90이 되어야 하므로 dirOffset = lon - 90.
       UI.$("btn-pano-setdir") && UI.$("btn-pano-setdir").addEventListener("click", () => {
         const pin = PanoViewer._currentPin;
         if (!pin) return;
-        pin.dirOffset = PanoViewer.S.lon;
+        pin.dirOffset = PanoViewer.S.lon - 90;
         this._autoSave && this._autoSave();
-        Prompt && Prompt.toast && Prompt.toast("방향이 저장되었습니다");
+        Prompt && Prompt.toast && Prompt.toast("오른쪽 방향이 지정되었습니다");
       });
       // [마스터: 구면 마커] 추가 모드 토글
       // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드

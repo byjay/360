@@ -1108,105 +1108,6 @@
     },
     toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
-    /* ── [마스터 요청] 자이로(폰 기울임) 둘러보기 — 삼성폰 DeviceOrientation ── */
-    isGyroSupported() { return typeof window !== "undefined" && "DeviceOrientationEvent" in window; },
-
-    /** 자이로 켜기/끄기 토글. iOS는 권한요청 필요(삼성폰=Android는 즉시 동작). 반환: 켜짐 여부
-     *  [근본원인 수정] 데스크톱 Chrome/Edge/Safari 는 센서가 없어도 window.DeviceOrientationEvent 를
-     *  정의해 둔다 → isGyroSupported() 가 true 를 반환해 "켜짐" 표시만 나고 실제로는 이벤트가
-     *  한 번도 오지 않아 화면이 전혀 움직이지 않았다(= 마스터가 본 "아무 반응 없음").
-     *  API 존재 여부가 아니라 실제 이벤트 수신 여부로 판정하고, 어느 쪽이든 피드백 1회를 보장한다. */
-    async toggleGyro() {
-      if (this._gyroBusy) return !!this._gyroOn;   // 프로브 중 연타 방지
-      if (this._gyroOn) {
-        this._stopGyro();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 끔");
-        return false;
-      }
-      if (!this.isGyroSupported()) {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 기기는 자이로 센서를 지원하지 않습니다");
-        return false;
-      }
-      // iOS 13+ 권한 요청(Android/삼성폰은 해당 없음)
-      try {
-        const DOE = window.DeviceOrientationEvent;
-        if (DOE && typeof DOE.requestPermission === "function") {
-          const res = await DOE.requestPermission();
-          if (res !== "granted") {
-            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 권한이 거부되었습니다");
-            return false;
-          }
-        }
-      } catch (e) {/* Android는 requestPermission 없음 → 무시 */}
-      this._startGyro();
-      // 실제 센서 데이터가 오는지 최대 1.2초 동안 확인. 안 오면 센서 없는 기기 → 정직하게 알린다.
-      this._gyroBusy = true;
-      let live = false;
-      try { live = await this._probeGyro(1200); } finally { this._gyroBusy = false; }
-      if (!live) {
-        this._stopGyro();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 기기는 자이로 센서가 없습니다 — 드래그로 둘러보세요");
-        return false;
-      }
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("자이로 켜짐 — 기기를 돌려 둘러보세요");
-      return true;
-    },
-
-    /** deviceorientation 이벤트가 실제로 도착하는지 ms 동안 폴링. 도착=true. */
-    _probeGyro(ms) {
-      return new Promise((resolve) => {
-        const t0 = Date.now();
-        const tick = () => {
-          if (this._gyroLive) return resolve(true);
-          if (!this._gyroHandler) return resolve(false);   // 그 사이 꺼졌으면 중단
-          if (Date.now() - t0 >= ms) return resolve(false);
-          setTimeout(tick, 80);
-        };
-        tick();
-      });
-    },
-
-    _startGyro() {
-      if (this._gyroHandler) this._stopGyro();
-      this._gyroLive = false;    // 실제 센서 이벤트 수신 플래그(프로브용)
-      this.S.autoRotate = false; // 자이로 중엔 자동회전 끔(충돌 방지)
-      this._gyroBase = null;     // 첫 측정값을 기준으로 상대 이동
-      this._gyroHandler = (e) => {
-        // alpha=나침반(yaw), beta=앞뒤기울임(pitch). 가로/세로 회전 보정은 화면방향 고려.
-        const alpha = (e.alpha == null) ? null : e.alpha;
-        const beta  = (e.beta  == null) ? null : e.beta;
-        if (alpha == null && beta == null) return;   // 값 없는 껍데기 이벤트 = 센서 없음
-        this._gyroLive = true;                       // 유효 데이터 도착 → 프로브 통과
-        if (!this.open || this.S.dragging) return;
-        if (!this._gyroBase) {
-          this._gyroBase = { alpha: alpha || 0, beta: beta || 0, lon: this.S.lon, lat: this.S.lat };
-          return;
-        }
-        const b = this._gyroBase;
-        // yaw: alpha 증가 → 좌측 회전. 부호는 직관에 맞게 보정.
-        let dAlpha = (alpha == null) ? 0 : (alpha - b.alpha);
-        // -180~180 정규화
-        dAlpha = ((dAlpha + 540) % 360) - 180;
-        const dBeta = (beta == null) ? 0 : (beta - b.beta);
-        this.S.lon = b.lon - dAlpha;
-        this.S.lat = b.lat + dBeta;
-        this._invalidate();
-      };
-      window.addEventListener("deviceorientation", this._gyroHandler, true);
-      this._gyroOn = true;
-      // 켜짐 안내는 toggleGyro() 가 센서 실동작을 확인한 뒤 1회만 낸다(거짓 "켜짐" 방지).
-    },
-
-    _stopGyro() {
-      if (this._gyroHandler) {
-        window.removeEventListener("deviceorientation", this._gyroHandler, true);
-        this._gyroHandler = null;
-      }
-      this._gyroOn = false;
-      this._gyroBase = null;
-      this._gyroLive = false;
-    },
-
     onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; this._downX = x; this._downY = y; this._moved = false; },
     onPointerMove(x, y) {
       if (!this.S.dragging) return;
@@ -1287,7 +1188,6 @@
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
       cancelAnimationFrame(this.rafId);
-      this._stopGyro();           // [마스터 요청] 자이로 리스너 정리(닫을 때 누수 방지)
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
       const ip = document.getElementById("pano-info-panel");
@@ -6566,36 +6466,22 @@
       UI.$("btn-pano-rotate").addEventListener("click", e => {
         const on = PanoViewer.toggleAuto();
         e.currentTarget.classList.toggle("on", on);
-        // 자동회전 켜면 자이로 끔(충돌 방지) — 버튼 상태 동기화
-        if (on) { const g = UI.$("btn-pano-gyro"); if (g) g.classList.remove("on"); }
       });
-      // ── [마스터 요청] 자이로(폰 기울임) 둘러보기 토글 ──
-      const gyroBtn = UI.$("btn-pano-gyro");
-      if (gyroBtn) {
-        // 자이로 미지원 기기에선 버튼 숨김(혼란 방지)
-        if (typeof PanoViewer !== "undefined" && !PanoViewer.isGyroSupported()) {
-          gyroBtn.style.display = "none";
-        }
-        gyroBtn.addEventListener("click", async (e) => {
-          const on = await PanoViewer.toggleGyro();
-          e.currentTarget.classList.toggle("on", on);
-          // 자이로 켜면 자동회전 버튼 표시 동기화
-          if (on) { const r = UI.$("btn-pano-rotate"); if (r) r.classList.remove("on"); }
-        });
-      }
       UI.$("btn-pano-zoomin").addEventListener("click",  () => PanoViewer.setFov(-10));
       UI.$("btn-pano-zoomout").addEventListener("click", () => PanoViewer.setFov(10));
       UI.$("btn-pano-reset").addEventListener("click",   () => PanoViewer.resetView());
       // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
-      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 위쪽" 기준으로 저장
+      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 오른쪽(3시)" 기준으로 저장
+      // Radar.spin()의 effectiveLon = lon - dirOffset, rotate(effectiveLon deg)는 CSS 기준 시계방향(0deg=위/북, 90deg=오른쪽/동).
+      // 사용자가 지금 보는 방향을 "오른쪽"으로 지정 → effectiveLon이 90이 되어야 하므로 dirOffset = lon - 90.
       UI.$("btn-pano-setdir") && UI.$("btn-pano-setdir").addEventListener("click", () => {
         const pin = PanoViewer._currentPin;
         if (!pin) return;
-        pin.dirOffset = PanoViewer.S.lon;
+        pin.dirOffset = PanoViewer.S.lon - 90;
         this._autoSave && this._autoSave();
-        Prompt && Prompt.toast && Prompt.toast("방향이 저장되었습니다");
+        Prompt && Prompt.toast && Prompt.toast("오른쪽 방향이 지정되었습니다");
       });
       // [마스터: 구면 마커] 추가 모드 토글
       // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드
