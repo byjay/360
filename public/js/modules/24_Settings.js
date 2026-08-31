@@ -12,7 +12,7 @@
         if (!sw) return;
         PinPrefs.set(sw.getAttribute("data-pincolor"));
         this._renderPinColor();
-        Prompt && Prompt.toast && Prompt.toast("핀 색상 변경됨");
+        // [토스트 스팸 제거] 색상 스와치 선택 결과가 핀에 즉시 반영돼 눈에 보인다.
       });
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());

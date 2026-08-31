@@ -448,7 +448,7 @@
         btn.classList.toggle("on", newVal);
         btn.setAttribute("aria-pressed", newVal);
         btn.setAttribute("aria-label", newVal ? "켜짐, 클릭해서 끄기" : "꺼짐, 클릭해서 켜기");
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("" + key + " = " + (newVal ? "ON" : "OFF"));
+        // [토스트 스팸 제거] 스위치 .on 상태 + aria-pressed 로 결과가 이미 드러난다.
       } catch (e) { alert("설정 실패"); }
       finally { btn.disabled = false; }
     },

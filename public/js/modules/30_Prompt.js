@@ -9,6 +9,10 @@
       const inp = $("prompt-modal-input");
       if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this._submit(); } if (e.key === "Escape") this._close(null); });
     },
+    /** [스팸 방지] 동시에 화면에 떠 있을 수 있는 토스트 최대 개수.
+     *  이 캡이 없으면 버튼 연타·연쇄 액션 시 토스트가 세로로 무한정 쌓여
+     *  360 뷰어 컨트롤바를 가리는 "검은 박스 스택"이 된다(마스터 스크린샷 실측). */
+    TOAST_MAX: 2,
     /** 가벼운 토스트 알림 (화면 하단 중앙, 자동 소멸) */
     toast(msg, ms) {
       let host = document.getElementById("wm-toast-host");
@@ -18,12 +22,31 @@
         host.className = "wm-toast-host";
         document.body.appendChild(host);
       }
+      const life = ms || 2200;
+      const kill = (el) => {
+        if (el._wmT) { clearTimeout(el._wmT); el._wmT = null; }
+        if (el._wmT2) { clearTimeout(el._wmT2); el._wmT2 = null; }
+        el.remove();
+      };
+      const arm = (el, dur) => {
+        if (el._wmT) clearTimeout(el._wmT);
+        el._wmT = setTimeout(() => {
+          el.classList.remove("on");
+          el._wmT2 = setTimeout(() => el.remove(), 280);
+        }, dur);
+      };
+      // ① 같은 메시지가 이미 떠 있으면 새로 쌓지 말고 수명만 연장(중복 스택 차단)
+      const dup = Array.prototype.filter.call(host.children, (n) => n.dataset && n.dataset.wmMsg === String(msg))[0];
+      if (dup) { arm(dup, life); return; }
+      // ② 캡 초과분은 가장 오래된 것부터 즉시 제거 — 어떤 호출부가 남아 있어도 무한 스택 불가
+      while (host.children.length >= this.TOAST_MAX) kill(host.firstElementChild);
       const t = document.createElement("div");
       t.className = "wm-toast";
       t.textContent = msg;
+      t.dataset.wmMsg = String(msg);
       host.appendChild(t);
       requestAnimationFrame(() => t.classList.add("on"));
-      setTimeout(() => { t.classList.remove("on"); setTimeout(() => t.remove(), 280); }, ms || 2200);
+      arm(t, life);
     },
     /** opts: { title, sub, placeholder, second } → Promise<string|{value,second}|null> */
     ask(opts) {

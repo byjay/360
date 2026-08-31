@@ -123,7 +123,7 @@
     /** Firebase 팝업 로그인 실행 + 사용자 피드백(토스트/게이트 에러) */
     async _doFirebaseLogin() {
       try {
-        Prompt && Prompt.toast && Prompt.toast("Google 로그인 창을 여는 중…", 1600);
+        // [토스트 스팸 제거] 팝업 창이 실제로 뜨는 것이 곧 피드백이다(성공/실패 토스트는 아래 유지).
         await this.loginWithFirebase();
         const who = (this.user && (this.user.name || this.user.email)) || "";
         Prompt && Prompt.toast && Prompt.toast("로그인 완료 — " + who + " (" + this._roleLabel() + ")", 3000);
