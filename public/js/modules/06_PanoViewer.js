@@ -85,7 +85,7 @@
           const hint = document.querySelector("#pano-error .pano-error-hint");
           if (hint) hint.textContent =
             "이 이미지 서버가 외부 접근(CORS)을 막고 있습니다. " +
-            "설계자 모드에서 '그림 파일 선택'으로 직접 업로드하면 클라우드 저장되어 항상 표시됩니다.";
+            "편집모드에서 '그림 파일 선택'으로 직접 업로드하면 클라우드 저장되어 항상 표시됩니다.";
         }
       };
       img.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src;

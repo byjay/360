@@ -545,7 +545,7 @@
       const b = document.createElement("div");
       b.id = "demo-mode-badge";
       b.className = "demo-mode-badge";
-      b.innerHTML = '<span class="demo-dot"></span>설계자 모드 — 도면·핀·프로젝트 편집 중';
+      b.innerHTML = '<span class="demo-dot"></span>편집모드 — 도면·핀·프로젝트 편집 중';
       document.body.appendChild(b);
     },
 

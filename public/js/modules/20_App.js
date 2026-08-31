@@ -104,7 +104,7 @@
       if (_ml) {
         _ml.innerHTML = _modeIcon;
         _ml.style.color = accentVar;
-        _ml.title = isCheckboard ? "체크보드 모드" : (isDesigner ? "설계자 모드" : "뷰어 모드");
+        _ml.title = isCheckboard ? "체크보드 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
         _ml.style.display = "inline-flex"; _ml.style.alignItems = "center";
       }
 
@@ -119,7 +119,7 @@
         const cbEnter = UI.$("btn-checkboard-enter");
         const cbEnterLbl = UI.$("btn-checkboard-enter-label");
         if (cbEnter) cbEnter.classList.toggle("active", isCheckboard);
-        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "디자이너 모드로 복귀" : "체크보드 모드 시작";
+        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드 시작";
         const startInput = UI.$("input-checkboard-start");
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
       } catch (e) {}
@@ -196,7 +196,7 @@
       const cbBtn = UI.$("btn-checkboard-enter");
       if (cbBtn) cbBtn.classList.toggle("active", isCheckboard);
       const cbLabel = UI.$("btn-checkboard-enter-label");
-      if (cbLabel) cbLabel.textContent = isCheckboard ? "디자이너 모드로 복귀" : "체크보드 모드";
+      if (cbLabel) cbLabel.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드";
       const placeBtn = UI.$("btn-place");
       if (placeBtn) placeBtn.textContent = isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
       const placeHint = UI.$("place-hint");
@@ -492,7 +492,7 @@
         Prompt && Prompt.toast && Prompt.toast(
           next === "checkboard"
             ? "체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다"
-            : "디자이너 모드로 복귀"
+            : "편집모드로 복귀"
         );
         if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
       };
@@ -1544,7 +1544,7 @@
         e.preventDefault(); e.stopPropagation();
         setOver(false);
         if (State.mode !== "designer") {
-          if (typeof Prompt !== "undefined") Prompt.toast("ℹ 도면 업로드는 디자이너 모드에서만 가능합니다.");
+          if (typeof Prompt !== "undefined") Prompt.toast("ℹ 도면 업로드는 편집모드에서만 가능합니다.");
           return;
         }
         const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
@@ -1561,7 +1561,7 @@
       //  도면 등록의 모든 진입 경로(버튼/단축키/드래그앤드롭/mnav/시트)는 결국 이 함수로 모이므로,
       //  여기서 한 번에 권한을 강제한다. 설계자 권한 + 디자이너 모드일 때만 통과.
       if (State.mode !== "designer" || (typeof Auth !== "undefined" && !Auth.isDesigner)) {
-        Prompt && Prompt.toast && Prompt.toast("뷰어는 도면을 등록할 수 없습니다. 설계자 모드에서만 가능합니다.");
+        Prompt && Prompt.toast && Prompt.toast("뷰어는 도면을 등록할 수 없습니다. 편집모드에서만 가능합니다.");
         return;
       }
       // ── [마스터 규칙] 구역(deck) 선행 등록 강제: 프로젝트에 구역이 없거나 미선택이면 도면 로드 차단 ──
@@ -2537,8 +2537,8 @@
         // 한 번이라도 이미지 미리보기(localPreview/imageUrl=blob)가 있었으면 업로드 미완으로 판단
         const hadTempImage = !!(pin.localPreview || (pin.imageUrl && pin.imageUrl.indexOf("blob:") === 0) || pin.imageName);
         $("pano-error").querySelector(".pano-error-msg").textContent = hadTempImage
-          ? "이 360° 사진은 임시 미리보기만 저장되어 재접속 후 표시할 수 없습니다. 설계자 모드에서 사진을 다시 업로드해 주세요."
-          : "이 포인트에는 360° 미디어가 등록되지 않았습니다. 설계자 모드에서 사진(클라우드 업로드) 또는 영상 URL을 추가해 주세요.";
+          ? "이 360° 사진은 임시 미리보기만 저장되어 재접속 후 표시할 수 없습니다. 편집모드에서 사진을 다시 업로드해 주세요."
+          : "이 포인트에는 360° 미디어가 등록되지 않았습니다. 편집모드에서 사진(클라우드 업로드) 또는 영상 URL을 추가해 주세요.";
         $("pano-error-url").textContent = "";
         const hint = $("pano-error").querySelector(".pano-error-hint");
         if (hint) hint.textContent = hadTempImage
