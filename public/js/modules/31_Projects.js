@@ -84,6 +84,8 @@
       // 서버가 다른 프로젝트 deck을 섞어줘도(이론상) 현재 프로젝트 것만 사용
       this.decks = (data || []).filter((d) => !d.project_id || d.project_id === reqPid);
       this._renderDecks();
+      // [B4] 로컬 draft 스캔 → '미저장' 배지 동기화(비차단)
+      try { if (typeof App !== "undefined" && App._refreshUnsavedDecks) App._refreshUnsavedDecks(); } catch (e) {}
     },
 
     /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */
@@ -117,6 +119,14 @@
         if (!r.ok) { alert(d.error || "생성 실패(권한 필요)"); return null; }
         await this.loadDecks();
         const created = this.decks.find((x) => x.id === d.id) || d;
+        // ── [B3] draft 키 표류 방지 ──
+        //   draft 키는 `projectId::deckId` 다. currentDeck 을 새 구역으로 바꾸기 전에
+        //   현재 구역에서 작업 중이던 미저장분을 '기존 키'로 확실히 저장한다.
+        //   (안 하면 이전 구역 작업이 새 구역 키로 넘어가 사실상 유실된다)
+        if (opts.select !== false && this.currentDeck && this.currentDeck.id !== created.id
+            && typeof App !== "undefined" && App._dirty && App._saveDraftLocal) {
+          try { await App._saveDraftLocal(); } catch (e) {}
+        }
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
         // ── [마스터 요청] 구역 생성 직후 곧바로 도면 등록 흐름으로 연결 ──
         // ensureDeck() 자동생성 경로(무한루프 방지)는 askDrawing:false 로 이 단계를 건너뜀.
@@ -179,7 +189,10 @@
         const dot = hasDoc
           ? '<span class="deck-hasdoc" title="도면 등록됨"><i class="fa-solid fa-file-lines"></i></span>'
           : '<span class="deck-nodoc" title="도면 미등록"><i class="fa-regular fa-folder-open"></i></span>';
-        row.innerHTML = `<span class="deck-tree-guide">└</span><span class="deck-name">${dot}${this._esc(d.name)}</span>
+        // [B4] 로컬에만 있고 서버 미저장 → '미저장' 배지('도면없음'과 구분)
+        const unsaved = (typeof App !== "undefined" && App.isDeckUnsaved) ? App.isDeckUnsaved(d.id) : false;
+        const uTag = unsaved ? '<span class="deck-unsaved-tag" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>' : "";
+        row.innerHTML = `<span class="deck-tree-guide">└</span><span class="deck-name">${dot}${this._esc(d.name)}${uTag}</span>
           <button class="deck-del" title="삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
         row.querySelector(".deck-name").addEventListener("click", () => this.selectDeck(d));
         row.querySelector(".deck-del").addEventListener("click", (e) => { e.stopPropagation(); this.deleteDeck(d.id, d.name); });

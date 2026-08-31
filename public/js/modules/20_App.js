@@ -2924,10 +2924,11 @@
     },
 
     /** 로컬(IndexedDB) draft 로부터 도면+핀+구역 복원 — 서버 실패/오프라인/새로고침 대응 */
-    async _restoreDraftLocal() {
+    async _restoreDraftLocal(key) {
       try {
         if (typeof SyncQueue === "undefined") return false;
-        const d = await SyncQueue.loadDraft(this._draftKey());
+        const dkey = key || this._draftKey();
+        const d = await SyncQueue.loadDraft(dkey);
         if (!d || !d.pages || !d.pages.length) return false;
 
         State.reset();
@@ -2957,10 +2958,81 @@
         if (imgEl.complete && imgEl.naturalWidth) _r1();
         if (d.dirty) {
           this._setSaveIndicator(navigator.onLine ? "saving" : "offline");
+          // [B4] 미저장(서버 미반영) 상태를 사용자에게 명확히 — 저장버튼 강조 + 구역 '미저장' 배지
+          this._markDirty();
+          this._markDeckUnsaved(this._deckIdOfKey(dkey), true);
           if (navigator.onLine) setTimeout(() => this._flushDirtyDrafts(), 400);
         }
-        Prompt && Prompt.toast && Prompt.toast("로컬에 보관된 도면을 복원했습니다" + (d.dirty ? " (서버 동기화 대기 중)" : ""));
+        Prompt && Prompt.toast && Prompt.toast("로컬에 보관된 도면을 복원했습니다" + (d.dirty ? " (아직 서버에 저장되지 않음 — ‘저장’을 누르세요)" : ""));
         return true;
+      } catch (e) { return false; }
+    },
+
+    /** draft 키(`projectId::deckId`)에서 deckId 만 추출. 프로젝트 id 에 '::' 가 있어도 안전. */
+    _deckIdOfKey(key) {
+      const s = String(key || ""); const i = s.lastIndexOf("::");
+      if (i < 0) return "";
+      const did = s.slice(i + 2);
+      return (did && did !== "nodeck") ? did : "";
+    },
+
+    /** [B4] 로컬에만 있고 서버 미저장인 구역 id 집합 — 사이드바 '미저장' 배지의 단일 출처 */
+    _unsavedDecks: {},
+    isDeckUnsaved(deckId) { return !!(deckId && this._unsavedDecks[deckId]); },
+    _markDeckUnsaved(deckId, on) {
+      if (!deckId) return;
+      const had = !!this._unsavedDecks[deckId];
+      if (on) this._unsavedDecks[deckId] = true; else delete this._unsavedDecks[deckId];
+      if (had === !!on) return;                      // 변화 없음 → 재렌더 생략
+      try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {}
+    },
+    /** 로컬 draft 전수 스캔으로 '미저장 구역' 집합을 재구성(재진입/구역목록 갱신 시) */
+    async _refreshUnsavedDecks() {
+      try {
+        if (typeof SyncQueue === "undefined" || !SyncQueue.allDraftKeys) return;
+        const keys = (await SyncQueue.allDraftKeys()) || [];
+        let changed = false;
+        for (const k of keys) {
+          const did = this._deckIdOfKey(k);
+          if (!did) continue;
+          let d = null;
+          try { d = await SyncQueue.loadDraft(k); } catch (e) { continue; }
+          const unsaved = !!(d && d.dirty && d.pages && d.pages.length);
+          if (!!this._unsavedDecks[did] === unsaved) continue;
+          if (unsaved) this._unsavedDecks[did] = true; else delete this._unsavedDecks[did];
+          changed = true;
+        }
+        if (changed) { try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {} }
+      } catch (e) {}
+    },
+
+    /** [B1] 서버 배포본이 하나도 없는 프로젝트로 재진입했을 때 —
+     *  로컬 draft(저장 버튼을 안 눌러 서버엔 없는 작업분)를 찾아 화면에 복원한다.
+     *  이 경로가 없으면 사용자에겐 도면이 '사라진 것'으로 보인다. */
+    async _restoreProjectDraft(pid) {
+      try {
+        if (!pid || typeof SyncQueue === "undefined" || !SyncQueue.allDraftKeys) return false;
+        let keys = [];
+        try { keys = (await SyncQueue.allDraftKeys()) || []; } catch (e) { return false; }
+        const prefix = pid + "::";
+        const mine = keys.filter((k) => typeof k === "string" && k.indexOf(prefix) === 0);
+        if (!mine.length) return false;
+        const decks = (typeof Projects !== "undefined" && Array.isArray(Projects.decks)) ? Projects.decks : [];
+        let best = null, bestScore = -1, bestDeck = null;
+        for (const k of mine) {
+          let d = null;
+          try { d = await SyncQueue.loadDraft(k); } catch (e) { continue; }
+          if (!d || !d.pages || !d.pages.length) continue;
+          const did = this._deckIdOfKey(k);
+          const deck = did ? decks.find((x) => String(x.id) === String(did)) : null;
+          const score = (deck ? 2 : 0) + (d.dirty ? 1 : 0);   // 실존 구역 > dirty 우선
+          if (score > bestScore) { bestScore = score; best = k; bestDeck = deck || null; }
+        }
+        if (!best) return false;
+        if (bestDeck && typeof Projects !== "undefined") Projects.currentDeck = bestDeck;
+        const ok = await this._restoreDraftLocal(best);
+        if (ok) { try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {} }
+        return ok;
       } catch (e) { return false; }
     },
 
@@ -3009,8 +3081,27 @@
           }
           if (!res.ok) continue;                  // 실패 → dirty 유지, 다음 기회에 재시도
           const rec = await res.json().catch(() => null);
+          const wasNew = !d.depId;                // POST 로 '새' 배포본을 만든 경우
           d.depId = (rec && rec.id) ? rec.id : d.depId;
           d.dirty = false;
+          // [B2] 자동 동기화가 만든 새 배포본도 반드시 구역(deck)에 연결한다.
+          //   연결을 빠뜨리면 배포본은 서버에 있는데 구역엔 '도면없음'인 고아가 되어
+          //   사용자에겐 도면이 사라진 것으로 보인다. (draft 키 = projectId::deckId)
+          if (wasNew && d.depId) {
+            try {
+              const deckId = this._deckIdOfKey(key);
+              if (deckId) {
+                const deckObj = (typeof Projects !== "undefined" && Array.isArray(Projects.decks))
+                  ? Projects.decks.find((x) => String(x.id) === String(deckId)) : null;
+                const linked = await this._linkDeckDeployment(deckId, d.depId, deckObj);
+                if (linked && deckObj) {
+                  deckObj.deployment_id = d.depId;
+                  try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {}
+                }
+              }
+            } catch (e) { /* 연결 실패 → _deckLinkQueue 가 다음 기회에 재시도 */ }
+          }
+          this._markDeckUnsaved(this._deckIdOfKey(key), false);   // [B4] 서버 반영됨 → 배지 해제
           // 병합된 핀/구역을 draft 에도 반영(다음 동기화 기준 정합)
           if (srvPins)  { try { d.pins  = JSON.parse(body.pins  || "[]"); } catch (e) {} }
           if (srvZones) { try { d.zones = JSON.parse(body.zones || "[]"); } catch (e) {} }
@@ -3048,7 +3139,10 @@
           depId:       State.autoSaveDepId || null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
-        await SyncQueue.saveDraft(this._draftKey(), payload);
+        const dkey = this._draftKey();
+        await SyncQueue.saveDraft(dkey, payload);
+        // [B4] 서버 미반영(로컬 전용) 구역 표시 — 저장을 눌렀는지 사용자가 알 수 있게
+        this._markDeckUnsaved(this._deckIdOfKey(dkey), true);
         return true;
       } catch (e) { return false; }
     },
@@ -3177,6 +3271,7 @@
           await this._markDraftClean(pages);
         }
         this._dirty = false; this._dirtyPages = false; this._updateSaveBtn();
+        try { this._markDeckUnsaved(this._deckIdOfKey(this._draftKey()), false); } catch (e) {}  // [B4]
         this._setSaveIndicator("saved");
         // [마스터: 저장 확인이 안 됨] 명확한 완료 피드백(모바일 토스트)
         try { Prompt.toast && Prompt.toast("저장 완료"); } catch (e) {}
@@ -3408,6 +3503,10 @@
           } catch (e) {}
           if (!wantId) {   // 새/빈 프로젝트 → 도면 없음(다른 프로젝트 도면을 잘못 띄우지 않음)
             statusEl.textContent = "";
+            // [B1] 서버 배포본이 없어도 '저장 전' 로컬 draft 가 있으면 복원한다.
+            //   (자동저장 OFF 정책 하에선 저장 버튼을 안 누른 작업이 로컬에만 존재한다)
+            try { await this._restoreProjectDraft(projectForDesigner.id); } catch (e) {}
+            try { this._refreshUnsavedDecks(); } catch (e) {}
             return;
           }
         }

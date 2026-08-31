@@ -4654,3 +4654,22 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
   .req-status-approved{color:#3fb950;background:rgba(63,185,80,.12)}
   .req-status-rejected{color:#f85149;background:rgba(248,81,73,.12)}
 }
+
+/* ═══ [B4] 미저장(로컬 전용) 상태 시각화 — 저장 버튼 강조 + 구역 '미저장' 배지 ═══
+   대비 실측(WCAG 2.1): #2b2820 on #f59e0b = 6.87:1 · #fff on #b45309 = 5.02:1 · #6b6457 on #efe9dc = 4.84:1 */
+.btn-save{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;
+  padding:6px 12px;border-radius:8px;cursor:pointer;font-family:var(--font-ui);
+  font-size:12px;font-weight:700;line-height:1;transition:background .15s,color .15s,box-shadow .15s;}
+.btn-save.hidden{display:none;}
+.btn-save.is-clean{background:transparent;border:1px solid rgba(107,100,87,.35);color:var(--text2,#6b6457);cursor:default;}
+.btn-save.is-dirty{background:#f59e0b;border:1px solid #b45309;color:#2b2820;
+  box-shadow:0 0 0 0 rgba(180,83,9,.55);animation:unsavedPulse 1.6s ease-out infinite;}
+.btn-save.is-dirty:hover{background:#fbbf24;}
+@keyframes unsavedPulse{
+  0%{box-shadow:0 0 0 0 rgba(180,83,9,.55);}
+  70%{box-shadow:0 0 0 7px rgba(180,83,9,0);}
+  100%{box-shadow:0 0 0 0 rgba(180,83,9,0);}
+}
+.tree-tag-unsaved,.deck-unsaved-tag{font-size:9px;font-weight:700;line-height:1.6;
+  color:#fff;background:#b45309;padding:1px 6px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
+@media (prefers-reduced-motion:reduce){ .btn-save.is-dirty{animation:none;} }

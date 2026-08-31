@@ -182,7 +182,12 @@
         g.className = "tree-deck" + (isCur ? " open" : "");
         const head = document.createElement("button");
         head.className = "tree-node tree-node-deck" + (isCur ? " active" : "");
-        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + (deck.deployment_id ? "" : '<span class="tree-tag">도면없음</span>');
+        // [B4] '도면없음'(구역에 도면 미등록) 과 '미저장'(로컬에만 있고 서버 미반영)을 구분 표시
+        const _unsaved = (typeof App !== "undefined" && App.isDeckUnsaved) ? App.isDeckUnsaved(deck.id) : false;
+        const _tag = _unsaved
+          ? '<span class="tree-tag tree-tag-unsaved" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>'
+          : (deck.deployment_id ? "" : '<span class="tree-tag">도면없음</span>');
+        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag;
         head.addEventListener("click", () => {
           if (isCur) { g.classList.toggle("open"); }
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
