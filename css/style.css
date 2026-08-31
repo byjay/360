@@ -755,10 +755,12 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .decks-list { display: flex; flex-direction: column; gap: 6px; }
 .decks-empty { color: var(--text2); font-size: 10.5px; font-family: var(--font-ui); padding: 6px 2px; }
 .decks-empty.hidden { display: none; }
+/* [마스터] 검은 deck-row 목록 제거 — 트리는 side-tree(구역>도면>영역>핀) 하나로 통일 */
+#decks-list, #decks-empty { display: none !important; }
 .deck-row {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; border-radius: 8px;
-  background: rgba(2,6,23,.5); border: 1px solid var(--border);
+  background: var(--bg3, #f1ece0); border: 1px solid var(--border);  /* 라이트 배경 — 대비 확보 */
   transition: border-color .15s, background .15s;
 }
 .deck-row.active { border-color: #38bdf8; background: rgba(56,189,248,.1); }
@@ -799,7 +801,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 
 /* ─── SIDEBAR ─── */
 .sidebar {
-  width: 240px; flex-shrink: 0;
+  width: 240px; max-width: 30vw; flex-shrink: 0;   /* [마스터] 전체화면의 30%를 넘지 않게 */
   background: var(--bg2);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
@@ -1377,6 +1379,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   border: 1px solid rgba(245,158,11,.28);
   border-radius: 10px; padding: 8px;
   box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  overflow: hidden;                 /* [마스터] 영역 확대 시 stage 가 박스 밖으로 삐져나가지 않게 */
 }
 .pano-radar.hidden { display: none !important; }
 .pano-radar-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 6px; }
@@ -1385,6 +1388,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pano-radar-stage {
   position: relative; width: 100%; border-radius: 6px; overflow: hidden;
   background: #efe9dc; line-height: 0;
+  transition: transform .45s cubic-bezier(.16,1,.3,1);   /* 영역 확대 시 시네마틱 전환 */
 }
 .pano-radar-map { width: 100%; display: block; opacity: .9; }
 .pano-radar-pins { position: absolute; inset: 0; }
@@ -1492,6 +1496,57 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   background: var(--gold); color: #f3ecd9; border-color: var(--gold);
   box-shadow: 0 0 14px rgba(245,158,11,.45);
 }
+/* [FARO Markers] 마커 종류 선택 칩 바 */
+.pano-spot-kinds { display: flex; gap: 4px; align-items: center; }
+.pano-spot-kinds.hidden { display: none; }
+.psk-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18);
+  color: #f3ecd9; font-size: 12px; font-weight: 600; white-space: nowrap;
+  transition: background .12s, border-color .12s, transform .1s;
+}
+.psk-chip:hover { background: rgba(255,255,255,.16); }
+.psk-chip.on { background: var(--gold); color: #1a1a1a; border-color: var(--gold); }
+.psk-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 0 1.5px rgba(255,255,255,.5); }
+/* [FARO Markers] 마커 호버 툴팁 */
+.pano-spot-tip {
+  position: fixed; z-index: 40; pointer-events: none;
+  max-width: 240px; padding: 7px 10px; border-radius: 8px;
+  background: rgba(10,16,32,.94); color: #f3ecd9;
+  border: 1px solid rgba(245,158,11,.4); box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  font-size: 12px; line-height: 1.45;
+}
+.pano-spot-tip.hidden { display: none; }
+.pano-spot-tip .pst-kind { font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
+.pano-spot-tip .pst-note { color: #cbd5e1; margin-top: 3px; }
+/* [FARO Markers] 마커 리스트 패널(테이블) */
+.pano-spot-list {
+  position: absolute; top: 64px; right: 18px; z-index: 22;
+  width: 300px; max-width: 86vw; max-height: 60vh; display: flex; flex-direction: column;
+  background: rgba(10,16,32,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(245,158,11,.28); border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.5); overflow: hidden;
+}
+.pano-spot-list.hidden { display: none; }
+.psl-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.12); }
+.psl-title { font-size: 13px; font-weight: 700; color: #f0b941; }
+.psl-close { background: transparent; border: none; color: #cbd5e1; cursor: pointer; display: flex; padding: 2px; border-radius: 6px; }
+.psl-close:hover { background: rgba(255,255,255,.12); color: #fff; }
+.psl-body { overflow-y: auto; }
+.psl-table { width: 100%; border-collapse: collapse; font-size: 12px; color: #e6edf3; }
+.psl-table th { text-align: left; font-size: 10.5px; font-weight: 700; color: #9aa6b2; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.1); position: sticky; top: 0; background: rgba(10,16,32,.97); }
+.psl-table td { padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: top; }
+.psl-row { cursor: pointer; }
+.psl-row:hover { background: rgba(245,158,11,.13); }
+.psl-num { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; color: #fff; }
+.psl-empty { padding: 24px 14px; text-align: center; color: #9aa6b2; font-size: 12px; line-height: 1.6; }
+/* [도면 연결 복구] 도면 목록 — admin-gate(라이트 카드) 안 */
+.deck-link-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
+.dl-item { display: block; width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
+  background: var(--bg3, #f1ece0); border: 1px solid var(--border); color: var(--text); font-size: 13px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .12s, border-color .12s; }
+.dl-item:hover { background: rgba(201,150,42,.14); border-color: var(--gold); }
 
 /* Animations */
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -3161,7 +3216,8 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .sidebar-backdrop { display: none; }
 
 /* ★ 상단 빠른 도구 아이콘 (데스크톱: 좌측 사이드바 핵심 기능을 상단에서 바로) */
-.topbar-quick { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; }
+/* [마스터] 상단 빠른도구는 옆 사이드바 도구(side-toolbar)·하단 dock과 중복 → 제거 */
+.topbar-quick { display: none !important; }
 /* [마스터 요청] 상단 빠른도구 — 밝은 크림 상단바에 맞춘 CAD급 입체 버튼 */
 .tq-btn {
   width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
@@ -3198,6 +3254,17 @@ body.role-viewer #btn-checkboard-toggle,
 body.role-viewer #btn-checkboard-enter { display: none !important; }
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
 @media (max-width: 760px) { .topbar-quick { display: none; } .btn-settings span { display: none; } }
+/* [마스터] 모바일 상단바 전수 아이콘화 — 텍스트 라벨은 CSS로만 숨김(HTML span 유지: JS가 innerHTML/textContent 갱신) */
+@media (max-width: 760px) {
+  .topbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .topbar::-webkit-scrollbar { display: none; }            /* 가로 스크롤바 숨김(넘쳐도 깔끔) */
+  .mode-label { display: none; }                            /* 모드는 .topbar-dot 색점으로 표시 */
+  .topbar-sep { display: none; }
+  .file-name-label { display: none; }                      /* 파일명은 미니맵/제목으로 식별 */
+  #autosave-text, #sync-text { display: none; }            /* 상태는 점(dot)만, 텍스트 숨김 */
+  .btn-save span, .btn-allpins span,
+  .btn-exit-edit span, .btn-enter-edit span { display: none; }   /* 아이콘만 남김 */
+}
 /* 모바일: 상단 PDF 가로스크롤 툴바 숨김 — 도구는 하단 그룹 도크로 통합(tb-* 버튼은 DOM 유지=위임 동작) */
 @media (max-width: 760px) { .pdf-toolbar { display: none !important; } }
 
@@ -3871,7 +3938,8 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pap-view.dim { opacity: .5; }
 .pap-move { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
 .pap-edit { background: #fefce8; border-color: #fde68a; color: #a16207; }
-.pap-del { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
+.pap-note { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
+.pap-del { background: #fef2f2; border-color: #fecaca; color: #dc2626; grid-column: 1 / -1; }
 .pap-hint { margin: 12px 0 0; font-size: 11px; color: #94a3b8; line-height: 1.5; }
 .pin-marker.edit-unlocked .pin-pin { animation: papWiggle .6s ease-in-out infinite; }
 @keyframes papWiggle { 0%,100% { transform: rotate(-6deg) scale(1.15); } 50% { transform: rotate(6deg) scale(1.15); } }
@@ -3895,6 +3963,15 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   position: relative; width: min(420px, 94vw); max-height: 92vh; overflow-y: auto;
   background: #fff; border-radius: 18px; padding: 26px 26px 20px;
   box-shadow: 0 24px 70px rgba(0,0,0,.45);
+  color-scheme: light;   /* [버그수정] OS/브라우저 다크모드가 입력창 글자색을 강제로 뒤집어 흰배경+흰글씨 되는 것 차단 */
+}
+/* [버그수정] 전역 input[type=...] 규칙(--text/--bg2 변수 사용, 명세 우위)이 이 모달의
+   고정 흰 배경 카드와 충돌해 클릭(포커스) 시 글자가 배경과 같아지던 문제 — 확정 지정으로 고정 */
+.company-gate-card input.company-input {
+  background: #fff; color: #0f172a;
+}
+.company-gate-card input.company-input:focus {
+  background: #fff; color: #0f172a;
 }
 .company-title { margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #0f172a; }
 .company-sub { margin: 0 0 18px; font-size: 13px; color: #64748b; }
@@ -4449,7 +4526,21 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 @media(max-width:760px){.btn-poly-finish{bottom:calc(70px + env(safe-area-inset-bottom,0px));}}
 
 /* ═══ [사이드바 재구성] 컴팩트 도구바 + 구역>도면>영역>포인트 트리 ═══ */
-.side-toolbar{display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;border-bottom:1px solid var(--border2);}
+.stb-toggle{display:none;}
+.side-toolbar{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border2);}
+/* [마스터] 모바일: 도구바를 드롭다운으로 접기 — 팝업 최대 30vh(전체화면 30% 이내) */
+@media(max-width:760px){
+  .stb-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;padding:10px 14px;margin:2px 0 6px;
+    background:var(--bg3,#f1ece0);border:1px solid var(--border);border-radius:10px;color:var(--text);
+    font-weight:700;font-size:13px;font-family:var(--font-ui);cursor:pointer;}
+  .stb-caret{display:inline-flex;transition:transform .25s var(--luxe-ease,ease);}
+  body.tools-open .stb-caret{transform:rotate(180deg);}
+  .side-toolbar{max-height:0;overflow:hidden;padding-block:0;border-bottom:none;
+    transition:max-height .28s cubic-bezier(.2,.9,.25,1);}
+  body.tools-open .side-toolbar{max-height:30vh;overflow-y:auto;padding-block:8px;border-bottom:1px solid var(--border2);}
+}
+.stb-group{display:flex;align-items:center;gap:4px;}
+.stb-group::before{content:attr(data-g);flex:0 0 40px;font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.03em;}
 .stb-btn{flex:0 0 auto;width:38px;height:36px;display:flex;align-items:center;justify-content:center;
   background:var(--bg3,#f1ece0);border:1px solid var(--border2);border-radius:8px;cursor:pointer;color:var(--text2,#6b6457);
   -webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:background .14s,border-color .14s,color .14s,transform .1s;}

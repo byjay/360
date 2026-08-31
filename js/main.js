@@ -3069,6 +3069,11 @@
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
       // [멀티테넌트] 서브도메인 부여
       $("pm-subdomain-btn") && $("pm-subdomain-btn").addEventListener("click", () => this.setSubdomain());
+      // [마스터 요청] 디자이너/뷰어 선택 모달
+      $("pms-cancel") && $("pms-cancel").addEventListener("click", () => this.closeModeSelect());
+      $("pms-backdrop") && $("pms-backdrop").addEventListener("click", () => this.closeModeSelect());
+      $("pms-btn-designer") && $("pms-btn-designer").addEventListener("click", () => this._enterAsDesigner());
+      $("pms-btn-viewer") && $("pms-btn-viewer").addEventListener("click", () => this._enterAsViewer());
       const pmSub = $("pm-subdomain");
       if (pmSub) {
         pmSub.addEventListener("input", () => {
@@ -3287,6 +3292,14 @@
       Auth._applyUi();          // 인증바 상태 동기화 (hub 슬롯 포함)
       Auth._renderHubSignin();  // 미로그인 시 hub 로그인 버튼 렌더
       await this.load();
+      // [마스터 2026-08-31] AUTO_DESIGNER_ENTRY 자동입장 연장 — 프로젝트 선택 화면(카드 클릭) 단계를
+      //   건너뛰고 가장 최근 프로젝트로 바로 진입. 서버가 created_at DESC로 정렬해 오므로 list[0] = 최신.
+      //   세션당 1회만(뒤로가기로 재방문 시 _autoEntered가 이미 true → 정상적으로 선택 화면 유지, 전환 경로 보존).
+      //   스위치 false면 이 블록 전체 무시 → 기존처럼 항상 선택 화면.
+      if (typeof AUTO_DESIGNER_ENTRY !== "undefined" && AUTO_DESIGNER_ENTRY && !this._autoEntered && this.list.length > 0 && Auth.isDesigner) {
+        this._autoEntered = true;
+        this.openProject(this.list[0]);
+      }
     },
 
     async load() {
@@ -3495,24 +3508,48 @@
       }
     },
 
-    /** 프로젝트 진입: 디자이너면 편집, 아니면 뷰어 */
+    /** 프로젝트 진입: Auth.isDesigner 자동판정으로 조용히 결정하지 않고,
+     *  항상 "디자이너로 열기"/"뷰어로 열기" 선택 모달을 띄워 사용자가 직접 고른다.
+     *  (AUTO_DESIGNER_ENTRY로 자동입장한 경우에도 이 선택 단계는 건너뛰지 않는다.) */
     async openProject(p) {
       // 선택 프로젝트를 Projects 모듈과 공유 (작업화면 사이드바 동기화용)
       Projects.list = this.list;
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
+      this._modeSelectProject = p;
+      const m = document.getElementById("proj-mode-select-modal");
+      if (!m) { // 모달 마크업이 없으면(구버전) 안전 폴백 — 기존 자동판정 동작 유지
+        if (Auth.isDesigner) App.openApp("designer", { project: p });
+        else App.openApp("viewer", { project: p });
+        return;
+      }
+      const nm = document.getElementById("pms-proj-name"); if (nm) nm.textContent = p.name || p.id;
+      m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+    closeModeSelect() {
+      const m = document.getElementById("proj-mode-select-modal");
+      if (!m) return; m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200);
+    },
+    async _enterAsDesigner() {
+      const p = this._modeSelectProject; if (!p) return;
+      this.closeModeSelect();
       // 회귀 방지: 설계자 토큰이 있는데 권한 확인(refresh)이 아직 끝나지 않아
-      //   isDesigner가 false인 채로 카드를 누르면 뷰어로 진입 → "PDF 업로드가 안 된다"는
-      //   회귀 느낌을 준다. 토큰이 있으면 권한 재확인을 한 번 await 한 뒤 모드를 결정한다.
+      //   isDesigner가 false인 채로 진입하면 "PDF 업로드가 안 된다"는 회귀 느낌을 준다.
+      //   토큰이 있으면 권한 재확인을 한 번 await 한 뒤 게이트를 판단한다.
       if (!Auth.isDesigner && Auth.idToken) {
         try { await Auth.refresh(); } catch (e) {}
       }
-      if (Auth.isDesigner) {
-        App.openApp("designer", { project: p });
-      } else {
-        App.openApp("viewer", { project: p });
-      }
+      // AUTO_DESIGNER_ENTRY 등으로 이미 디자이너 권한이 있으면 게이트 없이 바로 진입,
+      //   없으면 기존 로그인 게이트 경로(Auth.requireDesigner) 유지.
+      if (Auth.isDesigner) App.openApp("designer", { project: p });
+      else Auth.requireDesigner(() => App.openApp("designer", { project: p }));
+    },
+    _enterAsViewer() {
+      const p = this._modeSelectProject; if (!p) return;
+      this.closeModeSelect();
+      // 뷰어는 로그인 불필요 — 기존 동작 유지
+      App.openApp("viewer", { project: p });
     },
 
     async createProject() {
@@ -4985,7 +5022,7 @@
   ══════════════════════════════════════════ */
   const App = {
 
-    init() {
+    async init() {
       Brand.apply();
       this._bindHome();
       this._bindTopbar();
@@ -5004,7 +5041,9 @@
       PanoViewer.init(UI.$("pano-canvas"));
       AllPins.init();
       try { State.pinColor = PinPrefs.get(); } catch (e) {}  // 저장된 핀 색상 복원(기본 그린)
-      Auth.init();
+      // [버그①수정 2026-08-31] Auth.init()이 async(데모 자동로그인 refresh 포함)로 바뀌어 await 필요 —
+      // ProjectHub가 프로젝트 목록을 불러오기 전에 로그인 토큰 세팅이 반드시 끝나 있어야 한다.
+      await Auth.init();
       Settings.init();
       Designers.init();
       if (typeof UserMgmt !== "undefined") UserMgmt.init();
@@ -8625,6 +8664,11 @@
   // [마스터 2026-08-31] 디자이너 기능은 로그인 없이 바로 진입, 관리자만 구글 로그인 필요.
   //   마스터가 "다시 로그인 필수로" 지시하면 이 값을 false 로 바꾸면 즉시 원복(로그인 게이트 필수).
   const AUTO_DESIGNER_ENTRY = true;
+  // 자동입장 전용 토큰 — 데모 토큰(demo-*)과 완전히 별개 경로다.
+  //   데모 토큰은 P0 보안조치(CF 시크릿 DEMO_LOGIN=0)로 서버에서 영구 거부되므로 자동입장에 쓸 수 없다.
+  //   이 문자열은 서버 src/index.tsx 의 AUTO_DESIGNER_TOKEN 과 반드시 정확히 일치해야 한다.
+  //   서버는 이 토큰에 'designer' 역할만 부여하며 관리자/슈퍼로는 절대 승격되지 않는다.
+  const AUTO_DESIGNER_TOKEN = "auto-designer-entry-360";
 
   const Auth = {
     idToken: null,
@@ -8650,7 +8694,7 @@
            : this.role === "designer" ? "디자이너" : "뷰어";
     },
 
-    init() {
+    async init() {
       const $ = (id) => document.getElementById(id);
       // 로그아웃
       $("btn-signout") && $("btn-signout").addEventListener("click", () => this.signOut());
@@ -8707,12 +8751,17 @@
       // 서버에 설정된 Google Client ID(CF 시크릿)를 우선 적용 — 빌드파일 수정 없이 운영 주입
       this._loadServerConfig();
       // 복원된 토큰으로 권한 재확인
-      if (this.idToken) this.refresh();
-      // 저장된 로그인 정보가 전혀 없을 때만:
-      //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(데모 배지 숨김)
+      if (this.idToken) await this.refresh();
+      // 유효한 로그인이 없을 때만:
+      //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(배지 숨김)
       //  · AUTO_DESIGNER_ENTRY=false → [마스터 2026-06-22] 로그인 필수, 즉시 로그인 게이트
-      else if (!this._hasLocalToken()) {
-        if (AUTO_DESIGNER_ENTRY) this.demoLogin("designer", { silent: true });
+      // [버그②수정 2026-08-31] 종전에는 `else if` 라, 세션에 남은 폐기 토큰(예: 봉인된 demo-designer)이
+      //   복원되면 refresh()가 이를 거부·삭제한 뒤에도 자동입장/게이트 어느 쪽도 타지 않아
+      //   권한 없는 빈 화면에 갇혔다. 이제 refresh 결과(this.user)로 판단한다.
+      // [버그①수정 2026-08-31] await 누락으로 ProjectHub.load()가 토큰 세팅 전에 실행돼
+      //   "등록된 프로젝트가 없습니다"로 렌더되던 레이스 제거 — 토큰세팅+refresh 완료를 반드시 기다린다.
+      if (!this.user && !this._hasLocalToken()) {
+        if (AUTO_DESIGNER_ENTRY) await this._autoDesignerEntry();
         else this._openGate();
       }
     },
@@ -9113,6 +9162,32 @@
       }
       // 데모 모드 안내 배지 표시
       this._showDemoBadge();
+    },
+
+    /** [마스터 2026-08-31] 로그인 없는 디자이너 자동입장.
+     *  데모 토큰(demo-designer)은 서버에서 봉인(DEMO_LOGIN=0)되어 쓸 수 없으므로,
+     *  디자이너 권한만 가지는 전용 토큰(AUTO_DESIGNER_TOKEN)으로 서버 검증을 받는다.
+     *  서버 스위치(AUTO_DESIGNER_TOKEN_ENABLED)가 꺼져 있으면 인증 실패 → 기존 로그인 게이트로 폴백.
+     *  @returns {Promise<boolean>} 디자이너 진입 성공 여부 */
+    async _autoDesignerEntry() {
+      this._suppressDemoBadge = true;                    // 자동입장은 데모 배지를 띄우지 않는다
+      this.idToken = AUTO_DESIGNER_TOKEN;
+      try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
+      await this.refresh();                              // 서버가 전용 토큰을 검증해 role='designer' 세팅
+      if (!this.user) {                                  // 서버 스위치 off/네트워크 실패 → 정직하게 로그인 게이트
+        this.idToken = null;
+        try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
+        this._openGate();
+        return false;
+      }
+      this._closeGate();
+      if (this._pendingDesigner) {
+        const cb = this._pendingDesigner;
+        this._pendingDesigner = null;
+        if (this.isDesigner) cb();
+      }
+      this._showDemoBadge();                             // _suppressDemoBadge=true → 잔여 배지 제거만 수행
+      return this.isDesigner;
     },
 
     /** 데모 모드 안내 배지(허브 상단) */
@@ -12082,8 +12157,10 @@
   };
 
   /* ── 진입 ── */
-  document.addEventListener("DOMContentLoaded", () => {
-    App.init();
+  document.addEventListener("DOMContentLoaded", async () => {
+    // [버그①수정 2026-08-31] App.init()이 Auth.init()(데모 자동로그인)을 await하므로
+    // 여기서도 await해 ProjectHub.open() 등 하위 로직이 로그인 완료 후 실행되게 한다.
+    await App.init();
 
     // [오프라인 작업지시서 ] 오프라인 상태 배지/네트워크 이벤트 연결
     if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
