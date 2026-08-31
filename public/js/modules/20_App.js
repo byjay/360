@@ -1,6 +1,6 @@
   const App = {
 
-    init() {
+    async init() {
       Brand.apply();
       this._bindHome();
       this._bindTopbar();
@@ -19,7 +19,9 @@
       PanoViewer.init(UI.$("pano-canvas"));
       AllPins.init();
       try { State.pinColor = PinPrefs.get(); } catch (e) {}  // 저장된 핀 색상 복원(기본 그린)
-      Auth.init();
+      // [버그①수정 2026-08-31] Auth.init()이 async(데모 자동로그인 refresh 포함)로 바뀌어 await 필요 —
+      // ProjectHub가 프로젝트 목록을 불러오기 전에 로그인 토큰 세팅이 반드시 끝나 있어야 한다.
+      await Auth.init();
       Settings.init();
       Designers.init();
       if (typeof UserMgmt !== "undefined") UserMgmt.init();

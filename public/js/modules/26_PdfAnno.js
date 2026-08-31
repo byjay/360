@@ -188,7 +188,7 @@
     refresh() { this._render(); this.updateToolbar(); },
     _persist() {
       if (State.mode !== "designer") return;
-      // [오프라인 작업지시서 ❻] 오프라인이면 현재 주석들을 id 단위 upsert op 로 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 현재 주석들을 id 단위 upsert op 로 기록 + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         try {
           const arr = (State.annotations || []).filter(a => a && a.id != null);

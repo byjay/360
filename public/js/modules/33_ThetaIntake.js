@@ -53,7 +53,7 @@
     },
 
     openPicker() {
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("🌐 THETA로 찍은 R* 360 사진을 선택하세요 (여러 장 가능)");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("THETA로 찍은 R* 360 사진을 선택하세요 (여러 장 가능)");
       const inp = document.getElementById("input-theta-intake");
       if (inp) inp.click();
     },
@@ -110,7 +110,7 @@
       await this._persist();
       this.renderTray(); this.showTray();
       if (typeof Prompt !== "undefined" && Prompt.toast)
-        Prompt.toast("🌐 360 인입 " + accepted + "장" + (skipped ? " · 제외 " + skipped + "장(R*/360 아님)" : "") + (accepted ? " — 사진을 눌러 도면에 위치를 지정하세요" : ""));
+        Prompt.toast("360 인입 " + accepted + "장" + (skipped ? " · 제외 " + skipped + "장(R*/360 아님)" : "") + (accepted ? " — 사진을 눌러 도면에 위치를 지정하세요" : ""));
     },
 
     renderTray() {
@@ -148,7 +148,7 @@
       State.intakeFile = file;
       this.hideTray();
       if (!State.placing) App._togglePlacing();   // 배치 모드 ON (도면 탭 대기)
-      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("📍 '" + item.name + "' — 도면에서 이 사진의 위치를 탭하세요");
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("'" + item.name + "' — 도면에서 이 사진의 위치를 탭하세요");
     },
 
     /** App._handlePlaceClick 에서 인입 사진을 핀에 주입·등록한 직후 호출 — 트레이에서 제거·진행 */
@@ -159,10 +159,10 @@
       this.renderTray();
       if (this._pending.length) {
         this.showTray();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 등록 — 남은 360 인입 " + this._pending.length + "장. 계속 지정하세요");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("등록 — 남은 360 인입 " + this._pending.length + "장. 계속 지정하세요");
       } else {
         this.hideTray();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("✅ 360 인입 사진 위치 등록 완료" + (navigator.onLine ? "" : " — 온라인 시 '↑ 지금 올리기'로 반영"));
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 인입 사진 위치 등록 완료" + (navigator.onLine ? "" : " — 온라인 시 '↑ 지금 올리기'로 반영"));
       }
     },
 

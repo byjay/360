@@ -545,7 +545,7 @@
         this._measure.line = line;
         const dist = a.distanceTo(b);
         const lab = this._el("fls-measure-label");
-        if (lab) { lab.textContent = "📏 " + dist.toFixed(3) + " m"; lab.classList.remove("hidden"); }
+        if (lab) { lab.textContent = "" + dist.toFixed(3) + " m"; lab.classList.remove("hidden"); }
       }
     },
 

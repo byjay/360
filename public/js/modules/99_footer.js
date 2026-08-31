@@ -1,8 +1,10 @@
   /* ── 진입 ── */
-  document.addEventListener("DOMContentLoaded", () => {
-    App.init();
+  document.addEventListener("DOMContentLoaded", async () => {
+    // [버그①수정 2026-08-31] App.init()이 Auth.init()(데모 자동로그인)을 await하므로
+    // 여기서도 await해 ProjectHub.open() 등 하위 로직이 로그인 완료 후 실행되게 한다.
+    await App.init();
 
-    // [오프라인 작업지시서 ❼] 오프라인 상태 배지/네트워크 이벤트 연결
+    // [오프라인 작업지시서 ] 오프라인 상태 배지/네트워크 이벤트 연결
     if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──

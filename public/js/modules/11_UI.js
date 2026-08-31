@@ -24,7 +24,7 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     },
 
-    /** ★ [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
+    /** [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
     togglePinList(force) {
       const wrap = this.$("section-pin-list");
       const toggle = this.$("pin-list-toggle");
@@ -170,7 +170,9 @@
       const pinNode = (p) => {
         const n = document.createElement("button");
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
-        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>';
+        const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
+        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + noteIco;
+        if (p.note) n.title = "" + p.note;
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
@@ -186,7 +188,9 @@
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
-        if (isCur) {
+        // [버그수정] State(도면/영역/핀)는 전역이라, 도면이 다르거나 없는 구역을 펼치면
+        //   직전 구역의 도면·핀이 잔존 표시된다 → 이 구역의 도면이 '실제로 로드된 도면'일 때만 하위 표시.
+        if (isCur && deck.deployment_id && deck.deployment_id === State.currentDeploymentId) {
           const kids = document.createElement("div");
           kids.className = "tree-children";
           const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
@@ -343,7 +347,7 @@
               if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
               UI.renderPinList();
               if (typeof Zones !== "undefined") Zones.render();
-              Prompt.toast("📍 '" + pin.label + "' 위치 이동됨 · 자동저장");
+              Prompt.toast("'" + pin.label + "' 위치 이동됨 · 자동저장");
               App._autoSave();
             }
           };
@@ -352,7 +356,7 @@
             if (State.isoView) { Prompt.toast("ISO 3D 뷰에서는 위치 이동이 불가합니다. 평면 뷰로 전환하세요."); return; }
             // ── 요청사항 #6: '수정' 버튼으로 잠금 해제한 핀만 드래그 이동 가능 ──
             if (State.pinEditUnlocked !== pin.id) {
-              // 잠긴 상태 → 클릭으로만 동작(보기). 이동하려면 ✏ 수정 버튼을 눌러야 함.
+              // 잠긴 상태 → 클릭으로만 동작(보기). 이동하려면 수정 버튼을 눌러야 함.
               return;
             }
             startX = ev.touches ? ev.touches[0].clientX : ev.clientX;
@@ -402,7 +406,7 @@
                 // ── #6: 이동 잠금 해제 후 드래그 안내 ──
                 State.pinEditUnlocked = pin.id;
                 marker.classList.add("edit-unlocked");
-                Prompt.toast("🔓 '" + pin.label + "' 이동 잠금 해제 — 핀을 드래그하세요");
+                Prompt.toast("'" + pin.label + "' 이동 잠금 해제 — 핀을 드래그하세요");
               }
               else if (act === "edit") {
                 // ── #6: 수정 버튼 → 편집 폼 + 이동 잠금 해제(사진추가/위치이동 가능) ──
