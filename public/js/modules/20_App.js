@@ -1396,7 +1396,10 @@
       const canvas = UI.$("pano-canvas");
       canvas.addEventListener("mousedown", e => PanoViewer.onPointerDown(e.clientX, e.clientY));
       window.addEventListener("mousemove", e => PanoViewer.onPointerMove(e.clientX, e.clientY));
-      window.addEventListener("mouseup",   () => PanoViewer.onPointerUp());
+      window.addEventListener("mouseup",   () => {
+        const r = PanoViewer.onPointerUp();
+        if (r && r.spotMoved) this._finalizeSpotDrag(r.spotMoved);
+      });
       // [FARO Markers] 마커 위 마우스오버 → 내용 툴팁
       canvas.addEventListener("mousemove", e => this._panoHover(e.clientX, e.clientY));
       canvas.addEventListener("mouseleave", () => this._hideSpotTip());
@@ -1425,7 +1428,8 @@
       canvas.addEventListener("touchend", e => {
         if (!e.touches || e.touches.length < 2) panoPinchDist = null;
         const wasTap = PanoViewer.wasTap && PanoViewer.wasTap();
-        PanoViewer.onPointerUp();
+        const r = PanoViewer.onPointerUp();
+        if (r && r.spotMoved) { this._finalizeSpotDrag(r.spotMoved); return; }
         // [구면 마커] 탭이면 마커 추가/열기 (changedTouches 좌표 사용)
         if (wasTap && e.changedTouches && e.changedTouches[0]) {
           const t = e.changedTouches[0];
@@ -2212,10 +2216,17 @@
       try { this._autoSave && this._autoSave(); } catch (e) {}
       const p = UI.$("pano-spot-list"); if (p && !p.classList.contains("hidden")) this.renderSpotList();
     },
+    /** [마스터: 마커 드래그] 놓았을 때 1회 호출 — moveSpot()이 이미 갱신한 lon/lat을 저장 확정 */
+    _finalizeSpotDrag(id) {
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      if (!pin) return;
+      this._saveSpots(pin);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 위치 저장됨");
+    },
     /* ── [FARO Markers] 마커 위 마우스오버 → 내용 툴팁 ── */
     _panoHover(x, y) {
       if (typeof PanoViewer === "undefined" || !PanoViewer.open) return;
-      if (PanoViewer.S && PanoViewer.S.dragging) { this._hideSpotTip(); return; }
+      if (PanoViewer.S && (PanoViewer.S.dragging || PanoViewer._dragSpotId)) { this._hideSpotTip(); return; }
       const pin = PanoViewer._currentPin;
       const id = (pin && PanoViewer.hitSpotAt) ? PanoViewer.hitSpotAt(x, y) : null;
       const canvas = UI.$("pano-canvas");

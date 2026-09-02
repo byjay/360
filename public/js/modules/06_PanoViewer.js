@@ -2,6 +2,7 @@
     S: { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 },
     renderer: null, scene: null, camera: null, mesh: null, texture: null,
     videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
+    _dragSpotId: null, // [마스터: 마커 드래그] 현재 끌고 있는 spot.id (null이면 카메라 드래그)
 
     init(canvas) { this.canvas = canvas; },
 
@@ -286,8 +287,33 @@
     },
     toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
-    onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; this._downX = x; this._downY = y; this._moved = false; },
+    /** [마스터: 마커 드래그] 편집 권한 + 디자이너 모드일 때만 마커 이동 허용(뷰어는 종전대로 탭=열기만) */
+    canEditSpots() {
+      return typeof State !== "undefined" && State.mode === "designer" &&
+        (typeof Auth === "undefined" || Auth.isDesigner);
+    },
+    onPointerDown(x, y) {
+      this._downX = x; this._downY = y; this._moved = false;
+      const hitId = this.canEditSpots() ? this.hitSpotAt(x, y) : null;
+      this._dragSpotId = hitId || null;
+      if (hitId) {
+        // 마커를 잡은 동안엔 카메라가 회전하면 안 됨
+        this.S.dragging = false;
+        if (this.canvas) this.canvas.style.cursor = "grabbing";
+      } else {
+        this.S.dragging = true; this.S.lx = x; this.S.ly = y;
+      }
+    },
     onPointerMove(x, y) {
+      if (this._dragSpotId) {
+        if (!this._moved && Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) {
+          this._moved = true;
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 이동 중 — 놓으면 저장됩니다");
+        }
+        const ll = this.screenToLonLat(x, y);
+        if (ll) this.moveSpot(this._dragSpotId, ll.lon, ll.lat);
+        return;
+      }
       if (!this.S.dragging) return;
       if (Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) this._moved = true;
       const k = this.S.fov / 500; // FOV 비례 감도
@@ -296,7 +322,14 @@
       this.S.lx = x; this.S.ly = y;
       this._invalidate();
     },
-    onPointerUp() { this.S.dragging = false; },
+    /** 포인터를 뗐을 때: 마커를 실제로 옮겼으면 { spotMoved:id } 반환(호출부가 저장 확정), 아니면 null */
+    onPointerUp() {
+      this.S.dragging = false;
+      const draggedId = this._dragSpotId;
+      this._dragSpotId = null;
+      if (this.canvas) this.canvas.style.cursor = "";
+      return (draggedId && this._moved) ? { spotMoved: draggedId } : null;
+    },
     /** 마지막 포인터 동작이 '탭'(드래그 아님)이었나 */
     wasTap() { return !this._moved; },
 
@@ -358,6 +391,22 @@
       const hits = rc.intersectObjects(this._spotGroup.children, false);
       return hits.length ? hits[0].object.userData.spotId : null;
     },
+    /** [마스터: 마커 드래그] 전체 재생성 없이 스프라이트 1개 position만 갱신(드래그 중 매 프레임 호출).
+     *  spot 데이터(this._spots — pin.spots 와 동일 참조)의 lon/lat 도 그 자리에서 갱신해
+     *  드래그 종료 시 별도 반영 없이 그대로 저장할 수 있게 한다. */
+    moveSpot(id, lon, lat) {
+      if (!this._spotGroup) return false;
+      let sp = null;
+      for (let i = 0; i < this._spotGroup.children.length; i++) {
+        if (this._spotGroup.children[i].userData.spotId === id) { sp = this._spotGroup.children[i]; break; }
+      }
+      if (!sp) return false;
+      sp.position.copy(this._spotPos(lon, lat, 470));
+      const data = (this._spots || []).find(s => s.id === id);
+      if (data) { data.lon = lon; data.lat = lat; }
+      this._invalidate();
+      return true;
+    },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
 
     close() {
@@ -365,6 +414,7 @@
       this._currentPin = null;
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
+      this._dragSpotId = null;
       cancelAnimationFrame(this.rafId);
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
