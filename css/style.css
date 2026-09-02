@@ -1383,11 +1383,21 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   overflow: hidden;                 /* [마스터] 영역 확대 시 stage 가 박스 밖으로 삐져나가지 않게 */
 }
 .pano-radar.hidden { display: none !important; }
-.pano-radar-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 6px; }
+/* [P0] 헤더 버튼(방향보정/확대/접기) 히트테스트 복구.
+   #pano-radar-stage 는 JS 가 transform: scale(...) 을 걸어 새 스태킹 컨텍스트를 만든다.
+   헤더가 position:static 이면 '위치지정 요소'인 stage(+핀 레이어)가 나중에 그려져 헤더를 덮고,
+   elementFromPoint 가 버튼 대신 .pano-radar-pins 를 집어 클릭이 먹지 않는다.
+   → 헤더를 position:relative + z-index:20 으로 올리고, stage 를 z-index:1 로 못박아 순서를 확정한다.
+   헤더는 확대된 도면이 비쳐 버튼이 묻히므로 자체 배경을 준다.
+   대비 실측(어두운 미니맵 배경 #242835 기준): 골드 타이틀 5.50:1 · 버튼 아이콘 8.28:1 · 페이지 텍스트 9.68:1 */
+.pano-radar-head { display: flex; align-items: center; justify-content: space-between;
+  position: relative; z-index: 20; margin: 0 0 6px; padding: 1px 3px;
+  background: rgba(10,16,32,.92); border-radius: 6px; }
 .pano-radar-title { font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; color: var(--gold); text-transform: uppercase; }
-.pano-radar-page { font-family: var(--font-mono); font-size: 10px; color: rgba(43,40,32,.55); }
+/* 기존 rgba(43,40,32,.55)(어두운 글자)는 어두운 미니맵 배경에서 대비 ~1.0:1 로 사실상 보이지 않았다 */
+.pano-radar-page { font-family: var(--font-mono); font-size: 10px; color: #c9d4e0; }
 .pano-radar-stage {
-  position: relative; width: 100%; border-radius: 6px; overflow: hidden;
+  position: relative; z-index: 1; width: 100%; border-radius: 6px; overflow: hidden;
   background: #efe9dc; line-height: 0;
   transition: transform .45s cubic-bezier(.16,1,.3,1);   /* 영역 확대 시 시네마틱 전환 */
 }
@@ -2618,23 +2628,35 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 
 /* ── 자동 저장 표시기 (버튼 없이 즉시 저장) ── */
+/* [P3] 밝은 아이보리 상단바 위에 다크 테마 잔재(배경 rgba(8,13,24,.5))가 남아 있어
+   '저장됨' 글자 대비가 1.26:1 (사실상 판독 불가) 이었다 → 밝은 표면 + 진한 글자로 교정.
+   대비 실측(칩 배경 #faf7f0 기준): 기본 #6b6457 5.53:1 · 저장중 #2f6db5 5.06:1 ·
+   저장됨 #047857 5.18:1 · 실패 #c4462f 4.63:1 · 오프라인 #7e5d12 5.71:1 (모두 본문 4.5:1 통과) */
 .autosave-indicator {
   display: inline-flex; align-items: center; gap: 6px;
   margin-left: 8px; padding: 3px 10px;
   border-radius: 999px; font-size: 11px; font-weight: 600;
   font-family: var(--font-ui);
-  border: 1px solid var(--border2); background: rgba(8,13,24,.5);
+  border: 1px solid var(--border2); background: var(--bg2, #faf7f0);
   color: var(--text2); white-space: nowrap;
+  transition: border-color .18s, box-shadow .18s;
 }
 .autosave-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); flex: none; }
-.autosave-indicator.saving { color: #93c5fd; border-color: rgba(59,130,246,.4); }
+.autosave-indicator.saving { color: var(--blue, #2f6db5); border-color: rgba(47,109,181,.55); }
 .autosave-indicator.saving .autosave-dot { background: #3b82f6; animation: asPulse 1s ease-in-out infinite; }
-.autosave-indicator.saved { color: var(--green); border-color: rgba(16,185,129,.35); }
-.autosave-indicator.saved .autosave-dot { background: var(--green); box-shadow: 0 0 6px rgba(16,185,129,.6); }
-.autosave-indicator.error { color: var(--red); border-color: rgba(248,113,113,.45); }
+.autosave-indicator.saved { color: #047857; border-color: rgba(4,120,87,.45); }
+.autosave-indicator.saved .autosave-dot { background: #047857; }
+.autosave-indicator.error { color: var(--red); border-color: rgba(196,70,47,.55); }
 .autosave-indicator.error .autosave-dot { background: var(--red); }
-.autosave-indicator.offline { color: var(--gold); border-color: rgba(245,158,11,.4); }
-.autosave-indicator.offline .autosave-dot { background: var(--gold); }
+.autosave-indicator.offline { color: var(--gold-ink, #7e5d12); border-color: rgba(126,93,18,.5); }
+.autosave-indicator.offline .autosave-dot { background: var(--gold-ink, #7e5d12); }
+/* 저장 완료 직후 몇 초간 강조 — 모바일은 텍스트가 숨겨지므로(#autosave-text display:none)
+   테두리 링 + 팝 애니메이션으로 알린다. 글자/배경 색은 건드리지 않아 대비가 그대로 유지된다. */
+.autosave-indicator.saved.just-saved { border-color: #047857; box-shadow: 0 0 0 3px rgba(4,120,87,.22); }
+.autosave-indicator.saved.just-saved .autosave-dot { box-shadow: 0 0 0 3px rgba(4,120,87,.30); }
+.autosave-indicator.saved.just-saved { animation: savedPop .5s cubic-bezier(.2,.9,.25,1); }
+@keyframes savedPop { 0% { transform: scale(.92); } 55% { transform: scale(1.07); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .autosave-indicator.saved.just-saved { animation: none; } }
 @keyframes asPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* ════════════════════════════════════════════════════════════
@@ -4587,7 +4609,13 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
 .tree-cnt{min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--gold);color:#1a1206;font-size:9px;font-weight:700;flex:0 0 auto;}
-.tree-tag{font-size:9px;color:var(--text3);background:var(--bg3,#f1ece0);padding:1px 6px;border-radius:6px;flex:0 0 auto;}
+/* [P2] '도면없음' = 경고 톤(밝은 주황 채움 + 주황 외곽선 + 진한 주황 글자).
+   '미저장'(#b45309 진한 채움 + 흰 글자)과 채움 밝기/외곽선으로 시각 구분된다.
+   대비 실측(WCAG 2.1): 글자 #7c2d12 on #fbe3cd = 7.57:1(AAA) ·
+   외곽선 #c2410c on 칩 #fbe3cd = 4.18:1 · 외곽선 on 트리 배경 #efe9dc = 4.28:1 (UI 3:1 통과)
+   기존 값(#938a78 on #efe9dc = 2.53:1)은 UI 최소 3:1 미달이었다. */
+.tree-tag{font-size:9px;font-weight:700;line-height:1.6;color:#7c2d12;background:#fbe3cd;
+  border:1px solid #c2410c;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
 /* 기존 흩어진 목록/도구 섹션 숨김 — 도구바+트리로 통합(요소는 DOM 유지=위임 동작) */
 #decks-block,#section-upload,#section-checkboard,#section-place,#section-zones,#section-next-point,#section-pin-list{display:none!important;}
 
@@ -4671,5 +4699,5 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
   100%{box-shadow:0 0 0 0 rgba(180,83,9,0);}
 }
 .tree-tag-unsaved,.deck-unsaved-tag{font-size:9px;font-weight:700;line-height:1.6;
-  color:#fff;background:#b45309;padding:1px 6px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
+  color:#fff;background:#b45309;border:1px solid #b45309;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
 @media (prefers-reduced-motion:reduce){ .btn-save.is-dirty{animation:none;} }

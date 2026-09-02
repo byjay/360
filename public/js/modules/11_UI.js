@@ -186,7 +186,7 @@
         const _unsaved = (typeof App !== "undefined" && App.isDeckUnsaved) ? App.isDeckUnsaved(deck.id) : false;
         const _tag = _unsaved
           ? '<span class="tree-tag tree-tag-unsaved" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>'
-          : (deck.deployment_id ? "" : '<span class="tree-tag">도면없음</span>');
+          : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
         head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag;
         head.addEventListener("click", () => {
           if (isCur) { g.classList.toggle("open"); }

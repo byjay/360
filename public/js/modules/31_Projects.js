@@ -109,8 +109,23 @@
         this.currentDeck = dup; this._renderDecks();
         return dup; // 중복 생성하지 않고 기존 구역 반환
       }
+      // ── [P1·마스터 요청] "구역을 등록하면 반드시 도면이 등록되어야 한다" ──
+      //   사용자가 직접 만든 구역(askDrawing !== false)은 **도면 파일을 먼저 확정**한 뒤에야 POST 한다.
+      //   파일창을 취소하면 구역 POST 자체를 하지 않으므로 '도면없음' 구역이 생기지 않는다(롤백 불필요).
+      //   ensureDeck()/도면로드 중 자동생성(askDrawing:false)은 이미 파일이 손에 있으므로 이 단계를 건너뛴다(무한루프 방지).
       this._creatingDeck = true;
+      let created = null;
+      let picked = null;
       try {
+        if (opts.askDrawing !== false) {
+          if (typeof App === "undefined" || !App._pickDrawingFile) { alert("도면 선택기를 사용할 수 없습니다."); return null; }
+          Prompt.toast && Prompt.toast("구역 '" + name + "' — 이 구역에 등록할 도면(PDF/PNG/JPG)을 선택하세요");
+          picked = await App._pickDrawingFile();
+          if (!picked) {
+            Prompt.toast && Prompt.toast("도면을 선택하지 않아 구역 '" + name + "' 생성을 취소했습니다 — 구역에는 도면이 반드시 필요합니다");
+            return null;   // 구역을 만들지 않는다 → 사용자 취소로 '도면없음' 구역이 생기지 않음
+          }
+        }
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           body: JSON.stringify({ name })
@@ -118,7 +133,7 @@
         const d = await r.json();
         if (!r.ok) { alert(d.error || "생성 실패(권한 필요)"); return null; }
         await this.loadDecks();
-        const created = this.decks.find((x) => x.id === d.id) || d;
+        created = this.decks.find((x) => x.id === d.id) || d;
         // ── [B3] draft 키 표류 방지 ──
         //   draft 키는 `projectId::deckId` 다. currentDeck 을 새 구역으로 바꾸기 전에
         //   현재 구역에서 작업 중이던 미저장분을 '기존 키'로 확실히 저장한다.
@@ -128,16 +143,15 @@
           try { await App._saveDraftLocal(); } catch (e) {}
         }
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
-        // ── [마스터 요청] 구역 생성 직후 곧바로 도면 등록 흐름으로 연결 ──
-        // ensureDeck() 자동생성 경로(무한루프 방지)는 askDrawing:false 로 이 단계를 건너뜀.
-        if (opts.askDrawing !== false) {
-          Prompt.toast && Prompt.toast("구역 '" + name + "' 생성됨 — 이 구역에 등록할 도면을 선택하세요");
-          const uploadBtn = document.getElementById("btn-upload-drawing");
-          if (uploadBtn) uploadBtn.click();
-        }
-        return created;
       } catch (e) { alert("네트워크 오류"); return null; }
       finally { this._creatingDeck = false; }
+      // ── [P1] 구역이 확정된 뒤에 도면 로드. _creatingDeck 해제 후에 호출해야
+      //   _loadDrawing 내부의 '구역 선행' 가드가 createDeck 을 재호출해도 연타가드에 막히지 않는다.
+      if (created && picked && opts.select !== false && typeof App !== "undefined" && App._loadDrawing) {
+        try { await App._loadDrawing(picked); }
+        catch (e) { Prompt.toast && Prompt.toast("도면 로드 실패 — ‘도면 등록’ 버튼으로 다시 시도하세요"); }
+      }
+      return created;
     },
 
     /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */

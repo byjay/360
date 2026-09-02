@@ -473,11 +473,11 @@
             const db = document.getElementById("decks-block");
             if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
             // 구역 생성 다이얼로그 바로 띄움
-            // askDrawing:false — 이 핸들러가 아래(494행)에서 직접 input-drawing.click()을
-            // 호출하므로, createDeck 내부의 자동 파일창 트리거는 건너뛰어 중복 다이얼로그를 방지.
+            // [P1] createDeck() 는 이제 '이름 → 도면 파일 확정 → 구역 POST → 도면 로드'까지 한 번에 처리한다.
+            //   (파일창을 취소하면 구역 자체가 만들어지지 않음) → 여기서 흐름을 끝내고 별도 파일창을 띄우지 않는다.
             try {
-              const created = await Projects.createDeck({ askDrawing: false });
-              if (!created) return; // 사용자가 취소 → 업로드도 중단
+              await Projects.createDeck();
+              return;
             } catch (e) { return; }
           }
           // 2) 구역은 있는데 미선택 → 선택 유도(차단)
@@ -1588,6 +1588,36 @@
       });
     },
 
+    /** [P1] 구역 생성 전용 도면 파일 선택기 — 파일이 확정될 때까지 기다리고, 취소를 감지해 null 을 돌려준다.
+     *  전역 #input-drawing 을 재사용하면 그 change 핸들러가 먼저 _loadDrawing 을 호출해
+     *  "구역 선행" 가드와 충돌하므로(순서를 뒤집을 수 없음), 이 흐름 전용 일회용 input 을 쓴다.
+     *  취소 감지: 표준 'cancel' 이벤트(Chrome 113+/FF 91+/Safari 16.4+) + 창 포커스 복귀 폴백(구형). */
+    _pickDrawingFile() {
+      return new Promise((resolve) => {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.accept = ".pdf,.png,.jpg,.jpeg";
+        inp.style.display = "none";
+        let settled = false;
+        const finish = (f) => {
+          if (settled) return;
+          settled = true;
+          window.removeEventListener("focus", onFocus, true);
+          try { inp.remove(); } catch (e) {}
+          resolve(f || null);
+        };
+        const onFocus = () => {
+          // 파일창이 닫혀 창이 돌아옴 → 잠시 뒤에도 파일이 없으면 '취소'로 확정
+          setTimeout(() => { if (!(inp.files && inp.files.length)) finish(null); }, 1500);
+        };
+        inp.addEventListener("change", () => finish(inp.files && inp.files[0]));
+        inp.addEventListener("cancel", () => finish(null));
+        window.addEventListener("focus", onFocus, true);
+        document.body.appendChild(inp);
+        inp.click();
+      });
+    },
+
     async _loadDrawing(file) {
       // ── [마스터 규칙·권한] 뷰어는 도면을 등록할 수 없다(보기 전용) ──
       //  도면 등록의 모든 진입 경로(버튼/단축키/드래그앤드롭/mnav/시트)는 결국 이 함수로 모이므로,
@@ -1707,10 +1737,13 @@
       UI.updatePdfPagination();
       UI.updateRotationLabel();
       UI.renderPdfThumbs();
-      // [마스터: 자동저장 OFF] 도면 표시돼도 서버 자동생성 안 함 → dirty 표시(저장 버튼으로 반영)
-      if (State.mode === "designer" && !State.autoSaveDepId) {
-        this._markDirty();
-      }
+      // [P0-2 false-dirty 수정] 여기서 dirty 를 세우면 안 된다.
+      //   _showMapViewport() 는 '화면 표시' 함수라 ①새 도면 업로드 ②기존 배포본 로드
+      //   ③뷰어→편집모드 전환 ④페이지 이동 이 전부 통과한다. 뷰어 딥링크(?d=dep_…)로 열고
+      //   편집모드로 전환하기만 해도(사용자 변경 0건) autoSaveDepId 가 비어 있어 '저장 *' 가 켜졌고,
+      //   프로젝트·구역 컨텍스트가 없는 그 상태로 저장하면 어느 구역에도 안 붙는 고아 배포본이 생겼다.
+      //   → 실제 변경(새 도면 업로드)은 _afterDrawingLoaded() 가, 핀/영역 편집은 _autoSave() 가
+      //     각각 dirty 를 세운다. 표시 함수는 상태를 바꾸지 않는다.
     },
 
     _readAsArrayBuffer(file) {
@@ -2733,21 +2766,30 @@
       // stateStr: 'saving' | 'saved' | 'error' | 'offline'
       const el = UI.$("autosave-indicator");
       if (!el) return;
-      el.classList.remove("hidden", "saving", "saved", "error", "offline");
+      el.classList.remove("hidden", "saving", "saved", "error", "offline", "just-saved");
       el.classList.add(stateStr);
       const map = {
         saving:  "저장 중…",
-        saved:   "자동 저장됨",
+        saved:   "저장됨",                  // [P3] 자동저장 OFF 정책 — '자동 저장됨'은 사실과 다름
         error:   "저장 실패 — 재시도",
         offline: "오프라인 — 로컬 보관"
       };
       const t = UI.$("autosave-text");
       if (t) t.textContent = map[stateStr] || "";
+      // [P3] 저장 완료를 놓치지 않도록 몇 초간 강조(모바일은 텍스트가 숨겨져 점/링으로만 보인다)
+      try { clearTimeout(this._saveFlashT); } catch (e) {}
+      if (stateStr === "saved") {
+        el.classList.add("just-saved");
+        this._saveFlashT = setTimeout(() => { try { el.classList.remove("just-saved"); } catch (e) {} }, 2600);
+      }
     },
 
     /** #3: 도면 로드 직후 — 구역 보장 + 즉시 자동저장(스냅샷) + 구역에 도면 연결 */
     async _afterDrawingLoaded() {
       if (State.mode !== "designer") return;
+      // [P0-2] '새 도면이 실제로 올라온' 유일한 지점 — 여기서 dirty 를 확정한다.
+      //   아래 try 안(스냅샷/구역보장)에서 예외가 나도 미저장 표시는 반드시 남도록 try 밖에 둔다.
+      this._dirtyPages = true; this._markDirty();
       try {
         // 1) 구역이 없으면 강제 생성(현재 구역 보장)
         let deck = null;
@@ -2766,7 +2808,6 @@
           if (deck) this._pendingDeckLink = { deckId: deck.id, deck };  // 저장 시 생성+연결
         }
         await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지)
-        this._dirtyPages = true; this._markDirty();
         if (deck) { try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
         Prompt.toast && Prompt.toast((isReplace ? "도면 교체됨" : "도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요" + (deck ? " (구역: " + deck.name + ")" : ""));
       } catch (e) { /* 비치명적 */ }
@@ -3053,6 +3094,10 @@
             annotations: JSON.stringify(d.annotations || []),
             drawing_data: d.pages[0], pages_data: JSON.stringify(d.pages)
           };
+          // [P0-2] 구역(deck)에 속하지 않는 draft(`noproj::nodeck`)로 '새' 배포본을 만들면
+          //   연결할 구역이 없어 고아 배포본이 된다 → 신규 생성은 건너뛰고 로컬 draft 는 그대로 보존한다.
+          //   (기존 배포본 갱신(PATCH)은 연결이 이미 있으므로 그대로 진행)
+          if (!d.depId && !this._deckIdOfKey(key)) continue;
           let res;
           if (d.depId) {
             // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
@@ -3236,6 +3281,17 @@
       if (this.autoSaving) return;
       this.autoSaving = true;
       try {
+        // [P0-2] 신규 배포본을 만들려는데 프로젝트/구역 컨텍스트가 없으면 중단.
+        //   그대로 POST 하면 어느 구역에도 연결되지 않는 '고아 배포본'이 생기고(동일 도면 중복 생성),
+        //   사용자에겐 구역이 계속 '도면없음'으로 보인다. 기존 배포본 갱신(PATCH)은 영향 없다.
+        if (!State.autoSaveDepId) {
+          const hasCtx = (typeof Projects !== "undefined") && !!Projects.currentProject && !!Projects.currentDeck;
+          if (!hasCtx) {
+            this._setSaveIndicator("error");
+            Prompt.toast && Prompt.toast("저장할 구역이 없습니다 — 프로젝트와 구역을 먼저 선택하세요(도면은 구역에 연결되어야 저장됩니다)");
+            return;
+          }
+        }
         this._setSaveIndicator("saving");
         if (!State.autoSaveDepId) {
           // 신규: _createInitialSave 가 도면(R2 업로드)+핀 전체를 저장
