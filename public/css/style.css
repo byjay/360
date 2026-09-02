@@ -1393,7 +1393,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pano-radar-head { display: flex; align-items: center; justify-content: space-between;
   position: relative; z-index: 20; margin: 0 0 6px; padding: 1px 3px;
   background: rgba(10,16,32,.92); border-radius: 6px; }
-.pano-radar-title { font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; color: var(--gold); text-transform: uppercase; }
+/* [대비수정] var(--gold) 는 Brand.js 가 런타임에 테넌트 accent 로 덮어쓴다(실측: #1b75bb).
+   그러면 헤더 배경 rgba(10,16,32,.92) 위에서 대비 3.9:1 로 떨어져 10px 본문 기준 4.5:1 미달이었다.
+   → 브랜드 색과 무관한 고정 밝은 골드로 못박는다. 대비 실측 9.93:1 (배경 합성값 rgb(14,20,36) 기준). */
+.pano-radar-title { font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; color: #e9b949; text-transform: uppercase; }
 /* 기존 rgba(43,40,32,.55)(어두운 글자)는 어두운 미니맵 배경에서 대비 ~1.0:1 로 사실상 보이지 않았다 */
 .pano-radar-page { font-family: var(--font-mono); font-size: 10px; color: #c9d4e0; }
 .pano-radar-stage {

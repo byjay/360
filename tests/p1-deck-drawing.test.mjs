@@ -127,6 +127,66 @@ function runShowMapViewport(appSrc) {
   return marks;
 }
 
+/* ────────────────────────────────────────────────────────────
+ * P4 — App._deployToViewer() 구역↔배포본 정합
+ *   (a) 프로젝트/구역 컨텍스트가 없으면 /tables/deployments POST 에 도달하면 안 된다(고아 배포본 금지)
+ *   (b) 배포 후 반드시  구역.deployment_id === State.autoSaveDepId  (불변식)
+ *   (c) 기존 배포본이 있으면 배포는 새 배포본을 만들지 않는다(PATCH 만)
+ * ──────────────────────────────────────────────────────────── */
+function runDeploy(appSrc, { deck, autoSaveDepId }) {
+  const calls = { post: 0, patch: 0, link: [], alerts: [], status: "" };
+  const cl = () => ({ add() {}, remove() {}, toggle() {}, contains: () => false });
+  const statusEl = { classList: cl(), textContent: "", innerHTML: "" };
+  const btnEl = { classList: cl(), disabled: false, textContent: "", innerHTML: "" };
+  const sandbox = {
+    console, setTimeout, clearTimeout,
+    navigator: { onLine: true },
+    alert: (m) => { calls.alerts.push(m); },
+    location: { origin: "https://scan360.pages.dev", pathname: "/" },
+    State: {
+      mode: "designer", pins: [{ id: "p1", x: 1, y: 2 }], zones: [], annotations: [],
+      fileType: "image", fileName: "d.png", pdfPages: 1, viewerPages: null,
+      autoSaveDepId, currentDeploymentId: autoSaveDepId, depVersion: 0
+    },
+    UI: { $: (id) => (id === "btn-deploy" ? btnEl : id === "deploy-status" ? statusEl : { classList: cl(), style: {}, textContent: "", innerHTML: "" }) },
+    Auth: { headers: () => ({}), idToken: "t", user: { email: "a@b.c" }, isDesigner: true },
+    Prompt: { toast: (t) => { calls.toast = t; } },
+    Log: { push() {} },
+    Zones: { serialize: () => "[]" },
+    Projects: { currentProject: deck ? { id: "prj1" } : null, currentDeck: deck, _renderDecks() {}, decks: deck ? [deck] : [] },
+    document: { getElementById: () => null, createElement: () => ({ classList: cl(), style: {} }), body: { appendChild() {}, removeChild() {} } },
+    fetch: async (url, opt) => {
+      const method = (opt && opt.method) || "GET";
+      if (method === "POST" && /\/tables\/deployments$/.test(url)) {
+        calls.post++;
+        return { ok: true, status: 200, json: async () => ({ id: "dep_new", version: 1 }) };
+      }
+      if (method === "PATCH" && /\/tables\/deployments\//.test(url)) {
+        calls.patch++;
+        return { ok: true, status: 200, json: async () => ({ id: "dep_old", version: 1 }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(appSrc + "\n;globalThis.__A = App;", sandbox);
+  const A = sandbox.__A;
+  // 리프(I/O) 헬퍼만 대체 — 검사 대상인 _deployToViewer / _saveNow / _createInitialSave /
+  // _patchDeployment / _buildSavePayload 는 실제 소스 그대로 돈다.
+  A._snapshotPages    = async () => ["data:image/jpeg;base64,AAAA"];
+  A._uploadPagesToR2  = async (p) => p;
+  A._saveDraftLocal   = async () => {};
+  A._markDraftClean   = async () => {};
+  A._setSaveIndicator = (s) => { calls.status = s; };
+  A._updateSaveBtn    = () => {};
+  A._markDeckUnsaved  = () => {};
+  A._deckIdOfKey      = () => null;
+  A._draftKey         = () => "prj1::deck1";
+  A._linkDeckDeployment = async (deckId, depId) => { calls.link.push([deckId, depId]); return true; };
+  return A._deployToViewer().then(() => ({ calls, State: sandbox.State, deck }));
+}
+
 /* ── 실행 ── */
 const projectsSrc = src("31_Projects.js");
 const appSrc = src("20_App.js");
@@ -161,6 +221,65 @@ console.log("\n[P0-2 현재 코드 — 표시만으로 dirty 금지]");
   console.log("[P0-2 뮤테이션 — dirty 블록 복원 → false-dirty 재현되어야 함]");
   if (mutApp === appSrc) { ok(false, "뮤테이션 앵커 없음"); }
   else { const m = runShowMapViewport(mutApp); ok(m.dirty === 1, `무력화 시 false-dirty 재현 (_markDirty ${m.dirty})`); }
+}
+
+console.log("\n[P4 배포↔구역 정합 — 현재 코드]");
+{
+  // (a) 컨텍스트(프로젝트+구역) 없음 → 고아 배포본 POST 금지
+  const { calls } = await runDeploy(appSrc, { deck: null, autoSaveDepId: null });
+  ok(calls.post === 0, `컨텍스트 없는 배포의 deployments POST = ${calls.post} (기대 0)`);
+  ok(calls.patch === 0, `컨텍스트 없는 배포의 PATCH = ${calls.patch} (기대 0)`);
+  ok(calls.status === "error", `저장 인디케이터 = ${calls.status} (기대 error)`);
+}
+{
+  // (b)+(c) 구역에 이미 배포본이 있음 → 새 POST 없이 PATCH, 그리고 구역이 작업본 ID 를 가리킨다
+  const deck = { id: "deck1", name: "ZONE A", deployment_id: "dep_stale" };
+  const { calls, State } = await runDeploy(appSrc, { deck, autoSaveDepId: "dep_old" });
+  ok(calls.post === 0, `기존 배포본 재배포 시 새 POST = ${calls.post} (기대 0 — 중복 배포본 금지)`);
+  ok(calls.patch === 1, `기존 배포본 PATCH = ${calls.patch} (기대 1)`);
+  ok(State.autoSaveDepId === "dep_old", `작업본 ID 유지 = ${State.autoSaveDepId}`);
+  ok(String(deck.deployment_id) === String(State.autoSaveDepId),
+    `[불변식] 구역.deployment_id(${deck.deployment_id}) === autoSaveDepId(${State.autoSaveDepId})`);
+  ok(calls.link.length === 1 && calls.link[0][1] === "dep_old", `서버 재연결 PUT 발행 = ${JSON.stringify(calls.link)}`);
+}
+{
+  // 신규(컨텍스트 있음) → POST 1회 + 구역 연결
+  const deck = { id: "deck1", name: "ZONE A", deployment_id: null };
+  const { calls, State } = await runDeploy(appSrc, { deck, autoSaveDepId: null });
+  ok(calls.post === 1, `신규 배포 POST = ${calls.post} (기대 1)`);
+  ok(String(deck.deployment_id) === String(State.autoSaveDepId) && State.autoSaveDepId === "dep_new",
+    `[불변식] 신규 구역.deployment_id(${deck.deployment_id}) === autoSaveDepId(${State.autoSaveDepId})`);
+}
+
+{
+  // 뮤테이션 ①: 배포가 _saveNow 를 우회해 직접 POST 하던 옛 경로로 되돌리면
+  //   컨텍스트 없는 배포에서 고아 배포본이 다시 생겨야 한다.
+  const mutApp = appSrc.replace(
+    "        const saved = await this._saveNow({ now: true, withPages: true });",
+    "        const saved = await fetch('/tables/deployments', { method: 'POST', headers: Auth.headers(), body: '{}' }).then(r => r.json()).then(r => { State.autoSaveDepId = r.id; return true; });"
+  );
+  console.log("\n[P4 뮤테이션① — 배포 전용 POST 경로 복원 → 고아 배포본 재현되어야 함]");
+  if (mutApp === appSrc) { ok(false, "뮤테이션① 앵커 없음"); }
+  else {
+    const { calls } = await runDeploy(mutApp, { deck: null, autoSaveDepId: null });
+    ok(calls.post === 1, `무력화 시 고아 배포본 POST 재현 (POST ${calls.post})`);
+  }
+}
+{
+  // 뮤테이션 ②: 불변식 재연결 블록의 '다르면 재연결' 조건을 옛 '비어있을 때만 연결'로 되돌리면
+  //   구역이 옛(stale) ID 를 계속 가리켜 불변식이 깨져야 한다.
+  const mutApp = appSrc.replace(
+    'if (cd && String(cd.deployment_id || "") !== String(depId)) {',
+    'if (cd && !cd.deployment_id) {'
+  );
+  console.log("[P4 뮤테이션② — 재연결 가드를 '비어있을 때만'으로 되돌림 → 불변식 깨져야 함]");
+  if (mutApp === appSrc) { ok(false, "뮤테이션② 앵커 없음"); }
+  else {
+    const deck = { id: "deck1", name: "ZONE A", deployment_id: "dep_stale" };
+    const { State } = await runDeploy(mutApp, { deck, autoSaveDepId: "dep_old" });
+    ok(String(deck.deployment_id) !== String(State.autoSaveDepId),
+      `무력화 시 stale 링크 재현 (deck=${deck.deployment_id}, autoSave=${State.autoSaveDepId})`);
+  }
 }
 
 console.log("\n" + (failed ? "FAILED " + failed : "ALL PASS"));

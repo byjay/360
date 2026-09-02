@@ -421,3 +421,21 @@ npx wrangler d1 execute webapp-production --file=migrations/0020_must_change_pas
 - ① _saveNow 성공/실패 Prompt.toast("✅ 저장 완료" / "⚠️ 저장 실패" / "📥 오프라인 로컬보관") — 명확 피드백.
 - ② 모바일 CSS(family-tokens): #btn-save 플로팅 알약(fixed 우하단, z1300, 항상 보임). .btn-pano-ctrl span 숨김+아이콘 23px(아이콘만 간결·명확). #mode-label·topbar-sep 숨김(상단바 간결).
 - 검증(preview_eval 375px): save_floating/zindex1300/radius26, pano_label_hidden, icon23px, modelabel_hidden, toast_exists = PASS. build EXIT0.
+
+---
+
+## 2026-09-02 · 배포↔구역 데이터 정합 (Opus 실행자)
+
+**한 일**: `_deployToViewer()` 의 배포 전용 `POST /tables/deployments` 를 제거하고 저장 경로(`_saveNow`)를 재사용하도록 근본수정. 미니맵 타이틀 색 대비 수정.
+
+**Before → After**
+- Before: '뷰어로 배포'가 클릭마다 새 배포본을 POST. 구역은 옛 `deployment_id` 를 유지하고 작업본(`State.autoSaveDepId`)만 새 ID 로 갈아탐 → 이후 저장(PATCH)이 구역이 여는 배포본과 갈라짐("저장했는데 반영 안 됨"). 컨텍스트 없으면 고아 배포본 생성.
+- After: 배포 = `_saveNow()` (신규 생성+구역연결 / 기존 PATCH) → 뷰어 링크는 `State.autoSaveDepId`. 배포 직후 **`구역.deployment_id === State.autoSaveDepId`** 불변식을 재연결로 강제. 컨텍스트 없으면 POST 자체가 일어나지 않음.
+- `_saveNow` 가 `boolean` 반환(호출부 1곳뿐 — `btn-save` 핸들러, 반환값 무시하므로 호환).
+- `.pano-radar-title`: `var(--gold)`(런타임에 `#1b75bb` 로 덮임, 3.76~3.90:1) → `#e9b949` (**10.03~10.40:1**).
+
+**최종 상태**: 회귀 `tests/p1-deck-drawing.test.mjs` **22/22 PASS (EXIT=0)** · 뮤테이션 증명 2건 성립 · assemble/MIRROR/`node --check`/`vite build`/`wrangler deploy` 전부 EXIT=0 · 프로덕션 자산 curl 실측 확인.
+
+**배포**: https://37a73b2b.scan360.pages.dev (production: https://scan360.pages.dev)
+
+**미완**: 기존 D1 의 고아·중복 배포본 데이터 정리(파괴적 — 승인 필요) · UI 육안 4단계 미수행.

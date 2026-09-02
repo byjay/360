@@ -69,3 +69,42 @@
 ### 잔여 리스크(미수정 · 정직 보고)
 - `_deploy` 경로(20_App.js ~3415 `뷰어로 배포`)는 구역이 없어도 `POST /tables/deployments` 를 그대로 실행한다 → 이론상 고아 배포본 1건 생성 가능. 발주 범위 밖이고 명시적 배포 동작이라 이번엔 손대지 않음. 필요 시 동일 컨텍스트 가드 적용 권장.
 - 기존에 이미 생긴 '도면없음' 구역·중복 배포본(D1)은 데이터 정리 대상 — 코드 수정으로 제거되지 않음(실데이터 삭제는 수행하지 않았다).
+
+---
+
+## 처리 결과 (2026-09-02 · Opus 실행자 · 2차) — 잔여 리스크 `_deployToViewer` 해소 + 미니맵 타이틀 대비
+
+**근본원인**: `_deployToViewer()` 가 '저장'과 별개로 `POST /tables/deployments` 를 **항상** 실행했다.
+그래서 (a) 프로젝트/구역 컨텍스트가 없으면 어디에도 연결 안 되는 고아 배포본이 생기고,
+(b) 구역에 이미 `deployment_id` 가 있으면 배포 클릭마다 배포본이 하나 더 생기는데 **구역은 옛 ID 를 계속 가리키고**
+작업본(`State.autoSaveDepId`)만 새 ID 로 갈아타 이후 저장(PATCH)이 구역이 여는 배포본과 갈라졌다
+→ "저장했는데 구역에 반영 안 됨" 의 근본 후보.
+
+**채택 방식(Ponytail 사다리 ②: 기존 재사용)** — "배포 = 저장 경로 재사용".
+배포 전용 POST 를 **삭제**하고 `_saveNow()` 를 호출한다(신규면 생성+구역연결, 기존이면 그 배포본 PATCH).
+뷰어 링크는 `State.autoSaveDepId` 로 만든다. 배포본은 언제나 **1구역 1개**.
+`_saveNow` 는 성공 여부를 `boolean` 으로 반환하도록 바꿔 배포가 결과를 알 수 있게 했다(가드 차단·중복호출·실패 = false).
+불변식 **`구역.deployment_id === State.autoSaveDepId`** 는 배포 직후 재연결 블록이 강제한다(PATCH 경로의 stale 링크 교정).
+부수 효과: 배포 전용 중복 스냅샷 제거(R2 업로드 경로로 일원화 — 기존 배포 POST 는 base64 를 D1 에 직접 넣고 있었다).
+
+| 항목 | 파일:라인 | 변경 |
+|---|---|---|
+| 저장 결과 반환 | `public/js/modules/20_App.js:3277~3345` | `_saveNow` → `Promise<boolean>` (가드/중복/실패 false, 성공 true) |
+| 배포 정합 | `public/js/modules/20_App.js:3401~3438` | 배포 전용 POST 제거 → `_saveNow` 재사용 + 불변식 재연결 + `pageCount` 를 State 에서 파생 |
+| 미니맵 타이틀 대비 | `public/css/style.css:1396~1399` | `var(--gold)` → `#e9b949` 고정 |
+
+**대비 실측**: `--gold` 는 `18_Brand.js:19` 이 런타임에 테넌트 accent(`#1b75bb`)로 덮어쓴다.
+헤더 배경 `rgba(10,16,32,.92)` 합성값(백드롭 밝기 양극단) `rgb(14,20,36)`~`rgb(10,16,31)` 기준
+**옛 `#1b75bb` = 3.76:1 / 3.90:1 (10px 본문 4.5:1 미달)** → **새 `#e9b949` = 10.03:1 / 10.40:1 (AAA)**.
+기존 주석 기준색 `#242835` 대비도 8.04:1.
+
+**검증 증거**
+- `node tests/p1-deck-drawing.test.mjs` → **22/22 PASS, EXIT=0** (기존 12 + P4 신규 10)
+- 뮤테이션 2건 성립: ① 배포 전용 POST 경로 복원 → 컨텍스트 없는 고아 배포본 POST 재현 ② 재연결 가드를 옛 `!cd.deployment_id` 로 되돌림 → stale 링크(`deck=dep_stale` vs `autoSave=dep_old`) 재현
+- `python build-tools/assemble.py` EXIT=0 (38모듈 → 12513줄) · MIRROR EXIT=0 · `node --check public/js/main.js` EXIT=0 · `npx vite build` EXIT=0 (`dist/_worker.js` 98.05 kB) · `wrangler pages deploy` EXIT=0 (66 files)
+- 배포 URL: https://37a73b2b.scan360.pages.dev · 프로덕션 실측 `curl https://scan360.pages.dev/css/style.css` → `pano-radar-title … color: #e9b949` (200), `/js/main.js` 에 `배포 = 저장(_saveNow) 재사용` 1건 (200)
+
+### 미완 / 잔여 리스크(정직 보고)
+- **기존 D1 데이터의 고아·중복 배포본은 코드 수정으로 정리되지 않는다.** 실데이터 삭제는 수행하지 않았다(파괴적 행동 — 마스터 승인 필요).
+- `_loadDeployment` 설계자 재진입 경로(`20_App.js:3617`)는 프로젝트의 **최신** 배포본을 `autoSaveDepId` 로 잡는다. 이때 `Projects.currentDeck` 와 어긋날 수 있으나, 그 상태에서 사용자가 '배포'를 누르면 위 재연결 블록이 구역을 현재 작업본으로 교정한다. '저장'만 누르는 경우의 교정은 이번 범위 밖(배포 시점 불변식만 강제).
+- UI 4단계 육안 검증은 미수행(브라우저 세션 없음) — 위 검증은 정적·빌드·테스트·프로덕션 자산 실측까지.

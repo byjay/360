@@ -3274,11 +3274,13 @@
       this._markDirty();
     },
 
-    /** 실제 서버 저장(수동 '저장' 버튼). 배포본 없으면 생성+구역연결, 있으면 PATCH. */
+    /** 실제 서버 저장(수동 '저장' 버튼). 배포본 없으면 생성+구역연결, 있으면 PATCH.
+     *  @returns {Promise<boolean>} 서버 반영 성공 여부(가드 차단·중복호출·실패는 false).
+     *    '뷰어로 배포'(_deployToViewer)가 이 경로를 그대로 재사용하므로 결과를 반드시 알려야 한다. */
     async _saveNow(opts) {
-      if (State.mode !== "designer") return;
+      if (State.mode !== "designer") return false;
       opts = opts || {};
-      if (this.autoSaving) return;
+      if (this.autoSaving) return false;
       this.autoSaving = true;
       try {
         // [P0-2] 신규 배포본을 만들려는데 프로젝트/구역 컨텍스트가 없으면 중단.
@@ -3289,14 +3291,14 @@
           if (!hasCtx) {
             this._setSaveIndicator("error");
             Prompt.toast && Prompt.toast("저장할 구역이 없습니다 — 프로젝트와 구역을 먼저 선택하세요(도면은 구역에 연결되어야 저장됩니다)");
-            return;
+            return false;
           }
         }
         this._setSaveIndicator("saving");
         if (!State.autoSaveDepId) {
           // 신규: _createInitialSave 가 도면(R2 업로드)+핀 전체를 저장
           await this._createInitialSave();
-          if (!State.autoSaveDepId) { this._setSaveIndicator(navigator.onLine ? "error" : "offline"); return; }
+          if (!State.autoSaveDepId) { this._setSaveIndicator(navigator.onLine ? "error" : "offline"); return false; }
           // 도면 업로드로 대기 중이던 구역 연결 마무리
           if (this._pendingDeckLink) {
             const p = this._pendingDeckLink; this._pendingDeckLink = null;
@@ -3331,9 +3333,11 @@
         this._setSaveIndicator("saved");
         // [마스터: 저장 확인이 안 됨] 명확한 완료 피드백(모바일 토스트)
         try { Prompt.toast && Prompt.toast("저장 완료"); } catch (e) {}
+        return true;
       } catch (e) {
         this._setSaveIndicator(navigator.onLine ? "error" : "offline");
         try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+        return false;
       } finally {
         this.autoSaving = false;
       }
@@ -3395,78 +3399,43 @@
         }
       }
 
-      btn.disabled = true; btn.textContent = "배포 중...";
-      status.classList.add("hidden"); status.classList.remove("error");
-
-      let pagesData = [];
-      try {
-        if (State.fileType === "pdf" && State.pdfDoc) {
-          btn.textContent = "도면 전 페이지 스냅샷 중...";
-          pagesData = await PDF.snapshotAllPages(State.pdfDoc);
-        } else if (State.fileType === "image") {
-          const imgEl = UI.$("map-image");
-          const off = document.createElement("canvas");
-          const maxDim = 2000;
-          const ratio = Math.min(1, maxDim / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
-          off.width  = Math.round(imgEl.naturalWidth * ratio);
-          off.height = Math.round(imgEl.naturalHeight * ratio);
-          off.getContext("2d").drawImage(imgEl, 0, 0, off.width, off.height);
-          pagesData = [off.toDataURL("image/jpeg", 0.8)];
-        }
-      } catch (e) {
-        alert("도면 스냅샷 생성 실패: " + e.message);
-        btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
-        return;
-      }
-      if (pagesData.length === 0) {
+      // 저장 경로(_createInitialSave)와 동일한 전제: 도면(fileType)이 없으면 배포본을 만들 수 없다.
+      if (!State.fileType) {
         alert("도면이 없습니다. 먼저 도면을 업로드하세요.");
         btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
         return;
       }
 
-      btn.textContent = "서버 저장 중...";
-      // [B2] 로컬 전용 영상 blob URL은 다른 세션에서 무효 → 배포본에서 제거
-      const deployablePins = State.pins.map(p => {
-        const q = Object.assign({}, p);
-        if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
-        return q;
-      });
-      try {
-        const res = await fetch("/tables/deployments", {
-          method: "POST",
-          headers: Auth.headers(),
-          body: JSON.stringify({
-            title:        State.fileName || "도면",
-            file_name:    State.fileName || "",
-            drawing_data: pagesData[0],
-            pages_data:   JSON.stringify(pagesData),
-            pins:         JSON.stringify(deployablePins),
-            zones:        (typeof Zones !== "undefined") ? Zones.serialize() : "[]"
-          })
-        });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        // [B1] 발급된 배포 레코드의 id를 뷰어 링크에 부여 → 특정 배포본 고정 공유
-        const rec = await res.json();
-        const depId = (rec && rec.id) ? rec.id : null;
+      btn.disabled = true; btn.textContent = "배포 중...";
+      status.classList.add("hidden"); status.classList.remove("error");
 
-        // [버그수정] '뷰어로 배포'가 '저장'과 별개 경로로 새 배포본을 만들면서 구역↔도면 연결을
-        //   전혀 안 해 — 저장을 안 누르고 배포만 눌러도 성공해버려 구역엔 영원히 '도면없음'이 남았다.
-        //   배포로 만든 배포본도 여기서 반드시 구역에 연결(또는 대기 연결 마무리)한다.
-        if (depId) {
-          State.autoSaveDepId = depId; State.currentDeploymentId = depId;
-          try {
-            if (this._pendingDeckLink) {
-              const p = this._pendingDeckLink; this._pendingDeckLink = null;
-              if (p.deck) p.deck.deployment_id = depId;
-              await this._linkDeckDeployment(p.deckId, depId, p.deck);
-            } else if (typeof Projects !== "undefined" && Projects.currentDeck && !Projects.currentDeck.deployment_id) {
-              const cd = Projects.currentDeck;
-              cd.deployment_id = depId;
-              await this._linkDeckDeployment(cd.id, depId, cd);
-            }
-            if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks();
-          } catch (e) {}
-        }
+      try {
+        // [근본수정] 배포가 '저장'과 별개로 /tables/deployments 에 무조건 POST 하던 경로를 제거한다.
+        //   그 경로는 (a) 프로젝트/구역 컨텍스트가 없으면 어디에도 연결 안 되는 고아 배포본을 만들고,
+        //   (b) 구역에 이미 deployment_id 가 있으면 배포할 때마다 배포본이 하나씩 더 생기는데
+        //       구역은 옛 ID 를 계속 가리키고 작업본(State.autoSaveDepId)만 새 ID 로 갈아타
+        //       "저장했는데 구역에 반영 안 됨"이 발생했다.
+        //   → 배포 = 저장(_saveNow) 재사용. 신규면 생성+구역연결, 기존이면 그 배포본을 PATCH.
+        //     배포본은 언제나 1구역 1개이고, 뷰어 링크는 그 ID 를 그대로 쓴다.
+        btn.textContent = "서버 저장 중...";
+        this._dirtyPages = true;                       // 배포는 항상 현재 도면 스냅샷을 반영
+        const saved = await this._saveNow({ now: true, withPages: true });
+        const depId = saved ? State.autoSaveDepId : null;
+        if (!depId) throw new Error("저장이 완료되지 않았습니다 — 프로젝트/구역 선택과 네트워크를 확인하세요");
+
+        // [불변식] 배포 후 "구역.deployment_id === State.autoSaveDepId".
+        //   _saveNow 는 신규 생성 시에만 구역을 연결한다. 기존 배포본을 PATCH 한 경우
+        //   구역이 다른(옛) ID 를 가리키고 있으면 저장 결과가 구역에서 보이지 않으므로 여기서 재연결한다.
+        try {
+          const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
+          if (cd && String(cd.deployment_id || "") !== String(depId)) {
+            cd.deployment_id = depId;
+            await this._linkDeckDeployment(cd.id, depId, cd);
+          }
+          if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks();
+        } catch (e) {}
+
+        const pageCount = (State.viewerPages && State.viewerPages.length) || State.pdfPages || 1;
 
         // [버그수정] location.origin 은 배포별 임시 서브도메인(xxxx.scan360.pages.dev)일 수 있어
         //   그 링크는 '옛 코드'를 영구히 가리킨다(401 등) → 고정 production 도메인으로 정규화.
@@ -3477,7 +3446,7 @@
           "?mode=viewer" + (depId ? "&d=" + encodeURIComponent(depId) : "");
         // [C-LOOP1 결함1] 공유가 목적인 시스템 → 원클릭 링크 복사 버튼 제공
         status.innerHTML =
-          "배포 완료! (" + pagesData.length + "페이지 / " + State.pins.length + "핀)<br>" +
+          "배포 완료! (" + pageCount + "페이지 / " + State.pins.length + "핀)<br>" +
           "뷰어 전용 링크:<br>" +
           "<a id='deploy-link' href='" + viewerUrl + "' target='_blank' style='color:#10b981;word-break:break-all'>" + viewerUrl + "</a><br>" +
           "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>링크 복사</button>";
