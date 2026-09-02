@@ -12,6 +12,22 @@
         if (tb) { tb.addEventListener("click", (e) => { e.stopPropagation(); box.classList.toggle("collapsed"); }); this._toggleBound = true; }
       }
       // [마스터 요청] 미니맵 크게 보기 토글 (1회 바인딩) — 크기만 전환, 기존 로직 그대로
+      // [마스터 요청 "기본적으로 확대한 크기로 반영해"] 저장된 선택이 없으면 기본값=확대(large).
+      // localStorage("wm-radar-large")에 사용자 선택을 저장/복원 — 없으면 true(확대).
+      if (!this._largeInited) {
+        this._largeInited = true;
+        let storedLarge = true;
+        try {
+          const v = localStorage.getItem("wm-radar-large");
+          if (v !== null) storedLarge = v === "1";
+        } catch (e) { /* 사생활 모드 등 localStorage 접근 불가 → 기본값(확대) 유지 */ }
+        box.classList.toggle("pano-radar-large", storedLarge);
+        const eb0 = document.getElementById("pano-radar-expand");
+        if (eb0) {
+          eb0.classList.toggle("active", storedLarge);
+          eb0.title = storedLarge ? "미니맵 작게 보기" : "미니맵 크게 보기";
+        }
+      }
       if (!this._expandBound) {
         const eb = document.getElementById("pano-radar-expand");
         if (eb) {
@@ -20,6 +36,7 @@
             const large = box.classList.toggle("pano-radar-large");
             eb.classList.toggle("active", large);
             eb.title = large ? "미니맵 작게 보기" : "미니맵 크게 보기";
+            try { localStorage.setItem("wm-radar-large", large ? "1" : "0"); } catch (e) {}
           });
           this._expandBound = true;
         }
@@ -57,12 +74,26 @@
       const pinsLayer = document.getElementById("pano-radar-pins");
       if (pinsLayer) {
         pinsLayer.innerHTML = "";
+        // [마스터 요청 "이런 점은뭐야"] 도면 핀 마커와 동일한 번호 체계 표시.
+        // 11_UI.js renderPinsOnMap()의 dispNo 산출과 동일 로직(그대로 재사용) —
+        // 일반 핀=페이지 내 순번, 체크보드 핀=저장된 실제 번호(pin.label).
+        let radarIdx = 0;
         (State.pins || []).filter(p => (p.page || 1) === page).forEach(p => {
+          radarIdx++;
           const dot = document.createElement("div");
           dot.className = "pano-radar-pin" + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
           dot.style.top  = p.y + "%";
           dot.title = p.label || "";
+          let dispNo = radarIdx;
+          if (p.checkboard) {
+            const lblNum = parseInt(p.label, 10);
+            if (Number.isFinite(lblNum)) dispNo = lblNum;
+          }
+          const no = document.createElement("span");
+          no.className = "pano-radar-pin-no";
+          no.textContent = dispNo;
+          dot.appendChild(no);
           dot.addEventListener("click", (e) => {
             e.stopPropagation();
             if (this._dirAdjust) return; // 방향 조절 모드에서는 다른 핀 이동 금지

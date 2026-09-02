@@ -1411,8 +1411,19 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   border-radius: 50%; background: rgba(107,100,87,.85);
   border: 1px solid rgba(15,23,42,.8); cursor: pointer;
   transition: transform .12s ease, background .12s ease;
+  display: flex; align-items: center; justify-content: center;
+}
+/* [마스터 요청] 점 번호 — 도면 핀 마커와 같은 번호. 배경/테두리색은 불변, 글자색만 대비 확보.
+   기본 핀 bg는 rgba(107,100,87,.85)(불투명 근사 rgb(107,100,87), L=.1286) 위 흰색 → 5.88:1(PASS).
+   현재 핀 bg는 var(--gold)인데 Brand.js가 런타임에 테넌트 accent로 덮어써 실측 #1b75bb(파랑,
+   L=.1655) → 흰색 4.87:1(PASS). 스테이지가 항상 핀 주변으로 확대 렌더(최소 ≈2.78배)되므로
+   6px 폰트도 시각적으로 ≈16px 이상으로 표시돼 판독 가능. */
+.pano-radar-pin-no {
+  font-family: var(--font-mono); font-size: 6px; font-weight: 700; line-height: 1;
+  color: #fff; pointer-events: none; user-select: none;
 }
 .pano-radar-pin:hover { transform: scale(1.4); background: #fff; }
+.pano-radar-pin:hover .pano-radar-pin-no { color: #1a1a1a; } /* 흰 배경 위 흰 글자 방지(대비 17.4:1) */
 .pano-radar-pin.current { background: var(--gold); width: 10px; height: 10px; margin: -5px 0 0 -5px; box-shadow: 0 0 0 3px rgba(245,158,11,.25); }
 /* 시야 부채꼴 — 현재 핀 중심으로 회전 */
 .pano-radar-cone { position: absolute; width: 0; height: 0; pointer-events: none; }
