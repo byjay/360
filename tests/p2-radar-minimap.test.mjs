@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const radarSrc = fs.readFileSync(path.join(ROOT, "public/js/modules/07_Radar.js"), "utf8");
+// 번호/부류/필터 정본(SoT). Radar 는 이 모듈만 호출한다 — 목이 아니라 실제 소스를 같은 컨텍스트에 평가.
+const seriesSrc = fs.readFileSync(path.join(ROOT, "public/js/modules/01b_PinSeries.js"), "utf8");
 
 let failed = 0;
 const ok = (cond, label) => {
@@ -70,7 +72,7 @@ function makeLocalStorage(initial) {
 }
 
 /** Radar 모듈을 새 VM 컨텍스트에 평가하고 update(pin)까지 실행한 뒤 결과를 돌려준다. */
-function runRadar(src, { lsInitial = {}, pins, currentPin }) {
+function runRadar(src, { lsInitial = {}, pins, currentPin, seriesOverride = null }) {
   const registry = {};
   const el = (id) => (registry[id] = registry[id] || makeEl());
   const document = {
@@ -82,7 +84,7 @@ function runRadar(src, { lsInitial = {}, pins, currentPin }) {
   const sandbox = { console, document, State, localStorage };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(src + "\n;globalThis.__R = Radar;", sandbox);
+  vm.runInContext((seriesOverride || seriesSrc) + "\n" + src + "\n;globalThis.__R = Radar;globalThis.__PS = PinSeries;", sandbox);
   const R = sandbox.__R;
   R.update(currentPin);
   return { R, registry };
@@ -122,10 +124,10 @@ function suiteStoredSmall(label, src) {
 function suitePinNumbers(label, src) {
   console.log("\n[" + label + "]");
   const pins = [
-    { id: "a", page: 1, x: 10, y: 10 },                                   // pageIdx1 → "1"
-    { id: "b", page: 1, x: 20, y: 20, checkboard: true, label: "77" },    // pageIdx2, checkboard label → "77"
+    { id: "a", page: 1, x: 10, y: 10 },                                   // 콘텐츠 계열 1 → "1"
+    { id: "b", page: 1, x: 20, y: 20, checkboard: true, label: "77" },    // 체크보드 계열 · label 우선 → "77"
     { id: "c", page: 2, x: 5, y: 5 },                                     // 다른 페이지 → 제외
-    { id: "d", page: 1, x: 30, y: 30 }                                    // pageIdx3 → "3"
+    { id: "d", page: 1, x: 30, y: 30 }                                    // 콘텐츠 계열 2 → "2" (계열 분리)
   ];
   const { registry } = runRadar(src, { lsInitial: {}, pins, currentPin: pins[0] });
   const dots = registry["pano-radar-pins"]._children;
@@ -133,7 +135,7 @@ function suitePinNumbers(label, src) {
   const nums = dots.map((d) => d._children[0] && d._children[0]._text);
   ok(nums[0] === "1", `일반 핀 a 번호 = ${nums[0]} (기대 1)`);
   ok(nums[1] === "77", `체크보드 핀 b 번호 = ${nums[1]} (기대 77, label 우선)`);
-  ok(nums[2] === "3", `일반 핀 d 번호 = ${nums[2]} (기대 3)`);
+  ok(nums[2] === "2", `일반 핀 d 번호 = ${nums[2]} (기대 2 — 체크보드는 별도 계열이라 번호를 소비하지 않는다)`);
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -162,16 +164,16 @@ suitePinNumbers("③ 점 번호 표시 (정상 소스)", radarSrc);
  * 뮤테이션 증명: checkboard 번호 오버라이드를 제거하면 ③이 실패해야 한다
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션] checkboard 번호 오버라이드 제거하면 ③이 실패해야 함");
-  const needle = 'let dispNo = radarIdx;\n          if (p.checkboard) {\n            const lblNum = parseInt(p.label, 10);\n            if (Number.isFinite(lblNum)) dispNo = lblNum;\n          }';
-  const mutated = radarSrc.replace(needle, "let dispNo = radarIdx;");
-  if (mutated === radarSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  console.log("\n[뮤테이션] PinSeries 정본의 checkboard label 우선 로직을 제거하면 ③이 실패해야 함");
+  const needle = "no = Number.isFinite(lbl) ? lbl : nCheck;";
+  const mutated = seriesSrc.replace(needle, "no = nCheck;");
+  if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const pins = [
       { id: "a", page: 1, x: 10, y: 10 },
       { id: "b", page: 1, x: 20, y: 20, checkboard: true, label: "77" }
     ];
-    const { registry } = runRadar(mutated, { lsInitial: {}, pins, currentPin: pins[0] });
+    const { registry } = runRadar(radarSrc, { lsInitial: {}, pins, currentPin: pins[0], seriesOverride: mutated });
     const dots = registry["pano-radar-pins"]._children;
     const numB = dots[1]._children[0]._text;
     ok(numB !== "77", "뮤테이션 적용 시 checkboard 번호가 77이 아니게 뒤집힘(테스트가 실효성 있음을 증명) → 실제값=" + numB);
