@@ -202,10 +202,12 @@
 .pano-radar.collapsed #pano-radar-toggle svg { transform: rotate(180deg); }
 
 /* [마스터 요청] 미니맵 크게 보기 — 크기만 확대, 기존 기능(핀/부채꼴/클릭이동) 로직 변경 없음 */
-.pano-radar.pano-radar-large { width: min(52vw, 520px); }
+/* 확대 기본값(마스터 2026-09-02). 조작 바(.pano-controls: bottom 56px, 높이 49px)를 피해
+   위로 띄우고, 세로로 화면을 넘지 않게 상한을 둔다. */
+.pano-radar.pano-radar-large { width: min(52vw, 520px); bottom: 118px; max-height: calc(100vh - 210px); }
 .pano-radar-expand.active { opacity: 1; color: var(--gold, #f59e0b); }
 @media (max-width: 640px) {
-  .pano-radar.pano-radar-large { width: min(78vw, 420px); }
+  .pano-radar.pano-radar-large { width: min(78vw, 420px); bottom: 112px; max-height: calc(100vh - 200px); }
 }
 
 /* [마스터 요청 N3] 로고 세로 잘림 수정 — 전체가 다 보이게 */

@@ -1499,7 +1499,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pano-controls {
   position: absolute; bottom: 56px; left: 50%;
   transform: translateX(-50%);
-  display: flex; align-items: center; gap: 4px; z-index: 12;
+  display: flex; align-items: center; gap: 4px;
+  /* 미니맵(.pano-radar, z-index:12)보다 항상 위 — 확대 시 자동회전/마커/목록 버튼이
+     미니맵에 덮여 클릭 불가였던 회귀(2026-09-02 실측). 조작 바가 언제나 우선한다. */
+  z-index: 14;
   background: rgba(10,16,32,.78);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(43,40,32,0.17);
