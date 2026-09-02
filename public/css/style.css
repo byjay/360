@@ -1405,7 +1405,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: transform .45s cubic-bezier(.16,1,.3,1);   /* 영역 확대 시 시네마틱 전환 */
 }
 .pano-radar-map { width: 100%; display: block; opacity: .9; }
-.pano-radar-pins { position: absolute; inset: 0; }
+/* 핀 레이어를 부채꼴/중심점보다 위로 — DOM 순서상 cone 이 뒤라 현재 핀의 번호가 중심점(.pano-radar-dot)에
+   가려지던 문제. 부채꼴은 반투명 시야 표시라 핀 아래에 있는 편이 판독에 유리하다. */
+.pano-radar-pins { position: absolute; inset: 0; z-index: 3; }
 .pano-radar-pin {
   position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px;
   border-radius: 50%; background: rgba(107,100,87,.85);
@@ -1426,7 +1428,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pano-radar-pin:hover .pano-radar-pin-no { color: #1a1a1a; } /* 흰 배경 위 흰 글자 방지(대비 17.4:1) */
 .pano-radar-pin.current { background: var(--gold); width: 10px; height: 10px; margin: -5px 0 0 -5px; box-shadow: 0 0 0 3px rgba(245,158,11,.25); }
 /* 시야 부채꼴 — 현재 핀 중심으로 회전 */
-.pano-radar-cone { position: absolute; width: 0; height: 0; pointer-events: none; }
+.pano-radar-cone { position: absolute; width: 0; height: 0; pointer-events: none; z-index: 2; }
 .pano-radar-fan {
   position: absolute; left: 50%; top: 50%;
   width: 54px; height: 54px; margin: -27px 0 0 -27px;
