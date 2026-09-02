@@ -1310,15 +1310,11 @@
     },
 
     _placeCheckboardPin(pct) {
-      const totalPages = State.mode === "viewer"
-        ? (State.viewerPages ? State.viewerPages.length : 1)
-        : State.pdfPages;
       const curPage = State.pdfPage || 1;
-      const isMulti = (totalPages || 1) > 1;
-      const onPage = isMulti ? State.pins.filter(p => (p.page || 1) === curPage) : State.pins;
-      // 구역별 시작 번호부터 1씩 자동 증가: no = 시작번호 + (현재 페이지 핀 수)
+      // 🔴 채번 정본 = PinSeries. 체크보드 계열은 콘텐츠 핀과 독립이므로
+      //   "페이지 내 전체 핀 수"가 아니라 "페이지 내 체크보드 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage);
-      const no = start + onPage.length;
+      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start);
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
       State.pins.push(pin);
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });

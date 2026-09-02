@@ -74,22 +74,26 @@
       const pinsLayer = document.getElementById("pano-radar-pins");
       if (pinsLayer) {
         pinsLayer.innerHTML = "";
-        // [마스터 요청 "이런 점은뭐야"] 도면 핀 마커와 동일한 번호 체계 표시.
-        // 11_UI.js renderPinsOnMap()의 dispNo 산출과 동일 로직(그대로 재사용) —
-        // 일반 핀=페이지 내 순번, 체크보드 핀=저장된 실제 번호(pin.label).
-        let radarIdx = 0;
+        // 🔴 번호/부류/필터 정본 = PinSeries (01b_PinSeries.js).
+        //    도면 마커(11_UI.renderPinsOnMap)와 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
+        //    여기서 따로 세면 갈라진다(전역 CLAUDE.md §10 SoT).
+        const numMap = PinSeries.numbers(State.pins, page);
         (State.pins || []).filter(p => (p.page || 1) === page).forEach(p => {
-          radarIdx++;
+          // 표시 필터는 도면·미니맵에 동일 적용. 단, 지금 열람 중인 핀은 기준점이라 항상 표시.
+          if (p.id !== pin.id && !PinSeries.isVisible(p)) return;
+          const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p) };
           const dot = document.createElement("div");
-          dot.className = "pano-radar-pin" + (p.id === pin.id ? " current" : "");
+          dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
           dot.style.top  = p.y + "%";
           dot.title = p.label || "";
-          let dispNo = radarIdx;
-          if (p.checkboard) {
-            const lblNum = parseInt(p.label, 10);
-            if (Number.isFinite(lblNum)) dispNo = lblNum;
-          }
+          dot.dataset.id = p.id;      // 도면 마커(.pin-marker[data-id])와 동일 식별자 — 번호 일치 검증 가능
+          dot.dataset.kind = meta.kind;
+          // 색상도 도면 마커와 같은 정본에서 파생(현재 핀은 gold 강조 유지 → 인라인 지정 안 함).
+          // 점 위에 흰 숫자가 얹히므로 가장 어두운 톤(needle)을 쓴다 — 팔레트 6종 전부 8.96~13.0:1
+          // (head2 를 쓰면 gold 가 4.46:1 로 본문 기준 4.5:1 미달).
+          if (p.id !== pin.id) dot.style.background = PinSeries.colorsOf(meta.kind).needle;
+          const dispNo = meta.no;
           const no = document.createElement("span");
           no.className = "pano-radar-pin-no";
           no.textContent = dispNo;

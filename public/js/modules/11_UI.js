@@ -239,10 +239,17 @@
       const layer = this.$("pins-layer");
       layer.innerHTML = "";
       const curPage = State.pdfPage;
-      let pageIdx = 0; // 페이지별 1부터 시작하는 번호
+      // 🔴 번호/부류/색상 정본 = PinSeries (01b_PinSeries.js). 여기서 따로 세지 않는다.
+      //    미니맵(07_Radar)도 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
+      const numMap = PinSeries.numbers(State.pins, curPage);
+      PinSeries.renderChips();
+      let svgIdx = 0; // SVG gradient id 유일화용(필터로 건너뛰어도 충돌 없게 별도 카운터)
       State.pins.forEach((pin) => {
         if ((pin.page || 1) !== curPage) return; // 현재 페이지 핀만
-        pageIdx++;
+        // 표시 필터: 숨김은 "표시만" 감춘다 — 번호(numMap)는 이미 전체 기준으로 계산됨
+        if (!PinSeries.isVisible(pin)) return;
+        svgIdx++;
+        const pageIdx = svgIdx;
         const marker = document.createElement("div");
         marker.className = "pin-marker" + (pin.id === dropPinId ? " drop" : "")
           + (State.activePin === pin.id ? " focused" : "");
@@ -256,32 +263,32 @@
             marker.classList.add("zone-dim");
           }
         }
-        const hasContent = App.pinHasContent(pin);
+        const meta = numMap.get(pin.id) || { no: pageIdx, kind: PinSeries.kindOf(pin) };
+        const hasContent = meta.kind === "content";
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
-        // ── [마스터 요청] 체크보드 핀은 저장된 실제 번호(pin.label = 시작번호+순번)를
-        //   표시한다. 일반 핀은 페이지 내 순번(pageIdx)을 표시. ──
-        let dispNo = pageIdx;
-        if (pin.checkboard) {
-          const lblNum = parseInt(pin.label, 10);
-          if (Number.isFinite(lblNum)) dispNo = lblNum;
-        }
+        marker.classList.add("pin-kind-" + meta.kind); // 색맹 대비: 색 외 식별 훅
+        // ── 번호: 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번(PinSeries 정본) ──
+        const dispNo = meta.no;
         marker.dataset.no = dispNo;
+        marker.dataset.kind = meta.kind;
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
-        const _pc = (typeof PinPrefs !== "undefined") ? PinPrefs.color() : { head:'#10b981', head2:'#047857', needle:'#064e3b', text:'#065f46' };
-        // ── [체크보드 핀 색상구분] 체크보드 모드 핀은 콘텐츠 유무와 무관하게 --checkboard-color(블루) 계열로 통일 ──
-        const _cb = { head:'#2f6db5', head2:'#1e4a7a', needle:'#123356', text:'#1e4a7a' };
-        const headFill  = pin.checkboard ? _cb.head   : (hasContent ? _pc.head   : '#ef4444');
-        const headFill2 = pin.checkboard ? _cb.head2  : (hasContent ? _pc.head2  : '#b91c1c');
-        const needleTip = pin.checkboard ? _cb.needle : (hasContent ? _pc.needle : '#7f1d1d');
-        const txtFill   = pin.checkboard ? _cb.text   : (hasContent ? _pc.text   : '#991b1b');
+        // 🔴 색상도 PinSeries 정본에서 파생 — 미니맵 점과 같은 색을 쓴다.
+        const _col = PinSeries.colorsOf(meta.kind);
+        const headFill  = _col.head;
+        const headFill2 = _col.head2;
+        const needleTip = _col.needle;
+        const txtFill   = _col.text;
+        // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 부류를 구분:
+        // 콘텐츠=실선 / 미배치=점선 / 체크보드=파선
+        const ringDash  = PinSeries.RING[meta.kind] || "";
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -304,7 +311,7 @@
               <!-- 받침대 줄기: 머리에서 접지점(18,60)으로 수렴 -->
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
-              <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"/>
+              <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.4"/>
               <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->

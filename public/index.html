@@ -565,6 +565,10 @@
       <!-- 구역 페이저: 전체 도면 + 각 구역(crop-view 페이지) 탭 -->
       <nav id="zone-pager" class="zone-pager hidden" aria-label="구역 페이지 전환"></nav>
 
+      <!-- [마스터 요청] 핀 종류 필터 칩 — 전체/콘텐츠/미배치/체크보드.
+           도면 마커와 미니맵 점에 동일하게 적용된다. 렌더는 PinSeries.renderChips(). -->
+      <div id="pin-filter-bar" class="pinfilter-bar hidden" role="group" aria-label="핀 종류 필터"></div>
+
       <div id="drop-hint" class="drop-hint">
         <div id="drop-icon" class="drop-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="30" height="30" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
         <div id="drop-text" class="drop-text">도면을 업로드하세요</div>

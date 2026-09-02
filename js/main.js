@@ -99,6 +99,214 @@
   /* ══════════════════════════════════════════
      PDF MODULE
   ══════════════════════════════════════════ */
+
+  /* ══════════════════════════════════════════
+     PIN SERIES — 핀 번호 · 색상 계열 · 표시 필터의 정본(SoT)
+     ------------------------------------------------------------------
+     [마스터 요청 2026-09-02]
+       "360 사진/첨부를 넣는 핀과 단순 체크보드 핀은 색상을 달리하고,
+        각각 일련번호도 따로, 그 핀만 보기 버튼도 칩 버튼(필터)으로."
+
+     🔴 이 파일이 유일한 정본이다.
+        - 도면 마커: 11_UI.js renderPinsOnMap()
+        - 미니맵 점: 07_Radar.js update()
+        - 체크보드 다음 번호: 20_App.js _placeCheckboardPin()
+        셋 다 여기 함수만 호출한다. 각자 세면 화면마다 번호가 어긋난다
+        (전역 CLAUDE.md §10 SoT — 같은 사실을 두 곳에 쓰면 반드시 갈라진다).
+
+     계열(series) = 채번 단위 · 2종
+       content    : 체크보드가 아닌 모든 핀 → 1부터 독립 채번
+       checkboard : 체크보드 핀        → 저장된 label 숫자 우선(페이지 시작번호 반영),
+                                          숫자가 없으면 체크보드 계열 순번
+
+     부류(kind) = 색상/필터 단위 · 3종
+       content    : 360·첨부 등 콘텐츠 있음
+       empty      : 자리만 잡은 핀(콘텐츠 없음)
+       checkboard : 체크보드 핀
+  ══════════════════════════════════════════ */
+  const PinSeries = {
+    KINDS: ["content", "empty", "checkboard"],
+    LABELS: { content: "콘텐츠", empty: "미배치", checkboard: "체크보드" },
+    FILTER_KEY: "wm-pin-filter",
+
+    /* ── 색상 정본 ────────────────────────────────────────────
+       머리색(head/head2) · 바늘끝(needle) · 숫자 글자색(text).
+       숫자는 흰 디스크(#fff) 위에 놓이므로 text ↔ #fff 대비가 판독 기준.
+       실측(WCAG 2.1 상대휘도):
+         content(사용자 팔레트) : 6.40 ~ 9.00 : 1  (PinPrefs.PALETTE 6종 전부 4.5:1 초과)
+         empty  #991b1b         : 8.27 : 1
+         checkboard #1e3a8a     : 10.49 : 1
+       ⚠ 색만으로 구분하지 않는다(색맹 8%) — ring 패턴(solid/dotted/dashed)을 함께 준다. */
+    EMPTY_COLOR: { head: "#ef4444", head2: "#b91c1c", needle: "#7f1d1d", text: "#991b1b" },
+    // 체크보드는 사용자 팔레트(PinPrefs)의 "블루"(#2f6db5)와 겹쳐 보이던 문제가 있었다.
+    // → 더 진하고 채도 높은 인디고로 분리해 콘텐츠 핀과 확실히 구분.
+    CHECKBOARD_COLOR: { head: "#1d4ed8", head2: "#1e3a8a", needle: "#172554", text: "#1e3a8a" },
+    // ring: 부류를 색 없이도 식별하는 외곽선 패턴 (SVG stroke-dasharray)
+    RING: { content: "", empty: "2.6 2.6", checkboard: "6 3.4" },
+
+    /** 핀에 콘텐츠(360/영상/첨부/노트/3D)가 있는가 — App.pinHasContent 가 정본 */
+    hasContent(pin) {
+      if (typeof App !== "undefined" && App.pinHasContent) { try { return !!App.pinHasContent(pin); } catch (e) {} }
+      return !!(pin && (pin.imageId || pin.imageUrl || pin.videoId));
+    },
+
+    /** 색상/필터 부류 (3종) */
+    kindOf(pin) {
+      if (!pin) return "empty";
+      if (pin.checkboard) return "checkboard";
+      return this.hasContent(pin) ? "content" : "empty";
+    },
+
+    /** 채번 계열 (2종) */
+    seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },
+
+    /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용) */
+    colorsOf(kind) {
+      if (kind === "checkboard") return this.CHECKBOARD_COLOR;
+      if (kind === "empty") return this.EMPTY_COLOR;
+      return (typeof PinPrefs !== "undefined" && PinPrefs.color)
+        ? PinPrefs.color()
+        : { head: "#10b981", head2: "#047857", needle: "#064e3b", text: "#065f46" };
+    },
+
+    /**
+     * 🔴 번호 정본. 페이지 내 핀들의 표시 번호를 한 번에 계산한다.
+     * @param {Array} pins  State.pins (전체)
+     * @param {number} page 대상 페이지
+     * @returns {Map<id, {no:number, kind:string, series:string}>}
+     *
+     * - content / checkboard 계열이 각각 1부터 독립 채번된다.
+     * - 체크보드 핀은 저장된 pin.label 숫자를 우선 사용(기존 저장 데이터 불변 · 마이그레이션 없음).
+     * - 🔴 항상 "필터와 무관하게 전체 핀"으로 계산한다 → 필터를 켜도 번호가 재계산되지 않는다.
+     */
+    numbers(pins, page) {
+      const map = new Map();
+      const pg = page || 1;
+      let nContent = 0, nCheck = 0;
+      (pins || []).forEach((p) => {
+        if (!p) return;
+        if ((p.page || 1) !== pg) return;
+        const series = this.seriesOf(p);
+        let no;
+        if (series === "checkboard") {
+          nCheck++;
+          const lbl = parseInt(p.label, 10);
+          no = Number.isFinite(lbl) ? lbl : nCheck;
+        } else {
+          nContent++;
+          no = nContent;
+        }
+        map.set(p.id, { no: no, kind: this.kindOf(p), series: series });
+      });
+      return map;
+    },
+
+    /** 체크보드 다음 번호 = 시작번호 + (같은 페이지 체크보드 핀 수). 계열 독립. */
+    nextCheckboardNo(pins, page, start) {
+      const pg = page || 1;
+      const s = (Number.isFinite(start) && start >= 1) ? start : 1;
+      const n = (pins || []).filter(p => p && (p.page || 1) === pg && p.checkboard).length;
+      return s + n;
+    },
+
+    /* ══ 표시 필터 ══════════════════════════════════════════
+       숨김 = 표시만 감춘다. 저장 데이터·번호 계열은 필터와 무관하게 불변. */
+    _filter: null,
+
+    /** 현재 필터 상태 { content, empty, checkboard } — 세션 유지 + localStorage 복원 */
+    filter() {
+      if (!this._filter) {
+        this._filter = { content: true, empty: true, checkboard: true };
+        try {
+          const raw = localStorage.getItem(this.FILTER_KEY);
+          if (raw) {
+            const v = JSON.parse(raw);
+            this.KINDS.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; });
+          }
+        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
+        // 전부 꺼진 상태는 "핀이 하나도 없다"는 거짓말이 된다 → 전체 표시로 복구
+        if (!this.KINDS.some(k => this._filter[k])) this._filter = { content: true, empty: true, checkboard: true };
+      }
+      return this._filter;
+    },
+
+    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 */
+    isVisible(pin) { return !!this.filter()[this.kindOf(pin)]; },
+
+    isAll() { const f = this.filter(); return this.KINDS.every(k => f[k]); },
+
+    toggle(kind) {
+      const f = this.filter();
+      if (this.KINDS.indexOf(kind) < 0) return;
+      const next = Object.assign({}, f, {});
+      next[kind] = !f[kind];
+      // 마지막 하나를 끄는 건 전체 숨김 → 그 하나만 보기로 해석(단독 선택)
+      if (!this.KINDS.some(k => next[k])) { this.KINDS.forEach(k => next[k] = (k === kind)); }
+      this.KINDS.forEach(k => f[k] = next[k]);
+      this._persist();
+    },
+
+    showAll() { const f = this.filter(); this.KINDS.forEach(k => f[k] = true); this._persist(); },
+
+    _persist() {
+      try { localStorage.setItem(this.FILTER_KEY, JSON.stringify(this.filter())); } catch (e) {}
+    },
+
+    /** 페이지 내 부류별 핀 개수 (칩 배지용) */
+    counts(pins, page) {
+      const pg = page || 1;
+      const c = { content: 0, empty: 0, checkboard: 0, all: 0 };
+      (pins || []).forEach((p) => {
+        if (!p || (p.page || 1) !== pg) return;
+        c[this.kindOf(p)]++; c.all++;
+      });
+      return c;
+    },
+
+    /* ── 필터 칩 UI (도면 좌상단) — 기존 구역페이저 칩 스타일(.zpager-tab) 재사용 ── */
+    renderChips() {
+      if (typeof document === "undefined") return;
+      const host = document.getElementById("pin-filter-bar");
+      if (!host) return;
+      const page = (typeof State !== "undefined" && State.pdfPage) || 1;
+      const pins = (typeof State !== "undefined" && State.pins) || [];
+      const c = this.counts(pins, page);
+      if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
+      host.classList.remove("hidden");
+      const f = this.filter();
+      const chip = (kind, label, n, on) =>
+        '<button type="button" class="zpager-tab pinfilter-chip pf-' + kind + (on ? " active" : "") +
+        '" data-kind="' + kind + '" aria-pressed="' + (on ? "true" : "false") +
+        '" title="' + label + ' 핀만 보기"><span class="pinfilter-dot"></span>' + label +
+        '<span class="zpager-cnt">' + n + '</span></button>';
+      let html = chip("all", "전체", c.all, this.isAll());
+      this.KINDS.forEach(k => { if (c[k]) html += chip(k, this.LABELS[k], c[k], !!f[k]); });
+      host.innerHTML = html;
+      if (!this._chipsBound) {
+        this._chipsBound = true;
+        host.addEventListener("click", (e) => {
+          const btn = e.target && e.target.closest ? e.target.closest("[data-kind]") : null;
+          if (!btn) return;
+          e.stopPropagation();
+          const kind = btn.dataset.kind;
+          if (kind === "all") this.showAll(); else this.toggle(kind);
+          this.apply();
+        });
+      }
+    },
+
+    /** 필터 변경 후 도면 마커 + 미니맵 점을 함께 다시 그린다(한쪽만 걸리면 거짓말이 된다) */
+    apply() {
+      try { if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap(); } catch (e) {}
+      try {
+        const box = (typeof document !== "undefined") && document.getElementById("pano-radar");
+        if (box && !box.classList.contains("hidden") && typeof Radar !== "undefined" && Radar._pin && Radar.update) {
+          Radar.update(Radar._pin);
+        }
+      } catch (e) {}
+    }
+  };
+
   const PDF = {
     // 로컬 번들 worker 우선(외부 CDN worker가 차단/지연될 때 PDF가 무한 로딩되는 문제 방지)
     WORKER_SRC: "/vendor/pdf.worker.min.js",
@@ -824,6 +1032,7 @@
     S: { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 },
     renderer: null, scene: null, camera: null, mesh: null, texture: null,
     videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
+    _dragSpotId: null, // [마스터: 마커 드래그] 현재 끌고 있는 spot.id (null이면 카메라 드래그)
 
     init(canvas) { this.canvas = canvas; },
 
@@ -1108,8 +1317,33 @@
     },
     toggleAuto()  { this.S.autoRotate = !this.S.autoRotate; this._invalidate(); return this.S.autoRotate; },
 
-    onPointerDown(x, y) { this.S.dragging = true; this.S.lx = x; this.S.ly = y; this._downX = x; this._downY = y; this._moved = false; },
+    /** [마스터: 마커 드래그] 편집 권한 + 디자이너 모드일 때만 마커 이동 허용(뷰어는 종전대로 탭=열기만) */
+    canEditSpots() {
+      return typeof State !== "undefined" && State.mode === "designer" &&
+        (typeof Auth === "undefined" || Auth.isDesigner);
+    },
+    onPointerDown(x, y) {
+      this._downX = x; this._downY = y; this._moved = false;
+      const hitId = this.canEditSpots() ? this.hitSpotAt(x, y) : null;
+      this._dragSpotId = hitId || null;
+      if (hitId) {
+        // 마커를 잡은 동안엔 카메라가 회전하면 안 됨
+        this.S.dragging = false;
+        if (this.canvas) this.canvas.style.cursor = "grabbing";
+      } else {
+        this.S.dragging = true; this.S.lx = x; this.S.ly = y;
+      }
+    },
     onPointerMove(x, y) {
+      if (this._dragSpotId) {
+        if (!this._moved && Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) {
+          this._moved = true;
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 이동 중 — 놓으면 저장됩니다");
+        }
+        const ll = this.screenToLonLat(x, y);
+        if (ll) this.moveSpot(this._dragSpotId, ll.lon, ll.lat);
+        return;
+      }
       if (!this.S.dragging) return;
       if (Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) this._moved = true;
       const k = this.S.fov / 500; // FOV 비례 감도
@@ -1118,7 +1352,14 @@
       this.S.lx = x; this.S.ly = y;
       this._invalidate();
     },
-    onPointerUp() { this.S.dragging = false; },
+    /** 포인터를 뗐을 때: 마커를 실제로 옮겼으면 { spotMoved:id } 반환(호출부가 저장 확정), 아니면 null */
+    onPointerUp() {
+      this.S.dragging = false;
+      const draggedId = this._dragSpotId;
+      this._dragSpotId = null;
+      if (this.canvas) this.canvas.style.cursor = "";
+      return (draggedId && this._moved) ? { spotMoved: draggedId } : null;
+    },
     /** 마지막 포인터 동작이 '탭'(드래그 아님)이었나 */
     wasTap() { return !this._moved; },
 
@@ -1180,6 +1421,22 @@
       const hits = rc.intersectObjects(this._spotGroup.children, false);
       return hits.length ? hits[0].object.userData.spotId : null;
     },
+    /** [마스터: 마커 드래그] 전체 재생성 없이 스프라이트 1개 position만 갱신(드래그 중 매 프레임 호출).
+     *  spot 데이터(this._spots — pin.spots 와 동일 참조)의 lon/lat 도 그 자리에서 갱신해
+     *  드래그 종료 시 별도 반영 없이 그대로 저장할 수 있게 한다. */
+    moveSpot(id, lon, lat) {
+      if (!this._spotGroup) return false;
+      let sp = null;
+      for (let i = 0; i < this._spotGroup.children.length; i++) {
+        if (this._spotGroup.children[i].userData.spotId === id) { sp = this._spotGroup.children[i]; break; }
+      }
+      if (!sp) return false;
+      sp.position.copy(this._spotPos(lon, lat, 470));
+      const data = (this._spots || []).find(s => s.id === id);
+      if (data) { data.lon = lon; data.lat = lat; }
+      this._invalidate();
+      return true;
+    },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
 
     close() {
@@ -1187,6 +1444,7 @@
       this._currentPin = null;
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
+      this._dragSpotId = null;
       cancelAnimationFrame(this.rafId);
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
@@ -1221,6 +1479,22 @@
         if (tb) { tb.addEventListener("click", (e) => { e.stopPropagation(); box.classList.toggle("collapsed"); }); this._toggleBound = true; }
       }
       // [마스터 요청] 미니맵 크게 보기 토글 (1회 바인딩) — 크기만 전환, 기존 로직 그대로
+      // [마스터 요청 "기본적으로 확대한 크기로 반영해"] 저장된 선택이 없으면 기본값=확대(large).
+      // localStorage("wm-radar-large")에 사용자 선택을 저장/복원 — 없으면 true(확대).
+      if (!this._largeInited) {
+        this._largeInited = true;
+        let storedLarge = true;
+        try {
+          const v = localStorage.getItem("wm-radar-large");
+          if (v !== null) storedLarge = v === "1";
+        } catch (e) { /* 사생활 모드 등 localStorage 접근 불가 → 기본값(확대) 유지 */ }
+        box.classList.toggle("pano-radar-large", storedLarge);
+        const eb0 = document.getElementById("pano-radar-expand");
+        if (eb0) {
+          eb0.classList.toggle("active", storedLarge);
+          eb0.title = storedLarge ? "미니맵 작게 보기" : "미니맵 크게 보기";
+        }
+      }
       if (!this._expandBound) {
         const eb = document.getElementById("pano-radar-expand");
         if (eb) {
@@ -1229,6 +1503,7 @@
             const large = box.classList.toggle("pano-radar-large");
             eb.classList.toggle("active", large);
             eb.title = large ? "미니맵 작게 보기" : "미니맵 크게 보기";
+            try { localStorage.setItem("wm-radar-large", large ? "1" : "0"); } catch (e) {}
           });
           this._expandBound = true;
         }
@@ -1266,12 +1541,30 @@
       const pinsLayer = document.getElementById("pano-radar-pins");
       if (pinsLayer) {
         pinsLayer.innerHTML = "";
+        // 🔴 번호/부류/필터 정본 = PinSeries (01b_PinSeries.js).
+        //    도면 마커(11_UI.renderPinsOnMap)와 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
+        //    여기서 따로 세면 갈라진다(전역 CLAUDE.md §10 SoT).
+        const numMap = PinSeries.numbers(State.pins, page);
         (State.pins || []).filter(p => (p.page || 1) === page).forEach(p => {
+          // 표시 필터는 도면·미니맵에 동일 적용. 단, 지금 열람 중인 핀은 기준점이라 항상 표시.
+          if (p.id !== pin.id && !PinSeries.isVisible(p)) return;
+          const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p) };
           const dot = document.createElement("div");
-          dot.className = "pano-radar-pin" + (p.id === pin.id ? " current" : "");
+          dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
           dot.style.top  = p.y + "%";
           dot.title = p.label || "";
+          dot.dataset.id = p.id;      // 도면 마커(.pin-marker[data-id])와 동일 식별자 — 번호 일치 검증 가능
+          dot.dataset.kind = meta.kind;
+          // 색상도 도면 마커와 같은 정본에서 파생(현재 핀은 gold 강조 유지 → 인라인 지정 안 함).
+          // 점 위에 흰 숫자가 얹히므로 가장 어두운 톤(needle)을 쓴다 — 팔레트 6종 전부 8.96~13.0:1
+          // (head2 를 쓰면 gold 가 4.46:1 로 본문 기준 4.5:1 미달).
+          if (p.id !== pin.id) dot.style.background = PinSeries.colorsOf(meta.kind).needle;
+          const dispNo = meta.no;
+          const no = document.createElement("span");
+          no.className = "pano-radar-pin-no";
+          no.textContent = dispNo;
+          dot.appendChild(no);
           dot.addEventListener("click", (e) => {
             e.stopPropagation();
             if (this._dirAdjust) return; // 방향 조절 모드에서는 다른 핀 이동 금지
@@ -2783,10 +3076,17 @@
       const layer = this.$("pins-layer");
       layer.innerHTML = "";
       const curPage = State.pdfPage;
-      let pageIdx = 0; // 페이지별 1부터 시작하는 번호
+      // 🔴 번호/부류/색상 정본 = PinSeries (01b_PinSeries.js). 여기서 따로 세지 않는다.
+      //    미니맵(07_Radar)도 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
+      const numMap = PinSeries.numbers(State.pins, curPage);
+      PinSeries.renderChips();
+      let svgIdx = 0; // SVG gradient id 유일화용(필터로 건너뛰어도 충돌 없게 별도 카운터)
       State.pins.forEach((pin) => {
         if ((pin.page || 1) !== curPage) return; // 현재 페이지 핀만
-        pageIdx++;
+        // 표시 필터: 숨김은 "표시만" 감춘다 — 번호(numMap)는 이미 전체 기준으로 계산됨
+        if (!PinSeries.isVisible(pin)) return;
+        svgIdx++;
+        const pageIdx = svgIdx;
         const marker = document.createElement("div");
         marker.className = "pin-marker" + (pin.id === dropPinId ? " drop" : "")
           + (State.activePin === pin.id ? " focused" : "");
@@ -2800,32 +3100,32 @@
             marker.classList.add("zone-dim");
           }
         }
-        const hasContent = App.pinHasContent(pin);
+        const meta = numMap.get(pin.id) || { no: pageIdx, kind: PinSeries.kindOf(pin) };
+        const hasContent = meta.kind === "content";
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
-        // ── [마스터 요청] 체크보드 핀은 저장된 실제 번호(pin.label = 시작번호+순번)를
-        //   표시한다. 일반 핀은 페이지 내 순번(pageIdx)을 표시. ──
-        let dispNo = pageIdx;
-        if (pin.checkboard) {
-          const lblNum = parseInt(pin.label, 10);
-          if (Number.isFinite(lblNum)) dispNo = lblNum;
-        }
+        marker.classList.add("pin-kind-" + meta.kind); // 색맹 대비: 색 외 식별 훅
+        // ── 번호: 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번(PinSeries 정본) ──
+        const dispNo = meta.no;
         marker.dataset.no = dispNo;
+        marker.dataset.kind = meta.kind;
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
-        const _pc = (typeof PinPrefs !== "undefined") ? PinPrefs.color() : { head:'#10b981', head2:'#047857', needle:'#064e3b', text:'#065f46' };
-        // ── [체크보드 핀 색상구분] 체크보드 모드 핀은 콘텐츠 유무와 무관하게 --checkboard-color(블루) 계열로 통일 ──
-        const _cb = { head:'#2f6db5', head2:'#1e4a7a', needle:'#123356', text:'#1e4a7a' };
-        const headFill  = pin.checkboard ? _cb.head   : (hasContent ? _pc.head   : '#ef4444');
-        const headFill2 = pin.checkboard ? _cb.head2  : (hasContent ? _pc.head2  : '#b91c1c');
-        const needleTip = pin.checkboard ? _cb.needle : (hasContent ? _pc.needle : '#7f1d1d');
-        const txtFill   = pin.checkboard ? _cb.text   : (hasContent ? _pc.text   : '#991b1b');
+        // 🔴 색상도 PinSeries 정본에서 파생 — 미니맵 점과 같은 색을 쓴다.
+        const _col = PinSeries.colorsOf(meta.kind);
+        const headFill  = _col.head;
+        const headFill2 = _col.head2;
+        const needleTip = _col.needle;
+        const txtFill   = _col.text;
+        // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 부류를 구분:
+        // 콘텐츠=실선 / 미배치=점선 / 체크보드=파선
+        const ringDash  = PinSeries.RING[meta.kind] || "";
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -2848,7 +3148,7 @@
               <!-- 받침대 줄기: 머리에서 접지점(18,60)으로 수렴 -->
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
-              <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"/>
+              <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.4"/>
               <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
@@ -6414,15 +6714,11 @@
     },
 
     _placeCheckboardPin(pct) {
-      const totalPages = State.mode === "viewer"
-        ? (State.viewerPages ? State.viewerPages.length : 1)
-        : State.pdfPages;
       const curPage = State.pdfPage || 1;
-      const isMulti = (totalPages || 1) > 1;
-      const onPage = isMulti ? State.pins.filter(p => (p.page || 1) === curPage) : State.pins;
-      // 구역별 시작 번호부터 1씩 자동 증가: no = 시작번호 + (현재 페이지 핀 수)
+      // 🔴 채번 정본 = PinSeries. 체크보드 계열은 콘텐츠 핀과 독립이므로
+      //   "페이지 내 전체 핀 수"가 아니라 "페이지 내 체크보드 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage);
-      const no = start + onPage.length;
+      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start);
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
       State.pins.push(pin);
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
@@ -6500,7 +6796,10 @@
       const canvas = UI.$("pano-canvas");
       canvas.addEventListener("mousedown", e => PanoViewer.onPointerDown(e.clientX, e.clientY));
       window.addEventListener("mousemove", e => PanoViewer.onPointerMove(e.clientX, e.clientY));
-      window.addEventListener("mouseup",   () => PanoViewer.onPointerUp());
+      window.addEventListener("mouseup",   () => {
+        const r = PanoViewer.onPointerUp();
+        if (r && r.spotMoved) this._finalizeSpotDrag(r.spotMoved);
+      });
       // [FARO Markers] 마커 위 마우스오버 → 내용 툴팁
       canvas.addEventListener("mousemove", e => this._panoHover(e.clientX, e.clientY));
       canvas.addEventListener("mouseleave", () => this._hideSpotTip());
@@ -6529,7 +6828,8 @@
       canvas.addEventListener("touchend", e => {
         if (!e.touches || e.touches.length < 2) panoPinchDist = null;
         const wasTap = PanoViewer.wasTap && PanoViewer.wasTap();
-        PanoViewer.onPointerUp();
+        const r = PanoViewer.onPointerUp();
+        if (r && r.spotMoved) { this._finalizeSpotDrag(r.spotMoved); return; }
         // [구면 마커] 탭이면 마커 추가/열기 (changedTouches 좌표 사용)
         if (wasTap && e.changedTouches && e.changedTouches[0]) {
           const t = e.changedTouches[0];
@@ -7316,10 +7616,17 @@
       try { this._autoSave && this._autoSave(); } catch (e) {}
       const p = UI.$("pano-spot-list"); if (p && !p.classList.contains("hidden")) this.renderSpotList();
     },
+    /** [마스터: 마커 드래그] 놓았을 때 1회 호출 — moveSpot()이 이미 갱신한 lon/lat을 저장 확정 */
+    _finalizeSpotDrag(id) {
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      if (!pin) return;
+      this._saveSpots(pin);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 위치 저장됨");
+    },
     /* ── [FARO Markers] 마커 위 마우스오버 → 내용 툴팁 ── */
     _panoHover(x, y) {
       if (typeof PanoViewer === "undefined" || !PanoViewer.open) return;
-      if (PanoViewer.S && PanoViewer.S.dragging) { this._hideSpotTip(); return; }
+      if (PanoViewer.S && (PanoViewer.S.dragging || PanoViewer._dragSpotId)) { this._hideSpotTip(); return; }
       const pin = PanoViewer._currentPin;
       const id = (pin && PanoViewer.hitSpotAt) ? PanoViewer.hitSpotAt(x, y) : null;
       const canvas = UI.$("pano-canvas");
@@ -12463,7 +12770,7 @@
 
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
-      State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, PinIcons, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
+      State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, PinSeries, PinIcons, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
       Offline, OfflineBundle, OfflineLoad, OpLog,
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
