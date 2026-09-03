@@ -169,8 +169,65 @@
       return this._filter;
     },
 
-    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 */
-    isVisible(pin) { return !!this.filter()[this.kindOf(pin)]; },
+    /** 핀의 아이콘 종류 id (없으면 기본 number) — PinIcons.SET 의 id 와 1:1 */
+    iconOf(pin) { return (pin && pin.icon) || "number"; },
+
+    /* ══ 종류(아이콘) 필터 — [마스터 요청 2026-09-03] 계열(kind) 필터와 별도 축.
+       둘 다 걸어야 보인다(AND) — 같은 SoT 원칙으로 도면·미니맵 양쪽이 이 함수 하나만 본다. */
+    ICON_FILTER_KEY: "wm-pin-icon-filter",
+    _iconFilter: null,
+
+    /** 아이콘별 표시 상태 맵 { iconId: boolean }. 키가 없으면 표시(기본 전체 표시). */
+    iconFilter() {
+      if (!this._iconFilter) {
+        this._iconFilter = {};
+        try {
+          const raw = localStorage.getItem(this.ICON_FILTER_KEY);
+          if (raw) { const v = JSON.parse(raw); if (v && typeof v === "object") this._iconFilter = v; }
+        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
+      }
+      return this._iconFilter;
+    },
+
+    /** 페이지 내 아이콘 종류별 핀 개수 (칩 배지·존재하는 종류만 노출 판단용) */
+    iconCounts(pins, page) {
+      const pg = page || 1;
+      const c = {};
+      (pins || []).forEach(p => {
+        if (!p || (p.page || 1) !== pg) return;
+        const id = this.iconOf(p);
+        c[id] = (c[id] || 0) + 1;
+      });
+      return c;
+    },
+
+    isIconVisible(pin) { return this.iconFilter()[this.iconOf(pin)] !== false; },
+
+    isIconAll(presentIds) {
+      const f = this.iconFilter();
+      return (presentIds || []).every(id => f[id] !== false);
+    },
+
+    /** presentIds = 현재 페이지에 실제 존재하는 아이콘 id 목록(칩에 뜬 것들만).
+     *  마지막 하나를 끄면 kind 필터와 동일하게 "그것만 보기"로 해석(전체 숨김 금지). */
+    toggleIconFilter(iconId, presentIds) {
+      const f = this.iconFilter();
+      const next = Object.assign({}, f);
+      next[iconId] = (f[iconId] === false) ? true : false;
+      const anyVisible = (presentIds || []).some(id => next[id] !== false);
+      if (!anyVisible) (presentIds || []).forEach(id => { next[id] = (id === iconId); });
+      this._iconFilter = next;
+      this._persistIcon();
+    },
+
+    showAllIcons() { this._iconFilter = {}; this._persistIcon(); },
+
+    _persistIcon() {
+      try { localStorage.setItem(this.ICON_FILTER_KEY, JSON.stringify(this.iconFilter())); } catch (e) {}
+    },
+
+    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND) */
+    isVisible(pin) { return !!this.filter()[this.kindOf(pin)] && this.isIconVisible(pin); },
 
     isAll() { const f = this.filter(); return this.KINDS.every(k => f[k]); },
 
@@ -220,16 +277,45 @@
         '<span class="zpager-cnt">' + n + '</span></button>';
       let html = chip("all", "전체", c.all, this.isAll());
       this.KINDS.forEach(k => { if (c[k]) html += chip(k, this.LABELS[k], c[k], !!f[k]); });
+
+      // ── [마스터 요청 2026-09-03] 종류(아이콘) 필터 칩 — 계열 칩과 별도 축, 공존.
+      //   실제 페이지에 존재하는 종류만(0개 종류는 빈 화면만 준다) · 2종 이상일 때만(1종뿐이면
+      //   거를 게 없어 무의미한 칩이 된다 — YAGNI).
+      const ic = this.iconCounts(pins, page);
+      const presentIds = Object.keys(ic);
+      if (presentIds.length > 1 && typeof PinIcons !== "undefined") {
+        const iflt = this.iconFilter();
+        // 🔴 새 CSS 클래스 없이(.pinfilter-dot 은 9px 원+kind별 배경색 전제) — 인라인 스타일로
+        //   14px 사각 뱃지 안에 실제 아이콘 SVG 를 넣어 종류를 한눈에 구분(§CSS 미신설 보고 대상).
+        const dotStyle = 'style="width:14px;height:14px;border-radius:4px;box-shadow:none;' +
+          'background:rgba(255,255,255,.14);display:inline-flex;align-items:center;justify-content:center;color:inherit"';
+        const iconChip = (iconId, label, n, on) =>
+          '<button type="button" class="zpager-tab pinfilter-chip pf-icon-flt' + (on ? " active" : "") +
+          '" data-icon="' + iconId + '" aria-pressed="' + (on ? "true" : "false") +
+          '" title="' + label + ' 만 보기"><span class="pinfilter-dot" ' + dotStyle + ' aria-hidden="true">' +
+          (iconId === "all" ? "" : PinIcons.chipSvg(iconId, 11)) + '</span>' + label +
+          '<span class="zpager-cnt">' + n + '</span></button>';
+        html += iconChip("all", "전체", c.all, this.isIconAll(presentIds));
+        presentIds.forEach(id => { html += iconChip(id, PinIcons.def(id).name, ic[id], iflt[id] !== false); });
+      }
+
       host.innerHTML = html;
       if (!this._chipsBound) {
         this._chipsBound = true;
         host.addEventListener("click", (e) => {
-          const btn = e.target && e.target.closest ? e.target.closest("[data-kind]") : null;
+          const btn = e.target && e.target.closest ? e.target.closest("[data-kind],[data-icon]") : null;
           if (!btn) return;
           e.stopPropagation();
-          const kind = btn.dataset.kind;
-          if (kind === "all") this.showAll(); else this.toggle(kind);
-          this.apply();
+          if (btn.dataset.kind) {
+            const kind = btn.dataset.kind;
+            if (kind === "all") this.showAll(); else this.toggle(kind);
+          } else if (btn.dataset.icon) {
+            const page2 = (typeof State !== "undefined" && State.pdfPage) || 1;
+            const presentIds2 = Object.keys(this.iconCounts((typeof State !== "undefined" && State.pins) || [], page2));
+            const iconId = btn.dataset.icon;
+            if (iconId === "all") this.showAllIcons(); else this.toggleIconFilter(iconId, presentIds2);
+          }
+          this.apply(); // UI.renderPinsOnMap()이 renderChips()도 함께 호출해 칩 active 상태를 갱신한다
         });
       }
     },

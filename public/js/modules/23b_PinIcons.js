@@ -38,13 +38,15 @@
                  stroke-linecap="round" stroke-linejoin="round">${d.body}</g>`;
     },
 
-    /** 선택 그리드용 미리보기 칩(24x24 단독 SVG) */
-    chipSvg(iconId) {
+    /** 선택 그리드용 미리보기 칩(24x24 단독 SVG).
+     *  @param {number} [size] 명시 시 width/height 속성 부여(필터 칩처럼 CSS 그리드 밖에서 쓸 때). */
+    chipSvg(iconId, size) {
       const d = this.def(iconId);
+      const sz = size ? ` width="${size}" height="${size}"` : "";
       if (!d.body) {
-        return `<svg viewBox="0 0 24 24" aria-hidden="true"><text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="currentColor">#</text></svg>`;
+        return `<svg viewBox="0 0 24 24"${sz} aria-hidden="true"><text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="currentColor">#</text></svg>`;
       }
-      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      return `<svg viewBox="0 0 24 24"${sz} fill="none" stroke="currentColor" stroke-width="2"
                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d.body}</svg>`;
     }
   };

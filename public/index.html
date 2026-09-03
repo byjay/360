@@ -473,6 +473,14 @@
             <label for="input-checkboard-start" class="checkboard-start-label">현재 구역 시작 번호</label>
             <input id="input-checkboard-start" class="checkboard-start-input" type="number" min="1" step="1" value="1" inputmode="numeric" title="이 구역(페이지)에서 시작할 번호. 클릭마다 1씩 증가합니다." />
           </div>
+          <!-- [마스터 요청 2026-09-03] "핀을 종류별로 박는거" — 찍기 전에 종류를 고르면 연속 배치
+               내내 유지된다. 새 CSS 없이 핀 편집 폼의 아이콘 그리드(.pf-icon-section/.pf-icon-grid/
+               .pf-icon-chip)를 그대로 재사용(20_App.js _renderIconPicker("cb-icon-grid","cb-icon-label")).
+               안 고르면 종전과 동일하게 기본 번호로 찍힌다. -->
+          <div id="cb-icon-section" class="pf-icon-section">
+            <div id="cb-icon-label" class="pf-icon-label">아이콘 종류 (현재: 번호)</div>
+            <div id="cb-icon-grid" class="pf-icon-grid" role="group" aria-label="배치할 핀 아이콘 선택"></div>
+          </div>
           <button id="btn-checkboard-enter" class="btn-checkboard-toggle" type="button" title="체크보드 모드: 도면 위를 클릭하면 번호 핀이 바로 찍힙니다 (이름·사진 없이)">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <span id="btn-checkboard-enter-label">체크보드 모드 시작</span>

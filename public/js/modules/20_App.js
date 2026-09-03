@@ -127,6 +127,9 @@
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         else { const pbBtn = UI.$("btn-checkboard-photobatch"); if (pbBtn) pbBtn.classList.add("hidden"); }
+        // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
+        //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
+        if (isDesigner) App._renderIconPicker("cb-icon-grid", "cb-icon-label");
       } catch (e) {}
       if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
@@ -773,16 +776,25 @@
       panel.classList.add("pf-in");
     },
 
-    /** [마스터 요청] 핀 아이콘 선택 그리드 렌더 + 선택 상태 동기화 */
-    _renderIconPicker() {
-      const grid = UI.$("pf-icon-grid");
+    /** [마스터 요청] 핀 아이콘 선택 그리드 렌더 + 선택 상태 동기화.
+     *  [마스터 요청 2026-09-03] 배치 모드(체크보드 연속 배치)에서도 재사용하도록 일반화:
+     *  gridId(기본 pf-icon-grid) + labelId(있으면 "현재: OO" 로 갱신)를 받는다.
+     *  두 그리드 모두 같은 State.pendingIcon 을 공유 — 한 번 고르면 다음 배치까지 유지된다. */
+    _renderIconPicker(gridId, labelId) {
+      gridId = gridId || "pf-icon-grid";
+      const grid = UI.$(gridId);
       if (!grid || typeof PinIcons === "undefined") return;
       const cur = State.pendingIcon || "number";
+      grid._labelId = labelId || grid._labelId;
       grid.innerHTML = PinIcons.SET.map(it =>
         `<button type="button" class="pf-icon-chip${it.id === cur ? " active" : ""}" ` +
         `data-icon="${it.id}" title="${it.name}" aria-label="${it.name}" ` +
         `aria-pressed="${it.id === cur ? "true" : "false"}">${PinIcons.chipSvg(it.id)}</button>`
       ).join("");
+      if (grid._labelId) {
+        const lbl = UI.$(grid._labelId);
+        if (lbl) lbl.textContent = "아이콘 종류 (현재: " + PinIcons.def(cur).name + ")";
+      }
       // 위임 바인딩(중복 방지)
       if (!grid._iconBound) {
         grid.addEventListener("click", (e) => {
@@ -794,6 +806,10 @@
             c.classList.toggle("active", on);
             c.setAttribute("aria-pressed", on ? "true" : "false");
           });
+          if (grid._labelId) {
+            const lbl = UI.$(grid._labelId);
+            if (lbl) lbl.textContent = "아이콘 종류 (현재: " + PinIcons.def(State.pendingIcon).name + ")";
+          }
         });
         grid._iconBound = true;
       }
@@ -1337,6 +1353,9 @@
       const start = this._checkboardStart(curPage);
       const no = PinSeries.nextCheckboardNo(State.pins, curPage, start);
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
+      //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
+      if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       State.pins.push(pin);
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
       State.activePin = pin.id;
