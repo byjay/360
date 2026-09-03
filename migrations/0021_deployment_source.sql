@@ -1,0 +1,20 @@
+-- 0021_deployment_source.sql
+-- [P14 · 뷰어 확대 화질] 배포 스냅샷의 "원본 PDF" 보관 위치 + 실제 저장 픽셀 기록
+--
+-- 배경: 뷰어는 deployments.pages_data(스냅샷 비트맵)만 그린다. 원본 PDF 가 어디에도
+--       보관되지 않아, 확대하면 CSS 로 비트맵을 늘릴 수밖에 없어 도면이 뭉갰다.
+--       또한 snapshotAllPages 의 SOFT_LIMIT 강등(dim*=0.8, 최대 4회) 때문에 실제 저장
+--       해상도가 요청(4096)보다 훨씬 낮은 경우가 있는데, 그 값이 기록되지 않아
+--       뷰어가 "언제 원본이 필요한지"를 추측할 수밖에 없었다.
+--
+-- 조치: deployments 에 source_meta 컬럼 추가. 기존 JSON 필드(pages_data/pins/zones/
+--       annotations)의 모양은 그대로 두고 새 컬럼만 늘린다 → 구버전 뷰어는 이 컬럼을
+--       읽지 않으므로 기존 배포본·기존 클라이언트 모두 종전대로 동작한다.
+--
+-- 형식(JSON, NULL 이면 구버전 배포본 = 원본 없음):
+--   {"v":1,
+--    "pdf_url":"/api/r2/object/assets/<ts>-<rand>.pdf",
+--    "pages":[{"w":4096,"h":2893,"pw":2384,"ph":1684}, ...]}
+--     w/h   = 그 페이지 스냅샷의 실제 저장 픽셀
+--     pw/ph = PDF 페이지 크기(pt) — 뷰어의 크롭 오버레이 좌표계 산출용
+ALTER TABLE deployments ADD COLUMN source_meta TEXT;

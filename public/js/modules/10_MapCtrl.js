@@ -14,6 +14,15 @@
       } catch (e) {}
     },
 
+    /** [P14] 재래스터할 "원본"을 갖고 있는가 — 모드가 아니라 원본 보유 여부가 진짜 조건이다.
+     *  · 편집모드 PDF        : State.pdfDoc (전면 캔버스 재래스터)
+     *  · 뷰어/스냅샷 재열람  : State.srcPdfDoc (지연 로드한 원본 → 크롭 오버레이) */
+    hasRerenderSource() {
+      if (typeof PDF === "undefined" || !PDF.requestZoomRerender) return false;
+      if (State.srcPdfDoc) return true;
+      return State.fileType === "pdf" && !!State.pdfDoc;
+    },
+
     applyTransform() {
       const { x, y } = State.pan;
       // 이미지/뷰어(스냅샷) 모드에서는 CSS rotate 로 회전(디자이너 PDF 는 캔버스 재렌더로 처리하므로 0).
@@ -33,13 +42,17 @@
       // [마스터] 구역 라벨도 핀처럼 부모 zoom 을 상쇄 → 확대해도 흐려지지 않고 크리스프
       try { if (typeof Zones !== "undefined" && Zones.updateLabelScale) Zones.updateLabelScale(); } catch (e) {}
       this._updateZoomLabel();
-      // ── 벡터 PDF 화질 보존: 줌이 오르면 그 배율로 PDF 를 다시 래스터화 ──
-      // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
-      if (State.mode !== "viewer" && State.fileType === "pdf" && State.pdfDoc
-          && typeof PDF !== "undefined" && PDF.requestZoomRerender) {
+      // ── 벡터 원본 화질 보존: 줌이 오르면 그 배율로 원본을 다시 래스터화 ──
+      // [P14 근본원인 2026-09-03] 종전 조건은 `State.mode !== "viewer"` 였다. 진짜 조건은
+      //   모드가 아니라 **재렌더할 원본을 갖고 있는가** 다. 뷰어는 배포 스냅샷(비트맵)만
+      //   갖고 있어 CSS 확대 = 뭉갬이었다 → 원본 PDF 를 지연 로드하면 뷰어도 선명해진다.
+      if (this.hasRerenderSource()) {
         // 애니메이션(플라이/ISO/구역 확대)이 남아 있으면 그 잔여시간만큼 재렌더를 미룬다
         // → 애니메이션 중에는 부하 0, 끝난 뒤 최종 배율로 딱 한 번 고품질 렌더.
         PDF.requestZoomRerender(State.zoom, this._settleRemain());
+      } else if (typeof App !== "undefined" && App.maybeLoadSourcePdf) {
+        // 원본이 없다 → 스냅샷 해상도를 실제로 넘어섰을 때만 원본을 1회 지연 로드한다.
+        App.maybeLoadSourcePdf(State.zoom);
       }
       // [화질] 확대가 끝나면 합성 힌트를 풀어, 브라우저가 현재 배율로 다시 래스터화하게 한다.
       this._scheduleSettle();

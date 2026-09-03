@@ -1,3 +1,9 @@
+  /* [P14 설계 메모] 원본 PDF 를 `State.pdfDoc` 에 넣지 않고 `State.srcPdfDoc` 로 분리한 이유:
+     `State.pdfDoc` 는 "지금 화면을 PDF 캔버스 파이프라인으로 그리고 있다"는 뜻으로
+     UI.renderPdfThumbs / Radar._buildHiResSnapshot / PinGrid / App._rotatePdf 가 분기한다.
+     뷰어(스냅샷 <img> 바탕)에서 여기에 문서를 넣으면 그 형제 호출부들이 전부 오작동한다.
+     두 값은 같은 사실의 중복이 아니라 서로 다른 사실이며,
+     "재래스터할 원본이 있는가" 는 MapCtrl.hasRerenderSource() 한 곳에서만 파생시킨다. */
   const State = {
     mode:        null,      // 'designer' | 'viewer'
     checkboard:  false,     // 체크보드 모드: 디자이너와 동일하나 핀에 이름 대신 번호만 자동 부여
@@ -11,6 +17,14 @@
     pdfPages:    0,
     pdfRotation: 0,         // 0 | 90 | 180 | 270 (PDF.js 내장 회전)
     viewerPages: null,      // 뷰어 모드: 배포본 페이지 dataURL 배열
+    /* ── [P14] 배포 스냅샷의 "원본 PDF" (확대 시 재래스터용) ──
+       뷰어/구역 재열람은 배포 스냅샷(비트맵)만 그리므로 확대하면 뭉갠다.
+       배포 시 R2 에 보관해 둔 원본 PDF 를 임계 배율을 넘겼을 때만 1회 지연 로드한다. */
+    sourceMeta:   null,     // 배포본 source_meta 파싱 결과 { v, pdf_url, pages:[{w,h,pw,ph}] }
+    sourcePdfUrl: null,     // 원본 PDF 의 R2 URL (없으면 구버전 배포본 = 스냅샷 확대 폴백)
+    srcPdfDoc:    null,     // 지연 로드된 원본 PDFDocumentProxy (State.pdfDoc 과 별개 — 아래 주석)
+    srcNoticed:   false,    // 구버전 안내를 이미 1회 했는가(반복 알림 금지)
+    srcFailed:    false,    // 원본 다운로드/파싱 실패 — 재시도 금지(불필요 다운로드 0)
     pins:        [],        // {id,x,y,page,label,imageUrl?,imageId?,imageName?}
     annotations: [],        // {id,page,type:'highlight'|'rect'|'pen'|'text',color,...좌표(%)} PDF 주석
     annoTool:    "cursor",  // 현재 주석 도구
@@ -53,6 +67,9 @@
       this.fileType = null; this.fileName = null;
       this.fileData = null; this.pdfDoc = null;
       this.pdfPage = 1; this.pdfPages = 0; this.pdfRotation = 0; this.viewerPages = null;
+      // [P14] 원본 PDF 지연 로드 상태 초기화 — 도면이 바뀌면 이전 원본은 거짓 화면이 된다.
+      this.sourceMeta = null; this.sourcePdfUrl = null; this.srcPdfDoc = null;
+      this.srcNoticed = false; this.srcFailed = false;
       this.pins = []; this.zones = []; this.placing = false; this.drawingZone = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];

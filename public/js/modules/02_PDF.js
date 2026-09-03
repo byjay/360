@@ -91,7 +91,11 @@
       lastZoom: 1,           // 마지막으로 요청된 줌(= 확대가 끝난 시점의 화면 배율)
       crop: null,            // 고해상도 크롭 오버레이 캔버스
       cropTask: null,        // 진행 중인 크롭 render task
-      cropScale: 0           // 크롭 캔버스의 렌더 스케일
+      cropScale: 0,          // 크롭 캔버스의 렌더 스케일
+      // [P14] 바탕이 전면 PDF 캔버스가 아니라 "배포 스냅샷 <img>" 인 상태(뷰어/구역 재열람).
+      //   이때는 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표가 스냅샷 기준) →
+      //   보이는 영역만 크롭 오버레이로 얹는다.
+      overlayOnly: false
     },
 
     /* ── 캔버스 해상도 상한 (근거를 남긴다 · 매직넘버 금지) ────────────────────
@@ -110,6 +114,20 @@
     RERENDER_GAIN: 1.15,       // 이 배율 미만의 화질 향상은 재렌더 비용 대비 이득이 없다
     SHRINK_RATIO: 2.5,         // 축소 후 이만큼 과잉 해상도면 메모리 회수용으로 다시 그린다
     SETTLE_MS: 140,            // 줌 조작이 끝났다고 보는 디바운스(애니메이션 중에는 더 미룬다)
+    /* [P14] 원본 PDF 지연 로드 임계 — 스냅샷 비트맵이 화면 요구 해상도에 "얼마나" 부족해야
+       네트워크로 원본을 받아올 값어치가 있는가.
+       근거: RERENDER_GAIN(1.15)은 "원본이 이미 로컬에 있을 때 다시 그릴 값어치" 기준이다.
+       원본 다운로드는 수 MB · 현장 모바일 회선이므로 같은 기준을 쓰면 기본 화면에서도 곧바로
+       받아버린다. 배포 스냅샷은 CSS 1:1(.map-image 자연 크기)로 보도록 만들어진 것이므로
+       판정 기준은 device px 가 아니라 CSS px 이고, 확실히 부족할 때(1.5배)만 받는다.
+       → 1:1 스냅샷 기준 zoom > 1.5 에서 발동. 구역 확대(MapCtrl.fitZone 4~8배)는 항상 발동.
+       원본을 확보한 뒤의 실제 렌더 목표 배율은 종전대로 zoom×dpr 이다(planRerender). */
+    SOURCE_GAIN: 1.5,
+
+    /** 마지막 snapshotAllPages 가 실제로 저장한 페이지 픽셀 크기
+     *  [{ w, h, pw, ph }] — w/h = 스냅샷 비트맵 px, pw/ph = PDF 페이지 포인트.
+     *  SOFT_LIMIT 강등으로 요청(maxDim)보다 낮아진 실제 값을 배포본에 정직하게 기록하기 위함. */
+    lastSnapshotDims: null,
 
     /** 기기별 캔버스 면적 상한 (순수 함수 — 테스트 가능) */
     canvasPxCap(env) {
@@ -130,6 +148,33 @@
         mobile: /iP(hone|ad|od)|Android|Mobile/i.test(ua) || (touch > 1 && /Mac/i.test(navigator.platform || "")),
         deviceMemory: navigator.deviceMemory
       };
+    },
+
+    /** [P14] 스냅샷 비트맵이 현재 배율을 감당하는가 = 원본을 지연 로드할 때인가 (순수 함수).
+     *  snapPx : 배포본에 기록된(또는 <img>.naturalWidth 로 실측한) 스냅샷 가로 픽셀
+     *  cssPx  : 화면 1배(zoom=1)에서 그 스냅샷이 차지하는 CSS 가로 픽셀
+     *  zoom   : 현재 CSS 확대 배율
+     *  크기를 모르면(0) 받지 않는다 — 불필요한 다운로드 0 이 기본값이다. */
+    needsSourceRerender(o) {
+      const opt = o || {};
+      const snapPx = Number(opt.snapPx) || 0;
+      const cssPx  = Number(opt.cssPx)  || 0;
+      const zoom   = Number(opt.zoom)   || 0;
+      if (!(snapPx > 0) || !(cssPx > 0) || !(zoom > 0)) return false;
+      const gain = Number(opt.gain) || this.SOURCE_GAIN;
+      return (cssPx * zoom) > (snapPx * gain);
+    },
+
+    /** [P14] 크롭 오버레이를 얹을 "바탕" 요소 — 전면 PDF 캔버스(편집) 또는 배포 스냅샷 <img>(뷰어).
+     *  [근본원인] 종전엔 #pdf-canvas 만 보고 없으면 즉시 반환했다. 뷰어는 스냅샷 <img> 를
+     *  그리므로 재래스터 경로 자체에 진입하지 못했고, 확대하면 비트맵이 늘어나 뭉갰다. */
+    _baseEl() {
+      if (typeof document === "undefined") return null;
+      const cv = document.getElementById("pdf-canvas");
+      if (cv && !cv.classList.contains("hidden")) return cv;
+      const img = document.getElementById("map-image");
+      if (img && !img.classList.contains("hidden")) return img;
+      return null;
     },
 
     /** 캔버스 상한으로 렌더 스케일을 자른다 (순수 함수) */
@@ -184,6 +229,7 @@
       this._renderState.pageNum = pageNum;
       this._renderState.rotation = rotation;
       this._renderState.baseCssScale = baseCss;
+      this._renderState.overlayOnly = false;   // 전면 캔버스를 직접 그리는 경로(편집모드 PDF)
       // 첫 렌더 해상도: 초기 화질 확보를 위해 scale(권장 1.5)×dpr 로 미리 선명하게.
       // 이후 줌인하면 requestZoomRerender 가 더 높은 해상도로 재래스터화한다.
       const initRender = Math.max(1, scale) * dpr;
@@ -225,8 +271,8 @@
     requestZoomRerender(zoom, delayMs) {
       const st = this._renderState;
       if (!st.pdfDoc) return;
-      const canvas = document.getElementById("pdf-canvas");
-      if (!canvas || canvas.classList.contains("hidden")) { this._clearCrop(); return; }
+      const canvas = this._baseEl();
+      if (!canvas) { this._clearCrop(); return; }
       const dpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
       st.lastZoom = zoom;
       clearTimeout(st.pending);
@@ -243,6 +289,13 @@
             pageW: baseVp.width, pageH: baseVp.height,
             pxCap: this.canvasPxCap(this._env()), maxSide: this.MAX_SIDE_HARD
           });
+          // [P14] 바탕이 배포 스냅샷 <img> 면 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표 기준).
+          //   → 스냅샷보다 선명해질 때만 보이는 영역을 크롭 오버레이로 얹는다.
+          if (st.overlayOnly) {
+            if (plan.target > (st.renderScale || 0) * this.RERENDER_GAIN) await this.renderCrop(page, canvas, plan.target, rot);
+            else this._clearCrop();
+            return;
+          }
           // 전면 캔버스가 목표에 못 미치면(상한에 막힘) → 보이는 영역만 고해상도로 얹는다.
           if (plan.target > plan.capped * this.RERENDER_GAIN) {
             await this.renderCrop(page, canvas, plan.target, rot);
@@ -326,16 +379,23 @@
      *  PNG/JPEG 중 더 작은 쪽을 자동 선택한다. 너무 크면 단계적으로 해상도를 낮춰 D1 저장 안정성 확보. */
     async snapshotAllPages(pdfDoc, maxDim = 4096, quality = 0.92) {
       const out = [];
+      // [P14] 실제로 저장된 픽셀 크기를 기록한다 — SOFT_LIMIT 강등(dim*=0.8, 최대 4회)으로
+      //   요청 maxDim(4096)보다 훨씬 낮게 저장되는 경우가 있고, 뷰어는 그 값을 알아야
+      //   "언제 원본이 필요한지"를 추측이 아니라 사실로 판정할 수 있다.
+      const dims = [];
+      this.lastSnapshotDims = null;
       const SOFT_LIMIT = 2_600_000; // dataURL 문자수 상한 (≈2MB) — 초과 시 해상도 자동 강등
       for (let p = 1; p <= pdfDoc.numPages; p++) {
         const page = await pdfDoc.getPage(p);
         const base = page.getViewport({ scale: 1 });
+        const px = { w: 0, h: 0, pw: Math.round(base.width), ph: Math.round(base.height) };
         let dim = maxDim, q = quality, data = null;
         for (let attempt = 0; attempt < 4; attempt++) {
           const scale = Math.min(dim / Math.max(base.width, base.height), 4);
           const vp = page.getViewport({ scale });
           const cv = document.createElement("canvas");
           cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+          px.w = cv.width; px.h = cv.height;   // 이 시도가 채택되면 이 값이 최종 저장 픽셀
           const ctx = cv.getContext("2d", { alpha: false });
           ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
           await page.render({ canvasContext: ctx, viewport: vp }).promise;
@@ -348,7 +408,9 @@
           dim = Math.round(dim * 0.8); q = Math.max(0.8, q - 0.04);
         }
         out.push(data);
+        dims.push(px);
       }
+      this.lastSnapshotDims = dims;
       return out;
     }
   };
