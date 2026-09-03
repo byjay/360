@@ -270,8 +270,65 @@
       return this._filter;
     },
 
-    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 */
-    isVisible(pin) { return !!this.filter()[this.kindOf(pin)]; },
+    /** 핀의 아이콘 종류 id (없으면 기본 number) — PinIcons.SET 의 id 와 1:1 */
+    iconOf(pin) { return (pin && pin.icon) || "number"; },
+
+    /* ══ 종류(아이콘) 필터 — [마스터 요청 2026-09-03] 계열(kind) 필터와 별도 축.
+       둘 다 걸어야 보인다(AND) — 같은 SoT 원칙으로 도면·미니맵 양쪽이 이 함수 하나만 본다. */
+    ICON_FILTER_KEY: "wm-pin-icon-filter",
+    _iconFilter: null,
+
+    /** 아이콘별 표시 상태 맵 { iconId: boolean }. 키가 없으면 표시(기본 전체 표시). */
+    iconFilter() {
+      if (!this._iconFilter) {
+        this._iconFilter = {};
+        try {
+          const raw = localStorage.getItem(this.ICON_FILTER_KEY);
+          if (raw) { const v = JSON.parse(raw); if (v && typeof v === "object") this._iconFilter = v; }
+        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
+      }
+      return this._iconFilter;
+    },
+
+    /** 페이지 내 아이콘 종류별 핀 개수 (칩 배지·존재하는 종류만 노출 판단용) */
+    iconCounts(pins, page) {
+      const pg = page || 1;
+      const c = {};
+      (pins || []).forEach(p => {
+        if (!p || (p.page || 1) !== pg) return;
+        const id = this.iconOf(p);
+        c[id] = (c[id] || 0) + 1;
+      });
+      return c;
+    },
+
+    isIconVisible(pin) { return this.iconFilter()[this.iconOf(pin)] !== false; },
+
+    isIconAll(presentIds) {
+      const f = this.iconFilter();
+      return (presentIds || []).every(id => f[id] !== false);
+    },
+
+    /** presentIds = 현재 페이지에 실제 존재하는 아이콘 id 목록(칩에 뜬 것들만).
+     *  마지막 하나를 끄면 kind 필터와 동일하게 "그것만 보기"로 해석(전체 숨김 금지). */
+    toggleIconFilter(iconId, presentIds) {
+      const f = this.iconFilter();
+      const next = Object.assign({}, f);
+      next[iconId] = (f[iconId] === false) ? true : false;
+      const anyVisible = (presentIds || []).some(id => next[id] !== false);
+      if (!anyVisible) (presentIds || []).forEach(id => { next[id] = (id === iconId); });
+      this._iconFilter = next;
+      this._persistIcon();
+    },
+
+    showAllIcons() { this._iconFilter = {}; this._persistIcon(); },
+
+    _persistIcon() {
+      try { localStorage.setItem(this.ICON_FILTER_KEY, JSON.stringify(this.iconFilter())); } catch (e) {}
+    },
+
+    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND) */
+    isVisible(pin) { return !!this.filter()[this.kindOf(pin)] && this.isIconVisible(pin); },
 
     isAll() { const f = this.filter(); return this.KINDS.every(k => f[k]); },
 
@@ -321,16 +378,45 @@
         '<span class="zpager-cnt">' + n + '</span></button>';
       let html = chip("all", "전체", c.all, this.isAll());
       this.KINDS.forEach(k => { if (c[k]) html += chip(k, this.LABELS[k], c[k], !!f[k]); });
+
+      // ── [마스터 요청 2026-09-03] 종류(아이콘) 필터 칩 — 계열 칩과 별도 축, 공존.
+      //   실제 페이지에 존재하는 종류만(0개 종류는 빈 화면만 준다) · 2종 이상일 때만(1종뿐이면
+      //   거를 게 없어 무의미한 칩이 된다 — YAGNI).
+      const ic = this.iconCounts(pins, page);
+      const presentIds = Object.keys(ic);
+      if (presentIds.length > 1 && typeof PinIcons !== "undefined") {
+        const iflt = this.iconFilter();
+        // 🔴 새 CSS 클래스 없이(.pinfilter-dot 은 9px 원+kind별 배경색 전제) — 인라인 스타일로
+        //   14px 사각 뱃지 안에 실제 아이콘 SVG 를 넣어 종류를 한눈에 구분(§CSS 미신설 보고 대상).
+        const dotStyle = 'style="width:14px;height:14px;border-radius:4px;box-shadow:none;' +
+          'background:rgba(255,255,255,.14);display:inline-flex;align-items:center;justify-content:center;color:inherit"';
+        const iconChip = (iconId, label, n, on) =>
+          '<button type="button" class="zpager-tab pinfilter-chip pf-icon-flt' + (on ? " active" : "") +
+          '" data-icon="' + iconId + '" aria-pressed="' + (on ? "true" : "false") +
+          '" title="' + label + ' 만 보기"><span class="pinfilter-dot" ' + dotStyle + ' aria-hidden="true">' +
+          (iconId === "all" ? "" : PinIcons.chipSvg(iconId, 11)) + '</span>' + label +
+          '<span class="zpager-cnt">' + n + '</span></button>';
+        html += iconChip("all", "전체", c.all, this.isIconAll(presentIds));
+        presentIds.forEach(id => { html += iconChip(id, PinIcons.def(id).name, ic[id], iflt[id] !== false); });
+      }
+
       host.innerHTML = html;
       if (!this._chipsBound) {
         this._chipsBound = true;
         host.addEventListener("click", (e) => {
-          const btn = e.target && e.target.closest ? e.target.closest("[data-kind]") : null;
+          const btn = e.target && e.target.closest ? e.target.closest("[data-kind],[data-icon]") : null;
           if (!btn) return;
           e.stopPropagation();
-          const kind = btn.dataset.kind;
-          if (kind === "all") this.showAll(); else this.toggle(kind);
-          this.apply();
+          if (btn.dataset.kind) {
+            const kind = btn.dataset.kind;
+            if (kind === "all") this.showAll(); else this.toggle(kind);
+          } else if (btn.dataset.icon) {
+            const page2 = (typeof State !== "undefined" && State.pdfPage) || 1;
+            const presentIds2 = Object.keys(this.iconCounts((typeof State !== "undefined" && State.pins) || [], page2));
+            const iconId = btn.dataset.icon;
+            if (iconId === "all") this.showAllIcons(); else this.toggleIconFilter(iconId, presentIds2);
+          }
+          this.apply(); // UI.renderPinsOnMap()이 renderChips()도 함께 호출해 칩 active 상태를 갱신한다
         });
       }
     },
@@ -1704,13 +1790,8 @@
         if (db && stage) {
           db.addEventListener("click", (e) => {
             e.stopPropagation();
-            this._dirAdjust = !this._dirAdjust;
-            db.classList.toggle("active", this._dirAdjust);
-            db.title = this._dirAdjust ? "방향 조절 끄기" : "미니맵에서 방향 조절";
-            box.classList.toggle("dir-adjust-mode", this._dirAdjust);
-            if (this._dirAdjust && typeof Prompt !== "undefined" && Prompt.toast) {
-              Prompt.toast("지금 보고 있는 방향을 도면에서 클릭하세요 (예: 선수 방향)");
-            }
+            if (this._dirAdjust) this.exitDirAdjustMode();
+            else this.enterDirAdjustMode();
           });
           this._bindDirClick(stage, db, box);
           this._dirBound = true;
@@ -1814,6 +1895,40 @@
       box.classList.remove("hidden");
     },
 
+    /** [마스터] 방향 지정 모드 진입 — #btn-pano-setdir(파노 컨트롤바) / #pano-radar-dir(미니맵) 공용 진입점.
+     *  🔴 여기서는 "진입"만 한다 — 완료 토스트는 _commitAngle()에서 실제 클릭 확정 후에만 띄운다(조기 완료 선언 금지).
+     *  미니맵이 없거나 아직 표시되지 않은 상태(핀을 안 열었음)면 클릭할 대상이 없으므로 조용히 실패하지 않고 사유를 알린다. */
+    enterDirAdjustMode() {
+      const box = document.getElementById("pano-radar");
+      const stage = document.getElementById("pano-radar-stage");
+      if (!box || !stage) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("미니맵을 표시할 수 없습니다");
+        return false;
+      }
+      if (box.classList.contains("hidden")) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("먼저 핀을 열어 미니맵을 표시하세요");
+        return false;
+      }
+      box.classList.remove("collapsed"); // 접혀 있으면 펼쳐서 클릭 대상 확보
+      this._dirAdjust = true;
+      const db = document.getElementById("pano-radar-dir");
+      if (db) { db.classList.add("active"); db.title = "방향 조절 끄기"; }
+      box.classList.add("dir-adjust-mode");
+      if (typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast("도면에서 선수(오른쪽) 방향을 클릭하세요");
+      }
+      return true;
+    },
+
+    /** 방향 지정 모드 종료(사용자가 토글로 끔 — 클릭 확정 없이 취소) */
+    exitDirAdjustMode() {
+      this._dirAdjust = false;
+      const box = document.getElementById("pano-radar");
+      const db = document.getElementById("pano-radar-dir");
+      if (db) { db.classList.remove("active"); db.title = "미니맵에서 방향 조절"; }
+      if (box) box.classList.remove("dir-adjust-mode");
+    },
+
     /** 시야 방향(yaw=lon) + FOV에 맞춰 부채꼴 회전/너비 */
     spin(lon, fov) {
       const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
@@ -1848,9 +1963,7 @@
         e.preventDefault(); e.stopPropagation();
         this._commitAngle(angleFromEvent(e));
         // 클릭 1회로 완료 — 방향 조절 모드 자동 종료
-        this._dirAdjust = false;
-        if (db) { db.classList.remove("active"); db.title = "미니맵에서 방향 조절"; }
-        if (box) box.classList.remove("dir-adjust-mode");
+        this.exitDirAdjustMode();
       });
     },
 
@@ -6170,6 +6283,9 @@
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         else { const pbBtn = UI.$("btn-checkboard-photobatch"); if (pbBtn) pbBtn.classList.add("hidden"); }
+        // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
+        //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
+        if (isDesigner) App._renderIconPicker("cb-icon-grid", "cb-icon-label");
       } catch (e) {}
       if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
@@ -6816,16 +6932,25 @@
       panel.classList.add("pf-in");
     },
 
-    /** [마스터 요청] 핀 아이콘 선택 그리드 렌더 + 선택 상태 동기화 */
-    _renderIconPicker() {
-      const grid = UI.$("pf-icon-grid");
+    /** [마스터 요청] 핀 아이콘 선택 그리드 렌더 + 선택 상태 동기화.
+     *  [마스터 요청 2026-09-03] 배치 모드(체크보드 연속 배치)에서도 재사용하도록 일반화:
+     *  gridId(기본 pf-icon-grid) + labelId(있으면 "현재: OO" 로 갱신)를 받는다.
+     *  두 그리드 모두 같은 State.pendingIcon 을 공유 — 한 번 고르면 다음 배치까지 유지된다. */
+    _renderIconPicker(gridId, labelId) {
+      gridId = gridId || "pf-icon-grid";
+      const grid = UI.$(gridId);
       if (!grid || typeof PinIcons === "undefined") return;
       const cur = State.pendingIcon || "number";
+      grid._labelId = labelId || grid._labelId;
       grid.innerHTML = PinIcons.SET.map(it =>
         `<button type="button" class="pf-icon-chip${it.id === cur ? " active" : ""}" ` +
         `data-icon="${it.id}" title="${it.name}" aria-label="${it.name}" ` +
         `aria-pressed="${it.id === cur ? "true" : "false"}">${PinIcons.chipSvg(it.id)}</button>`
       ).join("");
+      if (grid._labelId) {
+        const lbl = UI.$(grid._labelId);
+        if (lbl) lbl.textContent = "아이콘 종류 (현재: " + PinIcons.def(cur).name + ")";
+      }
       // 위임 바인딩(중복 방지)
       if (!grid._iconBound) {
         grid.addEventListener("click", (e) => {
@@ -6837,6 +6962,10 @@
             c.classList.toggle("active", on);
             c.setAttribute("aria-pressed", on ? "true" : "false");
           });
+          if (grid._labelId) {
+            const lbl = UI.$(grid._labelId);
+            if (lbl) lbl.textContent = "아이콘 종류 (현재: " + PinIcons.def(State.pendingIcon).name + ")";
+          }
         });
         grid._iconBound = true;
       }
@@ -7380,6 +7509,9 @@
       const start = this._checkboardStart(curPage);
       const no = PinSeries.nextCheckboardNo(State.pins, curPage, start);
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
+      //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
+      if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       State.pins.push(pin);
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
       State.activePin = pin.id;
@@ -7559,15 +7691,13 @@
       // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
-      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 오른쪽(3시)" 기준으로 저장
-      // Radar.spin()의 effectiveLon = lon - dirOffset, rotate(effectiveLon deg)는 CSS 기준 시계방향(0deg=위/북, 90deg=오른쪽/동).
-      // 사용자가 지금 보는 방향을 "오른쪽"으로 지정 → effectiveLon이 90이 되어야 하므로 dirOffset = lon - 90.
+      // [마스터: 방향 설정 = 도면에서 직접 클릭] 이 버튼은 "지정 완료"를 즉시 선언하지 않는다.
+      // 미니맵 클릭 대기 모드(#pano-radar-dir 과 동일 모드, Radar._dirAdjust)로 진입만 시키고,
+      // 실제 방향(pin.dirOffset) 저장과 완료 토스트는 사용자가 미니맵을 클릭한 뒤 Radar._commitAngle()에서만 일어난다.
       UI.$("btn-pano-setdir") && UI.$("btn-pano-setdir").addEventListener("click", () => {
         const pin = PanoViewer._currentPin;
         if (!pin) return;
-        pin.dirOffset = PanoViewer.S.lon - 90;
-        this._autoSave && this._autoSave();
-        Prompt && Prompt.toast && Prompt.toast("오른쪽 방향이 지정되었습니다");
+        if (typeof Radar !== "undefined" && Radar.enterDirAdjustMode) Radar.enterDirAdjustMode();
       });
       // [마스터: 구면 마커] 추가 모드 토글
       // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드
@@ -10563,13 +10693,15 @@
                  stroke-linecap="round" stroke-linejoin="round">${d.body}</g>`;
     },
 
-    /** 선택 그리드용 미리보기 칩(24x24 단독 SVG) */
-    chipSvg(iconId) {
+    /** 선택 그리드용 미리보기 칩(24x24 단독 SVG).
+     *  @param {number} [size] 명시 시 width/height 속성 부여(필터 칩처럼 CSS 그리드 밖에서 쓸 때). */
+    chipSvg(iconId, size) {
       const d = this.def(iconId);
+      const sz = size ? ` width="${size}" height="${size}"` : "";
       if (!d.body) {
-        return `<svg viewBox="0 0 24 24" aria-hidden="true"><text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="currentColor">#</text></svg>`;
+        return `<svg viewBox="0 0 24 24"${sz} aria-hidden="true"><text x="12" y="12" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="currentColor">#</text></svg>`;
       }
-      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      return `<svg viewBox="0 0 24 24"${sz} fill="none" stroke="currentColor" stroke-width="2"
                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d.body}</svg>`;
     }
   };
@@ -12587,6 +12719,9 @@
     TOAST_MAX: 2,
     /** 가벼운 토스트 알림 (화면 하단 중앙, 자동 소멸) */
     toast(msg, ms) {
+      // [빈 토스트 방지] 빈/undefined/공백 메시지는 내용 없는 검은 상자만 띄우므로 무시.
+      const text = (msg === undefined || msg === null) ? "" : String(msg).trim();
+      if (!text) return;
       let host = document.getElementById("wm-toast-host");
       if (!host) {
         host = document.createElement("div");
@@ -12608,14 +12743,14 @@
         }, dur);
       };
       // ① 같은 메시지가 이미 떠 있으면 새로 쌓지 말고 수명만 연장(중복 스택 차단)
-      const dup = Array.prototype.filter.call(host.children, (n) => n.dataset && n.dataset.wmMsg === String(msg))[0];
+      const dup = Array.prototype.filter.call(host.children, (n) => n.dataset && n.dataset.wmMsg === text)[0];
       if (dup) { arm(dup, life); return; }
       // ② 캡 초과분은 가장 오래된 것부터 즉시 제거 — 어떤 호출부가 남아 있어도 무한 스택 불가
       while (host.children.length >= this.TOAST_MAX) kill(host.firstElementChild);
       const t = document.createElement("div");
       t.className = "wm-toast";
-      t.textContent = msg;
-      t.dataset.wmMsg = String(msg);
+      t.textContent = text;
+      t.dataset.wmMsg = text;
       host.appendChild(t);
       requestAnimationFrame(() => t.classList.add("on"));
       arm(t, life);
