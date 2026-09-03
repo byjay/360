@@ -1777,6 +1777,13 @@
   ══════════════════════════════════════════ */
   const FLS = {
     MAX_POINTS: 1_800_000,     // 렌더 안정 상한 (초과 시 균등 다운샘플)
+    // [정본] E57 대용량 메모리 가드 — 실측(커밋 017e532, build-tools/e57-realfile-check.mjs):
+    //   PANOPI_Panopi301.e57  51.9MB → 파싱 중 rss 178MB (3.43배)
+    //   PANOPI_scan101.e57   219.2MB → 파싱 중 rss 604MB (2.76배)
+    // 모바일 브라우저는 탭 메모리가 수백MB~1GB대에서 강제 종료된다(현장 폰에서 쓰는 PWA).
+    // 배율은 실측 상한(3.43배)을 반올림해 보수적으로 잡는다 — 추정치임을 문구에도 명시한다.
+    E57_LARGE_FILE_BYTES: 100 * 1024 * 1024,   // 100MB 초과 시 경고(추정 메모리 ≈350MB)
+    E57_MEM_MULTIPLIER: 3.5,
     renderer: null, scene: null, camera: null, points: null,
     _raf: null, _drag: null, _rot: { theta: 0.6, phi: 1.1, r: 3 },
     _target: { x: 0, y: 0, z: 0 }, _inited: false, _ro: null,
@@ -1837,18 +1844,47 @@
       if (eh) eh.textContent = h || "";
     },
 
+    /** 저사양 기기면 임계값을 낮춘다(navigator.deviceMemory 없는 브라우저도 정상 동작 — 그때는 기본값 그대로) */
+    _e57Threshold() {
+      const dm = (typeof navigator !== "undefined" && typeof navigator.deviceMemory === "number")
+        ? navigator.deviceMemory : null;
+      // deviceMemory(GB) 4 이하 = 저사양(주로 모바일) — 임계값 절반으로
+      return (dm != null && dm <= 4) ? this.E57_LARGE_FILE_BYTES / 2 : this.E57_LARGE_FILE_BYTES;
+    },
+
+    /** 파일 크기 → 경고 필요 여부 + 안내 문구(순수 함수, DOM 의존 없음 — 테스트 가능) */
+    _e57SizeWarning(byteLength) {
+      const threshold = this._e57Threshold();
+      if (byteLength <= threshold) return null;
+      const mb = (n) => (n / (1024 * 1024)).toFixed(1);
+      const estMb = mb(byteLength * this.E57_MEM_MULTIPLIER);
+      return "대용량 E57 파일입니다 (" + mb(byteLength) + "MB) — 파싱 중 메모리 사용량이 약 " + estMb
+        + "MB 까지 늘어날 수 있습니다(실측 배율 기반 추정치, 실제 값은 파일 내용에 따라 다를 수 있음). "
+        + "모바일/저사양 기기에서는 브라우저 탭이 강제 종료될 수 있습니다. 계속하시겠습니까?";
+    },
+
+    /** 대용량 확인 다이얼로그(기존 UI 패턴 재사용 — window.confirm) */
+    _confirmLargeE57(msg) {
+      return (typeof window !== "undefined" && typeof window.confirm === "function") ? window.confirm(msg) : true;
+    },
+
     /** ArrayBuffer + 파일명 → 파싱 후 렌더 */
     async loadBuffer(buf, name) {
       const ext = this.extOf(name);
       const badge = this._el("fls-fmt-badge");
       if (badge) badge.textContent = ext ? ("." + ext) : "";
+      if (ext === "e57") {
+        const warn = this._e57SizeWarning(buf.byteLength);
+        if (warn && !this._confirmLargeE57(warn)) { this._show("fls-empty"); return; }
+      }
       let parsed = null;
       try {
         if (ext === "ply") parsed = this._parsePLY(buf);
         else if (ext === "pcd") parsed = this._parsePCD(buf);
         else if (["xyz", "pts", "asc", "txt"].includes(ext)) parsed = this._parseXYZ(buf);
         else if (ext === "las" || ext === "laz") parsed = this._parseLAS(buf, ext);
-        else if (ext === "fls" || ext === "e57") parsed = this._parseFLS(buf, ext);
+        else if (ext === "e57") parsed = this._parseE57(buf);
+        else if (ext === "fls") parsed = this._parseFLS(buf, ext);
         else parsed = this._sniff(buf);
       } catch (e) {
         return this._showError("파싱 실패", (e && e.message) || "지원되지 않는 형식일 수 있습니다.");
@@ -1867,20 +1903,14 @@
               + (m.lib ? ` · iQLib ${m.lib}` : "") + ". ";
           }
           return this._showError(
-            ".fls(FARO 원시) 직접 표시 불가 — E57/LAS로 변환 필요",
+            ".fls(FARO 스캔 폴더) 직접 표시 불가 — E57로 내보내면 바로 열립니다",
             metaLine +
-            "FARO .fls 의 스캔 스트림은 독점 압축($ENC$·$NES$·$GRV$)이라 SDK 없이는 좌표 디코딩이 불가합니다. " +
-            "FARO SCENE에서 [내보내기 → E57(또는 LAS/LAZ/PLY)]로 변환해 다시 첨부하면 즉시 3D로 표시됩니다. " +
+            "FARO .fls 는 단일 파일이 아니라 폴더 컨테이너입니다(실측: Scans/<n>/ScanDataStream0 = 원시 스캔 스트림, " +
+            "Params·Calib = 텍스트 설정, ReferencePicture = JPEG 미리보기). 스캔 스트림은 독점 압축($ENC$·$NES$·$GRV$)이라 " +
+            "FARO LS SDK 없이는 좌표 디코딩이 불가하고, 폴더 전체를 브라우저로 올릴 수도 없습니다. " +
+            "FARO SCENE에서 [내보내기 → E57]로 변환해 첨부하세요 — E57은 이 뷰어가 직접 지원합니다(LAS/PLY도 가능). " +
             "(SCENE이 없으면 CloudCompare + FARO LS 플러그인으로도 변환 가능합니다.) " +
             "지금 기능을 바로 보시려면 아래 ‘샘플 FLS 불러오기’를 누르세요."
-          );
-        }
-        if (ext === "e57") {
-          // ── 요청 #9: E57 도 실패 → 둘 다 안 되면 포기(추가 변환 안내) ──
-          return this._showError(
-            "2단계: .e57 로드 실패 — 추가 변환이 필요합니다",
-            "이 .e57 컨테이너는 직접 파싱이 어렵습니다. CloudCompare 등에서 .las/.laz/.ply/.pcd 로 다시 내보내 첨부해 주세요. " +
-            "변환본도 열리지 않으면 해당 스캔의 3D 표시는 지원되지 않습니다(포기)."
           );
         }
         return this._showError("표시할 점이 없습니다", "파일이 비었거나 좌표 데이터를 찾지 못했습니다.");
@@ -2068,6 +2098,299 @@
         k++;
       }
       return this._decim(pos.subarray(0, k * 3), col ? col.subarray(0, k * 3) : null);
+    },
+
+    /* ══ E57 (ASTM E2807) ══════════════════════════════════════════════════
+       [정본] 포맷 상수·주소 변환·논리바이트 읽기는 아래 E57 / _e57* 한 곳에만 둔다(손목록 복제 금지).
+       ① 파일 전체가 pageSize 바이트 페이지로 나뉘고 **각 페이지 끝 4B 는 CRC** — 논리 데이터가 아니다.
+          물리 오프셋에서 읽으려면 페이지마다 CRC 를 건너뛰며 이어붙여야 한다(_e57Usable / _e57ReadLogical).
+          빠뜨리면 XML 도 좌표도 "조용히" 깨진다.
+       ② XML 안에 <prototype> 이 여러 개다(색인용 CompressedVector 가 앞에 온다).
+          반드시 <points type="CompressedVector"> **뒤에 오는** prototype 을 써야 한다(_e57Prototype).
+       ③ 각 바이트스트림 = 그 필드 값들을 LSB 우선으로 비트팩한 것. 값이 패킷 경계를 걸칠 수 있다
+          (실측: 2bit 필드 2139개 = 534.75B → 534B 만 실리고 남은 비트는 다음 패킷으로 넘어감).
+          → 스트림별 잔여 비트를 이어붙이고, 모든 스트림이 공급 가능한 개수(min)만큼만 레코드를 푼다.
+       ④ 대용량(224MB+) 대비: 앞에서부터 순차로 읽으며 MAX_POINTS 에 닿으면 즉시 중단하고,
+          recordCount > MAX_POINTS 면 stride 로 균등 다운샘플한다. 버려질 레코드는 값을 풀지 않고
+          비트 위치만 건너뛴다(디코딩 비용 O(필드수), 메모리는 항상 상한 이하).
+    */
+    E57: {
+      SIG: "ASTM-E57",
+      HEADER_BYTES: 48,              // sig(8) major(4) minor(4) fileLength(8) xmlPhys(8) xmlLen(8) pageSize(8)
+      CRC_BYTES: 4,                  // 페이지 끝 CRC
+      DEFAULT_PAGE: 1024,
+      SECTION_HEADER_BYTES: 32,      // id(1) 예약(7) 논리길이(8) dataPhys(8) indexPhys(8)
+      SECTION_ID_CV: 1,              // COMPRESSED_VECTOR_SECTION
+      PACKET_HEADER_BYTES: 6,        // type(1) flags(1) len-1(2) bytestreamCount(2)
+      PACKET_DATA: 1,                // 0=index, 1=data, 2=empty
+      // prototype 필드명 → 역할(숫자). 모르는 필드는 0(비트만 소비하고 버림).
+      ROLE: {
+        cartesianX: 1, cartesianY: 2, cartesianZ: 3,
+        colorRed: 4, colorGreen: 5, colorBlue: 6,
+        cartesianInvalidState: 7, sphericalInvalidState: 7,
+        sphericalRange: 8, sphericalAzimuth: 9, sphericalElevation: 10
+      }
+    },
+
+    /** 한 페이지에서 실제 데이터가 담기는 바이트 수(끝 4B 는 CRC) — CRC 처리의 정본 */
+    _e57Usable(pageSize) { return pageSize - this.E57.CRC_BYTES; },
+    /** 논리 주소 → 물리 주소 */
+    _e57PhysOf(logical, pageSize) {
+      const u = this._e57Usable(pageSize);
+      return Math.floor(logical / u) * pageSize + (logical % u);
+    },
+    /** 물리 주소 → 논리 주소 */
+    _e57LogicalOf(phys, pageSize) {
+      const u = this._e57Usable(pageSize);
+      return Math.floor(phys / pageSize) * u + Math.min(phys % pageSize, u);
+    },
+    /** 물리 오프셋 phys 에서 논리 바이트 len 개를 읽는다(페이지 CRC 건너뜀). 파일 끝이면 짧게 반환. */
+    _e57ReadLogical(u8, phys, len, pageSize) {
+      const out = new Uint8Array(len);
+      const u = this._e57Usable(pageSize);
+      let got = 0, p = phys;
+      while (got < len) {
+        const ps = Math.floor(p / pageSize) * pageSize, ip = p - ps;
+        const want = Math.min(u - ip, len - got);
+        if (want <= 0) break;
+        const end = Math.min(p + want, u8.length);
+        if (end <= p) break;
+        out.set(u8.subarray(p, end), got);
+        got += end - p;
+        if (end < p + want) break;          // 파일 끝(잘림)
+        p = ps + pageSize;
+      }
+      return got === len ? out : out.subarray(0, got);
+    },
+
+    /** E57 헤더(48B) 판독 */
+    _e57Header(buf) {
+      const E = this.E57;
+      if (buf.byteLength < E.HEADER_BYTES) throw new Error("E57 헤더(48B)보다 파일이 작습니다.");
+      const head = new Uint8Array(buf, 0, 8);
+      let sig = "";
+      for (let i = 0; i < 8; i++) sig += String.fromCharCode(head[i]);
+      if (sig !== E.SIG) throw new Error('E57 서명("' + E.SIG + '")이 없습니다 — 확장자만 .e57 인 다른 파일일 수 있습니다.');
+      const dv = new DataView(buf);
+      const u64 = (o) => dv.getUint32(o, true) + dv.getUint32(o + 4, true) * 4294967296;
+      const pageSize = u64(40) || E.DEFAULT_PAGE;
+      if (pageSize <= E.CRC_BYTES) throw new Error("E57 pageSize 값이 비정상입니다: " + pageSize);
+      return {
+        major: dv.getUint32(8, true), minor: dv.getUint32(12, true),
+        fileLength: u64(16), xmlPhysOffset: u64(24), xmlLength: u64(32), pageSize
+      };
+    },
+
+    /** points 태그 **뒤**의 prototype 에서 필드 정의를 뽑는다(손목록 금지 — 파일이 정본) */
+    _e57Prototype(xml, tagIndex) {
+      const from = tagIndex >= 0 ? tagIndex : 0;
+      const s0 = xml.indexOf("<prototype", from);     // ← 반드시 points 태그 뒤에서 찾는다(앞엣것은 색인용)
+      const s1 = s0 < 0 ? -1 : xml.indexOf("</prototype>", s0);
+      if (s0 < 0 || s1 < 0) throw new Error("E57 prototype 을 찾지 못했습니다.");
+      const block = xml.slice(s0, s1);
+      const ROLE = this.E57.ROLE;
+      const fields = [];
+      const re = /<(\w+)\s+type="(Float|Integer|ScaledInteger)"([^>]*?)\/?>/g;
+      let m;
+      while ((m = re.exec(block))) {
+        const name = m[1], type = m[2], at = m[3];
+        const attr = (k) => {
+          const a = at.match(new RegExp(k + '="(-?[0-9.eE+-]+)"'));
+          return a ? Number(a[1]) : null;
+        };
+        let f;
+        if (type === "Float") {
+          f = { name, type, bits: /precision="single"/.test(at) ? 32 : 64 };
+        } else {
+          const min = attr("minimum"), max = attr("maximum");
+          if (min === null || max === null || !isFinite(min) || !isFinite(max) || max < min)
+            throw new Error("E57 prototype 필드 " + name + " 에 minimum/maximum 이 없어 비트폭을 알 수 없습니다.");
+          const range = max - min;
+          const bits = range <= 0 ? 0 : Math.ceil(Math.log2(range + 1));
+          if (bits > 53) throw new Error("E57 필드 " + name + " 의 비트폭(" + bits + ")이 너무 큽니다.");
+          f = { name, type, bits, min, max };
+          if (type === "ScaledInteger") { f.scale = attr("scale") || 1; f.offset = attr("offset") || 0; }
+        }
+        f.role = ROLE[name] || 0;
+        // 색 정규화 기준도 파일에서 파생(0~255 가 아닌 0~65535 스캐너가 있다)
+        if (f.role >= 4 && f.role <= 6) f.cnorm = (f.type === "Float") ? 1 : (f.max || 255);
+        fields.push(f);
+      }
+      if (!fields.length) throw new Error("E57 prototype 에 필드가 없습니다.");
+      return fields;
+    },
+
+    /** 한 스트림에 새 바이트를 이어붙인다(이미 소비한 바이트는 버리고 잔여 비트는 유지) */
+    _e57Feed(st, add) {
+      const keep = st.bit >> 3;
+      const rem = st.bytes.length - keep;
+      const nb = new Uint8Array(rem + add.length);
+      nb.set(st.bytes.subarray(keep), 0);
+      nb.set(add, rem);
+      st.bytes = nb;
+      st.bit = st.bit & 7;
+    },
+
+    /** LSB 우선 비트 읽기(n ≤ 32). 바이트 정렬이면 바이트 단위 고속 경로. */
+    _e57Bits(st, n) {
+      if (n === 0) return 0;
+      const b = st.bytes;
+      if ((st.bit & 7) === 0 && (n & 7) === 0) {
+        let o = st.bit >> 3, v = 0, mul = 1;
+        for (let i = 0; i < n; i += 8) { v += b[o++] * mul; mul *= 256; }
+        st.bit += n;
+        return v;
+      }
+      let v = 0, mul = 1;
+      for (let i = 0; i < n; i++) {
+        v += ((b[st.bit >> 3] >> (st.bit & 7)) & 1) * mul;
+        mul *= 2; st.bit++;
+      }
+      return v;
+    },
+
+    /** 필드 1개 값 디코딩 */
+    _e57Value(f, st, scratch) {
+      if (f.type === "Float") {
+        if (f.bits === 32) { scratch.setUint32(0, this._e57Bits(st, 32), true); return scratch.getFloat32(0, true); }
+        const lo = this._e57Bits(st, 32), hi = this._e57Bits(st, 32);
+        scratch.setUint32(0, lo, true); scratch.setUint32(4, hi, true);
+        return scratch.getFloat64(0, true);
+      }
+      const raw = f.bits <= 32
+        ? this._e57Bits(st, f.bits)
+        : this._e57Bits(st, 32) + this._e57Bits(st, f.bits - 32) * 4294967296;
+      const v = f.min + raw;
+      return f.type === "ScaledInteger" ? v * f.scale + f.offset : v;
+    },
+
+    /** ArrayBuffer(.e57) → { positions, colors, count } — _parsePLY/_parseLAS 와 동일 계약 */
+    _parseE57(buf) {
+      const u8 = new Uint8Array(buf);
+      const h = this._e57Header(buf);
+      const xmlBytes = this._e57ReadLogical(u8, h.xmlPhysOffset, h.xmlLength, h.pageSize);
+      if (!xmlBytes.length) throw new Error("E57 XML 섹션을 읽지 못했습니다(물리오프셋 " + h.xmlPhysOffset + ").");
+      const xml = new TextDecoder("utf-8").decode(xmlBytes);
+
+      // 스캔이 여러 개면 points CompressedVector 도 여러 개 → 순서대로 이어 읽는다
+      const secs = [];
+      const re = /<points\s[^>]*type="CompressedVector"[^>]*>/g;
+      let m;
+      while ((m = re.exec(xml))) {
+        const fo = m[0].match(/fileOffset="(\d+)"/);
+        if (!fo) continue;
+        const rc = m[0].match(/recordCount="(\d+)"/);
+        secs.push({ at: m.index, fileOffset: Number(fo[1]), recordCount: rc ? Number(rc[1]) : 0 });
+      }
+      if (!secs.length) throw new Error("E57 안에 점 데이터(<points type=\"CompressedVector\">)가 없습니다.");
+      secs.forEach(s => { s.fields = this._e57Prototype(xml, s.at); });
+
+      const total = secs.reduce((s, x) => s + x.recordCount, 0);
+      const cap = Math.min(this.MAX_POINTS, total || this.MAX_POINTS);
+      const hasColor = secs.some(s => s.fields.some(f => f.role >= 4 && f.role <= 6));
+      const sink = {
+        pos: new Float32Array(cap * 3),
+        col: hasColor ? new Float32Array(cap * 3) : null,
+        cap, kept: 0, invalid: 0,
+        stride: (total > this.MAX_POINTS) ? Math.ceil(total / this.MAX_POINTS) : 1
+      };
+      for (const s of secs) {
+        if (sink.kept >= cap) break;
+        this._e57ReadSection(u8, s, h.pageSize, sink);
+      }
+      if (!sink.kept) {
+        throw new Error("유효한 점을 찾지 못했습니다 (recordCount=" + total + ", 무효점 " + sink.invalid + "). "
+          + "좌표 필드(cartesianX/Y/Z 또는 sphericalRange)가 없거나 모두 무효 측정값일 수 있습니다.");
+      }
+      return this._decim(sink.pos.subarray(0, sink.kept * 3), sink.col ? sink.col.subarray(0, sink.kept * 3) : null);
+    },
+
+    /** CompressedVector 섹션 1개를 앞에서부터 스트리밍 디코딩해 sink 에 채운다 */
+    _e57ReadSection(u8, sec, pageSize, sink) {
+      const E = this.E57, fields = sec.fields, nf = fields.length;
+      const sh = this._e57ReadLogical(u8, sec.fileOffset, E.SECTION_HEADER_BYTES, pageSize);
+      if (sh.length < E.SECTION_HEADER_BYTES) throw new Error("E57 CompressedVector 섹션 헤더를 읽지 못했습니다.");
+      if (sh[0] !== E.SECTION_ID_CV) throw new Error("E57 섹션 id 가 CompressedVector(1)가 아닙니다: " + sh[0]);
+      const sdv = new DataView(sh.buffer, sh.byteOffset, sh.byteLength);
+      const dataPhys = sdv.getUint32(16, true) + sdv.getUint32(20, true) * 4294967296;
+
+      const cartesian = fields.some(f => f.role >= 1 && f.role <= 3);
+      const scratch = new DataView(new ArrayBuffer(8));
+      const streams = [];
+      for (let i = 0; i < nf; i++) streams.push({ bytes: new Uint8Array(0), bit: 0 });
+      const nRec = sec.recordCount;
+      let phys = dataPhys, done = 0;
+
+      while (sink.kept < sink.cap) {
+        if (nRec && done >= nRec) break;
+        if (phys >= u8.length) break;
+        const ph = this._e57ReadLogical(u8, phys, E.PACKET_HEADER_BYTES, pageSize);
+        if (ph.length < E.PACKET_HEADER_BYTES) break;
+        const packetLen = (ph[2] | (ph[3] << 8)) + 1;
+        if (packetLen < E.PACKET_HEADER_BYTES) throw new Error("E57 패킷 길이가 비정상입니다: " + packetLen);
+        const next = this._e57PhysOf(this._e57LogicalOf(phys, pageSize) + packetLen, pageSize);
+        if (ph[0] !== E.PACKET_DATA) { phys = next; continue; }   // index/empty 패킷은 건너뜀
+        const nStreams = ph[4] | (ph[5] << 8);
+        if (nStreams !== nf)
+          throw new Error("E57 바이트스트림 수(" + nStreams + ")가 prototype 필드 수(" + nf + ")와 다릅니다.");
+        const full = this._e57ReadLogical(u8, phys, packetLen, pageSize);
+        if (full.length < packetLen) break;                       // 잘린 파일 — 여기까지만
+        let cur = E.PACKET_HEADER_BYTES + nStreams * 2;
+        for (let i = 0; i < nStreams; i++) {
+          const o = E.PACKET_HEADER_BYTES + i * 2;
+          const len = full[o] | (full[o + 1] << 8);
+          this._e57Feed(streams[i], full.subarray(cur, cur + len));
+          cur += len;
+        }
+        // 모든 스트림이 공급 가능한 만큼만 푼다(값이 패킷 경계를 걸치므로 min)
+        let avail = Infinity;
+        for (let i = 0; i < nf; i++) {
+          const bits = fields[i].bits;
+          if (!bits) continue;
+          const a = Math.floor((streams[i].bytes.length * 8 - streams[i].bit) / bits);
+          if (a < avail) avail = a;
+        }
+        if (avail === Infinity) avail = nRec ? nRec - done : 0;
+        if (nRec) avail = Math.min(avail, nRec - done);
+        if (avail <= 0) { phys = next; continue; }
+
+        for (let n = 0; n < avail && sink.kept < sink.cap; n++) {
+          if (done % sink.stride !== 0) {          // 균등 다운샘플: 비트만 건너뛰고 값은 풀지 않는다
+            for (let i = 0; i < nf; i++) streams[i].bit += fields[i].bits;
+            done++;
+            continue;
+          }
+          let x = 0, y = 0, z = 0, r = 1, g = 1, b = 1, bad = 0, rng = 0, az = 0, el = 0;
+          for (let i = 0; i < nf; i++) {
+            const f = fields[i], v = this._e57Value(f, streams[i], scratch);
+            switch (f.role) {
+              case 1: x = v; break;
+              case 2: y = v; break;
+              case 3: z = v; break;
+              case 4: r = v / f.cnorm; break;
+              case 5: g = v / f.cnorm; break;
+              case 6: b = v / f.cnorm; break;
+              case 7: if (v !== 0) bad = 1; break;
+              case 8: rng = v; break;
+              case 9: az = v; break;
+              case 10: el = v; break;
+              default: break;                      // 모르는 필드 — 비트만 소비
+            }
+          }
+          done++;
+          if (bad) { sink.invalid++; continue; }
+          if (!cartesian) {                        // 구면좌표 스캔 → 직교로 변환(E57 규격)
+            const c = Math.cos(el);
+            x = rng * c * Math.cos(az); y = rng * c * Math.sin(az); z = rng * Math.sin(el);
+          }
+          if (!isFinite(x) || !isFinite(y) || !isFinite(z)) { sink.invalid++; continue; }
+          const k = sink.kept;
+          sink.pos[k * 3] = x; sink.pos[k * 3 + 1] = y; sink.pos[k * 3 + 2] = z;
+          if (sink.col) { sink.col[k * 3] = r; sink.col[k * 3 + 1] = g; sink.col[k * 3 + 2] = b; }
+          sink.kept++;
+        }
+        phys = next;
+      }
     },
 
     _parseFLS(buf, ext) {
@@ -5431,6 +5754,9 @@
       if (typeof UserMgmt !== "undefined") UserMgmt.init();
       if (typeof ThetaIntake !== "undefined") ThetaIntake.init();
       if (typeof PdfPopup !== "undefined") PdfPopup.init();
+      // [고아 방지] 35_PhotoBatch 는 자체 init() 안에서만 버튼을 바인딩한다 —
+      //   여기서 부르지 않으면 번들에는 있는데 버튼이 죽는다(전역 CLAUDE.md §5 렌더 고아).
+      if (typeof PhotoBatch !== "undefined") PhotoBatch.init();
       Prompt.init();
       Projects.init();
       ProjectHub.init();
@@ -12757,6 +13083,400 @@
       const r = await fetch(src);
       return await r.arrayBuffer();
     },
+  };
+
+  /* ══════════════════════════════════════════════════════════════
+     사진 폴더 일괄 매칭 — 핀 번호 ↔ 촬영시각 1:1 매칭
+     ────────────────────────────────────────────────────────────────
+     마스터 요청(2026-09-03, RESUME_LEDGER.md §H): "핀을 순서대로 찍어둔 뒤 사진이
+     들어있는 폴더를 선택하면 사진 생성 시간 순서대로 핀 번호대로 1번부터 몇 번까지
+     설정한 후 업로드하면 핀 번호 순서 ↔ 사진 시간 순서로 1:1 매칭돼서 그 위치에
+     사진이 등록"
+
+     정렬 우선순위(추측을 사실처럼 보이지 않도록 각 행에 근거를 표시한다):
+       1) EXIF DateTimeOriginal(진짜 촬영시각)
+       2) 파일 lastModified
+       3) 파일명 자연정렬
+       — build-tools/photo-timesort.mjs(참고구현·실데이터 57장 검증됨)와 같은 로직을
+         브라우저(ArrayBuffer/DataView)로 포팅. 로직은 바꾸지 않는다.
+
+     번호 정본: PinSeries.numbers()(01b_PinSeries.js) — "콘텐츠 계열"(series==="content")만
+       대상으로 한다(체크보드 계열은 별도 채번이라 사진 매칭 대상이 아님).
+
+     저장 경로: Cloud.resizeImage()/Cloud.uploadImage() + 오프라인 SyncQueue.enqueue() —
+       20_App.js _confirmPin() 의 이미지 분기(≈1908~1934행)와 동일 API 조합을 그대로 쓴다.
+       새 저장 경로를 만들지 않는다.
+       🔴 단, App._uploadPinImageBg() 는 재사용하지 않는다 — 그 함수는 끝에서 this._autoSave()
+       를 호출해 매 장마다 서버에 자동저장되는데, 이 기능은 "자동저장 OFF 정책 유지 — 등록 후
+       미저장 표시만" 이 명시 요구사항(§H⑦)이라 상충한다. 그래서 동일한 저장 API 3개
+       (resizeImage/uploadImage/SyncQueue.enqueue)만 재사용하고, 자동저장 대신
+       App._markDirty() 로 "미저장" 표시만 남긴다.
+     360 판별: App._detect360(file, cb) 재사용(자체 판별 로직 추가 금지).
+  ══════════════════════════════════════════════════════════════ */
+  const PhotoBatch = {
+    _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
+    _range: { start: 1, end: 1 },
+    _busy: false,
+
+    /* ══ 순수 로직 — 회귀 테스트가 직접 호출한다(DOM 무의존) ══════════ */
+
+    /** 파일명 자연정렬(숫자를 숫자로) — build-tools/photo-timesort.mjs 와 동일 */
+    _natural(a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }); },
+
+    _asciiAt(view, off, n) {
+      let s = "";
+      for (let k = 0; k < n; k++) s += String.fromCharCode(view.getUint8(off + k));
+      return s;
+    },
+
+    /** JPEG APP1(EXIF)에서 DateTimeOriginal(0x9003)/DateTimeDigitized(0x9004)/DateTime(0x0132)을 찾는다.
+     *  입력: ArrayBuffer(파일 선두 일부, File.slice().arrayBuffer()). 실패해도 예외를 던지지 않고
+     *  null 을 반환해 mtime/파일명 폴백으로 자연히 넘어가게 한다(node 버전의 Buffer 판을 DataView 로 포팅). */
+    _parseExifDate(buf) {
+      try {
+        const b = new DataView(buf);
+        const len = b.byteLength;
+        if (len < 4 || b.getUint8(0) !== 0xFF || b.getUint8(1) !== 0xD8) return null;
+        let i = 2;
+        while (i < len - 4) {
+          if (b.getUint8(i) !== 0xFF) { i++; continue; }
+          const marker = b.getUint8(i + 1);
+          if (marker === 0xD8 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) { i += 2; continue; }
+          if (i + 4 > len) break;
+          const segLen = b.getUint16(i + 2, false);
+          const segStart = i + 4;
+          if (marker === 0xE1 && segStart + 4 <= len && this._asciiAt(b, segStart, 4) === "Exif") {
+            const r = this._parseExifIfd(b, segStart + 6, Math.min(segStart + segLen, len));
+            if (r) return r;
+          }
+          if (marker === 0xDA) break; // SOS 이후는 압축 데이터
+          i = segStart + segLen - 2;
+          if (segLen <= 0) break;
+        }
+        return null;
+      } catch (e) { return null; }
+    },
+
+    /** TIFF 헤더부터 IFD0 + ExifIFD 를 훑어 촬영시각 태그를 찾는다 */
+    _parseExifIfd(b, tiffStart, end) {
+      if (tiffStart + 8 > end) return null;
+      const le = this._asciiAt(b, tiffStart, 2) === "II";
+      const u16 = (o) => b.getUint16(o, le);
+      const u32 = (o) => b.getUint32(o, le);
+      if (u16(tiffStart + 2) !== 42) return null;
+      let best = null;
+      const walk = (ifdOff, depth) => {
+        if (depth > 2 || (best && best.tag === "DateTimeOriginal")) return;
+        const at = tiffStart + ifdOff;
+        if (at + 2 > end) return;
+        const n = u16(at);
+        for (let k = 0; k < n; k++) {
+          const e = at + 2 + k * 12;
+          if (e + 12 > end) return;
+          const tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
+          const valOff = (type === 2 && cnt > 4) ? tiffStart + u32(e + 8) : e + 8;
+          if (tag === 0x8769) { walk(u32(e + 8), depth + 1); continue; } // ExifIFD 포인터
+          if ((tag === 0x9003 || tag === 0x9004 || tag === 0x0132) && type === 2 && valOff + 19 <= end) {
+            const s = this._asciiAt(b, valOff, 19); // "YYYY:MM:DD HH:MM:SS"
+            const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(s);
+            if (m) {
+              const iso = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6];
+              if (tag === 0x9003) { best = { iso, tag: "DateTimeOriginal" }; return; }
+              if (!best) best = { iso, tag: tag === 0x9004 ? "DateTimeDigitized" : "DateTime" };
+            }
+          }
+        }
+      };
+      walk(u32(tiffStart + 4), 0);
+      return best;
+    },
+
+    /** 정렬 우선순위(EXIF→mtime→파일명)에 따라 sortKey/timeSource/timeLabel 을 부여하고
+     *  정렬한 "새" 배열을 반환한다(원본 불변). 큰 시간 간격(10분↑) 지점엔 bigGapBefore 를 단다.
+     *  순수 함수 — 테스트가 직접 호출한다. */
+    _sortRows(rows) {
+      const withKey = (rows || []).map((r) => {
+        let sortKey, timeSource, timeLabel;
+        if (r.exif && r.exif.iso) {
+          sortKey = Date.parse(r.exif.iso);
+          timeSource = "EXIF " + r.exif.tag;
+          timeLabel = r.exif.iso.replace("T", " ");
+        } else if (Number.isFinite(r.lastModified)) {
+          sortKey = r.lastModified;
+          timeSource = "파일 수정시각";
+          timeLabel = new Date(r.lastModified).toISOString().slice(0, 19).replace("T", " ");
+        } else {
+          sortKey = NaN;
+          timeSource = "파일명순(시간정보 없음)";
+          timeLabel = "-";
+        }
+        return Object.assign({}, r, { sortKey, timeSource, timeLabel, bigGapBefore: false, gapMs: 0 });
+      });
+      withKey.sort((a, b) => {
+        const ak = Number.isFinite(a.sortKey) ? a.sortKey : Infinity;
+        const bk = Number.isFinite(b.sortKey) ? b.sortKey : Infinity;
+        if (ak !== bk) return ak - bk;
+        return this._natural(a.name, b.name);
+      });
+      const GAP_MS = 10 * 60 * 1000; // 10분↑ = 구역 이동 경계 추정(실데이터: 중앙값 19초 vs 최대 4948초)
+      for (let k = 1; k < withKey.length; k++) {
+        const a = withKey[k - 1], c = withKey[k];
+        if (Number.isFinite(a.sortKey) && Number.isFinite(c.sortKey) && (c.sortKey - a.sortKey) >= GAP_MS) {
+          c.bigGapBefore = true; c.gapMs = c.sortKey - a.sortKey;
+        }
+      }
+      return withKey;
+    },
+
+    /** 🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 현재 페이지의 "콘텐츠 계열"
+     *  핀만 오름차순으로 나열한다(체크보드 계열 제외 — 별도 채번이라 사진 매칭 대상이 아님). */
+    _pinList(pins, page) {
+      const map = PinSeries.numbers(pins || [], page);
+      const list = [];
+      (pins || []).forEach((p) => {
+        if (!p || (p.page || 1) !== (page || 1)) return;
+        const info = map.get(p.id);
+        if (!info || info.series !== "content") return;
+        list.push({ pin: p, no: info.no });
+      });
+      list.sort((a, b) => a.no - b.no);
+      return list;
+    },
+
+    /** 핀 번호 범위 × 표시행 순서(제외 반영) → 1:1 매칭. 순수 함수.
+     *  개수가 다르면 남는 쪽을 leftoverPins/leftoverRows 로 알려준다(조용히 자르지 않음). */
+    _buildMatches(pinList, rows, range) {
+      const pinsInRange = (pinList || []).filter((e) => e.no >= range.start && e.no <= range.end);
+      const activeRows = (rows || []).filter((r) => !r.excluded);
+      const n = Math.min(pinsInRange.length, activeRows.length);
+      const matches = [];
+      for (let i = 0; i < n; i++) matches.push({ pin: pinsInRange[i].pin, no: pinsInRange[i].no, row: activeRows[i] });
+      return {
+        matches,
+        leftoverPins: pinsInRange.slice(n),
+        leftoverRows: activeRows.slice(n)
+      };
+    },
+
+    _esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); },
+
+    /* ══ DOM 연결 ══════════════════════════════════════════════ */
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("btn-photobatch") && $("btn-photobatch").addEventListener("click", () => this.open());
+      $("photobatch-close") && $("photobatch-close").addEventListener("click", () => this.close());
+      document.querySelectorAll('.admin-gate-backdrop[data-close="photobatch"]').forEach((bd) => bd.addEventListener("click", () => this.close()));
+
+      const folderInp = $("input-photobatch-folder");
+      if (folderInp) folderInp.addEventListener("change", (e) => { const files = Array.from(e.target.files || []); e.target.value = ""; this._onFilesChosen(files); });
+      $("btn-photobatch-pick") && $("btn-photobatch-pick").addEventListener("click", () => folderInp && folderInp.click());
+
+      const filesInp = $("input-photobatch-files");
+      if (filesInp) filesInp.addEventListener("change", (e) => { const files = Array.from(e.target.files || []); e.target.value = ""; this._onFilesChosen(files); });
+      $("btn-photobatch-pick-files") && $("btn-photobatch-pick-files").addEventListener("click", () => filesInp && filesInp.click());
+
+      $("btn-photobatch-run") && $("btn-photobatch-run").addEventListener("click", () => this.run());
+
+      const s = $("photobatch-start");
+      if (s) s.addEventListener("change", () => { const v = parseInt(s.value, 10); if (Number.isFinite(v)) this._range.start = v; this._renderTable(); });
+      const e2 = $("photobatch-end");
+      if (e2) e2.addEventListener("change", () => { const v = parseInt(e2.value, 10); if (Number.isFinite(v)) this._range.end = v; this._renderTable(); });
+
+      const tbody = $("photobatch-table-body");
+      if (tbody) {
+        tbody.addEventListener("click", (e) => {
+          const b = e.target.closest && e.target.closest("[data-act]");
+          if (!b) return;
+          const idx = parseInt(b.dataset.idx, 10);
+          if (b.dataset.act === "up") this._moveRow(idx, -1);
+          else if (b.dataset.act === "down") this._moveRow(idx, 1);
+        });
+        tbody.addEventListener("change", (e) => {
+          const b = e.target.closest && e.target.closest('[data-act="excl"]');
+          if (!b) return;
+          this._toggleExclude(parseInt(b.dataset.idx, 10));
+        });
+      }
+    },
+
+    _defaultRange() {
+      const list = this._pinList(State.pins, State.pdfPage || 1);
+      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1 };
+    },
+
+    open() {
+      if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
+      this._rows = [];
+      this._range = this._defaultRange();
+      const modal = document.getElementById("photobatch-modal");
+      if (!modal) return;
+      modal.classList.remove("hidden");
+      requestAnimationFrame(() => modal.classList.add("on"));
+      const s = document.getElementById("photobatch-start"); if (s) s.value = this._range.start;
+      const e = document.getElementById("photobatch-end"); if (e) e.value = this._range.end;
+      const ov = document.getElementById("photobatch-overwrite"); if (ov) ov.checked = false;
+      const prog = document.getElementById("photobatch-progress"); if (prog) prog.textContent = "";
+      this._renderTable();
+    },
+
+    close() {
+      const modal = document.getElementById("photobatch-modal");
+      if (!modal) return;
+      modal.classList.remove("on");
+      setTimeout(() => modal.classList.add("hidden"), 180);
+    },
+
+    async _onFilesChosen(files) {
+      const IMG_RE = /\.(jpe?g|png|webp)$/i;
+      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
+      if (!imgFiles.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다"); return; }
+      const status = document.getElementById("photobatch-status");
+      if (status) status.textContent = imgFiles.length + "장 분석 중...";
+      const rows = [];
+      for (const f of imgFiles) {
+        let exif = null;
+        try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
+        rows.push({ file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0 });
+      }
+      this._rows = this._sortRows(rows);
+      if (status) status.textContent = imgFiles.length + "장 · 시간순 정렬 완료";
+      this._renderTable();
+      // 360 판별(비동기, App._detect360 재사용) — 완료되는 대로 표를 다시 그려 채운다
+      this._rows.forEach((r) => {
+        if (typeof App === "undefined" || !App._detect360) return;
+        App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; this._renderTable(); });
+      });
+    },
+
+    _moveRow(idx, dir) {
+      const j = idx + dir;
+      if (idx < 0 || idx >= this._rows.length || j < 0 || j >= this._rows.length) return;
+      const tmp = this._rows[idx]; this._rows[idx] = this._rows[j]; this._rows[j] = tmp;
+      this._renderTable();
+    },
+
+    _toggleExclude(idx) {
+      const r = this._rows[idx];
+      if (!r) return;
+      r.excluded = !r.excluded;
+      this._renderTable();
+    },
+
+    _renderTable() {
+      const host = document.getElementById("photobatch-table-body");
+      if (!host) return;
+      const page = State.pdfPage || 1;
+      const pinList = this._pinList(State.pins, page);
+      const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
+      const matchByRow = new Map();
+      matches.forEach((m) => matchByRow.set(m.row, m));
+
+      let html = "";
+      this._rows.forEach((r, idx) => {
+        const m = matchByRow.get(r);
+        const pinNo = m ? m.no : (r.excluded ? "제외" : "범위 밖");
+        const hasExisting = m ? PinSeries.hasContent(m.pin) : false;
+        if (r.bigGapBefore) {
+          html += '<tr class="pb-gap-row"><td colspan="7">⏱ 간격 ' + Math.round(r.gapMs / 60000) + '분 — 구역 경계 추정</td></tr>';
+        }
+        html += '<tr class="pb-row' + (r.excluded ? " pb-excluded" : "") + '" data-idx="' + idx + '">'
+          + '<td class="pb-c-no">' + this._esc(pinNo) + '</td>'
+          + '<td class="pb-c-file" title="' + this._esc(r.name) + '">' + this._esc(r.name) + '</td>'
+          + '<td class="pb-c-time">' + this._esc(r.timeLabel || "-") + '</td>'
+          + '<td class="pb-c-src">' + this._esc(r.timeSource || "-") + '</td>'
+          + '<td class="pb-c-360">' + (r.is360 === true ? "360°" : (r.is360 === false ? "일반" : "…")) + '</td>'
+          + '<td class="pb-c-exist">' + (hasExisting ? "기존있음" : "-") + '</td>'
+          + '<td class="pb-c-act">'
+            + '<button type="button" class="pb-mini" data-act="up" data-idx="' + idx + '" title="위로" aria-label="위로">↑</button>'
+            + '<button type="button" class="pb-mini" data-act="down" data-idx="' + idx + '" title="아래로" aria-label="아래로">↓</button>'
+            + '<label class="pb-excl"><input type="checkbox" data-act="excl" data-idx="' + idx + '"' + (r.excluded ? " checked" : "") + ' /> 제외</label>'
+            + '<span class="pb-status" id="pb-status-' + idx + '"></span>'
+          + '</td>'
+          + '</tr>';
+      });
+      host.innerHTML = html || '<tr><td colspan="7" class="pb-empty">폴더를 선택하세요</td></tr>';
+
+      const warnEl = document.getElementById("photobatch-warn");
+      if (warnEl) {
+        if (leftoverPins.length || leftoverRows.length) {
+          warnEl.classList.remove("hidden");
+          warnEl.textContent = "⚠ 개수 불일치 — " + (leftoverPins.length ? "핀 " + leftoverPins.length + "개 남음 " : "") + (leftoverRows.length ? "사진 " + leftoverRows.length + "장 남음" : "");
+        } else { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
+      }
+      const cntEl = document.getElementById("photobatch-count");
+      if (cntEl) cntEl.textContent = matches.length + "건 매칭 예정 · 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+    },
+
+    _setRowStatus(row, text) {
+      const idx = this._rows.indexOf(row);
+      if (idx < 0) return;
+      const el = document.getElementById("pb-status-" + idx);
+      if (el) el.textContent = text;
+    },
+
+    _updateProgress(total, done) {
+      const el = document.getElementById("photobatch-progress");
+      if (el) el.textContent = done + " / " + total;
+    },
+
+    /** 실행: 순차 업로드(동시 3), 진행률, 실패 건 표시, 오프라인이면 SyncQueue 폴백.
+     *  이미 사진 있는 핀은 기본 건너뛰기(덮어쓰기 체크 시에만 진행).
+     *  🔴 자동저장 OFF 정책 — 완료 후 App._markDirty() 로 "미저장" 표시만 한다. */
+    async run() {
+      if (this._busy) return;
+      const page = State.pdfPage || 1;
+      const pinList = this._pinList(State.pins, page);
+      const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
+      if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("매칭할 핀·사진이 없습니다"); return; }
+      if (leftoverPins.length || leftoverRows.length) {
+        const msg = (leftoverPins.length ? leftoverPins.length + "개 핀 남음 " : "") + (leftoverRows.length ? leftoverRows.length + "장 사진 남음" : "");
+        if (!confirm("개수가 일치하지 않습니다 — " + msg + ". " + matches.length + "건만 매칭해 진행할까요?")) return;
+      }
+      this._busy = true;
+      const runBtn = document.getElementById("btn-photobatch-run");
+      if (runBtn) runBtn.disabled = true;
+      const overwriteEl = document.getElementById("photobatch-overwrite");
+      const overwrite = !!(overwriteEl && overwriteEl.checked);
+
+      let done = 0, fail = 0, skip = 0;
+      const queue = matches.slice();
+      const worker = async () => {
+        while (queue.length) {
+          const m = queue.shift();
+          const { pin, row } = m;
+          if (!overwrite && PinSeries.hasContent(pin)) { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); this._updateProgress(matches.length, done + fail + skip); continue; }
+          try {
+            this._setRowStatus(row, "업로드 중...");
+            const { dataURL, width, height } = await Cloud.resizeImage(row.file);
+            const imgName = row.name.replace(/\.[^.]+$/, "");
+            let uploaded = false;
+            if (navigator.onLine) {
+              try { const imageId = await Cloud.uploadImage(imgName, dataURL, width, height); pin.imageId = imageId; Cloud._cache[imageId] = dataURL; uploaded = true; } catch (e) { uploaded = false; }
+            }
+            if (!uploaded) {
+              const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
+              if (opId) { pin.pendingOpId = opId; pin.pendingSync = true; Cloud._cache["op:" + opId] = dataURL; }
+              else throw new Error("저장공간 부족");
+            }
+            pin.imageName = imgName;
+            if (row.is360) pin.is360 = true;
+            done++; this._setRowStatus(row, uploaded ? "완료" : "오프라인 저장됨");
+          } catch (e) {
+            fail++; this._setRowStatus(row, "실패: " + (e.message || e));
+          }
+          this._updateProgress(matches.length, done + fail + skip);
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]); // 동시 3
+
+      this._busy = false;
+      if (runBtn) runBtn.disabled = false;
+      try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+      try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
+      if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} } // 자동저장 호출 금지 — 미저장 표시만
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
+    }
   };
 
   /* ── 진입 ── */
