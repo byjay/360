@@ -36,4 +36,5 @@
 32_Offline.js
 33_ThetaIntake.js
 34_PdfPopup.js
+35_PhotoBatch.js
 99_footer.js

@@ -434,6 +434,9 @@
           <button class="stb-btn" data-deleg="btn-theta-intake" type="button" title="360 사진 인입" aria-label="360 사진 인입"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></button>
           <button class="stb-btn" data-deleg="btn-checkboard-enter" data-sync="btn-checkboard-enter" type="button" title="체크보드 모드" aria-label="체크보드 모드"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
         </div>
+        <div class="stb-group" data-g="사진">
+          <button id="btn-photobatch" class="stb-btn" type="button" title="사진 폴더 일괄 매칭 (핀 번호 ↔ 촬영시각)" aria-label="사진 폴더 일괄 매칭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="2.5" y="5.5" width="19" height="14" rx="2"/><circle cx="8.5" cy="11" r="2"/><path d="M2.5 16.5l5-4 4 3 3-2.5 6 4.5"/></svg></button>
+        </div>
       </div>
       <!-- [트리 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리 -->
       <div id="side-tree" class="side-tree"></div>
@@ -1898,6 +1901,52 @@
       <div id="deck-link-list" class="deck-link-list"></div>
       <div class="admin-gate-actions">
         <button id="deck-link-cancel" class="admin-gate-btn ghost" type="button">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 사진 폴더 일괄 매칭 — 핀 번호 ↔ 촬영시각 1:1 매칭 (RESUME_LEDGER.md §H) -->
+  <div id="photobatch-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="photobatch-title">
+    <div class="admin-gate-backdrop" data-close="photobatch"></div>
+    <div class="admin-gate-card wide pb-card">
+      <h2 id="photobatch-title" class="admin-gate-title" style="text-align:left">사진 폴더 일괄 매칭</h2>
+      <p class="admin-gate-sub" style="text-align:left">핀을 순서대로 찍어둔 뒤, 사진 폴더를 선택하면 촬영시각 순서대로 핀 번호에 1:1로 매칭해 등록합니다.</p>
+
+      <div class="pb-range-row">
+        <label class="pb-range-label">핀 번호 범위
+          <input id="photobatch-start" class="pb-range-input" type="number" min="1" step="1" inputmode="numeric" />
+          ~
+          <input id="photobatch-end" class="pb-range-input" type="number" min="1" step="1" inputmode="numeric" />
+        </label>
+        <label class="pb-overwrite"><input id="photobatch-overwrite" type="checkbox" /> 기존 사진 덮어쓰기</label>
+      </div>
+
+      <div class="pb-pick-row">
+        <button id="btn-photobatch-pick" class="admin-gate-btn primary" type="button">📁 사진 폴더 선택</button>
+        <input id="input-photobatch-folder" type="file" accept="image/*" multiple webkitdirectory hidden />
+        <button id="btn-photobatch-pick-files" class="admin-gate-btn ghost" type="button">여러 파일 선택(폴더 미지원 시)</button>
+        <input id="input-photobatch-files" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden />
+        <span id="photobatch-status" class="pb-status-line"></span>
+      </div>
+
+      <p id="photobatch-warn" class="pb-warn hidden"></p>
+      <p id="photobatch-count" class="pb-count"></p>
+
+      <div class="pb-table-wrap">
+        <table class="pb-table">
+          <thead>
+            <tr>
+              <th>핀번호</th><th>파일명</th><th>촬영시각</th><th>정렬근거</th><th>360</th><th>기존사진</th><th>순서/제외</th>
+            </tr>
+          </thead>
+          <tbody id="photobatch-table-body"><tr><td colspan="7" class="pb-empty">폴더를 선택하세요</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="admin-gate-actions">
+        <button id="photobatch-close" class="admin-gate-btn ghost" type="button">닫기</button>
+        <button id="btn-photobatch-run" class="admin-gate-btn primary" type="button">일괄 등록 실행</button>
+        <span id="photobatch-progress" class="pb-progress"></span>
       </div>
     </div>
   </div>
