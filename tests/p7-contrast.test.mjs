@@ -2,14 +2,28 @@
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p7-contrast.test.mjs)
  *
  * 대상: public/css/style.css — #photobatch-modal(.admin-gate 재사용) 대비 위반 수정
- *  ① .pb-table thead th — 표 머리글(핀번호/파일명/촬영시각/…): 크림 배경 위 var(--text)
+ *  ① .pb-table thead th — 표 머리글(핀번호/파일명/촬영시각/…): 크림 배경 위 고정 글자색
  *  ② .admin-gate-btn.primary — 사진폴더 선택/일괄등록 실행 버튼(반투명 골드 배경 위 골드 글자)
+ *  ③ 구조적 안티패턴 스캐너 — "배경은 리터럴 hex 고정, 글자색은 var(--text*) 테마 변수"
+ *     조합을 전체 스타일시트에서 찾아 0건이어야 한다.
+ *
+ *     근본원인(2026-09-03 프로덕션 실측, coordinator 재작업 지시):
+ *     이 앱은 인앱 다크테마 토글이 없다(--text 는 :root 에 단 1회만 선언됨, JS 도 건드리지 않음).
+ *     그런데도 프로덕션에서 .pb-table thead th 의 실측 color 가 var(--text)=#2b2820 이 아니라
+ *     rgb(233,234,238)(거의 흰색)로 나왔다 — background(#e9e2d2, 실측과 정확히 일치)는 그대로였다.
+ *     원인은 OS/브라우저의 강제 다크모드(forced/auto dark)가 "고정 배경은 그대로 두고 var() 기반
+ *     텍스트만 밝게 재해석"하는 유형이기 때문(이 코드베이스에 이미 선례 있음 —
+ *     .company-gate-card 의 `color-scheme: light` 버그수정 주석 참조).
+ *     즉 숫자 대비비 계산만으로는 "소스상 라이트 값 기준"만 보고 통과 판정을 내려 이 결함을
+ *     놓친다(실제 1차 작업에서 오탐으로 결론지었던 원인). 그래서 이 스캐너는 대비비가 아니라
+ *     **패턴 자체**("고정 배경 + 테마변수 글자")를 위반으로 잡는다 — 값에 의존하지 않으므로
+ *     현재 값이 얼마든, 미래에 실제 다크테마가 도입되든 항상 유효하다.
  *
  * 하드코딩 금지(§10): 기대 색상을 손으로 나열하지 않는다 — style.css 를 파싱해
  * :root 커스텀 프로퍼티 + 해당 규칙의 color/background 를 그대로 읽어 WCAG 대비비를 계산한다.
  * 새로 추가되는 색도 이 파서가 그대로 재계산하므로, 값이 바뀌면 이 테스트도 같이 재검증한다.
  *
- * 뮤테이션 증명: color 를 옛 값(var(--gold)/e9eaee류 밝은 값)으로 되돌리면 FAIL 해야 한다.
+ * 뮤테이션 증명: color 를 옛 값(var(--gold)/var(--text) 등 테마 변수)으로 되돌리면 FAIL 해야 한다.
  * (수동 확인 절차는 커밋 메시지에 EXIT 코드로 기록)
  */
 import fs from "node:fs";
@@ -133,6 +147,28 @@ const WCAG_AA_SMALL = 4.5;
   });
   const worst = Math.min(...ratios);
   ok(worst >= WCAG_AA_SMALL, `② 버튼 글자 대비(최악 스톱 기준) ${worst.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${colorExpr} bg=${bgExpr} on card gradient)`);
+}
+
+/* ══ ③ 구조적 안티패턴 스캐너 — 고정 리터럴 배경 + var(--text*) 글자색 ══════════ */
+{
+  // 전체 규칙(선택자 { 선언들 })을 순회하며 "background(-color) 가 리터럴 hex/rgb(불투명)"
+  // 이면서 "color 가 var(--text[2 등]) 그대로"인 규칙을 찾는다. rgba()로 투명도가 있는
+  // 배경은 조상색과 섞이므로(§②에서 별도 처리) 이 스캐너 대상에서 제외한다.
+  const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+  const violations = [];
+  let m;
+  while ((m = ruleRe.exec(css))) {
+    const selector = m[1].trim();
+    const body = m[2];
+    if (!selector || selector.startsWith("@") || selector === ":root") continue;
+    const bgM = body.match(/background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*\)|white)\s*;/i);
+    const colorM = body.match(/(?:^|;)\s*color\s*:\s*(var\(--text[\w-]*\))\s*;/);
+    if (bgM && colorM) violations.push(`${selector} (bg=${bgM[1]}, color=${colorM[1]})`);
+  }
+  ok(violations.length === 0,
+    violations.length === 0
+      ? "③ 고정배경+테마변수글자 안티패턴 0건"
+      : `③ 고정배경+테마변수글자 안티패턴 ${violations.length}건 발견: ${violations.join(" | ")}`);
 }
 
 console.log(failed === 0 ? "\n전체 PASS" : `\n${failed}건 FAIL`);
