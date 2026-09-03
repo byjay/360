@@ -192,8 +192,16 @@
       this._syncUploadLock();
       if (!listEl) return;
       listEl.innerHTML = "";
-      if (!this.decks.length) { emptyEl.classList.remove("hidden"); return; }
-      emptyEl.classList.add("hidden");
+      if (!this.decks.length) {
+        // ── [결함수정] #decks-empty 는 side-tree 일원화(2b9b677)로 CSS에서 영구 숨김이다.
+        //    과거엔 여기서 return 해버려 UI.renderTree() 호출까지 건너뛰어 #side-tree 가
+        //    갱신되지 않았다(= 구역 0개일 때 사이드바가 통째로 비어 보이는 조용한 실패).
+        //    #decks-empty 를 되살리지 않고, #side-tree 안에서 직접 실제 안내를 그린다. ──
+        if (emptyEl) emptyEl.classList.add("hidden");
+        this._renderSideTreeEmpty();
+        return;
+      }
+      if (emptyEl) emptyEl.classList.add("hidden");
       this.decks.forEach((d) => {
         const isActive = this.currentDeck && this.currentDeck.id === d.id;
         const row = document.createElement("div");
@@ -225,6 +233,27 @@
         }
       });
       if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
+    },
+
+    /** [결함수정] 구역 0개일 때 #side-tree 안에 직접 그리는 빈 상태 안내.
+     *  UI.renderTree()(11_UI.js — 다른 에이전트 작업 중이라 수정 금지)도 구역 0개면 같은
+     *  자리에 안내 텍스트만 그리지만 실제 생성 버튼이 없다. 여기서는 프로젝트가 선택된
+     *  경우에만(=진짜 "구역 0개") 실제 생성 버튼이 있는 안내를 그리고, 프로젝트 미선택
+     *  상태에서는 잘못된 안내를 띄우지 않도록 비워둔다.
+     *  ponytail: 이후 다른 코드가 UI.renderTree()를 독립 호출하면(16_Zones.js 등) 이 안내가
+     *  버튼 없는 텍스트로 되돌아갈 수 있다 — 실전에서는 구역이 0개일 때 존재할 수 없는
+     *  zone/pin 갱신 경로라 발생 가능성이 낮지만, 근본 해결은 11_UI.js 쪽 수정이 필요하다. */
+    _renderSideTreeEmpty() {
+      const host = document.getElementById("side-tree");
+      if (!host) return;
+      if (!this.currentProject) { host.innerHTML = ""; return; } // 프로젝트 미선택 — 안내 없음
+      host.innerHTML =
+        '<div class="side-tree-empty">' +
+          '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>구역을 만들면 도면을 등록할 수 있습니다.</p>' +
+          '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>' +
+        '</div>';
+      const btn = document.getElementById("side-tree-create-deck");
+      if (btn) btn.addEventListener("click", () => this.createDeck());
     },
 
     /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */

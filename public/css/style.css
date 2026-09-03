@@ -4723,6 +4723,20 @@ body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
    기존 값(#938a78 on #efe9dc = 2.53:1)은 UI 최소 3:1 미달이었다. */
 .tree-tag{font-size:9px;font-weight:700;line-height:1.6;color:#7c2d12;background:#fbe3cd;
   border:1px solid #c2410c;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
+/* [결함수정] 구역 0개(#side-tree 안 조용한 빈 상태 금지) — 프로젝트는 선택됐지만 구역이
+   없을 때의 실제 생성 버튼 안내. 배경을 고정색으로 두므로 글자색도 고정색으로 맞춘다
+   (var() 텍스트가 강제 다크모드에서만 밝게 재해석돼 고정 배경과 어긋나는 실사고 재발 방지, 831a127).
+   대비 실측(WCAG 2.1, 라이트/다크 공통 — :root 팔레트가 prefers-color-scheme 로 재정의되지 않음):
+   메시지 #6b6457 on #efe9dc = 4.98:1(본문 4.5:1 이상) · 버튼 글자 #7c2d12 on #fbe3cd = 7.57:1(AAA,
+   .tree-tag 와 동일 색쌍 재사용 — 이미 이 파일에서 검증된 톤). */
+.side-tree-empty{margin:6px 2px;padding:16px 12px;text-align:center;
+  background:#efe9dc;border:1px solid #d9cfb8;border-radius:10px;}
+.side-tree-empty-msg{color:#6b6457;font-size:11.5px;line-height:1.7;font-family:var(--font-ui);margin:0 0 10px;}
+.side-tree-empty-cta{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;cursor:pointer;
+  font-family:var(--font-ui);font-size:11.5px;font-weight:700;color:#7c2d12;background:#fbe3cd;
+  border:1px solid #c2410c;transition:background .15s,transform .1s;}
+.side-tree-empty-cta:hover{background:#f6d3ae;transform:translateY(-1px);}
+.side-tree-empty-cta:active{transform:translateY(0);}
 /* 기존 흩어진 목록/도구 섹션 숨김 — 도구바+트리로 통합(요소는 DOM 유지=위임 동작) */
 #decks-block,#section-upload,#section-checkboard,#section-place,#section-zones,#section-next-point,#section-pin-list{display:none!important;}
 
