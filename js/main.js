@@ -30,6 +30,12 @@
     _videoBlobs.splice(0).forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} });
   }
 
+  /* [P14 설계 메모] 원본 PDF 를 `State.pdfDoc` 에 넣지 않고 `State.srcPdfDoc` 로 분리한 이유:
+     `State.pdfDoc` 는 "지금 화면을 PDF 캔버스 파이프라인으로 그리고 있다"는 뜻으로
+     UI.renderPdfThumbs / Radar._buildHiResSnapshot / PinGrid / App._rotatePdf 가 분기한다.
+     뷰어(스냅샷 <img> 바탕)에서 여기에 문서를 넣으면 그 형제 호출부들이 전부 오작동한다.
+     두 값은 같은 사실의 중복이 아니라 서로 다른 사실이며,
+     "재래스터할 원본이 있는가" 는 MapCtrl.hasRerenderSource() 한 곳에서만 파생시킨다. */
   const State = {
     mode:        null,      // 'designer' | 'viewer'
     checkboard:  false,     // 체크보드 모드: 디자이너와 동일하나 핀에 이름 대신 번호만 자동 부여
@@ -43,6 +49,14 @@
     pdfPages:    0,
     pdfRotation: 0,         // 0 | 90 | 180 | 270 (PDF.js 내장 회전)
     viewerPages: null,      // 뷰어 모드: 배포본 페이지 dataURL 배열
+    /* ── [P14] 배포 스냅샷의 "원본 PDF" (확대 시 재래스터용) ──
+       뷰어/구역 재열람은 배포 스냅샷(비트맵)만 그리므로 확대하면 뭉갠다.
+       배포 시 R2 에 보관해 둔 원본 PDF 를 임계 배율을 넘겼을 때만 1회 지연 로드한다. */
+    sourceMeta:   null,     // 배포본 source_meta 파싱 결과 { v, pdf_url, pages:[{w,h,pw,ph}] }
+    sourcePdfUrl: null,     // 원본 PDF 의 R2 URL (없으면 구버전 배포본 = 스냅샷 확대 폴백)
+    srcPdfDoc:    null,     // 지연 로드된 원본 PDFDocumentProxy (State.pdfDoc 과 별개 — 아래 주석)
+    srcNoticed:   false,    // 구버전 안내를 이미 1회 했는가(반복 알림 금지)
+    srcFailed:    false,    // 원본 다운로드/파싱 실패 — 재시도 금지(불필요 다운로드 0)
     pins:        [],        // {id,x,y,page,label,imageUrl?,imageId?,imageName?}
     annotations: [],        // {id,page,type:'highlight'|'rect'|'pen'|'text',color,...좌표(%)} PDF 주석
     annoTool:    "cursor",  // 현재 주석 도구
@@ -85,6 +99,9 @@
       this.fileType = null; this.fileName = null;
       this.fileData = null; this.pdfDoc = null;
       this.pdfPage = 1; this.pdfPages = 0; this.pdfRotation = 0; this.viewerPages = null;
+      // [P14] 원본 PDF 지연 로드 상태 초기화 — 도면이 바뀌면 이전 원본은 거짓 화면이 된다.
+      this.sourceMeta = null; this.sourcePdfUrl = null; this.srcPdfDoc = null;
+      this.srcNoticed = false; this.srcFailed = false;
       this.pins = []; this.zones = []; this.placing = false; this.drawingZone = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
@@ -526,7 +543,11 @@
       lastZoom: 1,           // 마지막으로 요청된 줌(= 확대가 끝난 시점의 화면 배율)
       crop: null,            // 고해상도 크롭 오버레이 캔버스
       cropTask: null,        // 진행 중인 크롭 render task
-      cropScale: 0           // 크롭 캔버스의 렌더 스케일
+      cropScale: 0,          // 크롭 캔버스의 렌더 스케일
+      // [P14] 바탕이 전면 PDF 캔버스가 아니라 "배포 스냅샷 <img>" 인 상태(뷰어/구역 재열람).
+      //   이때는 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표가 스냅샷 기준) →
+      //   보이는 영역만 크롭 오버레이로 얹는다.
+      overlayOnly: false
     },
 
     /* ── 캔버스 해상도 상한 (근거를 남긴다 · 매직넘버 금지) ────────────────────
@@ -545,6 +566,20 @@
     RERENDER_GAIN: 1.15,       // 이 배율 미만의 화질 향상은 재렌더 비용 대비 이득이 없다
     SHRINK_RATIO: 2.5,         // 축소 후 이만큼 과잉 해상도면 메모리 회수용으로 다시 그린다
     SETTLE_MS: 140,            // 줌 조작이 끝났다고 보는 디바운스(애니메이션 중에는 더 미룬다)
+    /* [P14] 원본 PDF 지연 로드 임계 — 스냅샷 비트맵이 화면 요구 해상도에 "얼마나" 부족해야
+       네트워크로 원본을 받아올 값어치가 있는가.
+       근거: RERENDER_GAIN(1.15)은 "원본이 이미 로컬에 있을 때 다시 그릴 값어치" 기준이다.
+       원본 다운로드는 수 MB · 현장 모바일 회선이므로 같은 기준을 쓰면 기본 화면에서도 곧바로
+       받아버린다. 배포 스냅샷은 CSS 1:1(.map-image 자연 크기)로 보도록 만들어진 것이므로
+       판정 기준은 device px 가 아니라 CSS px 이고, 확실히 부족할 때(1.5배)만 받는다.
+       → 1:1 스냅샷 기준 zoom > 1.5 에서 발동. 구역 확대(MapCtrl.fitZone 4~8배)는 항상 발동.
+       원본을 확보한 뒤의 실제 렌더 목표 배율은 종전대로 zoom×dpr 이다(planRerender). */
+    SOURCE_GAIN: 1.5,
+
+    /** 마지막 snapshotAllPages 가 실제로 저장한 페이지 픽셀 크기
+     *  [{ w, h, pw, ph }] — w/h = 스냅샷 비트맵 px, pw/ph = PDF 페이지 포인트.
+     *  SOFT_LIMIT 강등으로 요청(maxDim)보다 낮아진 실제 값을 배포본에 정직하게 기록하기 위함. */
+    lastSnapshotDims: null,
 
     /** 기기별 캔버스 면적 상한 (순수 함수 — 테스트 가능) */
     canvasPxCap(env) {
@@ -565,6 +600,33 @@
         mobile: /iP(hone|ad|od)|Android|Mobile/i.test(ua) || (touch > 1 && /Mac/i.test(navigator.platform || "")),
         deviceMemory: navigator.deviceMemory
       };
+    },
+
+    /** [P14] 스냅샷 비트맵이 현재 배율을 감당하는가 = 원본을 지연 로드할 때인가 (순수 함수).
+     *  snapPx : 배포본에 기록된(또는 <img>.naturalWidth 로 실측한) 스냅샷 가로 픽셀
+     *  cssPx  : 화면 1배(zoom=1)에서 그 스냅샷이 차지하는 CSS 가로 픽셀
+     *  zoom   : 현재 CSS 확대 배율
+     *  크기를 모르면(0) 받지 않는다 — 불필요한 다운로드 0 이 기본값이다. */
+    needsSourceRerender(o) {
+      const opt = o || {};
+      const snapPx = Number(opt.snapPx) || 0;
+      const cssPx  = Number(opt.cssPx)  || 0;
+      const zoom   = Number(opt.zoom)   || 0;
+      if (!(snapPx > 0) || !(cssPx > 0) || !(zoom > 0)) return false;
+      const gain = Number(opt.gain) || this.SOURCE_GAIN;
+      return (cssPx * zoom) > (snapPx * gain);
+    },
+
+    /** [P14] 크롭 오버레이를 얹을 "바탕" 요소 — 전면 PDF 캔버스(편집) 또는 배포 스냅샷 <img>(뷰어).
+     *  [근본원인] 종전엔 #pdf-canvas 만 보고 없으면 즉시 반환했다. 뷰어는 스냅샷 <img> 를
+     *  그리므로 재래스터 경로 자체에 진입하지 못했고, 확대하면 비트맵이 늘어나 뭉갰다. */
+    _baseEl() {
+      if (typeof document === "undefined") return null;
+      const cv = document.getElementById("pdf-canvas");
+      if (cv && !cv.classList.contains("hidden")) return cv;
+      const img = document.getElementById("map-image");
+      if (img && !img.classList.contains("hidden")) return img;
+      return null;
     },
 
     /** 캔버스 상한으로 렌더 스케일을 자른다 (순수 함수) */
@@ -619,6 +681,7 @@
       this._renderState.pageNum = pageNum;
       this._renderState.rotation = rotation;
       this._renderState.baseCssScale = baseCss;
+      this._renderState.overlayOnly = false;   // 전면 캔버스를 직접 그리는 경로(편집모드 PDF)
       // 첫 렌더 해상도: 초기 화질 확보를 위해 scale(권장 1.5)×dpr 로 미리 선명하게.
       // 이후 줌인하면 requestZoomRerender 가 더 높은 해상도로 재래스터화한다.
       const initRender = Math.max(1, scale) * dpr;
@@ -660,8 +723,8 @@
     requestZoomRerender(zoom, delayMs) {
       const st = this._renderState;
       if (!st.pdfDoc) return;
-      const canvas = document.getElementById("pdf-canvas");
-      if (!canvas || canvas.classList.contains("hidden")) { this._clearCrop(); return; }
+      const canvas = this._baseEl();
+      if (!canvas) { this._clearCrop(); return; }
       const dpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
       st.lastZoom = zoom;
       clearTimeout(st.pending);
@@ -678,6 +741,13 @@
             pageW: baseVp.width, pageH: baseVp.height,
             pxCap: this.canvasPxCap(this._env()), maxSide: this.MAX_SIDE_HARD
           });
+          // [P14] 바탕이 배포 스냅샷 <img> 면 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표 기준).
+          //   → 스냅샷보다 선명해질 때만 보이는 영역을 크롭 오버레이로 얹는다.
+          if (st.overlayOnly) {
+            if (plan.target > (st.renderScale || 0) * this.RERENDER_GAIN) await this.renderCrop(page, canvas, plan.target, rot);
+            else this._clearCrop();
+            return;
+          }
           // 전면 캔버스가 목표에 못 미치면(상한에 막힘) → 보이는 영역만 고해상도로 얹는다.
           if (plan.target > plan.capped * this.RERENDER_GAIN) {
             await this.renderCrop(page, canvas, plan.target, rot);
@@ -761,16 +831,23 @@
      *  PNG/JPEG 중 더 작은 쪽을 자동 선택한다. 너무 크면 단계적으로 해상도를 낮춰 D1 저장 안정성 확보. */
     async snapshotAllPages(pdfDoc, maxDim = 4096, quality = 0.92) {
       const out = [];
+      // [P14] 실제로 저장된 픽셀 크기를 기록한다 — SOFT_LIMIT 강등(dim*=0.8, 최대 4회)으로
+      //   요청 maxDim(4096)보다 훨씬 낮게 저장되는 경우가 있고, 뷰어는 그 값을 알아야
+      //   "언제 원본이 필요한지"를 추측이 아니라 사실로 판정할 수 있다.
+      const dims = [];
+      this.lastSnapshotDims = null;
       const SOFT_LIMIT = 2_600_000; // dataURL 문자수 상한 (≈2MB) — 초과 시 해상도 자동 강등
       for (let p = 1; p <= pdfDoc.numPages; p++) {
         const page = await pdfDoc.getPage(p);
         const base = page.getViewport({ scale: 1 });
+        const px = { w: 0, h: 0, pw: Math.round(base.width), ph: Math.round(base.height) };
         let dim = maxDim, q = quality, data = null;
         for (let attempt = 0; attempt < 4; attempt++) {
           const scale = Math.min(dim / Math.max(base.width, base.height), 4);
           const vp = page.getViewport({ scale });
           const cv = document.createElement("canvas");
           cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+          px.w = cv.width; px.h = cv.height;   // 이 시도가 채택되면 이 값이 최종 저장 픽셀
           const ctx = cv.getContext("2d", { alpha: false });
           ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
           await page.render({ canvasContext: ctx, viewport: vp }).promise;
@@ -783,7 +860,9 @@
           dim = Math.round(dim * 0.8); q = Math.max(0.8, q - 0.04);
         }
         out.push(data);
+        dims.push(px);
       }
+      this.lastSnapshotDims = dims;
       return out;
     }
   };
@@ -3089,6 +3168,15 @@
       } catch (e) {}
     },
 
+    /** [P14] 재래스터할 "원본"을 갖고 있는가 — 모드가 아니라 원본 보유 여부가 진짜 조건이다.
+     *  · 편집모드 PDF        : State.pdfDoc (전면 캔버스 재래스터)
+     *  · 뷰어/스냅샷 재열람  : State.srcPdfDoc (지연 로드한 원본 → 크롭 오버레이) */
+    hasRerenderSource() {
+      if (typeof PDF === "undefined" || !PDF.requestZoomRerender) return false;
+      if (State.srcPdfDoc) return true;
+      return State.fileType === "pdf" && !!State.pdfDoc;
+    },
+
     applyTransform() {
       const { x, y } = State.pan;
       // 이미지/뷰어(스냅샷) 모드에서는 CSS rotate 로 회전(디자이너 PDF 는 캔버스 재렌더로 처리하므로 0).
@@ -3108,13 +3196,17 @@
       // [마스터] 구역 라벨도 핀처럼 부모 zoom 을 상쇄 → 확대해도 흐려지지 않고 크리스프
       try { if (typeof Zones !== "undefined" && Zones.updateLabelScale) Zones.updateLabelScale(); } catch (e) {}
       this._updateZoomLabel();
-      // ── 벡터 PDF 화질 보존: 줌이 오르면 그 배율로 PDF 를 다시 래스터화 ──
-      // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
-      if (State.mode !== "viewer" && State.fileType === "pdf" && State.pdfDoc
-          && typeof PDF !== "undefined" && PDF.requestZoomRerender) {
+      // ── 벡터 원본 화질 보존: 줌이 오르면 그 배율로 원본을 다시 래스터화 ──
+      // [P14 근본원인 2026-09-03] 종전 조건은 `State.mode !== "viewer"` 였다. 진짜 조건은
+      //   모드가 아니라 **재렌더할 원본을 갖고 있는가** 다. 뷰어는 배포 스냅샷(비트맵)만
+      //   갖고 있어 CSS 확대 = 뭉갬이었다 → 원본 PDF 를 지연 로드하면 뷰어도 선명해진다.
+      if (this.hasRerenderSource()) {
         // 애니메이션(플라이/ISO/구역 확대)이 남아 있으면 그 잔여시간만큼 재렌더를 미룬다
         // → 애니메이션 중에는 부하 0, 끝난 뒤 최종 배율로 딱 한 번 고품질 렌더.
         PDF.requestZoomRerender(State.zoom, this._settleRemain());
+      } else if (typeof App !== "undefined" && App.maybeLoadSourcePdf) {
+        // 원본이 없다 → 스냅샷 해상도를 실제로 넘어섰을 때만 원본을 1회 지연 로드한다.
+        App.maybeLoadSourcePdf(State.zoom);
       }
       // [화질] 확대가 끝나면 합성 힌트를 풀어, 브라우저가 현재 배율로 다시 래스터화하게 한다.
       this._scheduleSettle();
@@ -6482,6 +6574,10 @@
             imgEl.src = Auth.r2(State.viewerPages[next - 1]);
           });
           this._showMapViewport();
+          // [P14] 페이지가 바뀌면 이전 페이지의 고해상도 오버레이는 즉시 거짓 화면이 된다.
+          //   원본을 갖고 있으면 새 페이지 기준으로 렌더 상태를 다시 잡는다.
+          try { PDF._clearCrop(); } catch (e) {}
+          if (State.srcPdfDoc) { await this._primeSourceRender(); MapCtrl.applyTransform(); }
         } else {
           await this._renderPdfPage();
         }
@@ -8888,9 +8984,13 @@
           const m = /^data:([^;,]+)[;,]/i.exec(page);
           const ct = (m && m[1]) || "image/jpeg";
           const blob = await (await fetch(page)).blob(); // dataURL → Blob (브라우저 표준)
+          // [P14 형제 결함] Auth.headers() 는 항상 Content-Type: application/json 을 넣는다.
+          //   종전 순서(Object.assign({CT: ct}, Auth.headers()))는 그 json 이 이미지 CT 를
+          //   덮어써서 R2 객체가 .bin/application-json 으로 저장됐다(<img> 는 MIME 스니핑
+          //   덕에 우연히 동작). 실제 CT 가 마지막에 오도록 순서를 바로잡는다.
           const r = await fetch("/api/r2/upload", {
             method: "PUT",
-            headers: Object.assign({ "Content-Type": ct }, Auth.headers ? Auth.headers() : {}),
+            headers: Object.assign({}, Auth.headers ? Auth.headers() : {}, { "Content-Type": ct }),
             body: blob
           });
           if (!r.ok) { out.push(page); continue; }  // 실패 → base64 폴백
@@ -8899,6 +8999,190 @@
         } catch (e) { out.push(page); }             // 예외 → base64 폴백
       }
       return out;
+    },
+
+    /* ==================================================================
+       [P14] 배포 스냅샷의 "원본 PDF" 보관 · 지연 로드 (뷰어 확대 화질)
+
+       근본원인: 뷰어는 배포 스냅샷(비트맵 <img>)만 그린다. 원본 PDF 가 없으니
+       확대하면 CSS 로 비트맵을 늘릴 수밖에 없어 뭉갠다(마스터 실사용 보고).
+       편집모드는 State.pdfDoc 가 있어 재래스터로 이미 해결됨(5996a22).
+
+       채택: 하이브리드 — 첫 화면은 종전대로 스냅샷으로 즉시 띄우고,
+       스냅샷 해상도를 실제로 넘겨 확대했을 때만 원본 PDF 를 1회 지연 로드해
+       편집모드가 쓰는 기존 경로(PDF.requestZoomRerender -> PDF.renderCrop)로
+       보이는 영역만 다시 그린다. 새 렌더 파이프라인은 만들지 않는다.
+       ================================================================== */
+
+    /** 원본 PDF 를 R2 에 1회 업로드 (기존 /api/r2/upload PUT 재사용).
+     *  실패는 치명적이지 않다 -> null 반환 = 스냅샷만 저장(종전 동작 그대로). */
+    async _uploadSourcePdf(ab) {
+      if (!ab || !ab.byteLength) return null;
+      try {
+        const blob = new Blob([ab], { type: "application/pdf" });
+        const r = await fetch("/api/r2/upload", {
+          method: "PUT",
+          headers: Object.assign({}, Auth.headers ? Auth.headers() : {}, { "Content-Type": "application/pdf" }),
+          body: blob
+        });
+        if (!r.ok) return null;
+        const j = await r.json();
+        return j.url || null;
+      } catch (e) { return null; }
+    },
+
+    /** 배포본에 남길 source_meta(JSON 문자열) 생성.
+     *  · 이미지 도면(PNG/JPG)은 원본이 곧 스냅샷이므로 이 경로를 타지 않는다 -> null.
+     *  · 이미 업로드한 원본이 있으면 재업로드하지 않는다(URL 재사용).
+     *  · dims = PDF.snapshotAllPages 가 실측한 실제 저장 픽셀([{w,h,pw,ph}]).
+     *    뷰어는 이 값으로 "언제 원본이 필요한지"를 추측이 아니라 사실로 판정한다. */
+    async _buildSourceMeta(dims) {
+      if (State.fileType !== "pdf" || !State.fileData) return null;
+      let url = State.sourcePdfUrl;
+      if (!url) {
+        url = await this._uploadSourcePdf(State.fileData);
+        if (!url) return null;
+        State.sourcePdfUrl = url;
+      }
+      const pages = Array.isArray(dims) ? dims
+        : (Array.isArray(PDF.lastSnapshotDims) ? PDF.lastSnapshotDims : []);
+      return JSON.stringify({ v: 1, pdf_url: url, pages: pages });
+    },
+
+    /** 배포본 레코드의 source_meta 를 State 에 반영 (도면 로드 경로 공용).
+     *  구버전 배포본(source_meta 없음)이면 전부 null -> 종전 동작 + 1회 안내. */
+    _applySourceMeta(dep) {
+      State.sourceMeta = null; State.sourcePdfUrl = null;
+      State.srcPdfDoc = null; State.srcNoticed = false; State.srcFailed = false;
+      try {
+        const m = JSON.parse((dep && dep.source_meta) || "null");
+        if (m && typeof m === "object") {
+          State.sourceMeta = m;
+          if (typeof m.pdf_url === "string" && m.pdf_url) State.sourcePdfUrl = m.pdf_url;
+        }
+      } catch (e) { /* 손상된 메타 = 원본 없음으로 취급(조용히 틀린 화면을 그리지 않는다) */ }
+    },
+
+    /** 배포본에 기록된 현재 페이지의 스냅샷 실측 픽셀 — 없으면 null */
+    _snapDim(pageNo) {
+      const m = State.sourceMeta;
+      if (!m || !Array.isArray(m.pages)) return null;
+      const d = m.pages[(pageNo || State.pdfPage || 1) - 1];
+      return (d && d.w > 0) ? d : null;
+    },
+
+    /** 구버전 배포본(원본 없음) 안내 — 조용한 실패 금지. 단, 반복 알림 금지(1회). */
+    _noticeNoSource() {
+      if (State.srcNoticed) return;
+      State.srcNoticed = true;
+      try {
+        Prompt && Prompt.toast && Prompt.toast(
+          "이 도면은 원본 없이 배포된 구버전이라 더 확대해도 선명해지지 않습니다 — 편집모드에서 다시 저장하면 원본이 함께 보관됩니다", 4600);
+      } catch (e) {}
+    },
+
+    /** 원본 다운로드 진행 표시(비차단 칩). pct=null 이면 제거. pct<0 이면 무한정 표시.
+     *  대비: #E6EDF3 on #0D1117 = 14.7:1 (WCAG AAA) */
+    _srcProgress(pct) {
+      let el = document.getElementById("src-progress");
+      if (pct === null) { if (el && el.parentNode) el.parentNode.removeChild(el); return; }
+      if (!el) {
+        el = document.createElement("div");
+        el.id = "src-progress";
+        el.setAttribute("role", "status");
+        el.style.cssText = "position:fixed;left:50%;bottom:76px;transform:translateX(-50%);" +
+          "z-index:9999;background:#0D1117;color:#E6EDF3;border:1px solid #30363D;" +
+          "border-radius:999px;padding:8px 14px;font-size:12.5px;font-weight:600;" +
+          "box-shadow:0 6px 20px rgba(0,0,0,.45);pointer-events:none;white-space:nowrap;";
+        document.body.appendChild(el);
+      }
+      el.textContent = (pct >= 0)
+        ? ("원본 도면 불러오는 중... " + pct + "%")
+        : "원본 도면 불러오는 중...";
+    },
+
+    /** 스냅샷 <img> 위에 원본 PDF 크롭 오버레이를 얹기 위한 렌더 상태 셋업.
+     *  편집모드와 같은 PDF._renderState 를 쓰므로 renderCrop 을 그대로 재사용한다.
+     *  · baseCssScale = 스냅샷 CSS 폭 / PDF 페이지 폭(pt)  -> 오버레이 좌표계 일치
+     *  · renderScale  = 스냅샷 실제 px / PDF 페이지 폭(pt) -> "스냅샷보다 선명할 때만" 판정 기준
+     *  주의(정직 고지): 도면 회전(State.pdfRotation != 0)에서는 스냅샷이 CSS rotate 로 돌아가는데
+     *    MapCtrl.visibleDrawingRect 는 회전을 역산하지 않는다 -> 오버레이를 얹지 않고 종전 동작. */
+    async _primeSourceRender() {
+      const doc = State.srcPdfDoc;
+      const img = UI.$("map-image");
+      if (!doc || !img || img.classList.contains("hidden") || !img.naturalWidth) return false;
+      if (State.pdfRotation) { PDF._clearCrop(); return false; }
+      try {
+        const pg = Math.max(1, Math.min(doc.numPages, State.pdfPage || 1));
+        const page = await doc.getPage(pg);
+        const rot = (page.rotate || 0) % 360;
+        const base = page.getViewport({ scale: 1, rotation: rot });
+        if (!(base.width > 0)) return false;
+        const st = PDF._renderState;
+        PDF._clearCrop();
+        st.pdfDoc = doc;
+        st.pageNum = pg;
+        st.rotation = 0;
+        st.baseCssScale = (img.clientWidth || img.naturalWidth) / base.width;
+        st.renderScale  = img.naturalWidth / base.width;
+        st.overlayOnly  = true;
+        return true;
+      } catch (e) { return false; }
+    },
+
+    /** [진입점] MapCtrl.applyTransform 이 호출. 원본이 없는 상태에서만 불린다.
+     *  임계(스냅샷 실해상도)를 넘겼을 때만 원본 PDF 를 딱 1회 받는다. */
+    async maybeLoadSourcePdf(zoom) {
+      if (State.srcPdfDoc || this._srcBusy || State.srcFailed) return false;
+      if (typeof PDF === "undefined" || !PDF.needsSourceRerender) return false;
+      const img = UI.$("map-image");
+      if (!img || img.classList.contains("hidden") || !img.naturalWidth) return false;
+      const dim = this._snapDim();
+      const snapPx = (dim && dim.w) || img.naturalWidth;
+      const cssPx  = img.clientWidth || img.naturalWidth;
+      const z = (zoom != null) ? zoom : State.zoom;
+      if (!PDF.needsSourceRerender({ snapPx: snapPx, cssPx: cssPx, zoom: z })) return false;
+      // 임계는 넘었는데 원본이 없다(구버전 배포본) -> 종전 동작 + 사유 1회 안내
+      if (!State.sourcePdfUrl) { this._noticeNoSource(); return false; }
+      this._srcBusy = true;
+      this._srcProgress(-1);
+      try {
+        const ab = await this._fetchSourcePdf(State.sourcePdfUrl);
+        if (!ab) throw new Error("source download failed");
+        State.srcPdfDoc = await PDF.load(ab);
+        await this._primeSourceRender();
+        MapCtrl.applyTransform();   // 확보 즉시 현재 배율로 크롭 오버레이 요청
+        return true;
+      } catch (e) {
+        State.srcFailed = true;     // 재시도 금지 — 확대할 때마다 재다운로드하지 않는다
+        try { Prompt && Prompt.toast && Prompt.toast("원본 도면을 불러오지 못했습니다 — 스냅샷 화질로 표시합니다"); } catch (e2) {}
+        return false;
+      } finally {
+        this._srcBusy = false;
+        this._srcProgress(null);
+      }
+    },
+
+    /** 원본 PDF 다운로드 + 진행률. Content-Length 가 없으면 무한정 표시로 폴백. */
+    async _fetchSourcePdf(url) {
+      const res = await fetch(Auth.r2 ? Auth.r2(url) : url, { headers: Auth.headers() });
+      if (!res.ok) return null;
+      const total = Number(res.headers.get("Content-Length") || 0);
+      if (!res.body || !res.body.getReader || !(total > 0)) return await res.arrayBuffer();
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        chunks.push(r.value);
+        got += r.value.length;
+        this._srcProgress(Math.min(99, Math.round(got * 100 / total)));
+      }
+      const buf = new Uint8Array(got);
+      let off = 0;
+      for (const c of chunks) { buf.set(c, off); off += c.length; }
+      return buf.buffer;
     },
 
     /* ════════════════════════════════════════════════════════════════
@@ -8968,7 +9252,7 @@
       return { ok: true, rec };
     },
 
-    _buildSavePayload(pagesData) {
+    _buildSavePayload(pagesData, sourceMeta) {
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
@@ -8992,10 +9276,15 @@
         body.drawing_data = pagesData[0];
         body.pages_data   = JSON.stringify(pagesData);
       }
+      // [P14] 원본 PDF 위치 + 실제 저장 픽셀. 있을 때만 실어 보낸다 —
+      //   미전송 시 서버가 기존 값을 그대로 보존하므로(부분 갱신) 기존 배포본이 깨지지 않는다.
+      if (sourceMeta) body.source_meta = sourceMeta;
       return body;
     },
 
     async _snapshotPages() {
+      // [P14] 이전 도면의 실측 픽셀이 남아 다음 저장에 잘못 붙지 않게 초기화(SoT 오염 방지)
+      try { PDF.lastSnapshotDims = null; } catch (e) {}
       if (State.fileType === "pdf" && State.pdfDoc) {
         return await PDF.snapshotAllPages(State.pdfDoc);
       } else if (State.fileType === "image") {
@@ -9177,6 +9466,7 @@
 
         State.reset();
         State.fileType = "image";       // 스냅샷은 이미지(dataURL)로 보관됨
+        this._applySourceMeta(dep);     // [P14] 원본 PDF 위치/실측 픽셀(구버전이면 전부 null)
         State.viewerPages = pages;
         State.pdfPage = 1;
         State.fileName = dep.file_name || dep.title || "구역 도면";
@@ -9224,6 +9514,7 @@
 
         State.reset();
         State.fileType    = "image";          // draft 스냅샷은 dataURL 이미지
+        this._applySourceMeta(null);          // [P14] 로컬 draft 에는 원본 PDF 가 없다(명시적 초기화)
         State.viewerPages = d.pages;
         State.pdfPage     = 1;
         State.fileName    = d.fileName || "도면";
@@ -9454,9 +9745,12 @@
         if (!pages.length) { this._setSaveIndicator("error"); return; }
         await this._saveDraftLocal(pages);                       // 로컬 우선 보관(원본 dataURL)
         // [마스터 요청 (나)] 교체 도면도 R2 업로드 후 URL 저장(실패 시 base64 폴백)
+        // [P14 버그수정] PDF 가 로드 안 된 경로(이미지 도면)에서도 안전하게(형제: L3039 패턴)
+        let dims = null; try { dims = PDF.lastSnapshotDims; } catch (e) {}
         const r2pages = await this._uploadPagesToR2(pages);
+        const srcMeta = await this._buildSourceMeta(dims);     // [P14] 교체 도면도 원본 보관
         // [멀티유저 충돌방지] 낙관적 잠금 PATCH — 409면 병합 후 재시도
-        const r = await this._patchDeployment(depId, () => this._buildSavePayload(r2pages));
+        const r = await this._patchDeployment(depId, () => this._buildSavePayload(r2pages, srcMeta));
         if (!r.ok) throw new Error("HTTP " + (r.status || "fail"));
         await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
@@ -9478,8 +9772,11 @@
         // 먼저 로컬에 무조건 보관(서버 성공 여부와 무관하게 도면 소실 방지) — 원본 dataURL 보존
         await this._saveDraftLocal(pages);
         // [마스터 요청 (나)] 도면 바이너리를 R2에 올리고 URL로 치환(실패 시 base64 폴백)
+        // [P14 버그수정] PDF 가 로드 안 된 경로(이미지 도면)에서도 안전하게(형제: L3039 패턴)
+        let dims = null; try { dims = PDF.lastSnapshotDims; } catch (e) {}
         const r2pages = await this._uploadPagesToR2(pages);
-        const body = this._buildSavePayload(r2pages);
+        const srcMeta = await this._buildSourceMeta(dims);     // [P14] 신규 배포본에 원본 PDF 보관
+        const body = this._buildSavePayload(r2pages, srcMeta);
         const res = await fetch("/tables/deployments", {
           method: "POST",
           headers: Auth.headers(),
@@ -9565,16 +9862,19 @@
         } else {
           // 기존: PATCH. 도면이 실제로 변경됐을 때만 재스냅샷·R2 재업로드.
           // 그 외엔 이미 저장된 pages(R2 URL)를 그대로 전달 → 불필요한 재업로드·스냅샷 실패 방지.
-          let pages = null;
+          let pages = null, srcMeta = null;
           if (this._dirtyPages) {
             pages = await this._snapshotPages();
+            // [P14 버그수정] PDF 가 로드 안 된 경로(이미지 도면)에서도 안전하게(형제: L3039 패턴)
+            let dims = null; try { dims = PDF.lastSnapshotDims; } catch (e) {}  // 실측 픽셀(스냅샷 직후 채취)
             if (pages && pages.length) pages = await this._uploadPagesToR2(pages);
+            srcMeta = await this._buildSourceMeta(dims);       // PDF 원본 -> R2 (이미지 도면이면 null)
           } else if (State.viewerPages && State.viewerPages.length) {
             pages = State.viewerPages.filter(p => typeof p === "string" && p.indexOf("blob:") !== 0);
             if (!pages.length) pages = null;
           }
           await this._saveDraftLocal(pages);
-          const r = await this._patchDeployment(State.autoSaveDepId, () => this._buildSavePayload(pages));
+          const r = await this._patchDeployment(State.autoSaveDepId, () => this._buildSavePayload(pages, srcMeta));
           if (!r.ok) throw new Error("HTTP " + (r.status || "fail"));
           await this._markDraftClean(pages);
         }
@@ -9833,6 +10133,7 @@
         // [N4] 설계자 재진입: 이후 편집이 새 배포본을 만들지 않고 이 배포본을 갱신하도록
         if (projectForDesigner && latest.id) { State.autoSaveDepId = latest.id; State.depVersion = (latest.version != null ? Number(latest.version) : 0); }
         State.fileType   = "image";
+        this._applySourceMeta(latest);  // [P14] 원본 PDF 위치/실측 픽셀(구버전이면 전부 null)
         State.viewerPages = pages;
         State.pdfPage    = 1;
         State.fileName   = latest.file_name || latest.title || "배포 도면";
