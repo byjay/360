@@ -19,11 +19,19 @@
  *     **패턴 자체**("고정 배경 + 테마변수 글자")를 위반으로 잡는다 — 값에 의존하지 않으므로
  *     현재 값이 얼마든, 미래에 실제 다크테마가 도입되든 항상 유효하다.
  *
+ *  ④ .wm-toast — 하단 토스트 알림. 배경이 linear-gradient(짙은 남색 2스톱)인데, 기존 ①~③
+ *     스캐너는 background-image(그라디언트) 위의 글자색을 검사하지 못해 다음 실사고를
+ *     놓쳤다: color 가 #2b2820(거의 검정)으로 남아 있어도 ①~③ 어느 것도 위반으로 잡지 못함
+ *     (③은 "리터럴 hex/rgb 불투명 배경 + var(--text*) 글자"만 보고, 그라디언트·고정 hex 글자는
+ *     스코프 밖). 그래서 ④는 background(-image) 안의 그라디언트 색 스톱을 전부 파싱해 각
+ *     스톱 위에서 글자색 대비를 계산하고, 가장 나쁜(최소) 대비가 기준을 만족해야 통과로 잡는다.
+ *
  * 하드코딩 금지(§10): 기대 색상을 손으로 나열하지 않는다 — style.css 를 파싱해
  * :root 커스텀 프로퍼티 + 해당 규칙의 color/background 를 그대로 읽어 WCAG 대비비를 계산한다.
  * 새로 추가되는 색도 이 파서가 그대로 재계산하므로, 값이 바뀌면 이 테스트도 같이 재검증한다.
  *
- * 뮤테이션 증명: color 를 옛 값(var(--gold)/var(--text) 등 테마 변수)으로 되돌리면 FAIL 해야 한다.
+ * 뮤테이션 증명: color 를 옛 값(var(--gold)/var(--text) 등 테마 변수, 또는 .wm-toast 의 경우
+ * #2b2820)으로 되돌리면 FAIL 해야 한다.
  * (수동 확인 절차는 커밋 메시지에 EXIT 코드로 기록)
  */
 import fs from "node:fs";
@@ -117,6 +125,21 @@ function cardBgStops(cssText) {
 }
 const [CARD_STOP_A, CARD_STOP_B] = cardBgStops(css);
 
+/* ── 범용 그라디언트 색 스톱 추출(hex/rgb()/rgba() 토큰을 순서대로 전부 뽑는다) ──
+ * linear-gradient(165deg, rgba(13,20,37,.98), rgba(10,16,32,.99)) 같은 표현식에서
+ * 각도·키워드는 무시하고 색 토큰만 parseColor 로 해석해 배열로 반환한다. */
+function genericGradientStops(gradientExpr) {
+  if (!gradientExpr) return [];
+  const re = /rgba?\([^)]*\)|#[0-9a-fA-F]{3,8}\b/g;
+  const out = [];
+  let mm;
+  while ((mm = re.exec(gradientExpr))) {
+    const c = parseColor(mm[0]);
+    if (c) out.push(c);
+  }
+  return out;
+}
+
 const WCAG_AA_SMALL = 4.5;
 
 /* ══ ① .pb-table thead th — 표 머리글 ══════════════════════════════════ */
@@ -169,6 +192,29 @@ const WCAG_AA_SMALL = 4.5;
     violations.length === 0
       ? "③ 고정배경+테마변수글자 안티패턴 0건"
       : `③ 고정배경+테마변수글자 안티패턴 ${violations.length}건 발견: ${violations.join(" | ")}`);
+}
+
+/* ══ ④ .wm-toast — 그라디언트 배경 위 토스트 글자색 ══════════════════════ */
+{
+  const bgExpr = getDecl(css, ".wm-toast", "background");
+  const colorExpr = getDecl(css, ".wm-toast", "color");
+  ok(bgExpr && colorExpr, "④ CSS 규칙 파싱 성공 (.wm-toast)");
+  const stops = genericGradientStops(bgExpr);
+  ok(stops.length >= 2, `④ 그라디언트 색 스톱 ${stops.length}개 파싱됨 (bg=${bgExpr})`);
+  const fgRgba = parseColor(colorExpr);
+  ok(!!fgRgba, "④ 글자색 파싱 성공 — color=" + colorExpr);
+  // 토스트 호스트는 document.body 위에 fixed 로 얹히므로, 조상(ambient) 배경은 body 의
+  // 실제 배경(var(--bg))이다. 각 그라디언트 스톱을 그 위에 alpha 합성한 뒤(스톱 alpha가
+  // .98~.99라 조상색 영향은 작지만, 값에 의존하지 않고 항상 계산한다) 대비를 구해
+  // 가장 나쁜(최소) 값으로 판정한다.
+  const ambientBg = parseColor("var(--bg)");
+  ok(!!ambientBg, "④ 조상 배경(var(--bg)) 파싱 성공");
+  const ratios = stops.map((stop) => {
+    const compositedBg = composite(stop, ambientBg.slice(0, 3));
+    return contrast(fgRgba.slice(0, 3), compositedBg);
+  });
+  const worst = Math.min(...ratios);
+  ok(worst >= WCAG_AA_SMALL, `④ 토스트 글자 대비(최악 스톱 기준) ${worst.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${colorExpr} bg=${bgExpr})`);
 }
 
 console.log(failed === 0 ? "\n전체 PASS" : `\n${failed}건 FAIL`);

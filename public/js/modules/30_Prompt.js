@@ -15,6 +15,9 @@
     TOAST_MAX: 2,
     /** 가벼운 토스트 알림 (화면 하단 중앙, 자동 소멸) */
     toast(msg, ms) {
+      // [빈 토스트 방지] 빈/undefined/공백 메시지는 내용 없는 검은 상자만 띄우므로 무시.
+      const text = (msg === undefined || msg === null) ? "" : String(msg).trim();
+      if (!text) return;
       let host = document.getElementById("wm-toast-host");
       if (!host) {
         host = document.createElement("div");
@@ -36,14 +39,14 @@
         }, dur);
       };
       // ① 같은 메시지가 이미 떠 있으면 새로 쌓지 말고 수명만 연장(중복 스택 차단)
-      const dup = Array.prototype.filter.call(host.children, (n) => n.dataset && n.dataset.wmMsg === String(msg))[0];
+      const dup = Array.prototype.filter.call(host.children, (n) => n.dataset && n.dataset.wmMsg === text)[0];
       if (dup) { arm(dup, life); return; }
       // ② 캡 초과분은 가장 오래된 것부터 즉시 제거 — 어떤 호출부가 남아 있어도 무한 스택 불가
       while (host.children.length >= this.TOAST_MAX) kill(host.firstElementChild);
       const t = document.createElement("div");
       t.className = "wm-toast";
-      t.textContent = msg;
-      t.dataset.wmMsg = String(msg);
+      t.textContent = text;
+      t.dataset.wmMsg = text;
       host.appendChild(t);
       requestAnimationFrame(() => t.classList.add("on"));
       arm(t, life);
