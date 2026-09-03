@@ -141,8 +141,26 @@
     // 체크보드는 사용자 팔레트(PinPrefs)의 "블루"(#2f6db5)와 겹쳐 보이던 문제가 있었다.
     // → 더 진하고 채도 높은 인디고로 분리해 콘텐츠 핀과 확실히 구분.
     CHECKBOARD_COLOR: { head: "#1d4ed8", head2: "#1e3a8a", needle: "#172554", text: "#1e3a8a" },
-    // ring: 부류를 색 없이도 식별하는 외곽선 패턴 (SVG stroke-dasharray)
-    RING: { content: "", empty: "2.6 2.6", checkboard: "6 3.4" },
+    /* [마스터 2026-09-03] "사진이 등록된거와 아닌거 심볼색을 다르게해"
+       체크보드 계열은 사진 유무와 무관하게 늘 같은 색이라, 일괄 매칭 직후
+       무엇이 등록됐는지 화면으로 확인할 방법이 없었다(kindOf 가 checkboard 를
+       콘텐츠 판정보다 먼저 반환하기 때문).
+       → 계열 정체성(인디고 블루)은 유지하고 명도만 갈라 등록/미등록을 구분한다.
+       실측(WCAG 2.1, 흰 도면 #fff 기준 — 아래 값은 테마 변수 아님·라이트/다크 동일):
+         등록   head2 #1e3a8a 10.36:1 · needle #172554 14.69:1 · text #1e3a8a 10.36:1
+         미등록 head2 #6366f1  4.47:1 · needle #4f46e5  6.29:1 · text #4338ca  7.90:1
+         등록↔미등록 상호 분리도 head2 2.32:1 / needle 2.34:1 (눈에 띄게 다른 톤)
+       ⚠ 색만으로 구분하지 않는다 → patternOf() 형태 단서(실선/파선/점선) 병행. */
+    CHECKBOARD_EMPTY_COLOR: { head: "#818cf8", head2: "#6366f1", needle: "#4f46e5", text: "#4338ca" },
+
+    /* 형태 단서 정본(색각 이상 8% 대비) — 도면 링 dasharray 와 미니맵 점 테두리가
+       같은 이름 하나에서 파생된다. 두 곳에 따로 쓰면 반드시 갈라진다(§10 SoT).
+         solid  = 콘텐츠 등록됨 / dashed = 체크보드(등록됨) / dotted = 미등록 */
+    PATTERN: {
+      solid:  { dash: "",        border: "solid"  },
+      dotted: { dash: "2.6 2.6", border: "dotted" },
+      dashed: { dash: "6 3.4",   border: "dashed" }
+    },
 
     /** 핀에 콘텐츠(360/영상/첨부/노트/3D)가 있는가 — App.pinHasContent 가 정본 */
     hasContent(pin) {
@@ -160,13 +178,35 @@
     /** 채번 계열 (2종) */
     seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },
 
-    /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용) */
-    colorsOf(kind) {
-      if (kind === "checkboard") return this.CHECKBOARD_COLOR;
+    /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용)
+     *  @param {string} kind   부류(content/empty/checkboard)
+     *  @param {boolean} [filled] 사진(콘텐츠) 등록 여부. 체크보드 계열에서만 의미가 있다.
+     *         (미지정 = 등록된 것으로 간주 — 기존 호출부 호환) */
+    colorsOf(kind, filled) {
+      if (kind === "checkboard") return (filled === false) ? this.CHECKBOARD_EMPTY_COLOR : this.CHECKBOARD_COLOR;
       if (kind === "empty") return this.EMPTY_COLOR;
       return (typeof PinPrefs !== "undefined" && PinPrefs.color)
         ? PinPrefs.color()
         : { head: "#10b981", head2: "#047857", needle: "#064e3b", text: "#065f46" };
+    },
+
+    /** 형태 단서 이름 (색 없이도 등록 여부를 읽게 하는 축) */
+    patternOf(kind, filled) {
+      if (kind === "checkboard") return filled ? "dashed" : "dotted";
+      return (kind === "empty") ? "dotted" : "solid";
+    },
+
+    /**
+     * 🔴 도면 마커(11_UI) · 미니맵 점(07_Radar) 공용 표시 스타일 정본.
+     * 계열(kind) × 사진 등록 여부(filled) 두 축을 한 번에 판정해 색·형태를 함께 돌려준다.
+     * 두 화면이 각자 판정하면 "사진이 있는데 없다고 보이는" 거짓말이 된다(§10 SoT).
+     * @returns {{kind:string, filled:boolean, colors:object, dash:string, border:string}}
+     */
+    markerStyle(pin) {
+      const kind = this.kindOf(pin);
+      const filled = this.hasContent(pin);
+      const pat = this.PATTERN[this.patternOf(kind, filled)] || this.PATTERN.solid;
+      return { kind: kind, filled: filled, colors: this.colorsOf(kind, filled), dash: pat.dash, border: pat.border };
     },
 
     /**
@@ -396,15 +436,88 @@
       renderScale: 0,        // 현재 캔버스가 래스터화된 PDF 스케일 (CSS 1배 기준 픽셀/포인트)
       baseCssScale: 1,       // 캔버스가 표현하는 "논리적(=화면 1배)" 크기 기준 스케일
       task: null,            // 진행 중인 render task (취소용)
-      pending: null          // 디바운스 타이머
+      pending: null,         // 디바운스 타이머
+      lastZoom: 1,           // 마지막으로 요청된 줌(= 확대가 끝난 시점의 화면 배율)
+      crop: null,            // 고해상도 크롭 오버레이 캔버스
+      cropTask: null,        // 진행 중인 크롭 render task
+      cropScale: 0           // 크롭 캔버스의 렌더 스케일
     },
 
-    /** PDF.js 권장 렌더 한계(메모리/캔버스 면적). 모바일/저사양도 안전한 상한. */
-    MAX_CANVAS_PX: 16777216,   // 4096×4096 ≈ 캔버스 최대 픽셀 (Safari 제한 고려)
+    /* ── 캔버스 해상도 상한 (근거를 남긴다 · 매직넘버 금지) ────────────────────
+       [근본원인 2026-09-03] 상한이 전 기기 공통 16.7M px 였다. A1 도면(≈2384×1684pt)은
+       면적 상한만으로 렌더 스케일이 √(16.7M / 4.01M) ≈ 2.04 로 잘린다. 그런데 retina(dpr 2)
+       에서는 첫 렌더가 이미 1.5×2 = 3.0 → 2.04 로 클램프되어 **상한에 닿은 상태로 시작**한다.
+       이후 아무리 확대해도 재래스터 결과가 2.04 로 되돌아가 화질이 1도 오르지 않았고,
+       (재렌더 임계 1.15 는 통과하므로) 확대할 때마다 이득 0 인 전체 재렌더만 반복했다.
+       → 기기별로 상한을 나눠 "모바일=안전 / 데스크톱=선명" 을 둘 다 만족시킨다. */
+    // iOS/iPadOS Safari 하드 제한: 캔버스 면적 16,777,216px(4096²) 초과 시 캔버스가 통째로 빈다.
+    CANVAS_PX_MOBILE: 16777216,
+    // 데스크톱: RGBA 4byte/px → 40M px ≈ 160MB. 저사양(deviceMemory ≤ 4GB)은 모바일 상한으로 강등.
+    CANVAS_PX_DESKTOP: 40000000,
+    LOW_MEMORY_GB: 4,
     MAX_SIDE_HARD: 8192,       // 한 변 하드 상한
+    RERENDER_GAIN: 1.15,       // 이 배율 미만의 화질 향상은 재렌더 비용 대비 이득이 없다
+    SHRINK_RATIO: 2.5,         // 축소 후 이만큼 과잉 해상도면 메모리 회수용으로 다시 그린다
+    SETTLE_MS: 140,            // 줌 조작이 끝났다고 보는 디바운스(애니메이션 중에는 더 미룬다)
+
+    /** 기기별 캔버스 면적 상한 (순수 함수 — 테스트 가능) */
+    canvasPxCap(env) {
+      const e = env || {};
+      if (e.mobile) return this.CANVAS_PX_MOBILE;
+      const mem = e.deviceMemory;
+      if (typeof mem === "number" && mem > 0 && mem <= this.LOW_MEMORY_GB) return this.CANVAS_PX_MOBILE;
+      return this.CANVAS_PX_DESKTOP;
+    },
+
+    /** 현재 실행 환경 스냅샷 (canvasPxCap 입력) */
+    _env() {
+      if (typeof navigator === "undefined") return {};
+      const ua = navigator.userAgent || "";
+      const touch = navigator.maxTouchPoints || 0;
+      return {
+        // iPadOS 는 UA 가 Mac 으로 나오므로 멀티터치로 보강 판정
+        mobile: /iP(hone|ad|od)|Android|Mobile/i.test(ua) || (touch > 1 && /Mac/i.test(navigator.platform || "")),
+        deviceMemory: navigator.deviceMemory
+      };
+    },
+
+    /** 캔버스 상한으로 렌더 스케일을 자른다 (순수 함수) */
+    clampScale(scale, pageW, pageH, pxCap, maxSide) {
+      const w = Math.max(1, pageW || 1), h = Math.max(1, pageH || 1);
+      const cap = pxCap || this.CANVAS_PX_MOBILE;
+      const side = maxSide || this.MAX_SIDE_HARD;
+      let rs = Math.min(scale, side / Math.max(w, h), Math.sqrt(cap / (w * h)));
+      return Math.max(rs, 0.1);
+    },
+
+    /**
+     * 줌에 맞는 목표 렌더 스케일 + 재렌더 실익 판정 (순수 함수 — 테스트 가능).
+     * @returns {{target:number, capped:number, worth:boolean, reason:string}}
+     *   target : 화면에 실제로 보이는 픽셀 밀도(= 논리스케일 × 줌 × dpr)
+     *   capped : 기기 상한으로 자른 실제 렌더 스케일
+     *   worth  : 다시 그릴 값어치가 있는가(선명해지거나 / 메모리를 회수하거나)
+     */
+    planRerender(o) {
+      const opt = o || {};
+      const gain = opt.gain || this.RERENDER_GAIN;
+      const cur = opt.renderScale || 0;
+      const target = (opt.baseCssScale || 1) * Math.max(1, opt.zoom || 1) * Math.max(1, opt.dpr || 1);
+      const capped = this.clampScale(target, opt.pageW, opt.pageH, opt.pxCap, opt.maxSide);
+      // 🔴 상한에 걸려 해상도가 안 오르는데 재렌더하면 "화질 그대로 + 대형 PDF 재렌더" 순수 손해다.
+      //    실제로 오를 때(capped 기준)만 다시 그린다.
+      if (capped > cur * gain) return { target: target, capped: capped, worth: true, reason: "sharpen" };
+      // 크게 축소한 뒤 남은 과잉 해상도 캔버스는 메모리만 먹는다 → 회수(히스테리시스로 진동 방지).
+      if (cur > 0 && capped < cur / (opt.shrink || this.SHRINK_RATIO)) {
+        return { target: target, capped: capped, worth: true, reason: "shrink" };
+      }
+      return { target: target, capped: capped, worth: false, reason: "enough" };
+    },
 
     async renderPage(pdfDoc, pageNum, canvas, scale = 1.5, rotation = 0) {
       const page = await pdfDoc.getPage(pageNum);
+      // 페이지/문서/회전이 바뀌면 이전 페이지의 크롭 오버레이는 즉시 거짓 화면이 된다 → 제거.
+      clearTimeout(this._renderState.pending);
+      this._clearCrop();
       const rot = ((page.rotate || 0) + (rotation || 0)) % 360;
       const base = page.getViewport({ scale: 1, rotation: rot });
       // 초기 렌더는 "화면 1배(=CSS 100%)" 에 맞는 해상도로 그린다.
@@ -430,11 +543,7 @@
     async _rasterize(page, canvas, renderScale, rot, cssScale) {
       // 캔버스 면적/변 상한으로 클램프 (안정성)
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
-      let rs = renderScale;
-      const maxBySide = this.MAX_SIDE_HARD / Math.max(baseVp.width, baseVp.height);
-      const maxByArea = Math.sqrt(this.MAX_CANVAS_PX / (baseVp.width * baseVp.height));
-      rs = Math.min(rs, maxBySide, maxByArea);
-      rs = Math.max(rs, 0.1);
+      const rs = this.clampScale(renderScale, baseVp.width, baseVp.height, this.canvasPxCap(this._env()), this.MAX_SIDE_HARD);
       const vp = page.getViewport({ scale: rs, rotation: rot });
       const ctx = canvas.getContext("2d", { alpha: false });
       // 진행 중 task 취소 (줌 연타 시 누적 방지)
@@ -457,27 +566,107 @@
       }
     },
 
-    /** 줌 변경 시 호출 — 현재 줌에 맞는 해상도로 PDF 재래스터화(디바운스).
-     *  zoom = MapCtrl 의 State.zoom (CSS transform 배율). */
-    requestZoomRerender(zoom) {
+    /** 줌 변경 시 호출 — 확대가 "끝난 뒤" 그 배율에 맞는 해상도로 PDF 를 딱 한 번 재래스터화.
+     *  zoom    = MapCtrl 의 State.zoom (CSS transform 배율. 구역 crop/ISO 확대 배율도 여기에 들어온다)
+     *  delayMs = 조작 종료 판정 지연. 애니메이션(플라이/ISO 전환) 중에는 MapCtrl 이 애니메이션
+     *            잔여시간을 넘겨 렌더를 뒤로 미룬다 → 애니메이션은 가볍고, 끝나면 선명해진다.
+     *  ⚠ 매 호출마다 타이머를 리셋하므로(디바운스) 연속 줌·rAF 애니메이션 중에는 렌더가 돌지 않는다. */
+    requestZoomRerender(zoom, delayMs) {
       const st = this._renderState;
       if (!st.pdfDoc) return;
       const canvas = document.getElementById("pdf-canvas");
-      if (!canvas || canvas.classList.contains("hidden")) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      // 목표 렌더 스케일 = 논리스케일 × 줌 × dpr.
-      // 즉 화면에 실제로 보이는 픽셀 밀도만큼 PDF 를 다시 그린다 → 항상 선명.
-      const target = st.baseCssScale * Math.max(1, zoom) * dpr;
-      // 이미 충분히 높은 해상도면(목표가 현재의 1.15배 미만) 재렌더 생략
-      if (target <= st.renderScale * 1.15) return;
+      if (!canvas || canvas.classList.contains("hidden")) { this._clearCrop(); return; }
+      const dpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
+      st.lastZoom = zoom;
       clearTimeout(st.pending);
+      const wait = Math.max(this.SETTLE_MS, delayMs || 0);
       st.pending = setTimeout(async () => {
         try {
           const page = await st.pdfDoc.getPage(st.pageNum);
           const rot = ((page.rotate || 0) + (st.rotation || 0)) % 360;
-          await this._rasterize(page, canvas, target, rot, st.baseCssScale);
+          const baseVp = page.getViewport({ scale: 1, rotation: rot });
+          // 🔴 실익 판정은 "상한으로 자른 뒤" 한다 — 상한에 걸려 화질이 안 오르는데
+          //    대형 PDF 를 다시 그리면 화면만 멈추고 얻는 게 없다(구 코드의 실제 버그).
+          const plan = this.planRerender({
+            zoom: st.lastZoom, dpr: dpr, baseCssScale: st.baseCssScale, renderScale: st.renderScale,
+            pageW: baseVp.width, pageH: baseVp.height,
+            pxCap: this.canvasPxCap(this._env()), maxSide: this.MAX_SIDE_HARD
+          });
+          // 전면 캔버스가 목표에 못 미치면(상한에 막힘) → 보이는 영역만 고해상도로 얹는다.
+          if (plan.target > plan.capped * this.RERENDER_GAIN) {
+            await this.renderCrop(page, canvas, plan.target, rot);
+            return;
+          }
+          this._clearCrop(); // 전면 캔버스만으로 충분한 배율 → 크롭 오버레이는 불필요
+          if (!plan.worth) return;
+          await this._rasterize(page, canvas, plan.target, rot, st.baseCssScale);
         } catch (e) {}
-      }, 140);
+      }, wait);
+    },
+
+    /** [화질 · 구조적 한계 우회] 지금 보이는 도면 영역만 목표 배율로 다시 그려 전면 캔버스 위에 얹는다.
+     *  전면 캔버스 한 장은 페이지 전체를 담아야 해서 한 변 8192px·면적 상한에 막힌다
+     *  (A1 기준 최대 배율 ≈3.44 → dpr2 화면에서 선명한 줌은 ≈1.7배까지). 구역 확대는 4~8배다.
+     *  크롭은 보이는 만큼만 그리므로 면적이 뷰포트 크기로 묶여 상한에 걸리지 않는다.
+     *  레이아웃 불변: 오버레이는 position:absolute 라 #map-transform 크기에 영향을 주지 않는다
+     *  → 핀 % 좌표 정합이 그대로 유지된다. */
+    async renderCrop(page, baseCanvas, scale, rot) {
+      const st = this._renderState;
+      const rect = (typeof MapCtrl !== "undefined" && MapCtrl.visibleDrawingRect)
+        ? MapCtrl.visibleDrawingRect() : null;
+      if (!rect || (rect.w >= 1 && rect.h >= 1)) { this._clearCrop(); return; } // 전면이 다 보이면 크롭 이득 없음
+      const baseVp = page.getViewport({ scale: 1, rotation: rot });
+      const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
+      const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
+      const rs = this.clampScale(scale, w0, h0, this.canvasPxCap(this._env()), this.MAX_SIDE_HARD);
+      // 전면 캔버스보다 선명하지 않으면 얹을 이유가 없다(메모리만 먹는다).
+      if (rs <= (st.renderScale || 0) * this.RERENDER_GAIN) { this._clearCrop(); return; }
+      const cv = this._ensureCrop(baseCanvas);
+      if (!cv) return;
+      const cssW = baseVp.width * st.baseCssScale, cssH = baseVp.height * st.baseCssScale;
+      cv.width  = Math.max(1, Math.round(w0 * rs));
+      cv.height = Math.max(1, Math.round(h0 * rs));
+      cv.style.left   = (rect.x * cssW) + "px";
+      cv.style.top    = (rect.y * cssH) + "px";
+      cv.style.width  = (rect.w * cssW) + "px";
+      cv.style.height = (rect.h * cssH) + "px";
+      const ctx = cv.getContext("2d", { alpha: false });
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
+      try { if (st.cropTask) st.cropTask.cancel(); } catch (e) {}
+      const vp = page.getViewport({ scale: rs, rotation: rot });
+      // transform: 페이지 전체 뷰포트를 크롭 원점만큼 밀어 넣는다(크롭 좌상단이 캔버스 0,0).
+      const task = page.render({
+        canvasContext: ctx, viewport: vp,
+        transform: [1, 0, 0, 1, -Math.round(x0 * rs), -Math.round(y0 * rs)]
+      });
+      st.cropTask = task;
+      st.cropScale = rs;
+      try { await task.promise; } catch (e) { /* cancel 등 무시 */ }
+    },
+
+    /** 크롭 오버레이 캔버스 확보 — 전용 CSS 없이 인라인 스타일만 쓴다.
+     *  z-index 0 = 전면 캔버스(비위치 in-flow) 위 · 구역(1)·주석·핀(3) 레이어 아래. */
+    _ensureCrop(baseCanvas) {
+      const st = this._renderState;
+      if (st.crop && st.crop.parentNode) return st.crop;
+      const host = (baseCanvas && baseCanvas.parentNode) || document.getElementById("map-transform");
+      if (!host) return null;
+      const cv = document.createElement("canvas");
+      cv.id = "pdf-canvas-hi";
+      cv.style.cssText = "position:absolute;z-index:0;display:block;pointer-events:none;";
+      if (baseCanvas && baseCanvas.nextSibling) host.insertBefore(cv, baseCanvas.nextSibling);
+      else host.appendChild(cv);
+      st.crop = cv;
+      return cv;
+    },
+
+    /** 크롭 오버레이 제거(페이지·문서 전환, 축소, 전면 캔버스로 충분해진 경우) */
+    _clearCrop() {
+      const st = this._renderState;
+      try { if (st.cropTask) st.cropTask.cancel(); } catch (e) {}
+      st.cropTask = null; st.cropScale = 0;
+      try { if (st.crop && st.crop.parentNode) st.crop.parentNode.removeChild(st.crop); } catch (e) {}
+      st.crop = null;
     },
 
     /** 전 페이지를 오프스크린 렌더 → 고화질 이미지 dataURL 배열 (배포 스냅샷용).
@@ -1549,6 +1738,10 @@
           // 표시 필터는 도면·미니맵에 동일 적용. 단, 지금 열람 중인 핀은 기준점이라 항상 표시.
           if (p.id !== pin.id && !PinSeries.isVisible(p)) return;
           const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p) };
+          // 🔴 색·형태 정본 = PinSeries.markerStyle — 도면 마커(11_UI)와 동일 함수.
+          //    체크보드 핀의 사진 등록 여부를 미니맵에도 똑같이 반영한다.
+          //    (한쪽만 반영하면 사용자에게 거짓말이 된다)
+          const _st = PinSeries.markerStyle(p);
           const dot = document.createElement("div");
           dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
@@ -1556,10 +1749,16 @@
           dot.title = p.label || "";
           dot.dataset.id = p.id;      // 도면 마커(.pin-marker[data-id])와 동일 식별자 — 번호 일치 검증 가능
           dot.dataset.kind = meta.kind;
+          dot.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(도면 마커와 동일 판정)
           // 색상도 도면 마커와 같은 정본에서 파생(현재 핀은 gold 강조 유지 → 인라인 지정 안 함).
           // 점 위에 흰 숫자가 얹히므로 가장 어두운 톤(needle)을 쓴다 — 팔레트 6종 전부 8.96~13.0:1
           // (head2 를 쓰면 gold 가 4.46:1 로 본문 기준 4.5:1 미달).
-          if (p.id !== pin.id) dot.style.background = PinSeries.colorsOf(meta.kind).needle;
+          // 체크보드: 등록 #172554(14.69:1) / 미등록 #4f46e5(6.29:1) — 둘 다 흰 숫자 4.5:1 초과.
+          if (p.id !== pin.id) dot.style.background = _st.colors.needle;
+          // 형태 단서(색각 이상 대비): 도면 링 패턴과 같은 이름에서 파생한 테두리.
+          // CSS 클래스(.pano-radar-pin-checkboard=dashed)만으로는 등록/미등록이 같아진다 → 인라인으로 덮어쓴다.
+          dot.style.borderStyle = _st.border;
+          dot.style.borderWidth = (_st.border === "solid") ? "1px" : "1.4px";
           const dispNo = meta.no;
           const no = document.createElement("span");
           no.className = "pano-radar-pin-no";
@@ -2800,8 +2999,115 @@
       // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
       if (State.mode !== "viewer" && State.fileType === "pdf" && State.pdfDoc
           && typeof PDF !== "undefined" && PDF.requestZoomRerender) {
-        PDF.requestZoomRerender(State.zoom);
+        // 애니메이션(플라이/ISO/구역 확대)이 남아 있으면 그 잔여시간만큼 재렌더를 미룬다
+        // → 애니메이션 중에는 부하 0, 끝난 뒤 최종 배율로 딱 한 번 고품질 렌더.
+        PDF.requestZoomRerender(State.zoom, this._settleRemain());
       }
+      // [화질] 확대가 끝나면 합성 힌트를 풀어, 브라우저가 현재 배율로 다시 래스터화하게 한다.
+      this._scheduleSettle();
+    },
+
+    /* ── 확대 종료 후 화질 수렴(settle) ──────────────────────────────────
+       will-change:transform 이 걸린 레이어는 브라우저가 "확대 전 해상도" 텍스처를
+       재사용하는 경향이 있어, 특히 ISO(rotateX/rotateZ 3D) 아래에서 확대 결과가 흐릿하다.
+       MDN 권고대로 "변화가 끝나면 will-change 를 제거"해 재래스터화를 유도한다.
+       (조작이 다시 시작되면 즉시 되돌려 성능을 지킨다 — 아래 _armWillChange)
+       ⚠ 정직 고지: 이 항목은 라이브 브라우저로 효과를 실측하지 못했다(코드/명세 근거만).
+          되돌리려면 _scheduleSettle 호출 한 줄만 제거하면 된다. */
+    SETTLE_IDLE_MS: 180,
+    _settleUntil: 0,     // 진행 중인 CSS transition 종료 시각(performance.now 기준)
+    _settleTimer: null,
+    /** 진행 중 애니메이션의 남은 시간(ms) */
+    _settleRemain() {
+      const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      if (this._flyRaf) return this.SETTLE_IDLE_MS;      // rAF 플라이: 매 프레임 리셋되므로 최소값
+      return Math.max(0, this._settleUntil - now);
+    },
+    /** CSS transition 기반 애니메이션 시작을 알린다(focusZoneIso/_applyIso 공용) */
+    _markAnimating(durationMs) {
+      const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      this._settleUntil = now + (durationMs || 0) + 40;
+      this._armWillChange();
+    },
+    _armWillChange() {
+      try { if (this.transform && this.transform.style.willChange !== "transform") this.transform.style.willChange = "transform"; } catch (e) {}
+    },
+    _scheduleSettle() {
+      if (typeof setTimeout !== "function") return;
+      this._armWillChange();
+      clearTimeout(this._settleTimer);
+      const wait = this.SETTLE_IDLE_MS + this._settleRemain();
+      this._settleTimer = setTimeout(() => {
+        if (this._flyRaf || State.panDragging) { this._scheduleSettle(); return; } // 아직 조작 중
+        try { if (this.transform) this.transform.style.willChange = "auto"; } catch (e) {}
+      }, wait);
+    },
+
+    /* ══ [화질] 보이는 도면 영역 산출 — 고해상도 크롭 렌더용 ══════════════════
+       전면 캔버스 한 장으로는 대형 도면의 구역 확대를 감당할 수 없다(구조적 상한):
+         A1(2384×1684pt) · 캔버스 한 변 상한 8192px → 최대 렌더 배율 ≈ 3.44
+         → dpr 2 화면에서 선명함이 유지되는 줌은 ≈1.7배까지. 구역 확대는 4~8배다.
+       그래서 확대가 끝나면 "지금 보이는 영역만" 그 배율로 다시 그려 위에 얹는다
+       (02_PDF.renderCrop). 크롭 면적은 뷰포트 크기로 자연히 묶여 메모리가 안 터진다. */
+    ISO_ANGLES: [-32, 58, 148, 238],   // applyTransform 의 ISO_Z 와 같은 값(코너 시점 4종)
+    ISO_TILT_DEG: 54,                  // applyTransform 의 rotateX(54deg)
+
+    /** 도면 로컬좌표(px) → 화면좌표(px). applyTransform 과 같은 모델.
+     *  ⚠ CSS perspective(2600px)는 무시하는 직교 근사다 — focusZoneIso 가 중앙정렬에
+     *     쓰는 것과 동일한 근사이며, 그래서 크롭 영역에 넉넉한 여백(pad)을 준다.
+     *  순수 함수(테스트 가능). */
+    projectPoint(lx, ly, o) {
+      const z = o.zoom, px = o.panX, py = o.panY;
+      if (!o.iso) return { x: px + z * lx, y: py + z * ly };
+      const th = (o.isoAngleDeg || 0) * Math.PI / 180;
+      const cs = Math.cos(th), sn = Math.sin(th);
+      const tilt = (o.tiltDeg == null ? this.ISO_TILT_DEG : o.tiltDeg) * Math.PI / 180;
+      const cosX = Math.cos(tilt);
+      return { x: px + z * (lx * cs - ly * sn), y: py + z * ((lx * sn + ly * cs) * cosX) };
+    },
+
+    /** 뷰포트에 실제로 보이는 도면 영역 (0~1 비율 {x,y,w,h}). 순수 함수.
+     *  역행렬 대신 전진 투영 격자 표본을 쓴다: ISO(3D+perspective) 역변환은 정확히 풀 수 없고,
+     *  근사 역행렬은 "조용히 틀린 영역"을 그린다. 표본은 둔하지만 틀리지 않는다.
+     *  ponytail: O(n²) 격자(97×97≈9.4k, 확대 종료 시 1회만). 정밀도가 더 필요하면 N만 올린다. */
+    computeVisibleRect(o) {
+      const N = o.grid || 96;
+      const pad = (o.pad == null ? 0.25 : o.pad);
+      const cw = o.contentW, ch = o.contentH, vw = o.viewW, vh = o.viewH;
+      const FULL = { x: 0, y: 0, w: 1, h: 1 };
+      if (!(cw > 0 && ch > 0 && vw > 0 && vh > 0)) return FULL;
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0, hit = 0;
+      for (let i = 0; i <= N; i++) {
+        const u = i / N, lx = u * cw;
+        for (let j = 0; j <= N; j++) {
+          const v = j / N;
+          const p = this.projectPoint(lx, v * ch, o);
+          if (p.x < 0 || p.y < 0 || p.x > vw || p.y > vh) continue;
+          hit++;
+          if (u < x0) x0 = u;
+          if (u > x1) x1 = u;
+          if (v < y0) y0 = v;
+          if (v > y1) y1 = v;
+        }
+      }
+      // 표본이 거의 안 잡히면(격자보다 좁은 영역 등) 전면으로 안전하게 폴백한다.
+      if (hit < 2) return FULL;
+      const mx = (x1 - x0) * pad + 1 / N;
+      const my = (y1 - y0) * pad + 1 / N;
+      x0 = Math.max(0, x0 - mx); x1 = Math.min(1, x1 + mx);
+      y0 = Math.max(0, y0 - my); y1 = Math.min(1, y1 + my);
+      return { x: x0, y: y0, w: Math.max(0.01, x1 - x0), h: Math.max(0.01, y1 - y0) };
+    },
+
+    /** 현재 화면 기준 보이는 도면 영역 (PDF.renderCrop 입력) */
+    visibleDrawingRect() {
+      if (!this.viewport || !this.transform) return null;
+      return this.computeVisibleRect({
+        contentW: this.transform.offsetWidth, contentH: this.transform.offsetHeight,
+        viewW: this.viewport.clientWidth, viewH: this.viewport.clientHeight,
+        zoom: State.zoom, panX: State.pan.x, panY: State.pan.y,
+        iso: !!State.isoView, isoAngleDeg: this.ISO_ANGLES[(State.isoDir || 0) % 4]
+      });
     },
 
     /** ISO 3D 뷰 — 4방향 순환:
@@ -2872,6 +3178,7 @@
           State.zoom = z;
           State.pan = { x: (vw - size.w * z) / 2, y: (vh - size.h * z) / 2 + vh * 0.04 };
         }
+        this._markAnimating(1010); // 전환 끝난 뒤 최종 배율로 1회 고품질 재렌더
         this.applyTransform();
         setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.remove("iso-animating"); }, 1050);
       }
@@ -3148,6 +3455,9 @@
       const tr = this.transform;
       try { tr.style.transition = "transform " + (duration / 1000) + "s cubic-bezier(.16,1,.3,1)"; } catch (e) {}
       { const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.add("iso-animating"); }
+      // 구역 확대(ISO)는 CSS transition 이라 프레임 콜백이 없다 → 전환 종료 시각을 명시적으로 알린다.
+      // 이게 없으면 재렌더가 전환 도중(140ms)에 돌아 애니메이션이 끊기고, 최종 배율도 아닌 값으로 그려진다.
+      this._markAnimating(duration);
       this.applyTransform();
       this._syncIsoButtons();
       setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.remove("iso-animating"); }, duration + 40);
@@ -3424,7 +3734,11 @@
           }
         }
         const meta = numMap.get(pin.id) || { no: pageIdx, kind: PinSeries.kindOf(pin) };
-        const hasContent = meta.kind === "content";
+        // 🔴 색·형태 정본 = PinSeries.markerStyle (미니맵 07_Radar 도 같은 함수를 쓴다).
+        //    체크보드 핀은 kind 가 늘 "checkboard" 라 kind 만으로는 사진 유무를 알 수 없다
+        //    → filled 축을 따로 받아 등록/미등록을 색·링 패턴으로 구분한다.
+        const _st = PinSeries.markerStyle(pin);
+        const hasContent = _st.filled;
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
@@ -3436,19 +3750,21 @@
         const dispNo = meta.no;
         marker.dataset.no = dispNo;
         marker.dataset.kind = meta.kind;
+        marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
+        marker.classList.add(_st.filled ? "pin-filled" : "pin-hollow");
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
         // 🔴 색상도 PinSeries 정본에서 파생 — 미니맵 점과 같은 색을 쓴다.
-        const _col = PinSeries.colorsOf(meta.kind);
+        const _col = _st.colors;
         const headFill  = _col.head;
         const headFill2 = _col.head2;
         const needleTip = _col.needle;
         const txtFill   = _col.text;
-        // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 부류를 구분:
-        // 콘텐츠=실선 / 미배치=점선 / 체크보드=파선
-        const ringDash  = PinSeries.RING[meta.kind] || "";
+        // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 구분:
+        // 실선=콘텐츠 등록 / 파선=체크보드(사진 등록됨) / 점선=미등록
+        const ringDash  = _st.dash;
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -5852,6 +6168,8 @@
         if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드 시작";
         const startInput = UI.$("input-checkboard-start");
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
+        if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+        else { const pbBtn = UI.$("btn-checkboard-photobatch"); if (pbBtn) pbBtn.classList.add("hidden"); }
       } catch (e) {}
       if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
@@ -6037,6 +6355,7 @@
       if (this._pageRendering) { this._pendingPage = next; return; } // 중복 렌더 방지
       State.pdfPage = next;
       UI.updatePdfPagination(); // 페이지 번호/버튼 상태 즉시 반영 (렌더 완료 전에도)
+      if (State.checkboard) this._updateCheckboardQuickStatus(next); // 페이지 전환 시 "사진 폴더 연동" 버튼·안내문 갱신
       this._pageRendering = true;
       try {
         if (State.mode === "viewer" && State.viewerPages) {
@@ -6269,6 +6588,21 @@
       if (cbBtn) cbBtn.addEventListener("click", toggleCheckboard);
       const cbEnter = UI.$("btn-checkboard-enter");
       if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
+
+      // [마스터 요청 2026-09-03] 사이드바 툴레일 "포인트" 버튼 — 클릭 한 번으로
+      //   체크보드 순차 배치 모드 진입(기존 btn-checkboard-enter 재사용, 새 로직 없음).
+      //   기존 #btn-place(이름/사진 폼)·#btn-checkboard-enter·#btn-photobatch 단독 진입은
+      //   그대로 유지된다 — 이 버튼은 지름길일 뿐 기존 길을 없애지 않는다.
+      const quickPoint = UI.$("btn-quickpoint");
+      if (quickPoint) quickPoint.addEventListener("click", () => this._quickCheckboardEntry());
+
+      // [마스터 요청 2026-09-03] "사진 폴더 연동" — 방금 찍은 체크보드 핀 범위(시작~마지막)로
+      //   PhotoBatch.open() 을 미리 채워 연다. 사용자가 범위를 다시 입력할 필요 없음.
+      const cbPhotoBatch = UI.$("btn-checkboard-photobatch");
+      if (cbPhotoBatch) cbPhotoBatch.addEventListener("click", () => {
+        const range = this._checkboardQuickRange(State.pdfPage || 1);
+        if (typeof PhotoBatch !== "undefined" && PhotoBatch.open) PhotoBatch.open(range);
+      });
 
       // 체크보드 구역별 시작 번호 입력
       const cbStart = UI.$("input-checkboard-start");
@@ -7055,7 +7389,56 @@
       if (typeof PinGrid !== "undefined") PinGrid.render();
       this._updateSyncBadge && this._updateSyncBadge();
       this._autoSave && this._autoSave();
+      this._updateCheckboardQuickStatus(curPage);
       Prompt && Prompt.toast && Prompt.toast("체크 포인트 #" + no + " 추가 · 자동저장");
+    },
+
+    /** [마스터 요청 2026-09-03] 사이드바 툴레일 "포인트" 버튼의 진입점 — 클릭 한 번으로
+     *  체크보드 순차 배치 모드로 들어간다(기존 로직 재사용, 새 진입 로직 없음).
+     *  이미 체크보드 모드면 배치 토글(#btn-place)만 위임한다. */
+    _quickCheckboardEntry() {
+      if (!State.checkboard) {
+        const cb = UI.$("btn-checkboard-enter");
+        if (cb) cb.click(); // 기존 toggleCheckboard 재사용 — 체크보드 진입 + 배치 자동 시작
+      } else {
+        const bp = UI.$("btn-place");
+        if (bp) bp.click();
+      }
+    },
+
+    /** 현재 페이지에서 방금 찍은 체크보드 계열 핀의 번호 범위(시작~마지막).
+     *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백.
+     *  [마스터 요청 2026-09-03] series:"checkboard" 를 함께 반환해 PhotoBatch.open() 이
+     *  콘텐츠 계열과 혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수). */
+    _checkboardQuickRange(page) {
+      const pg = page || State.pdfPage || 1;
+      const map = PinSeries.numbers(State.pins, pg);
+      let start = null, end = null;
+      (State.pins || []).forEach((p) => {
+        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        const info = map.get(p.id);
+        if (!info) return;
+        if (start === null || info.no < start) start = info.no;
+        if (end === null || info.no > end) end = info.no;
+      });
+      const fallback = this._checkboardStart(pg);
+      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: "checkboard" };
+    },
+
+    /** [마스터 요청 2026-09-03] "지금 몇 번부터 / 몇 개 찍었는지"를 기존 place-hint 문구에 반영하고,
+     *  "사진 폴더 연동" 퀵버튼을 찍은 핀이 있을 때만 노출한다(새 UI 요소 없이 기존 요소 재사용). */
+    _updateCheckboardQuickStatus(page) {
+      const pg = page || State.pdfPage || 1;
+      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard).length;
+      const range = this._checkboardQuickRange(pg);
+      const hint = UI.$("place-hint");
+      if (hint && State.checkboard) {
+        hint.textContent = cnt
+          ? ("시작 " + this._checkboardStart(pg) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
+          : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
+      }
+      const pbBtn = UI.$("btn-checkboard-photobatch");
+      if (pbBtn) pbBtn.classList.toggle("hidden", cnt === 0);
     },
 
     _handlePlaceClick(e) {
@@ -12473,8 +12856,16 @@
       this._syncUploadLock();
       if (!listEl) return;
       listEl.innerHTML = "";
-      if (!this.decks.length) { emptyEl.classList.remove("hidden"); return; }
-      emptyEl.classList.add("hidden");
+      if (!this.decks.length) {
+        // ── [결함수정] #decks-empty 는 side-tree 일원화(2b9b677)로 CSS에서 영구 숨김이다.
+        //    과거엔 여기서 return 해버려 UI.renderTree() 호출까지 건너뛰어 #side-tree 가
+        //    갱신되지 않았다(= 구역 0개일 때 사이드바가 통째로 비어 보이는 조용한 실패).
+        //    #decks-empty 를 되살리지 않고, #side-tree 안에서 직접 실제 안내를 그린다. ──
+        if (emptyEl) emptyEl.classList.add("hidden");
+        this._renderSideTreeEmpty();
+        return;
+      }
+      if (emptyEl) emptyEl.classList.add("hidden");
       this.decks.forEach((d) => {
         const isActive = this.currentDeck && this.currentDeck.id === d.id;
         const row = document.createElement("div");
@@ -12506,6 +12897,27 @@
         }
       });
       if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
+    },
+
+    /** [결함수정] 구역 0개일 때 #side-tree 안에 직접 그리는 빈 상태 안내.
+     *  UI.renderTree()(11_UI.js — 다른 에이전트 작업 중이라 수정 금지)도 구역 0개면 같은
+     *  자리에 안내 텍스트만 그리지만 실제 생성 버튼이 없다. 여기서는 프로젝트가 선택된
+     *  경우에만(=진짜 "구역 0개") 실제 생성 버튼이 있는 안내를 그리고, 프로젝트 미선택
+     *  상태에서는 잘못된 안내를 띄우지 않도록 비워둔다.
+     *  ponytail: 이후 다른 코드가 UI.renderTree()를 독립 호출하면(16_Zones.js 등) 이 안내가
+     *  버튼 없는 텍스트로 되돌아갈 수 있다 — 실전에서는 구역이 0개일 때 존재할 수 없는
+     *  zone/pin 갱신 경로라 발생 가능성이 낮지만, 근본 해결은 11_UI.js 쪽 수정이 필요하다. */
+    _renderSideTreeEmpty() {
+      const host = document.getElementById("side-tree");
+      if (!host) return;
+      if (!this.currentProject) { host.innerHTML = ""; return; } // 프로젝트 미선택 — 안내 없음
+      host.innerHTML =
+        '<div class="side-tree-empty">' +
+          '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>구역을 만들면 도면을 등록할 수 있습니다.</p>' +
+          '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>' +
+        '</div>';
+      const btn = document.getElementById("side-tree-create-deck");
+      if (btn) btn.addEventListener("click", () => this.createDeck());
     },
 
     /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */
@@ -13100,8 +13512,13 @@
        — build-tools/photo-timesort.mjs(참고구현·실데이터 57장 검증됨)와 같은 로직을
          브라우저(ArrayBuffer/DataView)로 포팅. 로직은 바꾸지 않는다.
 
-     번호 정본: PinSeries.numbers()(01b_PinSeries.js) — "콘텐츠 계열"(series==="content")만
-       대상으로 한다(체크보드 계열은 별도 채번이라 사진 매칭 대상이 아님).
+     번호 정본: PinSeries.numbers()(01b_PinSeries.js).
+     🔴 [마스터 요청 2026-09-03 갱신] 처음엔 "콘텐츠 계열"만 매칭 대상이었으나(체크보드는 별도
+       채번이라 제외), 마스터가 "체크보드로 핀을 차례대로 박고 → 그 핀들에 사진 폴더를 일괄
+       연동"이라고 명시해 체크보드 계열도 매칭 대상으로 바뀌었다. 번호가 계열마다 독립 채번(1부터)
+       이라 같은 번호가 계열마다 존재할 수 있으므로, open()/_pinList() 는 **어느 계열의 범위인지**
+       를 함께 받는다(series 미지정 시 기존 단독 진입과 동일하게 "content" 로 폴백 — 하위호환).
+       tests/p6-photo-batch.test.mjs §④ 참조(체크보드 제외 기대값 → 계열 지정 매칭으로 변경, 사유 주석 포함).
 
      저장 경로: Cloud.resizeImage()/Cloud.uploadImage() + 오프라인 SyncQueue.enqueue() —
        20_App.js _confirmPin() 의 이미지 분기(≈1908~1934행)와 동일 API 조합을 그대로 쓴다.
@@ -13115,7 +13532,7 @@
   ══════════════════════════════════════════════════════════════ */
   const PhotoBatch = {
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
-    _range: { start: 1, end: 1 },
+    _range: { start: 1, end: 1, series: "content" },
     _busy: false,
 
     /* ══ 순수 로직 — 회귀 테스트가 직접 호출한다(DOM 무의존) ══════════ */
@@ -13228,15 +13645,18 @@
       return withKey;
     },
 
-    /** 🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 현재 페이지의 "콘텐츠 계열"
-     *  핀만 오름차순으로 나열한다(체크보드 계열 제외 — 별도 채번이라 사진 매칭 대상이 아님). */
-    _pinList(pins, page) {
+    /** 🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 현재 페이지의 지정 계열
+     *  핀만 오름차순으로 나열한다. @param {string} [series="content"] 번호는 계열마다
+     *  독립 채번(1부터)이라 계열을 반드시 지정해야 모호성이 없다(미지정 시 기존 단독
+     *  진입과 동일하게 "content" 로 폴백 — 하위호환). */
+    _pinList(pins, page, series) {
+      const ser = series || "content";
       const map = PinSeries.numbers(pins || [], page);
       const list = [];
       (pins || []).forEach((p) => {
         if (!p || (p.page || 1) !== (page || 1)) return;
         const info = map.get(p.id);
-        if (!info || info.series !== "content") return;
+        if (!info || info.series !== ser) return;
         list.push({ pin: p, no: info.no });
       });
       list.sort((a, b) => a.no - b.no);
@@ -13301,14 +13721,21 @@
     },
 
     _defaultRange() {
-      const list = this._pinList(State.pins, State.pdfPage || 1);
-      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1 };
+      const list = this._pinList(State.pins, State.pdfPage || 1, "content");
+      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: "content" };
     },
 
-    open() {
+    /** @param {{start:number,end:number,series?:string}} [range] — [마스터 요청 2026-09-03] 체크보드
+     *  순차 배치 퀵플로우(20_App.js _quickCheckboardEntry → btn-checkboard-photobatch)가 방금 찍은
+     *  핀 범위 + series:"checkboard" 를 넘기면 사용자가 범위를 다시 입력하지 않도록 그대로 채운다.
+     *  🔴 series 생략 시 기존 단독 진입(#btn-photobatch)과 동일하게 "content" 계열 + 자동 계산
+     *  (_defaultRange) — 기존 동작 불변. */
+    open(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
       this._rows = [];
-      this._range = this._defaultRange();
+      this._range = (range && Number.isFinite(range.start) && Number.isFinite(range.end))
+        ? { start: range.start, end: range.end, series: range.series || "content" }
+        : this._defaultRange();
       const modal = document.getElementById("photobatch-modal");
       if (!modal) return;
       modal.classList.remove("hidden");
@@ -13317,6 +13744,13 @@
       const e = document.getElementById("photobatch-end"); if (e) e.value = this._range.end;
       const ov = document.getElementById("photobatch-overwrite"); if (ov) ov.checked = false;
       const prog = document.getElementById("photobatch-progress"); if (prog) prog.textContent = "";
+      // [마스터 요청 2026-09-03] 계열이 섞여 모호해질 수 있으므로 대상 계열을 화면에 명시한다
+      // (조용히 아무거나 고르지 않음 — §10 조용한 실패 금지).
+      const title = document.getElementById("photobatch-title");
+      if (title) {
+        const label = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
+        title.textContent = "사진 폴더 일괄 매칭 — " + label + " 계열";
+      }
       this._renderTable();
     },
 
@@ -13367,7 +13801,7 @@
       const host = document.getElementById("photobatch-table-body");
       if (!host) return;
       const page = State.pdfPage || 1;
-      const pinList = this._pinList(State.pins, page);
+      const pinList = this._pinList(State.pins, page, this._range.series);
       const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
       const matchByRow = new Map();
       matches.forEach((m) => matchByRow.set(m.row, m));
@@ -13405,7 +13839,10 @@
         } else { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
       }
       const cntEl = document.getElementById("photobatch-count");
-      if (cntEl) cntEl.textContent = matches.length + "건 매칭 예정 · 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+      if (cntEl) {
+        const serLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
+        cntEl.textContent = matches.length + "건 매칭 예정 · [" + serLabel + " 계열] 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+      }
     },
 
     _setRowStatus(row, text) {
@@ -13426,7 +13863,7 @@
     async run() {
       if (this._busy) return;
       const page = State.pdfPage || 1;
-      const pinList = this._pinList(State.pins, page);
+      const pinList = this._pinList(State.pins, page, this._range.series);
       const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
       if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("매칭할 핀·사진이 없습니다"); return; }
       if (leftoverPins.length || leftoverRows.length) {
