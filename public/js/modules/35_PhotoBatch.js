@@ -218,10 +218,15 @@
       return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1 };
     },
 
-    open() {
+    /** @param {{start:number,end:number}} [range] — [마스터 요청 2026-09-03] 체크보드 순차 배치
+     *  퀵플로우(20_App.js _quickCheckboardEntry → btn-checkboard-photobatch)가 방금 찍은 핀 범위를
+     *  넘기면 사용자가 범위를 다시 입력하지 않도록 그대로 채운다. 생략 시 기존처럼 자동 계산(_defaultRange). */
+    open(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
       this._rows = [];
-      this._range = this._defaultRange();
+      this._range = (range && Number.isFinite(range.start) && Number.isFinite(range.end))
+        ? { start: range.start, end: range.end }
+        : this._defaultRange();
       const modal = document.getElementById("photobatch-modal");
       if (!modal) return;
       modal.classList.remove("hidden");

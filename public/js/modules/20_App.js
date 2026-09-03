@@ -125,6 +125,8 @@
         if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드 시작";
         const startInput = UI.$("input-checkboard-start");
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
+        if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+        else { const pbBtn = UI.$("btn-checkboard-photobatch"); if (pbBtn) pbBtn.classList.add("hidden"); }
       } catch (e) {}
       if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
@@ -310,6 +312,7 @@
       if (this._pageRendering) { this._pendingPage = next; return; } // 중복 렌더 방지
       State.pdfPage = next;
       UI.updatePdfPagination(); // 페이지 번호/버튼 상태 즉시 반영 (렌더 완료 전에도)
+      if (State.checkboard) this._updateCheckboardQuickStatus(next); // 페이지 전환 시 "사진 폴더 연동" 버튼·안내문 갱신
       this._pageRendering = true;
       try {
         if (State.mode === "viewer" && State.viewerPages) {
@@ -542,6 +545,21 @@
       if (cbBtn) cbBtn.addEventListener("click", toggleCheckboard);
       const cbEnter = UI.$("btn-checkboard-enter");
       if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
+
+      // [마스터 요청 2026-09-03] 사이드바 툴레일 "포인트" 버튼 — 클릭 한 번으로
+      //   체크보드 순차 배치 모드 진입(기존 btn-checkboard-enter 재사용, 새 로직 없음).
+      //   기존 #btn-place(이름/사진 폼)·#btn-checkboard-enter·#btn-photobatch 단독 진입은
+      //   그대로 유지된다 — 이 버튼은 지름길일 뿐 기존 길을 없애지 않는다.
+      const quickPoint = UI.$("btn-quickpoint");
+      if (quickPoint) quickPoint.addEventListener("click", () => this._quickCheckboardEntry());
+
+      // [마스터 요청 2026-09-03] "사진 폴더 연동" — 방금 찍은 체크보드 핀 범위(시작~마지막)로
+      //   PhotoBatch.open() 을 미리 채워 연다. 사용자가 범위를 다시 입력할 필요 없음.
+      const cbPhotoBatch = UI.$("btn-checkboard-photobatch");
+      if (cbPhotoBatch) cbPhotoBatch.addEventListener("click", () => {
+        const range = this._checkboardQuickRange(State.pdfPage || 1);
+        if (typeof PhotoBatch !== "undefined" && PhotoBatch.open) PhotoBatch.open(range);
+      });
 
       // 체크보드 구역별 시작 번호 입력
       const cbStart = UI.$("input-checkboard-start");
@@ -1328,7 +1346,54 @@
       if (typeof PinGrid !== "undefined") PinGrid.render();
       this._updateSyncBadge && this._updateSyncBadge();
       this._autoSave && this._autoSave();
+      this._updateCheckboardQuickStatus(curPage);
       Prompt && Prompt.toast && Prompt.toast("체크 포인트 #" + no + " 추가 · 자동저장");
+    },
+
+    /** [마스터 요청 2026-09-03] 사이드바 툴레일 "포인트" 버튼의 진입점 — 클릭 한 번으로
+     *  체크보드 순차 배치 모드로 들어간다(기존 로직 재사용, 새 진입 로직 없음).
+     *  이미 체크보드 모드면 배치 토글(#btn-place)만 위임한다. */
+    _quickCheckboardEntry() {
+      if (!State.checkboard) {
+        const cb = UI.$("btn-checkboard-enter");
+        if (cb) cb.click(); // 기존 toggleCheckboard 재사용 — 체크보드 진입 + 배치 자동 시작
+      } else {
+        const bp = UI.$("btn-place");
+        if (bp) bp.click();
+      }
+    },
+
+    /** 현재 페이지에서 방금 찍은 체크보드 계열 핀의 번호 범위(시작~마지막).
+     *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백. */
+    _checkboardQuickRange(page) {
+      const pg = page || State.pdfPage || 1;
+      const map = PinSeries.numbers(State.pins, pg);
+      let start = null, end = null;
+      (State.pins || []).forEach((p) => {
+        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        const info = map.get(p.id);
+        if (!info) return;
+        if (start === null || info.no < start) start = info.no;
+        if (end === null || info.no > end) end = info.no;
+      });
+      const fallback = this._checkboardStart(pg);
+      return { start: start === null ? fallback : start, end: end === null ? fallback : end };
+    },
+
+    /** [마스터 요청 2026-09-03] "지금 몇 번부터 / 몇 개 찍었는지"를 기존 place-hint 문구에 반영하고,
+     *  "사진 폴더 연동" 퀵버튼을 찍은 핀이 있을 때만 노출한다(새 UI 요소 없이 기존 요소 재사용). */
+    _updateCheckboardQuickStatus(page) {
+      const pg = page || State.pdfPage || 1;
+      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard).length;
+      const range = this._checkboardQuickRange(pg);
+      const hint = UI.$("place-hint");
+      if (hint && State.checkboard) {
+        hint.textContent = cnt
+          ? ("시작 " + this._checkboardStart(pg) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
+          : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
+      }
+      const pbBtn = UI.$("btn-checkboard-photobatch");
+      if (pbBtn) pbBtn.classList.toggle("hidden", cnt === 0);
     },
 
     _handlePlaceClick(e) {
