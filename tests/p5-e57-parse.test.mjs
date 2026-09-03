@@ -26,9 +26,12 @@ const ok = (cond, label) => {
 };
 const near = (a, b, eps = 1e-6) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= eps;
 
-/** 모듈 블록(`const FLS = {...};`)을 그대로 평가해 FLS 객체를 얻는다 */
-function loadFLS(src) {
-  return new Function("THREE", "Cloud", "document", "window", (src || SRC) + "\n;return FLS;")();
+/** 모듈 블록(`const FLS = {...};`)을 그대로 평가해 FLS 객체를 얻는다.
+ *  winStub/docStub 은 크기 가드(window.confirm)·loadBuffer(document.getElementById) 테스트용 주입. */
+function loadFLS(src, winStub, docStub) {
+  return new Function("THREE", "Cloud", "document", "window", (src || SRC) + "\n;return FLS;")(
+    undefined, undefined, docStub, winStub
+  );
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -196,6 +199,74 @@ function buildE57(opts) {
   return { buf: out.buffer, xml, xmlLen, pageSize, pages, cvPhys: logToPhys(cvLogical) };
 }
 
+/** buildE57 의 단순화 버전 — <points type="CompressedVector"> 섹션을 **여러 개** 만든다.
+ *  cap(=Math.min(MAX_POINTS,total)) 백스톱 검증용: stride 는 섹션마다 done 이 0 부터 다시 세므로
+ *  섹션 수가 많으면 stride 만으로는 전체 상한을 못 지키고, cap 이 실제로 끊어야 한다(뮤테이션 C 대상). */
+function buildE57Sections(sectionsRecords, fieldsOpt) {
+  const fields = fieldsOpt || CART_FIELDS;
+  const pageSize = 1024, USABLE = pageSize - 4, perPacket = 7;
+  const logToPhys = (l) => Math.floor(l / USABLE) * pageSize + (l % USABLE);
+  const proto = fields.map(f => f.kind === "f32"
+    ? `<${f.name} type="Float" precision="single"/>`
+    : `<${f.name} type="Integer" minimum="${f.min}" maximum="${f.max}"/>`).join("");
+  if (sectionsRecords.length > 9) throw new Error("placeholder 는 섹션 9개까지만 지원(CVOFFSETn_ 10자 고정)");
+
+  const pointsXml = sectionsRecords.map((recs, i) =>
+    `<points type="CompressedVector" fileOffset="CVOFFSET${i}_" recordCount="${recs.length}">`
+    + `<prototype>${proto}</prototype><codecs type="Vector" allowHeterogeneousChildren="1"/></points>`);
+  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    + '<e57Root type="Structure"><formatName type="String"><![CDATA[ASTM E57 3D Imaging Data File]]></formatName>'
+    + '<data3D type="Vector" allowHeterogeneousChildren="1">'
+    + sectionsRecords.map((_, i) =>
+      '<vectorChild type="Structure"><name type="String"><![CDATA[s' + i + ']]></name>' + pointsXml[i] + '</vectorChild>').join("")
+    + '</data3D></e57Root>';
+  const xmlLen = Buffer.byteLength(xml, "utf8");
+
+  let cursor = align4(48 + xmlLen);
+  const sections = sectionsRecords.map(recs => {
+    const packed = fields.map(f => packStream(f, recs.map(r => r[f.name] || 0)));
+    const N = recs.length;
+    const packets = [];
+    for (let start = 0; start < N; start += perPacket) {
+      const end = Math.min(start + perPacket, N), last = end === N;
+      packets.push(dataPacket(fields.map((f, idx) => packed[idx].subarray(
+        Math.floor(start * f.bits / 8),
+        last ? Math.ceil(N * f.bits / 8) : Math.floor(end * f.bits / 8)
+      ))));
+    }
+    const secLen = packets.reduce((s, p) => s + p.length, 0);
+    const cvLogical = cursor, dataLogical = cvLogical + 32;
+    cursor = dataLogical + secLen;
+    return { cvLogical, dataLogical, secLen, packets };
+  });
+
+  sections.forEach((sm, i) => { xml = xml.replace("CVOFFSET" + i + "_", String(logToPhys(sm.cvLogical)).padStart(10, "0")); });
+
+  const logicalLen = cursor;
+  const pages = Math.ceil(logicalLen / USABLE);
+  const physLen = pages * pageSize;
+  const logical = new Uint8Array(logicalLen);
+  const hdv = new DataView(logical.buffer);
+  for (let i = 0; i < 8; i++) logical[i] = "ASTM-E57".charCodeAt(i);
+  hdv.setUint32(8, 1, true); hdv.setUint32(12, 0, true);
+  wu64(hdv, 16, physLen); wu64(hdv, 24, logToPhys(48)); wu64(hdv, 32, xmlLen); wu64(hdv, 40, pageSize);
+  logical.set(new TextEncoder().encode(xml), 48);
+  sections.forEach(sm => {
+    logical[sm.cvLogical] = 1;
+    const cdv = new DataView(logical.buffer, sm.cvLogical, 32);
+    wu64(cdv, 8, sm.secLen); wu64(cdv, 16, logToPhys(sm.dataLogical)); wu64(cdv, 24, 0);
+    let o = sm.dataLogical;
+    for (const pk of sm.packets) { logical.set(pk, o); o += pk.length; }
+  });
+
+  const out = new Uint8Array(physLen);
+  for (let p = 0; p < pages; p++) {
+    out.set(logical.subarray(p * USABLE, Math.min((p + 1) * USABLE, logicalLen)), p * pageSize);
+    out.set([0xDE, 0xAD, 0xBE, 0xEF], p * pageSize + USABLE);
+  }
+  return { buf: out.buffer };
+}
+
 /** 기대값(유효 레코드만) */
 function expectCart(records) {
   return records.filter(r => r.cartesianInvalidState === 0).map(r => ({
@@ -316,6 +387,30 @@ console.log("\n[⑥ MAX_POINTS 상한에서 중단 + 균등 다운샘플]");
 }
 
 /* ══════════════════════════════════════════════════════════════
+   ⑥b MAX_POINTS 상한 — 다중 섹션에서 stride 만으로는 못 막는 초과분을 cap 이 끊는다
+   (교차검증 보고서 "미확인" 항목: 실파일 2건 모두 stride 다운샘플만 걸리고 cap 백스톱은
+    도달한 적이 없었다. 섹션마다 stride 누적 done 이 0 부터 다시 시작하므로, 섹션 수가 많으면
+    stride 수식만으론 전체 상한을 못 지킨다 — cap 이 실제로 끊어야 한다. 뮤테이션 C 대상.
+    ※ 최종 반환값은 항상 _decim 이 MAX_POINTS 로 한 번 더 클램프하므로(이중 안전망), "count"만으로는
+    cap 백스톱의 유무를 구분할 수 없다(디버그로 실측: cap 제거해도 최종 count=5로 동일).
+    진짜 위험은 cap 이 없으면 **중간 디코딩 배열(sink.pos)이 total 크기로 부풀어** 대용량 파일에서
+    바로 그 메모리 폭증이 재현된다는 점 — 그래서 _decim 을 항등함수로 바꿔 sink 단계의 진짜 개수를
+    직접 드러낸다(이 테스트에 한해 안전망 하나를 걷어내 대상 로직만 격리 — 목 아님, 실제 _parseE57 그대로). */
+console.log("\n[⑥b MAX_POINTS 상한 — 다중 섹션(stride 만으론 6점, cap 이 5점으로 끊어야 함)]");
+{
+  const FLS = loadFLS();
+  FLS.MAX_POINTS = 5;
+  FLS._decim = (pos, col) => ({ positions: pos, colors: col, count: pos.length / 3 }); // 최종 이중 클램프 제거 → cap 백스톱만 관찰
+  // 3섹션 × 4레코드 = 12 total → stride=ceil(12/5)=3 → 섹션별 로컬 done 기준 2점씩(0,3번째) × 3섹션 = 6점
+  // cap(=min(5,12)=5) 이 실제로 끊지 않으면 6점이 반환된다.
+  const sections = [cartRecords(4), cartRecords(4), cartRecords(4)];
+  const f = buildE57Sections(sections);
+  const parsed = FLS._parseE57(f.buf);
+  ok(parsed.count === 5, `⑥b: 상한 5 → 반환 점 수 ${parsed.count} (다중 섹션 stride 만이면 6점이 됐을 상황)`);
+  ok(parsed.positions.length === 15, `⑥b: positions 길이 ${parsed.positions.length} (기대 15 — cap 크기만 할당)`);
+}
+
+/* ══════════════════════════════════════════════════════════════
    ⑦ 구면좌표 스캔(색상 없음) → 직교 변환 + 무채색 폴백
    ══════════════════════════════════════════════════════════════ */
 console.log("\n[⑦ 구면좌표 + 색상 없는 E57 → 무채색 폴백]");
@@ -376,6 +471,100 @@ console.log("\n[뮤테이션 B] prototype 검색 시작점을 points 태그 뒤 
       why = "count=" + p.count + " (기대 " + exp.length + ")";
     } catch (e) { broke = true; why = "throw: " + e.message.slice(0, 60); }
     ok(broke, "첫 prototype(색인용) 사용 시 ③이 뒤집힘 → " + why);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   뮤테이션 증명 C — cap(=Math.min(MAX_POINTS,total)) 을 없애면 ⑥b가 실패해야 한다
+   ══════════════════════════════════════════════════════════════ */
+console.log("\n[뮤테이션 C] cap 을 Math.min(MAX_POINTS,total) 대신 total 로 두면 ⑥b가 실패해야 함");
+{
+  const needle = "const cap = Math.min(this.MAX_POINTS, total || this.MAX_POINTS);";
+  const mutated = SRC.replace(needle, "const cap = total || this.MAX_POINTS;");
+  if (mutated === SRC) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const FLS = loadFLS(mutated);
+    FLS.MAX_POINTS = 5;
+    FLS._decim = (pos, col) => ({ positions: pos, colors: col, count: pos.length / 3 }); // ⑥b와 동일 — 이중 클램프 제거
+    const sections = [cartRecords(4), cartRecords(4), cartRecords(4)];
+    const f = buildE57Sections(sections);
+    let broke = false, why = "";
+    try {
+      const p = FLS._parseE57(f.buf);
+      broke = p.count !== 5;
+      why = "count=" + p.count + " (기대 5)";
+    } catch (e) { broke = true; why = "throw: " + e.message.slice(0, 60); }
+    ok(broke, "cap 백스톱 제거 시 ⑥b가 뒤집힘 → " + why);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ⑧ 대용량 E57 크기 가드 — _e57SizeWarning/_e57Threshold/_confirmLargeE57 (순수 로직)
+   ══════════════════════════════════════════════════════════════ */
+console.log("\n[⑧ 대용량 E57 크기 가드 — 임계값·문구·저사양 기기 감지]");
+{
+  const FLS = loadFLS();
+  ok(FLS._e57SizeWarning(FLS.E57_LARGE_FILE_BYTES) === null, "임계값 이하(경계 포함)면 경고 없음");
+  const over = FLS._e57SizeWarning(FLS.E57_LARGE_FILE_BYTES + 1);
+  ok(over !== null, "임계값 초과면 경고 문구 반환");
+  ok(/MB/.test(over) && /계속하시겠습니까/.test(over), "경고 문구에 실제 크기(MB)·확인 질문 포함: " + over.slice(0, 30));
+
+  ok(typeof navigator === "undefined", "테스트 환경엔 navigator 없음 — 기본 임계값 경로가 실제로 쓰임");
+  ok(FLS._e57Threshold() === FLS.E57_LARGE_FILE_BYTES, "navigator 없어도 정상 동작(기본 임계값)");
+
+  // deviceMemory ≤4GB(저사양·주로 모바일) → 임계값 절반, 없는 브라우저에서도 안전
+  globalThis.navigator = { deviceMemory: 4 };
+  try {
+    ok(FLS._e57Threshold() === FLS.E57_LARGE_FILE_BYTES / 2, "deviceMemory≤4GB → 임계값 절반");
+    ok(FLS._e57SizeWarning(FLS.E57_LARGE_FILE_BYTES / 2 + 1) !== null, "저사양 임계값 기준으로도 초과분 경고");
+  } finally { delete globalThis.navigator; }
+
+  // 기존 UI(window.confirm) 재사용 — 새 모달 없음
+  let confirmCalled = 0, confirmMsg = "";
+  const FLS2 = loadFLS(null, { confirm: (m) => { confirmCalled++; confirmMsg = m; return false; } });
+  ok(FLS2._confirmLargeE57("test-msg") === false, "window.confirm 반환값을 그대로 전달");
+  ok(confirmCalled === 1 && confirmMsg === "test-msg", "window.confirm 을 실제로 호출(새 모달 없이 기존 패턴 재사용)");
+
+  const FLS3 = loadFLS(); // window 없음(SSR 등)
+  ok(FLS3._confirmLargeE57("x") === true, "window 없으면 차단하지 않고 통과(true)");
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ⑨ loadBuffer 크기 가드 연동 — 임계 미만은 경고 없이 진행 / 초과는 확인 콜백을 탄다
+   ══════════════════════════════════════════════════════════════ */
+console.log("\n[⑨ loadBuffer 크기 가드 연동]");
+{
+  const domStub = { getElementById: () => null };
+  const bigLen = loadFLS().E57_LARGE_FILE_BYTES + 1024;
+
+  // 임계 미만 — 확인창 없이 곧장 파싱
+  {
+    let confirmCalls = 0, parseCalled = false;
+    const FLS = loadFLS(null, { confirm: () => { confirmCalls++; return true; } }, domStub);
+    FLS._parseE57 = () => { parseCalled = true; return { positions: new Float32Array(3), colors: null, count: 1 }; };
+    FLS._render = () => {};
+    await FLS.loadBuffer(new ArrayBuffer(1024), "small.e57");
+    ok(confirmCalls === 0 && parseCalled, "⑨: 임계 미만이면 확인창 없이 곧장 파싱");
+  }
+
+  // 임계 초과 + 취소 — 파싱 생략
+  {
+    let parseCalled = false;
+    const FLS = loadFLS(null, { confirm: () => false }, domStub);
+    FLS._parseE57 = () => { parseCalled = true; return { positions: new Float32Array(3), colors: null, count: 1 }; };
+    FLS._render = () => {};
+    await FLS.loadBuffer(new ArrayBuffer(bigLen), "big.e57");
+    ok(!parseCalled, "⑨: 임계 초과 + 취소면 _parseE57 을 호출하지 않음");
+  }
+
+  // 임계 초과 + 확인 — 파싱 진행
+  {
+    let parseCalled = false, renderCalled = false;
+    const FLS = loadFLS(null, { confirm: () => true }, domStub);
+    FLS._parseE57 = () => { parseCalled = true; return { positions: new Float32Array(3), colors: null, count: 1 }; };
+    FLS._render = () => { renderCalled = true; };
+    await FLS.loadBuffer(new ArrayBuffer(bigLen), "big.e57");
+    ok(parseCalled && renderCalled, "⑨: 임계 초과 + 확인이면 _parseE57·_render 진행");
   }
 }
 

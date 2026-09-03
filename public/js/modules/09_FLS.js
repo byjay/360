@@ -1,5 +1,12 @@
   const FLS = {
     MAX_POINTS: 1_800_000,     // 렌더 안정 상한 (초과 시 균등 다운샘플)
+    // [정본] E57 대용량 메모리 가드 — 실측(커밋 017e532, build-tools/e57-realfile-check.mjs):
+    //   PANOPI_Panopi301.e57  51.9MB → 파싱 중 rss 178MB (3.43배)
+    //   PANOPI_scan101.e57   219.2MB → 파싱 중 rss 604MB (2.76배)
+    // 모바일 브라우저는 탭 메모리가 수백MB~1GB대에서 강제 종료된다(현장 폰에서 쓰는 PWA).
+    // 배율은 실측 상한(3.43배)을 반올림해 보수적으로 잡는다 — 추정치임을 문구에도 명시한다.
+    E57_LARGE_FILE_BYTES: 100 * 1024 * 1024,   // 100MB 초과 시 경고(추정 메모리 ≈350MB)
+    E57_MEM_MULTIPLIER: 3.5,
     renderer: null, scene: null, camera: null, points: null,
     _raf: null, _drag: null, _rot: { theta: 0.6, phi: 1.1, r: 3 },
     _target: { x: 0, y: 0, z: 0 }, _inited: false, _ro: null,
@@ -60,11 +67,39 @@
       if (eh) eh.textContent = h || "";
     },
 
+    /** 저사양 기기면 임계값을 낮춘다(navigator.deviceMemory 없는 브라우저도 정상 동작 — 그때는 기본값 그대로) */
+    _e57Threshold() {
+      const dm = (typeof navigator !== "undefined" && typeof navigator.deviceMemory === "number")
+        ? navigator.deviceMemory : null;
+      // deviceMemory(GB) 4 이하 = 저사양(주로 모바일) — 임계값 절반으로
+      return (dm != null && dm <= 4) ? this.E57_LARGE_FILE_BYTES / 2 : this.E57_LARGE_FILE_BYTES;
+    },
+
+    /** 파일 크기 → 경고 필요 여부 + 안내 문구(순수 함수, DOM 의존 없음 — 테스트 가능) */
+    _e57SizeWarning(byteLength) {
+      const threshold = this._e57Threshold();
+      if (byteLength <= threshold) return null;
+      const mb = (n) => (n / (1024 * 1024)).toFixed(1);
+      const estMb = mb(byteLength * this.E57_MEM_MULTIPLIER);
+      return "대용량 E57 파일입니다 (" + mb(byteLength) + "MB) — 파싱 중 메모리 사용량이 약 " + estMb
+        + "MB 까지 늘어날 수 있습니다(실측 배율 기반 추정치, 실제 값은 파일 내용에 따라 다를 수 있음). "
+        + "모바일/저사양 기기에서는 브라우저 탭이 강제 종료될 수 있습니다. 계속하시겠습니까?";
+    },
+
+    /** 대용량 확인 다이얼로그(기존 UI 패턴 재사용 — window.confirm) */
+    _confirmLargeE57(msg) {
+      return (typeof window !== "undefined" && typeof window.confirm === "function") ? window.confirm(msg) : true;
+    },
+
     /** ArrayBuffer + 파일명 → 파싱 후 렌더 */
     async loadBuffer(buf, name) {
       const ext = this.extOf(name);
       const badge = this._el("fls-fmt-badge");
       if (badge) badge.textContent = ext ? ("." + ext) : "";
+      if (ext === "e57") {
+        const warn = this._e57SizeWarning(buf.byteLength);
+        if (warn && !this._confirmLargeE57(warn)) { this._show("fls-empty"); return; }
+      }
       let parsed = null;
       try {
         if (ext === "ply") parsed = this._parsePLY(buf);
