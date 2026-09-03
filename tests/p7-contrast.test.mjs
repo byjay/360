@@ -19,19 +19,32 @@
  *     **패턴 자체**("고정 배경 + 테마변수 글자")를 위반으로 잡는다 — 값에 의존하지 않으므로
  *     현재 값이 얼마든, 미래에 실제 다크테마가 도입되든 항상 유효하다.
  *
- *  ④ .wm-toast — 하단 토스트 알림. 배경이 linear-gradient(짙은 남색 2스톱)인데, 기존 ①~③
- *     스캐너는 background-image(그라디언트) 위의 글자색을 검사하지 못해 다음 실사고를
- *     놓쳤다: color 가 #2b2820(거의 검정)으로 남아 있어도 ①~③ 어느 것도 위반으로 잡지 못함
- *     (③은 "리터럴 hex/rgb 불투명 배경 + var(--text*) 글자"만 보고, 그라디언트·고정 hex 글자는
- *     스코프 밖). 그래서 ④는 background(-image) 안의 그라디언트 색 스톱을 전부 파싱해 각
- *     스톱 위에서 글자색 대비를 계산하고, 가장 나쁜(최소) 대비가 기준을 만족해야 통과로 잡는다.
+ *  ④ .wm-toast — 하단 토스트 알림. 2차 실사고(2026-09-03, coordinator 재작업 지시):
+ *     ①~③ 스캐너는 public/css/style.css **한 파일만** 봤다. 그런데 실제 로드 순서
+ *     (public/index.html 의 <link> 순서)는 style.css → seastar-family-tokens.css →
+ *     seastar-3d-skin.css 세 파일이고, family-tokens.css:284 에 `.wm-toast { color:
+ *     #11141a !important; }` 가 있었다 — style.css 의 `color:#f4f6fb`(비-important)를
+ *     항상 이겨 실제 배포본은 검정 글자였다. style.css 만 보는 스캐너는 이 클래스의
+ *     실사고를 **원리적으로 못 잡는다**(다른 파일의 override 자체를 모른다).
+ *     그래서 ④는 index.html 의 <link rel="stylesheet"> 순서에서 로컬 CSS 파일 목록을
+ *     "파생"하고(손목록 금지, §10), 그 순서대로 전부 파싱해 같은 선택자에 대해
+ *     "!important 가 비-important 를 이기고, 같은 중요도면 나중 파일이 이긴다"는
+ *     캐스케이드로 최종 color/background 를 정한 뒤 그라디언트 색 스톱 위 대비를 계산한다.
+ *     [ponytail] 이건 완전한 CSS 특이도(specificity) 엔진이 아니다 — "정확히 같은 선택자
+ *     문자열"에 대해서만 캐스케이드를 푼다(가상클래스·베이스클래스 간 특이도 비교, 즉
+ *     `.btn:hover`와 `.btn` 이 같은 요소에 동시 적용될 때의 우선순위는 다루지 않는다).
+ *     .wm-toast 는 두 파일 모두 단일 클래스 선택자라 이 단순화로 충분하며, 실측으로
+ *     확인했다(감사 스크립트로 전체 프로젝트를 스캔한 결과 `:hover`/`.active` 조합 선택자는
+ *     오탐이 났다 — 업그레이드 경로: 필요해지면 실제 특이도 계산을 추가한다).
  *
- * 하드코딩 금지(§10): 기대 색상을 손으로 나열하지 않는다 — style.css 를 파싱해
- * :root 커스텀 프로퍼티 + 해당 규칙의 color/background 를 그대로 읽어 WCAG 대비비를 계산한다.
+ * 하드코딩 금지(§10): 기대 색상을 손으로 나열하지 않는다 — CSS 를 파싱해 :root 커스텀
+ * 프로퍼티(3개 파일 모두 병합, 나중 파일이 이김 — seastar-3d-skin.css 의 :root 가 --text 등을
+ * 다크 값으로 리맵함을 실측 확인) + 해당 규칙의 color/background 를 그대로 읽어 계산한다.
  * 새로 추가되는 색도 이 파서가 그대로 재계산하므로, 값이 바뀌면 이 테스트도 같이 재검증한다.
  *
  * 뮤테이션 증명: color 를 옛 값(var(--gold)/var(--text) 등 테마 변수, 또는 .wm-toast 의 경우
- * #2b2820)으로 되돌리면 FAIL 해야 한다.
+ * family-tokens.css 에 `.wm-toast { color: #11141a !important; }` 재삽입)으로 되돌리면
+ * FAIL 해야 한다.
  * (수동 확인 절차는 커밋 메시지에 EXIT 코드로 기록)
  */
 import fs from "node:fs";
@@ -39,9 +52,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const css = fs.readFileSync(path.join(ROOT, "public/css/style.css"), "utf8")
-  .replace(/\r\n/g, "\n")
-  .replace(/\/\*[\s\S]*?\*\//g, ""); // 주석 제거 — 주석 뒤 선언이 "직전 ; 없음"으로 오매칭되는 것 방지
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, ""); // 주석 제거 — 뒤 선언이 "직전 ; 없음"으로 오매칭되는 것 방지
+const readCss = (relPath) => stripComments(fs.readFileSync(path.join(ROOT, relPath), "utf8").replace(/\r\n/g, "\n"));
+
+const css = readCss("public/css/style.css");
 
 let failed = 0;
 const ok = (cond, label) => {
@@ -49,18 +63,40 @@ const ok = (cond, label) => {
   if (!cond) failed++;
 };
 
-/* ── :root 커스텀 프로퍼티 맵 (ponytail: 첫 :root { } 블록만, 이 파일 구조상 충분) ── */
-function parseRootVars(cssText) {
-  const m = cssText.match(/:root\s*\{([^}]*)\}/);
-  const map = {};
-  if (!m) return map;
-  const body = m[1];
-  const re = /(--[\w-]+)\s*:\s*([^;]+);/g;
+/* ── ④ 전용: 로드 순서 CSS 파일 목록 — public/index.html <link> 에서 파생(손목록 금지) ── */
+function localStylesheetsInLoadOrder() {
+  const html = fs.readFileSync(path.join(ROOT, "public/index.html"), "utf8");
+  const re = /<link[^>]+rel="stylesheet"[^>]*href="([^"]+)"[^>]*>/g;
+  const out = [];
   let mm;
-  while ((mm = re.exec(body))) map[mm[1].trim()] = mm[2].trim();
+  while ((mm = re.exec(html))) {
+    const href = mm[1];
+    if (/^https?:/.test(href)) continue; // CDN 폰트/아이콘 제외 — 로컬 캐스케이드만 다룬다
+    out.push("public/" + href.replace(/^\.?\/?/, ""));
+  }
+  return out;
+}
+const CSS_FILES = localStylesheetsInLoadOrder();
+
+/* ── :root 커스텀 프로퍼티 맵 — CSS_FILES 전부를 로드 순서대로 병합(나중 파일이 이김) ──
+ * (①~③은 기존과 동일하게 style.css 단일 스코프로 두되, var() 해석용 ROOT_VARS 는
+ *  3파일 병합값을 쓴다 — --gold-ink 등 ①~③이 참조하는 변수는 다른 파일에서 재정의되지
+ *  않음을 실측 확인했으므로 회귀 없음, 병합은 ④의 정확한 색 해석을 위해 필요하다.) */
+function parseRootVarsMerged(fileList) {
+  const map = {};
+  for (const f of fileList) {
+    const txt = readCss(f);
+    const re = /:root\s*\{([^}]*)\}/g;
+    let mm;
+    while ((mm = re.exec(txt))) {
+      const declRe = /(--[\w-]+)\s*:\s*([^;]+);/g;
+      let x;
+      while ((x = declRe.exec(mm[1]))) map[x[1].trim()] = x[2].trim();
+    }
+  }
   return map;
 }
-const ROOT_VARS = parseRootVars(css);
+const ROOT_VARS = parseRootVarsMerged(CSS_FILES);
 
 /* ── 색 표현식 → [r,g,b,a] 파싱 (hex / rgb() / rgba() / var(--x[,fallback]) 재귀 해석) ── */
 function parseColor(expr, depth = 0) {
@@ -140,6 +176,50 @@ function genericGradientStops(gradientExpr) {
   return out;
 }
 
+/* ── ④ 전용 다중파일 캐스케이드 리졸버 ──────────────────────────────────────
+ * CSS_FILES 를 로드 순서대로 파싱해 "선택자 문자열이 정확히 일치"하는 모든 규칙에서
+ * 지정 프로퍼티 선언을 모으고: !important 가 있으면 그 그룹만, 그 안에서 (파일 순서,
+ * 파일 내 등장 순서) 가 가장 나중인 선언이 최종 승자다. 콤마로 묶인 선택자 목록
+ * (`a, b, c { ... }`)은 개별 선택자로 분해해 취급한다. */
+function parseAllRulesTagged(fileList) {
+  const all = [];
+  fileList.forEach((f, fileIdx) => {
+    const txt = readCss(f);
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let mm, order = 0;
+    while ((mm = ruleRe.exec(txt))) {
+      const selectors = mm[1].split(",").map((s) => s.trim()).filter(Boolean);
+      const body = mm[2];
+      for (const sel of selectors) all.push({ sel, body, fileIdx, order: order++, file: f });
+    }
+  });
+  return all;
+}
+const ALL_RULES = parseAllRulesTagged(CSS_FILES);
+
+function getPropFromBody(body, prop) {
+  const re = new RegExp("(?:^|;)\\s*" + prop + "\\s*:\\s*([^;]+);", "i");
+  const mm = body.match(re);
+  if (!mm) return null;
+  const val = mm[1].trim();
+  const important = /!important\s*$/i.test(val);
+  return { value: val.replace(/!important\s*$/i, "").trim(), important, raw: val };
+}
+
+/** 3파일 캐스케이드로 선택자의 최종 프로퍼티 값을 구한다. 없으면 null. */
+function resolveCascade(selector, prop) {
+  const candidates = ALL_RULES
+    .filter((r) => r.sel === selector)
+    .map((r) => ({ ...r, decl: getPropFromBody(r.body, prop) }))
+    .filter((r) => r.decl);
+  if (!candidates.length) return null;
+  const important = candidates.filter((c) => c.decl.important);
+  const pool = important.length ? important : candidates;
+  pool.sort((a, b) => (a.fileIdx - b.fileIdx) || (a.order - b.order));
+  const winner = pool[pool.length - 1];
+  return { value: winner.decl.value, important: winner.decl.important, file: winner.file };
+}
+
 const WCAG_AA_SMALL = 4.5;
 
 /* ══ ① .pb-table thead th — 표 머리글 ══════════════════════════════════ */
@@ -194,15 +274,16 @@ const WCAG_AA_SMALL = 4.5;
       : `③ 고정배경+테마변수글자 안티패턴 ${violations.length}건 발견: ${violations.join(" | ")}`);
 }
 
-/* ══ ④ .wm-toast — 그라디언트 배경 위 토스트 글자색 ══════════════════════ */
+/* ══ ④ .wm-toast — 3파일 캐스케이드로 해석한 그라디언트 배경 위 토스트 글자색 ══════ */
 {
-  const bgExpr = getDecl(css, ".wm-toast", "background");
-  const colorExpr = getDecl(css, ".wm-toast", "color");
-  ok(bgExpr && colorExpr, "④ CSS 규칙 파싱 성공 (.wm-toast)");
-  const stops = genericGradientStops(bgExpr);
-  ok(stops.length >= 2, `④ 그라디언트 색 스톱 ${stops.length}개 파싱됨 (bg=${bgExpr})`);
-  const fgRgba = parseColor(colorExpr);
-  ok(!!fgRgba, "④ 글자색 파싱 성공 — color=" + colorExpr);
+  ok(CSS_FILES.length >= 3, `④ index.html 에서 로컬 스타일시트 ${CSS_FILES.length}개 파생됨: ${CSS_FILES.join(", ")}`);
+  const colorR = resolveCascade(".wm-toast", "color");
+  const bgR = resolveCascade(".wm-toast", "background");
+  ok(!!colorR && !!bgR, `④ 캐스케이드 해석 성공 — color=${colorR && colorR.value}(from ${colorR && colorR.file}) bg=${bgR && bgR.value}(from ${bgR && bgR.file})`);
+  const stops = genericGradientStops(bgR.value);
+  ok(stops.length >= 2, `④ 그라디언트 색 스톱 ${stops.length}개 파싱됨 (bg=${bgR.value})`);
+  const fgRgba = parseColor(colorR.value);
+  ok(!!fgRgba, "④ 글자색 파싱 성공 — color=" + colorR.value);
   // 토스트 호스트는 document.body 위에 fixed 로 얹히므로, 조상(ambient) 배경은 body 의
   // 실제 배경(var(--bg))이다. 각 그라디언트 스톱을 그 위에 alpha 합성한 뒤(스톱 alpha가
   // .98~.99라 조상색 영향은 작지만, 값에 의존하지 않고 항상 계산한다) 대비를 구해
@@ -214,7 +295,7 @@ const WCAG_AA_SMALL = 4.5;
     return contrast(fgRgba.slice(0, 3), compositedBg);
   });
   const worst = Math.min(...ratios);
-  ok(worst >= WCAG_AA_SMALL, `④ 토스트 글자 대비(최악 스톱 기준) ${worst.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${colorExpr} bg=${bgExpr})`);
+  ok(worst >= WCAG_AA_SMALL, `④ 토스트 글자 대비(3파일 캐스케이드·최악 스톱 기준) ${worst.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${colorR.value} from ${colorR.file}; bg=${bgR.value} from ${bgR.file})`);
 }
 
 console.log(failed === 0 ? "\n전체 PASS" : `\n${failed}건 FAIL`);

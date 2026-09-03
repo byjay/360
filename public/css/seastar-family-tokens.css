@@ -280,8 +280,12 @@
    어둡게 남아 "검정 위 검정"이 되지 않도록 가드(스킨 토큰 사용). */
 .hub-card-body, .screen, .app-body, .sidebar, .pano-info-panel,
 .member-row, .domain-row, .designer-row, .log-row { color: var(--text, #e9eaee); }
-/* 반대로 밝은 칩/토스트(밝은 표면)에는 진한 검정 — 가독 대비 확보 */
-.wm-toast { color: #11141a !important; }
+/* 밝은 칩(밝은 표면)에는 진한 검정 — 가독 대비 확보.
+   [정정 2026-09-03] .wm-toast 는 여기서 제외 — 토스트 배경은 밝지 않고 style.css 의
+   짙은 남색 그라디언트(linear-gradient(165deg, rgba(13,20,37,.98), rgba(10,16,32,.99)))다.
+   이 !important 가 style.css 의 밝은 글자색(#f4f6fb)을 항상 이겨 "검정 위 검정"이 되던
+   실사고(마스터 프로덕션 실측 rgb(17,20,26)=#11141a). 토스트 글자색은 style.css 의
+   .wm-toast 선언에 맡긴다(캐스케이드 마지막 파일 seastar-3d-skin.css 에 재정의 없음 확인됨). */
 .hub-pub-badge { color: var(--green, #46c08a) !important; }
 
 /* [마스터: 흰바탕은 무조건 검은색글자] 네이티브 <select> 드롭다운 옵션은 OS가 흰 배경으로
