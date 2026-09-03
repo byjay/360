@@ -572,7 +572,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 .admin-gate-btn.ghost:hover { border-color: #6b6457; color: #fff; }
 .admin-gate-btn.primary {
-  background: rgba(245,158,11,.15); border: 1px solid var(--gold); color: var(--gold);
+  /* [대비수정] var(--gold) #c9962a 는 이 반투명 골드 배경(rgba(245,158,11,.15))과 실측 2.01:1(미달).
+     --gold-ink #7e5d12 로 교체 — 밝은 배경 위 골드 글자용 정본 토큰(실측 4.58~4.69:1, WCAG AA 통과). */
+  background: rgba(245,158,11,.15); border: 1px solid var(--gold); color: var(--gold-ink);
 }
 .admin-gate-btn.primary:hover { background: rgba(245,158,11,.28); transform: translateY(-1px); }
 .admin-gate-btn:active { transform: translateY(0); }

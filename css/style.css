@@ -572,12 +572,51 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 .admin-gate-btn.ghost:hover { border-color: #6b6457; color: #fff; }
 .admin-gate-btn.primary {
-  background: rgba(245,158,11,.15); border: 1px solid var(--gold); color: var(--gold);
+  /* [대비수정] var(--gold) #c9962a 는 이 반투명 골드 배경(rgba(245,158,11,.15))과 실측 2.01:1(미달).
+     --gold-ink #7e5d12 로 교체 — 밝은 배경 위 골드 글자용 정본 토큰(실측 4.58~4.69:1, WCAG AA 통과). */
+  background: rgba(245,158,11,.15); border: 1px solid var(--gold); color: var(--gold-ink);
 }
 .admin-gate-btn.primary:hover { background: rgba(245,158,11,.28); transform: translateY(-1px); }
 .admin-gate-btn:active { transform: translateY(0); }
 .admin-gate-card.wide { width: min(480px, 92vw); }
 .admin-gate-btn.full { width: 100%; flex: none; margin-top: 4px; }
+
+/* ═══════════════════════════════════════════════════════
+   PHOTO BATCH — 사진 폴더 일괄 매칭 모달 (.admin-gate 카드 재사용)
+   대비: 카드 배경(#f2ece0~#efe9dc) 위 var(--text) #2b2820 = 12.6:1,
+         var(--text2) #6b6457 = 4.98:1 — 둘 다 본문 4.5:1 이상(라이트/다크 공통 팔레트).
+   색만으로 구분하지 않는다 — 경고·상태는 항상 한국어 텍스트를 함께 표기.
+═══════════════════════════════════════════════════════ */
+.pb-card.admin-gate-card.wide { width: min(880px, 96vw); max-width: 880px; text-align: left; }
+.pb-range-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 4px 0 10px; }
+.pb-range-label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text2); font-family: var(--font-ui); }
+.pb-range-input { width: 64px; padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(107,100,87,.35); background: #fff; color: var(--text); font-size: 13px; text-align: center; }
+.pb-overwrite { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); font-family: var(--font-ui); }
+.pb-pick-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pb-status-line { font-size: 12px; color: var(--text2); font-family: var(--font-ui); }
+.pb-warn { color: #7a2b17; background: rgba(196,70,47,.14); border: 1px solid rgba(196,70,47,.35); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 6px 0; }
+.pb-warn.hidden { display: none; }
+.pb-count { font-size: 12px; color: var(--text2); margin: 0 0 8px; font-family: var(--font-ui); }
+.pb-table-wrap { max-height: 42vh; overflow: auto; border: 1px solid rgba(107,100,87,.25); border-radius: 8px; }
+.pb-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--font-ui); }
+.pb-table thead th { position: sticky; top: 0; background: #e9e2d2; color: var(--text); text-align: left; padding: 7px 8px; border-bottom: 1px solid rgba(107,100,87,.3); z-index: 1; }
+.pb-table td { padding: 6px 8px; border-bottom: 1px solid rgba(107,100,87,.15); color: var(--text); vertical-align: middle; }
+.pb-row:nth-child(even) { background: rgba(107,100,87,.05); }
+.pb-row.pb-excluded { opacity: .55; text-decoration: line-through; }
+.pb-c-file { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-c-src { color: var(--text2); }
+.pb-c-no { font-weight: 700; }
+.pb-gap-row td { border-top: 2px dashed var(--gold); background: rgba(201,150,42,.1); color: var(--text2); text-align: center; font-size: 11px; padding: 4px 8px; }
+.pb-mini { border: 1px solid rgba(107,100,87,.35); background: #fff; color: var(--text); border-radius: 5px; width: 22px; height: 22px; line-height: 1; cursor: pointer; margin-right: 3px; }
+.pb-mini:hover { border-color: var(--gold); }
+.pb-excl { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text2); margin-right: 6px; }
+.pb-status { font-size: 11px; color: var(--text2); }
+.pb-empty { text-align: center; color: var(--text2); padding: 18px 0 !important; }
+.pb-progress { font-size: 12px; color: var(--text2); margin-left: 8px; }
+@media (max-width: 640px) {
+  .pb-card.admin-gate-card.wide { width: 96vw; }
+  .pb-c-file { max-width: 100px; }
+}
 
 /* ── topbar 설정/전환 버튼 ── */
 .btn-settings, .btn-exit-edit, .btn-enter-edit {
