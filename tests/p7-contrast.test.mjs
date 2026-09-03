@@ -298,5 +298,67 @@ const WCAG_AA_SMALL = 4.5;
   ok(worst >= WCAG_AA_SMALL, `④ 토스트 글자 대비(3파일 캐스케이드·최악 스톱 기준) ${worst.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${colorR.value} from ${colorR.file}; bg=${bgR.value} from ${bgR.file})`);
 }
 
+/* ══ ⑤~⑦ 2026-09-03 감사 3건 — 공통 뿌리: 배경은 고정색으로 정하고 글자색은 var()에
+ * 맡기거나("밝을 것") 반대로 var() 배경 위에 "밝은 표면일 것"이라는 틀린 전제로 어두운
+ * 고정 글자색을 박은 패턴. ④ 와 동일하게 3파일 캐스케이드로 최종 선언을 구한다(손목록
+ * 금지 §10 — 기대값을 여기 하드코딩하지 않고 CSS 를 읽어 계산). */
+
+/* ══ ⑤ .access-cancel:hover / .btn-demo-viewer:hover / .btn-signout:hover ══════════
+ * family-tokens.css 가 크림 배경+골드브라운 글자 hover 를 정의하는데, 과거
+ * seastar-3d-skin.css 의 "다크 글로시" :hover 그룹이 같은 3개 선택자를 포함해
+ * color:var(--text) !important 로 이겼었다(나중 파일 승). 지금은 그 그룹에서 3개가
+ * 제외되어 family-tokens.css 규칙만 남아야 한다 — 재추가되면 이 테스트가 잡는다. */
+{
+  const sels = [".access-cancel:hover", ".btn-demo-viewer:hover", ".btn-signout:hover"];
+  const ratios = sels.map((sel) => {
+    const colorR = resolveCascade(sel, "color");
+    const bgR = resolveCascade(sel, "background");
+    ok(!!colorR && !!bgR, `⑤ ${sel} 캐스케이드 해석 성공 — color=${colorR && colorR.value}(${colorR && colorR.file}) bg=${bgR && bgR.value}(${bgR && bgR.file})`);
+    const fg = parseColor(colorR.value);
+    const stops = genericGradientStops(bgR.value);
+    ok(!!fg && stops.length >= 1, `⑤ ${sel} 색 파싱 성공`);
+    const worst = Math.min(...stops.map((s) => contrast(fg.slice(0, 3), s)));
+    return { sel, worst, colorR, bgR };
+  });
+  for (const r of ratios) {
+    ok(r.worst >= WCAG_AA_SMALL, `⑤ ${r.sel} 대비(최악 스톱) ${r.worst.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${r.colorR.value} from ${r.colorR.file}; bg=${r.bgR.value} from ${r.bgR.file})`);
+  }
+}
+
+/* ══ ⑥ .allpins-sort-btn — style.css 의 background:var(--bg) 위에 family-tokens.css 가
+ * !important 로 얹는 글자색. var(--bg) 는 seastar-3d-skin.css 가 항상 다크로 리맵한다. ══ */
+{
+  const colorR = resolveCascade(".allpins-sort-btn", "color");
+  const bgR = resolveCascade(".allpins-sort-btn", "background");
+  ok(!!colorR && !!bgR, `⑥ 캐스케이드 해석 성공 — color=${colorR && colorR.value}(${colorR && colorR.file}) bg=${bgR && bgR.value}(${bgR && bgR.file})`);
+  const fg = parseColor(colorR.value);
+  const bg = parseColor(bgR.value);
+  ok(!!fg && !!bg, `⑥ 색 파싱 성공 — fg=${colorR.value} bg=${bgR.value}`);
+  const ratio = contrast(fg.slice(0, 3), bg.slice(0, 3));
+  ok(ratio >= WCAG_AA_SMALL, `⑥ .allpins-sort-btn 대비 ${ratio.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${colorR.value} from ${colorR.file}; bg=${bgR.value}→${bg.slice(0,3)} from ${bgR.file})`);
+}
+
+/* ══ ⑦ .user-role.role-admin — 조상 체인 .topbar(var(--panel)) → .user-badge
+ * (rgba(15,23,42,.6)) → .user-role.role-admin(rgba(11,58,91,.10)) 3단 알파 합성 위
+ * 글자색. var(--panel) 은 3d-skin.css 가 항상 다크로 리맵한다. ══════════════════════ */
+{
+  const topbarBgR = resolveCascade(".topbar", "background");
+  const badgeBgR = resolveCascade(".user-badge", "background");
+  const roleBgR = resolveCascade(".user-role.role-admin", "background");
+  const roleColorR = resolveCascade(".user-role.role-admin", "color");
+  ok(!!topbarBgR && !!badgeBgR && !!roleBgR && !!roleColorR, "⑦ 조상 체인 4개 선언 캐스케이드 해석 성공");
+  const topbarBg = parseColor(topbarBgR.value);
+  const badgeBg = parseColor(badgeBgR.value);
+  const roleBg = parseColor(roleBgR.value);
+  const roleFg = parseColor(roleColorR.value);
+  ok(!!topbarBg && !!badgeBg && !!roleBg && !!roleFg,
+    `⑦ 색 파싱 성공 — topbar=${topbarBgR.value} badge=${badgeBgR.value} role-bg=${roleBgR.value} role-fg=${roleColorR.value}`);
+  const compositedBadge = composite(badgeBg, topbarBg.slice(0, 3));
+  const compositedRole = composite(roleBg, compositedBadge);
+  const ratio = contrast(roleFg.slice(0, 3), compositedRole);
+  ok(ratio >= WCAG_AA_SMALL,
+    `⑦ .user-role.role-admin 대비(3단 합성) ${ratio.toFixed(2)}:1 ≥ ${WCAG_AA_SMALL}:1 (fg=${roleColorR.value}; ambient=[${compositedRole.map((v) => v.toFixed(1))}])`);
+}
+
 console.log(failed === 0 ? "\n전체 PASS" : `\n${failed}건 FAIL`);
 process.exit(failed === 0 ? 0 : 1);

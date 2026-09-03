@@ -79,8 +79,13 @@ body{ background:#0e1014 !important; color:var(--text) !important; }
   transition:filter .1s ease, box-shadow .1s ease, transform .08s ease !important;
 }
 .btn-icon:hover,.btn-page:hover,.tq-btn:hover,.tb-btn:hover,.btn-settings:hover,
-.btn-allpins:hover,.btn-manage:hover,.btn-signout:hover,.btn-demo-viewer:hover,
-.access-cancel:hover,.btn-mini:hover,.zone-tool:hover,.btn-upload:hover,
+/* [정정 2026-09-03] .btn-signout/.btn-demo-viewer/.access-cancel 는 이 다크 글로시 그룹에서 제외 —
+   family-tokens.css 가 이 3개에 별도의 크림/골드 hover(cream bg + #8a6515 text)를 정의하는데,
+   이 그룹의 color:var(--text) !important 가 같은 :hover 특이도 + 나중 파일이라 항상 이겨
+   크림 배경 위에 밝은 글자가 얹히는 1.18:1 실사고였다(마스터 재작업 지시). base(비-hover)
+   상태는 그대로 이 그룹에 남아 다크 배경/회색 글자를 유지한다(기존 설계, 별건). */
+.btn-allpins:hover,.btn-manage:hover,
+.btn-mini:hover,.zone-tool:hover,.btn-upload:hover,
 .btn-pano-ctrl:hover,.btn-pano-nav:hover,.btn-pano-notes:hover,.btn-pano-close:hover,
 .pano-iso-btn:hover,.hub-card-act:hover,.pnp-fbtn:hover,.btn-enter-edit:hover,
 .btn-exit-edit:hover{

@@ -174,9 +174,15 @@
 .designer-row .dz-email, .member-row .mem-col-email, .domain-name {
   color: var(--text, #2b2820) !important; font-weight: 600 !important;
 }
-/* [역할모델] 일반관리자 역할 배지 — 슈퍼(골드)와 구분되는 네이비톤 */
+/* [역할모델] 일반관리자 역할 배지 — 슈퍼(골드)와 구분되는 네이비톤
+   [정정 2026-09-03] #user-role 은 .designer-row 같은 흰 행이 아니라 상단 .user-badge
+   (rgba(15,23,42,.6), 다크) 안에 있고, .user-badge 는 .topbar(var(--panel))에 얹힌다.
+   var(--panel) 은 3d-skin.css 가 #1d2025(다크)로 리맵하므로 실제 조상 배경은 항상 다크
+   합성색. 기존 #0b3a5b 는 "밝은 표면일 것"이라는 틀린 전제의 어두운 네이비라 1.42~1.47:1
+   이었다. 배경 tint(반투명 10%)는 그대로 두고(대비에 미치는 영향이 미미) 글자만 같은
+   네이비 계열의 밝은 톤으로 교체 — role-designer(#38bdf8, 하늘색)와는 구분되는 스틸블루. */
 .user-role.role-admin {
-  color: #0b3a5b !important; background: rgba(11,58,91,.10) !important;
+  color: #7fa8dd !important; background: rgba(11,58,91,.10) !important;
   border: 1px solid rgba(11,58,91,.35) !important; border-radius: 2px !important;
   padding: 1px 8px !important; font-weight: 800 !important;
 }
@@ -402,7 +408,13 @@ select option,
 .allpins-search svg { color: #7a7a7a !important; }
 .allpins-item { background: rgba(255,255,255,.55) !important; border-color: #ded7c7 !important; }
 .allpins-item:hover { background: rgba(255,255,255,.85) !important; }
-.allpins-sort-btn { color: #44464d !important; }
+/* [정정 2026-09-03] .allpins-sort-btn 은 여기 .allpins-panel(#f4f1ea, 밝음) 안이 아니라
+   style.css 자체 규칙(background:var(--bg))로 자기 배경을 다시 선언한다. var(--bg) 는
+   seastar-3d-skin.css(나중 파일) 가 #15171b(다크)로 항상 리맵하므로 실제 배경은 항상 다크.
+   기존 #44464d 는 "밝은 표면일 것"이라는 틀린 전제로 고른 어두운 회색이라 1.90:1이었다.
+   var(--text2) 는 이 앱의 다른 다크 버튼(.fl-btn 등)에서 이미 쓰는 값이며 3d-skin.css 가
+   #9095a0 으로 확정 리맵해 항상 밝다 — 배경과 짝지어 5.98:1. */
+.allpins-sort-btn { color: var(--text2, #9095a0) !important; }
 .allpins-sort-btn.active { color: #ffffff !important; }
 .allpins-thumb-no { color: #ffffff !important; }
 
