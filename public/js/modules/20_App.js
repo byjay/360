@@ -1535,15 +1535,13 @@
       // [마스터] 천정 수평 보정 — 기울어진 360 사진을 좌/우로 미세 회전해 수평 맞춤
       UI.$("btn-pano-level-l") && UI.$("btn-pano-level-l").addEventListener("click", () => PanoViewer.adjustRoll(-0.7));
       UI.$("btn-pano-level-r") && UI.$("btn-pano-level-r").addEventListener("click", () => PanoViewer.adjustRoll(0.7));
-      // [마스터: 미니맵 시야 부채꼴 방향 보정] 현재 보는 방향을 이 핀의 "도면 오른쪽(3시)" 기준으로 저장
-      // Radar.spin()의 effectiveLon = lon - dirOffset, rotate(effectiveLon deg)는 CSS 기준 시계방향(0deg=위/북, 90deg=오른쪽/동).
-      // 사용자가 지금 보는 방향을 "오른쪽"으로 지정 → effectiveLon이 90이 되어야 하므로 dirOffset = lon - 90.
+      // [마스터: 방향 설정 = 도면에서 직접 클릭] 이 버튼은 "지정 완료"를 즉시 선언하지 않는다.
+      // 미니맵 클릭 대기 모드(#pano-radar-dir 과 동일 모드, Radar._dirAdjust)로 진입만 시키고,
+      // 실제 방향(pin.dirOffset) 저장과 완료 토스트는 사용자가 미니맵을 클릭한 뒤 Radar._commitAngle()에서만 일어난다.
       UI.$("btn-pano-setdir") && UI.$("btn-pano-setdir").addEventListener("click", () => {
         const pin = PanoViewer._currentPin;
         if (!pin) return;
-        pin.dirOffset = PanoViewer.S.lon - 90;
-        this._autoSave && this._autoSave();
-        Prompt && Prompt.toast && Prompt.toast("오른쪽 방향이 지정되었습니다");
+        if (typeof Radar !== "undefined" && Radar.enterDirAdjustMode) Radar.enterDirAdjustMode();
       });
       // [마스터: 구면 마커] 추가 모드 토글
       // [FARO Markers] 마커 버튼 = 종류 선택 칩바 토글 / 칩 클릭 = 그 종류로 추가 모드

@@ -48,13 +48,8 @@
         if (db && stage) {
           db.addEventListener("click", (e) => {
             e.stopPropagation();
-            this._dirAdjust = !this._dirAdjust;
-            db.classList.toggle("active", this._dirAdjust);
-            db.title = this._dirAdjust ? "방향 조절 끄기" : "미니맵에서 방향 조절";
-            box.classList.toggle("dir-adjust-mode", this._dirAdjust);
-            if (this._dirAdjust && typeof Prompt !== "undefined" && Prompt.toast) {
-              Prompt.toast("지금 보고 있는 방향을 도면에서 클릭하세요 (예: 선수 방향)");
-            }
+            if (this._dirAdjust) this.exitDirAdjustMode();
+            else this.enterDirAdjustMode();
           });
           this._bindDirClick(stage, db, box);
           this._dirBound = true;
@@ -158,6 +153,40 @@
       box.classList.remove("hidden");
     },
 
+    /** [마스터] 방향 지정 모드 진입 — #btn-pano-setdir(파노 컨트롤바) / #pano-radar-dir(미니맵) 공용 진입점.
+     *  🔴 여기서는 "진입"만 한다 — 완료 토스트는 _commitAngle()에서 실제 클릭 확정 후에만 띄운다(조기 완료 선언 금지).
+     *  미니맵이 없거나 아직 표시되지 않은 상태(핀을 안 열었음)면 클릭할 대상이 없으므로 조용히 실패하지 않고 사유를 알린다. */
+    enterDirAdjustMode() {
+      const box = document.getElementById("pano-radar");
+      const stage = document.getElementById("pano-radar-stage");
+      if (!box || !stage) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("미니맵을 표시할 수 없습니다");
+        return false;
+      }
+      if (box.classList.contains("hidden")) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("먼저 핀을 열어 미니맵을 표시하세요");
+        return false;
+      }
+      box.classList.remove("collapsed"); // 접혀 있으면 펼쳐서 클릭 대상 확보
+      this._dirAdjust = true;
+      const db = document.getElementById("pano-radar-dir");
+      if (db) { db.classList.add("active"); db.title = "방향 조절 끄기"; }
+      box.classList.add("dir-adjust-mode");
+      if (typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast("도면에서 선수(오른쪽) 방향을 클릭하세요");
+      }
+      return true;
+    },
+
+    /** 방향 지정 모드 종료(사용자가 토글로 끔 — 클릭 확정 없이 취소) */
+    exitDirAdjustMode() {
+      this._dirAdjust = false;
+      const box = document.getElementById("pano-radar");
+      const db = document.getElementById("pano-radar-dir");
+      if (db) { db.classList.remove("active"); db.title = "미니맵에서 방향 조절"; }
+      if (box) box.classList.remove("dir-adjust-mode");
+    },
+
     /** 시야 방향(yaw=lon) + FOV에 맞춰 부채꼴 회전/너비 */
     spin(lon, fov) {
       const fan = document.querySelector("#pano-radar-cone .pano-radar-fan");
@@ -192,9 +221,7 @@
         e.preventDefault(); e.stopPropagation();
         this._commitAngle(angleFromEvent(e));
         // 클릭 1회로 완료 — 방향 조절 모드 자동 종료
-        this._dirAdjust = false;
-        if (db) { db.classList.remove("active"); db.title = "미니맵에서 방향 조절"; }
-        if (box) box.classList.remove("dir-adjust-mode");
+        this.exitDirAdjustMode();
       });
     },
 
