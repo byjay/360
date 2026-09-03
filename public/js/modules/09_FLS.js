@@ -71,7 +71,8 @@
         else if (ext === "pcd") parsed = this._parsePCD(buf);
         else if (["xyz", "pts", "asc", "txt"].includes(ext)) parsed = this._parseXYZ(buf);
         else if (ext === "las" || ext === "laz") parsed = this._parseLAS(buf, ext);
-        else if (ext === "fls" || ext === "e57") parsed = this._parseFLS(buf, ext);
+        else if (ext === "e57") parsed = this._parseE57(buf);
+        else if (ext === "fls") parsed = this._parseFLS(buf, ext);
         else parsed = this._sniff(buf);
       } catch (e) {
         return this._showError("파싱 실패", (e && e.message) || "지원되지 않는 형식일 수 있습니다.");
@@ -90,20 +91,14 @@
               + (m.lib ? ` · iQLib ${m.lib}` : "") + ". ";
           }
           return this._showError(
-            ".fls(FARO 원시) 직접 표시 불가 — E57/LAS로 변환 필요",
+            ".fls(FARO 스캔 폴더) 직접 표시 불가 — E57로 내보내면 바로 열립니다",
             metaLine +
-            "FARO .fls 의 스캔 스트림은 독점 압축($ENC$·$NES$·$GRV$)이라 SDK 없이는 좌표 디코딩이 불가합니다. " +
-            "FARO SCENE에서 [내보내기 → E57(또는 LAS/LAZ/PLY)]로 변환해 다시 첨부하면 즉시 3D로 표시됩니다. " +
+            "FARO .fls 는 단일 파일이 아니라 폴더 컨테이너입니다(실측: Scans/<n>/ScanDataStream0 = 원시 스캔 스트림, " +
+            "Params·Calib = 텍스트 설정, ReferencePicture = JPEG 미리보기). 스캔 스트림은 독점 압축($ENC$·$NES$·$GRV$)이라 " +
+            "FARO LS SDK 없이는 좌표 디코딩이 불가하고, 폴더 전체를 브라우저로 올릴 수도 없습니다. " +
+            "FARO SCENE에서 [내보내기 → E57]로 변환해 첨부하세요 — E57은 이 뷰어가 직접 지원합니다(LAS/PLY도 가능). " +
             "(SCENE이 없으면 CloudCompare + FARO LS 플러그인으로도 변환 가능합니다.) " +
             "지금 기능을 바로 보시려면 아래 ‘샘플 FLS 불러오기’를 누르세요."
-          );
-        }
-        if (ext === "e57") {
-          // ── 요청 #9: E57 도 실패 → 둘 다 안 되면 포기(추가 변환 안내) ──
-          return this._showError(
-            "2단계: .e57 로드 실패 — 추가 변환이 필요합니다",
-            "이 .e57 컨테이너는 직접 파싱이 어렵습니다. CloudCompare 등에서 .las/.laz/.ply/.pcd 로 다시 내보내 첨부해 주세요. " +
-            "변환본도 열리지 않으면 해당 스캔의 3D 표시는 지원되지 않습니다(포기)."
           );
         }
         return this._showError("표시할 점이 없습니다", "파일이 비었거나 좌표 데이터를 찾지 못했습니다.");
@@ -291,6 +286,299 @@
         k++;
       }
       return this._decim(pos.subarray(0, k * 3), col ? col.subarray(0, k * 3) : null);
+    },
+
+    /* ══ E57 (ASTM E2807) ══════════════════════════════════════════════════
+       [정본] 포맷 상수·주소 변환·논리바이트 읽기는 아래 E57 / _e57* 한 곳에만 둔다(손목록 복제 금지).
+       ① 파일 전체가 pageSize 바이트 페이지로 나뉘고 **각 페이지 끝 4B 는 CRC** — 논리 데이터가 아니다.
+          물리 오프셋에서 읽으려면 페이지마다 CRC 를 건너뛰며 이어붙여야 한다(_e57Usable / _e57ReadLogical).
+          빠뜨리면 XML 도 좌표도 "조용히" 깨진다.
+       ② XML 안에 <prototype> 이 여러 개다(색인용 CompressedVector 가 앞에 온다).
+          반드시 <points type="CompressedVector"> **뒤에 오는** prototype 을 써야 한다(_e57Prototype).
+       ③ 각 바이트스트림 = 그 필드 값들을 LSB 우선으로 비트팩한 것. 값이 패킷 경계를 걸칠 수 있다
+          (실측: 2bit 필드 2139개 = 534.75B → 534B 만 실리고 남은 비트는 다음 패킷으로 넘어감).
+          → 스트림별 잔여 비트를 이어붙이고, 모든 스트림이 공급 가능한 개수(min)만큼만 레코드를 푼다.
+       ④ 대용량(224MB+) 대비: 앞에서부터 순차로 읽으며 MAX_POINTS 에 닿으면 즉시 중단하고,
+          recordCount > MAX_POINTS 면 stride 로 균등 다운샘플한다. 버려질 레코드는 값을 풀지 않고
+          비트 위치만 건너뛴다(디코딩 비용 O(필드수), 메모리는 항상 상한 이하).
+    */
+    E57: {
+      SIG: "ASTM-E57",
+      HEADER_BYTES: 48,              // sig(8) major(4) minor(4) fileLength(8) xmlPhys(8) xmlLen(8) pageSize(8)
+      CRC_BYTES: 4,                  // 페이지 끝 CRC
+      DEFAULT_PAGE: 1024,
+      SECTION_HEADER_BYTES: 32,      // id(1) 예약(7) 논리길이(8) dataPhys(8) indexPhys(8)
+      SECTION_ID_CV: 1,              // COMPRESSED_VECTOR_SECTION
+      PACKET_HEADER_BYTES: 6,        // type(1) flags(1) len-1(2) bytestreamCount(2)
+      PACKET_DATA: 1,                // 0=index, 1=data, 2=empty
+      // prototype 필드명 → 역할(숫자). 모르는 필드는 0(비트만 소비하고 버림).
+      ROLE: {
+        cartesianX: 1, cartesianY: 2, cartesianZ: 3,
+        colorRed: 4, colorGreen: 5, colorBlue: 6,
+        cartesianInvalidState: 7, sphericalInvalidState: 7,
+        sphericalRange: 8, sphericalAzimuth: 9, sphericalElevation: 10
+      }
+    },
+
+    /** 한 페이지에서 실제 데이터가 담기는 바이트 수(끝 4B 는 CRC) — CRC 처리의 정본 */
+    _e57Usable(pageSize) { return pageSize - this.E57.CRC_BYTES; },
+    /** 논리 주소 → 물리 주소 */
+    _e57PhysOf(logical, pageSize) {
+      const u = this._e57Usable(pageSize);
+      return Math.floor(logical / u) * pageSize + (logical % u);
+    },
+    /** 물리 주소 → 논리 주소 */
+    _e57LogicalOf(phys, pageSize) {
+      const u = this._e57Usable(pageSize);
+      return Math.floor(phys / pageSize) * u + Math.min(phys % pageSize, u);
+    },
+    /** 물리 오프셋 phys 에서 논리 바이트 len 개를 읽는다(페이지 CRC 건너뜀). 파일 끝이면 짧게 반환. */
+    _e57ReadLogical(u8, phys, len, pageSize) {
+      const out = new Uint8Array(len);
+      const u = this._e57Usable(pageSize);
+      let got = 0, p = phys;
+      while (got < len) {
+        const ps = Math.floor(p / pageSize) * pageSize, ip = p - ps;
+        const want = Math.min(u - ip, len - got);
+        if (want <= 0) break;
+        const end = Math.min(p + want, u8.length);
+        if (end <= p) break;
+        out.set(u8.subarray(p, end), got);
+        got += end - p;
+        if (end < p + want) break;          // 파일 끝(잘림)
+        p = ps + pageSize;
+      }
+      return got === len ? out : out.subarray(0, got);
+    },
+
+    /** E57 헤더(48B) 판독 */
+    _e57Header(buf) {
+      const E = this.E57;
+      if (buf.byteLength < E.HEADER_BYTES) throw new Error("E57 헤더(48B)보다 파일이 작습니다.");
+      const head = new Uint8Array(buf, 0, 8);
+      let sig = "";
+      for (let i = 0; i < 8; i++) sig += String.fromCharCode(head[i]);
+      if (sig !== E.SIG) throw new Error('E57 서명("' + E.SIG + '")이 없습니다 — 확장자만 .e57 인 다른 파일일 수 있습니다.');
+      const dv = new DataView(buf);
+      const u64 = (o) => dv.getUint32(o, true) + dv.getUint32(o + 4, true) * 4294967296;
+      const pageSize = u64(40) || E.DEFAULT_PAGE;
+      if (pageSize <= E.CRC_BYTES) throw new Error("E57 pageSize 값이 비정상입니다: " + pageSize);
+      return {
+        major: dv.getUint32(8, true), minor: dv.getUint32(12, true),
+        fileLength: u64(16), xmlPhysOffset: u64(24), xmlLength: u64(32), pageSize
+      };
+    },
+
+    /** points 태그 **뒤**의 prototype 에서 필드 정의를 뽑는다(손목록 금지 — 파일이 정본) */
+    _e57Prototype(xml, tagIndex) {
+      const from = tagIndex >= 0 ? tagIndex : 0;
+      const s0 = xml.indexOf("<prototype", from);     // ← 반드시 points 태그 뒤에서 찾는다(앞엣것은 색인용)
+      const s1 = s0 < 0 ? -1 : xml.indexOf("</prototype>", s0);
+      if (s0 < 0 || s1 < 0) throw new Error("E57 prototype 을 찾지 못했습니다.");
+      const block = xml.slice(s0, s1);
+      const ROLE = this.E57.ROLE;
+      const fields = [];
+      const re = /<(\w+)\s+type="(Float|Integer|ScaledInteger)"([^>]*?)\/?>/g;
+      let m;
+      while ((m = re.exec(block))) {
+        const name = m[1], type = m[2], at = m[3];
+        const attr = (k) => {
+          const a = at.match(new RegExp(k + '="(-?[0-9.eE+-]+)"'));
+          return a ? Number(a[1]) : null;
+        };
+        let f;
+        if (type === "Float") {
+          f = { name, type, bits: /precision="single"/.test(at) ? 32 : 64 };
+        } else {
+          const min = attr("minimum"), max = attr("maximum");
+          if (min === null || max === null || !isFinite(min) || !isFinite(max) || max < min)
+            throw new Error("E57 prototype 필드 " + name + " 에 minimum/maximum 이 없어 비트폭을 알 수 없습니다.");
+          const range = max - min;
+          const bits = range <= 0 ? 0 : Math.ceil(Math.log2(range + 1));
+          if (bits > 53) throw new Error("E57 필드 " + name + " 의 비트폭(" + bits + ")이 너무 큽니다.");
+          f = { name, type, bits, min, max };
+          if (type === "ScaledInteger") { f.scale = attr("scale") || 1; f.offset = attr("offset") || 0; }
+        }
+        f.role = ROLE[name] || 0;
+        // 색 정규화 기준도 파일에서 파생(0~255 가 아닌 0~65535 스캐너가 있다)
+        if (f.role >= 4 && f.role <= 6) f.cnorm = (f.type === "Float") ? 1 : (f.max || 255);
+        fields.push(f);
+      }
+      if (!fields.length) throw new Error("E57 prototype 에 필드가 없습니다.");
+      return fields;
+    },
+
+    /** 한 스트림에 새 바이트를 이어붙인다(이미 소비한 바이트는 버리고 잔여 비트는 유지) */
+    _e57Feed(st, add) {
+      const keep = st.bit >> 3;
+      const rem = st.bytes.length - keep;
+      const nb = new Uint8Array(rem + add.length);
+      nb.set(st.bytes.subarray(keep), 0);
+      nb.set(add, rem);
+      st.bytes = nb;
+      st.bit = st.bit & 7;
+    },
+
+    /** LSB 우선 비트 읽기(n ≤ 32). 바이트 정렬이면 바이트 단위 고속 경로. */
+    _e57Bits(st, n) {
+      if (n === 0) return 0;
+      const b = st.bytes;
+      if ((st.bit & 7) === 0 && (n & 7) === 0) {
+        let o = st.bit >> 3, v = 0, mul = 1;
+        for (let i = 0; i < n; i += 8) { v += b[o++] * mul; mul *= 256; }
+        st.bit += n;
+        return v;
+      }
+      let v = 0, mul = 1;
+      for (let i = 0; i < n; i++) {
+        v += ((b[st.bit >> 3] >> (st.bit & 7)) & 1) * mul;
+        mul *= 2; st.bit++;
+      }
+      return v;
+    },
+
+    /** 필드 1개 값 디코딩 */
+    _e57Value(f, st, scratch) {
+      if (f.type === "Float") {
+        if (f.bits === 32) { scratch.setUint32(0, this._e57Bits(st, 32), true); return scratch.getFloat32(0, true); }
+        const lo = this._e57Bits(st, 32), hi = this._e57Bits(st, 32);
+        scratch.setUint32(0, lo, true); scratch.setUint32(4, hi, true);
+        return scratch.getFloat64(0, true);
+      }
+      const raw = f.bits <= 32
+        ? this._e57Bits(st, f.bits)
+        : this._e57Bits(st, 32) + this._e57Bits(st, f.bits - 32) * 4294967296;
+      const v = f.min + raw;
+      return f.type === "ScaledInteger" ? v * f.scale + f.offset : v;
+    },
+
+    /** ArrayBuffer(.e57) → { positions, colors, count } — _parsePLY/_parseLAS 와 동일 계약 */
+    _parseE57(buf) {
+      const u8 = new Uint8Array(buf);
+      const h = this._e57Header(buf);
+      const xmlBytes = this._e57ReadLogical(u8, h.xmlPhysOffset, h.xmlLength, h.pageSize);
+      if (!xmlBytes.length) throw new Error("E57 XML 섹션을 읽지 못했습니다(물리오프셋 " + h.xmlPhysOffset + ").");
+      const xml = new TextDecoder("utf-8").decode(xmlBytes);
+
+      // 스캔이 여러 개면 points CompressedVector 도 여러 개 → 순서대로 이어 읽는다
+      const secs = [];
+      const re = /<points\s[^>]*type="CompressedVector"[^>]*>/g;
+      let m;
+      while ((m = re.exec(xml))) {
+        const fo = m[0].match(/fileOffset="(\d+)"/);
+        if (!fo) continue;
+        const rc = m[0].match(/recordCount="(\d+)"/);
+        secs.push({ at: m.index, fileOffset: Number(fo[1]), recordCount: rc ? Number(rc[1]) : 0 });
+      }
+      if (!secs.length) throw new Error("E57 안에 점 데이터(<points type=\"CompressedVector\">)가 없습니다.");
+      secs.forEach(s => { s.fields = this._e57Prototype(xml, s.at); });
+
+      const total = secs.reduce((s, x) => s + x.recordCount, 0);
+      const cap = Math.min(this.MAX_POINTS, total || this.MAX_POINTS);
+      const hasColor = secs.some(s => s.fields.some(f => f.role >= 4 && f.role <= 6));
+      const sink = {
+        pos: new Float32Array(cap * 3),
+        col: hasColor ? new Float32Array(cap * 3) : null,
+        cap, kept: 0, invalid: 0,
+        stride: (total > this.MAX_POINTS) ? Math.ceil(total / this.MAX_POINTS) : 1
+      };
+      for (const s of secs) {
+        if (sink.kept >= cap) break;
+        this._e57ReadSection(u8, s, h.pageSize, sink);
+      }
+      if (!sink.kept) {
+        throw new Error("유효한 점을 찾지 못했습니다 (recordCount=" + total + ", 무효점 " + sink.invalid + "). "
+          + "좌표 필드(cartesianX/Y/Z 또는 sphericalRange)가 없거나 모두 무효 측정값일 수 있습니다.");
+      }
+      return this._decim(sink.pos.subarray(0, sink.kept * 3), sink.col ? sink.col.subarray(0, sink.kept * 3) : null);
+    },
+
+    /** CompressedVector 섹션 1개를 앞에서부터 스트리밍 디코딩해 sink 에 채운다 */
+    _e57ReadSection(u8, sec, pageSize, sink) {
+      const E = this.E57, fields = sec.fields, nf = fields.length;
+      const sh = this._e57ReadLogical(u8, sec.fileOffset, E.SECTION_HEADER_BYTES, pageSize);
+      if (sh.length < E.SECTION_HEADER_BYTES) throw new Error("E57 CompressedVector 섹션 헤더를 읽지 못했습니다.");
+      if (sh[0] !== E.SECTION_ID_CV) throw new Error("E57 섹션 id 가 CompressedVector(1)가 아닙니다: " + sh[0]);
+      const sdv = new DataView(sh.buffer, sh.byteOffset, sh.byteLength);
+      const dataPhys = sdv.getUint32(16, true) + sdv.getUint32(20, true) * 4294967296;
+
+      const cartesian = fields.some(f => f.role >= 1 && f.role <= 3);
+      const scratch = new DataView(new ArrayBuffer(8));
+      const streams = [];
+      for (let i = 0; i < nf; i++) streams.push({ bytes: new Uint8Array(0), bit: 0 });
+      const nRec = sec.recordCount;
+      let phys = dataPhys, done = 0;
+
+      while (sink.kept < sink.cap) {
+        if (nRec && done >= nRec) break;
+        if (phys >= u8.length) break;
+        const ph = this._e57ReadLogical(u8, phys, E.PACKET_HEADER_BYTES, pageSize);
+        if (ph.length < E.PACKET_HEADER_BYTES) break;
+        const packetLen = (ph[2] | (ph[3] << 8)) + 1;
+        if (packetLen < E.PACKET_HEADER_BYTES) throw new Error("E57 패킷 길이가 비정상입니다: " + packetLen);
+        const next = this._e57PhysOf(this._e57LogicalOf(phys, pageSize) + packetLen, pageSize);
+        if (ph[0] !== E.PACKET_DATA) { phys = next; continue; }   // index/empty 패킷은 건너뜀
+        const nStreams = ph[4] | (ph[5] << 8);
+        if (nStreams !== nf)
+          throw new Error("E57 바이트스트림 수(" + nStreams + ")가 prototype 필드 수(" + nf + ")와 다릅니다.");
+        const full = this._e57ReadLogical(u8, phys, packetLen, pageSize);
+        if (full.length < packetLen) break;                       // 잘린 파일 — 여기까지만
+        let cur = E.PACKET_HEADER_BYTES + nStreams * 2;
+        for (let i = 0; i < nStreams; i++) {
+          const o = E.PACKET_HEADER_BYTES + i * 2;
+          const len = full[o] | (full[o + 1] << 8);
+          this._e57Feed(streams[i], full.subarray(cur, cur + len));
+          cur += len;
+        }
+        // 모든 스트림이 공급 가능한 만큼만 푼다(값이 패킷 경계를 걸치므로 min)
+        let avail = Infinity;
+        for (let i = 0; i < nf; i++) {
+          const bits = fields[i].bits;
+          if (!bits) continue;
+          const a = Math.floor((streams[i].bytes.length * 8 - streams[i].bit) / bits);
+          if (a < avail) avail = a;
+        }
+        if (avail === Infinity) avail = nRec ? nRec - done : 0;
+        if (nRec) avail = Math.min(avail, nRec - done);
+        if (avail <= 0) { phys = next; continue; }
+
+        for (let n = 0; n < avail && sink.kept < sink.cap; n++) {
+          if (done % sink.stride !== 0) {          // 균등 다운샘플: 비트만 건너뛰고 값은 풀지 않는다
+            for (let i = 0; i < nf; i++) streams[i].bit += fields[i].bits;
+            done++;
+            continue;
+          }
+          let x = 0, y = 0, z = 0, r = 1, g = 1, b = 1, bad = 0, rng = 0, az = 0, el = 0;
+          for (let i = 0; i < nf; i++) {
+            const f = fields[i], v = this._e57Value(f, streams[i], scratch);
+            switch (f.role) {
+              case 1: x = v; break;
+              case 2: y = v; break;
+              case 3: z = v; break;
+              case 4: r = v / f.cnorm; break;
+              case 5: g = v / f.cnorm; break;
+              case 6: b = v / f.cnorm; break;
+              case 7: if (v !== 0) bad = 1; break;
+              case 8: rng = v; break;
+              case 9: az = v; break;
+              case 10: el = v; break;
+              default: break;                      // 모르는 필드 — 비트만 소비
+            }
+          }
+          done++;
+          if (bad) { sink.invalid++; continue; }
+          if (!cartesian) {                        // 구면좌표 스캔 → 직교로 변환(E57 규격)
+            const c = Math.cos(el);
+            x = rng * c * Math.cos(az); y = rng * c * Math.sin(az); z = rng * Math.sin(el);
+          }
+          if (!isFinite(x) || !isFinite(y) || !isFinite(z)) { sink.invalid++; continue; }
+          const k = sink.kept;
+          sink.pos[k * 3] = x; sink.pos[k * 3 + 1] = y; sink.pos[k * 3 + 2] = z;
+          if (sink.col) { sink.col[k * 3] = r; sink.col[k * 3 + 1] = g; sink.col[k * 3 + 2] = b; }
+          sink.kept++;
+        }
+        phys = next;
+      }
     },
 
     _parseFLS(buf, ext) {
