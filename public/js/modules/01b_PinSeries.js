@@ -40,8 +40,26 @@
     // 체크보드는 사용자 팔레트(PinPrefs)의 "블루"(#2f6db5)와 겹쳐 보이던 문제가 있었다.
     // → 더 진하고 채도 높은 인디고로 분리해 콘텐츠 핀과 확실히 구분.
     CHECKBOARD_COLOR: { head: "#1d4ed8", head2: "#1e3a8a", needle: "#172554", text: "#1e3a8a" },
-    // ring: 부류를 색 없이도 식별하는 외곽선 패턴 (SVG stroke-dasharray)
-    RING: { content: "", empty: "2.6 2.6", checkboard: "6 3.4" },
+    /* [마스터 2026-09-03] "사진이 등록된거와 아닌거 심볼색을 다르게해"
+       체크보드 계열은 사진 유무와 무관하게 늘 같은 색이라, 일괄 매칭 직후
+       무엇이 등록됐는지 화면으로 확인할 방법이 없었다(kindOf 가 checkboard 를
+       콘텐츠 판정보다 먼저 반환하기 때문).
+       → 계열 정체성(인디고 블루)은 유지하고 명도만 갈라 등록/미등록을 구분한다.
+       실측(WCAG 2.1, 흰 도면 #fff 기준 — 아래 값은 테마 변수 아님·라이트/다크 동일):
+         등록   head2 #1e3a8a 10.36:1 · needle #172554 14.69:1 · text #1e3a8a 10.36:1
+         미등록 head2 #6366f1  4.47:1 · needle #4f46e5  6.29:1 · text #4338ca  7.90:1
+         등록↔미등록 상호 분리도 head2 2.32:1 / needle 2.34:1 (눈에 띄게 다른 톤)
+       ⚠ 색만으로 구분하지 않는다 → patternOf() 형태 단서(실선/파선/점선) 병행. */
+    CHECKBOARD_EMPTY_COLOR: { head: "#818cf8", head2: "#6366f1", needle: "#4f46e5", text: "#4338ca" },
+
+    /* 형태 단서 정본(색각 이상 8% 대비) — 도면 링 dasharray 와 미니맵 점 테두리가
+       같은 이름 하나에서 파생된다. 두 곳에 따로 쓰면 반드시 갈라진다(§10 SoT).
+         solid  = 콘텐츠 등록됨 / dashed = 체크보드(등록됨) / dotted = 미등록 */
+    PATTERN: {
+      solid:  { dash: "",        border: "solid"  },
+      dotted: { dash: "2.6 2.6", border: "dotted" },
+      dashed: { dash: "6 3.4",   border: "dashed" }
+    },
 
     /** 핀에 콘텐츠(360/영상/첨부/노트/3D)가 있는가 — App.pinHasContent 가 정본 */
     hasContent(pin) {
@@ -59,13 +77,35 @@
     /** 채번 계열 (2종) */
     seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },
 
-    /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용) */
-    colorsOf(kind) {
-      if (kind === "checkboard") return this.CHECKBOARD_COLOR;
+    /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용)
+     *  @param {string} kind   부류(content/empty/checkboard)
+     *  @param {boolean} [filled] 사진(콘텐츠) 등록 여부. 체크보드 계열에서만 의미가 있다.
+     *         (미지정 = 등록된 것으로 간주 — 기존 호출부 호환) */
+    colorsOf(kind, filled) {
+      if (kind === "checkboard") return (filled === false) ? this.CHECKBOARD_EMPTY_COLOR : this.CHECKBOARD_COLOR;
       if (kind === "empty") return this.EMPTY_COLOR;
       return (typeof PinPrefs !== "undefined" && PinPrefs.color)
         ? PinPrefs.color()
         : { head: "#10b981", head2: "#047857", needle: "#064e3b", text: "#065f46" };
+    },
+
+    /** 형태 단서 이름 (색 없이도 등록 여부를 읽게 하는 축) */
+    patternOf(kind, filled) {
+      if (kind === "checkboard") return filled ? "dashed" : "dotted";
+      return (kind === "empty") ? "dotted" : "solid";
+    },
+
+    /**
+     * 🔴 도면 마커(11_UI) · 미니맵 점(07_Radar) 공용 표시 스타일 정본.
+     * 계열(kind) × 사진 등록 여부(filled) 두 축을 한 번에 판정해 색·형태를 함께 돌려준다.
+     * 두 화면이 각자 판정하면 "사진이 있는데 없다고 보이는" 거짓말이 된다(§10 SoT).
+     * @returns {{kind:string, filled:boolean, colors:object, dash:string, border:string}}
+     */
+    markerStyle(pin) {
+      const kind = this.kindOf(pin);
+      const filled = this.hasContent(pin);
+      const pat = this.PATTERN[this.patternOf(kind, filled)] || this.PATTERN.solid;
+      return { kind: kind, filled: filled, colors: this.colorsOf(kind, filled), dash: pat.dash, border: pat.border };
     },
 
     /**

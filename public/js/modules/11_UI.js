@@ -264,7 +264,11 @@
           }
         }
         const meta = numMap.get(pin.id) || { no: pageIdx, kind: PinSeries.kindOf(pin) };
-        const hasContent = meta.kind === "content";
+        // 🔴 색·형태 정본 = PinSeries.markerStyle (미니맵 07_Radar 도 같은 함수를 쓴다).
+        //    체크보드 핀은 kind 가 늘 "checkboard" 라 kind 만으로는 사진 유무를 알 수 없다
+        //    → filled 축을 따로 받아 등록/미등록을 색·링 패턴으로 구분한다.
+        const _st = PinSeries.markerStyle(pin);
+        const hasContent = _st.filled;
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
@@ -276,19 +280,21 @@
         const dispNo = meta.no;
         marker.dataset.no = dispNo;
         marker.dataset.kind = meta.kind;
+        marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
+        marker.classList.add(_st.filled ? "pin-filled" : "pin-hollow");
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
         //    바늘을 길고 가늘게 → "찌르는" 느낌. tip(18,62)으로 수렴.
         // 🔴 색상도 PinSeries 정본에서 파생 — 미니맵 점과 같은 색을 쓴다.
-        const _col = PinSeries.colorsOf(meta.kind);
+        const _col = _st.colors;
         const headFill  = _col.head;
         const headFill2 = _col.head2;
         const needleTip = _col.needle;
         const txtFill   = _col.text;
-        // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 부류를 구분:
-        // 콘텐츠=실선 / 미배치=점선 / 체크보드=파선
-        const ringDash  = PinSeries.RING[meta.kind] || "";
+        // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 구분:
+        // 실선=콘텐츠 등록 / 파선=체크보드(사진 등록됨) / 점선=미등록
+        const ringDash  = _st.dash;
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">

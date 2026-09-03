@@ -37,8 +37,115 @@
       // (디자이너 PDF 모드에서만. 이미지/뷰어 스냅샷은 비트맵이라 해당 없음)
       if (State.mode !== "viewer" && State.fileType === "pdf" && State.pdfDoc
           && typeof PDF !== "undefined" && PDF.requestZoomRerender) {
-        PDF.requestZoomRerender(State.zoom);
+        // 애니메이션(플라이/ISO/구역 확대)이 남아 있으면 그 잔여시간만큼 재렌더를 미룬다
+        // → 애니메이션 중에는 부하 0, 끝난 뒤 최종 배율로 딱 한 번 고품질 렌더.
+        PDF.requestZoomRerender(State.zoom, this._settleRemain());
       }
+      // [화질] 확대가 끝나면 합성 힌트를 풀어, 브라우저가 현재 배율로 다시 래스터화하게 한다.
+      this._scheduleSettle();
+    },
+
+    /* ── 확대 종료 후 화질 수렴(settle) ──────────────────────────────────
+       will-change:transform 이 걸린 레이어는 브라우저가 "확대 전 해상도" 텍스처를
+       재사용하는 경향이 있어, 특히 ISO(rotateX/rotateZ 3D) 아래에서 확대 결과가 흐릿하다.
+       MDN 권고대로 "변화가 끝나면 will-change 를 제거"해 재래스터화를 유도한다.
+       (조작이 다시 시작되면 즉시 되돌려 성능을 지킨다 — 아래 _armWillChange)
+       ⚠ 정직 고지: 이 항목은 라이브 브라우저로 효과를 실측하지 못했다(코드/명세 근거만).
+          되돌리려면 _scheduleSettle 호출 한 줄만 제거하면 된다. */
+    SETTLE_IDLE_MS: 180,
+    _settleUntil: 0,     // 진행 중인 CSS transition 종료 시각(performance.now 기준)
+    _settleTimer: null,
+    /** 진행 중 애니메이션의 남은 시간(ms) */
+    _settleRemain() {
+      const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      if (this._flyRaf) return this.SETTLE_IDLE_MS;      // rAF 플라이: 매 프레임 리셋되므로 최소값
+      return Math.max(0, this._settleUntil - now);
+    },
+    /** CSS transition 기반 애니메이션 시작을 알린다(focusZoneIso/_applyIso 공용) */
+    _markAnimating(durationMs) {
+      const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      this._settleUntil = now + (durationMs || 0) + 40;
+      this._armWillChange();
+    },
+    _armWillChange() {
+      try { if (this.transform && this.transform.style.willChange !== "transform") this.transform.style.willChange = "transform"; } catch (e) {}
+    },
+    _scheduleSettle() {
+      if (typeof setTimeout !== "function") return;
+      this._armWillChange();
+      clearTimeout(this._settleTimer);
+      const wait = this.SETTLE_IDLE_MS + this._settleRemain();
+      this._settleTimer = setTimeout(() => {
+        if (this._flyRaf || State.panDragging) { this._scheduleSettle(); return; } // 아직 조작 중
+        try { if (this.transform) this.transform.style.willChange = "auto"; } catch (e) {}
+      }, wait);
+    },
+
+    /* ══ [화질] 보이는 도면 영역 산출 — 고해상도 크롭 렌더용 ══════════════════
+       전면 캔버스 한 장으로는 대형 도면의 구역 확대를 감당할 수 없다(구조적 상한):
+         A1(2384×1684pt) · 캔버스 한 변 상한 8192px → 최대 렌더 배율 ≈ 3.44
+         → dpr 2 화면에서 선명함이 유지되는 줌은 ≈1.7배까지. 구역 확대는 4~8배다.
+       그래서 확대가 끝나면 "지금 보이는 영역만" 그 배율로 다시 그려 위에 얹는다
+       (02_PDF.renderCrop). 크롭 면적은 뷰포트 크기로 자연히 묶여 메모리가 안 터진다. */
+    ISO_ANGLES: [-32, 58, 148, 238],   // applyTransform 의 ISO_Z 와 같은 값(코너 시점 4종)
+    ISO_TILT_DEG: 54,                  // applyTransform 의 rotateX(54deg)
+
+    /** 도면 로컬좌표(px) → 화면좌표(px). applyTransform 과 같은 모델.
+     *  ⚠ CSS perspective(2600px)는 무시하는 직교 근사다 — focusZoneIso 가 중앙정렬에
+     *     쓰는 것과 동일한 근사이며, 그래서 크롭 영역에 넉넉한 여백(pad)을 준다.
+     *  순수 함수(테스트 가능). */
+    projectPoint(lx, ly, o) {
+      const z = o.zoom, px = o.panX, py = o.panY;
+      if (!o.iso) return { x: px + z * lx, y: py + z * ly };
+      const th = (o.isoAngleDeg || 0) * Math.PI / 180;
+      const cs = Math.cos(th), sn = Math.sin(th);
+      const tilt = (o.tiltDeg == null ? this.ISO_TILT_DEG : o.tiltDeg) * Math.PI / 180;
+      const cosX = Math.cos(tilt);
+      return { x: px + z * (lx * cs - ly * sn), y: py + z * ((lx * sn + ly * cs) * cosX) };
+    },
+
+    /** 뷰포트에 실제로 보이는 도면 영역 (0~1 비율 {x,y,w,h}). 순수 함수.
+     *  역행렬 대신 전진 투영 격자 표본을 쓴다: ISO(3D+perspective) 역변환은 정확히 풀 수 없고,
+     *  근사 역행렬은 "조용히 틀린 영역"을 그린다. 표본은 둔하지만 틀리지 않는다.
+     *  ponytail: O(n²) 격자(97×97≈9.4k, 확대 종료 시 1회만). 정밀도가 더 필요하면 N만 올린다. */
+    computeVisibleRect(o) {
+      const N = o.grid || 96;
+      const pad = (o.pad == null ? 0.25 : o.pad);
+      const cw = o.contentW, ch = o.contentH, vw = o.viewW, vh = o.viewH;
+      const FULL = { x: 0, y: 0, w: 1, h: 1 };
+      if (!(cw > 0 && ch > 0 && vw > 0 && vh > 0)) return FULL;
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0, hit = 0;
+      for (let i = 0; i <= N; i++) {
+        const u = i / N, lx = u * cw;
+        for (let j = 0; j <= N; j++) {
+          const v = j / N;
+          const p = this.projectPoint(lx, v * ch, o);
+          if (p.x < 0 || p.y < 0 || p.x > vw || p.y > vh) continue;
+          hit++;
+          if (u < x0) x0 = u;
+          if (u > x1) x1 = u;
+          if (v < y0) y0 = v;
+          if (v > y1) y1 = v;
+        }
+      }
+      // 표본이 거의 안 잡히면(격자보다 좁은 영역 등) 전면으로 안전하게 폴백한다.
+      if (hit < 2) return FULL;
+      const mx = (x1 - x0) * pad + 1 / N;
+      const my = (y1 - y0) * pad + 1 / N;
+      x0 = Math.max(0, x0 - mx); x1 = Math.min(1, x1 + mx);
+      y0 = Math.max(0, y0 - my); y1 = Math.min(1, y1 + my);
+      return { x: x0, y: y0, w: Math.max(0.01, x1 - x0), h: Math.max(0.01, y1 - y0) };
+    },
+
+    /** 현재 화면 기준 보이는 도면 영역 (PDF.renderCrop 입력) */
+    visibleDrawingRect() {
+      if (!this.viewport || !this.transform) return null;
+      return this.computeVisibleRect({
+        contentW: this.transform.offsetWidth, contentH: this.transform.offsetHeight,
+        viewW: this.viewport.clientWidth, viewH: this.viewport.clientHeight,
+        zoom: State.zoom, panX: State.pan.x, panY: State.pan.y,
+        iso: !!State.isoView, isoAngleDeg: this.ISO_ANGLES[(State.isoDir || 0) % 4]
+      });
     },
 
     /** ISO 3D 뷰 — 4방향 순환:
@@ -109,6 +216,7 @@
           State.zoom = z;
           State.pan = { x: (vw - size.w * z) / 2, y: (vh - size.h * z) / 2 + vh * 0.04 };
         }
+        this._markAnimating(1010); // 전환 끝난 뒤 최종 배율로 1회 고품질 재렌더
         this.applyTransform();
         setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.remove("iso-animating"); }, 1050);
       }
@@ -385,6 +493,9 @@
       const tr = this.transform;
       try { tr.style.transition = "transform " + (duration / 1000) + "s cubic-bezier(.16,1,.3,1)"; } catch (e) {}
       { const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.add("iso-animating"); }
+      // 구역 확대(ISO)는 CSS transition 이라 프레임 콜백이 없다 → 전환 종료 시각을 명시적으로 알린다.
+      // 이게 없으면 재렌더가 전환 도중(140ms)에 돌아 애니메이션이 끊기고, 최종 배율도 아닌 값으로 그려진다.
+      this._markAnimating(duration);
       this.applyTransform();
       this._syncIsoButtons();
       setTimeout(() => { try { tr.style.transition = ""; } catch (e) {} const _pl = document.getElementById("pins-layer"); if (_pl) _pl.classList.remove("iso-animating"); }, duration + 40);

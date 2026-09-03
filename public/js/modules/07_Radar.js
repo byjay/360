@@ -82,6 +82,10 @@
           // 표시 필터는 도면·미니맵에 동일 적용. 단, 지금 열람 중인 핀은 기준점이라 항상 표시.
           if (p.id !== pin.id && !PinSeries.isVisible(p)) return;
           const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p) };
+          // 🔴 색·형태 정본 = PinSeries.markerStyle — 도면 마커(11_UI)와 동일 함수.
+          //    체크보드 핀의 사진 등록 여부를 미니맵에도 똑같이 반영한다.
+          //    (한쪽만 반영하면 사용자에게 거짓말이 된다)
+          const _st = PinSeries.markerStyle(p);
           const dot = document.createElement("div");
           dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
@@ -89,10 +93,16 @@
           dot.title = p.label || "";
           dot.dataset.id = p.id;      // 도면 마커(.pin-marker[data-id])와 동일 식별자 — 번호 일치 검증 가능
           dot.dataset.kind = meta.kind;
+          dot.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(도면 마커와 동일 판정)
           // 색상도 도면 마커와 같은 정본에서 파생(현재 핀은 gold 강조 유지 → 인라인 지정 안 함).
           // 점 위에 흰 숫자가 얹히므로 가장 어두운 톤(needle)을 쓴다 — 팔레트 6종 전부 8.96~13.0:1
           // (head2 를 쓰면 gold 가 4.46:1 로 본문 기준 4.5:1 미달).
-          if (p.id !== pin.id) dot.style.background = PinSeries.colorsOf(meta.kind).needle;
+          // 체크보드: 등록 #172554(14.69:1) / 미등록 #4f46e5(6.29:1) — 둘 다 흰 숫자 4.5:1 초과.
+          if (p.id !== pin.id) dot.style.background = _st.colors.needle;
+          // 형태 단서(색각 이상 대비): 도면 링 패턴과 같은 이름에서 파생한 테두리.
+          // CSS 클래스(.pano-radar-pin-checkboard=dashed)만으로는 등록/미등록이 같아진다 → 인라인으로 덮어쓴다.
+          dot.style.borderStyle = _st.border;
+          dot.style.borderWidth = (_st.border === "solid") ? "1px" : "1.4px";
           const dispNo = meta.no;
           const no = document.createElement("span");
           no.className = "pano-radar-pin-no";
