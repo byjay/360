@@ -13,8 +13,13 @@
        — build-tools/photo-timesort.mjs(참고구현·실데이터 57장 검증됨)와 같은 로직을
          브라우저(ArrayBuffer/DataView)로 포팅. 로직은 바꾸지 않는다.
 
-     번호 정본: PinSeries.numbers()(01b_PinSeries.js) — "콘텐츠 계열"(series==="content")만
-       대상으로 한다(체크보드 계열은 별도 채번이라 사진 매칭 대상이 아님).
+     번호 정본: PinSeries.numbers()(01b_PinSeries.js).
+     🔴 [마스터 요청 2026-09-03 갱신] 처음엔 "콘텐츠 계열"만 매칭 대상이었으나(체크보드는 별도
+       채번이라 제외), 마스터가 "체크보드로 핀을 차례대로 박고 → 그 핀들에 사진 폴더를 일괄
+       연동"이라고 명시해 체크보드 계열도 매칭 대상으로 바뀌었다. 번호가 계열마다 독립 채번(1부터)
+       이라 같은 번호가 계열마다 존재할 수 있으므로, open()/_pinList() 는 **어느 계열의 범위인지**
+       를 함께 받는다(series 미지정 시 기존 단독 진입과 동일하게 "content" 로 폴백 — 하위호환).
+       tests/p6-photo-batch.test.mjs §④ 참조(체크보드 제외 기대값 → 계열 지정 매칭으로 변경, 사유 주석 포함).
 
      저장 경로: Cloud.resizeImage()/Cloud.uploadImage() + 오프라인 SyncQueue.enqueue() —
        20_App.js _confirmPin() 의 이미지 분기(≈1908~1934행)와 동일 API 조합을 그대로 쓴다.
@@ -28,7 +33,7 @@
   ══════════════════════════════════════════════════════════════ */
   const PhotoBatch = {
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
-    _range: { start: 1, end: 1 },
+    _range: { start: 1, end: 1, series: "content" },
     _busy: false,
 
     /* ══ 순수 로직 — 회귀 테스트가 직접 호출한다(DOM 무의존) ══════════ */
@@ -141,15 +146,18 @@
       return withKey;
     },
 
-    /** 🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 현재 페이지의 "콘텐츠 계열"
-     *  핀만 오름차순으로 나열한다(체크보드 계열 제외 — 별도 채번이라 사진 매칭 대상이 아님). */
-    _pinList(pins, page) {
+    /** 🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 현재 페이지의 지정 계열
+     *  핀만 오름차순으로 나열한다. @param {string} [series="content"] 번호는 계열마다
+     *  독립 채번(1부터)이라 계열을 반드시 지정해야 모호성이 없다(미지정 시 기존 단독
+     *  진입과 동일하게 "content" 로 폴백 — 하위호환). */
+    _pinList(pins, page, series) {
+      const ser = series || "content";
       const map = PinSeries.numbers(pins || [], page);
       const list = [];
       (pins || []).forEach((p) => {
         if (!p || (p.page || 1) !== (page || 1)) return;
         const info = map.get(p.id);
-        if (!info || info.series !== "content") return;
+        if (!info || info.series !== ser) return;
         list.push({ pin: p, no: info.no });
       });
       list.sort((a, b) => a.no - b.no);
@@ -214,18 +222,20 @@
     },
 
     _defaultRange() {
-      const list = this._pinList(State.pins, State.pdfPage || 1);
-      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1 };
+      const list = this._pinList(State.pins, State.pdfPage || 1, "content");
+      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: "content" };
     },
 
-    /** @param {{start:number,end:number}} [range] — [마스터 요청 2026-09-03] 체크보드 순차 배치
-     *  퀵플로우(20_App.js _quickCheckboardEntry → btn-checkboard-photobatch)가 방금 찍은 핀 범위를
-     *  넘기면 사용자가 범위를 다시 입력하지 않도록 그대로 채운다. 생략 시 기존처럼 자동 계산(_defaultRange). */
+    /** @param {{start:number,end:number,series?:string}} [range] — [마스터 요청 2026-09-03] 체크보드
+     *  순차 배치 퀵플로우(20_App.js _quickCheckboardEntry → btn-checkboard-photobatch)가 방금 찍은
+     *  핀 범위 + series:"checkboard" 를 넘기면 사용자가 범위를 다시 입력하지 않도록 그대로 채운다.
+     *  🔴 series 생략 시 기존 단독 진입(#btn-photobatch)과 동일하게 "content" 계열 + 자동 계산
+     *  (_defaultRange) — 기존 동작 불변. */
     open(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
       this._rows = [];
       this._range = (range && Number.isFinite(range.start) && Number.isFinite(range.end))
-        ? { start: range.start, end: range.end }
+        ? { start: range.start, end: range.end, series: range.series || "content" }
         : this._defaultRange();
       const modal = document.getElementById("photobatch-modal");
       if (!modal) return;
@@ -235,6 +245,13 @@
       const e = document.getElementById("photobatch-end"); if (e) e.value = this._range.end;
       const ov = document.getElementById("photobatch-overwrite"); if (ov) ov.checked = false;
       const prog = document.getElementById("photobatch-progress"); if (prog) prog.textContent = "";
+      // [마스터 요청 2026-09-03] 계열이 섞여 모호해질 수 있으므로 대상 계열을 화면에 명시한다
+      // (조용히 아무거나 고르지 않음 — §10 조용한 실패 금지).
+      const title = document.getElementById("photobatch-title");
+      if (title) {
+        const label = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
+        title.textContent = "사진 폴더 일괄 매칭 — " + label + " 계열";
+      }
       this._renderTable();
     },
 
@@ -285,7 +302,7 @@
       const host = document.getElementById("photobatch-table-body");
       if (!host) return;
       const page = State.pdfPage || 1;
-      const pinList = this._pinList(State.pins, page);
+      const pinList = this._pinList(State.pins, page, this._range.series);
       const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
       const matchByRow = new Map();
       matches.forEach((m) => matchByRow.set(m.row, m));
@@ -323,7 +340,10 @@
         } else { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
       }
       const cntEl = document.getElementById("photobatch-count");
-      if (cntEl) cntEl.textContent = matches.length + "건 매칭 예정 · 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+      if (cntEl) {
+        const serLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
+        cntEl.textContent = matches.length + "건 매칭 예정 · [" + serLabel + " 계열] 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+      }
     },
 
     _setRowStatus(row, text) {
@@ -344,7 +364,7 @@
     async run() {
       if (this._busy) return;
       const page = State.pdfPage || 1;
-      const pinList = this._pinList(State.pins, page);
+      const pinList = this._pinList(State.pins, page, this._range.series);
       const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
       if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("매칭할 핀·사진이 없습니다"); return; }
       if (leftoverPins.length || leftoverRows.length) {

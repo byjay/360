@@ -5,10 +5,19 @@
  *  ① EXIF DateTimeOriginal 파싱(합성 JPEG, 실파일 의존 없음)
  *  ② EXIF 없으면 파일 lastModified 폴백 + 근거 표시("파일 수정시각")
  *  ③ 시간순 정렬이 파일명순과 다를 때 시간순을 채택한다
- *  ④ 핀 번호는 PinSeries 정본에서 파생한다(체크보드 계열은 제외, 자체 채번 금지)
+ *  ④ 핀 번호는 PinSeries 정본에서 파생하고, 매칭 대상은 "지정된 계열의 범위 내 핀"이다
+ *     🔴 [마스터 요청 2026-09-03 갱신] 이전 기대값은 "콘텐츠 계열만 파생(체크보드 제외)"였다
+ *     (당시 지휘자 발주서 "콘텐츠 계열만 파생" 문구에서 비롯). 그런데 마스터가 "체크보드로
+ *     핀을 차례대로 박고 → 그 핀들에 사진 폴더를 일괄 연동"이라고 명시적으로 요청해, 체크보드
+ *     계열을 매칭에서 빼면 그 기능의 목적 자체가 사라진다는 게 드러났다. 그래서 이번 세션에서
+ *     기대값을 의도적으로 바꾼다: series 인자로 대상 계열을 명시하고(번호가 계열마다 독립
+ *     채번이라 모호성 제거 목적), 그 계열의 범위 내 핀만 대상으로 삼는다. series 미지정 시엔
+ *     기존 단독 진입(#btn-photobatch)과 동일하게 "content" 로 폴백해 하위호환을 지킨다.
  *  ⑤ 개수 불일치 시 남는 쪽을 경고(leftoverPins/leftoverRows)로 알려준다(조용히 자르지 않음)
  *  ⑥ 기존 사진이 있는 핀은 기본 건너뛴다(덮어쓰기 체크 시에만 진행)
  *  ⑦ 행 순서를 수동으로 바꾸면 매칭 순서에 그대로 반영된다
+ *  ⑧ 체크보드 퀵플로우 end-to-end: open({..., series:"checkboard"}) → _range 반영 →
+ *     _pinList/_buildMatches 로 실제 매칭 건수(N>0)가 나온다("열리기만 하는" 상태 금지)
  *
  * 실제 모듈 소스(01b_PinSeries.js / 35_PhotoBatch.js)를 그대로 vm 에 평가해 검사한다(목 구현 아님).
  * ③④ 에는 뮤테이션(수정 무력화) 케이스가 붙어 있어, 고친 코드를 되돌리면 실패한다.
@@ -135,30 +144,57 @@ function loadPB(pbSource, extraState = {}) {
   }
 }
 
-/* ══ ④ 핀 번호는 PinSeries 정본에서 파생(+뮤테이션: 자체 채번) ══════════════ */
+/* ══ ④ 핀 번호는 PinSeries 정본에서 파생 + 지정 계열의 범위 내 핀만 대상(+뮤테이션 2건) ══
+   [마스터 요청 2026-09-03 갱신] 기대값 변경 근거는 파일 상단 헤더 ④ 설명 참조. */
 {
   const pins = [
-    { id: "A", page: 1, label: "A", imageId: null },                 // content series no=1
-    { id: "X", page: 1, label: "5", checkboard: true },               // checkboard 계열(별도) — 매칭 대상 아님
-    { id: "B", page: 1, label: "B", imageId: null }                   // content series no=2
+    { id: "A", page: 1, label: "A", imageId: null },                 // content no=1
+    { id: "X", page: 1, label: "5", checkboard: true },               // checkboard no=5(label 우선)
+    { id: "B", page: 1, label: "B", imageId: null },                  // content no=2
+    { id: "Y", page: 1, label: "6", checkboard: true }                // checkboard no=6
   ];
   const { PB } = loadPB(pbSrc, { pins, pdfPage: 1 });
-  const list = PB._pinList(pins, 1);
-  ok(list.length === 2 && list[0].no === 1 && list[0].pin.id === "A" && list[1].no === 2 && list[1].pin.id === "B",
-    "④ PinSeries 정본에서 콘텐츠 계열만 파생(체크보드 제외) → " + JSON.stringify(list.map(e => ({ id: e.pin.id, no: e.no }))));
 
-  console.log("\n[뮤테이션④] PinSeries 를 우회해 자체 채번(체크보드까지 포함)하면 실패해야 함");
-  const needle = `        const info = map.get(p.id);
-        if (!info || info.series !== "content") return;
-        list.push({ pin: p, no: info.no });`;
-  const mutated = pbSrc.replace(needle, `        list.push({ pin: p, no: list.length + 1 });`);
-  if (mutated === pbSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  // ④a series 미지정 → 기존 단독 진입과 동일하게 content 로 폴백(하위호환 불변)
+  const listDefault = PB._pinList(pins, 1);
+  ok(listDefault.length === 2 && listDefault[0].no === 1 && listDefault[0].pin.id === "A" && listDefault[1].no === 2 && listDefault[1].pin.id === "B",
+    "④a series 미지정 → 기존처럼 콘텐츠 계열만(하위호환) → " + JSON.stringify(listDefault.map(e => ({ id: e.pin.id, no: e.no }))));
+
+  // ④b series="checkboard" 지정 → 체크보드 계열이 매칭 대상에 들어옴(마스터 지시 반영)
+  const listCb = PB._pinList(pins, 1, "checkboard");
+  ok(listCb.length === 2 && listCb.some(e => e.pin.id === "X" && e.no === 5) && listCb.some(e => e.pin.id === "Y" && e.no === 6),
+    "④b series='checkboard' 지정 → 체크보드 계열 포함 → " + JSON.stringify(listCb.map(e => ({ id: e.pin.id, no: e.no }))));
+
+  // ④c 계열이 다르면 같은 범위를 열어도 서로 섞이지 않는다(번호가 계열마다 독립 채번)
+  const listContent = PB._pinList(pins, 1, "content");
+  ok(!listContent.some(e => e.pin.id === "X" || e.pin.id === "Y") && !listCb.some(e => e.pin.id === "A" || e.pin.id === "B"),
+    "④c 계열 분리 — content 리스트에 체크보드 안 섞이고 그 반대도 마찬가지");
+
+  // ④d 범위 밖 핀은 대상에서 빠진다(_buildMatches)
+  const rows4 = [{ name: "p1.jpg", excluded: false }]; // 사진 1장뿐
+  const bm4 = PB._buildMatches(listCb, rows4, { start: 6, end: 6 }); // no=5(X)는 범위 밖
+  ok(bm4.matches.length === 1 && bm4.matches[0].pin.id === "Y",
+    "④d 범위 밖 핀(X, no=5) 제외 → 매칭=" + bm4.matches.map(m => m.pin.id).join(","));
+
+  console.log("\n[뮤테이션④-1] 체크보드 제외 필터를 되살리면 ④b(①: 체크보드 계열 매칭)가 실패해야 함");
+  const needle1 = `        if (!info || info.series !== ser) return;`;
+  const mutated1 = pbSrc.replace(needle1, `        if (!info || info.series !== "content") return;`);
+  if (mutated1 === pbSrc) { console.log("  FAIL 뮤테이션①-1 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { PB: PBm } = loadPB(mutated, { pins, pdfPage: 1 });
-    const listM = PBm._pinList(pins, 1);
-    const bNo = listM.find(e => e.pin.id === "B");
-    ok(!bNo || bNo.no !== 2,
-      `뮤테이션 적용 시 체크보드가 콘텐츠 번호를 밀어냄(테스트 실효성 증명) → B.no=${bNo && bNo.no}`);
+    const { PB: PBm1 } = loadPB(mutated1, { pins, pdfPage: 1 });
+    const listCbM = PBm1._pinList(pins, 1, "checkboard");
+    ok(!listCbM.some(e => e.pin.id === "X" || e.pin.id === "Y"),
+      `뮤테이션①-1 적용 시 series='checkboard' 를 요청해도 체크보드 계열이 하나도 안 잡힘(하드코딩 "content"로 되돌아감) → ${JSON.stringify(listCbM.map(e => e.pin.id))}`);
+  }
+
+  console.log("\n[뮤테이션④-2] series 인자를 무시하게 만들면 ④c(③: 계열 분리)가 실패해야 함");
+  const mutated2 = pbSrc.replace(needle1, `        if (!info) return;`);
+  if (mutated2 === pbSrc) { console.log("  FAIL 뮤테이션①-2 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { PB: PBm2 } = loadPB(mutated2, { pins, pdfPage: 1 });
+    const listContentM = PBm2._pinList(pins, 1, "content");
+    ok(listContentM.some(e => e.pin.id === "X" || e.pin.id === "Y"),
+      `뮤테이션①-2 적용 시 series 무시로 계열이 뒤섞임(테스트 실효성 증명) → ${JSON.stringify(listContentM.map(e => e.pin.id))}`);
   }
 }
 
@@ -235,7 +271,48 @@ async function testSkipExisting() {
     "⑦b 수동 순서 변경이 매칭에 반영됨 → P1↔" + after.matches[0].row.name + ", P2↔" + after.matches[1].row.name);
 }
 
+/* ══ ⑧ 체크보드 퀵플로우 end-to-end: open({series:"checkboard"}) → 실제 매칭 N>0 ══════════
+   [마스터 요청 2026-09-03 §5] "열리기만 하는" 상태로 끝내지 않기 위해, 진입(20_App.js
+   btn-checkboard-photobatch 가 넘기는 것과 동형의 range) → open() → _range 반영 →
+   _pinList/_buildMatches 까지 실제로 매칭 건수가 0이 아님을 증명한다. */
+async function testCheckboardE2E() {
+  const pins = [
+    { id: "P1", page: 1, label: "1", checkboard: true },
+    { id: "P2", page: 1, label: "2", checkboard: true },
+    { id: "P3", page: 1, label: "3", checkboard: true }
+  ];
+  const { PB, sandbox } = loadPB(pbSrc, { pins, pdfPage: 1 });
+  const registry = {};
+  const getEl = (id) => (registry[id] = registry[id] || { textContent: "", value: "", checked: false, classList: { add() {}, remove() {}, toggle() {} } });
+  sandbox.document = { getElementById: getEl, querySelectorAll: () => [] };
+  sandbox.requestAnimationFrame = (cb) => cb();
+
+  // 20_App.js _checkboardQuickRange() 가 넘기는 것과 동형의 range(방금 찍은 체크보드 핀 1~3번)
+  PB.open({ start: 1, end: 3, series: "checkboard" });
+
+  ok(PB._range.start === 1 && PB._range.end === 3 && PB._range.series === "checkboard",
+    "⑧a open()이 체크보드 range 를 그대로 반영 → " + JSON.stringify(PB._range));
+  ok(registry["photobatch-title"].textContent.indexOf("체크보드") !== -1,
+    "⑧b 대상 계열이 화면(제목)에 명시됨(조용히 아무거나 고르지 않음) → " + registry["photobatch-title"].textContent);
+
+  // 사진 3장이 폴더에서 선택됐다고 가정(정렬은 ①~③ 에서 이미 검증했으므로 여기선 결과 행만 구성)
+  PB._rows = [
+    { name: "a.jpg", excluded: false },
+    { name: "b.jpg", excluded: false },
+    { name: "c.jpg", excluded: false }
+  ];
+  const pinList = PB._pinList(pins, 1, PB._range.series);
+  const { matches, leftoverPins, leftoverRows } = PB._buildMatches(pinList, PB._rows, PB._range);
+  ok(matches.length === 3 && leftoverPins.length === 0 && leftoverRows.length === 0,
+    "⑧c 진입→오픈→매칭까지 실제 N건(0 아님) → matches=" + matches.length);
+
+  PB._renderTable();
+  ok(registry["photobatch-count"].textContent.indexOf("3건 매칭 예정") !== -1 && registry["photobatch-count"].textContent.indexOf("체크보드") !== -1,
+    "⑧d 표 렌더 결과에도 매칭 건수·계열이 반영됨 → " + registry["photobatch-count"].textContent);
+}
+
 await testSkipExisting();
+await testCheckboardE2E();
 
 console.log(failed === 0 ? "\n전체 PASS" : `\n${failed}건 FAIL`);
 process.exit(failed === 0 ? 0 : 1);

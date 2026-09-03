@@ -1364,7 +1364,9 @@
     },
 
     /** 현재 페이지에서 방금 찍은 체크보드 계열 핀의 번호 범위(시작~마지막).
-     *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백. */
+     *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백.
+     *  [마스터 요청 2026-09-03] series:"checkboard" 를 함께 반환해 PhotoBatch.open() 이
+     *  콘텐츠 계열과 혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수). */
     _checkboardQuickRange(page) {
       const pg = page || State.pdfPage || 1;
       const map = PinSeries.numbers(State.pins, pg);
@@ -1377,7 +1379,7 @@
         if (end === null || info.no > end) end = info.no;
       });
       const fallback = this._checkboardStart(pg);
-      return { start: start === null ? fallback : start, end: end === null ? fallback : end };
+      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: "checkboard" };
     },
 
     /** [마스터 요청 2026-09-03] "지금 몇 번부터 / 몇 개 찍었는지"를 기존 place-hint 문구에 반영하고,
