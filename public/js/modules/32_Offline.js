@@ -236,7 +236,12 @@
     const depId = _curDepId();
     if (depId) { try { pending = (await OpLog.pending(depId)).length; } catch (e) {} }
     try { pending += await SyncQueue.count(); } catch (e) {}
-    if (!navigator.onLine) {
+    // [P16] 토큰 만료로 업로드가 막힌 상태를 "동기화 중"과 구분해 정직하게 표시.
+    //   온라인이어도 인증이 만료됐으면 실제로는 못 올라가는 중이므로 최우선으로 판정.
+    if (typeof Auth !== "undefined" && Auth._expired) {
+      badge.classList.add("show", "syncing");
+      if (text) text.textContent = "인증 필요"; if (q) q.textContent = pending;
+    } else if (!navigator.onLine) {
       badge.classList.add("show"); badge.classList.remove("syncing");
       if (text) text.textContent = "오프라인"; if (q) q.textContent = pending;
     } else if (pending > 0) {

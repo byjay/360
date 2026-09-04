@@ -279,6 +279,12 @@
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
+        // [P16] 재로그인 성공 — 만료 상태 해제 + 보류된 오프라인 큐/드래프트를 자동으로 이어서 업로드.
+        //   Firebase/Credential 로그인 경로 둘 다 refresh()를 거치므로 이 한 지점에서만 처리(§G-2-5).
+        if (this._expired) {
+          this._expired = false; this._authExpiredNotified = false;
+          try { if (typeof SyncQueue !== "undefined" && SyncQueue._onReconnect) SyncQueue._onReconnect(); } catch (e) {}
+        }
         this._saveAuthCache(data);   // 성공 시 권한 스냅샷 저장
       } else if (!netFail) {
         // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
@@ -547,6 +553,21 @@
       b.className = "demo-mode-badge";
       b.innerHTML = '<span class="demo-dot"></span>편집모드 — 도면·핀·프로젝트 편집 중';
       document.body.appendChild(b);
+    },
+
+    _expired: false,              // 인증 만료 상태(배지 "인증 필요" 표시용)
+    _authExpiredNotified: false,  // 세션당 1회만 안내(재시도마다 토스트 반복 방지)
+
+    /** 오프라인 큐/드래프트 자동 업로드가 401/403(토큰 만료)로 실패했을 때 호출하는 공유 지점.
+     *  App._flushDirtyDrafts(20_App.js) 와 SyncQueue.flush(05_SyncQueue.js) 양쪽에서 호출한다(§G-2-5,
+     *  로직 복붙 대신 이 한 곳만 고친다). 데이터(큐/드래프트)는 그대로 보존되고, 세션당 1회만
+     *  안내 + 기존 로그인 게이트를 재사용해 재로그인 동선을 제공한다(신규 UI 없음). */
+    authExpired() {
+      this._expired = true;
+      if (this._authExpiredNotified) return;
+      this._authExpiredNotified = true;
+      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("로그인이 만료돼 업로드하지 못했습니다 — 다시 로그인하면 자동으로 이어서 올립니다", 4000); } catch (e) {}
+      try { this._openGate(); } catch (e) {}
     },
 
     signOut() {

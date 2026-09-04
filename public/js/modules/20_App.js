@@ -3392,11 +3392,15 @@
           //   (기존 배포본 갱신(PATCH)은 연결이 이미 있으므로 그대로 진행)
           if (!d.depId && !this._deckIdOfKey(key)) continue;
           let res;
+          // [발견/수정] srvPins/srvZones 는 아래 if(d.depId) 블록 밖(3449줄)에서도 참조되는데
+          //   기존엔 블록 스코프(let)로만 선언돼 매 PATCH 성공마다 ReferenceError → 바깥 catch 가
+          //   조용히 삼켜 draft 가 영원히 dirty:false 로 정리되지 않는 별개의 기존 결함이었다.
+          //   함수 스코프로 끌어올려 근본수정(이번 401 처리와 같은 함수 안이라 함께 정리).
+          let baseVer = 0, srvPins = null, srvZones = null;
           if (d.depId) {
             // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
             //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
             //   서버 핀/구역과 오프라인 작업분을 병합하여 양쪽 모두 보존.
-            let baseVer = 0, srvPins = null, srvZones = null;
             try {
               const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
               if (cur.ok) {
@@ -3417,7 +3421,12 @@
               method: "POST", headers: Auth.headers(), body: JSON.stringify(body)
             });
           }
-          if (!res.ok) continue;                  // 실패 → dirty 유지, 다음 기회에 재시도
+          if (!res.ok) {
+            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
+            //   그 외 실패는 종전처럼 조용히 재시도(dirty 유지). 큐/드래프트는 어떤 경우에도 보존.
+            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            continue;                              // 실패 → dirty 유지, 다음 기회에 재시도
+          }
           const rec = await res.json().catch(() => null);
           const wasNew = !d.depId;                // POST 로 '새' 배포본을 만든 경우
           d.depId = (rec && rec.id) ? rec.id : d.depId;

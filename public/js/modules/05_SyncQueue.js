@@ -194,7 +194,12 @@
               body: JSON.stringify({ ops: batch })
             });
           } catch (e) { failed += batch.length; break; } // 네트워크 단절 → 다음 online 때 재시도
-          if (!res.ok) { failed += batch.length; break; }
+          if (!res.ok) {
+            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
+            //   큐는 그대로 보존(제거하지 않음) — 재로그인 후 자동 재시도.
+            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            failed += batch.length; break;
+          }
           const data = await res.json();
           for (const r of (data.results || [])) {
             if (r.ok && r.id) { map[r.opId] = r.id; uploaded++; await this._remove(r.opId); }
