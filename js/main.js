@@ -1303,7 +1303,12 @@
               body: JSON.stringify({ ops: batch })
             });
           } catch (e) { failed += batch.length; break; } // 네트워크 단절 → 다음 online 때 재시도
-          if (!res.ok) { failed += batch.length; break; }
+          if (!res.ok) {
+            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
+            //   큐는 그대로 보존(제거하지 않음) — 재로그인 후 자동 재시도.
+            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            failed += batch.length; break;
+          }
           const data = await res.json();
           for (const r of (data.results || [])) {
             if (r.ok && r.id) { map[r.opId] = r.id; uploaded++; await this._remove(r.opId); }
@@ -9640,11 +9645,15 @@
           //   (기존 배포본 갱신(PATCH)은 연결이 이미 있으므로 그대로 진행)
           if (!d.depId && !this._deckIdOfKey(key)) continue;
           let res;
+          // [발견/수정] srvPins/srvZones 는 아래 if(d.depId) 블록 밖(3449줄)에서도 참조되는데
+          //   기존엔 블록 스코프(let)로만 선언돼 매 PATCH 성공마다 ReferenceError → 바깥 catch 가
+          //   조용히 삼켜 draft 가 영원히 dirty:false 로 정리되지 않는 별개의 기존 결함이었다.
+          //   함수 스코프로 끌어올려 근본수정(이번 401 처리와 같은 함수 안이라 함께 정리).
+          let baseVer = 0, srvPins = null, srvZones = null;
           if (d.depId) {
             // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
             //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
             //   서버 핀/구역과 오프라인 작업분을 병합하여 양쪽 모두 보존.
-            let baseVer = 0, srvPins = null, srvZones = null;
             try {
               const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
               if (cur.ok) {
@@ -9665,7 +9674,12 @@
               method: "POST", headers: Auth.headers(), body: JSON.stringify(body)
             });
           }
-          if (!res.ok) continue;                  // 실패 → dirty 유지, 다음 기회에 재시도
+          if (!res.ok) {
+            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
+            //   그 외 실패는 종전처럼 조용히 재시도(dirty 유지). 큐/드래프트는 어떤 경우에도 보존.
+            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            continue;                              // 실패 → dirty 유지, 다음 기회에 재시도
+          }
           const rec = await res.json().catch(() => null);
           const wasNew = !d.depId;                // POST 로 '새' 배포본을 만든 경우
           d.depId = (rec && rec.id) ? rec.id : d.depId;
@@ -10628,6 +10642,12 @@
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
+        // [P16] 재로그인 성공 — 만료 상태 해제 + 보류된 오프라인 큐/드래프트를 자동으로 이어서 업로드.
+        //   Firebase/Credential 로그인 경로 둘 다 refresh()를 거치므로 이 한 지점에서만 처리(§G-2-5).
+        if (this._expired) {
+          this._expired = false; this._authExpiredNotified = false;
+          try { if (typeof SyncQueue !== "undefined" && SyncQueue._onReconnect) SyncQueue._onReconnect(); } catch (e) {}
+        }
         this._saveAuthCache(data);   // 성공 시 권한 스냅샷 저장
       } else if (!netFail) {
         // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
@@ -10896,6 +10916,21 @@
       b.className = "demo-mode-badge";
       b.innerHTML = '<span class="demo-dot"></span>편집모드 — 도면·핀·프로젝트 편집 중';
       document.body.appendChild(b);
+    },
+
+    _expired: false,              // 인증 만료 상태(배지 "인증 필요" 표시용)
+    _authExpiredNotified: false,  // 세션당 1회만 안내(재시도마다 토스트 반복 방지)
+
+    /** 오프라인 큐/드래프트 자동 업로드가 401/403(토큰 만료)로 실패했을 때 호출하는 공유 지점.
+     *  App._flushDirtyDrafts(20_App.js) 와 SyncQueue.flush(05_SyncQueue.js) 양쪽에서 호출한다(§G-2-5,
+     *  로직 복붙 대신 이 한 곳만 고친다). 데이터(큐/드래프트)는 그대로 보존되고, 세션당 1회만
+     *  안내 + 기존 로그인 게이트를 재사용해 재로그인 동선을 제공한다(신규 UI 없음). */
+    authExpired() {
+      this._expired = true;
+      if (this._authExpiredNotified) return;
+      this._authExpiredNotified = true;
+      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("로그인이 만료돼 업로드하지 못했습니다 — 다시 로그인하면 자동으로 이어서 올립니다", 4000); } catch (e) {}
+      try { this._openGate(); } catch (e) {}
     },
 
     signOut() {
@@ -13618,7 +13653,12 @@
     const depId = _curDepId();
     if (depId) { try { pending = (await OpLog.pending(depId)).length; } catch (e) {} }
     try { pending += await SyncQueue.count(); } catch (e) {}
-    if (!navigator.onLine) {
+    // [P16] 토큰 만료로 업로드가 막힌 상태를 "동기화 중"과 구분해 정직하게 표시.
+    //   온라인이어도 인증이 만료됐으면 실제로는 못 올라가는 중이므로 최우선으로 판정.
+    if (typeof Auth !== "undefined" && Auth._expired) {
+      badge.classList.add("show", "syncing");
+      if (text) text.textContent = "인증 필요"; if (q) q.textContent = pending;
+    } else if (!navigator.onLine) {
       badge.classList.add("show"); badge.classList.remove("syncing");
       if (text) text.textContent = "오프라인"; if (q) q.textContent = pending;
     } else if (pending > 0) {
