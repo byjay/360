@@ -6436,9 +6436,9 @@
       // 설정 버튼은 항상 노출(로그인·편집 전환 진입점)
       const btnSettings = UI.$("btn-settings");
       if (btnSettings) btnSettings.classList.remove("hidden");
-      // "뷰어로" 버튼은 편집(designer) 모드에서만
+      // [마스터 2026-09-13] 뷰어는 배포 링크 전용 — 앱 안에서 뷰어로 나가는 문을 닫는다(항상 숨김, exitEdit()은 남겨둠).
       const btnExit = UI.$("btn-exit-edit");
-      if (btnExit) btnExit.classList.toggle("hidden", !isDesigner);
+      if (btnExit) btnExit.classList.add("hidden");
       // "설계자 모드" 버튼: 설계자 권한이 있는데 지금 뷰어 모드일 때만 노출(회귀 방지)
       const btnEnter = UI.$("btn-enter-edit");
       if (btnEnter) btnEnter.classList.toggle("hidden", isDesigner || !Auth.isDesigner);
@@ -14419,8 +14419,8 @@
     const params  = new URLSearchParams(location.search);
     const urlMode = params.get("mode");
     const depId   = params.get("d");
-    if (urlMode === "viewer" || depId) {
-      // 배포 링크(?mode=viewer / ?d=배포ID) — 특정 배포본 바로 뷰어 (허브 스킵)
+    if (depId) {
+      // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
       State.viewerLocked = true;
       App.openApp("viewer");
     } else if (urlMode === "designer") {
