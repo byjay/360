@@ -25,8 +25,8 @@
     const params  = new URLSearchParams(location.search);
     const urlMode = params.get("mode");
     const depId   = params.get("d");
-    if (urlMode === "viewer" || depId) {
-      // 배포 링크(?mode=viewer / ?d=배포ID) — 특정 배포본 바로 뷰어 (허브 스킵)
+    if (depId) {
+      // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
       State.viewerLocked = true;
       App.openApp("viewer");
     } else if (urlMode === "designer") {

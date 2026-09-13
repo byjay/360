@@ -183,9 +183,9 @@
       // 설정 버튼은 항상 노출(로그인·편집 전환 진입점)
       const btnSettings = UI.$("btn-settings");
       if (btnSettings) btnSettings.classList.remove("hidden");
-      // "뷰어로" 버튼은 편집(designer) 모드에서만
+      // [마스터 2026-09-13] 뷰어는 배포 링크 전용 — 앱 안에서 뷰어로 나가는 문을 닫는다(항상 숨김, exitEdit()은 남겨둠).
       const btnExit = UI.$("btn-exit-edit");
-      if (btnExit) btnExit.classList.toggle("hidden", !isDesigner);
+      if (btnExit) btnExit.classList.add("hidden");
       // "설계자 모드" 버튼: 설계자 권한이 있는데 지금 뷰어 모드일 때만 노출(회귀 방지)
       const btnEnter = UI.$("btn-enter-edit");
       if (btnEnter) btnEnter.classList.toggle("hidden", isDesigner || !Auth.isDesigner);
