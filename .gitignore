@@ -36,3 +36,8 @@ core
 *.core
 mobile/*.tar.gz
 public/js/main.js.ORIG_BACKUP
+
+# [마스터 2026-09-13] 루트에 떨어진 마스터 실사진/작업 산출물 — 삭제 금지, 추적만 제외
+2ND (*.JPG
+_archive/
+_code-export/
