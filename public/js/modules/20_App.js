@@ -2399,9 +2399,10 @@
       UI.renderPinsOnMap();
     },
 
-    /** [마스터] 핀 선택 → 자동 ISO 전환 + 해당 구역(zone)만큼 확대 포커스.
+    /** [WO 20260917-pin ISO 제거] 핀 선택 → 해당 구역(zone)만큼 "평면" 확대 포커스.
      *  구역이 없으면 핀 주변 영역으로 확대. 이후 사용자는 휠/버튼으로 자유 확대·축소.
-     *  뷰어·디자이너 공통. */
+     *  뷰어·디자이너 공통. 함수명(focusPinIso)은 호출부 호환을 위해 유지하지만
+     *  ISO 자동 전환은 하지 않는다("화면이 한참 아래로 내려간다" 마스터 지시로 제거). */
     focusPinIso(pin) {
       if (!pin) return;
       State.activePin = pin.id;
@@ -2422,17 +2423,22 @@
       }
       UI.renderPinList();
       UI.renderPinsOnMap();
-      MapCtrl.focusZoneIso(bbox);
+      // [WO 20260917-pin ISO 제거] 핀 탭은 항상 평면으로 확대한다(강제 ISO 전환 금지 — 마스터 지시).
+      //   되돌리려면 아래 주석 해제(16_Zones.js:397 와 동일 패턴):
+      //   MapCtrl.focusZoneIso(bbox); return;
+      if (MapCtrl.fitZone) MapCtrl.fitZone(bbox);
       // [토스트 스팸 제거] 핀 탭마다(2-tap 1단계) 발화해 가장 많이 쌓이던 토스트.
       // 확대 애니메이션 자체가 결과를 보여준다.
     },
 
     /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):
-     *  ① 첫 탭(미포커스) → ISO 전환 + 구역 확대
-     *  ② 같은 핀 둘째 탭(ISO 포커스 상태) → 콘텐츠(360°/정보) 열기 */
+     *  ① 첫 탭(미포커스) → 평면 확대(ISO 자동전환 없음 — 마스터 지시)
+     *  ② 같은 핀 둘째 탭(포커스 상태) → 콘텐츠(360°/정보) 열기
+     *  [WO 20260917-pin] "focused" 판정에서 State.isoView 조건을 제거 — 이전에는 ISO 가
+     *  자동으로 켜져야만 focused 가 성립했으나, 이제 ISO 를 켜지 않으므로 activePin 일치만으로 판정. */
     onPinTap(pin) {
       if (!pin) return;
-      const focused = State.activePin === pin.id && State.isoView;
+      const focused = State.activePin === pin.id;
       if (!focused) { this.focusPinIso(pin); return; }
       if (this.pinHasContent(pin)) this.openPano(pin);
       else if (State.mode === "designer" && typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);

@@ -1488,6 +1488,7 @@
     renderer: null, scene: null, camera: null, mesh: null, texture: null,
     videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
     _dragSpotId: null, // [마스터: 마커 드래그] 현재 끌고 있는 spot.id (null이면 카메라 드래그)
+    _dragOrigLL: null, _dragArrow: null, _dragArrowActive: false, // [마스터: 이동 화살표] 드래그 시작 lon/lat, 화살표 3D 오브젝트, 활성 플래그
 
     init(canvas) { this.canvas = canvas; },
 
@@ -1814,6 +1815,10 @@
         // 마커를 잡은 동안엔 카메라가 회전하면 안 됨
         this.S.dragging = false;
         if (this.canvas) this.canvas.style.cursor = "grabbing";
+        // [마스터: 이동 화살표] 원래 위치 기억(화살표 시작점) — moveSpot이 spot 데이터를 그 자리에서
+        // 바꿔버리므로 드래그 시작 시점의 lon/lat을 별도로 떠 둔다.
+        const data = (this._spots || []).find(s => s.id === hitId);
+        this._dragOrigLL = data ? { lon: data.lon || 0, lat: data.lat || 0 } : null;
       } else {
         this.S.dragging = true; this.S.lx = x; this.S.ly = y;
       }
@@ -1822,10 +1827,15 @@
       if (this._dragSpotId) {
         if (!this._moved && Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) {
           this._moved = true;
+          this._dragArrowActive = true;
           if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 이동 중 — 놓으면 저장됩니다");
         }
         const ll = this.screenToLonLat(x, y);
-        if (ll) this.moveSpot(this._dragSpotId, ll.lon, ll.lat);
+        if (ll) {
+          this.moveSpot(this._dragSpotId, ll.lon, ll.lat);
+          // 전체 재생성 없이 화살표 오브젝트 1개만 갱신(성능 원칙 — moveSpot과 동일)
+          if (this._moved && this._dragOrigLL) this._updateDragArrow(this._dragOrigLL, ll);
+        }
         return;
       }
       if (!this.S.dragging) return;
@@ -1841,6 +1851,9 @@
       this.S.dragging = false;
       const draggedId = this._dragSpotId;
       this._dragSpotId = null;
+      this._dragOrigLL = null;
+      this._dragArrowActive = false;
+      if (this._dragArrow) this._dragArrow.visible = false;
       if (this.canvas) this.canvas.style.cursor = "";
       return (draggedId && this._moved) ? { spotMoved: draggedId } : null;
     },
@@ -1860,14 +1873,19 @@
       const phi = THREE.MathUtils.degToRad(90 - lat), theta = THREE.MathUtils.degToRad(lon);
       return new THREE.Vector3(R * Math.sin(phi) * Math.cos(theta), R * Math.cos(phi), R * Math.sin(phi) * Math.sin(theta));
     },
+    // [마스터: 마커 투명화] 채움 알파를 낮춰 뒤 사진이 비치게 하되, 숫자는 검은 헤일로(외곽선)로
+    // 감싸 어떤 배경 위에서도 대비를 보장한다(배경 사진 색과 무관 — 헤일로 자체가 로컬 배경 역할).
+    SPOT_FILL_ALPHA: .42,
     _spotTexture(spot, idx) {
       const c = document.createElement("canvas"); c.width = c.height = 128;
       const g = c.getContext("2d");
       const col = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd", nav: "#3a97dd" }[spot.kind] || "#e0503e"; // 결함/장비/안전/메모/이동
-      g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = .92; g.fill(); g.globalAlpha = 1;
-      g.lineWidth = 6; g.strokeStyle = "#fff"; g.stroke();
-      g.fillStyle = "#fff"; g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-      g.fillText(spot.kind === "nav" ? "" : String(idx + 1), 64, 70);
+      g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = this.SPOT_FILL_ALPHA; g.fill(); g.globalAlpha = 1;
+      g.lineWidth = 6; g.strokeStyle = "rgba(255,255,255,.9)"; g.stroke();
+      g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+      const label = spot.kind === "nav" ? "" : String(idx + 1);
+      g.lineWidth = 8; g.lineJoin = "round"; g.strokeStyle = "rgba(0,0,0,.9)"; g.strokeText(label, 64, 70);
+      g.fillStyle = "#fff"; g.fillText(label, 64, 70);
       const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
     },
     renderSpots(spots) {
@@ -1921,6 +1939,31 @@
       this._invalidate();
       return true;
     },
+    /** [마스터: 이동 화살표] 드래그 중 "원래 위치 → 현재 위치" 화살표를 1개만 생성해 계속 재사용.
+     *  THREE.ArrowHelper가 없는 환경(구형 THREE/목)에서는 조용히 no-op — 드래그 저장 동작에는 영향 없음. */
+    _ensureDragArrow() {
+      if (this._dragArrow) return this._dragArrow;
+      if (!this.scene || typeof THREE === "undefined" || typeof THREE.ArrowHelper !== "function") return null;
+      const arrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1, 0xffffff, 10, 6);
+      arrow.visible = false;
+      arrow.renderOrder = 20;
+      this.scene.add(arrow);
+      this._dragArrow = arrow;
+      return arrow;
+    },
+    _updateDragArrow(origLL, curLL) {
+      const arrow = this._ensureDragArrow(); if (!arrow) return;
+      const from = this._spotPos(origLL.lon, origLL.lat, 470);
+      const to = this._spotPos(curLL.lon, curLL.lat, 470);
+      const dir = to.clone().sub(from);
+      const len = dir.length();
+      if (len < 0.01) { arrow.visible = false; return; }
+      dir.normalize();
+      arrow.position.copy(from);
+      arrow.setDirection(dir);
+      arrow.setLength(len, Math.min(24, len * 0.35), Math.min(14, len * 0.25));
+      arrow.visible = true;
+    },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
 
     close() {
@@ -1929,6 +1972,9 @@
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
       this._dragSpotId = null;
+      this._dragOrigLL = null;
+      this._dragArrowActive = false;
+      if (this._dragArrow) this._dragArrow.visible = false;
       cancelAnimationFrame(this.rafId);
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");
@@ -4172,8 +4218,8 @@
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
-              <!-- 메달리온 머리 -->
-              <circle cx="18" cy="15" r="11.8" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.4"/>
+              <!-- 메달리온 머리: 등록=채운 원 / 미등록=속 빈 원(흑백 변환해도 형태로 구분되게, 색상에 의존 금지) -->
+              <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
               <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
               <circle cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central"
@@ -4679,14 +4725,9 @@
       Auth._applyUi();          // 인증바 상태 동기화 (hub 슬롯 포함)
       Auth._renderHubSignin();  // 미로그인 시 hub 로그인 버튼 렌더
       await this.load();
-      // [마스터 2026-08-31] AUTO_DESIGNER_ENTRY 자동입장 연장 — 프로젝트 선택 화면(카드 클릭) 단계를
-      //   건너뛰고 가장 최근 프로젝트로 바로 진입. 서버가 created_at DESC로 정렬해 오므로 list[0] = 최신.
-      //   세션당 1회만(뒤로가기로 재방문 시 _autoEntered가 이미 true → 정상적으로 선택 화면 유지, 전환 경로 보존).
-      //   스위치 false면 이 블록 전체 무시 → 기존처럼 항상 선택 화면.
-      if (typeof AUTO_DESIGNER_ENTRY !== "undefined" && AUTO_DESIGNER_ENTRY && !this._autoEntered && this.list.length > 0 && Auth.isDesigner) {
-        this._autoEntered = true;
-        this.openProject(this.list[0]);
-      }
+      // [마스터 2026-09-17] "첫 화면은 무조건 프로젝트 선택이 나오게 해" — 최근 프로젝트로
+      //   건너뛰는 자동입장(옛 AUTO_DESIGNER_ENTRY 연장 블록)을 제거했다. 배포 링크(?d=)가 아닌
+      //   모든 진입은 여기서 항상 카드 목록(프로젝트 허브)을 보여준다.
     },
 
     async load() {
@@ -5230,6 +5271,47 @@
       } catch (e) {}
     },
 
+    /** [핀 액션 패널 재사용] 컴팩트 노트 목록 — loadForPin() 이 채운 this._list 를
+     *  그대로 그린다(별도 fetch 없음 · 같은 데이터 소스, §10 SoT). 상태 텍스트/정렬 기준도
+     *  render()와 동일(this.STATUS, created_at 최신순). */
+    renderCompact(containerId) {
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
+      const items = (this._list || []).slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
+      if (!items.length) { el.innerHTML = '<div style="color:#94a3b8;">등록된 노트 없음</div>'; return; }
+      el.innerHTML = items.map((n) => {
+        const st = n.status || "open";
+        const stLabel = this.STATUS[st] || st;
+        return '<div style="padding:5px 0;border-bottom:1px solid rgba(0,0,0,.06);">' +
+          '<span style="font-weight:700;color:#334155;">[' + UI.escapeHtml(stLabel) + ']</span> ' +
+          '<span style="color:#0f172a;">' + UI.escapeHtml(n.body) + '</span></div>';
+      }).join("");
+    },
+
+    /** [핀 액션 패널 재사용] 노트 1건 등록 — submit()과 같은 /api/notes 엔드포인트.
+     *  성공 시 this._list 를 다시 로드(요약 뱃지도 함께 갱신)하고 true 를 돌려준다. */
+    async submitCompact(pin, body) {
+      const dep = (typeof State !== "undefined") && State.currentDeploymentId;
+      const text = (body || "").trim();
+      if (!dep || !pin || !text) return false;
+      try {
+        const r = await fetch("/api/notes", {
+          method: "POST",
+          headers: Auth.headers(),
+          body: JSON.stringify({
+            deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
+            body: text, status: "open", assignee: "",
+            author: (typeof Auth !== "undefined" && Auth.user && Auth.user.name) || "",
+          }),
+        });
+        if (!r.ok) return false;
+        await this.loadForPin();
+        await this.loadSummary();
+        return true;
+      } catch (e) { return false; }
+    },
+
     _timeAgo(v) {
       const n = (typeof v === "number") ? v : Date.parse(v);
       if (!Number.isFinite(n)) return "";
@@ -5608,6 +5690,9 @@
     },
 
     _syncToolUi() {
+      // [WO 20260917 색음영] 영역 그리기 중엔 기존 영역들이 도면을 덮지 않도록 옅게 표시
+      // (da479bf 의 body.deck-view-active 패턴 재사용). 완성 영역 기본 스타일(.zone-shape)은 불변.
+      try { document.body.classList.toggle("zone-drawing-active", !!State.drawingZone); } catch (e) {}
       ["rect", "circle", "poly"].forEach(sh => {
         const b = UI.$("btn-zone-" + sh);
         if (b) b.classList.toggle("active", State.drawingZone && this._shape === sh);
@@ -5926,9 +6011,9 @@
     },
     _flyToZone(zone) {
       const bb = this._bbox(zone);   // rect/circle/poly 모두 {x,y,w,h}
-      // [버그수정] ISO 활성 시 평면 flyTo 는 rotateX(54°) 때문에 화면 아래로 빗나간다(줌이 영역 밑으로 이동).
-      //   ISO 좌표를 정확히 역산하는 focusZoneIso 로 분기.
-      if (State.isoView && MapCtrl.focusZoneIso) { MapCtrl.focusZoneIso(bb); return; }
+      // [WO 20260917 ISO 제거] 영역 클릭은 항상 평면으로 확대한다(강제 ISO 전환 금지 — 마스터 지시).
+      //   되돌리려면 아래 주석 해제:
+      //   if (State.isoView && MapCtrl.focusZoneIso) { MapCtrl.focusZoneIso(bb); return; }
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       // 영역 크기에 맞춰 줌 (작은 영역일수록 더 확대)
       const span = Math.max(bb.w, bb.h);
@@ -8826,9 +8911,10 @@
       UI.renderPinsOnMap();
     },
 
-    /** [마스터] 핀 선택 → 자동 ISO 전환 + 해당 구역(zone)만큼 확대 포커스.
+    /** [WO 20260917-pin ISO 제거] 핀 선택 → 해당 구역(zone)만큼 "평면" 확대 포커스.
      *  구역이 없으면 핀 주변 영역으로 확대. 이후 사용자는 휠/버튼으로 자유 확대·축소.
-     *  뷰어·디자이너 공통. */
+     *  뷰어·디자이너 공통. 함수명(focusPinIso)은 호출부 호환을 위해 유지하지만
+     *  ISO 자동 전환은 하지 않는다("화면이 한참 아래로 내려간다" 마스터 지시로 제거). */
     focusPinIso(pin) {
       if (!pin) return;
       State.activePin = pin.id;
@@ -8849,17 +8935,22 @@
       }
       UI.renderPinList();
       UI.renderPinsOnMap();
-      MapCtrl.focusZoneIso(bbox);
+      // [WO 20260917-pin ISO 제거] 핀 탭은 항상 평면으로 확대한다(강제 ISO 전환 금지 — 마스터 지시).
+      //   되돌리려면 아래 주석 해제(16_Zones.js:397 와 동일 패턴):
+      //   MapCtrl.focusZoneIso(bbox); return;
+      if (MapCtrl.fitZone) MapCtrl.fitZone(bbox);
       // [토스트 스팸 제거] 핀 탭마다(2-tap 1단계) 발화해 가장 많이 쌓이던 토스트.
       // 확대 애니메이션 자체가 결과를 보여준다.
     },
 
     /** 핀 탭 디스패처(뷰어·디자이너 공통, 2-tap):
-     *  ① 첫 탭(미포커스) → ISO 전환 + 구역 확대
-     *  ② 같은 핀 둘째 탭(ISO 포커스 상태) → 콘텐츠(360°/정보) 열기 */
+     *  ① 첫 탭(미포커스) → 평면 확대(ISO 자동전환 없음 — 마스터 지시)
+     *  ② 같은 핀 둘째 탭(포커스 상태) → 콘텐츠(360°/정보) 열기
+     *  [WO 20260917-pin] "focused" 판정에서 State.isoView 조건을 제거 — 이전에는 ISO 가
+     *  자동으로 켜져야만 focused 가 성립했으나, 이제 ISO 를 켜지 않으므로 activePin 일치만으로 판정. */
     onPinTap(pin) {
       if (!pin) return;
-      const focused = State.activePin === pin.id && State.isoView;
+      const focused = State.activePin === pin.id;
       if (!focused) { this.focusPinIso(pin); return; }
       if (this.pinHasContent(pin)) this.openPano(pin);
       else if (State.mode === "designer" && typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
@@ -9457,10 +9548,10 @@
     },
 
     _buildSavePayload(pagesData, sourceMeta) {
-      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀도 크롭 기준 %로 재배치해
-      // 실어 보낸다(라이브 State.pins 자체는 페이지 기준 %로 그대로 — 이 배열은 배포용 복사본).
-      // 크롭 밖 핀은 표시할 캔버스가 없으므로 배포본에서 제외한다(원본 State.pins 는 불변).
-      // 🔴 같은 페이지의 16_Zones.js 구역·PDF 주석은 재매핑 대상이 아니다(미구현·미포함).
+      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀/영역/주석도 크롭 기준 %로
+      // 재배치해 실어 보낸다(라이브 State.pins/zones/annotations 자체는 페이지 기준 %로 그대로 —
+      // 이 배열들은 배포용 복사본). 크롭 밖 항목은 표시할 캔버스가 없으므로 배포본에서 제외한다
+      // (원본 State.pins/zones/annotations 는 불변).
       const deckCrop = this._currentDeckCrop();
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
@@ -9479,12 +9570,14 @@
         delete q.uploading;
         return q;
       }).filter(Boolean);
+      const deployableZones = (State.zones || []).map(z => this._mapZoneForCrop(z, deckCrop)).filter(Boolean);
+      const deployableAnnotations = (State.annotations || []).map(a => this._mapAnnoForCrop(a, deckCrop)).filter(Boolean);
       const body = {
         title:       State.fileName || "도면",
         file_name:   State.fileName || "",
         pins:        JSON.stringify(deployablePins),
-        zones:       (typeof Zones !== "undefined") ? Zones.serialize() : "[]",
-        annotations: JSON.stringify(State.annotations || [])
+        zones:       JSON.stringify(deployableZones),
+        annotations: JSON.stringify(deployableAnnotations)
       };
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
@@ -9502,6 +9595,88 @@
       const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
       if (!cd || !cd.crop || !(cd.crop.w > 0) || !(cd.crop.h > 0)) return null;
       return { page: cd.page || 1, crop: cd.crop };
+    },
+
+    /** [WO 20260917-crop-zone-anno] 영역(16_Zones.js 의 State.zones 항목) 배포용 좌표 재매핑.
+     *  핀과 동일하게 MapCtrl.pageToDeckCropPct(순수함수)만 재사용 — 새 변환 로직 없음.
+     *  rect: {x,y,w,h}, circle: {cx,cy,r}, poly: {points:[{x,y}...]} 모두 대응.
+     *  반환: 복사본(원본 z 불변) · crop 밖(어느 한 점이라도)이면 null(배포본 제외).
+     *  crop 없음/페이지 불일치면 그대로 복사본 반환(재매핑 없음, 종전 동작). */
+    _mapZoneForCrop(z, deckCrop) {
+      const zz = Object.assign({}, z);
+      if (!deckCrop || (zz.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
+        return zz;
+      }
+      const crop = deckCrop.crop;
+      const mapPt = (x, y) => MapCtrl.pageToDeckCropPct(x, y, crop);
+      if (zz.shape === "poly" && Array.isArray(zz.points)) {
+        const mapped = [];
+        for (const p of zz.points) {
+          const m = mapPt(p.x, p.y);
+          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
+          mapped.push({ x: m.x, y: m.y });
+        }
+        zz.points = mapped;
+        const xs = mapped.map(p => p.x), ys = mapped.map(p => p.y);
+        zz.x = Math.min(...xs); zz.y = Math.min(...ys);
+        zz.w = Math.max(...xs) - zz.x; zz.h = Math.max(...ys) - zz.y;
+        return zz;
+      }
+      if (zz.shape === "circle") {
+        const p1 = mapPt(zz.cx - zz.r, zz.cy - zz.r);
+        const p2 = mapPt(zz.cx + zz.r, zz.cy + zz.r);
+        if (!p1 || !p2) return null;
+        zz.cx = (p1.x + p2.x) / 2; zz.cy = (p1.y + p2.y) / 2;
+        zz.r  = ((p2.x - p1.x) + (p2.y - p1.y)) / 4;
+        zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
+        return zz;
+      }
+      // rect(기본) — 항상 바운딩 박스(x,y,w,h)를 보관하는 형식(16_Zones.js _commitZone)
+      const p1 = mapPt(zz.x, zz.y);
+      const p2 = mapPt(zz.x + zz.w, zz.y + zz.h);
+      if (!p1 || !p2) return null;
+      zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
+      return zz;
+    },
+
+    /** [WO 20260917-crop-zone-anno] PDF 주석(26_PdfAnno.js 의 State.annotations 항목) 배포용
+     *  좌표 재매핑. 주석 좌표는 permille(0~1000, 페이지 기준 %×10) 저장 형식이라 MapCtrl.
+     *  pageToDeckCropPct(%,0~100 입력)에 맞춰 /10 → 변환 → *10 로 왕복한다(새 변환 로직 아님).
+     *  type: text{x,y} · rect/highlight{x,y,w,h} · pen{pts:[{x,y}...]}.
+     *  반환: 복사본(원본 a 불변) · crop 밖이면 null(배포본 제외). crop 없음/페이지 불일치면
+     *  그대로 복사본 반환(재매핑 없음, 종전 동작). */
+    _mapAnnoForCrop(a, deckCrop) {
+      const aa = Object.assign({}, a);
+      if (!deckCrop || (aa.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
+        return aa;
+      }
+      const crop = deckCrop.crop;
+      const mapPt = (x, y) => {
+        const m = MapCtrl.pageToDeckCropPct(x / 10, y / 10, crop);
+        return m ? { x: m.x * 10, y: m.y * 10 } : null;
+      };
+      if (aa.type === "pen" && Array.isArray(aa.pts)) {
+        const mapped = [];
+        for (const p of aa.pts) {
+          const m = mapPt(p.x, p.y);
+          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
+          mapped.push({ x: m.x, y: m.y });
+        }
+        aa.pts = mapped;
+        return aa;
+      }
+      if (aa.type === "text") {
+        const m = mapPt(aa.x, aa.y);
+        if (!m) return null;
+        aa.x = m.x; aa.y = m.y;
+        return aa;
+      }
+      // rect / highlight — {x,y,w,h}
+      const p1 = mapPt(aa.x, aa.y);
+      const p2 = mapPt(aa.x + aa.w, aa.y + aa.h);
+      if (!p1 || !p2) return null;
+      aa.x = p1.x; aa.y = p1.y; aa.w = p2.x - p1.x; aa.h = p2.y - p1.y;
+      return aa;
     },
 
     async _snapshotPages() {
@@ -12632,12 +12807,34 @@
      PIN ACTION POP — 핀 작업 전용 팝업
      (디자이너가 핀 클릭 → 이동/수정·사진추가/삭제/360°보기)
   ══════════════════════════════════════════ */
+  /** 사진 URL 로 허용하는 확장자(이미지·영상) — pap-photo-url 검증의 유일한 기준(SoT). */
+  const PAP_URL_RE = /^https?:\/\/.+\.(jpe?g|png|gif|webp|bmp|mp4|webm|mov)(\?.*)?$/i;
+  const PAP_VIDEO_RE = /\.(mp4|webm|mov)(\?.*)?$/i;
+
   const PinActionPop = {
     _pinId: null,
+    _layoutDone: false,
+
+    /** [마스터 2026-09-17] 패널 = 화면 오른쪽 고정, 상(정보)/하(사진) 2분할.
+     *  style.css 는 타 에이전트 점유 중이라 신규 클래스를 만들지 않고 인라인 스타일로 배치한다.
+     *  ISO 전환 코드는 여기 없다(핀 클릭 시 ISO 를 켜지 않는다 — 마스터 명시). */
+    _applyLayoutOnce() {
+      if (this._layoutDone) return;
+      this._layoutDone = true;
+      const pop = document.getElementById("pin-action-pop");
+      const card = document.getElementById("pap-card");
+      if (pop) { pop.style.display = "flex"; pop.style.alignItems = "stretch"; pop.style.justifyContent = "flex-end"; }
+      if (card) {
+        card.style.cssText += "width:380px;max-width:92vw;height:100vh;max-height:100vh;" +
+          "border-radius:0;display:flex;flex-direction:column;margin:0;";
+      }
+    },
+
     init() {
       const $ = (id) => document.getElementById(id);
       const el = $("pin-action-pop");
       if (!el) return;
+      this._applyLayoutOnce();
       $("pap-close") && $("pap-close").addEventListener("click", () => this.close());
       const bd = el.querySelector(".pin-action-backdrop");
       bd && bd.addEventListener("click", () => this.close());
@@ -12662,40 +12859,47 @@
         this.close();
         App.editPin(pin.id);
       });
-      $("pap-note") && $("pap-note").addEventListener("click", async () => {
-        const pin = this._pin(); if (!pin) return;
-        this.close();
-        const r = await Prompt.ask({
-          title: "노트 등록",
-          sub: "이 포인트에 남길 노트를 입력하세요 (비우고 확인하면 삭제)",
-          placeholder: "예: 도장 박리 / 재검사 필요",
-          value: pin.note || "",
-          allowEmpty: true
-        });
-        if (!r) return;
-        const note = (r.value || "").trim();
-        if (note) pin.note = note; else delete pin.note;
-        UI.renderPinsOnMap && UI.renderPinsOnMap();
-        UI.renderPinList && UI.renderPinList();
-        App._autoSave && App._autoSave();
-        Prompt.toast && Prompt.toast(note ? "노트 저장됨" : "노트 삭제됨");
-      });
       $("pap-del") && $("pap-del").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;
         this.close();
         App.deletePin(pin.id);
       });
+      // ── 등록정보(위치명) / 번호 수정 — 저장은 명시 버튼(자동저장 OFF, 미저장 표시만) ──
+      $("pap-label-save") && $("pap-label-save").addEventListener("click", () => this._saveLabel());
+      // ── 사진 미리보기 클릭 → 전체화면(기존 파노 뷰어 경로 재사용) ──
+      $("pap-photo-img") && $("pap-photo-img").addEventListener("click", () => {
+        const pin = this._pin(); if (!pin) return;
+        this.close();
+        App.openPano(pin);
+      });
+      // ── 사진 등록: 파일 선택 ──
+      $("pap-photo-file") && $("pap-photo-file").addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        this._registerPhotoFile(file);
+      });
+      // ── 사진 등록: 경로(URL) 직접 입력 — 검증 없이 저장 금지 ──
+      $("pap-photo-url-add") && $("pap-photo-url-add").addEventListener("click", () => this._registerPhotoUrl());
+      // ── 노트(이슈) 등록 — 13_Notes.js 재사용(같은 /api/notes) ──
+      $("pap-notes-submit") && $("pap-notes-submit").addEventListener("click", () => this._submitNote());
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !el.classList.contains("hidden")) this.close();
       });
     },
     _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
+
+    /** 편집 권한(번호 수정·사진 등록·노트 작성) = 디자이너만. 뷰어는 보기 전용. */
+    _canEdit() {
+      if (typeof Auth !== "undefined" && Auth && typeof Auth.isDesigner !== "undefined") return !!Auth.isDesigner;
+      return (typeof State !== "undefined" && State.mode === "designer");
+    },
+
     open(pinId) {
       const el = document.getElementById("pin-action-pop");
       if (!el) return;
       const pin = (State.pins || []).find(p => p.id === pinId);
       if (!pin) return;
       this._pinId = pinId;
+      this._applyLayoutOnce();
       // 페이지 기준 번호 계산
       const page = pin.page || 1;
       const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
@@ -12710,12 +12914,158 @@
       // 360° 보기 버튼은 미디어 있을 때 강조
       const viewBtn = $("pap-view");
       if (viewBtn) viewBtn.classList.toggle("dim", !hasContent);
+
+      const canEdit = this._canEdit();
+
+      // ── 등록정보/번호(위치명) — 뷰어는 읽기전용 ──
+      const labelInput = $("pap-label-input");
+      if (labelInput) {
+        labelInput.value = pin.label || "";
+        labelInput.readOnly = !canEdit;
+      }
+      const labelSaveBtn = $("pap-label-save");
+      if (labelSaveBtn) labelSaveBtn.classList.toggle("hidden", !canEdit);
+      const labelHint = $("pap-label-hint");
+      if (labelHint) labelHint.textContent = "";
+
+      this._renderPhoto(pin, canEdit);
+      this._loadNotes(pin, canEdit);
+
       el.classList.remove("hidden");
     },
     close() {
       const el = document.getElementById("pin-action-pop");
       if (el) el.classList.add("hidden");
       this._pinId = null;
+    },
+
+    /** ── 등록정보/번호 저장 — 자동저장 OFF: pin.label 만 갱신하고 미저장 표시만 남긴다 ── */
+    _saveLabel() {
+      const pin = this._pin(); if (!pin) return;
+      if (!this._canEdit()) return;
+      const $ = (id) => document.getElementById(id);
+      const v = ($("pap-label-input") && $("pap-label-input").value || "").trim();
+      pin.label = v;
+      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
+      // 화면 갱신(번호/제목/메타 재계산) — 페이지 재조회 없이 open()의 표시 로직만 재사용
+      const page = pin.page || 1;
+      const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
+      const no = samePage.indexOf(pin) + 1;
+      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
+      const hint = $("pap-label-hint");
+      if (hint) hint.textContent = "미저장 변경 — '저장하기'(포인트 편집 패널) 또는 자동저장 이벤트 발생 시 서버에 반영됩니다.";
+      Prompt.toast && Prompt.toast("위치명/번호 반영됨 (미저장)");
+    },
+
+    /** ── 사진 섹션: 있으면 미리보기, 없으면 등록 UI(뷰어는 등록 UI 숨김) ── */
+    _renderPhoto(pin, canEdit) {
+      const $ = (id) => document.getElementById(id);
+      const previewBox = $("pap-photo-preview");
+      const registerBox = $("pap-photo-register");
+      const img = $("pap-photo-img");
+      const hasPhoto = (typeof App !== "undefined" && App.pinHasMedia) ? App.pinHasMedia(pin) : !!(pin && (pin.imageId || pin.imageUrl || pin.videoUrl || pin.pendingOpId || pin.localPreview));
+      if (hasPhoto) {
+        if (previewBox) previewBox.classList.remove("hidden");
+        if (registerBox) registerBox.classList.add("hidden");
+        this._resolvePhotoSrc(pin).then((src) => { if (img && src) img.src = src; });
+      } else {
+        if (previewBox) previewBox.classList.add("hidden");
+        if (registerBox) registerBox.classList.toggle("hidden", !canEdit);
+        const errEl = $("pap-photo-err"); if (errEl) errEl.classList.add("hidden");
+        const statusEl = $("pap-photo-status"); if (statusEl) statusEl.textContent = "";
+        const urlInput = $("pap-photo-url"); if (urlInput) urlInput.value = "";
+        const fileInput = $("pap-photo-file"); if (fileInput) fileInput.value = "";
+      }
+    },
+
+    /** 미리보기 이미지 소스 해석 — 21_AllPins.js._loadThumb 과 같은 캐시/조회 경로 재사용 */
+    async _resolvePhotoSrc(pin) {
+      try {
+        if (pin.imageId) {
+          if (typeof Cloud !== "undefined" && Cloud._cache && Cloud._cache[pin.imageId]) return Cloud._cache[pin.imageId];
+          if (typeof Cloud !== "undefined" && Cloud.fetchImage) return await Cloud.fetchImage(pin.imageId);
+        }
+        if (pin.localPreview) return pin.localPreview;
+        if (pin.imageUrl && !PAP_VIDEO_RE.test(pin.imageUrl)) return pin.imageUrl;
+      } catch (e) { /* 썸네일 실패는 무시 — 등록 상태 자체는 이미 표시됨 */ }
+      return null;
+    },
+
+    /** ── 사진 등록: 파일 선택 — 기존 저장 경로(Cloud.resizeImage/uploadImage, imageId/imageName) 재사용 ── */
+    async _registerPhotoFile(file) {
+      const pin = this._pin(); if (!pin || !this._canEdit()) return;
+      const $ = (id) => document.getElementById(id);
+      const errEl = $("pap-photo-err"), statusEl = $("pap-photo-status");
+      if (errEl) errEl.classList.add("hidden");
+      if (!file) { if (errEl) { errEl.textContent = "파일을 선택하세요."; errEl.classList.remove("hidden"); } return; }
+      if (statusEl) statusEl.textContent = "업로드 중…";
+      try {
+        const { dataURL, width, height } = await Cloud.resizeImage(file);
+        const imgName = (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
+        const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
+        pin.imageId = imageId; pin.imageName = imgName;
+        if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
+        if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+        if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
+        if (statusEl) statusEl.textContent = "사진 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";
+        this._renderPhoto(pin, true);
+      } catch (e) {
+        if (errEl) { errEl.textContent = "업로드 실패: " + (e.message || e); errEl.classList.remove("hidden"); }
+        if (statusEl) statusEl.textContent = "";
+      }
+    },
+
+    /** ── 사진 등록: 경로(URL) 직접 입력 — 빈 값·잘못된 형식은 거부하고 이유 표시 ── */
+    _registerPhotoUrl() {
+      const pin = this._pin(); if (!pin || !this._canEdit()) return;
+      const $ = (id) => document.getElementById(id);
+      const errEl = $("pap-photo-err"), statusEl = $("pap-photo-status");
+      const raw = ($("pap-photo-url") && $("pap-photo-url").value || "").trim();
+      if (errEl) errEl.classList.add("hidden");
+      if (!raw) { if (errEl) { errEl.textContent = "경로를 입력하세요."; errEl.classList.remove("hidden"); } return; }
+      let parsed;
+      try { parsed = new URL(raw); } catch (e) { parsed = null; }
+      if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+        if (errEl) { errEl.textContent = "올바른 URL 형식이 아닙니다(http:// 또는 https:// 로 시작해야 함)."; errEl.classList.remove("hidden"); }
+        return;
+      }
+      if (!PAP_URL_RE.test(raw)) {
+        if (errEl) { errEl.textContent = "지원하지 않는 형식입니다(.jpg/.png/.gif/.webp/.mp4/.webm/.mov 만 허용)."; errEl.classList.remove("hidden"); }
+        return;
+      }
+      pin.imageUrl = raw;
+      pin.isVideo = PAP_VIDEO_RE.test(raw);
+      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
+      if (statusEl) statusEl.textContent = "경로 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";
+      this._renderPhoto(pin, true);
+    },
+
+    /** ── 노트(이슈) — 13_Notes.js 데이터/엔드포인트 재사용 ── */
+    async _loadNotes(pin, canEdit) {
+      const $ = (id) => document.getElementById(id);
+      const formRow = $("pap-notes-form-row");
+      if (formRow) formRow.classList.toggle("hidden", !canEdit);
+      if (typeof Notes === "undefined") return;
+      Notes.setPin(pin);
+      try { await Notes.loadForPin(); } catch (e) {}
+      if (Notes.renderCompact) Notes.renderCompact("pap-notes-list");
+    },
+    async _submitNote() {
+      const pin = this._pin(); if (!pin || !this._canEdit()) return;
+      const $ = (id) => document.getElementById(id);
+      const input = $("pap-notes-input");
+      const body = (input && input.value || "").trim();
+      if (!body || typeof Notes === "undefined" || !Notes.submitCompact) return;
+      const ok = await Notes.submitCompact(pin, body);
+      if (ok) {
+        if (input) input.value = "";
+        if (Notes.renderCompact) Notes.renderCompact("pap-notes-list");
+        Prompt.toast && Prompt.toast("노트 등록됨");
+      } else {
+        Prompt.toast && Prompt.toast("노트 등록 실패(네트워크 확인)");
+      }
     }
   };
 
@@ -14696,6 +15046,175 @@
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
     }
   };
+
+  /* ══════════════════════════════════════════════════════════════
+     도움말(Help) 체계 — 마스터 지시: "항상 모든 메뉴마다 사용자 매뉴얼을 구현해"
+     ────────────────────────────────────────────────────────────────
+     [설계 방침 — 작게 시작] 버튼 259개에 개별 문서를 일일이 다는 대신, 재사용
+     가능한 얇은 체계 하나만 둔다: 요소에 `data-help="키"` 를 달면 그 요소를 길게
+     누르는(hold) 것만으로 근처에 도움말 팝업이 뜬다.
+
+     트리거 방식 = Pointer Events 기반 "길게 누르기" 단일 방식.
+       - 마우스(누르고 있기)·터치(길게 누르기)를 Pointer Events 하나로 통합 처리
+         → 디자이너(PC, 마우스)·뷰어(모바일, 터치) 모두 별도 구현 없이 동일 코드로 커버.
+       - 기존 `title` 속성(브라우저 기본 툴팁, 130개 이미 존재)은 절대 건드리지 않는다.
+         이 레이어는 그 위에 "얹는" 것이지 대체가 아니다.
+       - 클릭(짧게 누름)은 원래 버튼 동작 그대로 통과시킨다 — 길게 눌러 팝업이 뜬
+         직후의 click 한 번만 억제해 버튼이 오작동(의도치 않은 실행)하지 않게 한다.
+
+     SoT(정본) = 아래 `Help.CONTENT` 객체 하나. 도움말 문구를 다른 파일에 복제하지 않는다.
+     내용이 없는 키는 조용히 무시하지 않고 "준비 중" 문구 + console.warn 으로 알린다
+     (사용자에게는 오류로 보이지 않게, 개발자에게는 빠뜨린 키를 알 수 있게).
+
+     🔴 반드시 `_manifest.txt` 에 등록해야 번들(main.js)에 포함된다(빠뜨리면 고아 모듈).
+     🔴 새 CSS 규칙 추가 금지(style.css 는 다른 트랙이 점유 중) — 전부 인라인 스타일.
+        색상은 var(--text) 등 테마 변수 대신 리터럴 hex 를 쓴다(이 앱은 다크토글이 없지만,
+        p7-contrast.test.mjs 가 실측한 "OS 강제다크모드가 var() 텍스트만 밝게 재해석" 함정을
+        원천 차단하기 위함 — 배경/글자 모두 고정 리터럴이면 그 함정 자체가 성립하지 않는다).
+        대비: #ffffff on #1a1712 ≈ 18.7:1 (WCAG AAA 여유).
+  ══════════════════════════════════════════════════════════════ */
+  const Help = {
+    // ── SoT: 도움말 문구 정본. 여기 한 곳에서만 관리한다 ──
+    // 초기 8개(마스터 지정 핵심 메뉴). 나머지 버튼은 키를 비워두고 점진 확장한다.
+    CONTENT: {
+      "zone-create": "구역/영역 만들기 — 도면 위에서 사각형·원형·다각형 도구를 선택한 뒤 그리면, 그 안에 속한 핀들을 하나의 구역(영역)으로 묶어 관리할 수 있습니다.",
+      "drawing-upload": "도면 등록 — PDF 또는 이미지(JPG/PNG) 파일을 업로드하면 그 위에 포인트(핀)를 찍을 수 있는 캔버스가 만들어집니다.",
+      "pin-place": "포인트(핀) 찍기 — 도면 위 원하는 위치를 클릭하면 그 자리에 360° 파노라마를 연결할 핀이 생성됩니다.",
+      "zone-assign": "영역 지정 — 핀을 특정 구역(zone)에 소속시켜 도면이 복잡해도 구역별로 찾아보기 쉽게 정리합니다.",
+      "photo-batch": "사진 폴더 일괄 매칭 — 핀을 순서대로 찍은 뒤 사진이 담긴 폴더를 선택하면, 촬영 시각 순서대로 핀 번호에 자동으로 1:1 매칭됩니다.",
+      "deploy-viewer": "뷰어로 배포 — 지금까지 작업한 도면·핀·영역을 열람 전용 링크로 만들어 다른 사람과 공유합니다(공유받은 사람은 로그인 없이 볼 수 있습니다).",
+      "orientation-fix": "방향 보정 — 360° 파노라마가 실제 도면 방향과 다르게 찍혔을 때, 회전시켜 도면 방향과 맞춥니다.",
+      "checkerboard": "체크보드 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다."
+    },
+
+    _inited: false,
+    _popup: null,
+    _hideTimer: null,
+    _downInfo: null,   // { x, y, el, timer }
+    _shownAt: 0,       // 팝업을 띄운 시각(ms) — 직후 click 1회 억제용
+    HOLD_MS: 480,
+    MOVE_TOL: 10,
+    SUPPRESS_CLICK_MS: 400,
+
+    /** 정본에서 값을 읽는다. 키가 없으면 undefined(조용한 대체값 날조 금지). */
+    get(key) {
+      return Object.prototype.hasOwnProperty.call(this.CONTENT, key) ? this.CONTENT[key] : undefined;
+    },
+
+    init() {
+      if (this._inited) return;
+      this._inited = true;
+      document.addEventListener("pointerdown", (e) => this._onDown(e));
+      document.addEventListener("pointermove", (e) => this._onMove(e));
+      document.addEventListener("pointerup", () => this._onUp());
+      document.addEventListener("pointercancel", () => this._onUp());
+      document.addEventListener("click", (e) => this._onClickCapture(e), true);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.hide(); });
+      window.addEventListener("scroll", () => this.hide(), true);
+      window.addEventListener("resize", () => this.hide());
+    },
+
+    _findHelpEl(target) {
+      if (!target) return null;
+      if (target.closest) return target.closest("[data-help]");
+      // closest 미지원 환경 폴백(구형 목 DOM 등)
+      let n = target;
+      while (n) {
+        if (n.dataset && n.dataset.help) return n;
+        n = n.parentNode || null;
+      }
+      return null;
+    },
+
+    _onDown(e) {
+      const el = this._findHelpEl(e.target);
+      if (!el) return;
+      const x = e.clientX || 0, y = e.clientY || 0;
+      const timer = setTimeout(() => {
+        this._shownAt = Date.now();
+        this.show(el, el.dataset ? el.dataset.help : el.getAttribute("data-help"));
+      }, this.HOLD_MS);
+      this._downInfo = { x, y, el, timer };
+    },
+
+    _onMove(e) {
+      if (!this._downInfo) return;
+      const dx = Math.abs((e.clientX || 0) - this._downInfo.x);
+      const dy = Math.abs((e.clientY || 0) - this._downInfo.y);
+      if (dx > this.MOVE_TOL || dy > this.MOVE_TOL) {
+        clearTimeout(this._downInfo.timer);
+        this._downInfo = null;
+      }
+    },
+
+    _onUp() {
+      if (this._downInfo) { clearTimeout(this._downInfo.timer); this._downInfo = null; }
+    },
+
+    /** 길게 눌러 팝업이 막 뜬 경우, 뒤따르는 click 1회만 삼켜 버튼 오작동을 막는다.
+     *  팝업이 떠 있는 상태에서 팝업 바깥을 클릭하면 닫는다. */
+    _onClickCapture(e) {
+      if (this._shownAt && (Date.now() - this._shownAt) < this.SUPPRESS_CLICK_MS) {
+        this._shownAt = 0;
+        if (e.preventDefault) e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        return;
+      }
+      if (this._popup) {
+        const insidePopup = e.target && e.target.closest && e.target.closest("[data-help-popup]");
+        if (!insidePopup) this.hide();
+      }
+    },
+
+    /** 도움말 팝업을 el 근처에 띄운다. content 없는 키는 "준비 중"으로 표시(조용한 실패 금지). */
+    show(el, key) {
+      this.hide();
+      const content = this.get(key);
+      const isPlaceholder = content == null;
+      const text = isPlaceholder
+        ? "[도움말 준비 중] 이 항목의 설명은 아직 작성되지 않았습니다."
+        : content;
+      if (isPlaceholder && typeof console !== "undefined" && console.warn) {
+        console.warn("[Help] 정의되지 않은 도움말 키:", key);
+      }
+
+      const pop = document.createElement("div");
+      pop.setAttribute("data-help-popup", "1");
+      pop.setAttribute("role", "tooltip");
+      pop.textContent = text;
+      pop.style.cssText = [
+        "position:fixed", "max-width:280px", "padding:10px 14px",
+        "background:#1a1712", "color:#ffffff", "font-size:13px", "line-height:1.5",
+        "border-radius:8px", "box-shadow:0 6px 20px rgba(0,0,0,.35)",
+        "z-index:99999", "pointer-events:none", "font-family:sans-serif",
+        isPlaceholder ? "font-style:italic" : "font-style:normal",
+        "opacity:0.98"
+      ].join(";");
+      document.body.appendChild(pop);
+
+      const rect = (el && el.getBoundingClientRect) ? el.getBoundingClientRect() : { left: 12, top: 12, bottom: 12, width: 0 };
+      let left = rect.left, top = rect.bottom + 8;
+      const vw = (typeof window !== "undefined" && window.innerWidth) || 1024;
+      const vh = (typeof window !== "undefined" && window.innerHeight) || 768;
+      const POP_W = 280;
+      if (left + POP_W > vw - 8) left = Math.max(8, vw - POP_W - 8);
+      if (top > vh - 60) top = Math.max(8, rect.top - 68);
+      pop.style.left = left + "px";
+      pop.style.top = top + "px";
+
+      this._popup = pop;
+      this._hideTimer = setTimeout(() => this.hide(), 6000);
+      return pop;
+    },
+
+    hide() {
+      if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null; }
+      if (this._popup && this._popup.parentNode) this._popup.parentNode.removeChild(this._popup);
+      this._popup = null;
+    }
+  };
+
+  document.addEventListener("DOMContentLoaded", () => Help.init());
 
   /* ── 진입 ── */
   document.addEventListener("DOMContentLoaded", async () => {
