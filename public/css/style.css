@@ -2017,6 +2017,25 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   font-size: 8px; font-weight: 800; font-family: var(--font-mono); line-height: 1;
   border: 1.5px solid #efe9dc; box-shadow: 0 1px 4px rgba(239,68,68,.6);
 }
+/* 🔴 [2026-09-17] 핀 번호 중복 경고 — 탐지·표시 전용(자동 재채번 금지, 마스터 명시).
+   이슈 뱃지(빨강)와 혼동되지 않게 색을 달리한다. #fff on #b45309 = 5.02:1(기존 검증값 재사용, 4817줄). */
+.pin-dup-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 16px; padding: 0 6px; margin-left: 6px;
+  border-radius: 999px; background: #b45309; color: #fff;
+  font-size: 9.5px; font-weight: 800; font-family: var(--font-mono); line-height: 1;
+  vertical-align: middle; box-shadow: 0 1px 4px rgba(180,83,9,.5);
+}
+/* 도면 마커 위 중복 경고(이슈 카운트와 자리 겹침 방지 → 좌상단) */
+.pin-marker-dup {
+  position: absolute; top: -4px; left: -5px; z-index: 4;
+  min-width: 12px; height: 12px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: #b45309; color: #fff;
+  font-size: 8px; font-weight: 800; font-family: var(--font-mono); line-height: 1;
+  border: 1.5px solid #efe9dc; box-shadow: 0 1px 4px rgba(180,83,9,.6);
+}
+.pin-marker-teardrop .pin-marker-dup { top: -4px; left: 0; }
 
 /* 파노라마 헤더 액션 묶음 */
 .pano-header-actions { display: flex; align-items: center; gap: 10px; }

@@ -74,6 +74,9 @@
       const visiblePins = isMulti
         ? State.pins.filter(p => (p.page || 1) === curPage)
         : State.pins;
+      // 🔴 [2026-09-17] 번호 중복 탐지 전용(표시만) — 자동 재채번 금지(마스터 명시).
+      //   정본 = PinSeries.duplicateCheckboardIds (11_UI 도면 마커도 같은 함수를 쓴다).
+      const dupPinIds = (typeof PinSeries !== "undefined") ? PinSeries.duplicateCheckboardIds(State.pins, curPage) : new Set();
 
       // 현재 페이지에 핀이 없으면 안내(다른 페이지에 핀이 있을 수 있음)
       if (isMulti && visiblePins.length === 0) {
@@ -105,12 +108,15 @@
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueBadge = openIssues > 0
           ? `<span class="pin-issue-badge" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
+        // 🔴 [2026-09-17] 번호 중복 경고(표시만 — 자동 재채번 금지, 마스터 명시)
+        const dupBadge = dupPinIds.has(pin.id)
+          ? `<span class="pin-dup-badge" title="번호 중복 — 현장 확인 후 직접 수정하세요">중복</span>` : "";
 
         if (State.mode === "designer") {
           item.innerHTML = `
             <div class="pin-num">${idx + 1}</div>
             <div class="pin-info">
-              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}${issueBadge}</div>
+              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}${issueBadge}${dupBadge}</div>
               <div class="pin-coords">${pin.x.toFixed(1)}%, ${pin.y.toFixed(1)}%${pageTag}</div>
             </div>
             <div class="pin-acts">
@@ -242,6 +248,8 @@
       // 🔴 번호/부류/색상 정본 = PinSeries (01b_PinSeries.js). 여기서 따로 세지 않는다.
       //    미니맵(07_Radar)도 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
       const numMap = PinSeries.numbers(State.pins, curPage);
+      // 🔴 [2026-09-17] 번호 중복 탐지(표시만·자동 재채번 금지 — 마스터 명시). 정본 = PinSeries.
+      const dupIds = PinSeries.duplicateCheckboardIds(State.pins, curPage);
       PinSeries.renderChips();
       let svgIdx = 0; // SVG gradient id 유일화용(필터로 건너뛰어도 충돌 없게 별도 카운터)
       State.pins.forEach((pin) => {
@@ -272,6 +280,9 @@
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
+        // 🔴 [2026-09-17] 번호 중복 경고(표시만·자동 재채번 금지 — 마스터 명시)
+        const dupDot = dupIds.has(pin.id)
+          ? `<span class="pin-marker-dup" title="번호 중복 — 현장 확인 후 직접 수정하세요">!</span>` : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
@@ -328,7 +339,7 @@
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
-            ${issueDot}
+            ${issueDot}${dupDot}
           </div>`;
           /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
              수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */
