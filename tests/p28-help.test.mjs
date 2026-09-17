@@ -248,6 +248,31 @@ console.log("\n[정상 소스]");
 }
 
 /* ────────────────────────────────────────────────────────────
+ * ⑩~⑬ 실제 배선 검증: public/index.html 의 data-help 속성 + 20_App.js 의
+ * Help.init() 호출부(고아 방지). 소스 문자열을 그대로 읽어 검사한다(목 아님).
+ * ──────────────────────────────────────────────────────────── */
+const indexHtmlSrc = rd("public/index.html");
+const appJsSrc = rd("public/js/modules/20_App.js");
+
+{
+  const dataHelpValues = [...indexHtmlSrc.matchAll(/data-help="([^"]*)"/g)].map((m) => m[1]);
+  ok(dataHelpValues.length >= 8,
+    `⑩ index.html 에 data-help 속성이 8개 이상 존재함 (실제 ${dataHelpValues.length}개)`);
+
+  const validKeys = Object.keys(makeEnv().Help.CONTENT);
+  const invalid = dataHelpValues.filter((v) => !validKeys.includes(v));
+  ok(invalid.length === 0,
+    `⑪ 모든 data-help 값이 Help.CONTENT 의 실제 키다 (오타/미정의 0건, 발견: ${JSON.stringify(invalid)})`);
+
+  const titleCount = (indexHtmlSrc.match(/title="/g) || []).length;
+  ok(titleCount === 130,
+    `⑫ 기존 title 속성 개수가 보존됨(회귀 기준값 130, 실제 ${titleCount})`);
+
+  ok(/Help\.init\s*\(\s*\)/.test(appJsSrc),
+    "⑬ 20_App.js 안에 Help.init() 호출부가 존재함(렌더 고아 방지)");
+}
+
+/* ────────────────────────────────────────────────────────────
  * 뮤테이션1: 토글 상태 무시 — 토글 버튼 클릭이 실제 toggle() 대신 항상 배지를
  * (재)장착만 하도록 바꾼다 → active 플래그가 갱신되지 않고(①), OFF 클릭에도
  * 배지가 사라지지 않아야 한다(②)

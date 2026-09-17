@@ -30,6 +30,9 @@
       // [고아 방지] 35_PhotoBatch 는 자체 init() 안에서만 버튼을 바인딩한다 —
       //   여기서 부르지 않으면 번들에는 있는데 버튼이 죽는다(전역 CLAUDE.md §5 렌더 고아).
       if (typeof PhotoBatch !== "undefined") PhotoBatch.init();
+      // [고아 방지] 36_Help 도 자체 init() 안에서만 토글 버튼/배지를 바인딩한다 —
+      //   여기서 부르지 않으면 번들에는 있는데 도움말이 뜨지 않는다(전역 CLAUDE.md §5 렌더 고아).
+      if (typeof Help !== "undefined") Help.init();
       Prompt.init();
       Projects.init();
       ProjectHub.init();
