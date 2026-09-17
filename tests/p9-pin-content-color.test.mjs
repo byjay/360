@@ -124,9 +124,11 @@ function runUI(sSrc, uSrc, pins, page = 1) {
     const stops = (html.match(/stop-color="(#[0-9a-fA-F]{6})"/g) || []).map((s) => s.slice(12, -1));
     const txt = (html.match(/fill="(#[0-9a-fA-F]{6})">\d+<\/text>/) || [])[1] || null;
     const dash = (html.match(/stroke-dasharray="([^"]*)"/) || [])[1] || "";
+    const headFillAttr = (html.match(/r="11\.8" fill="([^"]+)"/) || [])[1] || null;
     out[m.dataset.id] = {
       no: String(m.dataset.no), kind: m.dataset.kind, filled: m.dataset.filled,
       head: stops[0], head2: stops[1], needle: stops[3], text: txt, dash: dash,
+      headFillAttr: headFillAttr,
       cls: m.className, pulse: /pin-pulse/.test(html)
     };
   });
@@ -326,6 +328,36 @@ function suiteBlackWhiteOnly(label, sSrc, rSrc) {
     "계열(kind) 불변 회귀: checkboard/content/empty 그대로");
 }
 
+/* ────────────────────────────────────────────────────────────
+ * ⑧ [2026-09-17 4차] 헤드(메달리온) 도형 자체가 등록/미등록으로 갈리는가.
+ *   마스터 4번째 요구: "머리 원이 항상 채워져서 색을 흑백으로 봐도 구분이 안 된다."
+ *   근본원인: 헤드 circle(r=11.8) 의 fill 이 filled 여부와 무관하게
+ *   항상 url(#pgbody...) 그라디언트였다 → 이 스위트는 fill 속성 자체를 검사한다
+ *   (색 hex 값이 아니라 "채움 vs none" 이라는 도형 축).
+ * ──────────────────────────────────────────────────────────── */
+function suiteHeadShape(label, sSrc) {
+  console.log("\n[" + label + "]");
+  const fixture = FIXTURE();
+  const ui = runUI(sSrc, uiSrc, fixture).pins;
+
+  ok(/^url\(/.test(ui.c1.headFillAttr), `등록 핀(c1) 헤드 fill = 채운 원 → ${ui.c1.headFillAttr}`);
+  ok(ui.e1.headFillAttr === "none", `미등록 핀(e1) 헤드 fill = 속 빈 원 → ${ui.e1.headFillAttr}`);
+  ok(ui.c1.headFillAttr !== ui.e1.headFillAttr,
+    `등록↔미등록 헤드 fill 서로 다름: ${ui.c1.headFillAttr} ≠ ${ui.e1.headFillAttr}`);
+
+  // 체크보드 계열도 헤드 도형으로 등록/미등록이 갈려야 한다(색만으로 우선되지 않게)
+  ok(/^url\(/.test(ui.bA.headFillAttr), `체크보드 등록(bA) 헤드 fill = 채운 원 → ${ui.bA.headFillAttr}`);
+  ok(ui.bB.headFillAttr === "none", `체크보드 미등록(bB) 헤드 fill = 속 빈 원 → ${ui.bB.headFillAttr}`);
+  ok(ui.bA.headFillAttr !== ui.bB.headFillAttr, "체크보드 등록↔미등록 헤드 fill 서로 다름");
+
+  // 숫자는 채움/속빈 둘 다 렌더되고(가독성용 흰 디스크 위) 대비 확보(⑥ 스위트와 동일 기준 재확인)
+  ok(ui.c1.text !== null && ui.e1.text !== null,
+    `채운 원·속 빈 원 모두 번호 렌더됨(text 색 c1=${ui.c1.text}, e1=${ui.e1.text})`);
+  const WHITE = "#ffffff";
+  const rE1 = contrast(ui.e1.text, WHITE);
+  ok(rE1 >= 4.5, `속 빈 원 숫자 대비(흰 디스크 위) = ${rE1.toFixed(2)}:1 (기준 4.5:1)`);
+}
+
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */
 suiteCheckboardColor("① 체크보드 사진 유무 색 구분 (정상 소스)", seriesSrc, radarSrc);
 suiteNormalPins("② 일반 핀 구분 유지 (정상 소스)", seriesSrc);
@@ -334,6 +366,7 @@ suiteNumbers("④ 번호 체계 불변 (정상 소스)", seriesSrc, radarSrc);
 suiteShape("⑤ 색 외 형태 단서 (정상 소스)", seriesSrc, radarSrc);
 suiteContrast("⑥ WCAG 대비 실측 (정상 소스)", seriesSrc, radarSrc);
 suiteBlackWhiteOnly("⑦ 흑백(색 제거) 구분 (정상 소스)", seriesSrc, radarSrc);
+suiteHeadShape("⑧ 헤드 도형(fill) 자체가 등록/미등록으로 갈림 (정상 소스)", seriesSrc);
 
 /* ────────────────────────────────────────────────────────────
  * 뮤테이션 A: 체크보드 안의 콘텐츠 분기를 제거하면 ①이 실패해야 한다
@@ -410,6 +443,40 @@ suiteBlackWhiteOnly("⑦ 흑백(색 제거) 구분 (정상 소스)", seriesSrc, 
       `뮤테이션 적용 시 미니맵 테두리 구분도 사라짐(테스트 실효성 증명) → ${rdr.bA.border}==${rdr.bB.border}`);
     ok(ui.bA.head2 !== ui.bB.head2,
       "색(colorsOf)은 이 뮤테이션과 무관하게 여전히 다름 — 형태·색 축이 서로 분리되어 있음을 확인");
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 E: 헤드 fill 분기를 제거하고 항상 채움으로 고정 → ⑧이 실패해야 한다
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션E] 헤드 fill 분기 제거(항상 채움) → ⑧이 실패해야 함");
+  const needle = 'fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"';
+  const mutated = uiSrc.replace(needle, `fill="url(#pgbody\${pageIdx})" stroke="#ffffff" stroke-width="2.4"`);
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const fixture = FIXTURE();
+    const ui = runUI(seriesSrc, mutated, fixture).pins;
+    ok(/^url\(/.test(ui.c1.headFillAttr) && /^url\(/.test(ui.e1.headFillAttr),
+      `뮤테이션 적용 시 미등록도 항상 채운 원이 됨(테스트 실효성 증명) → c1=${ui.c1.headFillAttr}, e1=${ui.e1.headFillAttr}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 F: filled 판정을 무시하고 pin.checkboard 로 잘못 분기 → 체크보드 계열
+ *   등록/미등록 헤드 도형이 안 갈려야(실패해야) 한다(⑧ 체크보드 검사).
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션F] filled 판정 무시(pin.checkboard 로 대체) → ⑧ 체크보드 검사가 실패해야 함");
+  const needle = 'fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"';
+  const mutated = uiSrc.replace(needle,
+    'fill="${pin.checkboard ? `url(#pgbody${pageIdx})` : "none"}" stroke="${pin.checkboard ? "#ffffff" : headFill2}" stroke-width="${pin.checkboard ? 2.4 : 3.2}"');
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const fixture = FIXTURE();
+    const ui = runUI(seriesSrc, mutated, fixture).pins;
+    ok(/^url\(/.test(ui.bA.headFillAttr) && /^url\(/.test(ui.bB.headFillAttr),
+      `뮤테이션 적용 시 체크보드 등록/미등록 헤드 fill 이 둘 다 채운 원이 됨(테스트 실효성 증명) → bA=${ui.bA.headFillAttr}, bB=${ui.bB.headFillAttr}`);
   }
 }
 

@@ -350,8 +350,8 @@
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
-              <!-- 메달리온 머리: 등록=채운 원 / 미등록=속 빈 원(흑백 변환해도 형태로 구분되게, 색상에 의존 금지) -->
-              <circle cx="18" cy="15" r="11.8" fill="url(#pgbody${pageIdx})" stroke="#ffffff" stroke-width="2.4"/>
+              <!-- 메달리온 머리 -->
+              <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
               <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
               <circle cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central"
