@@ -76,6 +76,9 @@
     },
 
     _syncToolUi() {
+      // [WO 20260917 색음영] 영역 그리기 중엔 기존 영역들이 도면을 덮지 않도록 옅게 표시
+      // (da479bf 의 body.deck-view-active 패턴 재사용). 완성 영역 기본 스타일(.zone-shape)은 불변.
+      try { document.body.classList.toggle("zone-drawing-active", !!State.drawingZone); } catch (e) {}
       ["rect", "circle", "poly"].forEach(sh => {
         const b = UI.$("btn-zone-" + sh);
         if (b) b.classList.toggle("active", State.drawingZone && this._shape === sh);
