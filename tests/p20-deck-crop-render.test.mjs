@@ -151,9 +151,10 @@ function suite7(label, PDF, MapCtrl) {
   const pin = { x: 30, y: 35 };
   MapCtrl.pageToDeckCropPct(pin.x, pin.y, CROP_PCT);
   ok(pin.x === 30 && pin.y === 35, "pageToDeckCropPct 호출 후 pin 원본 객체 불변");
-  // snapshotAllPages 시그니처/본문 불변 — 크롭 인자 추가 없음(스냅샷 생성 로직 미변경)
-  ok(/async snapshotAllPages\(pdfDoc, maxDim = 4096, quality = 0\.92\)/.test(pdfSrc),
-    "snapshotAllPages 시그니처 불변(크롭 파라미터 추가 없음 = pages_data 생성 로직 무변경)");
+  // [WO 20260917(dpr)] 배선 완료 — deckCrop 은 4번째 선택 인자로 추가되었고 기본값 null이라
+  // 기존 3-인자 호출(크롭 없는 페이지)은 종전과 동일하게 전체 페이지를 렌더한다(비파괴).
+  ok(/async snapshotAllPages\(pdfDoc, maxDim = 4096, quality = 0\.92, deckCrop = null\)/.test(pdfSrc),
+    "snapshotAllPages 시그니처 = 크롭 인자 추가(기본 null → 크롭 없으면 종전 동작 그대로)");
   ok(/SOFT_LIMIT/.test(pdfSrc), "snapshotAllPages 본문의 SOFT_LIMIT 강등 루프 그대로 존재(재작성 아님)");
   ok(!/pages_data/.test(pdfSrc) && !/pages_data/.test(mapSrc), "02_PDF.js/10_MapCtrl.js 어디서도 pages_data 를 직접 쓰지 않음(저장 경로 미접촉)");
 }
