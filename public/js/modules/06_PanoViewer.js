@@ -3,6 +3,7 @@
     renderer: null, scene: null, camera: null, mesh: null, texture: null,
     videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
     _dragSpotId: null, // [마스터: 마커 드래그] 현재 끌고 있는 spot.id (null이면 카메라 드래그)
+    _dragOrigLL: null, _dragArrow: null, _dragArrowActive: false, // [마스터: 이동 화살표] 드래그 시작 lon/lat, 화살표 3D 오브젝트, 활성 플래그
 
     init(canvas) { this.canvas = canvas; },
 
@@ -329,6 +330,10 @@
         // 마커를 잡은 동안엔 카메라가 회전하면 안 됨
         this.S.dragging = false;
         if (this.canvas) this.canvas.style.cursor = "grabbing";
+        // [마스터: 이동 화살표] 원래 위치 기억(화살표 시작점) — moveSpot이 spot 데이터를 그 자리에서
+        // 바꿔버리므로 드래그 시작 시점의 lon/lat을 별도로 떠 둔다.
+        const data = (this._spots || []).find(s => s.id === hitId);
+        this._dragOrigLL = data ? { lon: data.lon || 0, lat: data.lat || 0 } : null;
       } else {
         this.S.dragging = true; this.S.lx = x; this.S.ly = y;
       }
@@ -337,10 +342,15 @@
       if (this._dragSpotId) {
         if (!this._moved && Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) {
           this._moved = true;
+          this._dragArrowActive = true;
           if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 이동 중 — 놓으면 저장됩니다");
         }
         const ll = this.screenToLonLat(x, y);
-        if (ll) this.moveSpot(this._dragSpotId, ll.lon, ll.lat);
+        if (ll) {
+          this.moveSpot(this._dragSpotId, ll.lon, ll.lat);
+          // 전체 재생성 없이 화살표 오브젝트 1개만 갱신(성능 원칙 — moveSpot과 동일)
+          if (this._moved && this._dragOrigLL) this._updateDragArrow(this._dragOrigLL, ll);
+        }
         return;
       }
       if (!this.S.dragging) return;
@@ -356,6 +366,9 @@
       this.S.dragging = false;
       const draggedId = this._dragSpotId;
       this._dragSpotId = null;
+      this._dragOrigLL = null;
+      this._dragArrowActive = false;
+      if (this._dragArrow) this._dragArrow.visible = false;
       if (this.canvas) this.canvas.style.cursor = "";
       return (draggedId && this._moved) ? { spotMoved: draggedId } : null;
     },
@@ -375,14 +388,19 @@
       const phi = THREE.MathUtils.degToRad(90 - lat), theta = THREE.MathUtils.degToRad(lon);
       return new THREE.Vector3(R * Math.sin(phi) * Math.cos(theta), R * Math.cos(phi), R * Math.sin(phi) * Math.sin(theta));
     },
+    // [마스터: 마커 투명화] 채움 알파를 낮춰 뒤 사진이 비치게 하되, 숫자는 검은 헤일로(외곽선)로
+    // 감싸 어떤 배경 위에서도 대비를 보장한다(배경 사진 색과 무관 — 헤일로 자체가 로컬 배경 역할).
+    SPOT_FILL_ALPHA: .42,
     _spotTexture(spot, idx) {
       const c = document.createElement("canvas"); c.width = c.height = 128;
       const g = c.getContext("2d");
       const col = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd", nav: "#3a97dd" }[spot.kind] || "#e0503e"; // 결함/장비/안전/메모/이동
-      g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = .92; g.fill(); g.globalAlpha = 1;
-      g.lineWidth = 6; g.strokeStyle = "#fff"; g.stroke();
-      g.fillStyle = "#fff"; g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-      g.fillText(spot.kind === "nav" ? "" : String(idx + 1), 64, 70);
+      g.beginPath(); g.arc(64, 64, 40, 0, Math.PI * 2); g.fillStyle = col; g.globalAlpha = this.SPOT_FILL_ALPHA; g.fill(); g.globalAlpha = 1;
+      g.lineWidth = 6; g.strokeStyle = "rgba(255,255,255,.9)"; g.stroke();
+      g.font = "bold 52px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+      const label = spot.kind === "nav" ? "" : String(idx + 1);
+      g.lineWidth = 8; g.lineJoin = "round"; g.strokeStyle = "rgba(0,0,0,.9)"; g.strokeText(label, 64, 70);
+      g.fillStyle = "#fff"; g.fillText(label, 64, 70);
       const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
     },
     renderSpots(spots) {
@@ -436,6 +454,31 @@
       this._invalidate();
       return true;
     },
+    /** [마스터: 이동 화살표] 드래그 중 "원래 위치 → 현재 위치" 화살표를 1개만 생성해 계속 재사용.
+     *  THREE.ArrowHelper가 없는 환경(구형 THREE/목)에서는 조용히 no-op — 드래그 저장 동작에는 영향 없음. */
+    _ensureDragArrow() {
+      if (this._dragArrow) return this._dragArrow;
+      if (!this.scene || typeof THREE === "undefined" || typeof THREE.ArrowHelper !== "function") return null;
+      const arrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1, 0xffffff, 10, 6);
+      arrow.visible = false;
+      arrow.renderOrder = 20;
+      this.scene.add(arrow);
+      this._dragArrow = arrow;
+      return arrow;
+    },
+    _updateDragArrow(origLL, curLL) {
+      const arrow = this._ensureDragArrow(); if (!arrow) return;
+      const from = this._spotPos(origLL.lon, origLL.lat, 470);
+      const to = this._spotPos(curLL.lon, curLL.lat, 470);
+      const dir = to.clone().sub(from);
+      const len = dir.length();
+      if (len < 0.01) { arrow.visible = false; return; }
+      dir.normalize();
+      arrow.position.copy(from);
+      arrow.setDirection(dir);
+      arrow.setLength(len, Math.min(24, len * 0.35), Math.min(14, len * 0.25));
+      arrow.visible = true;
+    },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
 
     close() {
@@ -444,6 +487,9 @@
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
       this._dragSpotId = null;
+      this._dragOrigLL = null;
+      this._dragArrowActive = false;
+      if (this._dragArrow) this._dragArrow.visible = false;
       cancelAnimationFrame(this.rafId);
       this._disposeVideo();
       document.getElementById("pano-overlay").classList.add("hidden");

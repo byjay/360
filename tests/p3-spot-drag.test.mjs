@@ -172,6 +172,10 @@ suiteViewerBlocked("④ 뷰어 권한은 마커 이동 불가", pvSrc);
         // 마커를 잡은 동안엔 카메라가 회전하면 안 됨
         this.S.dragging = false;
         if (this.canvas) this.canvas.style.cursor = "grabbing";
+        // [마스터: 이동 화살표] 원래 위치 기억(화살표 시작점) — moveSpot이 spot 데이터를 그 자리에서
+        // 바꿔버리므로 드래그 시작 시점의 lon/lat을 별도로 떠 둔다.
+        const data = (this._spots || []).find(s => s.id === hitId);
+        this._dragOrigLL = data ? { lon: data.lon || 0, lat: data.lat || 0 } : null;
       } else {
         this.S.dragging = true; this.S.lx = x; this.S.ly = y;
       }
