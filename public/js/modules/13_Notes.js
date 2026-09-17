@@ -3,10 +3,49 @@
     _list: [],           // 현재 핀의 노트 배열
     _filter: "all",
     _busy: false,
+    _gen: 0,             // [오프라인 노트 영속화] 로드 세대 카운터 — 늦게 끝난 비동기 결과가 최신 상태를 덮어쓰지 못하게 막는 가드
     STATUS: { open: "미해결", progress: "진행중", done: "완료" },
 
     /** [오프라인 노트] 클라 임시 id — 서버 반영 후 noteIdMap 으로 실제 id 로 치환됨(applyIdMap) */
     _tmpId() { return "tmp-note-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8); },
+
+    /** [오프라인 노트 영속화] 핀별 노트 스냅샷 키 — 32_Offline.js 의 bundle:dep:* 와 같은
+     *  SyncQueue.DRAFT_STORE(IndexedDB) 에 얹는다(새 저장소 신설 안 함, §5 사다리). */
+    _snapKey(dep, pinId) { return "notes:" + dep + ":" + pinId; },
+
+    /** [오프라인 노트 영속화] 현재 핀의 _list 스냅샷을 로컬에 즉시 저장.
+     *  [④ 덮어쓰기 가드] 기존 스냅샷보다 ts 가 더 오래된 저장 시도는 무시 —
+     *  느리게 끝난 오프라인 저장이 방금 끝난 서버 동기화 결과를 덮어쓰는 사고 방지. */
+    async _saveSnapshot(list, ts, pinOverride) {
+      if (typeof SyncQueue === "undefined" || !SyncQueue.saveDraft) return false;
+      const dep = (typeof State !== "undefined") && State.currentDeploymentId;
+      const pin = pinOverride || this._pin;
+      if (!dep || !pin) return false;
+      const key = this._snapKey(dep, pin.id);
+      ts = ts || Date.now();
+      try {
+        const existing = SyncQueue.loadDraft ? await SyncQueue.loadDraft(key) : null;
+        if (existing && typeof existing.ts === "number" && ts < existing.ts) return false; // 스냅샷 덮어쓰기 가드
+        const saved = await SyncQueue.saveDraft(key, { list: list, ts: ts });
+        if (saved === false) {
+          // [무신호 손실 차단] 05_SyncQueue.js:132 와 동일한 안내 문구/경로 재사용 — 새 알림 신설 안 함.
+          try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
+          return false;
+        }
+        return true;
+      } catch (e) { return false; }
+    },
+
+    /** [오프라인 노트 영속화] 로컬 스냅샷에서 복원. myGen 이 넘어오면, 그 사이 새 loadForPin() 이
+     *  시작돼 세대가 바뀐 경우 이 결과는 폐기한다(늦게 끝난 복원이 최신 상태를 덮어쓰지 않도록). */
+    async _restoreFromSnapshot(dep, pinId, myGen) {
+      if (typeof SyncQueue === "undefined" || !SyncQueue.loadDraft) return;
+      try {
+        const rec = await SyncQueue.loadDraft(this._snapKey(dep, pinId));
+        if (myGen != null && myGen !== this._gen) return; // 세대 불일치 — 폐기
+        if (rec && Array.isArray(rec.list)) this._list = rec.list;
+      } catch (e) {}
+    },
 
     /** [오프라인 노트] 온라인 복귀 시 App._flushOpLogs()가 서버 응답의 noteIdMap 을 받아 호출.
      *  this._list 안의 임시 id를 실제 id 로 갈아끼워 화면 참조(상태변경/삭제 버튼의 data-id 등)를 유지한다. */
@@ -16,7 +55,10 @@
       (this._list || []).forEach((n) => {
         if (n && map[n.id]) { n.id = map[n.id]; changed = true; }
       });
-      if (changed) this.render();
+      if (changed) {
+        this.render();
+        try { this._saveSnapshot(this._list, Date.now()); } catch (e) {} // 서버 확정 id 로 스냅샷도 갱신(§ 스냅샷은 서버가 SoT)
+      }
     },
 
     init() {
@@ -111,12 +153,26 @@
       const pin = this._pin;
       const listEl = document.getElementById("pnp-list");
       if (!dep || !pin) { if (listEl) listEl.innerHTML = ""; return; }
+      const myGen = ++this._gen;
+      // [오프라인 노트 영속화] 오프라인이면 서버 호출을 시도하지 않고 로컬 스냅샷으로 즉시 복원.
+      //   (기존 코드는 오프라인에도 fetch 를 시도해 실패 후 this._list = [] 로 비워버려
+      //    새로고침/재진입 시 방금 작성한 오프라인 노트가 화면에서 사라졌다.)
+      if (!navigator.onLine) {
+        await this._restoreFromSnapshot(dep, pin.id, myGen);
+        if (myGen === this._gen) this.render();
+        return;
+      }
       if (listEl) listEl.innerHTML = '<div class="pnp-loading">불러오는 중…</div>';
       try {
         const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(dep) + "&pin_id=" + encodeURIComponent(pin.id), { headers: Auth.headers() });
         const j = await r.json();
+        if (myGen !== this._gen) return; // 그 사이 새 로드가 시작됨 — 이 결과는 폐기
         this._list = j.data || [];
-      } catch (e) { this._list = []; }
+        await this._saveSnapshot(this._list, Date.now()); // 서버가 SoT — 로컬 스냅샷을 최신으로 갱신
+      } catch (e) {
+        if (myGen !== this._gen) return;
+        await this._restoreFromSnapshot(dep, pin.id, myGen); // 순간 네트워크 실패 → 로컬 스냅샷 폴백
+      }
       this.render();
     },
 
@@ -209,6 +265,7 @@
         this._list.push(noteObj);
         try {
           await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
+          await this._saveSnapshot(this._list, now); // [오프라인 노트 영속화] 즉시 로컬 스냅샷(재시작 유실 방지)
           input.value = "";
           if (document.getElementById("pnp-assignee")) document.getElementById("pnp-assignee").value = "";
           this.render();
@@ -244,7 +301,7 @@
         n.status = status;
         n.updated_at = Date.now();
         n.resolved_at = status === "done" ? n.updated_at : null;
-        try { await OpLog.recordCurrent("note", "upsert", id, n); } catch (e) {}
+        try { await OpLog.recordCurrent("note", "upsert", id, n); await this._saveSnapshot(this._list, n.updated_at); } catch (e) {}
         this.render();
         return;
       }
@@ -261,7 +318,7 @@
       if (!confirm("이 이슈/노트를 삭제할까요?")) return;
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         this._list = (this._list || []).filter((x) => x.id !== id);
-        try { await OpLog.recordCurrent("note", "delete", id); } catch (e) {}
+        try { await OpLog.recordCurrent("note", "delete", id); await this._saveSnapshot(this._list, Date.now()); } catch (e) {}
         this.render();
         return;
       }
@@ -310,6 +367,7 @@
         this._list.push(noteObj);
         try {
           await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
+          await this._saveSnapshot(this._list, now, pin); // [오프라인 노트 영속화] pin 파라미터 기준(this._pin 과 다를 수 있음)
           return true;
         } catch (e) { return false; }
       }
