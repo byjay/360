@@ -4535,6 +4535,15 @@ body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }
 body.zone-view-active .pin-marker.zone-dim{ opacity:.22; filter:grayscale(.5); pointer-events:none; }
 body.zone-view-active .zone-shape.zone-dim{ opacity:.12; }
 
+/* [WO 20260916] 구역(deck) 확대 상태 — 색 음영 최소화. 확대해서 그 안에서 작업할 때
+   채움이 도면 선·글자를 덮지 않도록 외곽선 위주로 낮춘다. 영역(zone) 기본 스타일(.zone-shape)은
+   그대로 두고, 구역 크롭 확대 상태(body.deck-view-active)에서만 낮춘다.
+   대비 실측(WCAG, 흰 도면 배경 기준, ZONE_COLORS 6색 · filter:brightness(.8) 스펙 계산):
+   #f59e0b 3.30:1 · #3b82f6 5.38:1 · #10b981 3.85:1 · #ef4444 5.51:1 · #a855f7 5.74:1 · #06b6d4 3.70:1
+   → 전부 3:1 이상(최저 3.30:1). */
+body.deck-view-active .zone-shape{ fill-opacity:.25; filter:brightness(.8); }
+body.deck-view-active .zone-shape:hover, body.deck-view-active .zone-shape.active{ fill-opacity:.5; }
+
 @media (max-width:640px), (pointer:coarse){
   .zone-pager{ top:8px; max-width:calc(100% - 16px); padding:5px 6px; gap:5px; }
   .zpager-tab{ padding:8px 11px; font-size:.8rem; }
