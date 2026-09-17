@@ -163,12 +163,21 @@
        무엇이 등록됐는지 화면으로 확인할 방법이 없었다(kindOf 가 checkboard 를
        콘텐츠 판정보다 먼저 반환하기 때문).
        → 계열 정체성(인디고 블루)은 유지하고 명도만 갈라 등록/미등록을 구분한다.
+       🔴 [2026-09-17 재실측·수정] 예전 값(head2 #6366f1·needle #4f46e5)의
+       등록↔미등록 상호 분리도는 head2 2.32:1 / needle 2.34:1 — WCAG 비텍스트
+       UI 요소 최소 기준(3:1, 1.4.11)에 못 미쳐 실제로 "같은 색으로 보인다"는
+       마스터 신고(스크린샷 핀 2·3·4·3)의 원인 중 하나였다. 한 단계 더 밝은
+       톤으로 교체해 분리도를 3:1 이상으로 올렸다(계산: (max L+.05)/(min L+.05)).
        실측(WCAG 2.1, 흰 도면 #fff 기준 — 아래 값은 테마 변수 아님·라이트/다크 동일):
-         등록   head2 #1e3a8a 10.36:1 · needle #172554 14.69:1 · text #1e3a8a 10.36:1
-         미등록 head2 #6366f1  4.47:1 · needle #4f46e5  6.29:1 · text #4338ca  7.90:1
-         등록↔미등록 상호 분리도 head2 2.32:1 / needle 2.34:1 (눈에 띄게 다른 톤)
-       ⚠ 색만으로 구분하지 않는다 → patternOf() 형태 단서(실선/파선/점선) 병행. */
-    CHECKBOARD_EMPTY_COLOR: { head: "#818cf8", head2: "#6366f1", needle: "#4f46e5", text: "#4338ca" },
+         등록   head #1d4ed8 · head2 #1e3a8a 10.36:1 · needle #172554 14.69:1 · text #1e3a8a 10.36:1
+         미등록 head2 #7881f6 3.35:1 · needle #4f46e5(불변) 6.29:1 · text #4338ca(불변) 7.90:1
+         등록↔미등록 상호 분리도 head 3.36:1 / head2 3.09:1 (WCAG 3:1 이상 충족)
+         🔴 needle 은 minimap 점 배경(≥4.5:1 필요, tests/p9)이라 원래 진한 값을 유지했다
+         → needle 상호 분리도는 2.34:1 로 남는다(needle 은 얇은 바늘·미니맵 점이라
+         "공"(머리) 색 대비를 우선했다 — head/head2 가 시각적으로 지배적인 부분).
+       ⚠ 색만으로 구분하지 않는다 → patternOf() 형태 단서(실선/파선/점선) 병행 +
+         모든 마커 공통 진한 외곽 링(stroke #1a1a1a)이 흰 도면 위 경계를 보강한다. */
+    CHECKBOARD_EMPTY_COLOR: { head: "#a5b4fc", head2: "#7881f6", needle: "#4f46e5", text: "#4338ca" },
 
     /* 형태 단서 정본(색각 이상 8% 대비) — 도면 링 dasharray 와 미니맵 점 테두리가
        같은 이름 하나에서 파생된다. 두 곳에 따로 쓰면 반드시 갈라진다(§10 SoT).
@@ -258,12 +267,39 @@
       return map;
     },
 
-    /** 체크보드 다음 번호 = 시작번호 + (같은 페이지 체크보드 핀 수). 계열 독립. */
+    /** 체크보드 다음 번호 = max(시작번호, 같은 페이지 체크보드 핀들의 label 숫자 최댓값 + 1).
+     *  🔴 [2026-09-17 근본수정] 예전엔 "개수"를 셌다 — 핀이 삭제되면 개수가 줄어
+     *  다음 채번이 기존 남은 번호와 겹쳤다(1,2,3,4 중 3번 삭제 → 개수 3 → 다음 번호 1+3=4,
+     *  이미 존재하는 4와 중복). 최댓값+1 로 바꾸면 삭제로 생긴 구멍은 구멍인 채 남고
+     *  (재사용 안 함 — 마스터 명시: 번호는 현장 기록과 연결된 값), 번호는 항상 처음 보는 값이 된다. */
     nextCheckboardNo(pins, page, start) {
       const pg = page || 1;
       const s = (Number.isFinite(start) && start >= 1) ? start : 1;
-      const n = (pins || []).filter(p => p && (p.page || 1) === pg && p.checkboard).length;
-      return s + n;
+      let maxNo = 0;
+      (pins || []).forEach(p => {
+        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        const n = parseInt(p.label, 10);
+        if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시
+      });
+      return Math.max(s, maxNo + 1);
+    },
+
+    /** 🔴 [2026-09-17] 같은 페이지 체크보드 계열에서 label 이 중복된 핀 id 집합.
+     *  탐지·표시 전용 — 이미 저장된 중복 번호를 자동으로 바꾸지 않는다
+     *  (마스터 명시: 현장 기록과 연결된 실데이터라 임의 재채번 금지).
+     *  @returns {Set<number|string>} 중복인 핀들의 id */
+    duplicateCheckboardIds(pins, page) {
+      const pg = page || 1;
+      const byLabel = new Map();
+      (pins || []).forEach(p => {
+        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        const key = String(p.label);
+        if (!byLabel.has(key)) byLabel.set(key, []);
+        byLabel.get(key).push(p.id);
+      });
+      const dup = new Set();
+      byLabel.forEach(ids => { if (ids.length > 1) ids.forEach(id => dup.add(id)); });
+      return dup;
     },
 
     /* ══ 표시 필터 ══════════════════════════════════════════
@@ -3754,6 +3790,9 @@
       const visiblePins = isMulti
         ? State.pins.filter(p => (p.page || 1) === curPage)
         : State.pins;
+      // 🔴 [2026-09-17] 번호 중복 탐지 전용(표시만) — 자동 재채번 금지(마스터 명시).
+      //   정본 = PinSeries.duplicateCheckboardIds (11_UI 도면 마커도 같은 함수를 쓴다).
+      const dupPinIds = (typeof PinSeries !== "undefined") ? PinSeries.duplicateCheckboardIds(State.pins, curPage) : new Set();
 
       // 현재 페이지에 핀이 없으면 안내(다른 페이지에 핀이 있을 수 있음)
       if (isMulti && visiblePins.length === 0) {
@@ -3785,12 +3824,15 @@
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueBadge = openIssues > 0
           ? `<span class="pin-issue-badge" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
+        // 🔴 [2026-09-17] 번호 중복 경고(표시만 — 자동 재채번 금지, 마스터 명시)
+        const dupBadge = dupPinIds.has(pin.id)
+          ? `<span class="pin-dup-badge" title="번호 중복 — 현장 확인 후 직접 수정하세요">중복</span>` : "";
 
         if (State.mode === "designer") {
           item.innerHTML = `
             <div class="pin-num">${idx + 1}</div>
             <div class="pin-info">
-              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}${issueBadge}</div>
+              <div class="pin-name">${this.escapeHtml(pin.label)}${cloudTag}${metaIcons}${issueBadge}${dupBadge}</div>
               <div class="pin-coords">${pin.x.toFixed(1)}%, ${pin.y.toFixed(1)}%${pageTag}</div>
             </div>
             <div class="pin-acts">
@@ -3922,6 +3964,8 @@
       // 🔴 번호/부류/색상 정본 = PinSeries (01b_PinSeries.js). 여기서 따로 세지 않는다.
       //    미니맵(07_Radar)도 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
       const numMap = PinSeries.numbers(State.pins, curPage);
+      // 🔴 [2026-09-17] 번호 중복 탐지(표시만·자동 재채번 금지 — 마스터 명시). 정본 = PinSeries.
+      const dupIds = PinSeries.duplicateCheckboardIds(State.pins, curPage);
       PinSeries.renderChips();
       let svgIdx = 0; // SVG gradient id 유일화용(필터로 건너뛰어도 충돌 없게 별도 카운터)
       State.pins.forEach((pin) => {
@@ -3952,6 +3996,9 @@
         const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
         const issueDot = openIssues > 0
           ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
+        // 🔴 [2026-09-17] 번호 중복 경고(표시만·자동 재채번 금지 — 마스터 명시)
+        const dupDot = dupIds.has(pin.id)
+          ? `<span class="pin-marker-dup" title="번호 중복 — 현장 확인 후 직접 수정하세요">!</span>` : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
@@ -4008,7 +4055,7 @@
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
-            ${issueDot}
+            ${issueDot}${dupDot}
           </div>`;
           /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
              수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */
