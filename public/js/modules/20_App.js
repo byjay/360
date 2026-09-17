@@ -2199,7 +2199,16 @@
     _updateSyncBadge() {
       const badge = UI.$("sync-badge");
       if (!badge) return;
-      SyncQueue.count().then(n => {
+      // [오프라인 노트] 이미지/문서 큐(SyncQueue) + 핀/구역/주석/노트 OpLog 대기분을 합산(SoT — 별도 배지 금지)
+      const opLogCount = (async () => {
+        try {
+          const depId = (typeof Offline !== "undefined" && Offline.curDepId) ? Offline.curDepId() : null;
+          if (depId && typeof OpLog !== "undefined") return (await OpLog.pending(depId)).length;
+        } catch (e) {}
+        return 0;
+      })();
+      Promise.all([SyncQueue.count(), opLogCount]).then(([sqN, opN]) => {
+        const n = sqN + opN;
         const dot = UI.$("sync-dot"), txt = UI.$("sync-text");
         const online = navigator.onLine;
         if (!online && n === 0) {

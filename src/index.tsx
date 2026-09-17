@@ -2293,7 +2293,11 @@ app.put('/tables/deployments/:id', updateDeployment)
  *  - 같은 엔티티 동시 수정 → 필드단위 얕은 병합 + ts 최신(LWW)
  *  - delete → tombstone(_deleted) 보존(재생성 방지)
  *  - 같은 opId 재전송 → applied_ops 로 멱등 차단(version 추가증가 없음)
- * body: { base_version?, ops:[ {opId, entity:'pin'|'zone'|'anno', action:'upsert'|'delete', id, data?, ts, author} ] }
+ * body: { base_version?, ops:[ {opId, entity:'pin'|'zone'|'anno'|'note', action:'upsert'|'delete', id, data?, ts, author} ] }
+ *  - entity:'note' 는 pins/zones/annotations 와 달리 배포본 JSON blob이 아니라 별도 pin_notes 테이블에 씀.
+ *    op.id 는 클라이언트 임시 id(오프라인 작성) 또는 이미 동기화된 실제 note id. 임시 id는 최초 upsert에서
+ *    행을 새로 만들고 실제 id를 생성해 응답 noteIdMap[임시id]=실제id 로 돌려준다(화면 참조 치환용).
+ *    applied_ops 멱등 체크는 위 공통 로직 그대로 재사용(같은 opId 재전송 시 중복 생성 없음).
  */
 app.post('/tables/deployments/:id/ops', async (c) => {
   const user = await requireDesigner(c)
@@ -2326,11 +2330,63 @@ app.post('/tables/deployments/:id/ops', async (c) => {
 
   const applied: string[] = []
   let newlyApplied = 0   // 멱등: 실제로 새로 적용된 op만 카운트 → version 증가 판정에 사용
+  const noteIdMap: Record<string, string> = {}   // 클라 임시 note id → 서버 실제 id
   for (const op of ops) {
     if (!op || !op.opId || !op.entity || op.id == null) continue
     // 멱등: 이미 적용된 opId면 건너뜀(중복 업로드 무해, version 증가에 기여하지 않음)
     const dup = await c.env.DB.prepare('SELECT op_id FROM applied_ops WHERE op_id = ?').bind(op.opId).first()
     if (dup) { applied.push(op.opId); continue }
+    const opTsNote = Number(op.ts || Date.now())
+
+    // ── entity:'note' — pin_notes 테이블 직접 반영(배포본 blob과 무관, version 불변) ──
+    if (op.entity === 'note') {
+      const localId = String(op.id)
+      const realId = noteIdMap[localId] || localId
+      const isTemp = realId.indexOf('tmp-note-') === 0
+      if (op.action === 'delete') {
+        if (!isTemp) {
+          await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ?')
+            .bind(opTsNote, realId).run()
+        }
+        // isTemp(한 번도 서버에 생성된 적 없는 노트) → 삭제할 행이 없으므로 no-op
+      } else { // upsert
+        const d = op.data || {}
+        if (isTemp) {
+          const newId = genId('note')
+          const status = VALID_STATUS.includes(d.status) ? d.status : 'open'
+          await c.env.DB.prepare(
+            `INSERT INTO pin_notes
+              (id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+          ).bind(
+            newId, id, String(d.pin_id || ''), String(d.pin_label || ''),
+            String(d.body || '').slice(0, 4000), status,
+            (d.assignee ? String(d.assignee) : null), String(d.author || '익명'),
+            d.author_email || null, d.author_role || 'guest',
+            opTsNote, opTsNote, status === 'done' ? opTsNote : null
+          ).run()
+          noteIdMap[localId] = newId
+        } else {
+          const fields: string[] = []; const args: any[] = []
+          if (typeof d.body === 'string') { fields.push('body = ?'); args.push(d.body.slice(0, 4000)) }
+          if (typeof d.status === 'string' && VALID_STATUS.includes(d.status)) {
+            fields.push('status = ?'); args.push(d.status)
+            fields.push('resolved_at = ?'); args.push(d.status === 'done' ? opTsNote : null)
+          }
+          if (typeof d.assignee === 'string') { fields.push('assignee = ?'); args.push(d.assignee.trim() || null) }
+          if (fields.length) {
+            fields.push('updated_at = ?'); args.push(opTsNote)
+            args.push(realId)
+            await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ? AND deleted = 0`).bind(...args).run()
+          }
+        }
+      }
+      await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)')
+        .bind(op.opId, id, Date.now()).run()
+      applied.push(op.opId)
+      continue
+    }
+
     const m = pick(op.entity)
     const cur = m.get(String(op.id))
     const opTs = Number(op.ts || Date.now())
@@ -2367,7 +2423,7 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   }
 
   return c.json({
-    ok: true, applied, version: newVersion,
+    ok: true, applied, version: newVersion, noteIdMap,
     current: mapDeployment(Object.assign({}, dep, {
       pins: dump(pins), zones: dump(zones), annotations: dump(annos), version: newVersion
     }))

@@ -5252,6 +5252,20 @@
     _busy: false,
     STATUS: { open: "미해결", progress: "진행중", done: "완료" },
 
+    /** [오프라인 노트] 클라 임시 id — 서버 반영 후 noteIdMap 으로 실제 id 로 치환됨(applyIdMap) */
+    _tmpId() { return "tmp-note-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8); },
+
+    /** [오프라인 노트] 온라인 복귀 시 App._flushOpLogs()가 서버 응답의 noteIdMap 을 받아 호출.
+     *  this._list 안의 임시 id를 실제 id 로 갈아끼워 화면 참조(상태변경/삭제 버튼의 data-id 등)를 유지한다. */
+    applyIdMap(map) {
+      if (!map) return;
+      let changed = false;
+      (this._list || []).forEach((n) => {
+        if (n && map[n.id]) { n.id = map[n.id]; changed = true; }
+      });
+      if (changed) this.render();
+    },
+
     init() {
       const $ = (id) => document.getElementById(id);
       $("btn-pano-notes") && $("btn-pano-notes").addEventListener("click", () => this.toggle());
@@ -5429,6 +5443,27 @@
       this._busy = true;
       const submitBtn = document.getElementById("pnp-submit");
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "등록 중…"; }
+      // [오프라인 노트] pin/zone/anno 와 같은 OpLog 경로에 편입 — 새 큐 만들지 않음(§편입)
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
+        const now = Date.now();
+        const noteObj = {
+          id: this._tmpId(), deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
+          body, status, assignee, author: author || (Auth && Auth.user && Auth.user.name) || "익명",
+          author_email: (Auth && Auth.user && Auth.user.email) || null,
+          author_role: (Auth && Auth.isDesigner) ? "designer" : "guest",
+          created_at: now, updated_at: now, resolved_at: status === "done" ? now : null,
+        };
+        this._list.push(noteObj);
+        try {
+          await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
+          input.value = "";
+          if (document.getElementById("pnp-assignee")) document.getElementById("pnp-assignee").value = "";
+          this.render();
+        } catch (e) {}
+        this._busy = false;
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "등록"; }
+        return;
+      }
       try {
         const r = await fetch("/api/notes", {
           method: "POST",
@@ -5450,6 +5485,16 @@
     },
 
     async updateStatus(id, status) {
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
+        const n = (this._list || []).find((x) => x.id === id);
+        if (!n) return;
+        n.status = status;
+        n.updated_at = Date.now();
+        n.resolved_at = status === "done" ? n.updated_at : null;
+        try { await OpLog.recordCurrent("note", "upsert", id, n); } catch (e) {}
+        this.render();
+        return;
+      }
       try {
         const r = await fetch("/api/notes/" + encodeURIComponent(id), {
           method: "PATCH", headers: Auth.headers(),
@@ -5461,6 +5506,12 @@
 
     async remove(id) {
       if (!confirm("이 이슈/노트를 삭제할까요?")) return;
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
+        this._list = (this._list || []).filter((x) => x.id !== id);
+        try { await OpLog.recordCurrent("note", "delete", id); } catch (e) {}
+        this.render();
+        return;
+      }
       try {
         const r = await fetch("/api/notes/" + encodeURIComponent(id), {
           method: "DELETE", headers: Auth.headers(),
@@ -5493,6 +5544,22 @@
       const dep = (typeof State !== "undefined") && State.currentDeploymentId;
       const text = (body || "").trim();
       if (!dep || !pin || !text) return false;
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
+        const now = Date.now();
+        const noteObj = {
+          id: this._tmpId(), deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
+          body: text, status: "open", assignee: "",
+          author: (typeof Auth !== "undefined" && Auth.user && Auth.user.name) || "익명",
+          author_email: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || null,
+          author_role: (typeof Auth !== "undefined" && Auth.isDesigner) ? "designer" : "guest",
+          created_at: now, updated_at: now, resolved_at: null,
+        };
+        this._list.push(noteObj);
+        try {
+          await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
+          return true;
+        } catch (e) { return false; }
+      }
       try {
         const r = await fetch("/api/notes", {
           method: "POST",
@@ -8909,7 +8976,16 @@
     _updateSyncBadge() {
       const badge = UI.$("sync-badge");
       if (!badge) return;
-      SyncQueue.count().then(n => {
+      // [오프라인 노트] 이미지/문서 큐(SyncQueue) + 핀/구역/주석/노트 OpLog 대기분을 합산(SoT — 별도 배지 금지)
+      const opLogCount = (async () => {
+        try {
+          const depId = (typeof Offline !== "undefined" && Offline.curDepId) ? Offline.curDepId() : null;
+          if (depId && typeof OpLog !== "undefined") return (await OpLog.pending(depId)).length;
+        } catch (e) {}
+        return 0;
+      })();
+      Promise.all([SyncQueue.count(), opLogCount]).then(([sqN, opN]) => {
+        const n = sqN + opN;
         const dot = UI.$("sync-dot"), txt = UI.$("sync-text");
         const online = navigator.onLine;
         if (!online && n === 0) {
@@ -14520,6 +14596,10 @@
           if (res && res.ok) {
             const j = await res.json();
             await OpLog.clearApplied(depId, j.applied || ops.map((o) => o.opId));
+            // [오프라인 노트] 임시id → 서버 실제id 치환(화면의 노트 참조 유지, 핀 pendingOpId 와 같은 목적)
+            if (j.noteIdMap && typeof Notes !== "undefined" && Notes.applyIdMap) {
+              try { Notes.applyIdMap(j.noteIdMap); } catch (e) {}
+            }
             // 서버 최신본을 로컬 번들에 반영(타 작업자 변경 흡수)
             if (j.current) await SyncQueue.saveDraft("bundle:dep:" + depId, j.current);
             // 현재 열려있는 도면이면 화면 갱신(tombstone 제외)

@@ -206,6 +206,10 @@
           if (res && res.ok) {
             const j = await res.json();
             await OpLog.clearApplied(depId, j.applied || ops.map((o) => o.opId));
+            // [오프라인 노트] 임시id → 서버 실제id 치환(화면의 노트 참조 유지, 핀 pendingOpId 와 같은 목적)
+            if (j.noteIdMap && typeof Notes !== "undefined" && Notes.applyIdMap) {
+              try { Notes.applyIdMap(j.noteIdMap); } catch (e) {}
+            }
             // 서버 최신본을 로컬 번들에 반영(타 작업자 변경 흡수)
             if (j.current) await SyncQueue.saveDraft("bundle:dep:" + depId, j.current);
             // 현재 열려있는 도면이면 화면 갱신(tombstone 제외)
