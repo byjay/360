@@ -4218,7 +4218,7 @@
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
-              <!-- 메달리온 머리: 등록=채운 원 / 미등록=속 빈 원(흑백 변환해도 형태로 구분되게, 색상에 의존 금지) -->
+              <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
               <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
               <circle cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>
@@ -15051,27 +15051,43 @@
      도움말(Help) 체계 — 마스터 지시: "항상 모든 메뉴마다 사용자 매뉴얼을 구현해"
      ────────────────────────────────────────────────────────────────
      [설계 방침 — 작게 시작] 버튼 259개에 개별 문서를 일일이 다는 대신, 재사용
-     가능한 얇은 체계 하나만 둔다: 요소에 `data-help="키"` 를 달면 그 요소를 길게
-     누르는(hold) 것만으로 근처에 도움말 팝업이 뜬다.
+     가능한 얇은 체계 하나만 둔다: 요소에 `data-help="키"` 를 달면, 도움말 모드를
+     켰을 때 그 요소 옆에 "?" 표시(배지)가 나타나고, 배지를 누르면 설명이 뜬다.
 
-     트리거 방식 = Pointer Events 기반 "길게 누르기" 단일 방식.
-       - 마우스(누르고 있기)·터치(길게 누르기)를 Pointer Events 하나로 통합 처리
-         → 디자이너(PC, 마우스)·뷰어(모바일, 터치) 모두 별도 구현 없이 동일 코드로 커버.
-       - 기존 `title` 속성(브라우저 기본 툴팁, 130개 이미 존재)은 절대 건드리지 않는다.
-         이 레이어는 그 위에 "얹는" 것이지 대체가 아니다.
-       - 클릭(짧게 누름)은 원래 버튼 동작 그대로 통과시킨다 — 길게 눌러 팝업이 뜬
-         직후의 click 한 번만 억제해 버튼이 오작동(의도치 않은 실행)하지 않게 한다.
+     🔴 [2026-09-17 재작업 — "길게 누르기" 반려] 최초 구현은 요소를 길게 누르면
+     팝업이 뜨는 방식이었으나, **화면에 아무 단서가 없어 존재를 알 수 없다**는
+     이유로 반려됨(방향보정 기능이 있는데도 "사라졌다"고 보고됐던 것과 동일한 패턴 —
+     기능이 있어도 발견 못 하면 없는 것과 같다). 추가로 길게 누르기는 버튼의 원래
+     클릭 동작과 물리적으로 충돌해(누르다 떼면 클릭 발생) 오작동 억제 코드가
+     필요했다 — 그 자체가 방식이 틀렸다는 신호였다.
+
+     트리거 방식 = **도움말 모드 토글("?" 버튼 1개, 화면에 항상 보임) + 배지**.
+       - 토글을 켜면 `data-help` 가 있는 모든 요소 옆(우상단)에 작은 "?" 배지가
+         **화면에 보이는 형태로** 나타난다 → 사용자가 "도움말이 있다"는 사실 자체를
+         한눈에 알 수 있다(요구① 충족). 평소(꺼짐)엔 화면이 깨끗하다.
+       - 배지는 대상 요소의 **자식이 아니라 `document.body` 에 별도로 추가되는
+         완전히 분리된 엘리먼트**이므로, 배지를 눌러도 그 아래 버튼의 클릭 이벤트가
+         발생하지 않는다(요구: 원래 동작과 충돌 금지 — 억제 코드로 땜질하는 게 아니라
+         구조적으로 겹치지 않게 설계). 방어적으로 stopPropagation/preventDefault 도
+         호출한다.
+       - 토글·배지 모두 **click 이벤트만으로 동작**한다(hover/mouseenter 의존 0) →
+         터치 기기(현장 폰)에서도 탭 한 번으로 100% 도달 가능(요구②: 호버 전용 금지).
+       - 기존 `title` 속성(브라우저 기본 툴팁, 130개 이미 존재)은 전혀 건드리지 않는다.
 
      SoT(정본) = 아래 `Help.CONTENT` 객체 하나. 도움말 문구를 다른 파일에 복제하지 않는다.
      내용이 없는 키는 조용히 무시하지 않고 "준비 중" 문구 + console.warn 으로 알린다
      (사용자에게는 오류로 보이지 않게, 개발자에게는 빠뜨린 키를 알 수 있게).
 
      🔴 반드시 `_manifest.txt` 에 등록해야 번들(main.js)에 포함된다(빠뜨리면 고아 모듈).
-     🔴 새 CSS 규칙 추가 금지(style.css 는 다른 트랙이 점유 중) — 전부 인라인 스타일.
-        색상은 var(--text) 등 테마 변수 대신 리터럴 hex 를 쓴다(이 앱은 다크토글이 없지만,
-        p7-contrast.test.mjs 가 실측한 "OS 강제다크모드가 var() 텍스트만 밝게 재해석" 함정을
-        원천 차단하기 위함 — 배경/글자 모두 고정 리터럴이면 그 함정 자체가 성립하지 않는다).
-        대비: #ffffff on #1a1712 ≈ 18.7:1 (WCAG AAA 여유).
+     🔴 새 CSS 규칙 추가 금지(style.css 는 다른 트랙이 점유 중) — 전부 인라인 스타일,
+        리터럴 hex(테마 변수 var() 미사용 — OS 강제다크모드가 var() 텍스트만 밝게
+        재해석하는 이 코드베이스의 기존 함정을 원천 차단).
+        대비 실측: 배지/팝업 #ffffff on #1a1712 ≈ 18.7:1. 토글 on-상태 #1a1712 on
+        #c9962a ≈ 8.0:1(WCAG AAA). 모두 4.5:1 기준 여유.
+     🔴 토글 버튼은 이 모듈이 JS로 직접 body 에 생성해 붙인다(index.html 수정 불필요,
+        다른 트랙과 충돌 없음). 배치는 좌하단(bottom:16,left:16) — 우하단 wm-toast,
+        상단 net-badge 등 기존 고정 UI와 자리가 겹치지 않는다(겹치면 지휘자가
+        index.html/좌표로 재배치 가능하도록 z-index/스타일을 한 곳에 모아둠).
   ══════════════════════════════════════════════════════════════ */
   const Help = {
     // ── SoT: 도움말 문구 정본. 여기 한 곳에서만 관리한다 ──
@@ -15088,13 +15104,11 @@
     },
 
     _inited: false,
+    active: false,        // 도움말 모드 on/off
+    _toggleBtn: null,
+    _badges: [],           // [{ badge, target }]
     _popup: null,
     _hideTimer: null,
-    _downInfo: null,   // { x, y, el, timer }
-    _shownAt: 0,       // 팝업을 띄운 시각(ms) — 직후 click 1회 억제용
-    HOLD_MS: 480,
-    MOVE_TOL: 10,
-    SUPPRESS_CLICK_MS: 400,
 
     /** 정본에서 값을 읽는다. 키가 없으면 undefined(조용한 대체값 날조 금지). */
     get(key) {
@@ -15104,66 +15118,107 @@
     init() {
       if (this._inited) return;
       this._inited = true;
-      document.addEventListener("pointerdown", (e) => this._onDown(e));
-      document.addEventListener("pointermove", (e) => this._onMove(e));
-      document.addEventListener("pointerup", () => this._onUp());
-      document.addEventListener("pointercancel", () => this._onUp());
-      document.addEventListener("click", (e) => this._onClickCapture(e), true);
+      this._createToggle();
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.hide(); });
-      window.addEventListener("scroll", () => this.hide(), true);
-      window.addEventListener("resize", () => this.hide());
+      window.addEventListener("scroll", () => { if (this.active) this._reposition(); }, true);
+      window.addEventListener("resize", () => { if (this.active) this._reposition(); });
     },
 
-    _findHelpEl(target) {
-      if (!target) return null;
-      if (target.closest) return target.closest("[data-help]");
-      // closest 미지원 환경 폴백(구형 목 DOM 등)
-      let n = target;
-      while (n) {
-        if (n.dataset && n.dataset.help) return n;
-        n = n.parentNode || null;
-      }
-      return null;
-    },
-
-    _onDown(e) {
-      const el = this._findHelpEl(e.target);
-      if (!el) return;
-      const x = e.clientX || 0, y = e.clientY || 0;
-      const timer = setTimeout(() => {
-        this._shownAt = Date.now();
-        this.show(el, el.dataset ? el.dataset.help : el.getAttribute("data-help"));
-      }, this.HOLD_MS);
-      this._downInfo = { x, y, el, timer };
-    },
-
-    _onMove(e) {
-      if (!this._downInfo) return;
-      const dx = Math.abs((e.clientX || 0) - this._downInfo.x);
-      const dy = Math.abs((e.clientY || 0) - this._downInfo.y);
-      if (dx > this.MOVE_TOL || dy > this.MOVE_TOL) {
-        clearTimeout(this._downInfo.timer);
-        this._downInfo = null;
-      }
-    },
-
-    _onUp() {
-      if (this._downInfo) { clearTimeout(this._downInfo.timer); this._downInfo = null; }
-    },
-
-    /** 길게 눌러 팝업이 막 뜬 경우, 뒤따르는 click 1회만 삼켜 버튼 오작동을 막는다.
-     *  팝업이 떠 있는 상태에서 팝업 바깥을 클릭하면 닫는다. */
-    _onClickCapture(e) {
-      if (this._shownAt && (Date.now() - this._shownAt) < this.SUPPRESS_CLICK_MS) {
-        this._shownAt = 0;
+    /** 화면에 항상 보이는 "?" 토글 — 도움말 체계의 존재 자체를 알리는 유일한 진입점. */
+    _createToggle() {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-help-toggle", "1");
+      btn.setAttribute("aria-label", "도움말 모드 켜기/끄기");
+      btn.setAttribute("aria-pressed", "false");
+      btn.textContent = "?";
+      btn.style.cssText = this._toggleStyle(false);
+      btn.addEventListener("click", (e) => {
         if (e.preventDefault) e.preventDefault();
         if (e.stopPropagation) e.stopPropagation();
-        return;
+        this.toggle();
+      });
+      document.body.appendChild(btn);
+      this._toggleBtn = btn;
+    },
+
+    _toggleStyle(isActive) {
+      return [
+        "position:fixed", "left:16px", "bottom:16px", "width:40px", "height:40px",
+        "border-radius:50%", "border:none", "cursor:pointer", "z-index:9550",
+        "display:flex", "align-items:center", "justify-content:center",
+        "font-size:18px", "font-weight:700", "font-family:sans-serif",
+        "box-shadow:0 4px 14px rgba(0,0,0,.3)",
+        isActive ? "background:#c9962a" : "background:#1a1712",
+        isActive ? "color:#1a1712" : "color:#ffffff"
+      ].join(";");
+    },
+
+    toggle() { this.active ? this.disable() : this.enable(); },
+
+    /** 도움말 모드 ON — data-help 요소마다 눈에 보이는 "?" 배지를 붙인다. */
+    enable() {
+      this.active = true;
+      if (this._toggleBtn) {
+        this._toggleBtn.setAttribute("aria-pressed", "true");
+        this._toggleBtn.style.cssText = this._toggleStyle(true);
       }
-      if (this._popup) {
-        const insidePopup = e.target && e.target.closest && e.target.closest("[data-help-popup]");
-        if (!insidePopup) this.hide();
+      this._mountBadges();
+    },
+
+    /** 도움말 모드 OFF — 배지를 전부 제거해 평소 화면으로 복귀한다. */
+    disable() {
+      this.active = false;
+      if (this._toggleBtn) {
+        this._toggleBtn.setAttribute("aria-pressed", "false");
+        this._toggleBtn.style.cssText = this._toggleStyle(false);
       }
+      this._unmountBadges();
+      this.hide();
+    },
+
+    _mountBadges() {
+      this._unmountBadges();
+      const targets = document.querySelectorAll("[data-help]");
+      for (let i = 0; i < targets.length; i++) {
+        const el = targets[i];
+        const badge = document.createElement("button");
+        badge.type = "button";
+        badge.setAttribute("data-help-badge", "1");
+        badge.setAttribute("aria-label", "도움말 보기");
+        badge.textContent = "?";
+        badge.style.cssText = [
+          "position:fixed", "width:18px", "height:18px", "border-radius:50%",
+          "border:1.5px solid #ffffff", "background:#1a1712", "color:#ffffff",
+          "font-size:11px", "font-weight:700", "line-height:1", "padding:0",
+          "cursor:pointer", "z-index:99997", "display:flex", "align-items:center",
+          "justify-content:center", "box-shadow:0 2px 6px rgba(0,0,0,.35)", "font-family:sans-serif"
+        ].join(";");
+        badge.addEventListener("click", (e) => {
+          // 배지는 대상 요소의 자식이 아니라 body 에 별도로 붙는 독립 엘리먼트라
+          // 원래 버튼의 클릭 핸들러가 구조적으로 실행되지 않는다. stopPropagation/
+          // preventDefault 는 방어적 이중 안전장치다(요구: 원래 동작 차단).
+          if (e.preventDefault) e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          this.show(el, el.dataset ? el.dataset.help : el.getAttribute("data-help"));
+        });
+        document.body.appendChild(badge);
+        this._badges.push({ badge, target: el });
+      }
+      this._reposition();
+    },
+
+    _unmountBadges() {
+      this._badges.forEach(({ badge }) => { if (badge.parentNode) badge.parentNode.removeChild(badge); });
+      this._badges = [];
+    },
+
+    _reposition() {
+      this._badges.forEach(({ badge, target }) => {
+        const rect = (target && target.getBoundingClientRect) ? target.getBoundingClientRect() : { left: 0, top: 0, width: 0 };
+        badge.style.left = Math.max(0, rect.left + rect.width - 9) + "px";
+        badge.style.top = Math.max(0, rect.top - 9) + "px";
+      });
     },
 
     /** 도움말 팝업을 el 근처에 띄운다. content 없는 키는 "준비 중"으로 표시(조용한 실패 금지). */
