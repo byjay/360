@@ -394,9 +394,9 @@
     },
     _flyToZone(zone) {
       const bb = this._bbox(zone);   // rect/circle/poly 모두 {x,y,w,h}
-      // [버그수정] ISO 활성 시 평면 flyTo 는 rotateX(54°) 때문에 화면 아래로 빗나간다(줌이 영역 밑으로 이동).
-      //   ISO 좌표를 정확히 역산하는 focusZoneIso 로 분기.
-      if (State.isoView && MapCtrl.focusZoneIso) { MapCtrl.focusZoneIso(bb); return; }
+      // [WO 20260917 ISO 제거] 영역 클릭은 항상 평면으로 확대한다(강제 ISO 전환 금지 — 마스터 지시).
+      //   되돌리려면 아래 주석 해제:
+      //   if (State.isoView && MapCtrl.focusZoneIso) { MapCtrl.focusZoneIso(bb); return; }
       const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
       // 영역 크기에 맞춰 줌 (작은 영역일수록 더 확대)
       const span = Math.max(bb.w, bb.h);
