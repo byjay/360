@@ -159,7 +159,14 @@
     },
 
     /* [사이드바 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리.
-       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임. */
+       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임.
+       [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 제거:
+         · 구역: 항상 전체 표시(과거에도 이미 그랬음 — decks.forEach 는 필터 없음, 유지).
+         · 영역/핀: 과거엔 State.pdfPage 와 일치하는 것만 표시했다 → 다른 페이지 항목이 안 보였다.
+           이제 로드된 구역(=State.currentDeploymentId 와 일치)의 전체 페이지 영역/핀을 항상 표시하고,
+           현재 페이지 항목만 .active 로 "구분"한다(숨기지 않는다).
+         · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
+           개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
     renderTree() {
       const host = this.$("side-tree");
       if (!host) return;
@@ -173,19 +180,28 @@
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
       if (!decks.length) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+      const curPage = State.pdfPage || 1;
+      const totalPages = State.mode === "viewer"
+        ? (State.viewerPages ? State.viewerPages.length : 1)
+        : (State.pdfPages || 1);
+      const showPageTag = totalPages > 1;
+      const pageTag = (pg) => showPageTag ? ' <span class="tree-label-sub">P' + (pg || 1) + '</span>' : "";
       const pinNode = (p) => {
         const n = document.createElement("button");
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
-        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + noteIco;
+        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
       decks.forEach((deck) => {
         const isCur = typeof Projects !== "undefined" && Projects.currentDeck && Projects.currentDeck.id === deck.id;
+        // [WO 20260917-pin] 이 구역의 도면이 '실제로 로드된 도면'인지(=State 에 zone/pin 데이터가 실존)
+        //   isCur(선택됨)와는 별개 — 선택 직후 비동기 로딩 중엔 isLoaded 가 false 인 게 정상(가짜 데이터 금지).
+        const isLoaded = !!(deck.deployment_id && deck.deployment_id === State.currentDeploymentId);
         const g = document.createElement("div");
-        g.className = "tree-deck" + (isCur ? " open" : "");
+        g.className = "tree-deck" + (isLoaded ? " open" : ""); // [항목2] 기본 펼침(로드된 구역)
         const head = document.createElement("button");
         head.className = "tree-node tree-node-deck" + (isCur ? " active" : "");
         // [B4] '도면없음'(구역에 도면 미등록) 과 '미저장'(로컬에만 있고 서버 미반영)을 구분 표시
@@ -193,15 +209,17 @@
         const _tag = _unsaved
           ? '<span class="tree-tag tree-tag-unsaved" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>'
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
-        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag;
+        // [항목4] 구역별 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
+        const zoneCntTag = isLoaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
+        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag + zoneCntTag;
         head.addEventListener("click", () => {
           if (isCur) { g.classList.toggle("open"); }
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
-        // [버그수정] State(도면/영역/핀)는 전역이라, 도면이 다르거나 없는 구역을 펼치면
-        //   직전 구역의 도면·핀이 잔존 표시된다 → 이 구역의 도면이 '실제로 로드된 도면'일 때만 하위 표시.
-        if (isCur && deck.deployment_id && deck.deployment_id === State.currentDeploymentId) {
+        // [WO 20260917-pin] 로드된 구역이면 전체 페이지의 영역/핀을 항상 표시(과거: 현재 페이지만).
+        //   State(도면/영역/핀)는 전역이라 다른 구역엔 데이터가 없으므로 isLoaded 구역에서만 하위 렌더.
+        if (isLoaded) {
           const kids = document.createElement("div");
           kids.className = "tree-children";
           const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
@@ -211,18 +229,21 @@
             dn.innerHTML = ICO.doc + '<span class="tree-label">' + esc(fname) + '</span>';
             kids.appendChild(dn);
           }
-          const page = State.pdfPage || 1;
-          const zones = (State.zones || []).filter((z) => (z.page || 1) === page);
-          const pins = (State.pins || []).filter((p) => (p.page || 1) === page);
+          const zones = State.zones || []; // 전체 페이지(필터 없음)
+          const pins = State.pins || [];   // 전체 페이지(필터 없음)
           const used = new Set();
           zones.forEach((zone) => {
-            const zpins = pins.filter((p) => (typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false);
+            const zpage = zone.page || 1;
+            const isCurZonePage = zpage === curPage;
+            const zpins = pins.filter((p) => (p.page || 1) === zpage &&
+              ((typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false));
             zpins.forEach((p) => used.add(p.id));
             const zn = document.createElement("div");
-            zn.className = "tree-zone open";
+            zn.className = "tree-zone open"; // [항목2] 기본 펼침
             const zh = document.createElement("button");
-            zh.className = "tree-node tree-node-zone";
-            zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span><span class="tree-cnt">' + zpins.length + '</span>';
+            // [항목3][항목5] 현재 페이지 영역 = .active 로 "구분"(숨기지 않음). 클릭 동작은 기존 그대로.
+            zh.className = "tree-node tree-node-zone" + (isCurZonePage ? " active" : "");
+            zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span>' + pageTag(zpage) + '<span class="tree-cnt" title="핀 수">' + zpins.length + '</span>';
             zh.addEventListener("click", (e) => {
               if (e.target.closest(".tree-caret")) { zn.classList.toggle("open"); return; }
               if (typeof Zones !== "undefined" && Zones.focus) Zones.focus(zone.id);
