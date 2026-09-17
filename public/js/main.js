@@ -232,7 +232,9 @@
       const kind = this.kindOf(pin);
       const filled = this.hasContent(pin);
       const pat = this.PATTERN[this.patternOf(kind, filled)] || this.PATTERN.solid;
-      return { kind: kind, filled: filled, colors: this.colorsOf(kind, filled), dash: pat.dash, border: pat.border };
+      // [WO 20260917] tier = 콘텐츠 3상태(photo/content/empty) — filled(등록여부) 축은 불변,
+      // tier 는 그 안(filled=true)을 사진유무로 더 세분하는 부가 필드(기존 소비자는 무시해도 무방).
+      return { kind: kind, filled: filled, colors: this.colorsOf(kind, filled), dash: pat.dash, border: pat.border, tier: this.contentTier(pin) };
     },
 
     /**
@@ -271,13 +273,23 @@
      *  🔴 [2026-09-17 근본수정] 예전엔 "개수"를 셌다 — 핀이 삭제되면 개수가 줄어
      *  다음 채번이 기존 남은 번호와 겹쳤다(1,2,3,4 중 3번 삭제 → 개수 3 → 다음 번호 1+3=4,
      *  이미 존재하는 4와 중복). 최댓값+1 로 바꾸면 삭제로 생긴 구멍은 구멍인 채 남고
-     *  (재사용 안 함 — 마스터 명시: 번호는 현장 기록과 연결된 값), 번호는 항상 처음 보는 값이 된다. */
-    nextCheckboardNo(pins, page, start) {
+     *  (재사용 안 함 — 마스터 명시: 번호는 현장 기록과 연결된 값), 번호는 항상 처음 보는 값이 된다.
+     *
+     *  🔴 [WO 20260917 멀티유저 ①·재설계] 시작번호 = "사용자별 번호 대역"(마스터 확정:
+     *  "사용자는 시작번호를 100으로 할지 200으로 할지 세팅"). author 를 넘기면 최댓값 계산을
+     *  "같은 작성자가 찍은 핀"으로만 한정한다 — 그러지 않으면 다른 사용자의 대역이 내
+     *  최댓값에 섞여 내 다음 번호가 상대 대역을 침범한다.
+     *  예: A(대역 100) 가 100,101 찍음 → B(대역 200) 가 200 찍음 → A 가 다시 찍으면
+     *      전체-최댓값 기준이면 max(100,201)=201(상대 대역 침범, 버그) → author 필터 기준이면
+     *      A 소유 핀 중 최댓값(101)+1 = 102(정상, 자기 대역 안에서만 증가).
+     *  author 미지정(구버전 호출·비로그인)이면 종전처럼 페이지 전체 기준(하위호환). */
+    nextCheckboardNo(pins, page, start, author) {
       const pg = page || 1;
       const s = (Number.isFinite(start) && start >= 1) ? start : 1;
       let maxNo = 0;
       (pins || []).forEach(p => {
         if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        if (author != null && p.author !== author) return; // 대역 침범 방지: 내 핀만 본다
         const n = parseInt(p.label, 10);
         if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시
       });
@@ -400,6 +412,88 @@
 
     _persist() {
       try { localStorage.setItem(this.FILTER_KEY, JSON.stringify(this.filter())); } catch (e) {}
+    },
+
+    /* ── [WO 20260917 멀티유저 ②·재설계] 사용자 구분 배지 — 4번째 축, 기존 3축(계열/등록여부/종류)과 별개.
+       기존 3축은 핀 몸통 색·외곽 링 dasharray·머리 안 아이콘을 쓰므로, 사용자 구분은 겹치지 않게
+       몸통 바깥 모서리(11_UI.js 렌더에서 bottom-right, 이슈뱃지 top-right·중복뱃지 top-left와도
+       자리 분리)의 작은 배지(숫자/이니셜+색)로만 표시한다. 이 배지는 hasContent/filled 여부와
+       무관하게 항상 그려지므로 속 빈 원(미등록)에서도 사용자 구분이 그대로 보인다.
+       팔레트 7색 모두 흰 배경(도면) 대비 ≥4.5:1(WCAG AA 실측, ≥3:1 요건 상회):
+         #0072B2 5.19 · #5B2C87 9.74 · #1B4965 9.60 · #8B3A3A 7.60 · #2E5E4E 7.43 · #6B4226 8.63 · #264653 10.08
+       🔴 SoT: 팔레트는 이 배열 하나뿐 — 대역 인덱스(userMark)·해시 인덱스(authorStyle) 둘 다
+       이 배열만 순환 참조한다(대역/작성자 수가 7 초과 시 팔레트를 순환). */
+    USER_MARK_PALETTE: ["#0072B2", "#5B2C87", "#1B4965", "#8B3A3A", "#2E5E4E", "#6B4226", "#264653"],
+
+    /** 작성자 식별자(이메일 등) → 배지 색상/이니셜. 결정적(같은 작성자=항상 같은 색·글자).
+     *  대역(번호 대) 개념이 없는 계열(content/empty)의 폴백 표시 방식. */
+    authorStyle(pin) {
+      const a = pin && pin.author;
+      if (!a || typeof a !== "string") return null;
+      let h = 0;
+      for (let i = 0; i < a.length; i++) h = (h * 31 + a.charCodeAt(i)) >>> 0;
+      const color = this.USER_MARK_PALETTE[h % this.USER_MARK_PALETTE.length];
+      const initial = a.trim().charAt(0).toUpperCase() || "?";
+      return { color: color, initial: initial, author: a, band: null };
+    },
+
+    /** [WO 20260917 멀티유저 ①·재설계] 사용자별 번호 대역 시작값 — localStorage 에 사용자
+     *  이메일 기준으로 저장한다(🔴 배포본 단일 필드에 저장하면 다른 사용자가 저장할 때
+     *  덮어써진다 — 사용자별 값은 그 사용자에게 붙어야 한다는 마스터 지시. 각 브라우저의
+     *  localStorage 는 사용자별로 독립이므로 이 문제가 구조적으로 발생하지 않는다). */
+    BAND_KEY_PREFIX: "wm-user-band:",
+    userBandStart(author) {
+      if (!author) return null;
+      try {
+        const raw = localStorage.getItem(this.BAND_KEY_PREFIX + author);
+        const n = parseInt(raw, 10);
+        return (Number.isFinite(n) && n >= 1) ? n : null;
+      } catch (e) { return null; }
+    },
+    setUserBandStart(author, value) {
+      if (!author) return null;
+      let n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) n = 1;
+      try { localStorage.setItem(this.BAND_KEY_PREFIX + author, String(n)); } catch (e) {}
+      return n;
+    },
+
+    /** [WO 20260917 멀티유저 ①+②·재설계] 마스터 확정: "100번대 사용자→색A, 200번대→색B" —
+     *  체크보드 계열은 대역(번호 100단위 그룹)에서 색을 파생시킨다(번호 자체가 이미 눈에 보이는
+     *  비색 단서라 색맹에도 안전 · 별도 작성자 필드 없이도 구분됨). 대역 개념이 없는 계열
+     *  (content/empty)은 이메일 해시(authorStyle)로 폴백한다.
+     *  🔴 기존 3축(계열색 colorsOf · 등록여부 헤드 fill/링 dash · 아이콘)은 전혀 건드리지 않는다
+     *  — 이 배지는 SVG 밖 별도 코너에 얹힐 뿐이라 구조적으로 충돌하지 않는다(11_UI.js 참조). */
+    userMark(pin, no) {
+      if (!pin) return null;
+      if (pin.checkboard && Number.isFinite(no)) {
+        const band = Math.floor((no - 1) / 100); // 0=1~100, 1=101~200 … "100번대/200번대" 그룹
+        const color = this.USER_MARK_PALETTE[band % this.USER_MARK_PALETTE.length];
+        return { color: color, initial: String(band + 1), author: pin.author || null, band: band };
+      }
+      return this.authorStyle(pin);
+    },
+
+    /** [WO 20260917 콘텐츠 3상태] 핀에 "사진/영상(미디어)"가 있는가 — App.pinHasMedia 가 정본.
+     *  🔴 App.pinHasContent 자체는 바꾸지 않는다(호출부 다수) — 여기서 별도로 미디어/정보를
+     *  나눠 읽어 3상태(사진/내용만/빈 포인트)를 만든다. */
+    mediaOf(pin) {
+      if (typeof App !== "undefined" && App.pinHasMedia) { try { return !!App.pinHasMedia(pin); } catch (e) {} }
+      return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl || pin.pendingOpId || pin.localPreview));
+    },
+    /** 핀에 "노트/첨부/3D"(정보성 콘텐츠, 미디어 아님)가 있는가 — App.pinHasInfo 가 정본. */
+    infoOf(pin) {
+      if (typeof App !== "undefined" && App.pinHasInfo) { try { return !!App.pinHasInfo(pin); } catch (e) {} }
+      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length) || pin.has3D || pin.flsLocalId || pin.flsUrl));
+    },
+    /** [WO 20260917] 콘텐츠 3상태: photo(사진/영상 있음) > content(노트/첨부만) > empty(둘 다 없음).
+     *  둘 다 있으면(사진+노트) 미디어가 우선 — photo 로 처리(정상 처리, 크래시 없음).
+     *  🔴 이 함수는 hasContent()/markerStyle() 의 filled(등록여부) 판정을 바꾸지 않는다 —
+     *  filled 는 여전히 media OR info(App.pinHasContent), tier 는 그 안을 세분하는 별도 축. */
+    contentTier(pin) {
+      if (this.mediaOf(pin)) return "photo";
+      if (this.infoOf(pin)) return "content";
+      return "empty";
     },
 
     /** 페이지 내 부류별 핀 개수 (칩 배지용) */
@@ -4172,6 +4266,14 @@
         // 🔴 [2026-09-17] 번호 중복 경고(표시만·자동 재채번 금지 — 마스터 명시)
         const dupDot = dupIds.has(pin.id)
           ? `<span class="pin-marker-dup" title="번호 중복 — 현장 확인 후 직접 수정하세요">!</span>` : "";
+        // [WO 20260917 멀티유저 ①+②·재설계] 사용자 구분 배지 — 4번째 축. 체크보드는 번호 대역
+        //   (100번대/200번대…)에서, 그 외 계열은 작성자 이메일 해시에서 색을 파생(PinSeries.userMark
+        //   정본, SoT). hasContent/filled 와 무관하게 항상 그려져 속 빈 원(미등록)에서도 보인다.
+        //   기존 이슈(top-right)·중복(top-left) 뱃지와 자리 겹치지 않게 bottom-right.
+        const userMark = (typeof PinSeries !== "undefined" && PinSeries.userMark) ? PinSeries.userMark(pin, meta.no) : null;
+        const authorDot = userMark
+          ? `<span class="pin-marker-author" title="${userMark.band != null ? ('번호 대역 ' + (userMark.band * 100 + 1) + '~' + (userMark.band * 100 + 100)) : ('작성자: ' + this.escapeHtml(userMark.author || ''))}" style="position:absolute;bottom:-4px;right:-5px;z-index:4;min-width:12px;height:12px;padding:0 3px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:${userMark.color};color:#fff;font-size:8px;font-weight:800;font-family:var(--font-mono);line-height:1;border:1.5px solid #efe9dc;box-shadow:0 1px 4px rgba(0,0,0,.5)">${userMark.initial || ""}</span>`
+          : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
@@ -4182,6 +4284,11 @@
         marker.dataset.kind = meta.kind;
         marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
         marker.classList.add(_st.filled ? "pin-filled" : "pin-hollow");
+        // [WO 20260917 콘텐츠 3상태] photo(사진/영상) / content(노트·첨부만) / empty — filled 축은
+        // 안 건드리고 그 안(filled=true)을 세분. 색 없이도(흑백) 구분되게 pin-content-dot 형태 단서 사용.
+        const tier = _st.tier || (typeof PinSeries !== "undefined" ? PinSeries.contentTier(pin) : (hasContent ? "content" : "empty"));
+        marker.dataset.tier = tier;
+        marker.classList.add("pin-tier-" + tier);
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
@@ -4195,6 +4302,11 @@
         // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 구분:
         // 실선=콘텐츠 등록 / 파선=체크보드(사진 등록됨) / 점선=미등록
         const ringDash  = _st.dash;
+        // [WO 20260917 콘텐츠 3상태] content(노트/첨부만, 사진 없음) 전용 형태 단서 — 색을 무시해도
+        // (흑백) 원 안 작은 점의 유무만으로 photo/content 를 가른다(pin-content-dot 클래스로 검출).
+        const contentDot = (tier === "content")
+          ? `<circle class="pin-content-dot" cx="18" cy="21.2" r="1.9" fill="${txtFill}" stroke="#ffffff" stroke-width="0.5"/>`
+          : "";
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -4227,8 +4339,9 @@
                     fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
+              ${contentDot}
             </svg>
-            ${issueDot}${dupDot}
+            ${issueDot}${dupDot}${authorDot}
           </div>`;
           /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
              수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */
@@ -7847,22 +7960,45 @@
 
     /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
      *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
-    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1) */
+    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1).
+     *  🔴 [WO 20260917 멀티유저 ①·재설계] 마스터 확정: "시작번호 = 사용자별 번호 대역"
+     *  (예: 사용자A=100, 사용자B=200 — 번호만 봐도 누가 찍었는지 알고, 충돌이 구조적으로 없다).
+     *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속)이 있으면 최우선이고,
+     *  없으면 기존 페이지별 값(State.checkboardStart, 구버전/비로그인 폴백)을 쓴다. */
     _checkboardStart(page) {
       const p = page || State.pdfPage || 1;
+      const author = this._pinAuthor();
+      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author) : null;
+      if (band != null) return band;
       const v = State.checkboardStart && State.checkboardStart[p];
       const n = parseInt(v, 10);
       return (Number.isFinite(n) && n >= 1) ? n : 1;
     },
-    /** 현재 구역(페이지)의 체크보드 시작 번호 설정 */
+    /** 시작 번호 설정. 로그인 사용자는 "내 대역"(사용자에게 귀속 — localStorage, 배포본
+     *  단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
+     *  비로그인/데모(author 없음)는 종전처럼 페이지별 값만 저장(하위호환). */
     _setCheckboardStart(page, value) {
       const p = page || State.pdfPage || 1;
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
+      const author = this._pinAuthor();
+      if (author && typeof PinSeries !== "undefined" && PinSeries.setUserBandStart) {
+        PinSeries.setUserBandStart(author, n);
+      }
       State.checkboardStart = State.checkboardStart || {};
       State.checkboardStart[p] = n;
       this._autoSave && this._autoSave();
       return n;
+    },
+
+    /** [WO 20260917 멀티유저 ②] 핀 생성 시점의 작성자 식별자(이메일 우선) — 없으면 null.
+     *  🔴 신규 핀에만 부여(편집 시 기존 pin.author 는 건드리지 않는다 — 편집자≠원작성자).
+     *  기존 13_Notes.js/32_Offline.js 와 동일 관례(author=email)를 재사용(SoT 필드명 통일). */
+    _pinAuthor() {
+      try {
+        if (typeof Auth !== "undefined" && Auth.user) return Auth.user.email || Auth.user.name || null;
+      } catch (e) {}
+      return null;
     },
 
     _placeCheckboardPin(pct) {
@@ -7870,8 +8006,12 @@
       // 🔴 채번 정본 = PinSeries. 체크보드 계열은 콘텐츠 핀과 독립이므로
       //   "페이지 내 전체 핀 수"가 아니라 "페이지 내 체크보드 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage);
-      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start);
+      const _auth0 = this._pinAuthor();
+      // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
+      //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
+      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start, _auth0);
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
@@ -8376,6 +8516,7 @@
         pendingSync: true,       // 업로드 진행/대기 표시
         uploading: true
       };
+      { const _auth1 = this._pinAuthor(); if (_auth1) pin.author = _auth1; } // [WO 20260917 멀티유저 ②]
       if (note) pin.note = note;
       if (url)  { pin.imageUrl = url; if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) pin.isVideo = true; }
       // [마스터 요청] 핀(호스팟)별 아이콘 — 선택값을 핀에 보존(기본 number는 저장 생략)
@@ -8500,8 +8641,8 @@
 
       // 편집이면 기존 객체를 베이스로(기존 미디어 보존), 신규면 새 객체
       const pin = editing && existing
-        ? existing
-        : { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label };
+        ? existing // [WO 20260917 멀티유저 ②] 편집은 기존 pin.author 를 건드리지 않는다(편집자≠원작성자)
+        : (() => { const _auth2 = this._pinAuthor(); const np = { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
       pin.label = label;
       if (note) pin.note = note; else if (editing) delete pin.note;
       // [마스터 요청] 핀(호스팟)별 아이콘 캡처 — number(기본)면 속성 제거(하위호환)
@@ -9582,6 +9723,10 @@
         zones:       JSON.stringify(deployableZones),
         annotations: JSON.stringify(deployableAnnotations)
       };
+      // [WO 20260917 멀티유저 ①] 체크보드 시작번호(페이지별) 영속화 — 항상 함께 보낸다(작아서
+      //   조건부 전송할 이유가 없음). 서버는 컬럼 자체가 없던 구버전에서도 부분갱신 규칙(§merged)
+      //   대로 안전히 저장한다. 값이 비어도 "{}" 로 보내 구버전(값 없음=1) 폴백을 그대로 재현.
+      body.checkboard_start = JSON.stringify(State.checkboardStart || {});
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
         body.pages_data   = JSON.stringify(pagesData);
@@ -9876,6 +10021,9 @@
         try { State.pins  = JSON.parse(dep.pins  || "[]"); } catch { State.pins = []; }
         try { State.zones = JSON.parse(dep.zones || "[]"); } catch { State.zones = []; }
         try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
+        // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
+        //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
+        try { State.checkboardStart = JSON.parse(dep.checkboard_start || "{}") || {}; } catch { State.checkboardStart = {}; }
 
         const imgEl = UI.$("map-image");
         // ponytail: fired flag prevents double-fire when image is already browser-cached
@@ -9921,6 +10069,8 @@
         State.pins        = Array.isArray(d.pins)  ? d.pins  : [];
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
+        // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
+        State.checkboardStart = (d.checkboardStart && typeof d.checkboardStart === "object") ? d.checkboardStart : {};
         if (d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; }
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
@@ -10131,6 +10281,7 @@
           pins:        State.pins || [],
           zones:       (typeof Zones !== "undefined" && State.zones) ? State.zones : [],
           annotations: State.annotations || [],
+          checkboardStart: State.checkboardStart || {}, // [WO 20260917 멀티유저 ①]
           depId:       State.autoSaveDepId || null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
@@ -10556,6 +10707,9 @@
         catch { State.zones = []; }
         try { State.annotations = JSON.parse(latest.annotations || "[]"); }
         catch { State.annotations = []; }
+        // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
+        try { State.checkboardStart = JSON.parse(latest.checkboard_start || "{}") || {}; }
+        catch { State.checkboardStart = {}; }
 
         const imgEl = UI.$("map-image");
         let _ld2 = false;
