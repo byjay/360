@@ -222,6 +222,47 @@
       } catch (e) {}
     },
 
+    /** [핀 액션 패널 재사용] 컴팩트 노트 목록 — loadForPin() 이 채운 this._list 를
+     *  그대로 그린다(별도 fetch 없음 · 같은 데이터 소스, §10 SoT). 상태 텍스트/정렬 기준도
+     *  render()와 동일(this.STATUS, created_at 최신순). */
+    renderCompact(containerId) {
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
+      const items = (this._list || []).slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
+      if (!items.length) { el.innerHTML = '<div style="color:#94a3b8;">등록된 노트 없음</div>'; return; }
+      el.innerHTML = items.map((n) => {
+        const st = n.status || "open";
+        const stLabel = this.STATUS[st] || st;
+        return '<div style="padding:5px 0;border-bottom:1px solid rgba(0,0,0,.06);">' +
+          '<span style="font-weight:700;color:#334155;">[' + UI.escapeHtml(stLabel) + ']</span> ' +
+          '<span style="color:#0f172a;">' + UI.escapeHtml(n.body) + '</span></div>';
+      }).join("");
+    },
+
+    /** [핀 액션 패널 재사용] 노트 1건 등록 — submit()과 같은 /api/notes 엔드포인트.
+     *  성공 시 this._list 를 다시 로드(요약 뱃지도 함께 갱신)하고 true 를 돌려준다. */
+    async submitCompact(pin, body) {
+      const dep = (typeof State !== "undefined") && State.currentDeploymentId;
+      const text = (body || "").trim();
+      if (!dep || !pin || !text) return false;
+      try {
+        const r = await fetch("/api/notes", {
+          method: "POST",
+          headers: Auth.headers(),
+          body: JSON.stringify({
+            deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
+            body: text, status: "open", assignee: "",
+            author: (typeof Auth !== "undefined" && Auth.user && Auth.user.name) || "",
+          }),
+        });
+        if (!r.ok) return false;
+        await this.loadForPin();
+        await this.loadSummary();
+        return true;
+      } catch (e) { return false; }
+    },
+
     _timeAgo(v) {
       const n = (typeof v === "number") ? v : Date.parse(v);
       if (!Number.isFinite(n)) return "";
