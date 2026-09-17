@@ -150,6 +150,23 @@
       return { x: x0, y: y0, w: Math.max(0.01, x1 - x0), h: Math.max(0.01, y1 - y0) };
     },
 
+    /** [WO 20260917] 핀 표시좌표 변환 — 페이지 기준 %(pin.x/y 저장 형식) → 구역 크롭 기준 %.
+     *  순수 함수(테스트 가능) · 저장값(x,y)은 변경하지 않고 새 좌표만 반환한다.
+     *  crop 없으면 항등(변환 없음, 종전대로 페이지 전체 기준). 크롭 밖이면 null(표시 안 함). */
+    pageToDeckCropPct(x, y, crop) {
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) return { x, y };
+      if (x < crop.x || x > crop.x + crop.w || y < crop.y || y > crop.y + crop.h) return null;
+      return { x: (x - crop.x) / crop.w * 100, y: (y - crop.y) / crop.h * 100 };
+    },
+
+    /** 역변환 — 크롭 기준 표시 % → 페이지 기준 %(저장용). 순수 함수.
+     *  🔴 새 핀을 크롭 화면에서 찍을 때 반드시 이 함수로 되돌려 저장해야
+     *  기존 페이지 기준 % 저장 형식(마이그레이션 없음)과 어긋나지 않는다. */
+    deckCropPctToPage(x, y, crop) {
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) return { x, y };
+      return { x: crop.x + (x / 100) * crop.w, y: crop.y + (y / 100) * crop.h };
+    },
+
     /** 현재 화면 기준 보이는 도면 영역 (PDF.renderCrop 입력) */
     visibleDrawingRect() {
       if (!this.viewport || !this.transform) return null;

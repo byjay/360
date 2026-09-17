@@ -264,6 +264,9 @@
         // 구버전 구역(page/crop 없음)은 이 분기가 그냥 건너뛰어져 종전대로 동작.
         if (d.page && typeof App._gotoPage === "function") { try { await App._gotoPage(d.page); } catch (e) {} }
         try { document.body.classList.toggle("deck-view-active", !!d.crop); } catch (e) {}
+        // [WO 20260917] 크롭 렌더 대상 고정 — 같은 픽셀 예산을 구역 영역에 집중(재사용: PDF.renderCrop).
+        // crop 없으면 null 로 해제(구버전 구역은 종전대로 전체 페이지 렌더).
+        if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(d.crop || null);
         if (d.crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(d.crop, 0.14, 640);
       } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
         App.offerDeckDrawingLink(d);

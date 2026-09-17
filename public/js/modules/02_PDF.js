@@ -95,7 +95,10 @@
       // [P14] 바탕이 전면 PDF 캔버스가 아니라 "배포 스냅샷 <img>" 인 상태(뷰어/구역 재열람).
       //   이때는 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표가 스냅샷 기준) →
       //   보이는 영역만 크롭 오버레이로 얹는다.
-      overlayOnly: false
+      overlayOnly: false,
+      // [WO 20260917] 활성 구역(deck)의 크롭 — 0~1 비율 {x,y,w,h}. 설정돼 있으면
+      // renderCrop 은 "현재 보이는 영역" 대신 이 영역을 렌더 대상으로 고정한다.
+      deckCrop: null
     },
 
     /* ── 캔버스 해상도 상한 (근거를 남긴다 · 매직넘버 금지) ────────────────────
@@ -230,6 +233,9 @@
       this._renderState.rotation = rotation;
       this._renderState.baseCssScale = baseCss;
       this._renderState.overlayOnly = false;   // 전면 캔버스를 직접 그리는 경로(편집모드 PDF)
+      // [WO 20260917] 새 문서/페이지 로드 시 이전 구역의 크롭 고정을 초기화(누출 방지).
+      // 구역 진입 시 selectDeck 이 다시 PDF.setDeckCrop 으로 설정한다.
+      this._renderState.deckCrop = null;
       // 첫 렌더 해상도: 초기 화질 확보를 위해 scale(권장 1.5)×dpr 로 미리 선명하게.
       // 이후 줌인하면 requestZoomRerender 가 더 높은 해상도로 재래스터화한다.
       const initRender = Math.max(1, scale) * dpr;
@@ -289,6 +295,10 @@
             pageW: baseVp.width, pageH: baseVp.height,
             pxCap: this.canvasPxCap(this._env()), maxSide: this.MAX_SIDE_HARD
           });
+          // [WO 20260917] 구역(deck) 크롭이 고정돼 있으면 전체 페이지 임계와 무관하게
+          //   항상 그 영역만 렌더 대상으로 삼는다 — 같은 픽셀 예산을 그 영역에 집중시켜
+          //   A1/A0 가 첫 렌더부터 상한에 닿아 확대해도 선명해지지 않던 문제를 해소한다.
+          if (st.deckCrop) { await this.renderCrop(page, canvas, plan.target, rot); return; }
           // [P14] 바탕이 배포 스냅샷 <img> 면 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표 기준).
           //   → 스냅샷보다 선명해질 때만 보이는 영역을 크롭 오버레이로 얹는다.
           if (st.overlayOnly) {
@@ -308,6 +318,30 @@
       }, wait);
     },
 
+    /** [WO 20260917] 구역(deck) 크롭(%, 0~100) → 렌더 대상 비율(0~1). 순수 함수.
+     *  crop 없거나 폭/높이가 0 이하면 null(=구역 크롭 없음). 입력 객체는 변경하지 않는다. */
+    deckCropToFraction(crop) {
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) return null;
+      return { x: crop.x / 100, y: crop.y / 100, w: crop.w / 100, h: crop.h / 100 };
+    },
+
+    /** 활성 구역 크롭을 렌더 상태에 고정 — 이후 렌더는 "현재 보이는 영역" 대신
+     *  이 영역을 대상으로 삼는다(같은 픽셀 예산을 그 영역에 집중). crop 이 없으면 해제
+     *  (= 구버전 구역·페이지 전체 구역은 종전대로 visibleDrawingRect 로 동작). */
+    setDeckCrop(crop) {
+      this._renderState.deckCrop = this.deckCropToFraction(crop);
+      return this._renderState.deckCrop;
+    },
+
+    /** renderCrop 이 실제로 그릴 영역 선택(순수 로직 · 테스트 가능):
+     *  구역 크롭이 고정돼 있으면 그것을, 아니면 종전대로 현재 보이는 영역. */
+    _cropRenderRect() {
+      const st = this._renderState;
+      if (st.deckCrop) return st.deckCrop;
+      return (typeof MapCtrl !== "undefined" && MapCtrl.visibleDrawingRect)
+        ? MapCtrl.visibleDrawingRect() : null;
+    },
+
     /** [화질 · 구조적 한계 우회] 지금 보이는 도면 영역만 목표 배율로 다시 그려 전면 캔버스 위에 얹는다.
      *  전면 캔버스 한 장은 페이지 전체를 담아야 해서 한 변 8192px·면적 상한에 막힌다
      *  (A1 기준 최대 배율 ≈3.44 → dpr2 화면에서 선명한 줌은 ≈1.7배까지). 구역 확대는 4~8배다.
@@ -316,8 +350,7 @@
      *  → 핀 % 좌표 정합이 그대로 유지된다. */
     async renderCrop(page, baseCanvas, scale, rot) {
       const st = this._renderState;
-      const rect = (typeof MapCtrl !== "undefined" && MapCtrl.visibleDrawingRect)
-        ? MapCtrl.visibleDrawingRect() : null;
+      const rect = this._cropRenderRect();
       if (!rect || (rect.w >= 1 && rect.h >= 1)) { this._clearCrop(); return; } // 전면이 다 보이면 크롭 이득 없음
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
       const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
@@ -371,6 +404,17 @@
       st.cropTask = null; st.cropScale = 0;
       try { if (st.crop && st.crop.parentNode) st.crop.parentNode.removeChild(st.crop); } catch (e) {}
       st.crop = null;
+    },
+
+    /** [WO 20260917] 구역 크롭이 있는 페이지의 스냅샷 렌더 대상 사각형(페이지 포인트 단위). 순수 함수.
+     *  crop 없으면 페이지 전체(종전 동작) — snapshotAllPages 자체는 변경하지 않는다(비파괴).
+     *  🔴 [지휘자 판단 필요 — 미배선] 실제 배포 스냅샷(snapshotAllPages)에 연결하려면 "원본 유지"
+     *  지시와 "스냅샷도 크롭으로" 지시가 충돌한다(스냅샷=저장 데이터이므로 크롭 저장은 재저장에 해당).
+     *  안전하게 순수 계산만 두고 배선은 보류했다. */
+    deckSnapshotRect(crop, pageW, pageH) {
+      const f = this.deckCropToFraction(crop);
+      if (!f) return { x0: 0, y0: 0, w0: pageW, h0: pageH };
+      return { x0: f.x * pageW, y0: f.y * pageH, w0: f.w * pageW, h0: f.h * pageH };
     },
 
     /** 전 페이지를 오프스크린 렌더 → 고화질 이미지 dataURL 배열 (배포 스냅샷용).
