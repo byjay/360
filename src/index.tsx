@@ -1295,7 +1295,10 @@ function mapProject(r: any) {
     subdomain: r.subdomain || null }
 }
 function mapDeck(r: any) {
-  return { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, created_at: r.created_at, updated_at: r.updated_at }
+  // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
+  let crop: any = null
+  if (r.crop) { try { crop = JSON.parse(r.crop) } catch { crop = null } }
+  return { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, created_at: r.created_at, updated_at: r.updated_at }
 }
 
 // 프로젝트 목록 (누구나 조회 가능 — 뷰어도 탐색)
@@ -1890,11 +1893,14 @@ app.post('/api/projects/:id/decks', async (c) => {
   if (!name) return c.json({ error: 'name required' }, 400)
   const id = genId('dck')
   const now = Date.now()
+  // [WO 20260916] page/crop — 미전송(undefined)이면 NULL(구버전과 동일 취급). 새 필드는 추가만.
+  const page = body.page != null ? Number(body.page) : null
+  const crop = body.crop != null ? JSON.stringify(body.crop) : null
   await c.env.DB.prepare(
-    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
-  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, now, now).run()
-  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, created_at: now, updated_at: now }))
+    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, now, now).run()
+  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, created_at: now, updated_at: now }))
 })
 
 // 데크 수정 (디자이너) — 배포본 연결/이름/층번호
@@ -1909,10 +1915,13 @@ app.put('/api/decks/:id', async (c) => {
   const name = body.name !== undefined ? String(body.name) : row.name
   const level = body.level_no !== undefined ? body.level_no : row.level_no
   const dep = body.deployment_id !== undefined ? body.deployment_id : row.deployment_id
+  // [WO 20260916] page/crop 부분 수정 지원 — 미전송 필드는 기존값 유지(추가 전용)
+  const page = body.page !== undefined ? body.page : row.page
+  const crop = body.crop !== undefined ? (body.crop != null ? JSON.stringify(body.crop) : null) : row.crop
   await c.env.DB.prepare(
-    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, updated_at = ? WHERE id = ?'
-  ).bind(name, level, dep, Date.now(), id).run()
-  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep }))
+    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, updated_at = ? WHERE id = ?'
+  ).bind(name, level, dep, page, crop, Date.now(), id).run()
+  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop }))
 })
 
 // 데크 삭제 (디자이너)

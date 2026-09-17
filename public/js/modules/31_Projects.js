@@ -116,6 +116,8 @@
       this._creatingDeck = true;
       let created = null;
       let picked = null;
+      // [WO 20260916] 구역=도면의 한 조각 — 이 구역이 가리킬 페이지(1-base). 파일 미확정 경로(자동생성)는 미지정(NULL)으로 둔다.
+      let page = 1;
       try {
         if (opts.askDrawing !== false) {
           if (typeof App === "undefined" || !App._pickDrawingFile) { alert("도면 선택기를 사용할 수 없습니다."); return null; }
@@ -125,10 +127,15 @@
             Prompt.toast && Prompt.toast("도면을 선택하지 않아 구역 '" + name + "' 생성을 취소했습니다 — 구역에는 도면이 반드시 필요합니다");
             return null;   // 구역을 만들지 않는다 → 사용자 취소로 '도면없음' 구역이 생기지 않음
           }
+          // 여러 장 PDF 면 이 구역이 쓸 1페이지를 먼저 정한다(1장/이미지면 자동 1, 묻지 않음).
+          const totalPages = await this._peekPageCount(picked);
+          page = await this._choosePage(totalPages);
         }
+        const body = { name };
+        if (opts.askDrawing !== false) body.page = page; // 자동생성 경로는 전송하지 않음 → 서버 NULL(구버전과 동일)
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
-          body: JSON.stringify({ name })
+          body: JSON.stringify(body)
         });
         const d = await r.json();
         if (!r.ok) { alert(d.error || "생성 실패(권한 필요)"); return null; }
@@ -148,10 +155,83 @@
       // ── [P1] 구역이 확정된 뒤에 도면 로드. _creatingDeck 해제 후에 호출해야
       //   _loadDrawing 내부의 '구역 선행' 가드가 createDeck 을 재호출해도 연타가드에 막히지 않는다.
       if (created && picked && opts.select !== false && typeof App !== "undefined" && App._loadDrawing) {
-        try { await App._loadDrawing(picked); }
+        try {
+          await App._loadDrawing(picked);
+          // 선택한 페이지로 전환(1페이지면 그대로) + 그 페이지에서 크롭(영역) 지정 — 건너뛰면 페이지 전체(crop 없음).
+          if (page > 1 && App._gotoPage) { try { await App._gotoPage(page); } catch (e) {} }
+          const crop = await this._pickDeckCrop();
+          if (crop) {
+            const r2 = await fetch("/api/decks/" + created.id, { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ crop }) });
+            if (r2.ok) {
+              const updated = await r2.json();
+              Object.assign(created, updated);
+              const idx = this.decks.findIndex((x) => x.id === created.id);
+              if (idx >= 0) this.decks[idx] = created;
+              if (this.currentDeck && this.currentDeck.id === created.id) this.currentDeck = created;
+              this._renderDecks();
+            }
+          }
+        }
         catch (e) { Prompt.toast && Prompt.toast("도면 로드 실패 — ‘도면 등록’ 버튼으로 다시 시도하세요"); }
       }
       return created;
+    },
+
+    /** [WO 20260916] 선택한 파일의 PDF 페이지 수를 가볍게 확인(peek, State 비변경). 이미지/실패 시 1. */
+    async _peekPageCount(file) {
+      const isPdf = file && (file.type === "application/pdf" || String(file.name || "").toLowerCase().endsWith(".pdf"));
+      if (!isPdf || typeof PDF === "undefined" || !PDF.load) return 1;
+      try {
+        const ab = await file.arrayBuffer();
+        const doc = await PDF.load(ab);
+        const n = doc && doc.numPages ? doc.numPages : 1;
+        try { doc && doc.destroy && doc.destroy(); } catch (e) {}
+        return n;
+      } catch (e) { return 1; }
+    },
+
+    /** [WO 20260916] 여러 장 PDF 중 이 구역이 쓸 페이지 번호를 묻는다. 1장이면 자동 1(묻지 않음). */
+    async _choosePage(totalPages) {
+      if (!(totalPages > 1)) return 1;
+      const pr = await Prompt.ask({
+        title: "페이지 선택",
+        sub: `이 PDF는 ${totalPages}페이지입니다 — 이 구역에 쓸 페이지 번호를 입력하세요(1~${totalPages})`,
+        placeholder: "예: 1", value: "1"
+      });
+      if (!pr || !pr.value) return 1;
+      const n = parseInt(pr.value, 10);
+      return (!isNaN(n) && n >= 1 && n <= totalPages) ? n : 1;
+    },
+
+    /** [WO 20260916] 구역이 될 영역(crop, %)을 도면 위에서 드래그로 지정.
+     *  🔴 새 그리기 도구 금지(Ponytail) — 기존 영역 그리기(Zones rect 드래그)를 그대로 재사용한다.
+     *  Zones._commitZone/_cancelDraw 를 일시적으로 가로채 라벨 프롬프트 없이 bbox(%)만 받고 원복.
+     *  드래그 없이 Esc/취소 → null(=페이지 전체, crop 미지정). */
+    _pickDeckCrop() {
+      return new Promise((resolve) => {
+        if (typeof Zones === "undefined") { resolve(null); return; }
+        const origCommit = Zones._commitZone.bind(Zones);
+        const origCancel = Zones._cancelDraw.bind(Zones);
+        let done = false;
+        const restore = () => { Zones._commitZone = origCommit; Zones._cancelDraw = origCancel; };
+        Zones._commitZone = async (geom) => {
+          if (done) return; done = true;
+          const bb = Zones._bbox(geom);
+          restore();
+          origCancel();
+          resolve({ x: bb.x, y: bb.y, w: bb.w, h: bb.h });
+        };
+        Zones._cancelDraw = () => {
+          origCancel();
+          if (done) return; done = true;
+          restore();
+          resolve(null);
+        };
+        Zones._shape = "rect"; Zones._poly = null;
+        State.drawingZone = true;
+        if (Zones._syncToolUi) Zones._syncToolUi();
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("도면에서 이 구역이 될 영역을 드래그하세요 — Esc를 누르면 페이지 전체가 구역이 됩니다");
+      });
     },
 
     /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */
@@ -180,6 +260,11 @@
       // 연결된 도면이 있으면 로드, 없으면(끊김/미연결) 도면 연결 선택 띄움(디자이너)
       if (d.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {
         await App.loadDeckDrawing(d.deployment_id);
+        // [WO 20260916] 구역=도면의 한 조각 — page 로 전환 + crop 있으면 그 부분만 확대(재사용: fitZone).
+        // 구버전 구역(page/crop 없음)은 이 분기가 그냥 건너뛰어져 종전대로 동작.
+        if (d.page && typeof App._gotoPage === "function") { try { await App._gotoPage(d.page); } catch (e) {} }
+        try { document.body.classList.toggle("deck-view-active", !!d.crop); } catch (e) {}
+        if (d.crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(d.crop, 0.14, 640);
       } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
         App.offerDeckDrawingLink(d);
       }
