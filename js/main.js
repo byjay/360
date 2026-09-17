@@ -895,10 +895,7 @@
     },
 
     /** [WO 20260917] 구역 크롭이 있는 페이지의 스냅샷 렌더 대상 사각형(페이지 포인트 단위). 순수 함수.
-     *  crop 없으면 페이지 전체(종전 동작) — snapshotAllPages 자체는 변경하지 않는다(비파괴).
-     *  🔴 [지휘자 판단 필요 — 미배선] 실제 배포 스냅샷(snapshotAllPages)에 연결하려면 "원본 유지"
-     *  지시와 "스냅샷도 크롭으로" 지시가 충돌한다(스냅샷=저장 데이터이므로 크롭 저장은 재저장에 해당).
-     *  안전하게 순수 계산만 두고 배선은 보류했다. */
+     *  crop 없으면 페이지 전체(종전 동작) — snapshotAllPages 자체는 변경하지 않는다(비파괴). */
     deckSnapshotRect(crop, pageW, pageH) {
       const f = this.deckCropToFraction(crop);
       if (!f) return { x0: 0, y0: 0, w0: pageW, h0: pageH };
@@ -908,8 +905,14 @@
     /** 전 페이지를 오프스크린 렌더 → 고화질 이미지 dataURL 배열 (배포 스냅샷용).
      *  뷰어에서 확대해도 선명하도록 해상도를 충분히 높게 잡되(maxDim 4096),
      *  엔지니어링 도면(선/텍스트 위주)은 PNG 가 JPEG보다 선명하고 용량도 작은 경우가 많아
-     *  PNG/JPEG 중 더 작은 쪽을 자동 선택한다. 너무 크면 단계적으로 해상도를 낮춰 D1 저장 안정성 확보. */
-    async snapshotAllPages(pdfDoc, maxDim = 4096, quality = 0.92) {
+     *  PNG/JPEG 중 더 작은 쪽을 자동 선택한다. 너무 크면 단계적으로 해상도를 낮춰 D1 저장 안정성 확보.
+     *  [WO 20260917] deckCrop = { page(1-base), crop:{x,y,w,h}(%) } 이 주어지고 그 페이지 번호와
+     *  일치하면, 그 페이지만 deckSnapshotRect 로 잘라낸 영역을 대상으로 스케일을 계산해
+     *  같은 픽셀 예산(maxDim)을 크롭 영역에 집중한다(renderCrop 과 동일한 transform 오프셋 기법 재사용).
+     *  🔴 [지휘자 판단 필요] 이 페이지에 16_Zones.js 구역·PDF 주석이 있으면 좌표(페이지 기준 %)가
+     *  크롭 이미지 기준과 어긋난다 — 핀(x,y)만 MapCtrl.pageToDeckCropPct 로 재매핑했고
+     *  zones/annotations 재매핑은 이번 범위에 없다(별도 함수 필요, 미구현). */
+    async snapshotAllPages(pdfDoc, maxDim = 4096, quality = 0.92, deckCrop = null) {
       const out = [];
       // [P14] 실제로 저장된 픽셀 크기를 기록한다 — SOFT_LIMIT 강등(dim*=0.8, 최대 4회)으로
       //   요청 maxDim(4096)보다 훨씬 낮게 저장되는 경우가 있고, 뷰어는 그 값을 알아야
@@ -920,17 +923,30 @@
       for (let p = 1; p <= pdfDoc.numPages; p++) {
         const page = await pdfDoc.getPage(p);
         const base = page.getViewport({ scale: 1 });
-        const px = { w: 0, h: 0, pw: Math.round(base.width), ph: Math.round(base.height) };
+        const isCropPage = !!(deckCrop && (deckCrop.page || 1) === p && deckCrop.crop);
+        const rect = isCropPage ? this.deckSnapshotRect(deckCrop.crop, base.width, base.height)
+                                 : { x0: 0, y0: 0, w0: base.width, h0: base.height };
+        const px = { w: 0, h: 0, pw: Math.round(rect.w0), ph: Math.round(rect.h0) };
         let dim = maxDim, q = quality, data = null;
         for (let attempt = 0; attempt < 4; attempt++) {
-          const scale = Math.min(dim / Math.max(base.width, base.height), 4);
+          const scale = Math.min(dim / Math.max(rect.w0, rect.h0), 4);
           const vp = page.getViewport({ scale });
           const cv = document.createElement("canvas");
-          cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+          cv.width = Math.max(1, Math.round(rect.w0 * scale));
+          cv.height = Math.max(1, Math.round(rect.h0 * scale));
           px.w = cv.width; px.h = cv.height;   // 이 시도가 채택되면 이 값이 최종 저장 픽셀
           const ctx = cv.getContext("2d", { alpha: false });
           ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, cv.width, cv.height);
-          await page.render({ canvasContext: ctx, viewport: vp }).promise;
+          if (isCropPage) {
+            // renderCrop(02_PDF.js)과 동일한 오프셋 기법: 페이지 전체를 그리되 크롭 원점만큼 밀어
+            // 캔버스(=크롭 크기)에는 크롭 영역만 담긴다.
+            await page.render({
+              canvasContext: ctx, viewport: vp,
+              transform: [1, 0, 0, 1, -Math.round(rect.x0 * scale), -Math.round(rect.y0 * scale)]
+            }).promise;
+          } else {
+            await page.render({ canvasContext: ctx, viewport: vp }).promise;
+          }
           // 선화 도면은 PNG 가 더 선명/경량인 경우가 많음 → PNG·JPEG 중 작은 쪽 채택
           const png = cv.toDataURL("image/png");
           const jpg = cv.toDataURL("image/jpeg", q);
