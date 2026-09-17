@@ -35,6 +35,13 @@
   --shadow-3:  0 8px 24px rgba(43,40,32,.14), 0 2px 8px rgba(43,40,32,.10);
   --ring:      0 0 0 3px rgba(27,117,187,.18);  /* 포커스 링 (브랜드 블루) */
   --ease:      cubic-bezier(.4, 0, .2, 1);
+
+  /* ── [WO 20260917 mobile-pano-layout] 겹침 방지 SoT — 값을 여기 한 곳에서만 관리하고
+     레이더/조작판/도움말버튼/토스트 CSS가 전부 이 변수를 참조한다(매직넘버 중복 금지). ── */
+  --pano-controls-bottom:   56px;  /* .pano-controls 의 bottom과 동일 리터럴(아래서 var로 교체) */
+  --pano-controls-h-mobile: 206px; /* 모바일 폭에서 버튼이 2줄로 래핑될 때 실측 높이(마스터 2026-09-17, 375×812) */
+  --pinfilter-bottom-mobile: 64px; /* .pinfilter-bar 모바일(640px 이하/coarse) bottom과 동일 리터럴 */
+  --pinfilter-h-mobile:      48px; /* 위 상태에서 칩바 실측 높이(마스터 2026-09-17, 375×812 — pin-filter-bar 303×48) */
 }
 
 html, body {
@@ -1543,7 +1550,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 
 /* 파노라마 컨트롤 바 — 전문 플로팅 툴바 */
 .pano-controls {
-  position: absolute; bottom: 56px; left: 50%;
+  position: absolute; bottom: var(--pano-controls-bottom); left: 50%;
   transform: translateX(-50%);
   display: flex; align-items: center; gap: 4px;
   /* 미니맵(.pano-radar, z-index:12)보다 항상 위 — 확대 시 자동회전/마커/목록 버튼이
@@ -3410,6 +3417,13 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     border-top:1px solid var(--border2);box-shadow:0 -4px 18px rgba(43,40,32,.14);
     padding-bottom:env(safe-area-inset-bottom,0px);}
   .mdock-bar{display:flex;align-items:stretch;height:58px;}
+  /* [결함4 2026-09-17 지휘자 실측] 도움말 "?" 토글(36_Help.js, 인라인 bottom:16px/z-index:9550)이
+     이 도크(위 .mobile-dock, z-index:140)에 덮여 "메뉴" 항목이 눌리지 않았다.
+     도크 높이(58px)만 피하면 그 위 .pinfilter-bar(bottom:64px, 실측 높이 48px)와 새로 겹치므로
+     칩 바 상단까지 올린다 — SoT 변수 재사용(값 중복 정의 없음), 인라인 스타일 덮으려면 !important 필요. */
+  [data-help-toggle]{
+    bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px) !important;
+  }
   .mdock-chip{position:relative;flex:1 1 0;min-width:40px;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:2px;padding:6px 1px;
     background:transparent;border:none;cursor:pointer;color:#6b6457;
@@ -4557,7 +4571,11 @@ body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }
 .pinfilter-chip.pf-empty.active{      background:#b91c1c; border-color:#fca5a5; color:#fff; }
 .pinfilter-chip.pf-checkboard.active{ background:#1d4ed8; border-color:#93c5fd; color:#fff; }
 @media (max-width:640px), (pointer:coarse){
-  .pinfilter-bar{ top:auto; bottom:64px; left:8px; max-width:calc(100% - 16px); padding:5px 6px; gap:5px; }
+  .pinfilter-bar{ top:auto; bottom:var(--pinfilter-bottom-mobile); left:8px; max-width:calc(100% - 16px); padding:5px 6px; gap:5px; }
+  /* [결함3 2026-09-17] 토스트가 이 칩 바와 겹쳐 글자가 읽히지 않던 문제 — 칩 바 상단(bottom+height) 위로
+     8px 여백을 두고 띄운다. z-index는 이미 .wm-toast-host(9999) > .pinfilter-bar(41)로 우위였지만
+     겹치는 위치 자체가 가독성을 해쳤다(마스터 육안 목격). SoT 변수 재사용, 새 매직넘버 아님. */
+  .wm-toast-host{ bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px); }
 }
 
 /* 미니맵 점 — 배경색은 07_Radar.js 가 PinSeries.colorsOf(kind).head2 로 인라인 지정한다

@@ -212,8 +212,20 @@
    위로 띄우고, 세로로 화면을 넘지 않게 상한을 둔다. */
 .pano-radar.pano-radar-large { width: min(52vw, 520px); bottom: 118px; max-height: calc(100vh - 210px); }
 .pano-radar-expand.active { opacity: 1; color: var(--gold, #f59e0b); }
-@media (max-width: 640px) {
-  .pano-radar.pano-radar-large { width: min(78vw, 420px); bottom: 112px; max-height: calc(100vh - 200px); }
+@media (max-width: 720px) {
+  /* [WO 20260917 결함1·2 — 지휘자 실측 375×812 프로덕션]
+     결함1: 이전 값(bottom:112px, 293×264)이 .pano-controls(bottom:56px, 모바일 2줄 래핑
+       실측 높이 206px, css/style.css :root --pano-controls-h-mobile)와 187×150=28,050px²
+       겹쳤다(레이더 면적의 36%). z-index로는 못 고친다 — 사각형이 물리적으로 겹쳐서다.
+       bottom 을 조작판 상단(56+206) 위로 8px 띄워 겹침을 0으로 만든다.
+     결함2: 293×264=화면의 25.3% 점유(마스터 실측)로 과대 — width를 60vw/300px 상한으로
+       줄여 375폭 기준 225×~203=14.98%(≤18% 목표) 로 축소. 기본 확대(wm-radar-large)
+       토글 자체는 07_Radar.js 로직 그대로, 크기 값만 조정. */
+  .pano-radar.pano-radar-large {
+    width: min(60vw, 300px);
+    bottom: calc(var(--pano-controls-bottom) + var(--pano-controls-h-mobile) + 8px);
+    max-height: calc(100vh - 210px);
+  }
 }
 
 /* [마스터 요청 N3] 로고 세로 잘림 수정 — 전체가 다 보이게 */
