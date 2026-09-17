@@ -3030,10 +3030,10 @@
     },
 
     _buildSavePayload(pagesData, sourceMeta) {
-      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀도 크롭 기준 %로 재배치해
-      // 실어 보낸다(라이브 State.pins 자체는 페이지 기준 %로 그대로 — 이 배열은 배포용 복사본).
-      // 크롭 밖 핀은 표시할 캔버스가 없으므로 배포본에서 제외한다(원본 State.pins 는 불변).
-      // 🔴 같은 페이지의 16_Zones.js 구역·PDF 주석은 재매핑 대상이 아니다(미구현·미포함).
+      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀/영역/주석도 크롭 기준 %로
+      // 재배치해 실어 보낸다(라이브 State.pins/zones/annotations 자체는 페이지 기준 %로 그대로 —
+      // 이 배열들은 배포용 복사본). 크롭 밖 항목은 표시할 캔버스가 없으므로 배포본에서 제외한다
+      // (원본 State.pins/zones/annotations 는 불변).
       const deckCrop = this._currentDeckCrop();
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
@@ -3052,12 +3052,14 @@
         delete q.uploading;
         return q;
       }).filter(Boolean);
+      const deployableZones = (State.zones || []).map(z => this._mapZoneForCrop(z, deckCrop)).filter(Boolean);
+      const deployableAnnotations = (State.annotations || []).map(a => this._mapAnnoForCrop(a, deckCrop)).filter(Boolean);
       const body = {
         title:       State.fileName || "도면",
         file_name:   State.fileName || "",
         pins:        JSON.stringify(deployablePins),
-        zones:       (typeof Zones !== "undefined") ? Zones.serialize() : "[]",
-        annotations: JSON.stringify(State.annotations || [])
+        zones:       JSON.stringify(deployableZones),
+        annotations: JSON.stringify(deployableAnnotations)
       };
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
@@ -3075,6 +3077,88 @@
       const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
       if (!cd || !cd.crop || !(cd.crop.w > 0) || !(cd.crop.h > 0)) return null;
       return { page: cd.page || 1, crop: cd.crop };
+    },
+
+    /** [WO 20260917-crop-zone-anno] 영역(16_Zones.js 의 State.zones 항목) 배포용 좌표 재매핑.
+     *  핀과 동일하게 MapCtrl.pageToDeckCropPct(순수함수)만 재사용 — 새 변환 로직 없음.
+     *  rect: {x,y,w,h}, circle: {cx,cy,r}, poly: {points:[{x,y}...]} 모두 대응.
+     *  반환: 복사본(원본 z 불변) · crop 밖(어느 한 점이라도)이면 null(배포본 제외).
+     *  crop 없음/페이지 불일치면 그대로 복사본 반환(재매핑 없음, 종전 동작). */
+    _mapZoneForCrop(z, deckCrop) {
+      const zz = Object.assign({}, z);
+      if (!deckCrop || (zz.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
+        return zz;
+      }
+      const crop = deckCrop.crop;
+      const mapPt = (x, y) => MapCtrl.pageToDeckCropPct(x, y, crop);
+      if (zz.shape === "poly" && Array.isArray(zz.points)) {
+        const mapped = [];
+        for (const p of zz.points) {
+          const m = mapPt(p.x, p.y);
+          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
+          mapped.push({ x: m.x, y: m.y });
+        }
+        zz.points = mapped;
+        const xs = mapped.map(p => p.x), ys = mapped.map(p => p.y);
+        zz.x = Math.min(...xs); zz.y = Math.min(...ys);
+        zz.w = Math.max(...xs) - zz.x; zz.h = Math.max(...ys) - zz.y;
+        return zz;
+      }
+      if (zz.shape === "circle") {
+        const p1 = mapPt(zz.cx - zz.r, zz.cy - zz.r);
+        const p2 = mapPt(zz.cx + zz.r, zz.cy + zz.r);
+        if (!p1 || !p2) return null;
+        zz.cx = (p1.x + p2.x) / 2; zz.cy = (p1.y + p2.y) / 2;
+        zz.r  = ((p2.x - p1.x) + (p2.y - p1.y)) / 4;
+        zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
+        return zz;
+      }
+      // rect(기본) — 항상 바운딩 박스(x,y,w,h)를 보관하는 형식(16_Zones.js _commitZone)
+      const p1 = mapPt(zz.x, zz.y);
+      const p2 = mapPt(zz.x + zz.w, zz.y + zz.h);
+      if (!p1 || !p2) return null;
+      zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
+      return zz;
+    },
+
+    /** [WO 20260917-crop-zone-anno] PDF 주석(26_PdfAnno.js 의 State.annotations 항목) 배포용
+     *  좌표 재매핑. 주석 좌표는 permille(0~1000, 페이지 기준 %×10) 저장 형식이라 MapCtrl.
+     *  pageToDeckCropPct(%,0~100 입력)에 맞춰 /10 → 변환 → *10 로 왕복한다(새 변환 로직 아님).
+     *  type: text{x,y} · rect/highlight{x,y,w,h} · pen{pts:[{x,y}...]}.
+     *  반환: 복사본(원본 a 불변) · crop 밖이면 null(배포본 제외). crop 없음/페이지 불일치면
+     *  그대로 복사본 반환(재매핑 없음, 종전 동작). */
+    _mapAnnoForCrop(a, deckCrop) {
+      const aa = Object.assign({}, a);
+      if (!deckCrop || (aa.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
+        return aa;
+      }
+      const crop = deckCrop.crop;
+      const mapPt = (x, y) => {
+        const m = MapCtrl.pageToDeckCropPct(x / 10, y / 10, crop);
+        return m ? { x: m.x * 10, y: m.y * 10 } : null;
+      };
+      if (aa.type === "pen" && Array.isArray(aa.pts)) {
+        const mapped = [];
+        for (const p of aa.pts) {
+          const m = mapPt(p.x, p.y);
+          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
+          mapped.push({ x: m.x, y: m.y });
+        }
+        aa.pts = mapped;
+        return aa;
+      }
+      if (aa.type === "text") {
+        const m = mapPt(aa.x, aa.y);
+        if (!m) return null;
+        aa.x = m.x; aa.y = m.y;
+        return aa;
+      }
+      // rect / highlight — {x,y,w,h}
+      const p1 = mapPt(aa.x, aa.y);
+      const p2 = mapPt(aa.x + aa.w, aa.y + aa.h);
+      if (!p1 || !p2) return null;
+      aa.x = p1.x; aa.y = p1.y; aa.w = p2.x - p1.x; aa.h = p2.y - p1.y;
+      return aa;
     },
 
     async _snapshotPages() {
