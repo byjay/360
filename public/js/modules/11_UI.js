@@ -304,6 +304,14 @@
         // 🔴 [2026-09-17] 번호 중복 경고(표시만·자동 재채번 금지 — 마스터 명시)
         const dupDot = dupIds.has(pin.id)
           ? `<span class="pin-marker-dup" title="번호 중복 — 현장 확인 후 직접 수정하세요">!</span>` : "";
+        // [WO 20260917 멀티유저 ①+②·재설계] 사용자 구분 배지 — 4번째 축. 체크보드는 번호 대역
+        //   (100번대/200번대…)에서, 그 외 계열은 작성자 이메일 해시에서 색을 파생(PinSeries.userMark
+        //   정본, SoT). hasContent/filled 와 무관하게 항상 그려져 속 빈 원(미등록)에서도 보인다.
+        //   기존 이슈(top-right)·중복(top-left) 뱃지와 자리 겹치지 않게 bottom-right.
+        const userMark = (typeof PinSeries !== "undefined" && PinSeries.userMark) ? PinSeries.userMark(pin, meta.no) : null;
+        const authorDot = userMark
+          ? `<span class="pin-marker-author" title="${userMark.band != null ? ('번호 대역 ' + (userMark.band * 100 + 1) + '~' + (userMark.band * 100 + 100)) : ('작성자: ' + this.escapeHtml(userMark.author || ''))}" style="position:absolute;bottom:-4px;right:-5px;z-index:4;min-width:12px;height:12px;padding:0 3px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:${userMark.color};color:#fff;font-size:8px;font-weight:800;font-family:var(--font-mono);line-height:1;border:1.5px solid #efe9dc;box-shadow:0 1px 4px rgba(0,0,0,.5)">${userMark.initial || ""}</span>`
+          : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
@@ -314,6 +322,11 @@
         marker.dataset.kind = meta.kind;
         marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
         marker.classList.add(_st.filled ? "pin-filled" : "pin-hollow");
+        // [WO 20260917 콘텐츠 3상태] photo(사진/영상) / content(노트·첨부만) / empty — filled 축은
+        // 안 건드리고 그 안(filled=true)을 세분. 색 없이도(흑백) 구분되게 pin-content-dot 형태 단서 사용.
+        const tier = _st.tier || (typeof PinSeries !== "undefined" ? PinSeries.contentTier(pin) : (hasContent ? "content" : "empty"));
+        marker.dataset.tier = tier;
+        marker.classList.add("pin-tier-" + tier);
         // ── 바늘형 핀(영역=골드와 색상 완전 분리):
         //    미배치(콘텐츠 없음)=선명한 코랄레드(#ef4444),
         //    콘텐츠 있음=사용자 설정 색상(기본 그린). 설정에서 변경 가능.
@@ -327,6 +340,11 @@
         // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 구분:
         // 실선=콘텐츠 등록 / 파선=체크보드(사진 등록됨) / 점선=미등록
         const ringDash  = _st.dash;
+        // [WO 20260917 콘텐츠 3상태] content(노트/첨부만, 사진 없음) 전용 형태 단서 — 색을 무시해도
+        // (흑백) 원 안 작은 점의 유무만으로 photo/content 를 가른다(pin-content-dot 클래스로 검출).
+        const contentDot = (tier === "content")
+          ? `<circle class="pin-content-dot" cx="18" cy="21.2" r="1.9" fill="${txtFill}" stroke="#ffffff" stroke-width="0.5"/>`
+          : "";
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -359,8 +377,9 @@
                     fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
+              ${contentDot}
             </svg>
-            ${issueDot}${dupDot}
+            ${issueDot}${dupDot}${authorDot}
           </div>`;
           /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
              수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */

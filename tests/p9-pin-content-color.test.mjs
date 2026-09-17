@@ -129,7 +129,9 @@ function runUI(sSrc, uSrc, pins, page = 1) {
       no: String(m.dataset.no), kind: m.dataset.kind, filled: m.dataset.filled,
       head: stops[0], head2: stops[1], needle: stops[3], text: txt, dash: dash,
       headFillAttr: headFillAttr,
-      cls: m.className, pulse: /pin-pulse/.test(html)
+      cls: m.className, pulse: /pin-pulse/.test(html),
+      // [WO 20260917 콘텐츠 3상태] tier(photo/content/empty) + 형태 단서(pin-content-dot) 검출
+      tier: m.dataset.tier, hasContentDot: /class="pin-content-dot"/.test(html)
     };
   });
   return { pins: out, PS: sandbox.__PS };
@@ -358,6 +360,47 @@ function suiteHeadShape(label, sSrc) {
   ok(rE1 >= 4.5, `속 빈 원 숫자 대비(흰 디스크 위) = ${rE1.toFixed(2)}:1 (기준 4.5:1)`);
 }
 
+/* ────────────────────────────────────────────────────────────
+ * ⑬~⑯ [2026-09-17 콘텐츠 3상태] "내용이 있는 거, 사진이 있는 거 모두 구분되게 해".
+ *   근본원인: App.pinHasContent = pinHasMedia || pinHasInfo — OR 로 뭉뚱그려져 있어
+ *   사진만 있는 핀과 노트만 있는 핀이 등록여부(filled)만으로는 똑같이 "채운 원"이었다.
+ *   PinSeries.contentTier() 가 media/info 를 따로 읽어 photo/content/empty 3상태로 가른다.
+ *   🔴 pinHasContent 자체는 건드리지 않는다 — markerStyle().filled 축은 그대로 media OR info.
+ * ──────────────────────────────────────────────────────────── */
+const FIXTURE_TIER = () => [
+  { id: "p1", page: 1, x: 5,  y: 5,  imageId: "img" },                 // 사진만
+  { id: "p2", page: 1, x: 10, y: 10, note: "메모만" },                  // 내용(노트)만
+  { id: "p3", page: 1, x: 15, y: 15 },                                  // 빈 포인트
+  { id: "p4", page: 1, x: 20, y: 20, imageId: "img2", note: "겸용" }    // 사진+내용 둘 다
+];
+
+function suiteContentTier(label, sSrc) {
+  console.log("\n[" + label + "]");
+  const ui = runUI(sSrc, uiSrc, FIXTURE_TIER()).pins;
+
+  ok(ui.p1.tier === "photo" && ui.p2.tier === "content" && ui.p3.tier === "empty",
+    `⑬ 3상태 판정: 사진=${ui.p1.tier}(기대 photo) · 내용만=${ui.p2.tier}(기대 content) · 빈핀=${ui.p3.tier}(기대 empty)`);
+  ok(!ui.p1.hasContentDot && ui.p2.hasContentDot && !ui.p3.hasContentDot,
+    `⑬ 형태 단서(pin-content-dot): 사진=${ui.p1.hasContentDot} · 내용만=${ui.p2.hasContentDot} · 빈핀=${ui.p3.hasContentDot} (내용만 참이어야)`);
+
+  // ⑭ 색(head/head2/needle/text)을 전혀 보지 않고 tier 문자열 + 형태(dot 유무)만으로 3상태 구분
+  const shapeKey = (p) => p.tier + ":" + (p.hasContentDot ? "1" : "0");
+  const keys = [shapeKey(ui.p1), shapeKey(ui.p2), shapeKey(ui.p3)];
+  ok(new Set(keys).size === 3,
+    `⑭ 색 무시·형태(tier+dot)만으로 3상태 전부 구분됨 → ${keys.join(", ")}`);
+
+  // ⑮ 사진+내용 둘 다 있는 핀 — 정상 처리(미디어 우선 → photo, 크래시 없음)
+  ok(ui.p4.tier === "photo" && ui.p4.filled === "1",
+    `⑮ 사진+내용 겸용 핀 정상 처리(미디어 우선) → tier=${ui.p4.tier}, filled=${ui.p4.filled}`);
+
+  // ⑯ App.pinHasContent 호출부 동작 불변 — 실제 20_App.js 소스에서 정의·호출부가 그대로인지 확인
+  const appSrcOnDisk = rd("public/js/modules/20_App.js");
+  ok(/pinHasContent\(pin\)\s*\{\s*return this\.pinHasMedia\(pin\) \|\| this\.pinHasInfo\(pin\);\s*\}/.test(appSrcOnDisk),
+    "⑯ App.pinHasContent 정의 불변(pinHasMedia || pinHasInfo)");
+  const callSites = (appSrcOnDisk.match(/\.pinHasContent\(/g) || []).length;
+  ok(callSites >= 1, `⑯ App.pinHasContent 호출부 개수 = ${callSites} (기존 호출부 보존, 회귀 없음)`);
+}
+
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */
 suiteCheckboardColor("① 체크보드 사진 유무 색 구분 (정상 소스)", seriesSrc, radarSrc);
 suiteNormalPins("② 일반 핀 구분 유지 (정상 소스)", seriesSrc);
@@ -367,6 +410,7 @@ suiteShape("⑤ 색 외 형태 단서 (정상 소스)", seriesSrc, radarSrc);
 suiteContrast("⑥ WCAG 대비 실측 (정상 소스)", seriesSrc, radarSrc);
 suiteBlackWhiteOnly("⑦ 흑백(색 제거) 구분 (정상 소스)", seriesSrc, radarSrc);
 suiteHeadShape("⑧ 헤드 도형(fill) 자체가 등록/미등록으로 갈림 (정상 소스)", seriesSrc);
+suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정상 소스)", seriesSrc);
 
 /* ────────────────────────────────────────────────────────────
  * 뮤테이션 A: 체크보드 안의 콘텐츠 분기를 제거하면 ①이 실패해야 한다
@@ -477,6 +521,37 @@ suiteHeadShape("⑧ 헤드 도형(fill) 자체가 등록/미등록으로 갈림 
     const ui = runUI(seriesSrc, mutated, fixture).pins;
     ok(/^url\(/.test(ui.bA.headFillAttr) && /^url\(/.test(ui.bB.headFillAttr),
       `뮤테이션 적용 시 체크보드 등록/미등록 헤드 fill 이 둘 다 채운 원이 됨(테스트 실효성 증명) → bA=${ui.bA.headFillAttr}, bB=${ui.bB.headFillAttr}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 G: 3상태(photo/content/empty)를 2상태로 되돌림 → ⑬이 실패해야 한다
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션G] contentTier 를 2상태로 되돌림(photo 구분 제거) → ⑬이 실패해야 함");
+  const needle = 'contentTier(pin) {\n      if (this.mediaOf(pin)) return "photo";\n      if (this.infoOf(pin)) return "content";\n      return "empty";\n    },';
+  const mutated = seriesSrc.replace(needle, 'contentTier(pin) { return (this.mediaOf(pin) || this.infoOf(pin)) ? "content" : "empty"; },');
+  if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const ui = runUI(mutated, uiSrc, FIXTURE_TIER()).pins;
+    ok(ui.p1.tier === ui.p2.tier,
+      `뮤테이션 적용 시 사진과 내용만 있는 핀이 같은 tier 가 됨(테스트 실효성 증명, ⑬이 깨짐) → ${ui.p1.tier} == ${ui.p2.tier}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 H: 형태 단서(pin-content-dot) 제거하고 tier 텍스트만 남김
+ *   → ⑭(형태만으로도 구분) 검사가 실패해야 한다(색/텍스트 데이터 속성 없이 순수 SVG 형태만 볼 때).
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션H] 형태 단서(pin-content-dot) 렌더 제거 → ⑭가 실패해야 함");
+  const needle = 'const contentDot = (tier === "content")\n          ? `<circle class="pin-content-dot" cx="18" cy="21.2" r="1.9" fill="${txtFill}" stroke="#ffffff" stroke-width="0.5"/>`\n          : "";';
+  const mutated = uiSrc.replace(needle, 'const contentDot = "";');
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const ui = runUI(seriesSrc, mutated, FIXTURE_TIER()).pins;
+    ok(ui.p1.hasContentDot === false && ui.p2.hasContentDot === false,
+      `뮤테이션 적용 시 형태 단서가 사라져 photo/content 를 dot 유무로 구분 못 함(테스트 실효성 증명) → p1=${ui.p1.hasContentDot}, p2=${ui.p2.hasContentDot}`);
   }
 }
 

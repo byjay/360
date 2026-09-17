@@ -114,7 +114,9 @@
       const kind = this.kindOf(pin);
       const filled = this.hasContent(pin);
       const pat = this.PATTERN[this.patternOf(kind, filled)] || this.PATTERN.solid;
-      return { kind: kind, filled: filled, colors: this.colorsOf(kind, filled), dash: pat.dash, border: pat.border };
+      // [WO 20260917] tier = 콘텐츠 3상태(photo/content/empty) — filled(등록여부) 축은 불변,
+      // tier 는 그 안(filled=true)을 사진유무로 더 세분하는 부가 필드(기존 소비자는 무시해도 무방).
+      return { kind: kind, filled: filled, colors: this.colorsOf(kind, filled), dash: pat.dash, border: pat.border, tier: this.contentTier(pin) };
     },
 
     /**
@@ -153,13 +155,23 @@
      *  🔴 [2026-09-17 근본수정] 예전엔 "개수"를 셌다 — 핀이 삭제되면 개수가 줄어
      *  다음 채번이 기존 남은 번호와 겹쳤다(1,2,3,4 중 3번 삭제 → 개수 3 → 다음 번호 1+3=4,
      *  이미 존재하는 4와 중복). 최댓값+1 로 바꾸면 삭제로 생긴 구멍은 구멍인 채 남고
-     *  (재사용 안 함 — 마스터 명시: 번호는 현장 기록과 연결된 값), 번호는 항상 처음 보는 값이 된다. */
-    nextCheckboardNo(pins, page, start) {
+     *  (재사용 안 함 — 마스터 명시: 번호는 현장 기록과 연결된 값), 번호는 항상 처음 보는 값이 된다.
+     *
+     *  🔴 [WO 20260917 멀티유저 ①·재설계] 시작번호 = "사용자별 번호 대역"(마스터 확정:
+     *  "사용자는 시작번호를 100으로 할지 200으로 할지 세팅"). author 를 넘기면 최댓값 계산을
+     *  "같은 작성자가 찍은 핀"으로만 한정한다 — 그러지 않으면 다른 사용자의 대역이 내
+     *  최댓값에 섞여 내 다음 번호가 상대 대역을 침범한다.
+     *  예: A(대역 100) 가 100,101 찍음 → B(대역 200) 가 200 찍음 → A 가 다시 찍으면
+     *      전체-최댓값 기준이면 max(100,201)=201(상대 대역 침범, 버그) → author 필터 기준이면
+     *      A 소유 핀 중 최댓값(101)+1 = 102(정상, 자기 대역 안에서만 증가).
+     *  author 미지정(구버전 호출·비로그인)이면 종전처럼 페이지 전체 기준(하위호환). */
+    nextCheckboardNo(pins, page, start, author) {
       const pg = page || 1;
       const s = (Number.isFinite(start) && start >= 1) ? start : 1;
       let maxNo = 0;
       (pins || []).forEach(p => {
         if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        if (author != null && p.author !== author) return; // 대역 침범 방지: 내 핀만 본다
         const n = parseInt(p.label, 10);
         if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시
       });
@@ -282,6 +294,88 @@
 
     _persist() {
       try { localStorage.setItem(this.FILTER_KEY, JSON.stringify(this.filter())); } catch (e) {}
+    },
+
+    /* ── [WO 20260917 멀티유저 ②·재설계] 사용자 구분 배지 — 4번째 축, 기존 3축(계열/등록여부/종류)과 별개.
+       기존 3축은 핀 몸통 색·외곽 링 dasharray·머리 안 아이콘을 쓰므로, 사용자 구분은 겹치지 않게
+       몸통 바깥 모서리(11_UI.js 렌더에서 bottom-right, 이슈뱃지 top-right·중복뱃지 top-left와도
+       자리 분리)의 작은 배지(숫자/이니셜+색)로만 표시한다. 이 배지는 hasContent/filled 여부와
+       무관하게 항상 그려지므로 속 빈 원(미등록)에서도 사용자 구분이 그대로 보인다.
+       팔레트 7색 모두 흰 배경(도면) 대비 ≥4.5:1(WCAG AA 실측, ≥3:1 요건 상회):
+         #0072B2 5.19 · #5B2C87 9.74 · #1B4965 9.60 · #8B3A3A 7.60 · #2E5E4E 7.43 · #6B4226 8.63 · #264653 10.08
+       🔴 SoT: 팔레트는 이 배열 하나뿐 — 대역 인덱스(userMark)·해시 인덱스(authorStyle) 둘 다
+       이 배열만 순환 참조한다(대역/작성자 수가 7 초과 시 팔레트를 순환). */
+    USER_MARK_PALETTE: ["#0072B2", "#5B2C87", "#1B4965", "#8B3A3A", "#2E5E4E", "#6B4226", "#264653"],
+
+    /** 작성자 식별자(이메일 등) → 배지 색상/이니셜. 결정적(같은 작성자=항상 같은 색·글자).
+     *  대역(번호 대) 개념이 없는 계열(content/empty)의 폴백 표시 방식. */
+    authorStyle(pin) {
+      const a = pin && pin.author;
+      if (!a || typeof a !== "string") return null;
+      let h = 0;
+      for (let i = 0; i < a.length; i++) h = (h * 31 + a.charCodeAt(i)) >>> 0;
+      const color = this.USER_MARK_PALETTE[h % this.USER_MARK_PALETTE.length];
+      const initial = a.trim().charAt(0).toUpperCase() || "?";
+      return { color: color, initial: initial, author: a, band: null };
+    },
+
+    /** [WO 20260917 멀티유저 ①·재설계] 사용자별 번호 대역 시작값 — localStorage 에 사용자
+     *  이메일 기준으로 저장한다(🔴 배포본 단일 필드에 저장하면 다른 사용자가 저장할 때
+     *  덮어써진다 — 사용자별 값은 그 사용자에게 붙어야 한다는 마스터 지시. 각 브라우저의
+     *  localStorage 는 사용자별로 독립이므로 이 문제가 구조적으로 발생하지 않는다). */
+    BAND_KEY_PREFIX: "wm-user-band:",
+    userBandStart(author) {
+      if (!author) return null;
+      try {
+        const raw = localStorage.getItem(this.BAND_KEY_PREFIX + author);
+        const n = parseInt(raw, 10);
+        return (Number.isFinite(n) && n >= 1) ? n : null;
+      } catch (e) { return null; }
+    },
+    setUserBandStart(author, value) {
+      if (!author) return null;
+      let n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) n = 1;
+      try { localStorage.setItem(this.BAND_KEY_PREFIX + author, String(n)); } catch (e) {}
+      return n;
+    },
+
+    /** [WO 20260917 멀티유저 ①+②·재설계] 마스터 확정: "100번대 사용자→색A, 200번대→색B" —
+     *  체크보드 계열은 대역(번호 100단위 그룹)에서 색을 파생시킨다(번호 자체가 이미 눈에 보이는
+     *  비색 단서라 색맹에도 안전 · 별도 작성자 필드 없이도 구분됨). 대역 개념이 없는 계열
+     *  (content/empty)은 이메일 해시(authorStyle)로 폴백한다.
+     *  🔴 기존 3축(계열색 colorsOf · 등록여부 헤드 fill/링 dash · 아이콘)은 전혀 건드리지 않는다
+     *  — 이 배지는 SVG 밖 별도 코너에 얹힐 뿐이라 구조적으로 충돌하지 않는다(11_UI.js 참조). */
+    userMark(pin, no) {
+      if (!pin) return null;
+      if (pin.checkboard && Number.isFinite(no)) {
+        const band = Math.floor((no - 1) / 100); // 0=1~100, 1=101~200 … "100번대/200번대" 그룹
+        const color = this.USER_MARK_PALETTE[band % this.USER_MARK_PALETTE.length];
+        return { color: color, initial: String(band + 1), author: pin.author || null, band: band };
+      }
+      return this.authorStyle(pin);
+    },
+
+    /** [WO 20260917 콘텐츠 3상태] 핀에 "사진/영상(미디어)"가 있는가 — App.pinHasMedia 가 정본.
+     *  🔴 App.pinHasContent 자체는 바꾸지 않는다(호출부 다수) — 여기서 별도로 미디어/정보를
+     *  나눠 읽어 3상태(사진/내용만/빈 포인트)를 만든다. */
+    mediaOf(pin) {
+      if (typeof App !== "undefined" && App.pinHasMedia) { try { return !!App.pinHasMedia(pin); } catch (e) {} }
+      return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl || pin.pendingOpId || pin.localPreview));
+    },
+    /** 핀에 "노트/첨부/3D"(정보성 콘텐츠, 미디어 아님)가 있는가 — App.pinHasInfo 가 정본. */
+    infoOf(pin) {
+      if (typeof App !== "undefined" && App.pinHasInfo) { try { return !!App.pinHasInfo(pin); } catch (e) {} }
+      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length) || pin.has3D || pin.flsLocalId || pin.flsUrl));
+    },
+    /** [WO 20260917] 콘텐츠 3상태: photo(사진/영상 있음) > content(노트/첨부만) > empty(둘 다 없음).
+     *  둘 다 있으면(사진+노트) 미디어가 우선 — photo 로 처리(정상 처리, 크래시 없음).
+     *  🔴 이 함수는 hasContent()/markerStyle() 의 filled(등록여부) 판정을 바꾸지 않는다 —
+     *  filled 는 여전히 media OR info(App.pinHasContent), tier 는 그 안을 세분하는 별도 축. */
+    contentTier(pin) {
+      if (this.mediaOf(pin)) return "photo";
+      if (this.infoOf(pin)) return "content";
+      return "empty";
     },
 
     /** 페이지 내 부류별 핀 개수 (칩 배지용) */

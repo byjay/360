@@ -1,0 +1,13 @@
+-- [WORK_ORDER_20260917 멀티유저 ①] 체크보드 시작번호(페이지별) 영속화
+--
+-- 배경: State.checkboardStart(01_State.js:61)는 메모리에만 있어 세션을 닫으면 1로
+--       초기화됐다. 마스터 지시: "처음 시작할 번호 세팅 기능"이 세션을 넘어 유지돼야 한다.
+--
+-- 조치: deployments 에 checkboard_start 컬럼 추가. 기존 JSON 필드(pins/zones/annotations/
+--       pages_data 등)의 모양은 그대로 두고 새 컬럼만 늘린다 → 구버전 클라이언트/구버전
+--       배포본은 이 컬럼을 모르거나 NULL이며, 서버 mapDeployment 가 '{}' 로 치환해
+--       클라이언트 _checkboardStart() 가 종전대로 1을 반환한다(하위호환).
+--
+-- 형식(JSON): {"<page:number>": <startNo:number>, ...}  예: {"1": 100, "2": 500}
+--   컬럼 없음/NULL/파싱실패 → {} → 페이지별 시작번호 없음 = 종전대로 1부터.
+ALTER TABLE deployments ADD COLUMN checkboard_start TEXT;

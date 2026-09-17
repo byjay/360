@@ -179,7 +179,9 @@ suitePinScale("⑦ 핀 크기 균일 (정상 소스)");
  * ──────────────────────────────────────────────────────────── */
 console.log("\n[뮤테이션A] 최댓값 채번 → 개수 채번으로 되돌림 → ①②③ 실패해야 함");
 {
-  const needle = /nextCheckboardNo\(pins, page, start\) \{[\s\S]*?\n    \},/;
+  // 🔴 [WO 20260917 멀티유저 ①] nextCheckboardNo 에 author 4번째 인자가 추가되어 시그니처가
+  //   바뀌었다(대역 침범 방지 — tests/p31-multiuser.test.mjs) — 정규식을 그 변경에 맞춰 갱신.
+  const needle = /nextCheckboardNo\(pins, page, start(?:, author)?\) \{[\s\S]*?\n    \},/;
   const oldImpl = `nextCheckboardNo(pins, page, start) {
       const pg = page || 1;
       const s = (Number.isFinite(start) && start >= 1) ? start : 1;

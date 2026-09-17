@@ -1335,22 +1335,45 @@
 
     /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
      *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
-    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1) */
+    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1).
+     *  🔴 [WO 20260917 멀티유저 ①·재설계] 마스터 확정: "시작번호 = 사용자별 번호 대역"
+     *  (예: 사용자A=100, 사용자B=200 — 번호만 봐도 누가 찍었는지 알고, 충돌이 구조적으로 없다).
+     *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속)이 있으면 최우선이고,
+     *  없으면 기존 페이지별 값(State.checkboardStart, 구버전/비로그인 폴백)을 쓴다. */
     _checkboardStart(page) {
       const p = page || State.pdfPage || 1;
+      const author = this._pinAuthor();
+      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author) : null;
+      if (band != null) return band;
       const v = State.checkboardStart && State.checkboardStart[p];
       const n = parseInt(v, 10);
       return (Number.isFinite(n) && n >= 1) ? n : 1;
     },
-    /** 현재 구역(페이지)의 체크보드 시작 번호 설정 */
+    /** 시작 번호 설정. 로그인 사용자는 "내 대역"(사용자에게 귀속 — localStorage, 배포본
+     *  단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
+     *  비로그인/데모(author 없음)는 종전처럼 페이지별 값만 저장(하위호환). */
     _setCheckboardStart(page, value) {
       const p = page || State.pdfPage || 1;
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
+      const author = this._pinAuthor();
+      if (author && typeof PinSeries !== "undefined" && PinSeries.setUserBandStart) {
+        PinSeries.setUserBandStart(author, n);
+      }
       State.checkboardStart = State.checkboardStart || {};
       State.checkboardStart[p] = n;
       this._autoSave && this._autoSave();
       return n;
+    },
+
+    /** [WO 20260917 멀티유저 ②] 핀 생성 시점의 작성자 식별자(이메일 우선) — 없으면 null.
+     *  🔴 신규 핀에만 부여(편집 시 기존 pin.author 는 건드리지 않는다 — 편집자≠원작성자).
+     *  기존 13_Notes.js/32_Offline.js 와 동일 관례(author=email)를 재사용(SoT 필드명 통일). */
+    _pinAuthor() {
+      try {
+        if (typeof Auth !== "undefined" && Auth.user) return Auth.user.email || Auth.user.name || null;
+      } catch (e) {}
+      return null;
     },
 
     _placeCheckboardPin(pct) {
@@ -1358,8 +1381,12 @@
       // 🔴 채번 정본 = PinSeries. 체크보드 계열은 콘텐츠 핀과 독립이므로
       //   "페이지 내 전체 핀 수"가 아니라 "페이지 내 체크보드 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage);
-      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start);
+      const _auth0 = this._pinAuthor();
+      // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
+      //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
+      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start, _auth0);
       const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
@@ -1864,6 +1891,7 @@
         pendingSync: true,       // 업로드 진행/대기 표시
         uploading: true
       };
+      { const _auth1 = this._pinAuthor(); if (_auth1) pin.author = _auth1; } // [WO 20260917 멀티유저 ②]
       if (note) pin.note = note;
       if (url)  { pin.imageUrl = url; if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) pin.isVideo = true; }
       // [마스터 요청] 핀(호스팟)별 아이콘 — 선택값을 핀에 보존(기본 number는 저장 생략)
@@ -1988,8 +2016,8 @@
 
       // 편집이면 기존 객체를 베이스로(기존 미디어 보존), 신규면 새 객체
       const pin = editing && existing
-        ? existing
-        : { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label };
+        ? existing // [WO 20260917 멀티유저 ②] 편집은 기존 pin.author 를 건드리지 않는다(편집자≠원작성자)
+        : (() => { const _auth2 = this._pinAuthor(); const np = { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
       pin.label = label;
       if (note) pin.note = note; else if (editing) delete pin.note;
       // [마스터 요청] 핀(호스팟)별 아이콘 캡처 — number(기본)면 속성 제거(하위호환)
@@ -3070,6 +3098,10 @@
         zones:       JSON.stringify(deployableZones),
         annotations: JSON.stringify(deployableAnnotations)
       };
+      // [WO 20260917 멀티유저 ①] 체크보드 시작번호(페이지별) 영속화 — 항상 함께 보낸다(작아서
+      //   조건부 전송할 이유가 없음). 서버는 컬럼 자체가 없던 구버전에서도 부분갱신 규칙(§merged)
+      //   대로 안전히 저장한다. 값이 비어도 "{}" 로 보내 구버전(값 없음=1) 폴백을 그대로 재현.
+      body.checkboard_start = JSON.stringify(State.checkboardStart || {});
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
         body.pages_data   = JSON.stringify(pagesData);
@@ -3364,6 +3396,9 @@
         try { State.pins  = JSON.parse(dep.pins  || "[]"); } catch { State.pins = []; }
         try { State.zones = JSON.parse(dep.zones || "[]"); } catch { State.zones = []; }
         try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
+        // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
+        //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
+        try { State.checkboardStart = JSON.parse(dep.checkboard_start || "{}") || {}; } catch { State.checkboardStart = {}; }
 
         const imgEl = UI.$("map-image");
         // ponytail: fired flag prevents double-fire when image is already browser-cached
@@ -3409,6 +3444,8 @@
         State.pins        = Array.isArray(d.pins)  ? d.pins  : [];
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
+        // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
+        State.checkboardStart = (d.checkboardStart && typeof d.checkboardStart === "object") ? d.checkboardStart : {};
         if (d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; }
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
@@ -3619,6 +3656,7 @@
           pins:        State.pins || [],
           zones:       (typeof Zones !== "undefined" && State.zones) ? State.zones : [],
           annotations: State.annotations || [],
+          checkboardStart: State.checkboardStart || {}, // [WO 20260917 멀티유저 ①]
           depId:       State.autoSaveDepId || null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
@@ -4044,6 +4082,9 @@
         catch { State.zones = []; }
         try { State.annotations = JSON.parse(latest.annotations || "[]"); }
         catch { State.annotations = []; }
+        // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
+        try { State.checkboardStart = JSON.parse(latest.checkboard_start || "{}") || {}; }
+        catch { State.checkboardStart = {}; }
 
         const imgEl = UI.$("map-image");
         let _ld2 = false;

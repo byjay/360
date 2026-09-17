@@ -1966,6 +1966,9 @@ function mapDeployment(r: any) {
     annotations: r.annotations || '[]',
     // [P14 · 뷰어 확대 화질] 원본 PDF 위치 + 실제 저장 픽셀(JSON). 구버전 배포본은 NULL.
     source_meta: r.source_meta != null ? r.source_meta : null,
+    // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(JSON). 구버전 배포본(컬럼 없음)은 '{}'
+    //   → 클라이언트 _checkboardStart() 가 종전대로 1 반환(하위호환).
+    checkboard_start: r.checkboard_start || '{}',
     created_at: r.created_at,
     updated_at: r.updated_at,
     version: (r.version != null ? r.version : 0),
@@ -2192,8 +2195,8 @@ app.post('/tables/deployments', async (c) => {
   // [PART 0 · Tenant 격리] 새 배포본은 작성자 테넌트로 귀속(슈퍼/미등록은 기본 테넌트)
   const ownerTenant = (await tenantOf(c, user)) || DEFAULT_TENANT
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, source_meta, tenant_id, created_at, updated_at, version, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, source_meta, checkboard_start, tenant_id, created_at, updated_at, version, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
   ).bind(
     id,
     body.title || '',
@@ -2204,6 +2207,9 @@ app.post('/tables/deployments', async (c) => {
     body.zones || '[]',
     body.annotations || '[]',
     body.source_meta || null,
+    // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(폴백값). 사용자 대역(1순위)은
+    // 클라이언트 localStorage 에만 있어 서버가 알 필요 없다 — 여기는 구버전/비로그인 폴백뿐.
+    body.checkboard_start || null,
     ownerTenant,
     now, now
   ).run()
@@ -2217,6 +2223,7 @@ app.post('/tables/deployments', async (c) => {
     drawing_data: body.drawing_data || null, pages_data: body.pages_data || null,
     pins: body.pins || '[]', zones: body.zones || '[]', annotations: body.annotations || '[]',
     source_meta: body.source_meta || null,
+    checkboard_start: body.checkboard_start || null,
     created_at: now, updated_at: now, version: 0, deleted: 0
   }))
 })
@@ -2265,13 +2272,15 @@ const updateDeployment = async (c: any) => {
     annotations:  body.annotations   != null ? body.annotations  : (existing.annotations || '[]'),
     // [P14] 미전송 시 기존 값 보존(부분 갱신) — 원본 없는 구버전 저장 흐름이 기존 원본을 지우지 않는다.
     source_meta:  body.source_meta   != null ? body.source_meta  : (existing.source_meta != null ? existing.source_meta : null),
+    // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(폴백값, 부분 갱신 — 미전송이면 기존값 보존).
+    checkboard_start: body.checkboard_start != null ? body.checkboard_start : (existing.checkboard_start != null ? existing.checkboard_start : null),
   }
   const newVersion = curVersion + 1
   await c.env.DB.prepare(
-    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?, source_meta=?, updated_at=?, version=? WHERE id=?`
+    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?, source_meta=?, checkboard_start=?, updated_at=?, version=? WHERE id=?`
   ).bind(
     merged.title, merged.file_name, merged.drawing_data, merged.pages_data,
-    merged.pins, merged.zones, merged.annotations, merged.source_meta, now, newVersion, id
+    merged.pins, merged.zones, merged.annotations, merged.source_meta, merged.checkboard_start, now, newVersion, id
   ).run()
   return c.json(mapDeployment(Object.assign({}, existing, merged, { id, updated_at: now, version: newVersion })))
 }
