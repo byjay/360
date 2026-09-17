@@ -246,14 +246,9 @@
       Auth._applyUi();          // 인증바 상태 동기화 (hub 슬롯 포함)
       Auth._renderHubSignin();  // 미로그인 시 hub 로그인 버튼 렌더
       await this.load();
-      // [마스터 2026-08-31] AUTO_DESIGNER_ENTRY 자동입장 연장 — 프로젝트 선택 화면(카드 클릭) 단계를
-      //   건너뛰고 가장 최근 프로젝트로 바로 진입. 서버가 created_at DESC로 정렬해 오므로 list[0] = 최신.
-      //   세션당 1회만(뒤로가기로 재방문 시 _autoEntered가 이미 true → 정상적으로 선택 화면 유지, 전환 경로 보존).
-      //   스위치 false면 이 블록 전체 무시 → 기존처럼 항상 선택 화면.
-      if (typeof AUTO_DESIGNER_ENTRY !== "undefined" && AUTO_DESIGNER_ENTRY && !this._autoEntered && this.list.length > 0 && Auth.isDesigner) {
-        this._autoEntered = true;
-        this.openProject(this.list[0]);
-      }
+      // [마스터 2026-09-17] "첫 화면은 무조건 프로젝트 선택이 나오게 해" — 최근 프로젝트로
+      //   건너뛰는 자동입장(옛 AUTO_DESIGNER_ENTRY 연장 블록)을 제거했다. 배포 링크(?d=)가 아닌
+      //   모든 진입은 여기서 항상 카드 목록(프로젝트 허브)을 보여준다.
     },
 
     async load() {
