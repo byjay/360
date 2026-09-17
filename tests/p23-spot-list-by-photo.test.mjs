@@ -46,18 +46,19 @@ function makePins() {
 }
 
 /* ────────────────────────────────────────────────────────────
- * test1: [현황 확인] renderSpotList가 이미 현재 핀만 읽는지 소스로 고정
+ * test1: [배선 후] renderSpotList가 현재 핀을 기준(currentPin)으로 buildSpotGroups에 넘기는지 고정
+ *  (①"해당 사진에서만" 은 이제 buildSpotGroups가 담당 — groups[0]이 항상 현재 핀이고 isCurrent=true.
+ *   State.pins를 buildSpotGroups에 넘기는 것은 "다른 사진 그룹도 함께 나열"하기 위한 의도된 변경이다.)
  * ──────────────────────────────────────────────────────────── */
 function test1_currentPinOnlyAlready() {
-  console.log("\n[test1] 현황: App.renderSpotList는 이미 PanoViewer._currentPin.spots만 읽음(①기충족)");
+  console.log("\n[test1] 배선: App.renderSpotList는 PanoViewer._currentPin을 currentPin으로 buildSpotGroups에 전달");
   const m = appSrc.match(/renderSpotList\(\) \{([\s\S]*?)\n    \},/);
   ok(!!m, "renderSpotList() 함수를 찾음");
   const body = m ? m[1] : "";
   ok(/const pin = \(typeof PanoViewer[\s\S]*?PanoViewer\._currentPin/.test(body),
-    "pin = PanoViewer._currentPin (현재 핀 하나만 참조)");
-  ok(/const spots = \(pin && pin\.spots\) \|\| \[\]/.test(body),
-    "spots = pin.spots (다른 핀의 spots를 합치지 않음 — 이미 현재 사진만 표시)");
-  ok(!/State\.pins/.test(body), "State.pins(전체 핀 목록)를 순회하지 않음 — 다른 사진 마커가 섞이지 않음");
+    "pin = PanoViewer._currentPin (현재 핀을 명시적으로 식별)");
+  ok(/PanoViewer\.buildSpotGroups\(State\.pins \|\| \[\], pin\)/.test(body),
+    "buildSpotGroups(State.pins, pin) — pin이 currentPin으로 전달되어 groups[0]이 항상 현재 사진(①은 buildSpotGroups가 보장)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -118,11 +119,57 @@ function test5_honestEmptyState(src) {
   ok(Array.isArray(groups[0].spots) && groups[0].spots.length === 0, "spots=[] 로 정직하게 표시(렌더 쪽이 '마커 없음' 안내를 그릴 수 있음)");
 }
 
+/* ────────────────────────────────────────────────────────────
+ * test6: 배선 확인 — App.renderSpotList()가 buildSpotGroups/spotRowAction을 호출/참조
+ * ──────────────────────────────────────────────────────────── */
+function test6_wiredToGroupHelpers() {
+  console.log("\n[test6] 배선: renderSpotList가 buildSpotGroups·spotRowAction을 사용");
+  const m = appSrc.match(/renderSpotList\(\) \{([\s\S]*?)\n    \},/);
+  ok(!!m, "renderSpotList() 함수를 찾음(배선 후)");
+  const body = m ? m[1] : "";
+  ok(/PanoViewer\.buildSpotGroups\(/.test(body), "buildSpotGroups(...) 호출");
+  ok(/PanoViewer\.spotRowAction\(/.test(body), "spotRowAction(...) 호출");
+  ok(/this\.openPano\(a\.pin\)/.test(body), "openPano(a.pin) — openPano 분기에서 실제 pin으로 이동");
+  ok(/PanoViewer\.lookAtSpot\(a\.lon, a\.lat\)/.test(body), "look 분기는 기존 lookAtSpot(lon, lat) 그대로 재사용");
+  ok(/pano-spot-list-body/.test(appSrc) && /psl-table/.test(body), "기존 표 구조(psl-table) 유지");
+}
+
+/* ────────────────────────────────────────────────────────────
+ * test7: spotRowAction 계약대로 App.openPano/lookAtSpot 재사용 경로가 실제로 동작하는지 검증
+ * ──────────────────────────────────────────────────────────── */
+function test7_renderWiringBehavior(src) {
+  console.log("\n[test7] 배선 동작: 다른 사진 클릭→openPano(그 핀) / 같은 사진 클릭→lookAtSpot 유지 / 빈 상태");
+  const PV = loadPV(src);
+  const { pins, cur, bdong } = makePins();
+  let lookCalled = null, openCalled = null;
+  PV.lookAtSpot = (lon, lat) => { lookCalled = { lon, lat }; };
+  const AppStub = { openPano(pin) { openCalled = pin; } };
+
+  const groups = PV.buildSpotGroups(pins, cur);
+  const otherGroup = groups.find((g) => g.pin.id === bdong.id);
+  const otherAction = PV.spotRowAction(otherGroup, otherGroup.spots[0]);
+  if (otherAction.type === "openPano") AppStub.openPano(otherAction.pin);
+  ok(openCalled === bdong, "다른 사진 마커 클릭 시뮬 → App.openPano(그 핀 객체) 호출됨");
+
+  const curGroup = groups[0];
+  const curAction = PV.spotRowAction(curGroup, curGroup.spots[0]);
+  if (curAction.type === "look") PV.lookAtSpot(curAction.lon, curAction.lat);
+  ok(lookCalled && lookCalled.lon === curGroup.spots[0].lon && lookCalled.lat === curGroup.spots[0].lat,
+    "같은 사진 마커 클릭 시뮬 → 기존 lookAtSpot(lon, lat) 경로 유지");
+
+  const empty = { id: "p-empty", label: "빈사진", spots: [] };
+  const emptyGroups = PV.buildSpotGroups([empty], empty);
+  ok(emptyGroups.length === 1 && emptyGroups[0].spots.length === 0,
+    "현재 사진 마커 0개 → 그룹은 존재(빈 상태를 조용히 숨기지 않고 렌더 쪽에서 표시 가능)");
+}
+
 test1_currentPinOnlyAlready();
 test2_groupsCurrentFirst(pvSrc);
 test3_sortedByLabel(pvSrc);
 test4_navigateReusesOpenPano(pvSrc);
 test5_honestEmptyState(pvSrc);
+test6_wiredToGroupHelpers();
+test7_renderWiringBehavior(pvSrc);
 
 /* ────────────────────────────────────────────────────────────
  * 뮤테이션 ①: 현재 핀 필터를 제거(모든 핀의 spots를 한 그룹에 합침) → test2가 실패해야 함
@@ -169,6 +216,36 @@ test5_honestEmptyState(pvSrc);
     const groups = PV.buildSpotGroups(pins, cur);
     // 정렬 없으면 pins 배열 순서(B동이 A동보다 먼저 들어있음) 그대로 유지됨 → A동이 먼저가 아니게 됨
     ok(!(groups[1] && groups[1].pin.id === adong.id), "뮤테이션 적용 시 A동이 더 이상 먼저가 아니게 뒤집힘(테스트 실효성 증명)");
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 ③(배선): renderSpotList에서 buildSpotGroups 호출 제거 → test6 실패해야 함
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션③] renderSpotList의 buildSpotGroups 호출 제거 → test6이 실패해야 함");
+  const needle = "PanoViewer.buildSpotGroups(State.pins || [], pin);";
+  const mutated = appSrc.replace(needle, "(pin.spots || []).map((s) => ({ pin, spots: [s], isCurrent: true }));");
+  if (mutated === appSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const m = mutated.match(/renderSpotList\(\) \{([\s\S]*?)\n    \},/);
+    const body = m ? m[1] : "";
+    ok(!/PanoViewer\.buildSpotGroups\(/.test(body), "뮤테이션 적용 시 buildSpotGroups 호출이 사라짐(=test6이 실패, 테스트 실효성 증명)");
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 ④(배선): openPano 분기 제거 → test6이 실패해야 함
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션④] openPano 분기 제거 → test6이 실패해야 함");
+  const needle = 'else if (a.type === "openPano") { this.openPano(a.pin); }';
+  const mutated = appSrc.replace(needle, "");
+  if (mutated === appSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const m = mutated.match(/renderSpotList\(\) \{([\s\S]*?)\n    \},/);
+    const body = m ? m[1] : "";
+    ok(!/this\.openPano\(a\.pin\)/.test(body), "뮤테이션 적용 시 openPano(a.pin) 분기가 사라짐(=test6이 실패, 테스트 실효성 증명)");
   }
 }
 

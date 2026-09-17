@@ -2341,29 +2341,54 @@
       if (p.classList.contains("hidden")) { this.renderSpotList(); p.classList.remove("hidden"); }
       else p.classList.add("hidden");
     },
+    /** [P23: 마커목록 사진별] 현재 사진의 마커만 보여주되(①), 다른 사진의 마커도 그룹으로 함께
+     *  나열해 클릭 시 그 사진으로 이동(②)하고, 사진별로 정렬(③)한다.
+     *  그룹/이동 판단은 PanoViewer.buildSpotGroups/spotRowAction(순수 함수, 06_PanoViewer.js)에 위임하고
+     *  이 함수는 렌더 + 배선만 담당(뷰어·디자이너 공통, 새 CSS 없이 기존 psl-* 재사용 + 인라인 스타일). */
     renderSpotList() {
       const body = UI.$("pano-spot-list-body"); if (!body) return;
       const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
-      const spots = (pin && pin.spots) || [];
-      if (!spots.length) {
+      if (!pin || typeof PanoViewer.buildSpotGroups !== "function") {
+        body.innerHTML = '<div class="psl-empty">등록된 마커가 없습니다.<br>‘마커’ 버튼으로 360 안에 추가하세요.</div>';
+        return;
+      }
+      const groups = PanoViewer.buildSpotGroups(State.pins || [], pin);
+      if (!groups.length) {
         body.innerHTML = '<div class="psl-empty">등록된 마커가 없습니다.<br>‘마커’ 버튼으로 360 안에 추가하세요.</div>';
         return;
       }
       const KN = { defect: "결함", equip: "장비", safety: "안전", note: "메모" };
       const COL = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd" };
-      const rows = spots.map((s, i) => {
-        const col = COL[s.kind] || "#e0503e";
-        return '<tr class="psl-row" data-id="' + s.id + '">' +
-          '<td><span class="psl-num" style="background:' + col + '">' + (i + 1) + '</span></td>' +
-          '<td>' + (KN[s.kind] || "마커") + '</td>' +
-          '<td>' + UI.escapeHtml(s.label || "-") + '</td>' +
-          '<td>' + UI.escapeHtml(s.note || "") + '</td></tr>';
-      }).join("");
+      const HEAD_STYLE = "padding:8px 10px;font-size:11px;font-weight:700;color:#f0b941;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);";
+      const EMPTY_STYLE = "padding:14px 10px;text-align:center;color:#9aa6b2;font-size:12px;";
+      let rows = "";
+      groups.forEach((g) => {
+        const label = UI.escapeHtml((g.pin && (g.pin.label || g.pin.id)) || "-");
+        const headText = (g.isCurrent ? "현재 사진 · " : "") + label;
+        rows += '<tr><td colspan="4" style="' + HEAD_STYLE + '">' + headText + '</td></tr>';
+        if (!g.spots.length) {
+          rows += '<tr><td colspan="4" style="' + EMPTY_STYLE + '">등록된 마커가 없습니다.</td></tr>';
+          return;
+        }
+        g.spots.forEach((s, i) => {
+          const col = COL[s.kind] || "#e0503e";
+          rows += '<tr class="psl-row" data-pin="' + g.pin.id + '" data-id="' + s.id + '">' +
+            '<td><span class="psl-num" style="background:' + col + '">' + (i + 1) + '</span></td>' +
+            '<td>' + (KN[s.kind] || "마커") + '</td>' +
+            '<td>' + UI.escapeHtml(s.label || "-") + '</td>' +
+            '<td>' + UI.escapeHtml(s.note || "") + '</td></tr>';
+        });
+      });
       body.innerHTML = '<table class="psl-table"><thead><tr><th>#</th><th>종류</th><th>이름</th><th>노트</th></tr></thead><tbody>' + rows + '</tbody></table>';
       body.querySelectorAll(".psl-row").forEach((r) => {
         r.addEventListener("click", () => {
-          const s = spots.find((x) => x.id === r.dataset.id);
-          if (s && PanoViewer.lookAtSpot) PanoViewer.lookAtSpot(s.lon, s.lat);
+          const g = groups.find((gr) => gr.pin && gr.pin.id === r.dataset.pin);
+          const s = g && g.spots.find((x) => x.id === r.dataset.id);
+          if (!g || !s || !PanoViewer.spotRowAction) return;
+          const a = PanoViewer.spotRowAction(g, s);
+          if (!a) return;
+          if (a.type === "look") { if (PanoViewer.lookAtSpot) PanoViewer.lookAtSpot(a.lon, a.lat); }
+          else if (a.type === "openPano") { this.openPano(a.pin); }
         });
       });
     },
@@ -3005,8 +3030,18 @@
     },
 
     _buildSavePayload(pagesData, sourceMeta) {
+      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀도 크롭 기준 %로 재배치해
+      // 실어 보낸다(라이브 State.pins 자체는 페이지 기준 %로 그대로 — 이 배열은 배포용 복사본).
+      // 크롭 밖 핀은 표시할 캔버스가 없으므로 배포본에서 제외한다(원본 State.pins 는 불변).
+      // 🔴 같은 페이지의 16_Zones.js 구역·PDF 주석은 재매핑 대상이 아니다(미구현·미포함).
+      const deckCrop = this._currentDeckCrop();
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
+        if (deckCrop && (q.page || 1) === deckCrop.page && typeof MapCtrl !== "undefined" && MapCtrl.pageToDeckCropPct) {
+          const mapped = MapCtrl.pageToDeckCropPct(q.x, q.y, deckCrop.crop);
+          if (!mapped) return null; // 크롭 밖 — 배포본에서 제외
+          q.x = mapped.x; q.y = mapped.y;
+        }
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
         // [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
         //   서버/배포본에 저장하면 재접속 시 죽은 blob 으로 "이미지를 불러올 수 없습니다".
@@ -3016,7 +3051,7 @@
         if (typeof q.imageUrl === "string" && q.imageUrl.indexOf("blob:") === 0) delete q.imageUrl;
         delete q.uploading;
         return q;
-      });
+      }).filter(Boolean);
       const body = {
         title:       State.fileName || "도면",
         file_name:   State.fileName || "",
@@ -3034,11 +3069,19 @@
       return body;
     },
 
+    /** [WO 20260917] 현재 구역(deck)의 크롭 — { page(1-base), crop:{x,y,w,h}(%) } 또는 null.
+     *  crop 없는 구역(또는 구역 미선택)은 null → snapshotAllPages 는 종전대로 전체 페이지. */
+    _currentDeckCrop() {
+      const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
+      if (!cd || !cd.crop || !(cd.crop.w > 0) || !(cd.crop.h > 0)) return null;
+      return { page: cd.page || 1, crop: cd.crop };
+    },
+
     async _snapshotPages() {
       // [P14] 이전 도면의 실측 픽셀이 남아 다음 저장에 잘못 붙지 않게 초기화(SoT 오염 방지)
       try { PDF.lastSnapshotDims = null; } catch (e) {}
       if (State.fileType === "pdf" && State.pdfDoc) {
-        return await PDF.snapshotAllPages(State.pdfDoc);
+        return await PDF.snapshotAllPages(State.pdfDoc, undefined, undefined, this._currentDeckCrop());
       } else if (State.fileType === "image") {
         const imgEl = UI.$("map-image");
         if (!imgEl || !imgEl.naturalWidth) return [];
