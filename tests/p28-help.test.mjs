@@ -264,9 +264,13 @@ const appJsSrc = rd("public/js/modules/20_App.js");
   ok(invalid.length === 0,
     `⑪ 모든 data-help 값이 Help.CONTENT 의 실제 키다 (오타/미정의 0건, 발견: ${JSON.stringify(invalid)})`);
 
+  // [WO 20260917] 정확한 개수(=130) 단언은 취약하다 — 신규 UI(레이더 확대 버튼 등)가
+  // title 속성을 정당하게 추가할 때마다 기준값을 손으로 올려야 하는 문제가 반복된다.
+  // 이 테스트의 목적은 "기존 title 이 삭제/치환되지 않았는가"이므로 하한(≥ 기준값)만 검사한다.
   const titleCount = (indexHtmlSrc.match(/title="/g) || []).length;
-  ok(titleCount === 130,
-    `⑫ 기존 title 속성 개수가 보존됨(회귀 기준값 130, 실제 ${titleCount})`);
+  const TITLE_COUNT_FLOOR = 130;
+  ok(titleCount >= TITLE_COUNT_FLOOR,
+    `⑫ 기존 title 속성이 제거되지 않음(하한 ${TITLE_COUNT_FLOOR} 이상, 실제 ${titleCount})`);
 
   ok(/Help\.init\s*\(\s*\)/.test(appJsSrc),
     "⑬ 20_App.js 안에 Help.init() 호출부가 존재함(렌더 고아 방지)");
