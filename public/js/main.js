@@ -5061,15 +5061,19 @@
             ? '<div class="hub-card-actions">' +
                 '<button class="hub-card-act hub-card-pub' + (p.published ? ' is-pub' : '') + '" title="' + (p.published ? '배포됨 — 클릭 시 배포취소(뷰어 비공개)' : '뷰어에게 배포(공개)') + '" data-act="pub" aria-label="배포">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>' +
+                  '<span class="hub-card-act-label">배포</span>' +
                 '</button>' +
-                '<button class="hub-card-act hub-card-dl" title="오프라인 다운로드" data-act="dl" aria-label="오프라인 다운로드">' +
+                '<button class="hub-card-act hub-card-dl" title="오프라인 다운로드" data-act="dl" data-help="offline-download" aria-label="오프라인 다운로드">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>' +
+                  '<span class="hub-card-act-label" data-dl-label>다운로드</span>' +
                 '</button>' +
                 '<button class="hub-card-act hub-card-members" title="멤버 관리 — 이 프로젝트에 접근할 사용자 배정" data-act="members" aria-label="멤버 관리">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>' +
+                  '<span class="hub-card-act-label">멤버</span>' +
                 '</button>' +
                 '<button class="hub-card-act hub-card-del" title="삭제" data-act="del" aria-label="삭제">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
+                  '<span class="hub-card-act-label">삭제</span>' +
                 '</button>' +
               '</div>'
             : '');
@@ -5106,8 +5110,14 @@
             if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
             else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
           } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
-          finally { dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig; dl.setAttribute("title", "오프라인 다운로드"); }
+          finally {
+            dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig;
+            this._refreshDlState(dl, p.id);
+          }
         });
+        // 카드가 화면에 그려질 때마다 "이미 오프라인 저장돼 있는지" 표시 —
+        // 눌러봐야 아는 게 아니라 항상 보이게(마스터 지시: 상태는 보여야 한다)
+        if (dl) this._refreshDlState(dl, p.id);
 
         // 배포(Publish) 버튼 — 설계자가 프로젝트를 뷰어에게 공개/비공개 토글
         const pub = card.querySelector('[data-act="pub"]');
@@ -5203,6 +5213,25 @@
       } catch (e) {}
     },
 
+    /** 오프라인 다운로드 버튼 상태 갱신 — 기존 OfflineBundle.verify() 재사용(SoT).
+     *  눌러야만 알 수 있는 상태를 없애기 위해 카드 렌더 시점 + 다운로드 직후 모두 호출한다. */
+    async _refreshDlState(dl, projectId) {
+      if (!dl || typeof OfflineBundle === "undefined" || !OfflineBundle.verify) return;
+      try {
+        const v = await OfflineBundle.verify(projectId);
+        const label = dl.querySelector("[data-dl-label]");
+        if (v && v.ok) {
+          dl.classList.add("is-dl-done");
+          if (label) label.textContent = "저장됨";
+          dl.setAttribute("title", "오프라인 저장됨 — 다시 눌러 최신화");
+        } else {
+          dl.classList.remove("is-dl-done");
+          if (label) label.textContent = "다운로드";
+          dl.setAttribute("title", "오프라인 다운로드");
+        }
+      } catch (e) {}
+    },
+
     /** 프로젝트 배포(Publish) 토글 — 배포하면 권한받은 뷰어가 열람 가능, 배포취소하면 뷰어에게 숨김 */
     async togglePublish(p, btn) {
       if (!Auth.isDesigner) { Auth.requireDesigner(() => this.togglePublish(p)); return; }
@@ -5250,10 +5279,49 @@
     _list: [],           // 현재 핀의 노트 배열
     _filter: "all",
     _busy: false,
+    _gen: 0,             // [오프라인 노트 영속화] 로드 세대 카운터 — 늦게 끝난 비동기 결과가 최신 상태를 덮어쓰지 못하게 막는 가드
     STATUS: { open: "미해결", progress: "진행중", done: "완료" },
 
     /** [오프라인 노트] 클라 임시 id — 서버 반영 후 noteIdMap 으로 실제 id 로 치환됨(applyIdMap) */
     _tmpId() { return "tmp-note-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8); },
+
+    /** [오프라인 노트 영속화] 핀별 노트 스냅샷 키 — 32_Offline.js 의 bundle:dep:* 와 같은
+     *  SyncQueue.DRAFT_STORE(IndexedDB) 에 얹는다(새 저장소 신설 안 함, §5 사다리). */
+    _snapKey(dep, pinId) { return "notes:" + dep + ":" + pinId; },
+
+    /** [오프라인 노트 영속화] 현재 핀의 _list 스냅샷을 로컬에 즉시 저장.
+     *  [④ 덮어쓰기 가드] 기존 스냅샷보다 ts 가 더 오래된 저장 시도는 무시 —
+     *  느리게 끝난 오프라인 저장이 방금 끝난 서버 동기화 결과를 덮어쓰는 사고 방지. */
+    async _saveSnapshot(list, ts, pinOverride) {
+      if (typeof SyncQueue === "undefined" || !SyncQueue.saveDraft) return false;
+      const dep = (typeof State !== "undefined") && State.currentDeploymentId;
+      const pin = pinOverride || this._pin;
+      if (!dep || !pin) return false;
+      const key = this._snapKey(dep, pin.id);
+      ts = ts || Date.now();
+      try {
+        const existing = SyncQueue.loadDraft ? await SyncQueue.loadDraft(key) : null;
+        if (existing && typeof existing.ts === "number" && ts < existing.ts) return false; // 스냅샷 덮어쓰기 가드
+        const saved = await SyncQueue.saveDraft(key, { list: list, ts: ts });
+        if (saved === false) {
+          // [무신호 손실 차단] 05_SyncQueue.js:132 와 동일한 안내 문구/경로 재사용 — 새 알림 신설 안 함.
+          try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인 저장 실패 — 기기 저장공간 부족"); } catch (e) {}
+          return false;
+        }
+        return true;
+      } catch (e) { return false; }
+    },
+
+    /** [오프라인 노트 영속화] 로컬 스냅샷에서 복원. myGen 이 넘어오면, 그 사이 새 loadForPin() 이
+     *  시작돼 세대가 바뀐 경우 이 결과는 폐기한다(늦게 끝난 복원이 최신 상태를 덮어쓰지 않도록). */
+    async _restoreFromSnapshot(dep, pinId, myGen) {
+      if (typeof SyncQueue === "undefined" || !SyncQueue.loadDraft) return;
+      try {
+        const rec = await SyncQueue.loadDraft(this._snapKey(dep, pinId));
+        if (myGen != null && myGen !== this._gen) return; // 세대 불일치 — 폐기
+        if (rec && Array.isArray(rec.list)) this._list = rec.list;
+      } catch (e) {}
+    },
 
     /** [오프라인 노트] 온라인 복귀 시 App._flushOpLogs()가 서버 응답의 noteIdMap 을 받아 호출.
      *  this._list 안의 임시 id를 실제 id 로 갈아끼워 화면 참조(상태변경/삭제 버튼의 data-id 등)를 유지한다. */
@@ -5263,7 +5331,10 @@
       (this._list || []).forEach((n) => {
         if (n && map[n.id]) { n.id = map[n.id]; changed = true; }
       });
-      if (changed) this.render();
+      if (changed) {
+        this.render();
+        try { this._saveSnapshot(this._list, Date.now()); } catch (e) {} // 서버 확정 id 로 스냅샷도 갱신(§ 스냅샷은 서버가 SoT)
+      }
     },
 
     init() {
@@ -5358,12 +5429,26 @@
       const pin = this._pin;
       const listEl = document.getElementById("pnp-list");
       if (!dep || !pin) { if (listEl) listEl.innerHTML = ""; return; }
+      const myGen = ++this._gen;
+      // [오프라인 노트 영속화] 오프라인이면 서버 호출을 시도하지 않고 로컬 스냅샷으로 즉시 복원.
+      //   (기존 코드는 오프라인에도 fetch 를 시도해 실패 후 this._list = [] 로 비워버려
+      //    새로고침/재진입 시 방금 작성한 오프라인 노트가 화면에서 사라졌다.)
+      if (!navigator.onLine) {
+        await this._restoreFromSnapshot(dep, pin.id, myGen);
+        if (myGen === this._gen) this.render();
+        return;
+      }
       if (listEl) listEl.innerHTML = '<div class="pnp-loading">불러오는 중…</div>';
       try {
         const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(dep) + "&pin_id=" + encodeURIComponent(pin.id), { headers: Auth.headers() });
         const j = await r.json();
+        if (myGen !== this._gen) return; // 그 사이 새 로드가 시작됨 — 이 결과는 폐기
         this._list = j.data || [];
-      } catch (e) { this._list = []; }
+        await this._saveSnapshot(this._list, Date.now()); // 서버가 SoT — 로컬 스냅샷을 최신으로 갱신
+      } catch (e) {
+        if (myGen !== this._gen) return;
+        await this._restoreFromSnapshot(dep, pin.id, myGen); // 순간 네트워크 실패 → 로컬 스냅샷 폴백
+      }
       this.render();
     },
 
@@ -5456,6 +5541,7 @@
         this._list.push(noteObj);
         try {
           await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
+          await this._saveSnapshot(this._list, now); // [오프라인 노트 영속화] 즉시 로컬 스냅샷(재시작 유실 방지)
           input.value = "";
           if (document.getElementById("pnp-assignee")) document.getElementById("pnp-assignee").value = "";
           this.render();
@@ -5491,7 +5577,7 @@
         n.status = status;
         n.updated_at = Date.now();
         n.resolved_at = status === "done" ? n.updated_at : null;
-        try { await OpLog.recordCurrent("note", "upsert", id, n); } catch (e) {}
+        try { await OpLog.recordCurrent("note", "upsert", id, n); await this._saveSnapshot(this._list, n.updated_at); } catch (e) {}
         this.render();
         return;
       }
@@ -5508,7 +5594,7 @@
       if (!confirm("이 이슈/노트를 삭제할까요?")) return;
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         this._list = (this._list || []).filter((x) => x.id !== id);
-        try { await OpLog.recordCurrent("note", "delete", id); } catch (e) {}
+        try { await OpLog.recordCurrent("note", "delete", id); await this._saveSnapshot(this._list, Date.now()); } catch (e) {}
         this.render();
         return;
       }
@@ -5557,6 +5643,7 @@
         this._list.push(noteObj);
         try {
           await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
+          await this._saveSnapshot(this._list, now, pin); // [오프라인 노트 영속화] pin 파라미터 기준(this._pin 과 다를 수 있음)
           return true;
         } catch (e) { return false; }
       }
@@ -15423,7 +15510,8 @@
       "deploy-viewer": "뷰어로 배포 — 지금까지 작업한 도면·핀·영역을 열람 전용 링크로 만들어 다른 사람과 공유합니다(공유받은 사람은 로그인 없이 볼 수 있습니다).",
       "orientation-fix": "방향 보정 — 360° 파노라마가 실제 도면 방향과 다르게 찍혔을 때, 회전시켜 도면 방향과 맞춥니다.",
       "checkerboard": "체크보드 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다.",
-      "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다."
+      "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다.",
+      "offline-download": "오프라인 다운로드 — 이 프로젝트의 도면(PDF/이미지)과 배치된 핀, 그리고 핀에 연결된 360° 파노라마 사진을 전부 이 기기에 내려받습니다. 다운로드가 끝나면 인터넷이 끊긴 현장에서도 도면과 360° 사진을 그대로 열람하고 작업할 수 있고, 나중에 인터넷이 다시 연결되면 자동으로 서버와 동기화됩니다. 버튼에 '저장됨'이 표시되면 이미 내려받아 오프라인 사용 준비가 된 상태입니다."
     },
 
     _inited: false,

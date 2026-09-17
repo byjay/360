@@ -384,15 +384,19 @@
             ? '<div class="hub-card-actions">' +
                 '<button class="hub-card-act hub-card-pub' + (p.published ? ' is-pub' : '') + '" title="' + (p.published ? '배포됨 — 클릭 시 배포취소(뷰어 비공개)' : '뷰어에게 배포(공개)') + '" data-act="pub" aria-label="배포">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>' +
+                  '<span class="hub-card-act-label">배포</span>' +
                 '</button>' +
-                '<button class="hub-card-act hub-card-dl" title="오프라인 다운로드" data-act="dl" aria-label="오프라인 다운로드">' +
+                '<button class="hub-card-act hub-card-dl" title="오프라인 다운로드" data-act="dl" data-help="offline-download" aria-label="오프라인 다운로드">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>' +
+                  '<span class="hub-card-act-label" data-dl-label>다운로드</span>' +
                 '</button>' +
                 '<button class="hub-card-act hub-card-members" title="멤버 관리 — 이 프로젝트에 접근할 사용자 배정" data-act="members" aria-label="멤버 관리">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>' +
+                  '<span class="hub-card-act-label">멤버</span>' +
                 '</button>' +
                 '<button class="hub-card-act hub-card-del" title="삭제" data-act="del" aria-label="삭제">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
+                  '<span class="hub-card-act-label">삭제</span>' +
                 '</button>' +
               '</div>'
             : '');
@@ -429,8 +433,14 @@
             if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
             else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
           } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
-          finally { dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig; dl.setAttribute("title", "오프라인 다운로드"); }
+          finally {
+            dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig;
+            this._refreshDlState(dl, p.id);
+          }
         });
+        // 카드가 화면에 그려질 때마다 "이미 오프라인 저장돼 있는지" 표시 —
+        // 눌러봐야 아는 게 아니라 항상 보이게(마스터 지시: 상태는 보여야 한다)
+        if (dl) this._refreshDlState(dl, p.id);
 
         // 배포(Publish) 버튼 — 설계자가 프로젝트를 뷰어에게 공개/비공개 토글
         const pub = card.querySelector('[data-act="pub"]');
@@ -523,6 +533,25 @@
       try {
         await fetch("/api/projects/" + p.id, { method: "DELETE", headers: Auth.headers() });
         await this.load();
+      } catch (e) {}
+    },
+
+    /** 오프라인 다운로드 버튼 상태 갱신 — 기존 OfflineBundle.verify() 재사용(SoT).
+     *  눌러야만 알 수 있는 상태를 없애기 위해 카드 렌더 시점 + 다운로드 직후 모두 호출한다. */
+    async _refreshDlState(dl, projectId) {
+      if (!dl || typeof OfflineBundle === "undefined" || !OfflineBundle.verify) return;
+      try {
+        const v = await OfflineBundle.verify(projectId);
+        const label = dl.querySelector("[data-dl-label]");
+        if (v && v.ok) {
+          dl.classList.add("is-dl-done");
+          if (label) label.textContent = "저장됨";
+          dl.setAttribute("title", "오프라인 저장됨 — 다시 눌러 최신화");
+        } else {
+          dl.classList.remove("is-dl-done");
+          if (label) label.textContent = "다운로드";
+          dl.setAttribute("title", "오프라인 다운로드");
+        }
       } catch (e) {}
     },
 
