@@ -310,7 +310,9 @@
         //   기존 이슈(top-right)·중복(top-left) 뱃지와 자리 겹치지 않게 bottom-right.
         const userMark = (typeof PinSeries !== "undefined" && PinSeries.userMark) ? PinSeries.userMark(pin, meta.no) : null;
         const authorDot = userMark
-          ? `<span class="pin-marker-author" title="${userMark.band != null ? ('번호 대역 ' + (userMark.band * 100 + 1) + '~' + (userMark.band * 100 + 100)) : ('작성자: ' + this.escapeHtml(userMark.author || ''))}" style="position:absolute;bottom:-4px;right:-5px;z-index:4;min-width:12px;height:12px;padding:0 3px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:${userMark.color};color:#fff;font-size:8px;font-weight:800;font-family:var(--font-mono);line-height:1;border:1.5px solid #efe9dc;box-shadow:0 1px 4px rgba(0,0,0,.5)">${userMark.initial || ""}</span>`
+          // [WO 20260917 dpr] bottom:-4px/right:-5px 는 21px 폭 핀의 바늘 끝(실좌표)을 가린다(마스터 실측).
+          // → bottom:10px 로 올려 바늘 옆구리에 붙이고 끝점은 비운다. 크기도 축소해 issueDot/dupDot과 비겹침.
+          ? `<span class="pin-marker-author" title="${userMark.band != null ? ('번호 대역 ' + (userMark.band * 100 + 1) + '~' + (userMark.band * 100 + 100)) : ('작성자: ' + this.escapeHtml(userMark.author || ''))}" style="position:absolute;bottom:10px;right:-6px;z-index:4;min-width:10px;height:10px;padding:0 2px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:${userMark.color};color:#fff;font-size:7px;font-weight:800;font-family:var(--font-mono);line-height:1;border:1.2px solid #efe9dc;box-shadow:0 1px 4px rgba(0,0,0,.5)">${userMark.initial || ""}</span>`
           : "";
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
@@ -323,7 +325,7 @@
         marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
         marker.classList.add(_st.filled ? "pin-filled" : "pin-hollow");
         // [WO 20260917 콘텐츠 3상태] photo(사진/영상) / content(노트·첨부만) / empty — filled 축은
-        // 안 건드리고 그 안(filled=true)을 세분. 색 없이도(흑백) 구분되게 pin-content-dot 형태 단서 사용.
+        // 안 건드리고 그 안(filled=true)을 세분. 색 없이도(흑백) 구분되게 속 원판 실루엣(pin-tier-disc) 사용.
         const tier = _st.tier || (typeof PinSeries !== "undefined" ? PinSeries.contentTier(pin) : (hasContent ? "content" : "empty"));
         marker.dataset.tier = tier;
         marker.classList.add("pin-tier-" + tier);
@@ -340,11 +342,12 @@
         // 색만으로 구분 금지(색맹 8%) → 외곽 링 패턴으로도 구분:
         // 실선=콘텐츠 등록 / 파선=체크보드(사진 등록됨) / 점선=미등록
         const ringDash  = _st.dash;
-        // [WO 20260917 콘텐츠 3상태] content(노트/첨부만, 사진 없음) 전용 형태 단서 — 색을 무시해도
-        // (흑백) 원 안 작은 점의 유무만으로 photo/content 를 가른다(pin-content-dot 클래스로 검출).
-        const contentDot = (tier === "content")
-          ? `<circle class="pin-content-dot" cx="18" cy="21.2" r="1.9" fill="${txtFill}" stroke="#ffffff" stroke-width="0.5"/>`
-          : "";
+        // [WO 20260917 형태단서 재설계] 21px 실크기에서 작은 점(지름 2.2px)은 안 보인다(마스터 실측).
+        // → 속 원판(inner disc)의 실루엣 자체를 티어별로 바꾼다: photo/empty=원, content=둥근사각형.
+        // 흑백(색 제거)에서도 면적 차이로 구분되도록 인라인 fill 유지(CSS 소비자에 의존 금지).
+        const tierDisc = (tier === "content")
+          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`
+          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -371,13 +374,13 @@
               <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
               <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
-              <circle cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>
+              <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
+              ${tierDisc}
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central"
                     font-family="'Segoe UI',sans-serif" font-size="13" font-weight="900"
                     fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
-              ${contentDot}
             </svg>
             ${issueDot}${dupDot}${authorDot}
           </div>`;

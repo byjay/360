@@ -130,8 +130,10 @@ function runUI(sSrc, uSrc, pins, page = 1) {
       head: stops[0], head2: stops[1], needle: stops[3], text: txt, dash: dash,
       headFillAttr: headFillAttr,
       cls: m.className, pulse: /pin-pulse/.test(html),
-      // [WO 20260917 콘텐츠 3상태] tier(photo/content/empty) + 형태 단서(pin-content-dot) 검출
-      tier: m.dataset.tier, hasContentDot: /class="pin-content-dot"/.test(html)
+      // [WO 20260917 형태단서 재설계] tier(photo/content/empty) + 속 원판 실루엣(pin-tier-disc)의
+      // 태그명(circle/rect)만 검출 — fill/stroke 색 속성은 일부러 보지 않는다(흑백 구분 검증용).
+      tier: m.dataset.tier,
+      discTag: (html.match(/<(circle|rect)\b[^>]*class="pin-tier-disc"/) || [])[1] || null
     };
   });
   return { pins: out, PS: sandbox.__PS };
@@ -361,10 +363,12 @@ function suiteHeadShape(label, sSrc) {
 }
 
 /* ────────────────────────────────────────────────────────────
- * ⑬~⑯ [2026-09-17 콘텐츠 3상태] "내용이 있는 거, 사진이 있는 거 모두 구분되게 해".
- *   근본원인: App.pinHasContent = pinHasMedia || pinHasInfo — OR 로 뭉뚱그려져 있어
+ * ⑬~⑯ [2026-09-17 콘텐츠 3상태 + 형태단서 재설계] "내용이 있는 거, 사진이 있는 거 모두 구분되게 해".
+ *   근본원인1: App.pinHasContent = pinHasMedia || pinHasInfo — OR 로 뭉뚱그려져 있어
  *   사진만 있는 핀과 노트만 있는 핀이 등록여부(filled)만으로는 똑같이 "채운 원"이었다.
  *   PinSeries.contentTier() 가 media/info 를 따로 읽어 photo/content/empty 3상태로 가른다.
+ *   근본원인2(마스터 실측): 21px 실크기 핀에서 지름 2.2px 짜리 작은 점(pin-content-dot)은
+ *   안 보인다. → 속 원판(inner disc) 자체의 실루엣(원/둥근사각)으로 대체(pin-tier-disc).
  *   🔴 pinHasContent 자체는 건드리지 않는다 — markerStyle().filled 축은 그대로 media OR info.
  * ──────────────────────────────────────────────────────────── */
 const FIXTURE_TIER = () => [
@@ -374,24 +378,29 @@ const FIXTURE_TIER = () => [
   { id: "p4", page: 1, x: 20, y: 20, imageId: "img2", note: "겸용" }    // 사진+내용 둘 다
 ];
 
+/** [WO 20260917 형태단서 재설계] 색(fill hex) 없이 태그명 + 채움유무(url/none)만으로 만드는 서명.
+ *  discTag: circle/rect(속 원판 실루엣) · headFillAttr: url(...)/none 은 색값이 아니라
+ *  "채워짐 vs 빈 원" 구조 자체라 색 속성을 전부 제거해도 살아남는다. */
+const shapeSig = (p) => (p.discTag || "?") + ":" + (/^url\(/.test(p.headFillAttr) ? "url" : "none");
+
 function suiteContentTier(label, sSrc) {
   console.log("\n[" + label + "]");
   const ui = runUI(sSrc, uiSrc, FIXTURE_TIER()).pins;
 
   ok(ui.p1.tier === "photo" && ui.p2.tier === "content" && ui.p3.tier === "empty",
     `⑬ 3상태 판정: 사진=${ui.p1.tier}(기대 photo) · 내용만=${ui.p2.tier}(기대 content) · 빈핀=${ui.p3.tier}(기대 empty)`);
-  ok(!ui.p1.hasContentDot && ui.p2.hasContentDot && !ui.p3.hasContentDot,
-    `⑬ 형태 단서(pin-content-dot): 사진=${ui.p1.hasContentDot} · 내용만=${ui.p2.hasContentDot} · 빈핀=${ui.p3.hasContentDot} (내용만 참이어야)`);
+  ok(ui.p1.discTag === "circle" && ui.p2.discTag === "rect" && ui.p3.discTag === "circle",
+    `⑬ 형태 단서(속 원판 실루엣): 사진=${ui.p1.discTag} · 내용만=${ui.p2.discTag}(기대 rect) · 빈핀=${ui.p3.discTag}`);
 
-  // ⑭ 색(head/head2/needle/text)을 전혀 보지 않고 tier 문자열 + 형태(dot 유무)만으로 3상태 구분
-  const shapeKey = (p) => p.tier + ":" + (p.hasContentDot ? "1" : "0");
-  const keys = [shapeKey(ui.p1), shapeKey(ui.p2), shapeKey(ui.p3)];
+  // ⑭ 색(head/head2/needle/text/fill/stroke 전부)을 전혀 보지 않고 discTag(원/사각) +
+  //    headFillAttr 구조(채움 url() vs 빈 none)만으로 3상태 전부 구분되는가.
+  const keys = [shapeSig(ui.p1), shapeSig(ui.p2), shapeSig(ui.p3)];
   ok(new Set(keys).size === 3,
-    `⑭ 색 무시·형태(tier+dot)만으로 3상태 전부 구분됨 → ${keys.join(", ")}`);
+    `⑭ 색 속성 전부 제거·태그명+채움구조만으로 3상태 전부 구분됨 → ${keys.join(", ")}`);
 
-  // ⑮ 사진+내용 둘 다 있는 핀 — 정상 처리(미디어 우선 → photo, 크래시 없음)
-  ok(ui.p4.tier === "photo" && ui.p4.filled === "1",
-    `⑮ 사진+내용 겸용 핀 정상 처리(미디어 우선) → tier=${ui.p4.tier}, filled=${ui.p4.filled}`);
+  // ⑮ 사진+내용 둘 다 있는 핀 — 정상 처리(미디어 우선 → photo, 크래시 없음, 원판도 photo 형태)
+  ok(ui.p4.tier === "photo" && ui.p4.filled === "1" && ui.p4.discTag === "circle",
+    `⑮ 사진+내용 겸용 핀 정상 처리(미디어 우선) → tier=${ui.p4.tier}, filled=${ui.p4.filled}, discTag=${ui.p4.discTag}`);
 
   // ⑯ App.pinHasContent 호출부 동작 불변 — 실제 20_App.js 소스에서 정의·호출부가 그대로인지 확인
   const appSrcOnDisk = rd("public/js/modules/20_App.js");
@@ -540,18 +549,41 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 H: 형태 단서(pin-content-dot) 제거하고 tier 텍스트만 남김
- *   → ⑭(형태만으로도 구분) 검사가 실패해야 한다(색/텍스트 데이터 속성 없이 순수 SVG 형태만 볼 때).
+ * 뮤테이션 H: content 를 다시 원판(circle)으로 되돌림(마스터 발주 ① 시나리오)
+ *   → ⑬(형태 판정 photo≠content≠empty)·⑭(색 무시 서명 3구분)가 모두 실패해야 한다.
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션H] 형태 단서(pin-content-dot) 렌더 제거 → ⑭가 실패해야 함");
-  const needle = 'const contentDot = (tier === "content")\n          ? `<circle class="pin-content-dot" cx="18" cy="21.2" r="1.9" fill="${txtFill}" stroke="#ffffff" stroke-width="0.5"/>`\n          : "";';
-  const mutated = uiSrc.replace(needle, 'const contentDot = "";');
+  console.log("\n[뮤테이션H] content 를 원판(circle)으로 되돌림 → ⑬⑭ 가 실패해야 함");
+  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
+  const mutated = uiSrc.replace(needle, 'const tierDisc = `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ui = runUI(seriesSrc, mutated, FIXTURE_TIER()).pins;
-    ok(ui.p1.hasContentDot === false && ui.p2.hasContentDot === false,
-      `뮤테이션 적용 시 형태 단서가 사라져 photo/content 를 dot 유무로 구분 못 함(테스트 실효성 증명) → p1=${ui.p1.hasContentDot}, p2=${ui.p2.hasContentDot}`);
+    ok(ui.p1.discTag === ui.p2.discTag,
+      `뮤테이션 적용 시 photo/content 원판 태그가 둘 다 circle 로 같아짐(⑬ 붕괴 증명) → p1=${ui.p1.discTag}, p2=${ui.p2.discTag}`);
+    const keys = [shapeSig(ui.p1), shapeSig(ui.p2), shapeSig(ui.p3)];
+    ok(new Set(keys).size < 3,
+      `뮤테이션 적용 시 색 무시 서명이 3구분에서 무너짐(⑭ 붕괴 증명) → ${keys.join(", ")}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 I: 형태(태그)는 그대로 두고 "색만" content 를 다르게 칠함(마스터 발주 ② 시나리오)
+ *   → 색 속성을 전부 제거한 뒤 보는 ⑭ 서명 검사가 실패해야 한다(형태 차이가 없으므로).
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션I] 형태 차이 제거·색만 다르게(content=circle+노란색) → ⑭ 가 실패해야 함");
+  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
+  const mutated = uiSrc.replace(needle,
+    'const tierDisc = (tier === "content")\n          ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffcc00" opacity="0.99"/>`\n          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const ui = runUI(seriesSrc, mutated, FIXTURE_TIER()).pins;
+    ok(ui.p1.discTag === ui.p2.discTag,
+      `뮤테이션 적용 시 photo/content 태그가 둘 다 circle(형태 차이 없음, 색만 다름) → p1=${ui.p1.discTag}, p2=${ui.p2.discTag}`);
+    const keys = [shapeSig(ui.p1), shapeSig(ui.p2), shapeSig(ui.p3)];
+    ok(new Set(keys).size < 3,
+      `뮤테이션 적용 시 색(fill hex)만 다르고 형태(태그/채움구조)는 같아 색 제거 서명이 붕괴함(⑭ 실효성 증명) → ${keys.join(", ")}`);
   }
 }
 
