@@ -2207,41 +2207,123 @@
       if (cone) { cone.style.left = pin.x + "%"; cone.style.top = pin.y + "%"; }
 
       // [마스터 요청 #3] 핀이 영역(구역) 내부면 그 구역만 확대해서 미니맵 표시
-      const stage = document.getElementById("pano-radar-stage");
-      if (stage) {
-        let view = null;
-        try {
-          if (typeof Zones !== "undefined" && Zones._bbox) {
-            // [N8] 핀↔구역 매칭: pinIds 명시적 링크 우선, 없으면 기하학적 포함 판정
-            const z = (State.zones || []).find(zz => (zz.page || 1) === page && (
-              (Array.isArray(zz.pinIds) && zz.pinIds.indexOf(pin.id) >= 0) ||
-              (Zones._contains && Zones._contains(zz, pin.x, pin.y))
-            ));
-            if (z) {
-              const bb = Zones._bbox(z), pad = 8;
-              view = {
-                x: Math.max(0, bb.x - pad), y: Math.max(0, bb.y - pad),
-                w: Math.min(100, bb.w + pad * 2), h: Math.min(100, bb.h + pad * 2)
-              };
-            }
-          }
-        } catch (e) {}
-        if (view && view.w > 3 && view.h > 3) {
-          const s = Math.min(100 / view.w, 100 / view.h);   // 더 큰 축 기준 fit
-          stage.style.transformOrigin = "0 0";
-          stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-view.x).toFixed(2) + "%, " + (-view.y).toFixed(2) + "%)";
-        } else {
-          // [마스터] 구역이 없어도 현재 핀 주변을 확대 — 전체 도면을 작게 보여주지 말고 항상 "크게"
-          const r = 18;                                      // 핀 중심 ±18% (≈36% 영역)
-          const vx = Math.max(0, Math.min(100 - r * 2, pin.x - r));
-          const vy = Math.max(0, Math.min(100 - r * 2, pin.y - r));
-          const s = 100 / (r * 2);
-          stage.style.transformOrigin = "0 0";
-          stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-vx).toFixed(2) + "%, " + (-vy).toFixed(2) + "%)";
-        }
-      }
+      // + [마스터 요청 "포인트 클릭 → 하단 네비게이터에서 확대"] 사용자 콘텐츠 확대(1~6x)를
+      //   기존 자동 프레이밍 위에 합성 — _applyTransform() 참조.
+      if (!this._zoomBound) this._bindZoomControls();
+      this._applyTransform();
 
       box.classList.remove("hidden");
+    },
+
+    /** 자동 프레이밍 배율/오프셋(s0,vx0,vy0) 계산 — 기존 로직 그대로(회귀 방지를 위해
+     *  분리만 하고 산식은 변경하지 않았다). 구역 안이면 구역 bbox 기준, 아니면 핀 반경 기준. */
+    _computeBaseView(pin, page) {
+      let view = null;
+      try {
+        if (typeof Zones !== "undefined" && Zones._bbox) {
+          // [N8] 핀↔구역 매칭: pinIds 명시적 링크 우선, 없으면 기하학적 포함 판정
+          const z = (State.zones || []).find(zz => (zz.page || 1) === page && (
+            (Array.isArray(zz.pinIds) && zz.pinIds.indexOf(pin.id) >= 0) ||
+            (Zones._contains && Zones._contains(zz, pin.x, pin.y))
+          ));
+          if (z) {
+            const bb = Zones._bbox(z), pad = 8;
+            view = {
+              x: Math.max(0, bb.x - pad), y: Math.max(0, bb.y - pad),
+              w: Math.min(100, bb.w + pad * 2), h: Math.min(100, bb.h + pad * 2)
+            };
+          }
+        }
+      } catch (e) {}
+      if (view && view.w > 3 && view.h > 3) {
+        const s = Math.min(100 / view.w, 100 / view.h);   // 더 큰 축 기준 fit
+        return { s, vx: view.x, vy: view.y };
+      }
+      // [마스터] 구역이 없어도 현재 핀 주변을 확대 — 전체 도면을 작게 보여주지 말고 항상 "크게"
+      const r = 18;                                      // 핀 중심 ±18% (≈36% 영역)
+      const vx = Math.max(0, Math.min(100 - r * 2, pin.x - r));
+      const vy = Math.max(0, Math.min(100 - r * 2, pin.y - r));
+      const s = 100 / (r * 2);
+      return { s, vx, vy };
+    },
+
+    /** stage 에 최종 transform(scale+translate) 적용.
+     *  zoom(this._zoom, 1~6)이 1이면 기존 자동 프레이밍(base)을 그대로 쓴다(회귀 없음).
+     *  zoom>1이면 배율만 base*zoom으로 올리고, 오프셋은 "현재 핀이 항상 박스 정중앙"
+     *  이 되도록 재계산한다 — CSS `scale(s) translate(tx%,ty%)`(우→좌 합성, translate가
+     *  먼저 적용되고 이후 scale)에서 화면상 위치 = s*(pin - v) 이므로, 중앙(50%) 고정 조건
+     *  s*(pin - v) = 50 을 풀면 v = pin - 50/s. 박스 크기(.pano-radar)는 절대 건드리지
+     *  않는다 — 오직 stage(안쪽 콘텐츠) transform만 바뀐다. 패널은 overflow:hidden(CSS
+     *  기존 규칙, style.css:1429/1449)이라 넘친 부분은 자동으로 잘린다. */
+    _applyTransform() {
+      const stage = document.getElementById("pano-radar-stage");
+      const pin = this._pin;
+      if (!stage || !pin) return;
+      const page = pin.page || 1;
+      const base = this._computeBaseView(pin, page);
+      const zoom = this._zoom || 1;
+      let s = base.s, vx = base.vx, vy = base.vy;
+      if (zoom > 1.001) {
+        s = base.s * zoom;
+        vx = pin.x - 50 / s;
+        vy = pin.y - 50 / s;
+      }
+      stage.style.transformOrigin = "0 0";
+      stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-vx).toFixed(2) + "%, " + (-vy).toFixed(2) + "%)";
+    },
+
+    /** [마스터 요청] 미니맵 콘텐츠(도면) 확대 1~6x — +/− 버튼, 핀치 줌, 더블탭/더블클릭 리셋.
+     *  세션 중(this._zoom)에만 유지 — localStorage 영속화 안 함(요구사항 YAGNI). */
+    _bindZoomControls() {
+      this._zoomBound = true;
+      this._zoom = this._zoom || 1;
+      const ZMIN = 1, ZMAX = 6, ZSTEP = 0.6;
+      const clamp = (v) => Math.max(ZMIN, Math.min(ZMAX, v));
+      const zin = document.getElementById("pano-radar-zoom-in");
+      const zout = document.getElementById("pano-radar-zoom-out");
+      const setZoom = (v) => {
+        this._zoom = clamp(v);
+        this._applyTransform();
+        if (zin) zin.disabled = this._zoom >= ZMAX - 0.001;
+        if (zout) zout.disabled = this._zoom <= ZMIN + 0.001;
+      };
+      if (zin) zin.addEventListener("click", (e) => { e.stopPropagation(); setZoom(this._zoom + ZSTEP); });
+      if (zout) zout.addEventListener("click", (e) => { e.stopPropagation(); setZoom(this._zoom - ZSTEP); });
+
+      const stage = document.getElementById("pano-radar-stage");
+      if (!stage) return;
+      // 더블클릭(데스크톱) → 1x 리셋
+      stage.addEventListener("dblclick", (e) => { e.stopPropagation(); setZoom(1); });
+      // 핀치 줌(터치) — 두 손가락 거리 변화만으로 배율 산정. 자유 패닝은 두지 않는다
+      // (요구: "확대 시 현재 위치를 항상 중앙 유지" → _applyTransform이 매번 재계산하므로
+      // 패닝 로직 자체가 불필요, YAGNI). 더블탭(300ms 이내 재탭)은 1x 리셋.
+      // 🔴 stopPropagation으로 파노라마 본체의 회전/줌 제스처로 전파되지 않게 막는다.
+      let pinchStartDist = null, pinchStartZoom = 1, lastTapT = 0;
+      stage.addEventListener("touchstart", (e) => {
+        if (e.touches.length === 2) {
+          e.preventDefault(); e.stopPropagation();
+          const [a, b] = e.touches;
+          pinchStartDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          pinchStartZoom = this._zoom;
+        } else if (e.touches.length === 1) {
+          e.stopPropagation();
+          const now = Date.now();
+          if (now - lastTapT < 300) { e.preventDefault(); setZoom(1); }
+          lastTapT = now;
+        }
+      }, { passive: false });
+      stage.addEventListener("touchmove", (e) => {
+        if (e.touches.length === 2 && pinchStartDist) {
+          e.preventDefault(); e.stopPropagation();
+          const [a, b] = e.touches;
+          const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          setZoom(pinchStartZoom * (d / pinchStartDist));
+        }
+      }, { passive: false });
+      stage.addEventListener("touchend", (e) => {
+        e.stopPropagation();
+        if (e.touches.length < 2) pinchStartDist = null;
+      }, { passive: true });
     },
 
     /** [마스터] 방향 지정 모드 진입 — #btn-pano-setdir(파노 컨트롤바) / #pano-radar-dir(미니맵) 공용 진입점.
@@ -15260,7 +15342,8 @@
       "photo-batch": "사진 폴더 일괄 매칭 — 핀을 순서대로 찍은 뒤 사진이 담긴 폴더를 선택하면, 촬영 시각 순서대로 핀 번호에 자동으로 1:1 매칭됩니다.",
       "deploy-viewer": "뷰어로 배포 — 지금까지 작업한 도면·핀·영역을 열람 전용 링크로 만들어 다른 사람과 공유합니다(공유받은 사람은 로그인 없이 볼 수 있습니다).",
       "orientation-fix": "방향 보정 — 360° 파노라마가 실제 도면 방향과 다르게 찍혔을 때, 회전시켜 도면 방향과 맞춥니다.",
-      "checkerboard": "체크보드 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다."
+      "checkerboard": "체크보드 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다.",
+      "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다."
     },
 
     _inited: false,

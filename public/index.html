@@ -1066,9 +1066,16 @@
       <button id="pano-radar-dir" class="pano-radar-toggle pano-radar-dir" type="button" title="미니맵에서 방향 조절" aria-label="시야 방향 조절">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="12 7 14.5 12 12 17 9.5 12" fill="currentColor" stroke="none"/></svg>
       </button>
-      <!-- [마스터 요청] 미니맵 확대/축소 보기 토글 -->
+      <!-- [마스터 요청] 미니맵 확대/축소 보기 토글 (패널 박스 크기만 전환 — 아래 콘텐츠 확대와 별개) -->
       <button id="pano-radar-expand" class="pano-radar-toggle pano-radar-expand" type="button" title="미니맵 크게 보기" aria-label="미니맵 크게 보기">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+      </button>
+      <!-- [마스터 요청 "포인트 클릭하면 하단 네비게이터에서 확대"] 콘텐츠(도면) 확대 1~6x. 패널 박스 크기는 불변 — 안의 도면만 확대(overflow:hidden). -->
+      <button id="pano-radar-zoom-out" class="pano-radar-toggle pano-radar-zoomout" type="button" title="미니맵 도면 축소" aria-label="미니맵 도면 축소">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <button id="pano-radar-zoom-in" class="pano-radar-toggle pano-radar-zoomin" type="button" title="미니맵 도면 확대" aria-label="미니맵 도면 확대" data-help="radar-zoom">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
       <!-- [마스터 요청 N9] PDF/미니맵 열었다 닫았다 토글 -->
       <button id="pano-radar-toggle" class="pano-radar-toggle" type="button" title="미니맵 접기/펼치기" aria-label="미니맵 토글">
