@@ -420,7 +420,7 @@
           <button class="stb-btn" data-deleg="btn-new-deck" type="button" title="구역 생성" aria-label="구역 생성"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg></button>
         </div>
         <div class="stb-group" data-g="도면">
-          <button class="stb-btn" data-deleg="btn-upload-drawing" type="button" title="도면 등록" aria-label="도면 등록"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+          <button class="stb-btn" data-deleg="btn-upload-drawing" type="button" title="도면 등록" aria-label="도면 등록" data-help="drawing-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
         </div>
         <div class="stb-group" data-g="포인트">
           <!-- [마스터 요청 2026-09-03] 이 버튼이 전체 흐름의 진입점: 클릭 한 번 → 체크보드 순차 배치
@@ -439,7 +439,7 @@
           <button class="stb-btn" data-deleg="btn-checkboard-enter" data-sync="btn-checkboard-enter" type="button" title="체크보드 모드" aria-label="체크보드 모드"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
         </div>
         <div class="stb-group" data-g="사진">
-          <button id="btn-photobatch" class="stb-btn" type="button" title="사진 폴더 일괄 매칭 (핀 번호 ↔ 촬영시각)" aria-label="사진 폴더 일괄 매칭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="2.5" y="5.5" width="19" height="14" rx="2"/><circle cx="8.5" cy="11" r="2"/><path d="M2.5 16.5l5-4 4 3 3-2.5 6 4.5"/></svg></button>
+          <button id="btn-photobatch" class="stb-btn" type="button" title="사진 폴더 일괄 매칭 (핀 번호 ↔ 촬영시각)" aria-label="사진 폴더 일괄 매칭" data-help="photo-batch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="2.5" y="5.5" width="19" height="14" rx="2"/><circle cx="8.5" cy="11" r="2"/><path d="M2.5 16.5l5-4 4 3 3-2.5 6 4.5"/></svg></button>
         </div>
       </div>
       <!-- [트리 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리 -->
@@ -447,7 +447,7 @@
 
       <!-- Upload — 선택된 구역에 도면(PDF) 등록 (designer only) -->
       <div id="section-upload" class="sidebar-section">
-        <button id="btn-upload-drawing" class="btn-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>구역 도면 등록 (PDF/PNG/JPG)</button>
+        <button id="btn-upload-drawing" class="btn-upload" data-help="drawing-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>구역 도면 등록 (PDF/PNG/JPG)</button>
         <input id="input-drawing" type="file" accept=".pdf,.png,.jpg,.jpeg" hidden />
         <p id="upload-zone-hint" class="place-hint">구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.</p>
         <button id="btn-import-json" class="btn-upload secondary hidden">JSON 포인트 가져오기</button>
@@ -481,7 +481,7 @@
             <div id="cb-icon-label" class="pf-icon-label">아이콘 종류 (현재: 번호)</div>
             <div id="cb-icon-grid" class="pf-icon-grid" role="group" aria-label="배치할 핀 아이콘 선택"></div>
           </div>
-          <button id="btn-checkboard-enter" class="btn-checkboard-toggle" type="button" title="체크보드 모드: 도면 위를 클릭하면 번호 핀이 바로 찍힙니다 (이름·사진 없이)">
+          <button id="btn-checkboard-enter" class="btn-checkboard-toggle" type="button" title="체크보드 모드: 도면 위를 클릭하면 번호 핀이 바로 찍힙니다 (이름·사진 없이)" data-help="checkerboard">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             <span id="btn-checkboard-enter-label">체크보드 모드 시작</span>
           </button>
@@ -496,7 +496,7 @@
       </div>
 
       <div id="section-place" class="sidebar-section hidden">
-        <button id="btn-place" class="btn-place"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>위치 포인트 추가</button>
+        <button id="btn-place" class="btn-place" data-help="pin-place"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>위치 포인트 추가</button>
         <p id="place-hint" class="place-hint hidden">도면 위 원하는 위치를 클릭하세요</p>
 
         <!-- [마스터: THETA R* 360 인입] 오프라인 THETA 360 사진을 가져와 도면에 위치 지정 등록 -->
@@ -520,15 +520,15 @@
           <svg class="ztl-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
         </summary>
         <div id="zone-tools" class="zone-tools">
-          <button id="btn-zone-rect" class="zone-tool" data-shape="rect" title="사각형 영역" aria-label="사각형 영역">
+          <button id="btn-zone-rect" class="zone-tool" data-shape="rect" title="사각형 영역" aria-label="사각형 영역" data-help="zone-create">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg>
             <span>사각형</span>
           </button>
-          <button id="btn-zone-circle" class="zone-tool" data-shape="circle" title="원형 영역" aria-label="원형 영역">
+          <button id="btn-zone-circle" class="zone-tool" data-shape="circle" title="원형 영역" aria-label="원형 영역" data-help="zone-create">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/></svg>
             <span>원형</span>
           </button>
-          <button id="btn-zone-poly" class="zone-tool" data-shape="poly" title="선 그리기(닫으면 구역)" aria-label="선 그리기">
+          <button id="btn-zone-poly" class="zone-tool" data-shape="poly" title="선 그리기(닫으면 구역)" aria-label="선 그리기" data-help="zone-create">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,3 21,9 17.5,20 6.5,20 3,9"/></svg>
             <span>선/다각형</span>
           </button>
@@ -575,7 +575,7 @@
 
       <!-- Export (designer only) -->
       <div id="section-export" class="sidebar-section hidden">
-        <button id="btn-deploy" class="btn-deploy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포</button>
+        <button id="btn-deploy" class="btn-deploy" data-help="deploy-viewer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포</button>
         <button id="btn-export-json" class="btn-upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>JSON 내보내기</button>
         <p id="deploy-status" class="deploy-status hidden"></p>
       </div>
@@ -1043,7 +1043,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M17 8l4 4-4 4"/></svg>
     </button>
     <!-- [마스터: 미니맵 시야 부채꼴 방향 보정] 도면(미니맵)에서 선수(오른쪽) 방향을 클릭해 지정 -->
-    <button id="btn-pano-setdir" class="btn-pano-ctrl icon-only" title="도면에서 선수(오른쪽) 방향 클릭해 지정" aria-label="방향 설정(도면 클릭)">
+    <button id="btn-pano-setdir" class="btn-pano-ctrl icon-only" title="도면에서 선수(오른쪽) 방향 클릭해 지정" aria-label="방향 설정(도면 클릭)" data-help="orientation-fix">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="12 6 14 12 12 18 10 12" fill="currentColor" stroke="none"/></svg>
     </button>
     <div class="pano-ctrl-sep"></div>
