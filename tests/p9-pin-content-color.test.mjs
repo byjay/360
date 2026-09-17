@@ -293,6 +293,39 @@ function suiteContrast(label, sSrc, rSrc) {
     "핀 색 정본은 리터럴 hex 만 사용(런타임 테마 변수 없음 → 라이트/다크 동일 값)");
 }
 
+/* ────────────────────────────────────────────────────────────
+ * ⑦ [2026-09-17] 색 제거(흑백) 시에도 등록/미등록이 구분되는가.
+ *   마스터 신고(3회차): "색 대비만 올려선(2.32→3.09:1) 육안 구분 안 됨."
+ *   head/head2/needle/text(색) 필드는 전혀 보지 않는다 — dash(도면 링 패턴)와
+ *   pin-filled/pin-hollow 클래스, 미니맵 border-style 만으로 등록/미등록을 가른다.
+ *   체크보드 계열뿐 아니라 일반(content/empty) 계열도 함께 검사한다.
+ * ──────────────────────────────────────────────────────────── */
+function suiteBlackWhiteOnly(label, sSrc, rSrc) {
+  console.log("\n[" + label + "]");
+  const fixture = FIXTURE();
+  const ui = runUI(sSrc, uiSrc, fixture).pins;
+  const rdr = runRadar(sSrc, rSrc, fixture, CURRENT(fixture)).pins;
+
+  ok(ui.bA.dash !== ui.bB.dash,
+    `[체크보드] 색 무시·링 패턴만: 등록 "${ui.bA.dash}" ≠ 미등록 "${ui.bB.dash}"`);
+  ok(/pin-filled/.test(ui.bA.cls) && /pin-hollow/.test(ui.bB.cls),
+    "[체크보드] 색 무시·클래스만: 등록=pin-filled, 미등록=pin-hollow");
+  ok(rdr.bA.border !== rdr.bB.border,
+    `[체크보드] 색 무시·미니맵 테두리만: 등록 ${rdr.bA.border} ≠ 미등록 ${rdr.bB.border}`);
+
+  ok(ui.c1.dash !== ui.e1.dash,
+    `[일반] 색 무시·링 패턴만: 등록 "${ui.c1.dash}" ≠ 미등록 "${ui.e1.dash}"`);
+  ok(/pin-filled/.test(ui.c1.cls) && /pin-hollow/.test(ui.e1.cls),
+    "[일반] 색 무시·클래스만: 등록=pin-filled, 미등록=pin-hollow");
+  ok(rdr.c1.border !== rdr.e1.border,
+    `[일반] 색 무시·미니맵 테두리만: 등록 ${rdr.c1.border} ≠ 미등록 ${rdr.e1.border}`);
+
+  // 이 스위트가 계열(kind) 축을 건드리지 않았음을 재확인(회귀)
+  ok(ui.bA.kind === "checkboard" && ui.bB.kind === "checkboard" &&
+     ui.c1.kind === "content" && ui.e1.kind === "empty",
+    "계열(kind) 불변 회귀: checkboard/content/empty 그대로");
+}
+
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */
 suiteCheckboardColor("① 체크보드 사진 유무 색 구분 (정상 소스)", seriesSrc, radarSrc);
 suiteNormalPins("② 일반 핀 구분 유지 (정상 소스)", seriesSrc);
@@ -300,6 +333,7 @@ suiteSameJudgment("③ 도면 == 미니맵 판정 (정상 소스)", seriesSrc, r
 suiteNumbers("④ 번호 체계 불변 (정상 소스)", seriesSrc, radarSrc);
 suiteShape("⑤ 색 외 형태 단서 (정상 소스)", seriesSrc, radarSrc);
 suiteContrast("⑥ WCAG 대비 실측 (정상 소스)", seriesSrc, radarSrc);
+suiteBlackWhiteOnly("⑦ 흑백(색 제거) 구분 (정상 소스)", seriesSrc, radarSrc);
 
 /* ────────────────────────────────────────────────────────────
  * 뮤테이션 A: 체크보드 안의 콘텐츠 분기를 제거하면 ①이 실패해야 한다
@@ -333,6 +367,49 @@ suiteContrast("⑥ WCAG 대비 실측 (정상 소스)", seriesSrc, radarSrc);
     const diff = COLORED(Object.keys(ui)).filter((id) => ui[id].filled !== rdr[id].filled || ui[id].needle !== rdr[id].bg);
     ok(diff.length > 0,
       `뮤테이션 적용 시 도면↔미니맵 판정이 어긋남(테스트 실효성 증명) → 불일치 ${diff.length}건: ${diff.join(",")}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 C: hasContent 판정을 바꾸면(App.pinHasContent 무시) ①·②가 실패해야 한다
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션C] hasContent 판정 변경(항상 콘텐츠 있음으로 오판) → ①·②가 실패해야 함");
+  const needle = 'hasContent(pin) {\n      if (typeof App !== "undefined" && App.pinHasContent) { try { return !!App.pinHasContent(pin); } catch (e) {} }\n      return !!(pin && (pin.imageId || pin.imageUrl || pin.videoId));\n    },';
+  const mutated = seriesSrc.replace(needle, 'hasContent(pin) { return true; },');
+  if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const fixture = FIXTURE();
+    const ui = runUI(mutated, uiSrc, fixture).pins;
+    ok(ui.e1.kind === "content",
+      `뮤테이션 적용 시 빈 핀도 콘텐츠로 오판(테스트 실효성 증명, ②가 깨짐) → e1.kind=${ui.e1.kind}`);
+    ok(ui.bA.head2 === ui.bB.head2,
+      `뮤테이션 적용 시 체크보드 등록/미등록 색 구분도 무너짐(테스트 실효성 증명, ①이 깨짐) → ${ui.bA.head2}==${ui.bB.head2}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 D: 형태(패턴) 구분 제거 · 색은 유지 → ⑤·⑦의 형태(dash/border) 검사가 실패해야 한다.
+ *   🔴 이 저장소는 색(colorsOf)과 형태(patternOf)가 이미 완전히 분리된 축이다.
+ *   마스터가 요구한 "형태 구분 제거" / "색만 남기고 형태 통일" 두 시나리오는
+ *   이 구조에서 동일한 단일 변이(patternOf 상수화)로 수렴한다 — colorsOf 를
+ *   전혀 건드리지 않고도 형태만 지울 수 있기 때문이다(아래 세 번째 검사로 증명).
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션D] 형태(패턴) 구분 제거 · 색은 유지 → ⑤·⑦의 형태 검사가 실패해야 함");
+  const needle = 'patternOf(kind, filled) {\n      if (kind === "checkboard") return filled ? "dashed" : "dotted";\n      return (kind === "empty") ? "dotted" : "solid";\n    },';
+  const mutated = seriesSrc.replace(needle, 'patternOf(kind, filled) { return "solid"; },');
+  if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const fixture = FIXTURE();
+    const ui = runUI(mutated, uiSrc, fixture).pins;
+    const rdr = runRadar(mutated, radarSrc, fixture, CURRENT(fixture)).pins;
+    ok(ui.bA.dash === ui.bB.dash && ui.bA.dash === "",
+      `뮤테이션 적용 시 형태(dash) 구분이 사라짐(테스트 실효성 증명, ⑤·⑦이 깨짐) → bA="${ui.bA.dash}" bB="${ui.bB.dash}"`);
+    ok(rdr.bA.border === rdr.bB.border,
+      `뮤테이션 적용 시 미니맵 테두리 구분도 사라짐(테스트 실효성 증명) → ${rdr.bA.border}==${rdr.bB.border}`);
+    ok(ui.bA.head2 !== ui.bB.head2,
+      "색(colorsOf)은 이 뮤테이션과 무관하게 여전히 다름 — 형태·색 축이 서로 분리되어 있음을 확인");
   }
 }
 
