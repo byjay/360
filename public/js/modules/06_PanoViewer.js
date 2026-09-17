@@ -229,6 +229,35 @@
       };
       this._spotRaf = requestAnimationFrame(step);
     },
+    /** [P23: 마커목록 사진별] 전체 핀 배열 → "사진(핀) 단위" 그룹으로 묶고 정렬.
+     *  - 현재 사진(currentPin)은 항상 맨 앞(스팟이 0개여도 포함 — 빈 상태를 정직하게 보여주기 위함).
+     *  - 다른 사진은 "마커가 있는 핀만" 포함(마커 0개인 핀은 목록 자체가 무의미하므로 제외),
+     *    label(없으면 id) 오름차순 정렬.
+     *  App.renderSpotList()가 이 결과로 그룹 렌더 + 행 클릭 시 spotRowAction()을 호출하는 용도.
+     *  (렌더 자체는 20_App.js 소관이라 이 함수는 순수 데이터만 만든다.) */
+    buildSpotGroups(pins, currentPin) {
+      const list = Array.isArray(pins) ? pins : [];
+      const cur = currentPin || null;
+      const groups = [];
+      if (cur) groups.push({ pin: cur, spots: Array.isArray(cur.spots) ? cur.spots : [], isCurrent: true });
+      const others = list.filter((p) => p && p !== cur && (!cur || p.id !== cur.id) &&
+        Array.isArray(p.spots) && p.spots.length > 0);
+      others.sort((a, b) => String(a.label || a.id || "").localeCompare(String(b.label || b.id || ""), "ko"));
+      others.forEach((p) => groups.push({ pin: p, spots: p.spots, isCurrent: false }));
+      return groups;
+    },
+    /** [P23] 마커 목록 행 클릭 → 어떤 동작을 해야 하는지 결정(순수 함수, 부수효과 없음).
+     *  - 같은 사진(그룹)의 마커: 그 마커로 시점 이동(기존 lookAtSpot 재사용) → {type:'look', lon, lat}
+     *  - 다른 사진(그룹): 그 사진으로 이동(기존 App.openPano 재사용) → {type:'openPano', pin}
+     *  실제 이동 호출은 배선하는 쪽(App.renderSpotList)이 이 반환값을 보고 수행한다. */
+    spotRowAction(group, spot) {
+      if (!group) return null;
+      if (group.isCurrent) {
+        if (!spot) return null;
+        return { type: "look", lon: spot.lon, lat: spot.lat };
+      }
+      return { type: "openPano", pin: group.pin };
+    },
     /** [마스터: 수평 보정] 천정 기울기 보정 — roll 을 deg 만큼 가감(한계 ±20°). */
     // [토스트 스팸 제거] ↺/↻ 는 0.7°씩 연타하는 버튼이라 클릭마다 토스트가 쌓였다.
     // 보정 결과는 화면이 기울어지는 것으로 즉시 보이므로 토스트 불필요.
