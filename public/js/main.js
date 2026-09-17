@@ -3965,7 +3965,14 @@
     },
 
     /* [사이드바 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리.
-       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임. */
+       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임.
+       [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 제거:
+         · 구역: 항상 전체 표시(과거에도 이미 그랬음 — decks.forEach 는 필터 없음, 유지).
+         · 영역/핀: 과거엔 State.pdfPage 와 일치하는 것만 표시했다 → 다른 페이지 항목이 안 보였다.
+           이제 로드된 구역(=State.currentDeploymentId 와 일치)의 전체 페이지 영역/핀을 항상 표시하고,
+           현재 페이지 항목만 .active 로 "구분"한다(숨기지 않는다).
+         · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
+           개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
     renderTree() {
       const host = this.$("side-tree");
       if (!host) return;
@@ -3979,19 +3986,28 @@
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
       if (!decks.length) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+      const curPage = State.pdfPage || 1;
+      const totalPages = State.mode === "viewer"
+        ? (State.viewerPages ? State.viewerPages.length : 1)
+        : (State.pdfPages || 1);
+      const showPageTag = totalPages > 1;
+      const pageTag = (pg) => showPageTag ? ' <span class="tree-label-sub">P' + (pg || 1) + '</span>' : "";
       const pinNode = (p) => {
         const n = document.createElement("button");
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
-        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + noteIco;
+        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
       decks.forEach((deck) => {
         const isCur = typeof Projects !== "undefined" && Projects.currentDeck && Projects.currentDeck.id === deck.id;
+        // [WO 20260917-pin] 이 구역의 도면이 '실제로 로드된 도면'인지(=State 에 zone/pin 데이터가 실존)
+        //   isCur(선택됨)와는 별개 — 선택 직후 비동기 로딩 중엔 isLoaded 가 false 인 게 정상(가짜 데이터 금지).
+        const isLoaded = !!(deck.deployment_id && deck.deployment_id === State.currentDeploymentId);
         const g = document.createElement("div");
-        g.className = "tree-deck" + (isCur ? " open" : "");
+        g.className = "tree-deck" + (isLoaded ? " open" : ""); // [항목2] 기본 펼침(로드된 구역)
         const head = document.createElement("button");
         head.className = "tree-node tree-node-deck" + (isCur ? " active" : "");
         // [B4] '도면없음'(구역에 도면 미등록) 과 '미저장'(로컬에만 있고 서버 미반영)을 구분 표시
@@ -3999,15 +4015,17 @@
         const _tag = _unsaved
           ? '<span class="tree-tag tree-tag-unsaved" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>'
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
-        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag;
+        // [항목4] 구역별 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
+        const zoneCntTag = isLoaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
+        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag + zoneCntTag;
         head.addEventListener("click", () => {
           if (isCur) { g.classList.toggle("open"); }
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
-        // [버그수정] State(도면/영역/핀)는 전역이라, 도면이 다르거나 없는 구역을 펼치면
-        //   직전 구역의 도면·핀이 잔존 표시된다 → 이 구역의 도면이 '실제로 로드된 도면'일 때만 하위 표시.
-        if (isCur && deck.deployment_id && deck.deployment_id === State.currentDeploymentId) {
+        // [WO 20260917-pin] 로드된 구역이면 전체 페이지의 영역/핀을 항상 표시(과거: 현재 페이지만).
+        //   State(도면/영역/핀)는 전역이라 다른 구역엔 데이터가 없으므로 isLoaded 구역에서만 하위 렌더.
+        if (isLoaded) {
           const kids = document.createElement("div");
           kids.className = "tree-children";
           const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
@@ -4017,18 +4035,21 @@
             dn.innerHTML = ICO.doc + '<span class="tree-label">' + esc(fname) + '</span>';
             kids.appendChild(dn);
           }
-          const page = State.pdfPage || 1;
-          const zones = (State.zones || []).filter((z) => (z.page || 1) === page);
-          const pins = (State.pins || []).filter((p) => (p.page || 1) === page);
+          const zones = State.zones || []; // 전체 페이지(필터 없음)
+          const pins = State.pins || [];   // 전체 페이지(필터 없음)
           const used = new Set();
           zones.forEach((zone) => {
-            const zpins = pins.filter((p) => (typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false);
+            const zpage = zone.page || 1;
+            const isCurZonePage = zpage === curPage;
+            const zpins = pins.filter((p) => (p.page || 1) === zpage &&
+              ((typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false));
             zpins.forEach((p) => used.add(p.id));
             const zn = document.createElement("div");
-            zn.className = "tree-zone open";
+            zn.className = "tree-zone open"; // [항목2] 기본 펼침
             const zh = document.createElement("button");
-            zh.className = "tree-node tree-node-zone";
-            zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span><span class="tree-cnt">' + zpins.length + '</span>';
+            // [항목3][항목5] 현재 페이지 영역 = .active 로 "구분"(숨기지 않음). 클릭 동작은 기존 그대로.
+            zh.className = "tree-node tree-node-zone" + (isCurZonePage ? " active" : "");
+            zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span>' + pageTag(zpage) + '<span class="tree-cnt" title="핀 수">' + zpins.length + '</span>';
             zh.addEventListener("click", (e) => {
               if (e.target.closest(".tree-caret")) { zn.classList.toggle("open"); return; }
               if (typeof Zones !== "undefined" && Zones.focus) Zones.focus(zone.id);
@@ -8731,29 +8752,54 @@
       if (p.classList.contains("hidden")) { this.renderSpotList(); p.classList.remove("hidden"); }
       else p.classList.add("hidden");
     },
+    /** [P23: 마커목록 사진별] 현재 사진의 마커만 보여주되(①), 다른 사진의 마커도 그룹으로 함께
+     *  나열해 클릭 시 그 사진으로 이동(②)하고, 사진별로 정렬(③)한다.
+     *  그룹/이동 판단은 PanoViewer.buildSpotGroups/spotRowAction(순수 함수, 06_PanoViewer.js)에 위임하고
+     *  이 함수는 렌더 + 배선만 담당(뷰어·디자이너 공통, 새 CSS 없이 기존 psl-* 재사용 + 인라인 스타일). */
     renderSpotList() {
       const body = UI.$("pano-spot-list-body"); if (!body) return;
       const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
-      const spots = (pin && pin.spots) || [];
-      if (!spots.length) {
+      if (!pin || typeof PanoViewer.buildSpotGroups !== "function") {
+        body.innerHTML = '<div class="psl-empty">등록된 마커가 없습니다.<br>‘마커’ 버튼으로 360 안에 추가하세요.</div>';
+        return;
+      }
+      const groups = PanoViewer.buildSpotGroups(State.pins || [], pin);
+      if (!groups.length) {
         body.innerHTML = '<div class="psl-empty">등록된 마커가 없습니다.<br>‘마커’ 버튼으로 360 안에 추가하세요.</div>';
         return;
       }
       const KN = { defect: "결함", equip: "장비", safety: "안전", note: "메모" };
       const COL = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd" };
-      const rows = spots.map((s, i) => {
-        const col = COL[s.kind] || "#e0503e";
-        return '<tr class="psl-row" data-id="' + s.id + '">' +
-          '<td><span class="psl-num" style="background:' + col + '">' + (i + 1) + '</span></td>' +
-          '<td>' + (KN[s.kind] || "마커") + '</td>' +
-          '<td>' + UI.escapeHtml(s.label || "-") + '</td>' +
-          '<td>' + UI.escapeHtml(s.note || "") + '</td></tr>';
-      }).join("");
+      const HEAD_STYLE = "padding:8px 10px;font-size:11px;font-weight:700;color:#f0b941;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);";
+      const EMPTY_STYLE = "padding:14px 10px;text-align:center;color:#9aa6b2;font-size:12px;";
+      let rows = "";
+      groups.forEach((g) => {
+        const label = UI.escapeHtml((g.pin && (g.pin.label || g.pin.id)) || "-");
+        const headText = (g.isCurrent ? "현재 사진 · " : "") + label;
+        rows += '<tr><td colspan="4" style="' + HEAD_STYLE + '">' + headText + '</td></tr>';
+        if (!g.spots.length) {
+          rows += '<tr><td colspan="4" style="' + EMPTY_STYLE + '">등록된 마커가 없습니다.</td></tr>';
+          return;
+        }
+        g.spots.forEach((s, i) => {
+          const col = COL[s.kind] || "#e0503e";
+          rows += '<tr class="psl-row" data-pin="' + g.pin.id + '" data-id="' + s.id + '">' +
+            '<td><span class="psl-num" style="background:' + col + '">' + (i + 1) + '</span></td>' +
+            '<td>' + (KN[s.kind] || "마커") + '</td>' +
+            '<td>' + UI.escapeHtml(s.label || "-") + '</td>' +
+            '<td>' + UI.escapeHtml(s.note || "") + '</td></tr>';
+        });
+      });
       body.innerHTML = '<table class="psl-table"><thead><tr><th>#</th><th>종류</th><th>이름</th><th>노트</th></tr></thead><tbody>' + rows + '</tbody></table>';
       body.querySelectorAll(".psl-row").forEach((r) => {
         r.addEventListener("click", () => {
-          const s = spots.find((x) => x.id === r.dataset.id);
-          if (s && PanoViewer.lookAtSpot) PanoViewer.lookAtSpot(s.lon, s.lat);
+          const g = groups.find((gr) => gr.pin && gr.pin.id === r.dataset.pin);
+          const s = g && g.spots.find((x) => x.id === r.dataset.id);
+          if (!g || !s || !PanoViewer.spotRowAction) return;
+          const a = PanoViewer.spotRowAction(g, s);
+          if (!a) return;
+          if (a.type === "look") { if (PanoViewer.lookAtSpot) PanoViewer.lookAtSpot(a.lon, a.lat); }
+          else if (a.type === "openPano") { this.openPano(a.pin); }
         });
       });
     },
@@ -9395,8 +9441,18 @@
     },
 
     _buildSavePayload(pagesData, sourceMeta) {
+      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀도 크롭 기준 %로 재배치해
+      // 실어 보낸다(라이브 State.pins 자체는 페이지 기준 %로 그대로 — 이 배열은 배포용 복사본).
+      // 크롭 밖 핀은 표시할 캔버스가 없으므로 배포본에서 제외한다(원본 State.pins 는 불변).
+      // 🔴 같은 페이지의 16_Zones.js 구역·PDF 주석은 재매핑 대상이 아니다(미구현·미포함).
+      const deckCrop = this._currentDeckCrop();
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
+        if (deckCrop && (q.page || 1) === deckCrop.page && typeof MapCtrl !== "undefined" && MapCtrl.pageToDeckCropPct) {
+          const mapped = MapCtrl.pageToDeckCropPct(q.x, q.y, deckCrop.crop);
+          if (!mapped) return null; // 크롭 밖 — 배포본에서 제외
+          q.x = mapped.x; q.y = mapped.y;
+        }
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
         // [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
         //   서버/배포본에 저장하면 재접속 시 죽은 blob 으로 "이미지를 불러올 수 없습니다".
@@ -9406,7 +9462,7 @@
         if (typeof q.imageUrl === "string" && q.imageUrl.indexOf("blob:") === 0) delete q.imageUrl;
         delete q.uploading;
         return q;
-      });
+      }).filter(Boolean);
       const body = {
         title:       State.fileName || "도면",
         file_name:   State.fileName || "",
@@ -9424,11 +9480,19 @@
       return body;
     },
 
+    /** [WO 20260917] 현재 구역(deck)의 크롭 — { page(1-base), crop:{x,y,w,h}(%) } 또는 null.
+     *  crop 없는 구역(또는 구역 미선택)은 null → snapshotAllPages 는 종전대로 전체 페이지. */
+    _currentDeckCrop() {
+      const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
+      if (!cd || !cd.crop || !(cd.crop.w > 0) || !(cd.crop.h > 0)) return null;
+      return { page: cd.page || 1, crop: cd.crop };
+    },
+
     async _snapshotPages() {
       // [P14] 이전 도면의 실측 픽셀이 남아 다음 저장에 잘못 붙지 않게 초기화(SoT 오염 방지)
       try { PDF.lastSnapshotDims = null; } catch (e) {}
       if (State.fileType === "pdf" && State.pdfDoc) {
-        return await PDF.snapshotAllPages(State.pdfDoc);
+        return await PDF.snapshotAllPages(State.pdfDoc, undefined, undefined, this._currentDeckCrop());
       } else if (State.fileType === "image") {
         const imgEl = UI.$("map-image");
         if (!imgEl || !imgEl.naturalWidth) return [];
