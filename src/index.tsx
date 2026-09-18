@@ -59,11 +59,105 @@ const AUTO_DESIGNER_TOKEN_ENABLED = true   // 2026-08-31 마스터 지시: 로�
 const AUTO_DESIGNER_TOKEN = 'auto-designer-entry-360'
 const AUTO_DESIGNER_EMAIL = 'auto.designer@seastargo.com'   // 예약 계정(실사용자 아님)
 const AUTO_DESIGNER_USER = { email: AUTO_DESIGNER_EMAIL, name: '설계자', picture: '', role: 'designer' as const }
-/** 자동입장 전용 토큰이면 디자이너 고정 사용자 반환, 아니면 null. 스위치 off 면 무조건 null. */
+/** 자동입장 **레거시 고정 문자열** 토큰 → 열람 전용(_readonly) 사용자.
+ *  [P48 보안 2026-09-18] 이 문자열은 클라이언트 번들에 박혀 공개돼 있다(= 비밀이 아니다).
+ *  따라서 더 이상 쓰기 자격으로 인정하지 않는다. 읽기만 허용해 기존 세션의 열람은 유지한다.
+ *  쓰기 가능한 자동입장은 아래 서명 토큰(ae1.*)으로만 발급된다. */
 function autoDesignerFromToken(token: string): any | null {
   if (!AUTO_DESIGNER_TOKEN_ENABLED) return null
   if (token !== AUTO_DESIGNER_TOKEN) return null
-  return { ...AUTO_DESIGNER_USER, _auto: true }
+  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: true }
+}
+
+/* ══ [P48 보안 · 마스터 재현 2026-09-18] 배포 링크 세션이 서버 쓰기까지 가능했던 결함 ══
+ * 재현: storage clear → `?d=dep_...` 만 열기 → sessionStorage 에 고정 문자열 토큰이 깔리고
+ *       fetch PATCH /tables/deployments/:id → 200. UI 만 숨겼을 뿐 서버가 막지 않았다.
+ * 근본원인 2개:
+ *   ⓐ AUTO_DESIGNER_TOKEN 이 **클라 번들에 박힌 고정 문자열** → 비밀이 아닌데 쓰기 자격이었다.
+ *   ⓑ 쓰기 차단이 클라이언트 UI(designerOnlyVisible)에만 있었다 → 서버 강제 없음.
+ * 조치:
+ *   ① 고정 문자열 = 열람 전용으로 강등(위 autoDesignerFromToken).
+ *   ② 편집 가능한 자동입장 토큰은 **서버가 HMAC 서명해 발급**(POST /api/auth/auto-entry).
+ *      비밀키: CF 시크릿 AUTO_ENTRY_SECRET → 없으면 D1 app_settings 에 암호난수로 1회 자동생성.
+ *      상수가 아니므로 번들 노출·영구유효 문제가 사라지고, 키 교체 한 번으로 전량 폐기된다.
+ *   ③ `?d=` 로 들어온 클라이언트는 kind='viewer'(열람전용) 토큰만 요청한다.
+ *   ④ 🔴 최종 방어선은 UI 가 아니라 서버 미들웨어 readOnlyGuard — 모든 변경 메서드를 한 곳에서 거부.
+ * 🔴 남은 한계(정직 보고): 발급 엔드포인트 자체가 익명이라, 환경변수 AUTO_ENTRY_DESIGNER_KEY 를
+ *   설정하지 않으면 "kind=designer 를 그냥 요청"하는 우회는 남는다. 이는 마스터 모델
+ *   ("로그인 없이 디자이너 진입 유지" + "?d= 없는 직접 접속은 쓰기 가능")이 요구하는 잔여 위험이며,
+ *   그 키를 설정하는 순간 코드 변경 없이 완전 차단된다.
+ * TEMP_OPEN_ALL_TENANTS 와의 관계: 그 플래그는 canManageProject(=프로젝트 범위)만 넓힌다.
+ *   readOnlyGuard 는 그보다 앞단(메서드 단위)에서 끊으므로 플래그가 true 여도 열람전용은 쓰기 불가. */
+const AUTO_ENTRY_PREFIX  = 'ae1.'
+const AUTO_ENTRY_TTL_MS  = 7 * 24 * 60 * 60 * 1000     // 자동입장 서명 토큰 유효기간(7일)
+const AUTO_ENTRY_SKEY    = 'auto_entry_secret'          // app_settings(scope='*') 자동생성 비밀키 행
+/** 변경(쓰기) HTTP 메서드 — readOnlyGuard 의 단일 진실 소스. */
+const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
+/** 열람전용 주체에게도 허용하는 비-콘텐츠 경로(로그인/가입/자동입장 발급 = 권한을 얻는 통로 자체).
+ *  이 목록 밖의 모든 변경 요청은 거부된다(allowlist 방식 — 새 쓰기 라우트가 자동으로 보호됨). */
+const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log']
+
+const b64u = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+const b64uDec = (s: string) => atob(s.replace(/-/g, '+').replace(/_/g, '/'))
+
+/** 자동입장 서명 비밀키. CF 시크릿 우선, 없으면 D1 에 암호난수로 1회 자동생성(하드코딩 금지).
+ *  D1 마저 불가하면 null → 서명 토큰 발급/검증 전부 실패(조용한 실패 대신 정직한 거부). */
+async function autoEntrySecret(c: any): Promise<string | null> {
+  const env = c?.env?.AUTO_ENTRY_SECRET
+  if (typeof env === 'string' && env.length >= 16) return env
+  try {
+    const row: any = await c.env.DB.prepare(
+      "SELECT value FROM app_settings WHERE scope = '*' AND skey = ?"
+    ).bind(AUTO_ENTRY_SKEY).first()
+    if (row && typeof row.value === 'string' && row.value.length >= 16) return row.value
+    const fresh = randToken('aes') + randToken('')
+    await c.env.DB.prepare(
+      "INSERT INTO app_settings (scope, skey, value, updated_by, updated_at) VALUES ('*', ?, ?, 'system', ?) ON CONFLICT(scope, skey) DO NOTHING"
+    ).bind(AUTO_ENTRY_SKEY, fresh, Date.now()).run()
+    const again: any = await c.env.DB.prepare(
+      "SELECT value FROM app_settings WHERE scope = '*' AND skey = ?"
+    ).bind(AUTO_ENTRY_SKEY).first()
+    return (again && again.value) ? String(again.value) : fresh
+  } catch { return null }
+}
+
+async function hmacB64u(secret: string, msg: string): Promise<string> {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(msg))
+  return b64u(String.fromCharCode(...new Uint8Array(sig)))
+}
+
+/** 자동입장 서명 토큰 발급. kind='designer' 면 편집 가능, 'viewer' 면 열람 전용. */
+async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer'): Promise<{ token: string, exp: number } | null> {
+  const secret = await autoEntrySecret(c)
+  if (!secret) return null
+  const exp = Date.now() + AUTO_ENTRY_TTL_MS
+  const payload = b64u(JSON.stringify({ k: kind, exp, n: randToken('') }))
+  return { token: AUTO_ENTRY_PREFIX + payload + '.' + (await hmacB64u(secret, payload)), exp }
+}
+
+/** 자동입장 서명 토큰 검증 → 사용자(열람전용 여부 포함). 서명/만료 불일치면 null. */
+async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
+  if (!AUTO_DESIGNER_TOKEN_ENABLED) return null
+  if (!token.startsWith(AUTO_ENTRY_PREFIX)) return null
+  const rest = token.slice(AUTO_ENTRY_PREFIX.length)
+  const dot = rest.lastIndexOf('.')
+  if (dot <= 0) return null
+  const payload = rest.slice(0, dot), sig = rest.slice(dot + 1)
+  const secret = await autoEntrySecret(c)
+  if (!secret) return null
+  const expect = await hmacB64u(secret, payload)
+  // 길이 선비교 후 상수시간 비교(타이밍 공격 완화)
+  if (expect.length !== sig.length) return null
+  let diff = 0
+  for (let i = 0; i < expect.length; i++) diff |= expect.charCodeAt(i) ^ sig.charCodeAt(i)
+  if (diff !== 0) return null
+  let p: any
+  try { p = JSON.parse(b64uDec(payload)) } catch { return null }
+  if (!p || typeof p.exp !== 'number' || p.exp < Date.now()) return null
+  if (p.k !== 'designer' && p.k !== 'viewer') return null
+  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer' }
 }
 
 function superAdmin(c: any): string {
@@ -440,6 +534,15 @@ async function resolveLocalSession(c: any, token: string): Promise<any | null> {
 
 /** Authorization: Bearer <idToken> 에서 검증된 사용자 반환 (없으면 null) */
 async function getUser(c: any): Promise<any | null> {
+  // [P48] 요청당 1회 메모 — readOnlyGuard 와 라우트 핸들러가 둘 다 호출하므로
+  //   메모가 없으면 모든 쓰기 요청에서 D1 조회/HMAC 검증이 2배로 돈다.
+  const memo = c.get('__user')
+  if (memo !== undefined) return memo
+  const u = await resolveUser(c)
+  c.set('__user', u)
+  return u
+}
+async function resolveUser(c: any): Promise<any | null> {
   const auth = c.req.header('Authorization') || ''
   const m = auth.match(/^Bearer\s+(.+)$/i)
   // ponytail: <img>/텍스처는 Authorization 헤더를 못 보내므로 ?t= 쿼리토큰 폴백 허용(R2 객체용).
@@ -449,7 +552,9 @@ async function getUser(c: any): Promise<any | null> {
   // 데모 토큰 우선 처리 (구글 로그인 없이 바로 진입/테스트)
   const demo = demoUserFromToken(c, token)
   if (demo) return demo
-  // 로그인 없는 디자이너 자동입장 전용 토큰 (데모 봉인 DEMO_LOGIN=0 과 무관한 별도 경로, designer 고정)
+  // [P48] 서버 서명 자동입장 토큰(ae1.*) — kind 에 따라 편집 가능/열람 전용이 갈린다
+  if (token.startsWith(AUTO_ENTRY_PREFIX)) return await autoEntryFromToken(c, token)
+  // 로그인 없는 디자이너 자동입장 **레거시 고정 문자열** (P48 이후 열람 전용)
   const autoD = autoDesignerFromToken(token)
   if (autoD) return autoD
   // 회사 이메일 자체가입 로컬 세션 토큰 ("local-...")
@@ -465,6 +570,41 @@ async function getUser(c: any): Promise<any | null> {
   if (!payload) return null
   return { email: String(payload.email).toLowerCase(), name: payload.name || payload.display_name || '', picture: payload.picture || '' }
 }
+
+/* ══ [P48] 🔴 쓰기 차단 단일 지점(chokepoint) ═══════════════════════════════
+ * 열람 전용 주체(`?d=` 배포 링크 세션 · 레거시 고정 문자열 토큰)의 모든 변경 요청을 거부한다.
+ * 라우트마다 가드를 다는 대신 미들웨어 한 곳에서 끊는 이유(§G-2-5):
+ *   쓰기 라우트가 51개이고 앞으로 더 늘어난다 — 한 군데라도 빠지면 그 구멍으로 전부 뚫린다.
+ *   allowlist 방식이라 **새로 추가되는 쓰기 라우트는 자동으로 보호**된다.
+ * 열람(GET/HEAD/OPTIONS)은 건드리지 않는다 → 링크 수령자의 도면·핀·파노라마 열람은 종전대로. */
+app.use('*', async (c, next) => {
+  if (!MUTATING_METHODS.includes(c.req.method.toUpperCase())) return next()
+  const p = c.req.path
+  if (READONLY_ALLOWED_WRITE_PREFIXES.some((x) => p === x || p.startsWith(x))) return next()
+  const user = await getUser(c)
+  if (user && user._readonly) {
+    return c.json({ error: 'forbidden — read-only session (view link)', readonly: true }, 403)
+  }
+  return next()
+})
+
+/* [P48] 자동입장 토큰 발급 — 서버 서명본. 고정 문자열 상수를 대체한다.
+ *  kind='viewer'  : 누구나(배포 링크 수령자 포함) — 열람 전용
+ *  kind='designer': AUTO_DESIGNER_TOKEN_ENABLED 이고, AUTO_ENTRY_DESIGNER_KEY 가 설정돼 있으면
+ *                   헤더 X-Auto-Entry-Key 가 일치할 때만. (미설정 = 현행 유지 = 익명 허용) */
+app.post('/api/auth/auto-entry', async (c) => {
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  let kind: 'designer' | 'viewer' = body && body.kind === 'designer' ? 'designer' : 'viewer'
+  if (kind === 'designer') {
+    if (!AUTO_DESIGNER_TOKEN_ENABLED) kind = 'viewer'
+    const need = c.env && (c.env as any).AUTO_ENTRY_DESIGNER_KEY
+    if (typeof need === 'string' && need.length > 0 && c.req.header('X-Auto-Entry-Key') !== need) kind = 'viewer'
+  }
+  const minted = await mintAutoEntryToken(c, kind)
+  if (!minted) return c.json({ error: 'auto entry unavailable' }, 503)
+  return c.json({ token: minted.token, kind, exp: minted.exp, readonly: kind !== 'designer' })
+})
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
   // 자동입장 예약계정: 스위치가 켜져 있을 때만 디자이너. designers 테이블 self-heal INSERT 도 타지 않게 최상단 처리.
@@ -517,7 +657,8 @@ app.get('/api/auth/me', async (c) => {
   }
   // 실제 로그인(데모/자동입장 제외)만 로그 기록 — 자동입장은 방문마다 발생해 로그를 오염시킨다
   if (!user._demo && !user._auto) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role, local: !!user._local } })
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, auto: !!user._auto, request_status, super_admin: superAdmin(c) })
+  // [P48] readonly=true 면 서버가 모든 쓰기를 거부한다 — 클라가 UI 를 정직하게 열람 전용으로 표시하도록 동봉.
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, auto: !!user._auto, readonly: !!user._readonly, request_status, super_admin: superAdmin(c) })
 })
 
 /* ── 클라이언트 인증 설정(공개 가능 값만) ──

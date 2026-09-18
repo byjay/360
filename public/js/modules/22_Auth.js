@@ -1,11 +1,14 @@
   // [마스터 2026-08-31] 디자이너 기능은 로그인 없이 바로 진입, 관리자만 구글 로그인 필요.
   //   마스터가 "다시 로그인 필수로" 지시하면 이 값을 false 로 바꾸면 즉시 원복(로그인 게이트 필수).
   const AUTO_DESIGNER_ENTRY = true;
-  // 자동입장 전용 토큰 — 데모 토큰(demo-*)과 완전히 별개 경로다.
-  //   데모 토큰은 P0 보안조치(CF 시크릿 DEMO_LOGIN=0)로 서버에서 영구 거부되므로 자동입장에 쓸 수 없다.
-  //   이 문자열은 서버 src/index.tsx 의 AUTO_DESIGNER_TOKEN 과 반드시 정확히 일치해야 한다.
-  //   서버는 이 토큰에 'designer' 역할만 부여하며 관리자/슈퍼로는 절대 승격되지 않는다.
+  // [P48 보안 2026-09-18] 이 고정 문자열은 **공개 번들에 박혀 있으므로 비밀이 아니다.**
+  //   서버(src/index.tsx)는 이제 이 문자열을 **열람 전용**으로만 인정한다 — 쓰기는 거부(403).
+  //   편집 가능한 자동입장 토큰은 서버가 서명해 발급한다(POST /api/auth/auto-entry).
+  //   여기 남겨두는 이유: 발급 실패(오프라인/구버전 서버) 시 "열람만이라도" 되게 하는 정직한 폴백.
   const AUTO_DESIGNER_TOKEN = "auto-designer-entry-360";
+  // 마스터 전용 자동입장 키(선택). 서버에 AUTO_ENTRY_DESIGNER_KEY 를 설정한 뒤
+  //   주소창에 ?akey=<키> 로 한 번 들어오면 이 브라우저에 저장되어 계속 편집 진입한다.
+  const AUTO_ENTRY_KEY_LS = "wm_auto_entry_key";
 
   const Auth = {
     idToken: null,
@@ -27,6 +30,7 @@
     /** 역할 한글 라벨 사전 — 전역역할(super/admin/designer/viewer)과
      *  프로젝트역할(designer/editor/viewer)이 같은 어휘를 쓰므로 한 곳에서만 정의한다(SoT). */
     _ROLE_LABELS: { super: "슈퍼관리자", admin: "관리자", designer: "디자이너", editor: "편집자", viewer: "뷰어" },
+    readonly: false,     // [P48] 서버가 쓰기를 거부하는 열람전용 세션(?d= 배포 링크)인가 — /api/auth/me 가 정본
     projectRole: null,   // [P40] 현재 열려 있는 프로젝트에서의 내 역할(없으면 전역역할로 표시)
     /** 배지 라벨. 프로젝트에 들어가 있으면 "그 프로젝트에서의 역할"을 우선한다(고정 '디자이너' 배지 제거). */
     _roleLabel() {
@@ -275,6 +279,7 @@
         if (cached && cached.authenticated) {
           this.user = { email: cached.email, name: cached.name, picture: cached.picture, role: cached.role, request_status: cached.request_status || null };
           this.role = cached.role;
+          this.readonly = !!cached.readonly;   // [P48] 오프라인 복원 시에도 열람전용 상태를 유지
           this.superAdmin = cached.super_admin || this.superAdmin;
           this._offline = true;
           this._applyUi();
@@ -285,6 +290,7 @@
       if (data && data.authenticated) {
         this.user = { email: data.email, name: data.name, picture: data.picture, role: data.role, request_status: data.request_status || null };
         this.role = data.role;
+        this.readonly = !!data.readonly;   // [P48] 서버 판정이 정본 — UI 는 이 값만 믿는다
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
         this._offlineOnly = false;   // [P40] 서버가 신원을 재검증함 → 오프라인 전용 상태 해제(서버 쓰기 재허용)
@@ -312,7 +318,7 @@
       try {
         localStorage.setItem("wm_auth_cache", JSON.stringify({
           authenticated: true, email: data.email, name: data.name, picture: data.picture,
-          role: data.role, request_status: data.request_status || null,
+          role: data.role, request_status: data.request_status || null, readonly: !!data.readonly,
           super_admin: data.super_admin || null, _ts: Date.now()
         }));
       } catch (e) {}
@@ -516,6 +522,26 @@
       this._showDemoBadge();
     },
 
+    /** [P48] 서버에서 자동입장 토큰을 발급받는다(고정 문자열 상수 대체).
+     *  @param {"designer"|"viewer"} kind
+     *  @returns {Promise<string|null>} 서명 토큰. 실패하면 null(호출부가 열람전용 폴백을 쓴다). */
+    async _mintAutoEntryToken(kind) {
+      let akey = "";
+      try {
+        const q = new URLSearchParams(location.search).get("akey");
+        if (q) localStorage.setItem(AUTO_ENTRY_KEY_LS, q);
+        akey = localStorage.getItem(AUTO_ENTRY_KEY_LS) || "";
+      } catch (e) {}
+      const headers = { "Content-Type": "application/json" };
+      if (akey) headers["X-Auto-Entry-Key"] = akey;
+      try {
+        const r = await fetch("/api/auth/auto-entry", { method: "POST", headers, body: JSON.stringify({ kind }) });
+        if (!r.ok) return null;
+        const j = await r.json();
+        return (j && typeof j.token === "string" && j.token) || null;
+      } catch (e) { return null; }   // 오프라인/구버전 서버 → 정직하게 실패, 열람전용 폴백
+    },
+
     /** [마스터 2026-08-31] 로그인 없는 디자이너 자동입장.
      *  데모 토큰(demo-designer)은 서버에서 봉인(DEMO_LOGIN=0)되어 쓸 수 없으므로,
      *  디자이너 권한만 가지는 전용 토큰(AUTO_DESIGNER_TOKEN)으로 서버 검증을 받는다.
@@ -523,7 +549,10 @@
      *  @returns {Promise<boolean>} 디자이너 진입 성공 여부 */
     async _autoDesignerEntry() {
       this._suppressDemoBadge = true;                    // 자동입장은 데모 배지를 띄우지 않는다
-      this.idToken = AUTO_DESIGNER_TOKEN;
+      // [P48] 🔴 배포 링크(?d=)로 들어온 세션은 **열람 전용** 토큰만 요청한다.
+      //   쓰기 차단의 최종 방어선은 서버 미들웨어이고, 여기는 "애초에 쓰기 자격을 받지 않는다"는 1차 방어다.
+      const kind = new URLSearchParams(location.search).get("d") ? "viewer" : "designer";
+      this.idToken = await this._mintAutoEntryToken(kind) || AUTO_DESIGNER_TOKEN;
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
       await this.refresh();                              // 서버가 전용 토큰을 검증해 role='designer' 세팅
       if (!this.user) {                                  // 서버 스위치 off/네트워크 실패 → 정직하게 로그인 게이트
