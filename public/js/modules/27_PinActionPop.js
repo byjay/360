@@ -130,14 +130,27 @@
       this._pinId = null;
     },
 
-    /** ── 등록정보/번호 저장 — 자동저장 OFF: pin.label 만 갱신하고 미저장 표시만 남긴다 ── */
+    /** ── 등록정보/번호 저장 — 자동저장 OFF: pin.label 만 갱신하고 미저장 표시만 남긴다 ──
+     *  [WO 20260918] 🔴 체크보드 핀은 label 이 곧 번호(유일해야 함) — 이미 쓰는 번호로
+     *  바꾸려 하면 조용히 삼키지 않고 거부한다(01b_PinSeries.js validateCheckboardLabel 정본).
+     *  콘텐츠/빈 핀은 label 이 자유 텍스트라 이 검증을 적용하지 않는다(기존 동작 불변). */
     _saveLabel() {
       const pin = this._pin(); if (!pin) return;
       if (!this._canEdit()) return;
       const $ = (id) => document.getElementById(id);
       const v = ($("pap-label-input") && $("pap-label-input").value || "").trim();
+      if (pin.checkboard && typeof PinSeries !== "undefined" && PinSeries.validateCheckboardLabel) {
+        const check = PinSeries.validateCheckboardLabel(State.pins, pin.page || 1, pin.id, v);
+        if (!check.ok) {
+          const hintEl = $("pap-label-hint");
+          if (hintEl) hintEl.textContent = check.reason;
+          Prompt.toast && Prompt.toast(check.reason);
+          return; // 저장하지 않는다 — 조용한 실패 금지(이유를 보여주고 중단)
+        }
+      }
       pin.label = v;
       if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       // 화면 갱신(번호/제목/메타 재계산) — 페이지 재조회 없이 open()의 표시 로직만 재사용
       const page = pin.page || 1;

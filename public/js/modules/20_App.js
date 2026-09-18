@@ -558,6 +558,10 @@
       const cbEnter = UI.$("btn-checkboard-enter");
       if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
 
+      // [WO 20260918] 체크보드 번호 일괄 변경 진입점 — App._renumberCheckboard() 재사용.
+      const cbRenumber = UI.$("btn-checkboard-renumber");
+      if (cbRenumber) cbRenumber.addEventListener("click", () => this._renumberCheckboard());
+
       // [마스터 요청 2026-09-03] 사이드바 툴레일 "포인트" 버튼 — 클릭 한 번으로
       //   체크보드 순차 배치 모드 진입(기존 btn-checkboard-enter 재사용, 새 로직 없음).
       //   기존 #btn-place(이름/사진 폼)·#btn-checkboard-enter·#btn-photobatch 단독 진입은
@@ -1362,6 +1366,45 @@
       State.checkboardStart[p] = n;
       this._autoSave && this._autoSave();
       return n;
+    },
+
+    /** [WO 20260918] 🔴 사용자가 버튼을 눌러서만 실행되는 일괄 재채번(자동 재채번 아님 —
+     *  duplicateCheckboardIds() 위 주석의 금지 규율과 충돌하지 않는다, 01b_PinSeries.js 참조).
+     *  버튼 클릭 → 새 시작번호 입력(Prompt.ask, 새 UI 없음) → 미리보기/확인(confirm) →
+     *  적용. 계산·검증은 PinSeries.renumberCheckboardRange() 정본에 전부 있고, 여기선
+     *  호출·확인·반영만 한다. */
+    async _renumberCheckboard() {
+      const page = State.pdfPage || 1;
+      const cur = PinSeries.numbers(State.pins, page);
+      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && p.checkboard);
+      if (!curTargets.length) { Prompt.toast && Prompt.toast("이 페이지에는 체크보드 핀이 없습니다"); return; }
+      let curMin = Infinity, curMax = -Infinity;
+      curTargets.forEach((p) => { const info = cur.get(p.id); if (info) { curMin = Math.min(curMin, info.no); curMax = Math.max(curMax, info.no); } });
+      const res = await Prompt.ask({
+        title: "번호 일괄 변경",
+        sub: "현재 " + curTargets.length + "개(" + curMin + "~" + curMax + "번) — 새 시작 번호를 입력하세요",
+        placeholder: "새 시작 번호", value: String(curMax + 1)
+      });
+      if (!res) return;
+      const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value);
+      if (!result.ok) { Prompt.toast && Prompt.toast(result.reason || "변경할 수 없습니다"); return; }
+      const first = result.changes[0].newLabel, last = result.changes[result.changes.length - 1].newLabel;
+      if (!confirm("체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
+      const byId = new Map((State.pins || []).map((p) => [p.id, p]));
+      result.changes.forEach((c) => {
+        const pin = byId.get(c.id);
+        if (!pin) return;
+        pin.label = c.newLabel;
+        // [WO 20260918] 🔴 id 는 절대 건드리지 않는다 — 사진/노트는 pin.id 로 연결되므로
+        // 라벨(표시 번호)만 바뀌어도 연결 불변. 아래 로그는 그 사실을 재확인용으로 남긴다.
+        if (typeof Log !== "undefined") Log.push("pin.renumber", pin.id, { oldLabel: c.oldLabel, newLabel: c.newLabel, page: page });
+        if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }
+      });
+      this._markDirty && this._markDirty();
+      this._autoSave && this._autoSave();
+      if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
+      this._updateCheckboardQuickStatus && this._updateCheckboardQuickStatus(page);
+      Prompt.toast && Prompt.toast(result.changes.length + "개 번호를 " + first + "~" + last + "번으로 변경했습니다" + (navigator.onLine ? "" : "(오프라인 — 연결 후 동기화)"));
     },
 
     /** [WO 20260917 멀티유저 ②] 핀 생성 시점의 작성자 식별자(이메일 우선) — 없으면 null.

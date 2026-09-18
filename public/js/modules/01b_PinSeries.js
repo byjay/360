@@ -218,6 +218,56 @@
       return dup;
     },
 
+    /** [WO 20260918] 🔴 "사용자가 버튼을 누르는" 일괄 재채번 정본 — duplicateCheckboardIds
+     *  위 주석의 금지 규율("자동 재채번 금지")과 충돌하지 않는다. 그건 코드가 스스로
+     *  판단해 조용히 고치는 걸 막은 것이고, 이건 사용자가 명시적으로 버튼을 눌러 요청한
+     *  변경이다 — 이 함수는 UI 에서만 호출되며 자동으로 실행되는 경로가 없다.
+     *  🔴 id 는 절대 건드리지 않는다 — 사진/노트는 pin.id 로 연결되므로 라벨(표시 번호)만
+     *  바뀌어도 연결은 그대로 유지된다.
+     *  순서 보존: 현재 유효 번호(numbers() 파생값) 오름차순으로 정렬해 newStart 부터
+     *  연속으로 다시 매긴다(1→newStart, 2→newStart+1 …) — 뒤섞이지 않는다.
+     *  중복 방지: 결과 라벨 집합 내부 중복(구조상 발생 안 함) + 대상 밖의 다른 체크보드 핀과의
+     *  충돌까지 검사해, 하나라도 겹치면 통째로 거부한다(부분 적용 금지 — 반쯤 바뀐 상태 방지).
+     *  이 함수는 미리보기만 계산하고 pins 를 직접 변형하지 않는다 — 실제 반영은 호출부(UI)가
+     *  confirm 을 받은 뒤 changes 를 적용한다.
+     *  @param {Set|Array} [targetIds] 생략 시 페이지의 체크보드 핀 전체(현재 UI 가 쓰는 범위).
+     *         지정하면 그 부분집합만 재채번하고, 대상 밖의 나머지 체크보드 핀과 번호가
+     *         겹치면 거부한다(향후 "선택 재채번" 확장 대비 — 지금 UI 는 항상 전체를 넘긴다).
+     *  @returns {{ok:boolean, changes:Array<{id,oldLabel,newLabel}>, reason?:string}} */
+    renumberCheckboardRange(pins, page, newStart, targetIds) {
+      const pg = page || 1;
+      const s = parseInt(newStart, 10);
+      if (!Number.isFinite(s) || s < 1) return { ok: false, changes: [], reason: "시작 번호를 올바르게 입력하세요(1 이상 숫자)" };
+      const map = this.numbers(pins, pg);
+      const wantIds = targetIds ? new Set(targetIds) : null;
+      const targets = (pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard && (!wantIds || wantIds.has(p.id)));
+      if (!targets.length) return { ok: false, changes: [], reason: "이 페이지에는 체크보드 핀이 없습니다" };
+      targets.sort((a, b) => {
+        const ai = map.get(a.id), bi = map.get(b.id);
+        return (ai ? ai.no : 0) - (bi ? bi.no : 0);
+      });
+      const changes = targets.map((p, i) => ({ id: p.id, oldLabel: p.label, newLabel: String(s + i) }));
+      const newLabelSet = new Set(changes.map((c) => c.newLabel));
+      if (newLabelSet.size !== changes.length) return { ok: false, changes: [], reason: "변경 결과에 번호 중복이 발생합니다 — 적용하지 않았습니다" };
+      const targetIdSet = new Set(targets.map((p) => p.id));
+      const collide = (pins || []).some((p) => p && (p.page || 1) === pg && p.checkboard && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label)));
+      if (collide) return { ok: false, changes: [], reason: "기존 다른 체크보드 핀과 번호가 겹칩니다 — 적용하지 않았습니다" };
+      return { ok: true, changes: changes };
+    },
+
+    /** [WO 20260918] 개별 번호 변경 검증 — 이미 쓰는 번호로 바꾸려 하면 거부(조용히 삼키지 않음).
+     *  체크보드 핀에만 적용(콘텐츠/빈 핀의 label 은 자유 텍스트라 번호 유일성 규칙이 없다).
+     *  @returns {{ok:boolean, newLabel?:string, reason?:string}} */
+    validateCheckboardLabel(pins, page, pinId, newLabel) {
+      const pg = page || 1;
+      const lbl = String(newLabel == null ? "" : newLabel).trim();
+      if (!lbl) return { ok: false, reason: "번호를 입력하세요" };
+      if (!/^\d+$/.test(lbl)) return { ok: false, reason: "체크보드 번호는 숫자만 가능합니다" };
+      const dup = (pins || []).some((p) => p && p.id !== pinId && (p.page || 1) === pg && p.checkboard && String(p.label) === lbl);
+      if (dup) return { ok: false, reason: "이미 사용 중인 번호입니다(" + lbl + ") — 다른 번호를 입력하세요" };
+      return { ok: true, newLabel: lbl };
+    },
+
     /* ══ 표시 필터 ══════════════════════════════════════════
        숨김 = 표시만 감춘다. 저장 데이터·번호 계열은 필터와 무관하게 불변. */
     _filter: null,
