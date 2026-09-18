@@ -4458,6 +4458,14 @@ button { font-family: var(--font-ui); }
   .brand-logo-top.brand-logo--text { font-size: 15px; }
   .brand-logo-top.brand-logo--img { padding: 5px 10px; }
   .brand-logo-img { max-height: 26px; }
+  /* [WO 로고축약] ≤560px 좁은 화면에서는 선박 와이어프레임을 뺀 축약 로고로 교체.
+     근거: seastar-family-tokens.css 의 전역 !important 규칙(.brand-logo img{max-height:44px})이
+     화면폭과 무관하게 실제 렌더 높이를 항상 44px 로 고정한다(실측, 위 26px 규칙은 사실상 무효).
+     같은 44px 높이에서 전체(2.326:1, 폭≈102px)보다 축약본(1.898:1, 폭≈83px)이 19px 더 좁아
+     좁은 상단바/파노 헤더의 폭 여유를 확보하고, SEASTAR 워드마크가 이미지 높이에서 차지하는
+     비율이 커져(23.4% vs 12.8%) 같은 44px 안에서도 글자가 더 크고 뚜렷하게 보인다.
+     img.src(cfg.logoUrl 경로)는 그대로 두고 화면 표시만 CSS content:url() 로 바꿔치기한다. */
+  .brand-logo-img { content: url("../images/logo-compact.png"); }
 
   /* 로그인 전 안내문은 모바일에서 숨겨 버튼 줄바꿈 방지 */
   .auth-signed-out .auth-hint { display: none; }

@@ -231,6 +231,65 @@ record(
   `background=${bg}`
 );
 
+// ══════════════════════════════════════════════════════════════
+// [WO 로고축약] logo-compact.png(선박 제외) + 좁은 화면 전환 검증
+// ══════════════════════════════════════════════════════════════
+const COMPACT_PATH = path.join(ROOT, "public", "images", "logo-compact.png");
+const compactSize = statSync(COMPACT_PATH).size;
+const compactBuf = readFileSync(COMPACT_PATH);
+const { width: compactW, height: compactH } = readPngSize(compactBuf);
+const compactRatio = compactW / compactH;
+
+// ⑮ logo-compact.png 존재 + 50KB 이하
+record(
+  "⑮ logo-compact.png 존재 + 파일 크기 ≤ 50KB",
+  compactSize > 0 && compactSize <= 50 * 1024,
+  `size=${compactSize}B (${(compactSize / 1024).toFixed(1)}KB) ${compactW}×${compactH}`
+);
+
+// ⑯ 선박 영역 제외 — 가로세로비가 원본(2.327:1)보다 유의미하게(≥10%) 좁아졌다(수치 근거)
+const ratioShrink = (ORIG_RATIO - compactRatio) / ORIG_RATIO;
+record(
+  "⑯ logo-compact.png 이 선박 와이어프레임을 제외해 가로세로비가 원본 대비 ≥10% 좁아졌다",
+  ratioShrink >= 0.10,
+  `compact=${compactW}×${compactH}(${compactRatio.toFixed(4)}) orig비=${ORIG_RATIO.toFixed(4)} 감소율=${(ratioShrink * 100).toFixed(1)}%`
+);
+
+// ⑰ 좁은 폭(≤560px) 전환 규칙이 CSS 값으로 실재한다 — @media (max-width:560px) 블록 안에서
+//    .brand-logo-img 의 content 선언이 logo-compact.png 를 가리키는지 "선언값을 파싱"해 확인.
+function findMediaBlockContainingLocal(css, mediaRe, needle) {
+  const re = new RegExp(mediaRe.source, "g" + (mediaRe.flags.includes("s") ? "s" : ""));
+  let m;
+  while ((m = re.exec(css))) { if (m[1].includes(needle)) return m[1]; }
+  return null;
+}
+const mobileBlock560 = findMediaBlockContainingLocal(styleCss, /@media \(max-width: 560px\) \{([\s\S]*?)\n\}/, ".brand-logo-img");
+const contentDecl = mobileBlock560 ? findDecl(mobileBlock560, "\\.brand-logo-img", "content") : null;
+const contentUrlMatch = contentDecl ? contentDecl.match(/url\(\s*["']?([^"')]+)["']?\s*\)/) : null;
+record(
+  "⑰ @media(max-width:560px) 안 .brand-logo-img { content: url(...) } 가 logo-compact.png 를 가리킨다",
+  !!contentUrlMatch && /logo-compact\.png$/.test(contentUrlMatch[1]),
+  `content=${contentDecl} url=${contentUrlMatch ? contentUrlMatch[1] : "(없음)"}`
+);
+
+// ⑱ 넓은 화면(미디어쿼리 밖)에서는 .brand-logo-img 에 content 재정의가 없어 logo.png(logoUrl) 그대로 유지(회귀)
+const cssNoMedia = styleCss.replace(/@media[^{]*\{[\s\S]*?\n\}/g, "");
+const topLevelContentBlock = cssNoMedia.match(/\.brand-logo-img\s*\{([^}]*)\}/);
+const topLevelHasContent = !!(topLevelContentBlock && /(?:^|[;\s])content\s*:/.test(topLevelContentBlock[1]));
+record(
+  "⑱ 넓은 화면(미디어쿼리 밖) .brand-logo-img 에 content 재정의 없음 — logo.png(logoUrl) 유지",
+  !topLevelHasContent,
+  topLevelContentBlock ? `top-level 블록=${topLevelContentBlock[1].trim()}` : "top-level 블록 없음(정상)"
+);
+
+// ⑲ 375×812 겹침 0 재확인(회귀) — 이번 변경은 .brand-logo-img 의 표시 이미지만 바꾸고
+//    박스 모델(height/padding)은 그대로이므로 ⑤ 의 계산이 동일하게 성립해야 한다.
+record(
+  "⑲ 375×812 — 로고 축약 적용 후에도 .mobile-dock/#btn-save/[data-help-toggle] 겹침 0(회귀, ⑤ 재확인)",
+  overlapDock === 0 && overlapSave === 0 && overlapHelp === 0,
+  `overlap(dock=${overlapDock}, save=${overlapSave}, help=${overlapHelp}) logoAreaBottom=${logoAreaBottomWorstCase.toFixed(1)}px`
+);
+
 // ── 결과 출력 ──
 for (const r of results) console.log(`[${r.pass ? "PASS" : "FAIL"}] ${r.name} :: ${r.detail}`);
 const failCount = results.filter((r) => !r.pass).length;
