@@ -28,6 +28,26 @@
     LABELS: { content: "콘텐츠", empty: "미배치", checkboard: "체크보드" },
     FILTER_KEY: "wm-pin-filter",
 
+    /* [마스터 요청 2026-09-18] "체크보드를 기본 모드로" — 프로젝트를 새로 열 때
+       배치 모드(designer/checkboard)의 기본값. 사용자가 명시 전환하면 그 선택을
+       기억해 다음에도 유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부
+       preferredMode()를 참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
+       🔴 저장된 기존 핀의 checkboard/kind 해석은 이 값과 무관 — 이건 오직
+          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다. */
+    PREFERRED_MODE_KEY: "wm_pin_default_mode",
+    DEFAULT_MODE: "checkboard",
+    preferredMode() {
+      try {
+        const v = localStorage.getItem(this.PREFERRED_MODE_KEY);
+        if (v === "designer" || v === "checkboard") return v;
+      } catch (e) {}
+      return this.DEFAULT_MODE;
+    },
+    setPreferredMode(mode) {
+      if (mode !== "designer" && mode !== "checkboard") return;
+      try { localStorage.setItem(this.PREFERRED_MODE_KEY, mode); } catch (e) {}
+    },
+
     /* ── 색상 정본 ────────────────────────────────────────────
        머리색(head/head2) · 바늘끝(needle) · 숫자 글자색(text).
        숫자는 흰 디스크(#fff) 위에 놓이므로 text ↔ #fff 대비가 판독 기준.

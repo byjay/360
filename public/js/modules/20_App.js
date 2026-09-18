@@ -72,7 +72,8 @@
           const mode = card.dataset.mode;
           // 설계자(디자이너) 모드는 구글 로그인 + 디자이너 권한 필요. 일반인은 뷰어만.
           if (mode === "designer") {
-            Auth.requireDesigner(() => this.openApp("designer"));
+            // [마스터 요청 2026-09-18] 편집 진입 기본 모드 = 체크보드(사용자가 전환하면 그 선택을 기억)
+            Auth.requireDesigner(() => this.openApp(PinSeries.preferredMode()));
             return;
           }
           this.openApp(mode);
@@ -233,11 +234,11 @@
     async enterEdit() {
       if (!Auth.isDesigner && Auth.idToken) { try { await Auth.refresh(); } catch (e) {} }
       if (!Auth.isDesigner) {
-        if (Auth.requireDesigner) { Auth.requireDesigner(() => this.openApp("designer", { project: Projects.currentProject })); }
+        if (Auth.requireDesigner) { Auth.requireDesigner(() => this.openApp(PinSeries.preferredMode(), { project: Projects.currentProject })); }
         return;
       }
       PanoViewer.close();
-      this.openApp("designer", { project: Projects.currentProject });
+      this.openApp(PinSeries.preferredMode(), { project: Projects.currentProject });
     },
 
     /* ── Topbar ── */
@@ -546,6 +547,8 @@
       const toggleCheckboard = () => {
         if (State.placing) this._togglePlacing();
         const next = State.checkboard ? "designer" : "checkboard";
+        // [마스터 요청 2026-09-18] 사용자가 명시 전환한 모드는 다음 진입 때도 유지
+        if (typeof PinSeries !== "undefined") PinSeries.setPreferredMode(next);
         App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
         // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
         if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
@@ -2207,14 +2210,28 @@
         } catch (e) {}
         return 0;
       })();
-      Promise.all([SyncQueue.count(), opLogCount]).then(([sqN, opN]) => {
+      // [마스터 요청 2026-09-18] 오프라인일 때 "오프라인 모드"(번들 다운로드됨) vs
+      //   "작업 불가"(번들 없음)를 구분 — 같은 배지(SoT), 새 배지 신설 금지.
+      const bundleCheck = (async () => {
+        try {
+          if (navigator.onLine) return true; // 온라인이면 판정 불필요(분기에서 안 쓰임)
+          const pid = (typeof Projects !== "undefined" && Projects.currentProject && Projects.currentProject.id) || null;
+          if (!pid) return false;
+          if (typeof Offline !== "undefined" && Offline.Bundle && Offline.Bundle.hasManifest) return await Offline.Bundle.hasManifest(pid);
+        } catch (e) {}
+        return false;
+      })();
+      Promise.all([SyncQueue.count(), opLogCount, bundleCheck]).then(([sqN, opN, hasBundle]) => {
         const n = sqN + opN;
         const dot = UI.$("sync-dot"), txt = UI.$("sync-text");
         const online = navigator.onLine;
         if (!online && n === 0) {
           badge.classList.remove("hidden", "online", "pending");
           badge.classList.add("offline");
-          if (txt) txt.textContent = "오프라인";
+          // 번들(프로젝트 다운로드분)이 로컬에 있으면 "오프라인 모드"로 열람/작업 가능,
+          // 없으면 표시할 데이터가 없어 작업 불가 — 서로 다른 상태이므로 문구를 분리한다.
+          if (txt) txt.textContent = hasBundle ? "오프라인 모드" : "오프라인 — 작업 불가(다운로드 필요)";
+          badge.classList.toggle("offline-blocked", !hasBundle);
         } else if (n > 0) {
           badge.classList.remove("hidden", "online", "offline");
           badge.classList.add("pending");

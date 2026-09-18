@@ -22,7 +22,7 @@
       $("btn-go-edit") && $("btn-go-edit").addEventListener("click", () => {
         if (!Auth.isDesigner) return;
         this.close();
-        App.openApp("designer");
+        App.openApp(PinSeries.preferredMode());
       });
       // 디자이너 지정 관리(슈퍼)
       $("btn-open-designers") && $("btn-open-designers").addEventListener("click", () => {

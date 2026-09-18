@@ -27,17 +27,32 @@
     async download(projectId, onProgress) {
       if (!navigator.onLine) throw new Error("온라인 상태에서만 다운로드할 수 있습니다.");
       const H = _authHeaders();
+      // [마스터 요건5 근본원인 대응 2026-09-18] IndexedDB 는 브라우저가 저장공간
+      // 압박 시 조용히 축출(evict)할 수 있다 — persist()로 축출 대상에서 제외 요청.
+      // 실패해도 무시(모든 브라우저가 지원하지 않음 — 다운로드를 막지 않는다).
+      try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
+
+      // [마스터 요건5 근본원인 수정] saveDraft() 는 실패(IDB 에러/localStorage 용량초과)해도
+      // 조용히 false 를 반환할 뿐 throw 하지 않는다 — 기존 코드는 반환값을 확인하지 않아
+      // "다운로드 완료" 토스트가 뜨지만 실제로는 일부 데이터가 저장되지 않는 조용한 실패가
+      // 가능했다(재현: 마스터 기기에서 다운로드했는데 새로고침/재방문 후 "저장됨"이 안 보임).
+      // → 저장 실패 시 즉시 throw 해 사용자에게 정직하게 "실패"로 보이게 한다.
+      const saveOrThrow = async (key, data) => {
+        const ok = await SyncQueue.saveDraft(key, data);
+        if (!ok) throw new Error("로컬 저장 실패(기기 저장공간 부족) — " + key);
+        return ok;
+      };
 
       // 1) 프로젝트 메타
       const proj = await (await fetch("/api/projects", { headers: H })).json();
       const project = (proj.data || []).find((p) => p.id === projectId);
       if (!project) throw new Error("프로젝트를 찾을 수 없습니다.");
-      await SyncQueue.saveDraft("bundle:project:" + projectId, project);
+      await saveOrThrow("bundle:project:" + projectId, project);
 
       // 2) 데크 목록
       const decksRes = await (await fetch("/api/projects/" + projectId + "/decks", { headers: H })).json();
       const decks = decksRes.data || [];
-      await SyncQueue.saveDraft("bundle:decks:" + projectId, decks);
+      await saveOrThrow("bundle:decks:" + projectId, decks);
 
       // 3) 데크가 가리키는 배포본 id 수집(중복 제거)
       const depIds = Array.from(new Set(decks.map((d) => d.deployment_id).filter(Boolean)));
@@ -48,7 +63,7 @@
       // 4) 각 배포본 + 그 안의 파노 imageId 수집
       for (const depId of depIds) {
         const dep = await (await fetch("/tables/deployments/" + depId, { headers: H })).json();
-        await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+        await saveOrThrow("bundle:dep:" + depId, dep);
         let pins = []; try { pins = JSON.parse(dep.pins || "[]"); } catch (e) {}
         pins.forEach((p) => { if (p && p.imageId) panoIds.add(p.imageId); });
         done++; onProgress && onProgress(done, total, "도면 " + (dep.title || depId));
@@ -58,24 +73,31 @@
       const panoArr = Array.from(panoIds);
       for (let i = 0; i < panoArr.length; i++) {
         const imgId = panoArr[i];
-        try {
-          const rec = await (await fetch("/tables/pano_images/" + imgId, { headers: H })).json();
-          if (rec && rec.image_data) {
-            await SyncQueue.saveDraft("bundle:pano:" + imgId, rec.image_data);
-            if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imgId] = rec.image_data; }
-          }
-        } catch (e) {}
+        const rec = await (await fetch("/tables/pano_images/" + imgId, { headers: H })).json();
+        if (rec && rec.image_data) {
+          await saveOrThrow("bundle:pano:" + imgId, rec.image_data);
+          if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imgId] = rec.image_data; }
+        }
         onProgress && onProgress(total + i + 1, total + panoArr.length, "3D 비워 " + (i + 1) + "/" + panoArr.length);
       }
 
-      // 6) 매니페스트 기록(무결성 검증용)
+      // 6) 매니페스트 기록(무결성 검증용) — 위 저장이 전부 성공했을 때만 여기 도달
       const manifest = {
         projectId, downloadedAt: Date.now(),
         decks: decks.length, deployments: depIds.length, panos: panoArr.length,
         depIds, panoIds: panoArr
       };
-      await SyncQueue.saveDraft("bundle:manifest:" + projectId, manifest);
+      await saveOrThrow("bundle:manifest:" + projectId, manifest);
       return manifest;
+    },
+
+    /** [마스터 요청 2026-09-18] "다운받은 상태"인지 여부(가벼운 체크 — 매니페스트 존재만).
+     *  offline 배지가 "오프라인 모드"(번들 있음) / "작업 불가"(번들 없음)를 가르는 데 쓴다.
+     *  verify()보다 훨씬 가볍다(각 dep/pano 개별 조회 없이 매니페스트 존재만 확인). */
+    async hasManifest(projectId) {
+      if (!projectId) return false;
+      try { return !!(await SyncQueue.loadDraft("bundle:manifest:" + projectId)); }
+      catch (e) { return false; }
     },
 
     /* ── 번들 무결성 검증 ── */

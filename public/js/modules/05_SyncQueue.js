@@ -1,4 +1,12 @@
   const SyncQueue = {
+    // 🔴 SoT — IndexedDB 이름은 이 리터럴 하나뿐이다(코드 전체 grep 결과: 다른 이름 0건).
+    // [마스터 실측 2026-09-18] 프로덕션 브라우저에서 "wm-sync"(하이픈, 빈 DB)와
+    // "wm_sync"(언더바, drafts 4건) 두 DB가 동시에 존재하는 것이 관찰됐다 — 그러나
+    // 소스 전체(현재+git 이력)를 grep 해도 "wm-sync"(하이픈)를 생성하는 코드는
+    // 이 리포에 존재하지 않는다(sw.js도 indexedDB 미사용, PWA/workbox 플러그인 없음).
+    // 즉 하이픈 DB는 이 코드가 만든 게 아닌 잔여물로 추정 — 그래도 방어적으로
+    // _migrateLegacyDb() 에서 감지 시 데이터가 있으면 옮기고 없으면 정리한다.
+    LEGACY_DB_NAME: "wm-sync",
     DB_NAME: "wm_sync",
     STORE: "ops",
     _db: null,
@@ -14,12 +22,13 @@
     },
 
     DRAFT_STORE: "drafts",
+    AUTH_STORE: "authlocal",   // [P40] 오프라인 재인증 검증자(verifier) — 평문 비밀번호는 절대 담지 않는다
 
     async _open() {
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 2);   // v2: drafts 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 3);   // v2: drafts / v3: authlocal 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
@@ -27,6 +36,9 @@
           }
           if (!db.objectStoreNames.contains(this.DRAFT_STORE)) {
             db.createObjectStore(this.DRAFT_STORE, { keyPath: "key" }); // 도면 임시저장(오프라인/서버실패 폴백)
+          }
+          if (!db.objectStoreNames.contains(this.AUTH_STORE)) {
+            db.createObjectStore(this.AUTH_STORE, { keyPath: "key" });  // 오프라인 재인증 검증자
           }
         };
         req.onsuccess = () => res(req.result);
@@ -96,6 +108,55 @@
       const keys = [];
       try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
       return keys;
+    },
+
+    /* ═══ [P40] 오프라인 재인증 검증자 보관 ═══
+       저장되는 것은 PBKDF2-SHA256(100k) 해시 + salt 뿐이다(서버 hashPassword 와 동일 파라미터).
+       기기를 털려도 원문 비밀번호는 복원되지 않는다. 보관 위치는 기존 IndexedDB 재사용(신규 저장소 없음). */
+    AUTH_KEY: "offline-verifier",
+    _authLsKey() { return "wm_offline_auth"; },
+    async saveAuthRecord(rec) {
+      const row = { key: this.AUTH_KEY, rec: rec };
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
+        try {
+          await new Promise((res, rej) => {
+            const tx = db.transaction(this.AUTH_STORE, "readwrite");
+            tx.objectStore(this.AUTH_STORE).put(row);
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+          });
+          return true;
+        } catch (e) { /* 폴백으로 */ }
+      }
+      try { localStorage.setItem(this._authLsKey(), JSON.stringify(row)); return true; } catch (e) { return false; }
+    },
+    async loadAuthRecord() {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
+        try {
+          const row = await new Promise((res) => {
+            const tx = db.transaction(this.AUTH_STORE, "readonly");
+            const rq = tx.objectStore(this.AUTH_STORE).get(this.AUTH_KEY);
+            rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null);
+          });
+          if (row) return row.rec;
+        } catch (e) {}
+      }
+      try { const r = JSON.parse(localStorage.getItem(this._authLsKey()) || "null"); return r ? r.rec : null; }
+      catch (e) { return null; }
+    },
+    async clearAuthRecord() {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
+        try {
+          await new Promise((res) => {
+            const tx = db.transaction(this.AUTH_STORE, "readwrite");
+            tx.objectStore(this.AUTH_STORE).delete(this.AUTH_KEY);
+            tx.oncomplete = res; tx.onerror = res;
+          });
+        } catch (e) {}
+      }
+      try { localStorage.removeItem(this._authLsKey()); } catch (e) {}
     },
 
     /* ── localStorage 폴백 ── */
@@ -172,6 +233,11 @@
     async flush() {
       if (this._syncing) return { ok: false, busy: true };
       if (!navigator.onLine) return { ok: false, offline: true };
+      // [P40 보안] 오프라인 검증자로만 인증된 상태(서버가 검증하지 않은 신원)로는 서버 쓰기를 시도하지 않는다.
+      //   큐는 그대로 보존 → 온라인 재로그인(서버 재검증) 후 자동 업로드된다.
+      if (typeof Auth !== "undefined" && Auth.canServerWrite && !Auth.canServerWrite()) {
+        return { ok: false, offlineAuth: true, reason: "오프라인 인증 상태 — 서버 업로드는 온라인 재로그인 후 진행됩니다" };
+      }
       const pending = (await this.all()).filter(o => o.status !== "done");
       if (pending.length === 0) { this._emit(); return { ok: true, uploaded: 0, map: {} }; }
 
@@ -232,6 +298,58 @@
       window.addEventListener("online", () => this._emit());
       window.addEventListener("offline", () => this._emit());
       this._emit();
+      // [마스터 요건1 2026-09-18] 옛 이름 잔여 DB 정리(있으면 데이터 이관 후 삭제) — fire-and-forget.
+      try { this._migrateLegacyDb(); } catch (e) {}
+    },
+
+    /** [마스터 요건1 2026-09-18] LEGACY_DB_NAME("wm-sync", 하이픈) 잔여 DB가 있으면
+     *  같은 이름의 스토어에 데이터가 있는 걸 정본 DB_NAME("wm_sync")으로 옮기고
+     *  옛 DB는 삭제한다. indexedDB.databases() 미지원 브라우저(Safari 구버전 등)는
+     *  조용히 건너뛴다(잔여 DB가 있어도 정본 읽기/쓰기 경로엔 영향 없음 — DB_NAME만 참조). */
+    async _migrateLegacyDb() {
+      if (!("indexedDB" in window) || typeof indexedDB.databases !== "function") return;
+      try {
+        const dbs = await indexedDB.databases();
+        if (!dbs.some(d => d && d.name === this.LEGACY_DB_NAME)) return; // 잔여 DB 없음 — 정상
+        const ldb = await new Promise((res) => {
+          const req = indexedDB.open(this.LEGACY_DB_NAME);
+          req.onsuccess = () => res(req.result);
+          req.onerror = () => res(null);
+        });
+        if (ldb) {
+          const storeNames = Array.from(ldb.objectStoreNames || []);
+          for (const sn of storeNames) {
+            let rows = [];
+            try {
+              rows = await new Promise((res) => {
+                const tx = ldb.transaction(sn, "readonly");
+                const rq = tx.objectStore(sn).getAll();
+                rq.onsuccess = () => res(rq.result || []);
+                rq.onerror = () => res([]);
+              });
+            } catch (e) {}
+            if (rows.length) {
+              const db = await this._open();
+              if (db && db.objectStoreNames.contains(sn)) {
+                try {
+                  await new Promise((res) => {
+                    const tx = db.transaction(sn, "readwrite");
+                    rows.forEach(r => { try { tx.objectStore(sn).put(r); } catch (e) {} });
+                    tx.oncomplete = res; tx.onerror = res;
+                  });
+                  console.warn("[SyncQueue] 잔여 DB(" + this.LEGACY_DB_NAME + ") " + sn + " " + rows.length + "건 → " + this.DB_NAME + " 이관");
+                } catch (e) {}
+              }
+            }
+          }
+          try { ldb.close(); } catch (e) {}
+        }
+        // 이관 완료(또는 애초에 비어있었음) → 잔여 DB 삭제
+        await new Promise((res) => {
+          const del = indexedDB.deleteDatabase(this.LEGACY_DB_NAME);
+          del.onsuccess = res; del.onerror = res; del.onblocked = res;
+        });
+      } catch (e) { /* 정리 실패해도 정본 DB_NAME 경로는 영향 없음 */ }
     },
 
     /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
