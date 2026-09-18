@@ -130,7 +130,6 @@
         const startInput = UI.$("input-checkboard-start");
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
-        else { const pbBtn = UI.$("btn-checkboard-photobatch"); if (pbBtn) pbBtn.classList.add("hidden"); }
         // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
         //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
         if (isDesigner) App._renderIconPicker("cb-icon-grid", "cb-icon-label");
@@ -566,13 +565,9 @@
       const quickPoint = UI.$("btn-quickpoint");
       if (quickPoint) quickPoint.addEventListener("click", () => this._quickCheckboardEntry());
 
-      // [마스터 요청 2026-09-03] "사진 폴더 연동" — 방금 찍은 체크보드 핀 범위(시작~마지막)로
-      //   PhotoBatch.open() 을 미리 채워 연다. 사용자가 범위를 다시 입력할 필요 없음.
-      const cbPhotoBatch = UI.$("btn-checkboard-photobatch");
-      if (cbPhotoBatch) cbPhotoBatch.addEventListener("click", () => {
-        const range = this._checkboardQuickRange(State.pdfPage || 1);
-        if (typeof PhotoBatch !== "undefined" && PhotoBatch.open) PhotoBatch.open(range);
-      });
+      // [WO 20260918 제거] 구 "사진 폴더 연동" 지름길(#btn-checkboard-photobatch)은 렌더 고아라
+      // 삭제했다. #btn-photobatch(사이드 툴바 "사진" 그룹)가 현재 모드 계열로 자동 매칭해
+      // 동일 기능을 커버한다(35_PhotoBatch.js _defaultRange).
 
       // 체크보드 구역별 시작 번호 입력
       const cbStart = UI.$("input-checkboard-start");
@@ -1438,8 +1433,9 @@
       return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: "checkboard" };
     },
 
-    /** [마스터 요청 2026-09-03] "지금 몇 번부터 / 몇 개 찍었는지"를 기존 place-hint 문구에 반영하고,
-     *  "사진 폴더 연동" 퀵버튼을 찍은 핀이 있을 때만 노출한다(새 UI 요소 없이 기존 요소 재사용). */
+    /** [마스터 요청 2026-09-03, WO 20260918 갱신] "지금 몇 번부터 / 몇 개 찍었는지"를 기존
+     *  place-hint 문구에 반영한다. (구 "사진 폴더 연동" 퀵버튼 노출 토글은 그 버튼이 렌더
+     *  고아라 삭제되며 함께 제거 — #btn-photobatch 로 통합.) */
     _updateCheckboardQuickStatus(page) {
       const pg = page || State.pdfPage || 1;
       const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard).length;
@@ -1450,8 +1446,6 @@
           ? ("시작 " + this._checkboardStart(pg) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
           : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       }
-      const pbBtn = UI.$("btn-checkboard-photobatch");
-      if (pbBtn) pbBtn.classList.toggle("hidden", cnt === 0);
     },
 
     _handlePlaceClick(e) {
@@ -1723,10 +1717,12 @@
         inp.accept = ".pdf,.png,.jpg,.jpeg";
         inp.style.display = "none";
         let settled = false;
+        let hardTimer = null;
         const finish = (f) => {
           if (settled) return;
           settled = true;
           window.removeEventListener("focus", onFocus, true);
+          if (hardTimer) { clearTimeout(hardTimer); hardTimer = null; }
           try { inp.remove(); } catch (e) {}
           resolve(f || null);
         };
@@ -1739,6 +1735,16 @@
         window.addEventListener("focus", onFocus, true);
         document.body.appendChild(inp);
         inp.click();
+        // [WO 20260918] 🔴 상한 타임아웃 — 파일창이 아예 안 열리는 환경(헤드리스·일부 모바일
+        // 브라우저·권한 거부)에서는 focus 이벤트가 오지 않아 이 Promise 가 영구 미해결됐고,
+        // 그 결과 31_Projects.js 의 _creatingDeck 플래그가 영구 true 로 남아 이후 구역 생성이
+        // 전부 조용히 무시됐다(지휘자 실제 피해, 새로고침 전까지 복구 불가). 60초 안에 change/
+        // cancel/focus 신호가 전혀 없으면 취소로 확정하고 사용자에게 알린다.
+        hardTimer = setTimeout(() => {
+          if (settled) return;
+          Prompt && Prompt.toast && Prompt.toast("파일 선택 창 응답이 없어 취소로 처리했습니다. 다시 시도해주세요.");
+          finish(null);
+        }, 60000);
       });
     },
 

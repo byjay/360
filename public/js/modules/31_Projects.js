@@ -34,8 +34,15 @@
       if (db) db.classList.toggle("hidden", !has);
     },
 
+    /* [WO 20260918] 🔴 조용한 실패 금지 — createProject/deleteProject/createDeck 은 서버에
+     *  즉시 ID 를 발급받아야 다음 단계(선택/도면로드/크롭)로 진행할 수 있는 동기 흐름이라,
+     *  OpLog 오프라인 큐(20_App.js, pin/zone 편집 재생 전용)로 편입하지 않는다 — 큐잉하면
+     *  임시 ID ↔ 서버 ID 재조정 로직이 새로 필요해지고(SoT 분열 위험), 삭제는 재생 시점에
+     *  사용자가 모르는 사이 실행돼 위험하다(§10). 대신 최소 조치로 오프라인이면 그 자리에서
+     *  이유를 말하고 중단한다(기존 Prompt.toast 경로 재사용, 새 UI 없음). */
     async createProject() {
       if (!Auth.isDesigner) return;
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 생성할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       const res = await Prompt.ask({ title: "프로젝트 생성", sub: "새 프로젝트 이름을 입력하세요 (예: ○○호 검사)", placeholder: "프로젝트 이름" });
       if (!res) return;
       try {
@@ -44,18 +51,26 @@
         if (!r.ok) { alert(p.error || "생성 실패(권한 필요)"); return; }
         await this.load();
         await this.selectProject(p.id);
-      } catch (e) { alert("네트워크 오류"); }
+      } catch (e) {
+        if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 생성할 수 없습니다 — 연결 후 다시 시도하세요"); }
+        else alert("네트워크 오류");
+      }
     },
 
     async deleteProject() {
       if (!this.currentProject) return;
       if (!confirm(`'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 삭제할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       try {
         await fetch("/api/projects/" + this.currentProject.id, { method: "DELETE", headers: Auth.headers() });
         this.currentProject = null; this.currentDeck = null; this.decks = [];
         await this.load();
         this._renderDecks();
-      } catch (e) {}
+      } catch (e) {
+        // [WO 20260918] 🔴 예전엔 빈 catch — 오프라인/네트워크 오류가 아무 말 없이 무시됐다.
+        if (!navigator.onLine) Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 삭제할 수 없습니다 — 연결 후 다시 시도하세요");
+        else Prompt.toast && Prompt.toast("삭제 실패 — 네트워크 오류, 다시 시도해주세요");
+      }
     },
 
     async selectProject(id) {
@@ -96,6 +111,9 @@
       if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return null; }
       // ── [마스터 요청] 생성 버튼 연타 가드: 진행 중이면 중복 생성 차단 ──
       if (this._creatingDeck) { return null; }
+      // [WO 20260918] 🔴 조용한 실패 금지 — 이 흐름은 파일선택창까지 여는 동기 흐름이라
+      // OpLog 큐잉 대상이 아니다(사유는 파일 상단 주석). 오프라인이면 파일창을 열기 전에 중단.
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 구역을 생성할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
       let name = opts.name;
       if (!name) {
         const res = await Prompt.ask({ title: "구역 생성", sub: "구역 이름을 입력하세요 (예: Main Deck, Engine Room, No.1 Hold)", placeholder: "구역 이름" });
@@ -152,7 +170,11 @@
           try { await App._saveDraftLocal(); } catch (e) {}
         }
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
-      } catch (e) { alert("네트워크 오류"); return null; }
+      } catch (e) {
+        if (!navigator.onLine) Prompt.toast && Prompt.toast("오프라인이라 지금은 구역을 생성할 수 없습니다 — 연결 후 다시 시도하세요");
+        else alert("네트워크 오류");
+        return null;
+      }
       finally { this._creatingDeck = false; }
       // ── [P1] 구역이 확정된 뒤에 도면 로드. _creatingDeck 해제 후에 호출해야
       //   _loadDrawing 내부의 '구역 선행' 가드가 createDeck 을 재호출해도 연타가드에 막히지 않는다.

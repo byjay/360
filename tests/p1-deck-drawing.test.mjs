@@ -37,6 +37,7 @@ function makeProjects(projectsSrc, { pickResult }) {
     console,
     alert: (m) => { calls.alert = m; },
     confirm: () => true,
+    navigator: { onLine: true },
     document: { getElementById: () => null, createElement: () => el(), body: { appendChild() {} } },
     Auth: { headers: () => ({}), isDesigner: true },
     Prompt: { ask: async () => ({ value: "TEST ZONE" }), toast: (t) => { calls.toast = t; } },

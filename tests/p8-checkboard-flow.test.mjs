@@ -9,10 +9,11 @@
  *     꺼져있으면 #btn-checkboard-enter 로, 켜져있으면 #btn-place 로 위임한다
  *  ② 연속 클릭 시 번호가 1씩 증가한다(시작번호 반영, PinSeries.nextCheckboardNo 그대로 재사용)
  *  ③ 범위(시작~마지막)는 PinSeries 정본에서 파생한다(자체 채번 금지)
- *  ④ "사진 폴더 연동"(#btn-checkboard-photobatch) 실행 시 PhotoBatch.open() 에
- *     방금 찍은 범위가 그대로 전달된다(사용자가 다시 입력하지 않음)
+ *  ④ [WO 20260918 갱신] 구 전용 지름길(#btn-checkboard-photobatch) 은 렌더 고아라 제거됐다.
+ *     대신 #btn-photobatch(단독 진입)가 State.checkboard 를 참조해 방금 찍은 체크보드
+ *     범위로 자동으로 열린다(35_PhotoBatch.js _defaultRange, 하드코딩 제거).
  *  ⑤ 기존 진입 경로 2개(#btn-checkboard-enter 단독, #btn-photobatch 단독)와
- *     새 버튼 2개(#btn-quickpoint, #btn-checkboard-photobatch)가 모두 바인딩된다
+ *     신규 버튼 1개(#btn-quickpoint)가 모두 바인딩된다
  *
  * 실제 모듈 소스(01b_PinSeries.js / 35_PhotoBatch.js / 20_App.js)를 그대로 vm 에 평가해 검사한다
  * (목 구현 아님). #btn-checkboard-enter 실클릭은 App.openApp()(네트워크·전체화면 전환)까지 타므로
@@ -187,37 +188,53 @@ function makeFullEnv(pins) {
   }
 }
 
-/* ══ ④ "사진 폴더 연동" 실행 시 PhotoBatch 에 방금 찍은 범위가 전달된다 ══ */
+/* ══ ④ [WO 20260918 갱신] 체크보드 모드에서 #btn-photobatch(단독 진입, 사이드 툴바 "사진" 그룹)를
+ *  눌러도 방금 찍은 체크보드 범위로 열린다 — 구 전용 지름길(#btn-checkboard-photobatch) 은
+ *  렌더 고아라 제거됐고(style.css:4914 영구 hidden + 새 toolbar 위임 대상 없음), 대체 경로는
+ *  35_PhotoBatch.js _defaultRange() 가 State.checkboard 를 참조해 series 를 자동 선택하는 것이다. */
 {
-  const { App, State, registry, photoBatchCalls } = makeFullEnv();
+  const { document, registry } = makeDoc();
+  const State = { checkboard: false, mode: "designer", pdfPage: 1, pins: [], checkboardStart: {}, activePin: null };
+  const UI = {
+    $: (id) => document.getElementById(id),
+    hide(id) { const e = document.getElementById(id); if (e) e.classList.add("hidden"); },
+    text(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; },
+    togglePinList() {}, renderPinList() {}, renderPinsOnMap() {}
+  };
+  const sandbox = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State, UI, Prompt: { toast() {} }, requestAnimationFrame: (cb) => cb(), JSON, Array, Map, Set, Date: makeSeqDate() };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    seriesSrc + "\n" + pbSrc + "\n" + appSrc + "\n;globalThis.__App = App; globalThis.__PB = PhotoBatch;",
+    sandbox
+  );
+  const App = sandbox.__App, PB = sandbox.__PB;
+  PB.init();
+  App._bindSidebar();
   State.checkboard = true;
   State.checkboardStart = { 1: 10 };
   App._placeCheckboardPin({ x: 1, y: 1 });
   App._placeCheckboardPin({ x: 2, y: 2 });
-  ok(registry["btn-checkboard-photobatch"].classList.contains("hidden") === false,
-    "④ 핀을 찍으면 '사진 폴더 연동' 버튼이 노출된다(hidden 해제)");
-  registry["btn-checkboard-photobatch"].click();
-  ok(photoBatchCalls.length === 1 && photoBatchCalls[0].start === 10 && photoBatchCalls[0].end === 11,
-    "④ '사진 폴더 연동' 클릭 → PhotoBatch.open() 에 방금 찍은 범위(10~11) 전달 → " + JSON.stringify(photoBatchCalls[0]));
+  registry["btn-photobatch"].click(); // 단독 진입(범위 인자 없음) — _defaultRange() 가 현재 모드를 봐야 함
+  ok(PB._range.series === "checkboard" && PB._range.start === 10 && PB._range.end === 11,
+    "④ 체크보드 모드에서 #btn-photobatch 클릭 → PhotoBatch 가 방금 찍은 체크보드 범위(10~11)로 열림 → " + JSON.stringify(PB._range));
 
-  console.log("\n[뮤테이션④] 사진폴더연동 버튼이 범위 없이 PhotoBatch.open() 을 호출하면 실패해야 함");
-  const needle = `if (typeof PhotoBatch !== "undefined" && PhotoBatch.open) PhotoBatch.open(range);`;
-  const mutated = appSrc.replace(needle, `if (typeof PhotoBatch !== "undefined" && PhotoBatch.open) PhotoBatch.open();`);
-  if (mutated === appSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  console.log("\n[뮤테이션④] _defaultRange() 가 다시 series=\"content\" 로 고정되면 실패해야 함");
+  const needle = 'const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";';
+  const mutated = pbSrc.replace(needle, 'const series = "content";');
+  if (mutated === pbSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { document, registry: regM } = makeDoc();
+    const { document: docM, registry: regM } = makeDoc();
     const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: [], checkboardStart: { 1: 10 } };
-    const callsM = [];
-    const PhotoBatchM = { open(range) { callsM.push(range); } };
-    const UIm = { $: (id) => document.getElementById(id), hide() {}, text() {}, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
-    const sandboxM = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State: StateM, UI: UIm, Prompt: { toast() {} }, PhotoBatch: PhotoBatchM, JSON, Array, Map, Set, Date: makeSeqDate() };
+    const UIm = { $: (id) => docM.getElementById(id), hide() {}, text() {}, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
+    const sandboxM = { console, document: docM, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State: StateM, UI: UIm, Prompt: { toast() {} }, requestAnimationFrame: (cb) => cb(), JSON, Array, Map, Set, Date: makeSeqDate() };
     vm.createContext(sandboxM);
-    vm.runInContext(seriesSrc + "\n" + mutated + "\n;globalThis.__App = App;", sandboxM);
+    vm.runInContext(seriesSrc + "\n" + mutated + "\n" + appSrc + "\n;globalThis.__App = App; globalThis.__PB = PhotoBatch;", sandboxM);
+    sandboxM.__PB.init();
     sandboxM.__App._bindSidebar();
     sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
-    regM["btn-checkboard-photobatch"].click();
-    ok(!(callsM[0] && callsM[0].start === 10),
-      `뮤테이션 적용 시 범위 없이 호출돼 깨짐(테스트 실효성 증명) → ${JSON.stringify(callsM[0])}`);
+    regM["btn-photobatch"].click();
+    ok(sandboxM.__PB._range.series !== "checkboard",
+      `뮤테이션 적용 시 체크보드 모드에서도 content 로 고정돼 깨짐(테스트 실효성 증명) → ${sandboxM.__PB._range.series}`);
   }
 }
 
@@ -230,8 +247,8 @@ function makeFullEnv(pins) {
     "⑤ 기존 경로2 — #btn-photobatch 단독 진입 핸들러가 여전히 바인딩됨(35_PhotoBatch.js init())");
   ok((registry["btn-quickpoint"]._handlers.click || []).length >= 1,
     "⑤ 신규 — #btn-quickpoint(사이드바 툴레일 '포인트') 핸들러가 바인딩됨");
-  ok((registry["btn-checkboard-photobatch"]._handlers.click || []).length >= 1,
-    "⑤ 신규 — #btn-checkboard-photobatch('사진 폴더 연동') 핸들러가 바인딩됨");
+  // [WO 20260918] 구 #btn-checkboard-photobatch('사진 폴더 연동' 전용 지름길) 은 렌더 고아라
+  // 제거됐다 — #btn-photobatch 가 모드 인지형으로 바뀌며 동일 기능을 흡수했다(④ 참조).
 }
 
 console.log(failed ? `\n총 ${failed}건 실패` : "\n전부 통과");

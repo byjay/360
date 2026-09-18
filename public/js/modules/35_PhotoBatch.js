@@ -221,16 +221,21 @@
       }
     },
 
+    /* [WO 20260918] 🔴 series 하드코딩 제거 — 단독 진입(#btn-photobatch)이 "콘텐츠 계열"로
+     *  고정돼 있어, 체크보드 모드에서 열면 대상 핀이 항상 0건이었다(진입로는 있지만 결과가 없어
+     *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
+     *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      const list = this._pinList(State.pins, State.pdfPage || 1, "content");
-      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: "content" };
+      const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";
+      const list = this._pinList(State.pins, State.pdfPage || 1, series);
+      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
 
-    /** @param {{start:number,end:number,series?:string}} [range] — [마스터 요청 2026-09-03] 체크보드
-     *  순차 배치 퀵플로우(20_App.js _quickCheckboardEntry → btn-checkboard-photobatch)가 방금 찍은
-     *  핀 범위 + series:"checkboard" 를 넘기면 사용자가 범위를 다시 입력하지 않도록 그대로 채운다.
-     *  🔴 series 생략 시 기존 단독 진입(#btn-photobatch)과 동일하게 "content" 계열 + 자동 계산
-     *  (_defaultRange) — 기존 동작 불변. */
+    /** @param {{start:number,end:number,series?:string}} [range] — 호출부가 명시 범위를 넘기면
+     *  그대로 채운다(range 없이 호출하는 경로는 현재 #btn-photobatch 단독 진입 하나뿐).
+     *  🔴 [WO 20260918] series 생략 시 _defaultRange() 가 현재 배치 모드(State.checkboard)를
+     *  따라 "content"/"checkboard" 를 자동 선택한다 — 예전엔 "content" 로 고정돼 체크보드
+     *  모드에서 열면 대상 핀이 0건이었다(하드코딩 제거). */
     open(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
       this._rows = [];
@@ -253,6 +258,13 @@
         title.textContent = "사진 폴더 일괄 매칭 — " + label + " 계열";
       }
       this._renderTable();
+      // [WO 20260918] 🔴 조용한 실패 금지 — 대상 계열 핀이 0건이면 모달만 열고 아무 말 없던 것을
+      // 이유와 함께 알린다(기존 토스트 경로 재사용, 새 UI 없음).
+      const targetList = this._pinList(State.pins, State.pdfPage || 1, this._range.series);
+      if (!targetList.length && typeof Prompt !== "undefined" && Prompt.toast) {
+        const label2 = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
+        Prompt.toast("이 화면(" + label2 + " 계열)에는 대상 핀이 없습니다 — 먼저 번호 핀을 찍어주세요");
+      }
     },
 
     close() {

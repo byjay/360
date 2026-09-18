@@ -43,6 +43,7 @@ function makeSandbox(src, overrides) {
     console,
     alert: (m) => { calls.alert = m; },
     confirm: () => true,
+    navigator: { onLine: true },
     document: { getElementById: () => null, createElement: () => el(), body: { appendChild() {}, classList: { toggle: (c, v) => calls.bodyClass = [c, !!v] } } },
     Auth: { headers: () => ({}), isDesigner: true },
     Prompt: { ask: async () => ({ value: "TEST DECK" }), toast: () => {} },

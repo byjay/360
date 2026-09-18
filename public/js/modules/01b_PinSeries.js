@@ -28,14 +28,16 @@
     LABELS: { content: "콘텐츠", empty: "미배치", checkboard: "체크보드" },
     FILTER_KEY: "wm-pin-filter",
 
-    /* [마스터 요청 2026-09-18] "체크보드를 기본 모드로" — 프로젝트를 새로 열 때
-       배치 모드(designer/checkboard)의 기본값. 사용자가 명시 전환하면 그 선택을
-       기억해 다음에도 유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부
-       preferredMode()를 참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
+    /* [마스터 요청 2026-09-18, 정정] 프로젝트를 새로 열 때 배치 모드(designer/checkboard)의
+       기본값 = 등록모드(designer). 사용자가 명시 전환하면 그 선택을 기억해 다음에도
+       유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부 preferredMode()를
+       참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
        🔴 저장된 기존 핀의 checkboard/kind 해석은 이 값과 무관 — 이건 오직
-          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다. */
+          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다.
+       (2026-09-18 11:23 커밋에서 체크보드로 바꿨다가, 같은 날 마스터가 등록모드로
+        되돌리라 정정 — 기본값만 뒤집고 SoT 구조·저장된 선택 우선순위는 그대로 유지.) */
     PREFERRED_MODE_KEY: "wm_pin_default_mode",
-    DEFAULT_MODE: "checkboard",
+    DEFAULT_MODE: "designer",
     preferredMode() {
       try {
         const v = localStorage.getItem(this.PREFERRED_MODE_KEY);

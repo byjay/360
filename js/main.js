@@ -146,14 +146,16 @@
     LABELS: { content: "콘텐츠", empty: "미배치", checkboard: "체크보드" },
     FILTER_KEY: "wm-pin-filter",
 
-    /* [마스터 요청 2026-09-18] "체크보드를 기본 모드로" — 프로젝트를 새로 열 때
-       배치 모드(designer/checkboard)의 기본값. 사용자가 명시 전환하면 그 선택을
-       기억해 다음에도 유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부
-       preferredMode()를 참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
+    /* [마스터 요청 2026-09-18, 정정] 프로젝트를 새로 열 때 배치 모드(designer/checkboard)의
+       기본값 = 등록모드(designer). 사용자가 명시 전환하면 그 선택을 기억해 다음에도
+       유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부 preferredMode()를
+       참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
        🔴 저장된 기존 핀의 checkboard/kind 해석은 이 값과 무관 — 이건 오직
-          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다. */
+          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다.
+       (2026-09-18 11:23 커밋에서 체크보드로 바꿨다가, 같은 날 마스터가 등록모드로
+        되돌리라 정정 — 기본값만 뒤집고 SoT 구조·저장된 선택 우선순위는 그대로 유지.) */
     PREFERRED_MODE_KEY: "wm_pin_default_mode",
-    DEFAULT_MODE: "checkboard",
+    DEFAULT_MODE: "designer",
     preferredMode() {
       try {
         const v = localStorage.getItem(this.PREFERRED_MODE_KEY);
@@ -7206,7 +7208,6 @@
         const startInput = UI.$("input-checkboard-start");
         if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
-        else { const pbBtn = UI.$("btn-checkboard-photobatch"); if (pbBtn) pbBtn.classList.add("hidden"); }
         // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
         //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
         if (isDesigner) App._renderIconPicker("cb-icon-grid", "cb-icon-label");
@@ -7642,13 +7643,9 @@
       const quickPoint = UI.$("btn-quickpoint");
       if (quickPoint) quickPoint.addEventListener("click", () => this._quickCheckboardEntry());
 
-      // [마스터 요청 2026-09-03] "사진 폴더 연동" — 방금 찍은 체크보드 핀 범위(시작~마지막)로
-      //   PhotoBatch.open() 을 미리 채워 연다. 사용자가 범위를 다시 입력할 필요 없음.
-      const cbPhotoBatch = UI.$("btn-checkboard-photobatch");
-      if (cbPhotoBatch) cbPhotoBatch.addEventListener("click", () => {
-        const range = this._checkboardQuickRange(State.pdfPage || 1);
-        if (typeof PhotoBatch !== "undefined" && PhotoBatch.open) PhotoBatch.open(range);
-      });
+      // [WO 20260918 제거] 구 "사진 폴더 연동" 지름길(#btn-checkboard-photobatch)은 렌더 고아라
+      // 삭제했다. #btn-photobatch(사이드 툴바 "사진" 그룹)가 현재 모드 계열로 자동 매칭해
+      // 동일 기능을 커버한다(35_PhotoBatch.js _defaultRange).
 
       // 체크보드 구역별 시작 번호 입력
       const cbStart = UI.$("input-checkboard-start");
@@ -8514,8 +8511,9 @@
       return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: "checkboard" };
     },
 
-    /** [마스터 요청 2026-09-03] "지금 몇 번부터 / 몇 개 찍었는지"를 기존 place-hint 문구에 반영하고,
-     *  "사진 폴더 연동" 퀵버튼을 찍은 핀이 있을 때만 노출한다(새 UI 요소 없이 기존 요소 재사용). */
+    /** [마스터 요청 2026-09-03, WO 20260918 갱신] "지금 몇 번부터 / 몇 개 찍었는지"를 기존
+     *  place-hint 문구에 반영한다. (구 "사진 폴더 연동" 퀵버튼 노출 토글은 그 버튼이 렌더
+     *  고아라 삭제되며 함께 제거 — #btn-photobatch 로 통합.) */
     _updateCheckboardQuickStatus(page) {
       const pg = page || State.pdfPage || 1;
       const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard).length;
@@ -8526,8 +8524,6 @@
           ? ("시작 " + this._checkboardStart(pg) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
           : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       }
-      const pbBtn = UI.$("btn-checkboard-photobatch");
-      if (pbBtn) pbBtn.classList.toggle("hidden", cnt === 0);
     },
 
     _handlePlaceClick(e) {
@@ -8799,10 +8795,12 @@
         inp.accept = ".pdf,.png,.jpg,.jpeg";
         inp.style.display = "none";
         let settled = false;
+        let hardTimer = null;
         const finish = (f) => {
           if (settled) return;
           settled = true;
           window.removeEventListener("focus", onFocus, true);
+          if (hardTimer) { clearTimeout(hardTimer); hardTimer = null; }
           try { inp.remove(); } catch (e) {}
           resolve(f || null);
         };
@@ -8815,6 +8813,16 @@
         window.addEventListener("focus", onFocus, true);
         document.body.appendChild(inp);
         inp.click();
+        // [WO 20260918] 🔴 상한 타임아웃 — 파일창이 아예 안 열리는 환경(헤드리스·일부 모바일
+        // 브라우저·권한 거부)에서는 focus 이벤트가 오지 않아 이 Promise 가 영구 미해결됐고,
+        // 그 결과 31_Projects.js 의 _creatingDeck 플래그가 영구 true 로 남아 이후 구역 생성이
+        // 전부 조용히 무시됐다(지휘자 실제 피해, 새로고침 전까지 복구 불가). 60초 안에 change/
+        // cancel/focus 신호가 전혀 없으면 취소로 확정하고 사용자에게 알린다.
+        hardTimer = setTimeout(() => {
+          if (settled) return;
+          Prompt && Prompt.toast && Prompt.toast("파일 선택 창 응답이 없어 취소로 처리했습니다. 다시 시도해주세요.");
+          finish(null);
+        }, 60000);
       });
     },
 
@@ -14506,8 +14514,15 @@
       if (db) db.classList.toggle("hidden", !has);
     },
 
+    /* [WO 20260918] 🔴 조용한 실패 금지 — createProject/deleteProject/createDeck 은 서버에
+     *  즉시 ID 를 발급받아야 다음 단계(선택/도면로드/크롭)로 진행할 수 있는 동기 흐름이라,
+     *  OpLog 오프라인 큐(20_App.js, pin/zone 편집 재생 전용)로 편입하지 않는다 — 큐잉하면
+     *  임시 ID ↔ 서버 ID 재조정 로직이 새로 필요해지고(SoT 분열 위험), 삭제는 재생 시점에
+     *  사용자가 모르는 사이 실행돼 위험하다(§10). 대신 최소 조치로 오프라인이면 그 자리에서
+     *  이유를 말하고 중단한다(기존 Prompt.toast 경로 재사용, 새 UI 없음). */
     async createProject() {
       if (!Auth.isDesigner) return;
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 생성할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       const res = await Prompt.ask({ title: "프로젝트 생성", sub: "새 프로젝트 이름을 입력하세요 (예: ○○호 검사)", placeholder: "프로젝트 이름" });
       if (!res) return;
       try {
@@ -14516,18 +14531,26 @@
         if (!r.ok) { alert(p.error || "생성 실패(권한 필요)"); return; }
         await this.load();
         await this.selectProject(p.id);
-      } catch (e) { alert("네트워크 오류"); }
+      } catch (e) {
+        if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 생성할 수 없습니다 — 연결 후 다시 시도하세요"); }
+        else alert("네트워크 오류");
+      }
     },
 
     async deleteProject() {
       if (!this.currentProject) return;
       if (!confirm(`'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 삭제할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       try {
         await fetch("/api/projects/" + this.currentProject.id, { method: "DELETE", headers: Auth.headers() });
         this.currentProject = null; this.currentDeck = null; this.decks = [];
         await this.load();
         this._renderDecks();
-      } catch (e) {}
+      } catch (e) {
+        // [WO 20260918] 🔴 예전엔 빈 catch — 오프라인/네트워크 오류가 아무 말 없이 무시됐다.
+        if (!navigator.onLine) Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 삭제할 수 없습니다 — 연결 후 다시 시도하세요");
+        else Prompt.toast && Prompt.toast("삭제 실패 — 네트워크 오류, 다시 시도해주세요");
+      }
     },
 
     async selectProject(id) {
@@ -14568,6 +14591,9 @@
       if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return null; }
       // ── [마스터 요청] 생성 버튼 연타 가드: 진행 중이면 중복 생성 차단 ──
       if (this._creatingDeck) { return null; }
+      // [WO 20260918] 🔴 조용한 실패 금지 — 이 흐름은 파일선택창까지 여는 동기 흐름이라
+      // OpLog 큐잉 대상이 아니다(사유는 파일 상단 주석). 오프라인이면 파일창을 열기 전에 중단.
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 구역을 생성할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
       let name = opts.name;
       if (!name) {
         const res = await Prompt.ask({ title: "구역 생성", sub: "구역 이름을 입력하세요 (예: Main Deck, Engine Room, No.1 Hold)", placeholder: "구역 이름" });
@@ -14624,7 +14650,11 @@
           try { await App._saveDraftLocal(); } catch (e) {}
         }
         if (opts.select !== false) { this.currentDeck = created; this._renderDecks(); }
-      } catch (e) { alert("네트워크 오류"); return null; }
+      } catch (e) {
+        if (!navigator.onLine) Prompt.toast && Prompt.toast("오프라인이라 지금은 구역을 생성할 수 없습니다 — 연결 후 다시 시도하세요");
+        else alert("네트워크 오류");
+        return null;
+      }
       finally { this._creatingDeck = false; }
       // ── [P1] 구역이 확정된 뒤에 도면 로드. _creatingDeck 해제 후에 호출해야
       //   _loadDrawing 내부의 '구역 선행' 가드가 createDeck 을 재호출해도 연타가드에 막히지 않는다.
@@ -15649,16 +15679,21 @@
       }
     },
 
+    /* [WO 20260918] 🔴 series 하드코딩 제거 — 단독 진입(#btn-photobatch)이 "콘텐츠 계열"로
+     *  고정돼 있어, 체크보드 모드에서 열면 대상 핀이 항상 0건이었다(진입로는 있지만 결과가 없어
+     *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
+     *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      const list = this._pinList(State.pins, State.pdfPage || 1, "content");
-      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: "content" };
+      const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";
+      const list = this._pinList(State.pins, State.pdfPage || 1, series);
+      return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
 
-    /** @param {{start:number,end:number,series?:string}} [range] — [마스터 요청 2026-09-03] 체크보드
-     *  순차 배치 퀵플로우(20_App.js _quickCheckboardEntry → btn-checkboard-photobatch)가 방금 찍은
-     *  핀 범위 + series:"checkboard" 를 넘기면 사용자가 범위를 다시 입력하지 않도록 그대로 채운다.
-     *  🔴 series 생략 시 기존 단독 진입(#btn-photobatch)과 동일하게 "content" 계열 + 자동 계산
-     *  (_defaultRange) — 기존 동작 불변. */
+    /** @param {{start:number,end:number,series?:string}} [range] — 호출부가 명시 범위를 넘기면
+     *  그대로 채운다(range 없이 호출하는 경로는 현재 #btn-photobatch 단독 진입 하나뿐).
+     *  🔴 [WO 20260918] series 생략 시 _defaultRange() 가 현재 배치 모드(State.checkboard)를
+     *  따라 "content"/"checkboard" 를 자동 선택한다 — 예전엔 "content" 로 고정돼 체크보드
+     *  모드에서 열면 대상 핀이 0건이었다(하드코딩 제거). */
     open(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
       this._rows = [];
@@ -15681,6 +15716,13 @@
         title.textContent = "사진 폴더 일괄 매칭 — " + label + " 계열";
       }
       this._renderTable();
+      // [WO 20260918] 🔴 조용한 실패 금지 — 대상 계열 핀이 0건이면 모달만 열고 아무 말 없던 것을
+      // 이유와 함께 알린다(기존 토스트 경로 재사용, 새 UI 없음).
+      const targetList = this._pinList(State.pins, State.pdfPage || 1, this._range.series);
+      if (!targetList.length && typeof Prompt !== "undefined" && Prompt.toast) {
+        const label2 = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
+        Prompt.toast("이 화면(" + label2 + " 계열)에는 대상 핀이 없습니다 — 먼저 번호 핀을 찍어주세요");
+      }
     },
 
     close() {

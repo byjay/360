@@ -4,7 +4,8 @@
  * 마스터 지시 4건(2026-09-18) + 지휘자 추가 실측 1건 검증:
  *  ① 모바일에서 .pf-tools 노출 타입이 사진 1개뿐
  *  ② 데스크톱은 6개 유지
- *  ③ 핀 기본 모드가 체크보드
+ *  ③ 핀 기본 모드가 등록모드(designer) — [WO 20260918 정정] 최초 지시(체크보드 기본)를
+ *     마스터가 같은 날 되돌려 등록모드로 확정. 저장된 선택은 기본값보다 우선.
  *  ④ 기존 저장 핀의 kind 해석 불변(회귀) — PinSeries.kindOf() 는 preferredMode 와 무관
  *  ⑤ 오프라인+번들있음 → "오프라인 모드" 표기
  *  ⑥ 오프라인+번들없음 → 다른 안내("작업 불가")
@@ -155,14 +156,15 @@ function makePinSeriesSandbox(initialStore) {
   return { PS: sandbox.__PS, store };
 }
 {
+  // [WO 20260918 정정] 마스터가 "체크보드 기본" 지시를 되돌려 "등록모드가 기본"으로 확정.
   const { PS } = makePinSeriesSandbox({}); // 새 사용자(저장된 선호 없음)
-  ok(PS.preferredMode() === "checkboard", "③ 저장된 선호 없을 때 기본값 = checkboard, 실제 " + PS.preferredMode());
-  ok(PS.DEFAULT_MODE === "checkboard", "③ DEFAULT_MODE 리터럴 = checkboard(SoT)");
+  ok(PS.preferredMode() === "designer", "③ 저장된 선호 없을 때 기본값 = designer(등록모드), 실제 " + PS.preferredMode());
+  ok(PS.DEFAULT_MODE === "designer", "③ DEFAULT_MODE 리터럴 = designer(SoT)");
 
-  // 사용자가 designer 로 전환하면 그 선택이 유지되는지
-  PS.setPreferredMode("designer");
-  const { PS: PS2 } = makePinSeriesSandbox({ wm_pin_default_mode: "designer" });
-  ok(PS2.preferredMode() === "designer", "사용자가 designer 전환 후 유지 확인");
+  // 사용자가 checkboard 로 전환하면 그 선택이 유지되는지(기본값보다 우선)
+  PS.setPreferredMode("checkboard");
+  const { PS: PS2 } = makePinSeriesSandbox({ wm_pin_default_mode: "checkboard" });
+  ok(PS2.preferredMode() === "checkboard", "사용자가 checkboard 전환 후 유지 확인 — 저장된 선택이 기본값보다 우선");
 
   // ④ 기존 저장 핀의 kind 해석은 preferredMode 와 무관(회귀) — 체크보드 핀/콘텐츠 핀/빈 핀
   ok(PS.kindOf({ checkboard: true }) === "checkboard", "④ 기존 체크보드 핀 kindOf 불변");
