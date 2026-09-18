@@ -489,26 +489,9 @@
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
 
-        // [오프라인 작업지시서 ] 오프라인 다운로드 버튼
+        // [오프라인 작업지시서 ] 오프라인 다운로드 버튼 — 실 로직은 downloadProject() 정본(SoT)
         const dl = card.querySelector('[data-act="dl"]');
-        if (dl) dl.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          if (typeof OfflineBundle === "undefined") { Prompt.toast("오프라인 모듈 미로드"); return; }
-          const orig = dl.innerHTML;
-          dl.disabled = true; dl.classList.add("busy");
-          try {
-            const m = await OfflineBundle.download(p.id, (done, total, label) => {
-              dl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
-            });
-            const v = await OfflineBundle.verify(p.id);
-            if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
-            else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
-          } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
-          finally {
-            dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig;
-            this._refreshDlState(dl, p.id);
-          }
-        });
+        if (dl) dl.addEventListener("click", (e) => { e.stopPropagation(); this.downloadProject(p, dl); });
         // 카드가 화면에 그려질 때마다 "이미 오프라인 저장돼 있는지" 표시 —
         // 눌러봐야 아는 게 아니라 항상 보이게(마스터 지시: 상태는 보여야 한다)
         if (dl) this._refreshDlState(dl, p.id);
@@ -608,6 +591,30 @@
         await fetch("/api/projects/" + p.id, { method: "DELETE", headers: Auth.headers() });
         await this.load();
       } catch (e) {}
+    },
+
+    /** [WO 20260918] 🔴 오프라인 다운로드 실행 정본(SoT) — 허브 카드 버튼과 프로젝트 안
+     *  진입점(#btn-project-download, 31_Projects.js)이 이 함수 하나만 호출한다(새 함수 금지,
+     *  로직 복제 금지). btnEl 은 선택적 — 넘기면 진행 중 disabled/라벨/제목을 갱신한다.
+     *  @param {object} p 프로젝트({id,name})
+     *  @param {HTMLElement} [btnEl] 눌린 버튼(진행 표시용, 없어도 동작) */
+    async downloadProject(p, btnEl) {
+      if (!p || !p.id) return;
+      if (typeof OfflineBundle === "undefined") { Prompt.toast("오프라인 모듈 미로드"); return; }
+      const orig = btnEl ? btnEl.innerHTML : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.classList.add("busy"); }
+      try {
+        const m = await OfflineBundle.download(p.id, (done, total, label) => {
+          if (btnEl) btnEl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
+        });
+        const v = await OfflineBundle.verify(p.id);
+        if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
+        else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
+      } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
+      finally {
+        if (btnEl) { btnEl.disabled = false; btnEl.classList.remove("busy"); if (orig != null) btnEl.innerHTML = orig; }
+        if (btnEl) this._refreshDlState(btnEl, p.id);
+      }
     },
 
     /** 오프라인 다운로드 버튼 상태 갱신 — 기존 OfflineBundle.verify() 재사용(SoT).

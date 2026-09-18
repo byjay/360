@@ -8,6 +8,12 @@
       const $ = (id) => document.getElementById(id);
       $("btn-new-project") && $("btn-new-project").addEventListener("click", () => this.createProject());
       $("btn-delete-project") && $("btn-delete-project").addEventListener("click", () => this.deleteProject());
+      // [WO 20260918] 프로젝트 안에서 오프라인 다운로드 — 12_ProjectHub.js downloadProject() 재사용(SoT).
+      const dlBtn = $("btn-download-project");
+      if (dlBtn) dlBtn.addEventListener("click", () => {
+        if (!this.currentProject) return;
+        if (typeof ProjectHub !== "undefined" && ProjectHub.downloadProject) ProjectHub.downloadProject(this.currentProject, dlBtn);
+      });
       $("btn-new-deck") && $("btn-new-deck").addEventListener("click", () => this.createDeck());
       // #1: 프로젝트 드롭다운 '이동(전환)' 기능 제거 — select 대신 현재 프로젝트명만 표시.
     },

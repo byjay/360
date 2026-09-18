@@ -5356,26 +5356,9 @@
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
 
-        // [오프라인 작업지시서 ] 오프라인 다운로드 버튼
+        // [오프라인 작업지시서 ] 오프라인 다운로드 버튼 — 실 로직은 downloadProject() 정본(SoT)
         const dl = card.querySelector('[data-act="dl"]');
-        if (dl) dl.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          if (typeof OfflineBundle === "undefined") { Prompt.toast("오프라인 모듈 미로드"); return; }
-          const orig = dl.innerHTML;
-          dl.disabled = true; dl.classList.add("busy");
-          try {
-            const m = await OfflineBundle.download(p.id, (done, total, label) => {
-              dl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
-            });
-            const v = await OfflineBundle.verify(p.id);
-            if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
-            else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
-          } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
-          finally {
-            dl.disabled = false; dl.classList.remove("busy"); dl.innerHTML = orig;
-            this._refreshDlState(dl, p.id);
-          }
-        });
+        if (dl) dl.addEventListener("click", (e) => { e.stopPropagation(); this.downloadProject(p, dl); });
         // 카드가 화면에 그려질 때마다 "이미 오프라인 저장돼 있는지" 표시 —
         // 눌러봐야 아는 게 아니라 항상 보이게(마스터 지시: 상태는 보여야 한다)
         if (dl) this._refreshDlState(dl, p.id);
@@ -5475,6 +5458,30 @@
         await fetch("/api/projects/" + p.id, { method: "DELETE", headers: Auth.headers() });
         await this.load();
       } catch (e) {}
+    },
+
+    /** [WO 20260918] 🔴 오프라인 다운로드 실행 정본(SoT) — 허브 카드 버튼과 프로젝트 안
+     *  진입점(#btn-project-download, 31_Projects.js)이 이 함수 하나만 호출한다(새 함수 금지,
+     *  로직 복제 금지). btnEl 은 선택적 — 넘기면 진행 중 disabled/라벨/제목을 갱신한다.
+     *  @param {object} p 프로젝트({id,name})
+     *  @param {HTMLElement} [btnEl] 눌린 버튼(진행 표시용, 없어도 동작) */
+    async downloadProject(p, btnEl) {
+      if (!p || !p.id) return;
+      if (typeof OfflineBundle === "undefined") { Prompt.toast("오프라인 모듈 미로드"); return; }
+      const orig = btnEl ? btnEl.innerHTML : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.classList.add("busy"); }
+      try {
+        const m = await OfflineBundle.download(p.id, (done, total, label) => {
+          if (btnEl) btnEl.setAttribute("title", "다운로드 " + done + "/" + total + " · " + label);
+        });
+        const v = await OfflineBundle.verify(p.id);
+        if (v.ok) Prompt.toast("오프라인 준비 완료 — 도면 " + m.deployments + "개 · 3D " + m.panos + "개");
+        else Prompt.toast("일부 누락: " + (v.missing || []).length + "건 — 다시 시도하세요");
+      } catch (err) { Prompt.toast("" + (err && err.message ? err.message : "다운로드 실패")); }
+      finally {
+        if (btnEl) { btnEl.disabled = false; btnEl.classList.remove("busy"); if (orig != null) btnEl.innerHTML = orig; }
+        if (btnEl) this._refreshDlState(btnEl, p.id);
+      }
     },
 
     /** 오프라인 다운로드 버튼 상태 갱신 — 기존 OfflineBundle.verify() 재사용(SoT).
@@ -7794,6 +7801,9 @@
       // [마스터: 수동 반영] 동기화 배지 클릭 → 지금 즉시 "전체" 동기화(업로드)
       const sb = UI.$("sync-badge");
       if (sb) sb.addEventListener("click", () => this.syncNow());
+      // [WO 20260918] 모바일 독의 "항상 보이는" 업로드 칩 — 같은 syncNow() 재사용(새 경로 금지).
+      const mUp = UI.$("mdock-upload");
+      if (mUp) mUp.addEventListener("click", () => this.syncNow());
 
       UI.$("btn-export-json").addEventListener("click", () => this._exportJson());
       UI.$("btn-deploy").addEventListener("click", () => this._deployToViewer());
@@ -9421,6 +9431,17 @@
           if (txt) txt.textContent = "동기화됨";
           // 디자이너 모드에서만 굳이 항상 표시할 필요는 없으나, 일관성 위해 유지
         }
+        // [WO 20260918] 🔴 "업로드 버튼이 안 보인다" — 위 #sync-badge(topbar)는 대기=0(온라인)일
+        // 때 hidden 클래스가 그대로 남아 화면에서 완전히 사라진다(데스크톱 기존 동작 — 이번
+        // 요구는 데스크톱 불변이 조건이라 그대로 둔다). 모바일은 하단 독(.mobile-dock)의
+        // #mdock-upload 칩을 항상 보이게 하고, 대기 건수로만 활성/비활성을 가른다.
+        const mUp = UI.$("mdock-upload");
+        if (mUp) {
+          mUp.disabled = (n === 0);
+          const label = UI.$("mdock-upload-label");
+          if (label) label.textContent = n > 0 ? ("업로드 " + n) : "업로드";
+          mUp.setAttribute("title", n > 0 ? ("대기 " + n + "건 — 눌러서 지금 업로드") : "업로드할 내용이 없습니다");
+        }
       });
     },
 
@@ -9436,6 +9457,10 @@
       const badge = UI.$("sync-badge"), txt = UI.$("sync-text");
       if (badge) badge.classList.add("syncing");
       if (txt) txt.textContent = "올리는 중…";
+      // [WO 20260918] 모바일 독 업로드 칩도 같은 진행 상태를 보여준다(SoT — 새 표시 로직 추가 금지).
+      const mUp = UI.$("mdock-upload"), mUpLabel = UI.$("mdock-upload-label");
+      if (mUp) mUp.disabled = true;
+      if (mUpLabel) mUpLabel.textContent = "올리는 중…";
       // [토스트 스팸 제거] sync-badge 가 이미 "올리는 중…" 을 표시한다. 완료/실패 토스트는 아래 유지.
       let uploaded = 0;
       try {
@@ -9450,7 +9475,7 @@
       } finally {
         this._syncingNow = false;
         if (badge) badge.classList.remove("syncing");
-        this._updateSyncBadge();
+        this._updateSyncBadge(); // mdock-upload 의 disabled/라벨도 여기서 최신 대기건수로 재계산됨
       }
     },
 
@@ -14594,6 +14619,12 @@
       const $ = (id) => document.getElementById(id);
       $("btn-new-project") && $("btn-new-project").addEventListener("click", () => this.createProject());
       $("btn-delete-project") && $("btn-delete-project").addEventListener("click", () => this.deleteProject());
+      // [WO 20260918] 프로젝트 안에서 오프라인 다운로드 — 12_ProjectHub.js downloadProject() 재사용(SoT).
+      const dlBtn = $("btn-download-project");
+      if (dlBtn) dlBtn.addEventListener("click", () => {
+        if (!this.currentProject) return;
+        if (typeof ProjectHub !== "undefined" && ProjectHub.downloadProject) ProjectHub.downloadProject(this.currentProject, dlBtn);
+      });
       $("btn-new-deck") && $("btn-new-deck").addEventListener("click", () => this.createDeck());
       // #1: 프로젝트 드롭다운 '이동(전환)' 기능 제거 — select 대신 현재 프로젝트명만 표시.
     },

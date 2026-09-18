@@ -395,6 +395,10 @@
         <!-- 현재 프로젝트명 표시(이동 기능 제거: 드롭다운 전환 없음) -->
         <div id="project-current" class="project-current">— 프로젝트 선택 —</div>
         <div id="project-actions" class="project-actions hidden">
+          <!-- [WO 20260918] 오프라인 다운로드 — 기존엔 허브 카드에만 있어 현장에서 다시
+               받으려면 프로젝트 밖으로 나가야 했다. 로직은 12_ProjectHub.js
+               downloadProject() 정본을 그대로 재사용(새 함수 없음). -->
+          <button id="btn-download-project" class="btn-mini" type="button" title="오프라인 다운로드" data-help="offline-download">다운로드</button>
           <button id="btn-delete-project" class="btn-mini danger" type="button" title="프로젝트 삭제">프로젝트 삭제</button>
         </div>
 
@@ -882,6 +886,14 @@
       </button>
       <button class="mdock-chip" data-act="list" type="button" aria-label="포인트 목록">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor"/><circle cx="3.5" cy="12" r="1.3" fill="currentColor"/><circle cx="3.5" cy="18" r="1.3" fill="currentColor"/></svg><span>목록</span>
+      </button>
+      <!-- [WO 20260918] 🔴 "업로드 버튼이 안 보인다" — #sync-badge(topbar)는 대기 0일 때
+           hidden 클래스가 그대로 남아 사라진다(모바일에선 topbar 자체가 좁아 더 취약).
+           이 칩은 항상 렌더되고, 20_App.js _updateSyncBadge()/syncNow() 를 그대로 재사용해
+           대기 건수로만 disabled/라벨을 바꾼다(새 동기화 경로 0). designer-only 아님 —
+           뷰어도 로컬 편집 대기분(오프라인 노트 등)을 올릴 수 있어야 한다. -->
+      <button id="mdock-upload" class="mdock-chip" type="button" aria-label="업로드" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span id="mdock-upload-label">업로드</span>
       </button>
     </div>
   </nav>

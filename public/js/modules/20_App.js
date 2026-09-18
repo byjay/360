@@ -666,6 +666,9 @@
       // [마스터: 수동 반영] 동기화 배지 클릭 → 지금 즉시 "전체" 동기화(업로드)
       const sb = UI.$("sync-badge");
       if (sb) sb.addEventListener("click", () => this.syncNow());
+      // [WO 20260918] 모바일 독의 "항상 보이는" 업로드 칩 — 같은 syncNow() 재사용(새 경로 금지).
+      const mUp = UI.$("mdock-upload");
+      if (mUp) mUp.addEventListener("click", () => this.syncNow());
 
       UI.$("btn-export-json").addEventListener("click", () => this._exportJson());
       UI.$("btn-deploy").addEventListener("click", () => this._deployToViewer());
@@ -2293,6 +2296,17 @@
           if (txt) txt.textContent = "동기화됨";
           // 디자이너 모드에서만 굳이 항상 표시할 필요는 없으나, 일관성 위해 유지
         }
+        // [WO 20260918] 🔴 "업로드 버튼이 안 보인다" — 위 #sync-badge(topbar)는 대기=0(온라인)일
+        // 때 hidden 클래스가 그대로 남아 화면에서 완전히 사라진다(데스크톱 기존 동작 — 이번
+        // 요구는 데스크톱 불변이 조건이라 그대로 둔다). 모바일은 하단 독(.mobile-dock)의
+        // #mdock-upload 칩을 항상 보이게 하고, 대기 건수로만 활성/비활성을 가른다.
+        const mUp = UI.$("mdock-upload");
+        if (mUp) {
+          mUp.disabled = (n === 0);
+          const label = UI.$("mdock-upload-label");
+          if (label) label.textContent = n > 0 ? ("업로드 " + n) : "업로드";
+          mUp.setAttribute("title", n > 0 ? ("대기 " + n + "건 — 눌러서 지금 업로드") : "업로드할 내용이 없습니다");
+        }
       });
     },
 
@@ -2308,6 +2322,10 @@
       const badge = UI.$("sync-badge"), txt = UI.$("sync-text");
       if (badge) badge.classList.add("syncing");
       if (txt) txt.textContent = "올리는 중…";
+      // [WO 20260918] 모바일 독 업로드 칩도 같은 진행 상태를 보여준다(SoT — 새 표시 로직 추가 금지).
+      const mUp = UI.$("mdock-upload"), mUpLabel = UI.$("mdock-upload-label");
+      if (mUp) mUp.disabled = true;
+      if (mUpLabel) mUpLabel.textContent = "올리는 중…";
       // [토스트 스팸 제거] sync-badge 가 이미 "올리는 중…" 을 표시한다. 완료/실패 토스트는 아래 유지.
       let uploaded = 0;
       try {
@@ -2322,7 +2340,7 @@
       } finally {
         this._syncingNow = false;
         if (badge) badge.classList.remove("syncing");
-        this._updateSyncBadge();
+        this._updateSyncBadge(); // mdock-upload 의 disabled/라벨도 여기서 최신 대기건수로 재계산됨
       }
     },
 
