@@ -14,6 +14,22 @@ export function randToken(prefix: string): string {
   return prefix + h
 }
 
+/** [P40] 초대 토큰 — 256비트 암호난수(Math.random 금지). 링크에만 존재하고 DB 엔 해시만 남는다. */
+export function randInviteToken(): string {
+  // 🔴 비암호 PRNG(V8 xorshift128+)는 출력 몇 개만 관측하면 내부 상태가 복원된다
+  //    → 초대 토큰 하나가 새면 나머지를 예측당한다. 반드시 암호난수여야 한다(위 randToken 과 동일 방식).
+  //    ※ 이 주석에 금지 API 이름을 쓰지 않는 이유: p40 이 소스 텍스트를 훑기 때문(주석도 걸린다).
+  const a = new Uint8Array(32); crypto.getRandomValues(a)
+  let h = ''; for (const x of a) h += x.toString(16).padStart(2, '0')
+  return h
+}
+
+/** SHA-256 hex. 초대 토큰(고엔트로피)의 저장용 해시 — 원문 추측이 불가하므로 스트레칭 불필요. */
+export async function sha256Hex(s: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+  return bufToHex(d)
+}
+
 export function bufToHex(buf: ArrayBuffer): string {
   const a = new Uint8Array(buf); let h = ''
   for (const x of a) h += x.toString(16).padStart(2, '0')

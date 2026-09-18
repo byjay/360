@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword } from './lib/util'
+import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex } from './lib/util'
 
 type Bindings = {
   DB: D1Database
@@ -748,7 +748,7 @@ app.post('/api/signup/verify', async (c) => {
 
   // 자동 로그인: 세션 토큰 발급
   const token = randToken('local-')
-  const exp = now + 30 * 24 * 60 * 60 * 1000 // 30일
+  const exp = now + LOCAL_SESSION_TTL_MS // 30일 (SoT: LOCAL_SESSION_TTL_MS)
   await c.env.DB.prepare('INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)')
     .bind(token, email, now, exp).run()
   await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
@@ -779,7 +779,7 @@ app.post('/api/signup/login', async (c) => {
 
   const now = Date.now()
   const token = randToken('local-')
-  const exp = now + 30 * 24 * 60 * 60 * 1000
+  const exp = now + LOCAL_SESSION_TTL_MS
   await c.env.DB.prepare('INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)')
     .bind(token, email, now, exp).run()
   await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, email).run().catch(() => {})
@@ -1348,6 +1348,45 @@ async function canManageProject(c: any, user: any, projectId: string): Promise<b
   return !!(m && m.role === 'designer')
 }
 
+/* ── [P40] 초대/세션 상수 — 값의 단일 진실 소스(매직넘버 중복 금지) ── */
+const LOCAL_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000   // 로컬 세션 유효기간(기존 값 그대로: 30일)
+const INVITE_TTL_MS        = 14 * 24 * 60 * 60 * 1000   // 초대 링크 유효기간: 14일
+const INVITE_MIN_PASSWORD  = 8                          // 초대 계정 비밀번호 최소 길이(/api/signup/verify 와 동일 기준)
+
+/** 프로젝트 멤버십 부여 + 역할 부수효과(designer 전역권한) — 초대수락/직접배정이 공유하는 한 지점(§G-2-5). */
+async function grantProjectMembership(c: any, pid: string, email: string, role: string, grantedBy: string, now: number) {
+  await c.env.DB.prepare(
+    `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`
+  ).bind(pid, email, role, grantedBy, now).run()
+  // designer 로 배정 → 모든 구역 세팅 권한. deployment 는 project_id 가 없고 tenant 단위라
+  // 프로젝트별 스코프 가드가 불가 → 전역 designers 등록으로 편집권한 부여(requireDesigner 통과).
+  // 뷰어는 등록하지 않음(열람만). 최고관리자는 designssir 만(isSuperAdmin)으로 별개 유지.
+  if (role === 'designer') {
+    await c.env.DB.prepare(
+      `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, '', ?, ?, ?, 0)
+       ON CONFLICT(email) DO UPDATE SET deleted = 0`
+    ).bind(email, 'project-invite:' + pid + ' by ' + grantedBy, now, now).run()
+  } else {
+    // viewer 로 (재)배정 시, 과거 designer 로 받았던 전역 권한은 회수(이 프로젝트 한정 의도)
+    await c.env.DB.prepare("UPDATE designers SET deleted = 1 WHERE email = ? AND added_by LIKE 'project-invite:%'").bind(email).run().catch(() => {})
+  }
+}
+
+/** 초대 토큰 원문 → 유효한 초대행(없으면 null). 조회는 항상 해시로 한다(원문은 DB 에 없다). */
+async function lookupInvite(c: any, rawToken: string): Promise<any | null> {
+  const t = String(rawToken || '')
+  if (!/^[0-9a-f]{32,}$/.test(t)) return null            // 형식 검증(hex, 128비트 이상)
+  const hash = await sha256Hex(t)
+  const inv: any = await c.env.DB.prepare(
+    'SELECT id, project_id, email, role, invited_by, expires_at, used, revoked FROM project_invites WHERE token_hash = ?'
+  ).bind(hash).first().catch(() => null)
+  if (!inv) return null
+  if (Number(inv.used) === 1 || Number(inv.revoked) === 1) return null
+  if (Date.now() > Number(inv.expires_at)) return null
+  return inv
+}
+
 app.get('/api/projects', async (c) => {
   const user = await getUser(c)
   const email = user?.email || ''
@@ -1375,7 +1414,9 @@ app.get('/api/projects', async (c) => {
   return c.json({ data: list.map((p: any) => {
     const isOwner = !!email && p.owner === email
     const isMember = !!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
-    return { ...mapProject(p), is_member: isMember, my_request: myReqStatus.get(p.id) || null }
+    // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/전역디자이너/슈퍼 > 없음)
+    const effRole = myRole.get(p.id) || ((isSuperUser || globalDesigner || isOwner) ? 'designer' : null)
+    return { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null }
   }) })
 })
 
@@ -1573,43 +1614,130 @@ app.post('/api/projects/:id/members', async (c) => {
   const role = ['viewer', 'editor', 'designer'].includes(body.role) ? body.role : 'viewer'
   if (!email || !isValidEmail(email)) return c.json({ error: 'valid email required' }, 400)
   const now = Date.now()
-  // 1) 프로젝트 멤버 등록(접근 권한 + 역할)
-  await c.env.DB.prepare(
-    `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`
-  ).bind(pid, email, role, user.email, now).run()
 
-  // 2) [마스터] 초대 = 그 이메일로 바로 로그인 가능하게 — 로컬 계정이 없으면 비번 '1'로 자동 생성.
-  //    must_change_password=1 → 첫 로그인 후 본인이 변경. (이미 가입된 계정은 건드리지 않음)
-  let created = false
-  const existsUser: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ?').bind(email).first()
+  // [보안 P40] 이미 계정이 있는 이메일 → 멤버로만 추가(이름·비번 재입력 없음).
+  //            계정이 없는 이메일 → 🔴 계정을 만들지 않는다. 일회용 초대 토큰만 발급.
+  //   종전 결함: 계정이 없으면 비밀번호 '1' 로 local_users 를 즉시 만들었다. must_change_password=1 이어도
+  //   본인 첫 로그인 전에 이메일을 아는 제3자가 <email>+'1' 로 선점 로그인할 수 있었다(계정 탈취).
+  const existsUser: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ? AND deleted = 0').bind(email).first()
+
   if (!existsUser) {
-    const { hash, salt } = await hashPassword('1')
-    const domain = email.split('@')[1] || ''
+    const token = randInviteToken()                 // 256비트 암호난수 (Math.random 금지)
+    const tokenHash = await sha256Hex(token)        // DB 에는 해시만 — 원문 저장 금지
+    const expiresAt = now + INVITE_TTL_MS
+    await c.env.DB.prepare(
+      `INSERT INTO project_invites (id, token_hash, project_id, email, role, invited_by, created_at, expires_at, used, revoked)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+    ).bind(randToken('inv-'), tokenHash, pid, email, role, user.email, now, expiresAt).run()
+    await logActivity(c, 'project.member.invite', { actor: user, targetType: 'project', targetId: pid, detail: { email, role } })
+    const origin = new URL(c.req.url).origin
+    return c.json({
+      success: true, email, role, created: false, invited: true,
+      invite_url: origin + '/?invite=' + token,     // 토큰 원문은 이 응답(=링크)에만 존재
+      expires_at: expiresAt
+    })
+  }
+
+  await grantProjectMembership(c, pid, email, role, user.email, now)
+  await logActivity(c, 'project.member.add', { actor: user, targetType: 'project', targetId: pid, detail: { email, role, created: false, existing: true } })
+  return c.json({ success: true, email, role, created: false, existing: true })
+})
+
+/* ── [P40] 프로젝트 초대 링크 ───────────────────────────────────────────
+ * GET  /api/projects/:id/invites      대기 중 초대 목록(관리자) — 토큰 원문은 절대 반환하지 않음
+ * DELETE /api/projects/:id/invites/:iid  초대 취소(revoke)
+ * GET  /api/invite/:token             (공개) 토큰 검증 → 이름/비번 입력이 필요한지 알려준다
+ * POST /api/invite/:token/accept      (공개) 이름+비번으로 계정 생성 & 멤버 등록 & 토큰 1회 소비 */
+
+app.get('/api/projects/:id/invites', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, email, role, invited_by, created_at, expires_at, used FROM project_invites WHERE project_id = ? AND used = 0 AND revoked = 0 ORDER BY created_at DESC'
+  ).bind(pid).all()
+  const now = Date.now()
+  return c.json({ data: (results || []).filter((r: any) => Number(r.expires_at) > now) })
+})
+
+app.delete('/api/projects/:id/invites/:iid', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const iid = decodeURIComponent(c.req.param('iid'))
+  await c.env.DB.prepare('UPDATE project_invites SET revoked = 1 WHERE id = ? AND project_id = ?').bind(iid, pid).run()
+  await logActivity(c, 'project.member.invite_revoke', { actor: user, targetType: 'project', targetId: pid, detail: { invite: iid } })
+  return c.json({ success: true })
+})
+
+app.get('/api/invite/:token', async (c) => {
+  const inv = await lookupInvite(c, c.req.param('token'))
+  if (!inv) return c.json({ error: '초대 링크가 유효하지 않거나 만료되었습니다.' }, 404)
+  const exist: any = await c.env.DB.prepare('SELECT email, name FROM local_users WHERE email = ? AND deleted = 0').bind(inv.email).first().catch(() => null)
+  const proj: any = await c.env.DB.prepare('SELECT name FROM projects WHERE id = ? AND deleted = 0').bind(inv.project_id).first().catch(() => null)
+  return c.json({
+    email: inv.email, role: inv.role, project_id: inv.project_id,
+    project_name: (proj && proj.name) || inv.project_id,
+    expires_at: inv.expires_at,
+    needs_account: !exist,                            // false → 이름·비번을 다시 묻지 않는다
+    name: (exist && exist.name) || ''
+  })
+})
+
+app.post('/api/invite/:token/accept', async (c) => {
+  const inv = await lookupInvite(c, c.req.param('token'))
+  if (!inv) return c.json({ error: '초대 링크가 유효하지 않거나 만료되었습니다.' }, 404)
+  let body: any
+  try { body = await c.req.json() } catch { body = {} }
+
+  const exist: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ? AND deleted = 0').bind(inv.email).first().catch(() => null)
+  const name = String(body.name || '').trim()
+  const password = String(body.password || '')
+  if (!exist) {
+    // 🔴 이름 필수 · 비밀번호 필수(가입과 동일 기준 8자) — 기본 비밀번호는 존재하지 않는다.
+    if (!name) return c.json({ error: '이름을 입력해 주세요.' }, 400)
+    if (password.length < INVITE_MIN_PASSWORD) return c.json({ error: `비밀번호는 ${INVITE_MIN_PASSWORD}자 이상이어야 합니다.` }, 400)
+  }
+
+  // 토큰을 '먼저' 원자적으로 소비한다(compare-and-swap). used=0 인 행을 갱신한 쪽만 1건을 얻으므로
+  // 동시 요청/링크 재사용이 계정을 두 번 만들 수 없다.
+  const consumed: any = await c.env.DB.prepare('UPDATE project_invites SET used = 1, used_at = ? WHERE id = ? AND used = 0 AND revoked = 0')
+    .bind(Date.now(), inv.id).run()
+  const changes = Number((consumed && consumed.meta && (consumed.meta.changes ?? consumed.meta.changed_db)) ?? 0)
+  if (!changes) return c.json({ error: '이미 사용된 초대 링크입니다.' }, 409)
+
+  const now = Date.now()
+  if (!exist) {
+    const { hash, salt } = await hashPassword(password)
     await c.env.DB.prepare(
       `INSERT INTO local_users (email, name, domain, pw_hash, pw_salt, email_verified, must_change_password, created_at, updated_at, deleted)
-       VALUES (?, '', ?, ?, ?, 1, 1, ?, ?, 0)
-       ON CONFLICT(email) DO NOTHING`
-    ).bind(email, domain, hash, salt, now, now).run()
-    created = true
+       VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, 0)
+       ON CONFLICT(email) DO UPDATE SET name = excluded.name, pw_hash = excluded.pw_hash, pw_salt = excluded.pw_salt, must_change_password = 0, updated_at = excluded.updated_at, deleted = 0`
+    ).bind(inv.email, name, emailDomain(inv.email), hash, salt, now, now).run()
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO tenant_members (tenant_id, email, role, created_at) VALUES ('tnt_default', ?, 'viewer', ?)
+         ON CONFLICT(tenant_id, email) DO NOTHING`
+      ).bind(inv.email, now).run()
+    } catch (e) {}
   }
 
-  // 3) [마스터] 디자이너로 초대 → 모든 구역 세팅 권한. deployment 는 project_id 가 없고 tenant 단위라
-  //    프로젝트별 스코프 가드가 불가 → 전역 designers 등록으로 편집권한 부여(requireDesigner 통과).
-  //    뷰어는 등록하지 않음(열람만). 최고관리자는 designssir 만(isSuperAdmin)으로 별개 유지.
-  if (role === 'designer') {
-    await c.env.DB.prepare(
-      `INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, '', ?, ?, ?, 0)
-       ON CONFLICT(email) DO UPDATE SET deleted = 0`
-    ).bind(email, 'project-invite:' + pid + ' by ' + user.email, now, now).run()
-  } else {
-    // viewer 로 (재)배정 시, 과거 designer 로 받았던 전역 권한은 회수(이 프로젝트 한정 의도)
-    // — 단, 다른 경로(도메인/슈퍼)로 designer 인 경우 isDesigner 가 여전히 true 이므로 안전.
-    await c.env.DB.prepare("UPDATE designers SET deleted = 1 WHERE email = ? AND added_by LIKE 'project-invite:%'").bind(email).run().catch(() => {})
-  }
+  await grantProjectMembership(c, inv.project_id, inv.email, inv.role, inv.invited_by || 'invite', now)
 
-  await logActivity(c, 'project.member.add', { actor: user, targetType: 'project', targetId: pid, detail: { email, role, created } })
-  return c.json({ success: true, email, role, created })
+  // 자동 로그인 — 기존 local_sessions 경로 재사용(새 세션 체계 없음)
+  const token = randToken('local-')
+  await c.env.DB.prepare('INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)')
+    .bind(token, inv.email, now, now + LOCAL_SESSION_TTL_MS).run()
+  await c.env.DB.prepare('UPDATE local_users SET last_login_at = ? WHERE email = ?').bind(now, inv.email).run().catch(() => {})
+  await logActivity(c, 'project.invite.accept', { actor: { email: inv.email }, targetType: 'project', targetId: inv.project_id, detail: { role: inv.role, created: !exist } })
+
+  const u: any = await c.env.DB.prepare('SELECT name FROM local_users WHERE email = ?').bind(inv.email).first().catch(() => null)
+  return c.json({
+    success: true, token, email: inv.email, name: (u && u.name) || name || inv.email.split('@')[0],
+    role: inv.role, project_id: inv.project_id, created: !exist
+  })
 })
 
 // [마스터] 비밀번호 변경 — 로그인한 로컬 계정 본인(초대 계정의 초기 비번 '1' 변경 포함)

@@ -146,6 +146,26 @@
     LABELS: { content: "콘텐츠", empty: "미배치", checkboard: "체크보드" },
     FILTER_KEY: "wm-pin-filter",
 
+    /* [마스터 요청 2026-09-18] "체크보드를 기본 모드로" — 프로젝트를 새로 열 때
+       배치 모드(designer/checkboard)의 기본값. 사용자가 명시 전환하면 그 선택을
+       기억해 다음에도 유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부
+       preferredMode()를 참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
+       🔴 저장된 기존 핀의 checkboard/kind 해석은 이 값과 무관 — 이건 오직
+          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다. */
+    PREFERRED_MODE_KEY: "wm_pin_default_mode",
+    DEFAULT_MODE: "checkboard",
+    preferredMode() {
+      try {
+        const v = localStorage.getItem(this.PREFERRED_MODE_KEY);
+        if (v === "designer" || v === "checkboard") return v;
+      } catch (e) {}
+      return this.DEFAULT_MODE;
+    },
+    setPreferredMode(mode) {
+      if (mode !== "designer" && mode !== "checkboard") return;
+      try { localStorage.setItem(this.PREFERRED_MODE_KEY, mode); } catch (e) {}
+    },
+
     /* ── 색상 정본 ────────────────────────────────────────────
        머리색(head/head2) · 바늘끝(needle) · 숫자 글자색(text).
        숫자는 흰 디스크(#fff) 위에 놓이므로 text ↔ #fff 대비가 판독 기준.
@@ -1298,6 +1318,14 @@
      · 서버 의존 없는 안정 설계: IndexedDB 미지원 환경은 localStorage 폴백.
   ══════════════════════════════════════════ */
   const SyncQueue = {
+    // 🔴 SoT — IndexedDB 이름은 이 리터럴 하나뿐이다(코드 전체 grep 결과: 다른 이름 0건).
+    // [마스터 실측 2026-09-18] 프로덕션 브라우저에서 "wm-sync"(하이픈, 빈 DB)와
+    // "wm_sync"(언더바, drafts 4건) 두 DB가 동시에 존재하는 것이 관찰됐다 — 그러나
+    // 소스 전체(현재+git 이력)를 grep 해도 "wm-sync"(하이픈)를 생성하는 코드는
+    // 이 리포에 존재하지 않는다(sw.js도 indexedDB 미사용, PWA/workbox 플러그인 없음).
+    // 즉 하이픈 DB는 이 코드가 만든 게 아닌 잔여물로 추정 — 그래도 방어적으로
+    // _migrateLegacyDb() 에서 감지 시 데이터가 있으면 옮기고 없으면 정리한다.
+    LEGACY_DB_NAME: "wm-sync",
     DB_NAME: "wm_sync",
     STORE: "ops",
     _db: null,
@@ -1313,12 +1341,13 @@
     },
 
     DRAFT_STORE: "drafts",
+    AUTH_STORE: "authlocal",   // [P40] 오프라인 재인증 검증자(verifier) — 평문 비밀번호는 절대 담지 않는다
 
     async _open() {
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 2);   // v2: drafts 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 3);   // v2: drafts / v3: authlocal 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
@@ -1326,6 +1355,9 @@
           }
           if (!db.objectStoreNames.contains(this.DRAFT_STORE)) {
             db.createObjectStore(this.DRAFT_STORE, { keyPath: "key" }); // 도면 임시저장(오프라인/서버실패 폴백)
+          }
+          if (!db.objectStoreNames.contains(this.AUTH_STORE)) {
+            db.createObjectStore(this.AUTH_STORE, { keyPath: "key" });  // 오프라인 재인증 검증자
           }
         };
         req.onsuccess = () => res(req.result);
@@ -1395,6 +1427,55 @@
       const keys = [];
       try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
       return keys;
+    },
+
+    /* ═══ [P40] 오프라인 재인증 검증자 보관 ═══
+       저장되는 것은 PBKDF2-SHA256(100k) 해시 + salt 뿐이다(서버 hashPassword 와 동일 파라미터).
+       기기를 털려도 원문 비밀번호는 복원되지 않는다. 보관 위치는 기존 IndexedDB 재사용(신규 저장소 없음). */
+    AUTH_KEY: "offline-verifier",
+    _authLsKey() { return "wm_offline_auth"; },
+    async saveAuthRecord(rec) {
+      const row = { key: this.AUTH_KEY, rec: rec };
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
+        try {
+          await new Promise((res, rej) => {
+            const tx = db.transaction(this.AUTH_STORE, "readwrite");
+            tx.objectStore(this.AUTH_STORE).put(row);
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+          });
+          return true;
+        } catch (e) { /* 폴백으로 */ }
+      }
+      try { localStorage.setItem(this._authLsKey(), JSON.stringify(row)); return true; } catch (e) { return false; }
+    },
+    async loadAuthRecord() {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
+        try {
+          const row = await new Promise((res) => {
+            const tx = db.transaction(this.AUTH_STORE, "readonly");
+            const rq = tx.objectStore(this.AUTH_STORE).get(this.AUTH_KEY);
+            rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null);
+          });
+          if (row) return row.rec;
+        } catch (e) {}
+      }
+      try { const r = JSON.parse(localStorage.getItem(this._authLsKey()) || "null"); return r ? r.rec : null; }
+      catch (e) { return null; }
+    },
+    async clearAuthRecord() {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
+        try {
+          await new Promise((res) => {
+            const tx = db.transaction(this.AUTH_STORE, "readwrite");
+            tx.objectStore(this.AUTH_STORE).delete(this.AUTH_KEY);
+            tx.oncomplete = res; tx.onerror = res;
+          });
+        } catch (e) {}
+      }
+      try { localStorage.removeItem(this._authLsKey()); } catch (e) {}
     },
 
     /* ── localStorage 폴백 ── */
@@ -1471,6 +1552,11 @@
     async flush() {
       if (this._syncing) return { ok: false, busy: true };
       if (!navigator.onLine) return { ok: false, offline: true };
+      // [P40 보안] 오프라인 검증자로만 인증된 상태(서버가 검증하지 않은 신원)로는 서버 쓰기를 시도하지 않는다.
+      //   큐는 그대로 보존 → 온라인 재로그인(서버 재검증) 후 자동 업로드된다.
+      if (typeof Auth !== "undefined" && Auth.canServerWrite && !Auth.canServerWrite()) {
+        return { ok: false, offlineAuth: true, reason: "오프라인 인증 상태 — 서버 업로드는 온라인 재로그인 후 진행됩니다" };
+      }
       const pending = (await this.all()).filter(o => o.status !== "done");
       if (pending.length === 0) { this._emit(); return { ok: true, uploaded: 0, map: {} }; }
 
@@ -1531,6 +1617,58 @@
       window.addEventListener("online", () => this._emit());
       window.addEventListener("offline", () => this._emit());
       this._emit();
+      // [마스터 요건1 2026-09-18] 옛 이름 잔여 DB 정리(있으면 데이터 이관 후 삭제) — fire-and-forget.
+      try { this._migrateLegacyDb(); } catch (e) {}
+    },
+
+    /** [마스터 요건1 2026-09-18] LEGACY_DB_NAME("wm-sync", 하이픈) 잔여 DB가 있으면
+     *  같은 이름의 스토어에 데이터가 있는 걸 정본 DB_NAME("wm_sync")으로 옮기고
+     *  옛 DB는 삭제한다. indexedDB.databases() 미지원 브라우저(Safari 구버전 등)는
+     *  조용히 건너뛴다(잔여 DB가 있어도 정본 읽기/쓰기 경로엔 영향 없음 — DB_NAME만 참조). */
+    async _migrateLegacyDb() {
+      if (!("indexedDB" in window) || typeof indexedDB.databases !== "function") return;
+      try {
+        const dbs = await indexedDB.databases();
+        if (!dbs.some(d => d && d.name === this.LEGACY_DB_NAME)) return; // 잔여 DB 없음 — 정상
+        const ldb = await new Promise((res) => {
+          const req = indexedDB.open(this.LEGACY_DB_NAME);
+          req.onsuccess = () => res(req.result);
+          req.onerror = () => res(null);
+        });
+        if (ldb) {
+          const storeNames = Array.from(ldb.objectStoreNames || []);
+          for (const sn of storeNames) {
+            let rows = [];
+            try {
+              rows = await new Promise((res) => {
+                const tx = ldb.transaction(sn, "readonly");
+                const rq = tx.objectStore(sn).getAll();
+                rq.onsuccess = () => res(rq.result || []);
+                rq.onerror = () => res([]);
+              });
+            } catch (e) {}
+            if (rows.length) {
+              const db = await this._open();
+              if (db && db.objectStoreNames.contains(sn)) {
+                try {
+                  await new Promise((res) => {
+                    const tx = db.transaction(sn, "readwrite");
+                    rows.forEach(r => { try { tx.objectStore(sn).put(r); } catch (e) {} });
+                    tx.oncomplete = res; tx.onerror = res;
+                  });
+                  console.warn("[SyncQueue] 잔여 DB(" + this.LEGACY_DB_NAME + ") " + sn + " " + rows.length + "건 → " + this.DB_NAME + " 이관");
+                } catch (e) {}
+              }
+            }
+          }
+          try { ldb.close(); } catch (e) {}
+        }
+        // 이관 완료(또는 애초에 비어있었음) → 잔여 DB 삭제
+        await new Promise((res) => {
+          const del = indexedDB.deleteDatabase(this.LEGACY_DB_NAME);
+          del.onsuccess = res; del.onerror = res; del.onblocked = res;
+        });
+      } catch (e) { /* 정리 실패해도 정본 DB_NAME 경로는 영향 없음 */ }
     },
 
     /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
@@ -4698,6 +4836,8 @@
       $("pm-add-btn") && $("pm-add-btn").addEventListener("click", () => this.addMember());
       const pmEmail = $("pm-email");
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
+      // [P40] 초대 링크 복사
+      $("pm-invite-copy") && $("pm-invite-copy").addEventListener("click", () => this._copyInviteLink());
       // [멀티테넌트] 서브도메인 부여
       $("pm-subdomain-btn") && $("pm-subdomain-btn").addEventListener("click", () => this.setSubdomain());
       // [마스터 요청] 디자이너/뷰어 선택 모달
@@ -4763,7 +4903,7 @@
         if (p.subdomain && t && t.base) this._renderSubdomainStatus(p.subdomain, "https://" + p.subdomain + "." + t.base);
       } catch (e) {}
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
-      await Promise.all([this.loadMembers(), this.loadAccessReqs()]);
+      await Promise.all([this.loadMembers(), this.loadAccessReqs(), this.loadPendingInvites()]);
     },
     closeMembers() {
       const m = document.getElementById("proj-members-modal");
@@ -4901,13 +5041,82 @@
         if (!r.ok) { if (err) { err.textContent = j.error || "배정 실패"; err.classList.remove("hidden"); } return; }
         inp.value = "";
         await this.loadMembers();
-        if (typeof Prompt !== "undefined" && Prompt.toast) {
-          const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
-          if (j.created) Prompt.toast("" + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
-          else Prompt.toast("" + email + " 배정(" + roleLabel + ")");
+        const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
+        if (j.invited && j.invite_url) {
+          // [P40] 계정은 만들어지지 않았다. 링크를 받은 본인이 이름·비번을 설정해야 계정이 생긴다.
+          this._showInviteLink(email, roleLabel, j.invite_url, j.expires_at);
+        } else if (typeof Prompt !== "undefined" && Prompt.toast) {
+          Prompt.toast("" + email + " 배정(" + roleLabel + ") — 기존 계정이라 바로 접근할 수 있습니다.", 4000);
         }
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
     },
+    /* ── [P40] 초대 링크 ── */
+    /** 발급된 1회용 초대 링크를 관리자에게 보여준다(토큰 원문은 이 순간에만 존재 — DB 엔 해시만). */
+    _showInviteLink(email, roleLabel, url, expiresAt) {
+      const box = document.getElementById("pm-invite-link-box");
+      const inp = document.getElementById("pm-invite-link");
+      if (!box || !inp) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("초대 링크: " + url, 8000);
+        return;
+      }
+      inp.value = url;
+      const note = document.getElementById("pm-invite-link-note");
+      if (note) {
+        const d = expiresAt ? new Date(Number(expiresAt)) : null;
+        const ds = d ? (d.getFullYear() + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + String(d.getDate()).padStart(2, "0")) : "";
+        note.textContent = email + " (" + roleLabel + ") — 이 링크를 본인에게 전달하세요. 1회용" + (ds ? (" · " + ds + " 까지") : "") + ". 계정은 본인이 이름·비밀번호를 설정할 때 생성됩니다.";
+      }
+      box.classList.remove("hidden");
+      try { inp.select(); } catch (e) {}
+      this._copyInviteLink();
+    },
+    _copyInviteLink() {
+      const inp = document.getElementById("pm-invite-link");
+      if (!inp || !inp.value) return;
+      const done = () => { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("초대 링크를 복사했습니다."); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(inp.value).then(done).catch(() => {}); return; }
+        inp.select(); document.execCommand("copy"); done();
+      } catch (e) {}
+    },
+    /** 아직 수락되지 않은 초대 목록(토큰 원문은 서버가 절대 돌려주지 않는다) */
+    async loadPendingInvites() {
+      const p = this._memProject; if (!p) return;
+      const sec = document.getElementById("pm-pending-invites");
+      const list = document.getElementById("pm-pending-invites-list");
+      if (!sec || !list) return;
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/invites", { headers: Auth.headers() });
+        if (!r.ok) { sec.classList.add("hidden"); return; }
+        const { data } = await r.json();
+        if (!data || !data.length) { sec.classList.add("hidden"); return; }
+        sec.classList.remove("hidden");
+        const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(s) : s;
+        list.innerHTML = "";
+        data.forEach((iv) => {
+          const d = new Date(Number(iv.expires_at));
+          const ds = d.getFullYear() + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + String(d.getDate()).padStart(2, "0");
+          const roleLabel = (typeof Auth !== "undefined" && Auth._ROLE_LABELS && Auth._ROLE_LABELS[iv.role]) || iv.role;
+          const row = document.createElement("div");
+          row.className = "member-row";
+          row.innerHTML = '<span class="mem-col-email" title="' + esc(iv.email) + '">' + esc(iv.email) + '</span>' +
+            '<span class="pm-role-badge role-' + esc(iv.role) + '">' + esc(roleLabel) + '</span>' +
+            '<span class="par-date">~' + ds + '</span>' +
+            '<button class="designer-del" title="초대 취소">✕</button>';
+          row.querySelector(".designer-del").addEventListener("click", () => this.revokeInvite(iv.id));
+          list.appendChild(row);
+        });
+      } catch (e) { sec.classList.add("hidden"); }
+    },
+    async revokeInvite(iid) {
+      const p = this._memProject; if (!p) return;
+      try {
+        await fetch("/api/projects/" + encodeURIComponent(p.id) + "/invites/" + encodeURIComponent(iid),
+          { method: "DELETE", headers: Auth.headers() });
+        await this.loadPendingInvites();
+      } catch (e) {}
+    },
+
     async removeMember(email) {
       const p = this._memProject; if (!p) return;
       if (!window.confirm(email + " 의 '" + (p.name || p.id) + "' 프로젝트 배정을 해제할까요?")) return;
@@ -5153,6 +5362,8 @@
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
+      // [P40] 우상단 배지를 "이 프로젝트에서의 내 역할"로 — 고정 '디자이너' 표기 제거
+      if (typeof Auth !== "undefined" && Auth.setProjectContext) Auth.setProjectContext(p);
       this._modeSelectProject = p;
       if (!ASK_ENTRY_MODE) { // 스위치 OFF: 묻지 않고 무조건 편집모드로 바로 진입
         await this._enterAsDesigner();
@@ -5160,7 +5371,7 @@
       }
       const m = document.getElementById("proj-mode-select-modal");
       if (!m) { // 모달 마크업이 없으면(구버전) 안전 폴백 — 기존 자동판정 동작 유지
-        if (Auth.isDesigner) App.openApp("designer", { project: p });
+        if (Auth.isDesigner) App.openApp(PinSeries.preferredMode(), { project: p });
         else App.openApp("viewer", { project: p });
         return;
       }
@@ -5182,8 +5393,9 @@
       }
       // AUTO_DESIGNER_ENTRY 등으로 이미 디자이너 권한이 있으면 게이트 없이 바로 진입,
       //   없으면 기존 로그인 게이트 경로(Auth.requireDesigner) 유지.
-      if (Auth.isDesigner) App.openApp("designer", { project: p });
-      else Auth.requireDesigner(() => App.openApp("designer", { project: p }));
+      // [마스터 요청 2026-09-18] 편집 진입 기본 모드 = 체크보드(사용자 전환 시 유지)
+      if (Auth.isDesigner) App.openApp(PinSeries.preferredMode(), { project: p });
+      else Auth.requireDesigner(() => App.openApp(PinSeries.preferredMode(), { project: p }));
     },
     _enterAsViewer() {
       const p = this._modeSelectProject; if (!p) return;
@@ -6936,7 +7148,8 @@
           const mode = card.dataset.mode;
           // 설계자(디자이너) 모드는 구글 로그인 + 디자이너 권한 필요. 일반인은 뷰어만.
           if (mode === "designer") {
-            Auth.requireDesigner(() => this.openApp("designer"));
+            // [마스터 요청 2026-09-18] 편집 진입 기본 모드 = 체크보드(사용자가 전환하면 그 선택을 기억)
+            Auth.requireDesigner(() => this.openApp(PinSeries.preferredMode()));
             return;
           }
           this.openApp(mode);
@@ -7097,11 +7310,11 @@
     async enterEdit() {
       if (!Auth.isDesigner && Auth.idToken) { try { await Auth.refresh(); } catch (e) {} }
       if (!Auth.isDesigner) {
-        if (Auth.requireDesigner) { Auth.requireDesigner(() => this.openApp("designer", { project: Projects.currentProject })); }
+        if (Auth.requireDesigner) { Auth.requireDesigner(() => this.openApp(PinSeries.preferredMode(), { project: Projects.currentProject })); }
         return;
       }
       PanoViewer.close();
-      this.openApp("designer", { project: Projects.currentProject });
+      this.openApp(PinSeries.preferredMode(), { project: Projects.currentProject });
     },
 
     /* ── Topbar ── */
@@ -7410,6 +7623,8 @@
       const toggleCheckboard = () => {
         if (State.placing) this._togglePlacing();
         const next = State.checkboard ? "designer" : "checkboard";
+        // [마스터 요청 2026-09-18] 사용자가 명시 전환한 모드는 다음 진입 때도 유지
+        if (typeof PinSeries !== "undefined") PinSeries.setPreferredMode(next);
         App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
         // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
         if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
@@ -9071,14 +9286,28 @@
         } catch (e) {}
         return 0;
       })();
-      Promise.all([SyncQueue.count(), opLogCount]).then(([sqN, opN]) => {
+      // [마스터 요청 2026-09-18] 오프라인일 때 "오프라인 모드"(번들 다운로드됨) vs
+      //   "작업 불가"(번들 없음)를 구분 — 같은 배지(SoT), 새 배지 신설 금지.
+      const bundleCheck = (async () => {
+        try {
+          if (navigator.onLine) return true; // 온라인이면 판정 불필요(분기에서 안 쓰임)
+          const pid = (typeof Projects !== "undefined" && Projects.currentProject && Projects.currentProject.id) || null;
+          if (!pid) return false;
+          if (typeof Offline !== "undefined" && Offline.Bundle && Offline.Bundle.hasManifest) return await Offline.Bundle.hasManifest(pid);
+        } catch (e) {}
+        return false;
+      })();
+      Promise.all([SyncQueue.count(), opLogCount, bundleCheck]).then(([sqN, opN, hasBundle]) => {
         const n = sqN + opN;
         const dot = UI.$("sync-dot"), txt = UI.$("sync-text");
         const online = navigator.onLine;
         if (!online && n === 0) {
           badge.classList.remove("hidden", "online", "pending");
           badge.classList.add("offline");
-          if (txt) txt.textContent = "오프라인";
+          // 번들(프로젝트 다운로드분)이 로컬에 있으면 "오프라인 모드"로 열람/작업 가능,
+          // 없으면 표시할 데이터가 없어 작업 불가 — 서로 다른 상태이므로 문구를 분리한다.
+          if (txt) txt.textContent = hasBundle ? "오프라인 모드" : "오프라인 — 작업 불가(다운로드 필요)";
+          badge.classList.toggle("offline-blocked", !hasBundle);
         } else if (n > 0) {
           badge.classList.remove("hidden", "online", "offline");
           badge.classList.add("pending");
@@ -10653,7 +10882,13 @@
         if (!State.autoSaveDepId) {
           // 신규: _createInitialSave 가 도면(R2 업로드)+핀 전체를 저장
           await this._createInitialSave();
-          if (!State.autoSaveDepId) { this._setSaveIndicator(navigator.onLine ? "error" : "offline"); return false; }
+          if (!State.autoSaveDepId) {
+            // [결함수정 2026-09-18] 모바일은 #autosave-text 가 CSS로 숨겨져(style.css) 인디케이터만으론
+            // 실패가 안 보인다 — 토스트로 반드시 알린다(기존 토스트 경로 재사용, 새 배지 없음).
+            this._setSaveIndicator(navigator.onLine ? "error" : "offline");
+            try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 도면 저장에 실패했습니다. 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+            return false;
+          }
           // 도면 업로드로 대기 중이던 구역 연결 마무리
           if (this._pendingDeckLink) {
             const p = this._pendingDeckLink; this._pendingDeckLink = null;
@@ -11184,11 +11419,19 @@
     get isSuper() { return this.role === "super"; },
     // [역할모델] 관리자 = 슈퍼관리자(마스터) 또는 일반관리자. 관리자 패널/모드 접근 기준. 디자이너는 관리자 아님.
     get isAdmin() { return this.role === "super" || this.role === "admin"; },
-    /** 4티어 역할 한글 라벨 */
+    /** 역할 한글 라벨 사전 — 전역역할(super/admin/designer/viewer)과
+     *  프로젝트역할(designer/editor/viewer)이 같은 어휘를 쓰므로 한 곳에서만 정의한다(SoT). */
+    _ROLE_LABELS: { super: "슈퍼관리자", admin: "관리자", designer: "디자이너", editor: "편집자", viewer: "뷰어" },
+    projectRole: null,   // [P40] 현재 열려 있는 프로젝트에서의 내 역할(없으면 전역역할로 표시)
+    /** 배지 라벨. 프로젝트에 들어가 있으면 "그 프로젝트에서의 역할"을 우선한다(고정 '디자이너' 배지 제거). */
     _roleLabel() {
-      return this.role === "super" ? "슈퍼관리자"
-           : this.role === "admin" ? "관리자"
-           : this.role === "designer" ? "디자이너" : "뷰어";
+      const key = this.projectRole || this.role;
+      return this._ROLE_LABELS[key] || this._ROLE_LABELS.viewer;
+    },
+    /** 프로젝트 진입/이탈 시 배지 컨텍스트 갱신 — 호출부는 ProjectHub.openProject / Projects.selectProject. */
+    setProjectContext(p) {
+      this.projectRole = (p && (p.my_role || p.role)) || null;
+      this._applyUi();
     },
 
     async init() {
@@ -11439,6 +11682,7 @@
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
+        this._offlineOnly = false;   // [P40] 서버가 신원을 재검증함 → 오프라인 전용 상태 해제(서버 쓰기 재허용)
         // [P16] 재로그인 성공 — 만료 상태 해제 + 보류된 오프라인 큐/드래프트를 자동으로 이어서 업로드.
         //   Firebase/Credential 로그인 경로 둘 다 refresh()를 거치므로 이 한 지점에서만 처리(§G-2-5).
         if (this._expired) {
@@ -11730,6 +11974,90 @@
       try { this._openGate(); } catch (e) {}
     },
 
+    /* ══════════════════════════════════════════════════════════════════
+       [P40] 오프라인 재인증 — 현장에서 세션이 끊겨도 "이 기기에서 한 번 온라인 로그인에
+       성공한 사용자"가 비밀번호로 다시 들어와 오프라인 작업을 이어갈 수 있게 한다.
+
+       보안 설계(트레이드오프 명시):
+        · 저장하는 것은 검증자(verifier)뿐 — 서버 hashPassword 와 동일한 PBKDF2-SHA256 100k/256bit
+          + 기기별 16B 난수 salt. 🔴 평문 비밀번호는 어디에도 저장하지 않는다.
+        · 기기를 탈취당하면 이 검증자는 오프라인 무차별 대입의 표적이 된다. 100k 스트레칭 +
+          시도 횟수 제한(OFFLINE_MAX_ATTEMPTS) + 만료(OFFLINE_VERIFIER_TTL_MS) 로 상쇄한다.
+          약한 비밀번호는 여전히 뚫린다 → 초대 계정 비밀번호 최소 8자를 서버에서 강제한다.
+        · 🔴 오프라인 인증은 서버 권한을 전혀 만들지 않는다. 세션 토큰을 복원하지 않으며
+          (idToken=null), canServerWrite()=false 로 업로드 경로가 스스로 멈춘다.
+          온라인 복귀 시 서버가 /api/auth/me 로 다시 검증해야만 쓰기가 열린다.
+        · 로그아웃 시 검증자를 삭제한다.
+       ══════════════════════════════════════════════════════════════════ */
+    OFFLINE_PBKDF2_ITER: 100000,                          // 서버 hashPassword 와 동일 파라미터
+    OFFLINE_VERIFIER_TTL_MS: 30 * 24 * 60 * 60 * 1000,    // 로컬 세션(30일)과 동일 창
+    OFFLINE_MAX_ATTEMPTS: 10,                             // 오프라인 무차별 대입 제한
+    _offlineOnly: false,                                  // 오프라인 검증자로만 인증된 상태
+
+    _hexOf(buf) {
+      const a = new Uint8Array(buf); let h = "";
+      for (const x of a) h += x.toString(16).padStart(2, "0");
+      return h;
+    },
+    _eqConstantTime(a, b) {
+      if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+      return diff === 0;
+    },
+    /** PBKDF2-SHA256(100k, 256bit) — 서버 src/lib/util.ts hashPassword 와 같은 값을 만든다. */
+    async _deriveVerifier(password, saltHex) {
+      const salt = new Uint8Array(String(saltHex).match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+      const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+      const bits = await crypto.subtle.deriveBits(
+        { name: "PBKDF2", salt: salt, iterations: this.OFFLINE_PBKDF2_ITER, hash: "SHA-256" }, baseKey, 256);
+      return this._hexOf(bits);
+    },
+    /** 온라인 로그인 성공 직후에만 호출한다(서버가 이미 신원을 검증한 시점). */
+    async saveOfflineVerifier(email, password, profile) {
+      try {
+        if (!email || !password) return false;
+        const saltBytes = new Uint8Array(16); crypto.getRandomValues(saltBytes);
+        const salt = this._hexOf(saltBytes.buffer);
+        const rec = {
+          v: 1,
+          email: String(email).toLowerCase(),
+          salt: salt,
+          verifier: await this._deriveVerifier(password, salt),   // 해시만 — 원문 없음
+          name: (profile && profile.name) || "",
+          role: (profile && profile.role) || "viewer",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + this.OFFLINE_VERIFIER_TTL_MS,
+          attempts: 0
+        };
+        return await SyncQueue.saveAuthRecord(rec);
+      } catch (e) { return false; }
+    },
+    /** 오프라인 재인증. 성공해도 서버 토큰은 만들지 않는다(로컬 작업 권한 전용). */
+    async offlineLogin(email, password) {
+      const rec = await SyncQueue.loadAuthRecord();
+      const em = String(email || "").trim().toLowerCase();
+      if (!rec || rec.email !== em) return { ok: false, reason: "no-record" };
+      if (Date.now() > rec.expiresAt) { await SyncQueue.clearAuthRecord(); return { ok: false, reason: "expired" }; }
+      if ((rec.attempts || 0) >= this.OFFLINE_MAX_ATTEMPTS) return { ok: false, reason: "locked" };
+      const h = await this._deriveVerifier(String(password || ""), rec.salt);
+      if (!this._eqConstantTime(h, rec.verifier)) {
+        rec.attempts = (rec.attempts || 0) + 1;
+        await SyncQueue.saveAuthRecord(rec);
+        return { ok: false, reason: "bad-password", remaining: Math.max(0, this.OFFLINE_MAX_ATTEMPTS - rec.attempts) };
+      }
+      rec.attempts = 0; await SyncQueue.saveAuthRecord(rec);
+      this.idToken = null;                    // 🔴 서버 세션 토큰을 복원하지 않는다
+      this._offlineOnly = true; this._offline = true;
+      this.user = { email: rec.email, name: rec.name || rec.email, picture: "", role: rec.role };
+      this.role = rec.role;
+      this._applyUi();
+      return { ok: true, user: this.user };
+    },
+    /** 서버 쓰기(업로드/동기화) 허용 여부 — 오프라인 검증만으로는 절대 허용하지 않는다. */
+    canServerWrite() { return !this._offlineOnly && !!this.idToken; },
+    async clearOfflineVerifier() { try { await SyncQueue.clearAuthRecord(); } catch (e) {} },
+
     signOut() {
       try {
         if (window.google && window.google.accounts && window.google.accounts.id)
@@ -11743,8 +12071,10 @@
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
       this._suppressDemoBadge = false;  // 다음 수동 데모 로그인 시 배지 정상 표시되도록 초기화
+      this._offlineOnly = false; this.projectRole = null;
       try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
       this._clearAuthCache();   // 오프라인 권한 캐시도 함께 정리
+      this.clearOfflineVerifier();  // [P40] 오프라인 재인증 검증자 삭제 — 로그아웃 후엔 이 기기에서 오프라인 진입 불가
       this._applyUi();
       this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환
@@ -11863,7 +12193,7 @@
       $("btn-go-edit") && $("btn-go-edit").addEventListener("click", () => {
         if (!Auth.isDesigner) return;
         this.close();
-        App.openApp("designer");
+        App.openApp(PinSeries.preferredMode());
       });
       // 디자이너 지정 관리(슈퍼)
       $("btn-open-designers") && $("btn-open-designers").addEventListener("click", () => {
@@ -13917,7 +14247,8 @@
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "가입에 실패했습니다."); return; }
-        this._onAuthed(j.token, j.name || j.email);
+        this._pendingPw = pw;   // [P40] 오프라인 재인증 검증자 생성용(메모리에서만, 저장 후 즉시 폐기)
+        this._onAuthed(j.token, j.name || j.email, { email: this._email, name: j.name, role: j.role });
       } catch (e) {
         this._err("네트워크 오류로 가입에 실패했습니다.");
       } finally {
@@ -13939,17 +14270,22 @@
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "로그인에 실패했습니다."); return; }
-        // [마스터] 초대 계정(비번 '1') 첫 로그인 → 비밀번호 변경 강제
+        // [하위호환] must_change_password=1 로 남아 있는 구(舊) 초대 계정만 비밀번호 변경 강제.
+        //   신규 초대는 초대 링크에서 본인이 직접 비밀번호를 설정하므로 이 분기를 타지 않는다.
         if (j.must_change) {
           try { sessionStorage.setItem("wm_id_token", j.token); localStorage.setItem("wm_local_token", j.token); } catch (e) {}
           if (typeof Auth !== "undefined") Auth.idToken = j.token;
           this._pendingName = j.name || j.email;
+          this._pendingProfile = { email: email, name: j.name, role: j.role };
           this._openPwChange();
           return;
         }
-        this._onAuthed(j.token, j.name || j.email);
+        this._pendingPw = pw;   // [P40] 오프라인 재인증 검증자 생성용
+        this._onAuthed(j.token, j.name || j.email, { email: email, name: j.name, role: j.role });
       } catch (e) {
-        this._err("네트워크 오류로 로그인에 실패했습니다.");
+        // [P40] 네트워크 실패 → 이 기기에 저장된 오프라인 검증자로 재인증 시도(오프라인 작업 전용).
+        const off = await this._tryOfflineLogin(email, pw);
+        if (!off) this._err("네트워크 오류로 로그인에 실패했습니다.");
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = orig; }
       }
@@ -13982,14 +14318,32 @@
         if (!r.ok) { showErr(j.error || "변경에 실패했습니다."); return; }
         const m = $("pwchange-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
         Prompt && Prompt.toast && Prompt.toast("비밀번호가 변경되었습니다.");
-        this._onAuthed(Auth.idToken, this._pendingName || "");
+        this._pendingPw = np;   // [P40] 변경된 비밀번호로 오프라인 검증자 갱신
+        this._onAuthed(Auth.idToken, this._pendingName || "", this._pendingProfile || null);
       } catch (e) {
         showErr("네트워크 오류로 변경에 실패했습니다.");
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = orig; }
       }
     },
-    _onAuthed(token, displayName) {
+    /** [P40] 오프라인 재인증 — 검증자는 "이 기기에서 온라인 로그인에 성공한 적 있는" 사용자만 갖는다.
+     *  성공해도 서버 토큰은 발급되지 않는다(Auth.offlineLogin 참조) → 서버 쓰기는 온라인 복귀 후. */
+    async _tryOfflineLogin(email, pw) {
+      if (typeof Auth === "undefined" || !Auth.offlineLogin) return false;
+      const r = await Auth.offlineLogin(email, pw);
+      if (!r || !r.ok) {
+        if (r && r.reason === "bad-password") this._err("비밀번호가 올바르지 않습니다. (오프라인 확인 · 남은 시도 " + r.remaining + "회)");
+        else if (r && r.reason === "locked") this._err("오프라인 로그인 시도 횟수를 초과했습니다. 인터넷에 연결해 로그인해 주세요.");
+        else if (r && r.reason === "expired") this._err("오프라인 로그인 유효기간이 지났습니다. 인터넷에 연결해 로그인해 주세요.");
+        return false;
+      }
+      this.close();
+      Prompt.toast && Prompt.toast("오프라인 로그인 — " + (r.user.name || r.user.email) + " · 작성한 내용은 온라인 복귀 후 자동 업로드됩니다", 4200);
+      if (App.openApp) App.openApp("viewer");
+      return true;
+    },
+
+    _onAuthed(token, displayName, profile) {
       // 로컬 세션 토큰 저장 → Auth 가 Bearer 로 사용 (idToken 슬롯 공용)
       try {
         sessionStorage.setItem("wm_id_token", token);
@@ -13998,12 +14352,23 @@
       if (typeof Auth !== "undefined") Auth.idToken = token;
       this.close();
       Prompt.toast && Prompt.toast("" + displayName + " 님으로 로그인되었습니다.");
+      const done = () => {
+        // [P40] 온라인 로그인 성공 시점에만 오프라인 검증자 저장 → 비번은 즉시 폐기(저장 안 함)
+        const pw = this._pendingPw; this._pendingPw = null;
+        const em = (profile && profile.email) || (typeof Auth !== "undefined" && Auth.user ? Auth.user.email : null);
+        if (pw && em && typeof Auth !== "undefined" && Auth.saveOfflineVerifier) {
+          Auth.saveOfflineVerifier(em, pw, {
+            name: (profile && profile.name) || displayName,
+            role: (typeof Auth !== "undefined" && Auth.role) || (profile && profile.role) || "viewer"
+          });
+        }
+        if (typeof Install !== "undefined" && Install.maybePrompt) Install.maybePrompt();
+        if (App.openApp) App.openApp("viewer");
+      };
       // 인증 상태 갱신 후 뷰어로
       if (typeof Auth !== "undefined" && Auth.refresh) {
-        Auth.refresh().then(() => { if (App.openApp) App.openApp("viewer"); }).catch(() => { if (App.openApp) App.openApp("viewer"); });
-      } else {
-        if (App.openApp) App.openApp("viewer");
-      }
+        Auth.refresh().then(done).catch(done);
+      } else { done(); }
     }
   };
 
@@ -14167,6 +14532,8 @@
 
     async selectProject(id) {
       this.currentProject = this.list.find((p) => p.id === id) || null;
+      // [P40] 배지 컨텍스트 — 프로젝트 역할 표시(공유 지점: Auth.setProjectContext)
+      if (typeof Auth !== "undefined" && Auth.setProjectContext) Auth.setProjectContext(this.currentProject);
       this._renderSelect();
       if (!this.currentProject) { this.decks = []; this._renderDecks(); return; }
       await this.loadDecks();
@@ -14504,17 +14871,32 @@
     async download(projectId, onProgress) {
       if (!navigator.onLine) throw new Error("온라인 상태에서만 다운로드할 수 있습니다.");
       const H = _authHeaders();
+      // [마스터 요건5 근본원인 대응 2026-09-18] IndexedDB 는 브라우저가 저장공간
+      // 압박 시 조용히 축출(evict)할 수 있다 — persist()로 축출 대상에서 제외 요청.
+      // 실패해도 무시(모든 브라우저가 지원하지 않음 — 다운로드를 막지 않는다).
+      try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
+
+      // [마스터 요건5 근본원인 수정] saveDraft() 는 실패(IDB 에러/localStorage 용량초과)해도
+      // 조용히 false 를 반환할 뿐 throw 하지 않는다 — 기존 코드는 반환값을 확인하지 않아
+      // "다운로드 완료" 토스트가 뜨지만 실제로는 일부 데이터가 저장되지 않는 조용한 실패가
+      // 가능했다(재현: 마스터 기기에서 다운로드했는데 새로고침/재방문 후 "저장됨"이 안 보임).
+      // → 저장 실패 시 즉시 throw 해 사용자에게 정직하게 "실패"로 보이게 한다.
+      const saveOrThrow = async (key, data) => {
+        const ok = await SyncQueue.saveDraft(key, data);
+        if (!ok) throw new Error("로컬 저장 실패(기기 저장공간 부족) — " + key);
+        return ok;
+      };
 
       // 1) 프로젝트 메타
       const proj = await (await fetch("/api/projects", { headers: H })).json();
       const project = (proj.data || []).find((p) => p.id === projectId);
       if (!project) throw new Error("프로젝트를 찾을 수 없습니다.");
-      await SyncQueue.saveDraft("bundle:project:" + projectId, project);
+      await saveOrThrow("bundle:project:" + projectId, project);
 
       // 2) 데크 목록
       const decksRes = await (await fetch("/api/projects/" + projectId + "/decks", { headers: H })).json();
       const decks = decksRes.data || [];
-      await SyncQueue.saveDraft("bundle:decks:" + projectId, decks);
+      await saveOrThrow("bundle:decks:" + projectId, decks);
 
       // 3) 데크가 가리키는 배포본 id 수집(중복 제거)
       const depIds = Array.from(new Set(decks.map((d) => d.deployment_id).filter(Boolean)));
@@ -14525,7 +14907,7 @@
       // 4) 각 배포본 + 그 안의 파노 imageId 수집
       for (const depId of depIds) {
         const dep = await (await fetch("/tables/deployments/" + depId, { headers: H })).json();
-        await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+        await saveOrThrow("bundle:dep:" + depId, dep);
         let pins = []; try { pins = JSON.parse(dep.pins || "[]"); } catch (e) {}
         pins.forEach((p) => { if (p && p.imageId) panoIds.add(p.imageId); });
         done++; onProgress && onProgress(done, total, "도면 " + (dep.title || depId));
@@ -14535,24 +14917,31 @@
       const panoArr = Array.from(panoIds);
       for (let i = 0; i < panoArr.length; i++) {
         const imgId = panoArr[i];
-        try {
-          const rec = await (await fetch("/tables/pano_images/" + imgId, { headers: H })).json();
-          if (rec && rec.image_data) {
-            await SyncQueue.saveDraft("bundle:pano:" + imgId, rec.image_data);
-            if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imgId] = rec.image_data; }
-          }
-        } catch (e) {}
+        const rec = await (await fetch("/tables/pano_images/" + imgId, { headers: H })).json();
+        if (rec && rec.image_data) {
+          await saveOrThrow("bundle:pano:" + imgId, rec.image_data);
+          if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imgId] = rec.image_data; }
+        }
         onProgress && onProgress(total + i + 1, total + panoArr.length, "3D 비워 " + (i + 1) + "/" + panoArr.length);
       }
 
-      // 6) 매니페스트 기록(무결성 검증용)
+      // 6) 매니페스트 기록(무결성 검증용) — 위 저장이 전부 성공했을 때만 여기 도달
       const manifest = {
         projectId, downloadedAt: Date.now(),
         decks: decks.length, deployments: depIds.length, panos: panoArr.length,
         depIds, panoIds: panoArr
       };
-      await SyncQueue.saveDraft("bundle:manifest:" + projectId, manifest);
+      await saveOrThrow("bundle:manifest:" + projectId, manifest);
       return manifest;
+    },
+
+    /** [마스터 요청 2026-09-18] "다운받은 상태"인지 여부(가벼운 체크 — 매니페스트 존재만).
+     *  offline 배지가 "오프라인 모드"(번들 있음) / "작업 불가"(번들 없음)를 가르는 데 쓴다.
+     *  verify()보다 훨씬 가볍다(각 dep/pano 개별 조회 없이 매니페스트 존재만 확인). */
+    async hasManifest(projectId) {
+      if (!projectId) return false;
+      try { return !!(await SyncQueue.loadDraft("bundle:manifest:" + projectId)); }
+      catch (e) { return false; }
     },
 
     /* ── 번들 무결성 검증 ── */
@@ -15511,7 +15900,8 @@
       "orientation-fix": "방향 보정 — 360° 파노라마가 실제 도면 방향과 다르게 찍혔을 때, 회전시켜 도면 방향과 맞춥니다.",
       "checkerboard": "체크보드 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다.",
       "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다.",
-      "offline-download": "오프라인 다운로드 — 이 프로젝트의 도면(PDF/이미지)과 배치된 핀, 그리고 핀에 연결된 360° 파노라마 사진을 전부 이 기기에 내려받습니다. 다운로드가 끝나면 인터넷이 끊긴 현장에서도 도면과 360° 사진을 그대로 열람하고 작업할 수 있고, 나중에 인터넷이 다시 연결되면 자동으로 서버와 동기화됩니다. 버튼에 '저장됨'이 표시되면 이미 내려받아 오프라인 사용 준비가 된 상태입니다."
+      "offline-download": "오프라인 다운로드 — 이 프로젝트의 도면(PDF/이미지)과 배치된 핀, 그리고 핀에 연결된 360° 파노라마 사진을 전부 이 기기에 내려받습니다. 다운로드가 끝나면 인터넷이 끊긴 현장에서도 도면과 360° 사진을 그대로 열람하고 작업할 수 있고, 나중에 인터넷이 다시 연결되면 자동으로 서버와 동기화됩니다. 버튼에 '저장됨'이 표시되면 이미 내려받아 오프라인 사용 준비가 된 상태입니다.",
+      "pin-mobile-photo-only": "모바일에서는 사진만 등록할 수 있습니다(화면이 좁아 사진 등록에 집중). 360° 사진·문서·노트·동영상·URL 첨부는 PC(데스크톱)에서 추가하세요. 이미 등록된 다른 종류의 첨부는 모바일에서도 그대로 보이고 열람됩니다."
     },
 
     _inited: false,
@@ -15682,6 +16072,217 @@
 
   document.addEventListener("DOMContentLoaded", () => Help.init());
 
+  /* ══════════════════════════════════════════
+     INVITE — 프로젝트 초대 링크 수락 (?invite=<token>)
+     [보안 P40] 초대는 더 이상 계정을 미리 만들지 않는다(기본 비밀번호 '1' 제거).
+       링크를 연 본인이 이름 + 비밀번호를 직접 설정해야 계정이 생긴다.
+       이미 계정이 있는 이메일이면 이름·비번을 다시 묻지 않고 멤버십만 추가한다.
+  ══════════════════════════════════════════ */
+  const Invite = {
+    TOKEN_PARAM: "invite",
+    _token: null,
+    _info: null,
+
+    init() {
+      const $ = (id) => document.getElementById(id);
+      $("inv-submit") && $("inv-submit").addEventListener("click", () => this.accept());
+      $("invite-gate-cancel") && $("invite-gate-cancel").addEventListener("click", () => this.close());
+      const pw2 = $("inv-pw2");
+      if (pw2) pw2.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.accept(); } });
+      return this.detect();
+    },
+
+    /** URL 에서 초대 토큰을 읽고 즉시 주소창에서 제거한다.
+     *  (토큰은 1회용 자격증명 — 브라우저 히스토리/스크린샷/Referer 에 남기지 않는다.) */
+    detect() {
+      let t = null;
+      try { t = new URLSearchParams(location.search).get(this.TOKEN_PARAM); } catch (e) { t = null; }
+      if (!t) return false;
+      this._token = t;
+      try { history.replaceState({}, "", location.pathname); } catch (e) {}
+      this.open();
+      return true;
+    },
+
+    _err(msg) {
+      const e = document.getElementById("inv-error");
+      if (!e) return;
+      if (msg) { e.textContent = msg; e.classList.remove("hidden"); }
+      else { e.textContent = ""; e.classList.add("hidden"); }
+    },
+
+    async open() {
+      const m = document.getElementById("invite-gate");
+      if (!m || !this._token) return;
+      this._err(null);
+      m.classList.remove("hidden");
+      requestAnimationFrame(() => m.classList.add("on"));
+      const $ = (id) => document.getElementById(id);
+      try {
+        const r = await fetch("/api/invite/" + encodeURIComponent(this._token));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { this._err(j.error || "초대 링크가 유효하지 않거나 만료되었습니다."); this._disable(); return; }
+        this._info = j;
+        $("inv-project") && ($("inv-project").textContent = j.project_name || j.project_id);
+        $("inv-email") && ($("inv-email").textContent = j.email);
+        const roleLabel = (typeof Auth !== "undefined" && Auth._ROLE_LABELS && Auth._ROLE_LABELS[j.role]) || j.role;
+        $("inv-role") && ($("inv-role").textContent = roleLabel);
+        // 기존 계정이면 이름/비번 입력을 숨긴다(다시 묻지 않는다)
+        const fields = $("inv-newacct-fields");
+        const existing = $("inv-existing-msg");
+        if (fields) fields.classList.toggle("hidden", !j.needs_account);
+        if (existing) existing.classList.toggle("hidden", !!j.needs_account);
+        const sub = $("inv-submit");
+        if (sub) sub.textContent = j.needs_account ? "계정 만들고 참여" : "프로젝트 참여";
+        if (j.needs_account) setTimeout(() => { const n = $("inv-name"); n && n.focus(); }, 120);
+      } catch (e) {
+        this._err("네트워크 오류 — 인터넷에 연결한 뒤 초대 링크를 다시 열어 주세요.");
+        this._disable();
+      }
+    },
+
+    _disable() {
+      const s = document.getElementById("inv-submit");
+      if (s) s.disabled = true;
+      const f = document.getElementById("inv-newacct-fields");
+      if (f) f.classList.add("hidden");
+    },
+
+    close() {
+      const m = document.getElementById("invite-gate");
+      if (!m) return;
+      m.classList.remove("on");
+      setTimeout(() => m.classList.add("hidden"), 200);
+    },
+
+    async accept() {
+      if (!this._token || !this._info) return;
+      const $ = (id) => document.getElementById(id);
+      this._err(null);
+      const needs = !!this._info.needs_account;
+      const name = needs ? (($("inv-name") || {}).value || "").trim() : "";
+      const pw = needs ? (($("inv-pw") || {}).value || "") : "";
+      const pw2 = needs ? (($("inv-pw2") || {}).value || "") : "";
+      if (needs) {
+        if (!name) { this._err("이름을 입력해 주세요."); return; }
+        if (pw.length < 8) { this._err("비밀번호는 8자 이상이어야 합니다."); return; }
+        if (pw !== pw2) { this._err("두 비밀번호가 일치하지 않습니다."); return; }
+      }
+      const btn = $("inv-submit"); const orig = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "처리 중..."; }
+      try {
+        const r = await fetch("/api/invite/" + encodeURIComponent(this._token) + "/accept", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(needs ? { name: name, password: pw } : {})
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { this._err(j.error || "참여에 실패했습니다."); return; }
+        this._token = null;
+        this.close();
+        // 기존 CompanyAuth 로그인 완료 경로를 그대로 재사용한다(세션 저장 + 오프라인 검증자 + 설치 유도).
+        if (typeof CompanyAuth !== "undefined" && CompanyAuth._onAuthed) {
+          if (needs) CompanyAuth._pendingPw = pw;
+          CompanyAuth._onAuthed(j.token, j.name || j.email, { email: j.email, name: j.name, role: j.role });
+        }
+      } catch (e) {
+        this._err("네트워크 오류로 참여하지 못했습니다.");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = orig; }
+      }
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     INSTALL — 모바일 "홈 화면에 설치" 유도 (PWA)
+     · Android/Chrome: beforeinstallprompt 를 보관해 두었다가 사용자가 버튼을 누를 때 실행.
+     · iOS(Safari): beforeinstallprompt 자체가 없다 → 공유→"홈 화면에 추가" 안내 문구로 대체.
+     · 이미 설치된 상태(display-mode: standalone)면 절대 띄우지 않는다.
+     · 배너는 하단 도크(.mobile-dock) 위로 띄운다 — 작업 화면을 가리지 않는다(CSS --mdock-h SoT).
+  ══════════════════════════════════════════ */
+  const Install = {
+    DISMISS_KEY: "wm_install_dismissed",
+    _deferred: null,
+
+    init() {
+      try {
+        window.addEventListener("beforeinstallprompt", (e) => {
+          e.preventDefault();          // 브라우저 기본 미니바 차단 → 우리 배너로 시점 제어
+          this._deferred = e;
+        });
+        window.addEventListener("appinstalled", () => { this._deferred = null; this.hide(); });
+      } catch (e) {}
+      const $ = (id) => document.getElementById(id);
+      $("pwa-install-accept") && $("pwa-install-accept").addEventListener("click", () => this.accept());
+      $("pwa-install-close") && $("pwa-install-close").addEventListener("click", () => this.dismiss());
+    },
+
+    /** 이미 앱으로 설치돼 실행 중인가 */
+    isStandalone() {
+      try {
+        if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+      } catch (e) {}
+      return !!(window.navigator && window.navigator.standalone);   // iOS Safari
+    },
+
+    /** iOS 계열(iPadOS 13+ 는 MacIntel + 터치로 보고된다) */
+    isIOS() {
+      const nav = window.navigator || {};
+      const ua = String(nav.userAgent || "");
+      if (/iPad|iPhone|iPod/.test(ua)) return true;
+      return nav.platform === "MacIntel" && Number(nav.maxTouchPoints || 0) > 1;
+    },
+
+    _dismissed() {
+      try { return localStorage.getItem(this.DISMISS_KEY) === "1"; } catch (e) { return false; }
+    },
+
+    /** 설치 안내를 띄워야 하는가 — 설치됨/거절함/설치수단 없음 이면 false */
+    _shouldPrompt() {
+      if (this.isStandalone()) return false;     // 🔴 이미 설치 → 안내 금지
+      if (this._dismissed()) return false;
+      return !!this._deferred || this.isIOS();   // 안드로이드=프롬프트 보유 / iOS=수동 안내
+    },
+
+    /** 로그인 직후 호출. 조건을 만족할 때만 배너를 띄운다. 반환: 띄웠는지 여부 */
+    maybePrompt() {
+      if (!this._shouldPrompt()) return false;
+      const b = document.getElementById("pwa-install-banner");
+      if (!b) return false;
+      const ios = document.getElementById("pwa-install-ios");
+      const btn = document.getElementById("pwa-install-accept");
+      const isIos = this.isIOS() && !this._deferred;
+      if (ios) ios.classList.toggle("hidden", !isIos);
+      if (btn) btn.classList.toggle("hidden", isIos);
+      b.classList.remove("hidden");
+      requestAnimationFrame(() => b.classList.add("on"));
+      return true;
+    },
+
+    hide() {
+      const b = document.getElementById("pwa-install-banner");
+      if (!b) return;
+      b.classList.remove("on");
+      setTimeout(() => b.classList.add("hidden"), 200);
+    },
+
+    dismiss() {
+      try { localStorage.setItem(this.DISMISS_KEY, "1"); } catch (e) {}
+      this.hide();
+    },
+
+    async accept() {
+      const d = this._deferred;
+      if (!d) { this.hide(); return false; }
+      this._deferred = null;
+      try {
+        d.prompt();
+        const choice = await d.userChoice;
+        this.hide();
+        return !!(choice && choice.outcome === "accepted");
+      } catch (e) { this.hide(); return false; }
+    }
+  };
+
   /* ── 진입 ── */
   document.addEventListener("DOMContentLoaded", async () => {
     // [버그①수정 2026-08-31] App.init()이 Auth.init()(데모 자동로그인)을 await하므로
@@ -15691,10 +16292,15 @@
     // [오프라인 작업지시서 ] 오프라인 상태 배지/네트워크 이벤트 연결
     if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
 
+    // [P40] PWA 설치 유도 배선 — beforeinstallprompt 는 페이지 초기에 발화하므로 먼저 등록한다.
+    if (typeof Install !== "undefined" && Install.init) { try { Install.init(); } catch (e) {} }
+    // [P40] 프로젝트 초대 링크(?invite=<token>) — 있으면 이름/비번 설정 모달을 띄운다.
+    if (typeof Invite !== "undefined" && Invite.init) { try { Invite.init(); } catch (e) {} }
+
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
       State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, PinSeries, PinIcons, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
-      Offline, OfflineBundle, OfflineLoad, OpLog,
+      Offline, OfflineBundle, OfflineLoad, OpLog, Invite, Install,
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
@@ -15726,7 +16332,7 @@
             if (typeof Projects !== 'undefined') Projects.currentProject = { id: t.project.id, name: t.project.name };
             // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — 서브도메인 자동진입은 디자이너로 고정한다.
             // 원복(뷰어 자동진입 부활) 시 아래 줄로 교체: App.openApp((typeof Auth !== 'undefined' && Auth.isDesigner) ? 'designer' : 'viewer', { project: { id: t.project.id, name: t.project.name } });
-            App.openApp('designer', { project: { id: t.project.id, name: t.project.name } });
+            App.openApp((typeof PinSeries !== 'undefined' ? PinSeries.preferredMode() : 'designer'), { project: { id: t.project.id, name: t.project.name } });
             return;
           }
         } catch (e) {}

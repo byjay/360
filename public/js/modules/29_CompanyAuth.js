@@ -145,7 +145,8 @@
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "가입에 실패했습니다."); return; }
-        this._onAuthed(j.token, j.name || j.email);
+        this._pendingPw = pw;   // [P40] 오프라인 재인증 검증자 생성용(메모리에서만, 저장 후 즉시 폐기)
+        this._onAuthed(j.token, j.name || j.email, { email: this._email, name: j.name, role: j.role });
       } catch (e) {
         this._err("네트워크 오류로 가입에 실패했습니다.");
       } finally {
@@ -167,17 +168,22 @@
         });
         const j = await r.json();
         if (!r.ok) { this._err(j.error || "로그인에 실패했습니다."); return; }
-        // [마스터] 초대 계정(비번 '1') 첫 로그인 → 비밀번호 변경 강제
+        // [하위호환] must_change_password=1 로 남아 있는 구(舊) 초대 계정만 비밀번호 변경 강제.
+        //   신규 초대는 초대 링크에서 본인이 직접 비밀번호를 설정하므로 이 분기를 타지 않는다.
         if (j.must_change) {
           try { sessionStorage.setItem("wm_id_token", j.token); localStorage.setItem("wm_local_token", j.token); } catch (e) {}
           if (typeof Auth !== "undefined") Auth.idToken = j.token;
           this._pendingName = j.name || j.email;
+          this._pendingProfile = { email: email, name: j.name, role: j.role };
           this._openPwChange();
           return;
         }
-        this._onAuthed(j.token, j.name || j.email);
+        this._pendingPw = pw;   // [P40] 오프라인 재인증 검증자 생성용
+        this._onAuthed(j.token, j.name || j.email, { email: email, name: j.name, role: j.role });
       } catch (e) {
-        this._err("네트워크 오류로 로그인에 실패했습니다.");
+        // [P40] 네트워크 실패 → 이 기기에 저장된 오프라인 검증자로 재인증 시도(오프라인 작업 전용).
+        const off = await this._tryOfflineLogin(email, pw);
+        if (!off) this._err("네트워크 오류로 로그인에 실패했습니다.");
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = orig; }
       }
@@ -210,14 +216,32 @@
         if (!r.ok) { showErr(j.error || "변경에 실패했습니다."); return; }
         const m = $("pwchange-modal"); if (m) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
         Prompt && Prompt.toast && Prompt.toast("비밀번호가 변경되었습니다.");
-        this._onAuthed(Auth.idToken, this._pendingName || "");
+        this._pendingPw = np;   // [P40] 변경된 비밀번호로 오프라인 검증자 갱신
+        this._onAuthed(Auth.idToken, this._pendingName || "", this._pendingProfile || null);
       } catch (e) {
         showErr("네트워크 오류로 변경에 실패했습니다.");
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = orig; }
       }
     },
-    _onAuthed(token, displayName) {
+    /** [P40] 오프라인 재인증 — 검증자는 "이 기기에서 온라인 로그인에 성공한 적 있는" 사용자만 갖는다.
+     *  성공해도 서버 토큰은 발급되지 않는다(Auth.offlineLogin 참조) → 서버 쓰기는 온라인 복귀 후. */
+    async _tryOfflineLogin(email, pw) {
+      if (typeof Auth === "undefined" || !Auth.offlineLogin) return false;
+      const r = await Auth.offlineLogin(email, pw);
+      if (!r || !r.ok) {
+        if (r && r.reason === "bad-password") this._err("비밀번호가 올바르지 않습니다. (오프라인 확인 · 남은 시도 " + r.remaining + "회)");
+        else if (r && r.reason === "locked") this._err("오프라인 로그인 시도 횟수를 초과했습니다. 인터넷에 연결해 로그인해 주세요.");
+        else if (r && r.reason === "expired") this._err("오프라인 로그인 유효기간이 지났습니다. 인터넷에 연결해 로그인해 주세요.");
+        return false;
+      }
+      this.close();
+      Prompt.toast && Prompt.toast("오프라인 로그인 — " + (r.user.name || r.user.email) + " · 작성한 내용은 온라인 복귀 후 자동 업로드됩니다", 4200);
+      if (App.openApp) App.openApp("viewer");
+      return true;
+    },
+
+    _onAuthed(token, displayName, profile) {
       // 로컬 세션 토큰 저장 → Auth 가 Bearer 로 사용 (idToken 슬롯 공용)
       try {
         sessionStorage.setItem("wm_id_token", token);
@@ -226,12 +250,23 @@
       if (typeof Auth !== "undefined") Auth.idToken = token;
       this.close();
       Prompt.toast && Prompt.toast("" + displayName + " 님으로 로그인되었습니다.");
+      const done = () => {
+        // [P40] 온라인 로그인 성공 시점에만 오프라인 검증자 저장 → 비번은 즉시 폐기(저장 안 함)
+        const pw = this._pendingPw; this._pendingPw = null;
+        const em = (profile && profile.email) || (typeof Auth !== "undefined" && Auth.user ? Auth.user.email : null);
+        if (pw && em && typeof Auth !== "undefined" && Auth.saveOfflineVerifier) {
+          Auth.saveOfflineVerifier(em, pw, {
+            name: (profile && profile.name) || displayName,
+            role: (typeof Auth !== "undefined" && Auth.role) || (profile && profile.role) || "viewer"
+          });
+        }
+        if (typeof Install !== "undefined" && Install.maybePrompt) Install.maybePrompt();
+        if (App.openApp) App.openApp("viewer");
+      };
       // 인증 상태 갱신 후 뷰어로
       if (typeof Auth !== "undefined" && Auth.refresh) {
-        Auth.refresh().then(() => { if (App.openApp) App.openApp("viewer"); }).catch(() => { if (App.openApp) App.openApp("viewer"); });
-      } else {
-        if (App.openApp) App.openApp("viewer");
-      }
+        Auth.refresh().then(done).catch(done);
+      } else { done(); }
     }
   };
 

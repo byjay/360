@@ -60,6 +60,8 @@
 
     async selectProject(id) {
       this.currentProject = this.list.find((p) => p.id === id) || null;
+      // [P40] 배지 컨텍스트 — 프로젝트 역할 표시(공유 지점: Auth.setProjectContext)
+      if (typeof Auth !== "undefined" && Auth.setProjectContext) Auth.setProjectContext(this.currentProject);
       this._renderSelect();
       if (!this.currentProject) { this.decks = []; this._renderDecks(); return; }
       await this.loadDecks();

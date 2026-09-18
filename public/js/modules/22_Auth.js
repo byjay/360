@@ -24,11 +24,19 @@
     get isSuper() { return this.role === "super"; },
     // [역할모델] 관리자 = 슈퍼관리자(마스터) 또는 일반관리자. 관리자 패널/모드 접근 기준. 디자이너는 관리자 아님.
     get isAdmin() { return this.role === "super" || this.role === "admin"; },
-    /** 4티어 역할 한글 라벨 */
+    /** 역할 한글 라벨 사전 — 전역역할(super/admin/designer/viewer)과
+     *  프로젝트역할(designer/editor/viewer)이 같은 어휘를 쓰므로 한 곳에서만 정의한다(SoT). */
+    _ROLE_LABELS: { super: "슈퍼관리자", admin: "관리자", designer: "디자이너", editor: "편집자", viewer: "뷰어" },
+    projectRole: null,   // [P40] 현재 열려 있는 프로젝트에서의 내 역할(없으면 전역역할로 표시)
+    /** 배지 라벨. 프로젝트에 들어가 있으면 "그 프로젝트에서의 역할"을 우선한다(고정 '디자이너' 배지 제거). */
     _roleLabel() {
-      return this.role === "super" ? "슈퍼관리자"
-           : this.role === "admin" ? "관리자"
-           : this.role === "designer" ? "디자이너" : "뷰어";
+      const key = this.projectRole || this.role;
+      return this._ROLE_LABELS[key] || this._ROLE_LABELS.viewer;
+    },
+    /** 프로젝트 진입/이탈 시 배지 컨텍스트 갱신 — 호출부는 ProjectHub.openProject / Projects.selectProject. */
+    setProjectContext(p) {
+      this.projectRole = (p && (p.my_role || p.role)) || null;
+      this._applyUi();
     },
 
     async init() {
@@ -279,6 +287,7 @@
         this.role = data.role;
         this.superAdmin = data.super_admin || this.superAdmin;
         this._offline = false;
+        this._offlineOnly = false;   // [P40] 서버가 신원을 재검증함 → 오프라인 전용 상태 해제(서버 쓰기 재허용)
         // [P16] 재로그인 성공 — 만료 상태 해제 + 보류된 오프라인 큐/드래프트를 자동으로 이어서 업로드.
         //   Firebase/Credential 로그인 경로 둘 다 refresh()를 거치므로 이 한 지점에서만 처리(§G-2-5).
         if (this._expired) {
@@ -570,6 +579,90 @@
       try { this._openGate(); } catch (e) {}
     },
 
+    /* ══════════════════════════════════════════════════════════════════
+       [P40] 오프라인 재인증 — 현장에서 세션이 끊겨도 "이 기기에서 한 번 온라인 로그인에
+       성공한 사용자"가 비밀번호로 다시 들어와 오프라인 작업을 이어갈 수 있게 한다.
+
+       보안 설계(트레이드오프 명시):
+        · 저장하는 것은 검증자(verifier)뿐 — 서버 hashPassword 와 동일한 PBKDF2-SHA256 100k/256bit
+          + 기기별 16B 난수 salt. 🔴 평문 비밀번호는 어디에도 저장하지 않는다.
+        · 기기를 탈취당하면 이 검증자는 오프라인 무차별 대입의 표적이 된다. 100k 스트레칭 +
+          시도 횟수 제한(OFFLINE_MAX_ATTEMPTS) + 만료(OFFLINE_VERIFIER_TTL_MS) 로 상쇄한다.
+          약한 비밀번호는 여전히 뚫린다 → 초대 계정 비밀번호 최소 8자를 서버에서 강제한다.
+        · 🔴 오프라인 인증은 서버 권한을 전혀 만들지 않는다. 세션 토큰을 복원하지 않으며
+          (idToken=null), canServerWrite()=false 로 업로드 경로가 스스로 멈춘다.
+          온라인 복귀 시 서버가 /api/auth/me 로 다시 검증해야만 쓰기가 열린다.
+        · 로그아웃 시 검증자를 삭제한다.
+       ══════════════════════════════════════════════════════════════════ */
+    OFFLINE_PBKDF2_ITER: 100000,                          // 서버 hashPassword 와 동일 파라미터
+    OFFLINE_VERIFIER_TTL_MS: 30 * 24 * 60 * 60 * 1000,    // 로컬 세션(30일)과 동일 창
+    OFFLINE_MAX_ATTEMPTS: 10,                             // 오프라인 무차별 대입 제한
+    _offlineOnly: false,                                  // 오프라인 검증자로만 인증된 상태
+
+    _hexOf(buf) {
+      const a = new Uint8Array(buf); let h = "";
+      for (const x of a) h += x.toString(16).padStart(2, "0");
+      return h;
+    },
+    _eqConstantTime(a, b) {
+      if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+      return diff === 0;
+    },
+    /** PBKDF2-SHA256(100k, 256bit) — 서버 src/lib/util.ts hashPassword 와 같은 값을 만든다. */
+    async _deriveVerifier(password, saltHex) {
+      const salt = new Uint8Array(String(saltHex).match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+      const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+      const bits = await crypto.subtle.deriveBits(
+        { name: "PBKDF2", salt: salt, iterations: this.OFFLINE_PBKDF2_ITER, hash: "SHA-256" }, baseKey, 256);
+      return this._hexOf(bits);
+    },
+    /** 온라인 로그인 성공 직후에만 호출한다(서버가 이미 신원을 검증한 시점). */
+    async saveOfflineVerifier(email, password, profile) {
+      try {
+        if (!email || !password) return false;
+        const saltBytes = new Uint8Array(16); crypto.getRandomValues(saltBytes);
+        const salt = this._hexOf(saltBytes.buffer);
+        const rec = {
+          v: 1,
+          email: String(email).toLowerCase(),
+          salt: salt,
+          verifier: await this._deriveVerifier(password, salt),   // 해시만 — 원문 없음
+          name: (profile && profile.name) || "",
+          role: (profile && profile.role) || "viewer",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + this.OFFLINE_VERIFIER_TTL_MS,
+          attempts: 0
+        };
+        return await SyncQueue.saveAuthRecord(rec);
+      } catch (e) { return false; }
+    },
+    /** 오프라인 재인증. 성공해도 서버 토큰은 만들지 않는다(로컬 작업 권한 전용). */
+    async offlineLogin(email, password) {
+      const rec = await SyncQueue.loadAuthRecord();
+      const em = String(email || "").trim().toLowerCase();
+      if (!rec || rec.email !== em) return { ok: false, reason: "no-record" };
+      if (Date.now() > rec.expiresAt) { await SyncQueue.clearAuthRecord(); return { ok: false, reason: "expired" }; }
+      if ((rec.attempts || 0) >= this.OFFLINE_MAX_ATTEMPTS) return { ok: false, reason: "locked" };
+      const h = await this._deriveVerifier(String(password || ""), rec.salt);
+      if (!this._eqConstantTime(h, rec.verifier)) {
+        rec.attempts = (rec.attempts || 0) + 1;
+        await SyncQueue.saveAuthRecord(rec);
+        return { ok: false, reason: "bad-password", remaining: Math.max(0, this.OFFLINE_MAX_ATTEMPTS - rec.attempts) };
+      }
+      rec.attempts = 0; await SyncQueue.saveAuthRecord(rec);
+      this.idToken = null;                    // 🔴 서버 세션 토큰을 복원하지 않는다
+      this._offlineOnly = true; this._offline = true;
+      this.user = { email: rec.email, name: rec.name || rec.email, picture: "", role: rec.role };
+      this.role = rec.role;
+      this._applyUi();
+      return { ok: true, user: this.user };
+    },
+    /** 서버 쓰기(업로드/동기화) 허용 여부 — 오프라인 검증만으로는 절대 허용하지 않는다. */
+    canServerWrite() { return !this._offlineOnly && !!this.idToken; },
+    async clearOfflineVerifier() { try { await SyncQueue.clearAuthRecord(); } catch (e) {} },
+
     signOut() {
       try {
         if (window.google && window.google.accounts && window.google.accounts.id)
@@ -583,8 +676,10 @@
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
       this._suppressDemoBadge = false;  // 다음 수동 데모 로그인 시 배지 정상 표시되도록 초기화
+      this._offlineOnly = false; this.projectRole = null;
       try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
       this._clearAuthCache();   // 오프라인 권한 캐시도 함께 정리
+      this.clearOfflineVerifier();  // [P40] 오프라인 재인증 검증자 삭제 — 로그아웃 후엔 이 기기에서 오프라인 진입 불가
       this._applyUi();
       this._showDemoBadge();  // 데모 배지 제거
       // 디자이너 화면(편집 모드)에 있었다면 뷰어로 전환

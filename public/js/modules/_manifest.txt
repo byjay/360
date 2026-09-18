@@ -38,4 +38,6 @@
 34_PdfPopup.js
 35_PhotoBatch.js
 36_Help.js
+37_Invite.js
+38_Install.js
 99_footer.js
