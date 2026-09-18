@@ -22,13 +22,12 @@
     },
 
     DRAFT_STORE: "drafts",
-    AUTH_STORE: "authlocal",   // [P40] 오프라인 재인증 검증자(verifier) — 평문 비밀번호는 절대 담지 않는다
 
     async _open() {
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 3);   // v2: drafts / v3: authlocal 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 2);   // v2: drafts 스토어 추가
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.STORE)) {
@@ -36,9 +35,6 @@
           }
           if (!db.objectStoreNames.contains(this.DRAFT_STORE)) {
             db.createObjectStore(this.DRAFT_STORE, { keyPath: "key" }); // 도면 임시저장(오프라인/서버실패 폴백)
-          }
-          if (!db.objectStoreNames.contains(this.AUTH_STORE)) {
-            db.createObjectStore(this.AUTH_STORE, { keyPath: "key" });  // 오프라인 재인증 검증자
           }
         };
         req.onsuccess = () => res(req.result);
@@ -108,55 +104,6 @@
       const keys = [];
       try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
       return keys;
-    },
-
-    /* ═══ [P40] 오프라인 재인증 검증자 보관 ═══
-       저장되는 것은 PBKDF2-SHA256(100k) 해시 + salt 뿐이다(서버 hashPassword 와 동일 파라미터).
-       기기를 털려도 원문 비밀번호는 복원되지 않는다. 보관 위치는 기존 IndexedDB 재사용(신규 저장소 없음). */
-    AUTH_KEY: "offline-verifier",
-    _authLsKey() { return "wm_offline_auth"; },
-    async saveAuthRecord(rec) {
-      const row = { key: this.AUTH_KEY, rec: rec };
-      const db = await this._open();
-      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
-        try {
-          await new Promise((res, rej) => {
-            const tx = db.transaction(this.AUTH_STORE, "readwrite");
-            tx.objectStore(this.AUTH_STORE).put(row);
-            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-          });
-          return true;
-        } catch (e) { /* 폴백으로 */ }
-      }
-      try { localStorage.setItem(this._authLsKey(), JSON.stringify(row)); return true; } catch (e) { return false; }
-    },
-    async loadAuthRecord() {
-      const db = await this._open();
-      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
-        try {
-          const row = await new Promise((res) => {
-            const tx = db.transaction(this.AUTH_STORE, "readonly");
-            const rq = tx.objectStore(this.AUTH_STORE).get(this.AUTH_KEY);
-            rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null);
-          });
-          if (row) return row.rec;
-        } catch (e) {}
-      }
-      try { const r = JSON.parse(localStorage.getItem(this._authLsKey()) || "null"); return r ? r.rec : null; }
-      catch (e) { return null; }
-    },
-    async clearAuthRecord() {
-      const db = await this._open();
-      if (db && db.objectStoreNames.contains(this.AUTH_STORE)) {
-        try {
-          await new Promise((res) => {
-            const tx = db.transaction(this.AUTH_STORE, "readwrite");
-            tx.objectStore(this.AUTH_STORE).delete(this.AUTH_KEY);
-            tx.oncomplete = res; tx.onerror = res;
-          });
-        } catch (e) {}
-      }
-      try { localStorage.removeItem(this._authLsKey()); } catch (e) {}
     },
 
     /* ── localStorage 폴백 ── */
@@ -233,11 +180,6 @@
     async flush() {
       if (this._syncing) return { ok: false, busy: true };
       if (!navigator.onLine) return { ok: false, offline: true };
-      // [P40 보안] 오프라인 검증자로만 인증된 상태(서버가 검증하지 않은 신원)로는 서버 쓰기를 시도하지 않는다.
-      //   큐는 그대로 보존 → 온라인 재로그인(서버 재검증) 후 자동 업로드된다.
-      if (typeof Auth !== "undefined" && Auth.canServerWrite && !Auth.canServerWrite()) {
-        return { ok: false, offlineAuth: true, reason: "오프라인 인증 상태 — 서버 업로드는 온라인 재로그인 후 진행됩니다" };
-      }
       const pending = (await this.all()).filter(o => o.status !== "done");
       if (pending.length === 0) { this._emit(); return { ok: true, uploaded: 0, map: {} }; }
 

@@ -42,7 +42,6 @@
   --pano-controls-h-mobile: 206px; /* 모바일 폭에서 버튼이 2줄로 래핑될 때 실측 높이(마스터 2026-09-17, 375×812) */
   --pinfilter-bottom-mobile: 64px; /* .pinfilter-bar 모바일(640px 이하/coarse) bottom과 동일 리터럴 */
   --pinfilter-h-mobile:      48px; /* 위 상태에서 칩바 실측 높이(마스터 2026-09-17, 375×812 — pin-filter-bar 303×48) */
-  --mdock-h:                 58px; /* [P40] .mdock-bar 높이 SoT — 하단 도크 위에 무엇을 띄울 때 이 값을 쓴다 */
 }
 
 html, body {
@@ -3444,7 +3443,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     background:linear-gradient(180deg,#faf7f0 0%,#f1ebdf 100%);
     border-top:1px solid var(--border2);box-shadow:0 -4px 18px rgba(43,40,32,.14);
     padding-bottom:env(safe-area-inset-bottom,0px);}
-  .mdock-bar{display:flex;align-items:stretch;height:var(--mdock-h);}
+  .mdock-bar{display:flex;align-items:stretch;height:58px;}
   /* [결함4 2026-09-17 지휘자 실측] 도움말 "?" 토글(36_Help.js, 인라인 bottom:16px/z-index:9550)이
      이 도크(위 .mobile-dock, z-index:140)에 덮여 "메뉴" 항목이 눌리지 않았다.
      도크 높이(58px)만 피하면 그 위 .pinfilter-bar(bottom:64px, 실측 높이 48px)와 새로 겹치므로
@@ -4967,35 +4966,3 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-tag-unsaved,.deck-unsaved-tag{font-size:9px;font-weight:700;line-height:1.6;
   color:#fff;background:#b45309;border:1px solid #b45309;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
 @media (prefers-reduced-motion:reduce){ .btn-save.is-dirty{animation:none;} }
-
-/* ═══ [P40] PWA 설치 유도 배너 ═══
-   🔴 작업 화면을 가리지 않는다: 모바일에서는 하단 도크(.mobile-dock / .mdock-bar, 높이 var(--mdock-h))
-   위로 12px 띄운다. 도크 높이를 리터럴로 다시 적지 않고 SoT 변수를 참조하므로 값이 갈라지지 않는다. */
-.pwa-install-banner{
-  position:fixed; left:12px; right:12px; bottom:16px; z-index:9560;
-  display:flex; align-items:center; gap:10px;
-  max-width:520px; margin:0 auto;
-  padding:10px 12px;
-  background:var(--bg2); color:var(--text);           /* #faf7f0 위 #2b2820 — 대비 13:1 */
-  border:1px solid var(--border2); border-radius:var(--radius-lg);
-  box-shadow:var(--shadow-3);
-  opacity:0; transform:translateY(8px);
-  transition:opacity .22s var(--ease), transform .22s var(--ease);
-}
-.pwa-install-banner.on{opacity:1; transform:translateY(0);}
-.pwa-install-banner.hidden{display:none;}
-.pwa-install-text{display:flex; flex-direction:column; gap:2px; flex:1 1 auto; min-width:0;}
-.pwa-install-text b{font:700 13px var(--font-ui); color:var(--text);}
-.pwa-install-sub, .pwa-install-ios{font:500 11.5px var(--font-ui); color:var(--text2);}  /* #6b6457 on #faf7f0 — 5.4:1 */
-.pwa-install-ios.hidden{display:none;}
-.pwa-install-btn{flex:0 0 auto;}
-.pwa-install-btn.hidden{display:none;}
-.pwa-install-x{flex:0 0 auto; width:28px; height:28px; border:none; background:transparent;
-  color:var(--text2); font-size:14px; line-height:1; cursor:pointer; border-radius:var(--radius-sm);}
-.pwa-install-x:hover{background:var(--bg3); color:var(--text);}
-@media (max-width: 760px){
-  /* 도크(높이 var(--mdock-h) + 세이프에어리어) 바로 위 — 겹침 면적 0 */
-  .pwa-install-banner{ bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px); }
-}
-/* 초대 모달 — 초대받은 이메일 표기 */
-.inv-email{font:600 12px var(--font-mono); color:var(--text2);}

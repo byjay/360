@@ -7,15 +7,10 @@
     // [오프라인 작업지시서 ] 오프라인 상태 배지/네트워크 이벤트 연결
     if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
 
-    // [P40] PWA 설치 유도 배선 — beforeinstallprompt 는 페이지 초기에 발화하므로 먼저 등록한다.
-    if (typeof Install !== "undefined" && Install.init) { try { Install.init(); } catch (e) {} }
-    // [P40] 프로젝트 초대 링크(?invite=<token>) — 있으면 이름/비번 설정 모달을 띄운다.
-    if (typeof Invite !== "undefined" && Invite.init) { try { Invite.init(); } catch (e) {} }
-
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
       State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, PinSeries, PinIcons, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
-      Offline, OfflineBundle, OfflineLoad, OpLog, Invite, Install,
+      Offline, OfflineBundle, OfflineLoad, OpLog,
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),

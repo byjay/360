@@ -21,8 +21,6 @@
       $("pm-add-btn") && $("pm-add-btn").addEventListener("click", () => this.addMember());
       const pmEmail = $("pm-email");
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
-      // [P40] 초대 링크 복사
-      $("pm-invite-copy") && $("pm-invite-copy").addEventListener("click", () => this._copyInviteLink());
       // [멀티테넌트] 서브도메인 부여
       $("pm-subdomain-btn") && $("pm-subdomain-btn").addEventListener("click", () => this.setSubdomain());
       // [마스터 요청] 디자이너/뷰어 선택 모달
@@ -88,7 +86,7 @@
         if (p.subdomain && t && t.base) this._renderSubdomainStatus(p.subdomain, "https://" + p.subdomain + "." + t.base);
       } catch (e) {}
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
-      await Promise.all([this.loadMembers(), this.loadAccessReqs(), this.loadPendingInvites()]);
+      await Promise.all([this.loadMembers(), this.loadAccessReqs()]);
     },
     closeMembers() {
       const m = document.getElementById("proj-members-modal");
@@ -226,82 +224,13 @@
         if (!r.ok) { if (err) { err.textContent = j.error || "배정 실패"; err.classList.remove("hidden"); } return; }
         inp.value = "";
         await this.loadMembers();
-        const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
-        if (j.invited && j.invite_url) {
-          // [P40] 계정은 만들어지지 않았다. 링크를 받은 본인이 이름·비번을 설정해야 계정이 생긴다.
-          this._showInviteLink(email, roleLabel, j.invite_url, j.expires_at);
-        } else if (typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("" + email + " 배정(" + roleLabel + ") — 기존 계정이라 바로 접근할 수 있습니다.", 4000);
+        if (typeof Prompt !== "undefined" && Prompt.toast) {
+          const roleLabel = role === "designer" ? "디자이너(모든 구역 세팅)" : "뷰어(열람)";
+          if (j.created) Prompt.toast("" + email + " 초대 — " + roleLabel + ". 초기 비밀번호 '1'로 로그인 후 변경하도록 안내하세요.", 4500);
+          else Prompt.toast("" + email + " 배정(" + roleLabel + ")");
         }
       } catch (e) { if (err) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); } }
     },
-    /* ── [P40] 초대 링크 ── */
-    /** 발급된 1회용 초대 링크를 관리자에게 보여준다(토큰 원문은 이 순간에만 존재 — DB 엔 해시만). */
-    _showInviteLink(email, roleLabel, url, expiresAt) {
-      const box = document.getElementById("pm-invite-link-box");
-      const inp = document.getElementById("pm-invite-link");
-      if (!box || !inp) {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("초대 링크: " + url, 8000);
-        return;
-      }
-      inp.value = url;
-      const note = document.getElementById("pm-invite-link-note");
-      if (note) {
-        const d = expiresAt ? new Date(Number(expiresAt)) : null;
-        const ds = d ? (d.getFullYear() + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + String(d.getDate()).padStart(2, "0")) : "";
-        note.textContent = email + " (" + roleLabel + ") — 이 링크를 본인에게 전달하세요. 1회용" + (ds ? (" · " + ds + " 까지") : "") + ". 계정은 본인이 이름·비밀번호를 설정할 때 생성됩니다.";
-      }
-      box.classList.remove("hidden");
-      try { inp.select(); } catch (e) {}
-      this._copyInviteLink();
-    },
-    _copyInviteLink() {
-      const inp = document.getElementById("pm-invite-link");
-      if (!inp || !inp.value) return;
-      const done = () => { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("초대 링크를 복사했습니다."); };
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(inp.value).then(done).catch(() => {}); return; }
-        inp.select(); document.execCommand("copy"); done();
-      } catch (e) {}
-    },
-    /** 아직 수락되지 않은 초대 목록(토큰 원문은 서버가 절대 돌려주지 않는다) */
-    async loadPendingInvites() {
-      const p = this._memProject; if (!p) return;
-      const sec = document.getElementById("pm-pending-invites");
-      const list = document.getElementById("pm-pending-invites-list");
-      if (!sec || !list) return;
-      try {
-        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/invites", { headers: Auth.headers() });
-        if (!r.ok) { sec.classList.add("hidden"); return; }
-        const { data } = await r.json();
-        if (!data || !data.length) { sec.classList.add("hidden"); return; }
-        sec.classList.remove("hidden");
-        const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(s) : s;
-        list.innerHTML = "";
-        data.forEach((iv) => {
-          const d = new Date(Number(iv.expires_at));
-          const ds = d.getFullYear() + "." + String(d.getMonth() + 1).padStart(2, "0") + "." + String(d.getDate()).padStart(2, "0");
-          const roleLabel = (typeof Auth !== "undefined" && Auth._ROLE_LABELS && Auth._ROLE_LABELS[iv.role]) || iv.role;
-          const row = document.createElement("div");
-          row.className = "member-row";
-          row.innerHTML = '<span class="mem-col-email" title="' + esc(iv.email) + '">' + esc(iv.email) + '</span>' +
-            '<span class="pm-role-badge role-' + esc(iv.role) + '">' + esc(roleLabel) + '</span>' +
-            '<span class="par-date">~' + ds + '</span>' +
-            '<button class="designer-del" title="초대 취소">✕</button>';
-          row.querySelector(".designer-del").addEventListener("click", () => this.revokeInvite(iv.id));
-          list.appendChild(row);
-        });
-      } catch (e) { sec.classList.add("hidden"); }
-    },
-    async revokeInvite(iid) {
-      const p = this._memProject; if (!p) return;
-      try {
-        await fetch("/api/projects/" + encodeURIComponent(p.id) + "/invites/" + encodeURIComponent(iid),
-          { method: "DELETE", headers: Auth.headers() });
-        await this.loadPendingInvites();
-      } catch (e) {}
-    },
-
     async removeMember(email) {
       const p = this._memProject; if (!p) return;
       if (!window.confirm(email + " 의 '" + (p.name || p.id) + "' 프로젝트 배정을 해제할까요?")) return;
@@ -547,8 +476,6 @@
       Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
-      // [P40] 우상단 배지를 "이 프로젝트에서의 내 역할"로 — 고정 '디자이너' 표기 제거
-      if (typeof Auth !== "undefined" && Auth.setProjectContext) Auth.setProjectContext(p);
       this._modeSelectProject = p;
       if (!ASK_ENTRY_MODE) { // 스위치 OFF: 묻지 않고 무조건 편집모드로 바로 진입
         await this._enterAsDesigner();

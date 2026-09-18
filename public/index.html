@@ -1875,7 +1875,7 @@
     <div class="admin-gate-backdrop"></div>
     <div class="admin-gate-card">
       <h2 id="pm-title" class="admin-gate-title">멤버 관리 — <span id="pm-proj-name"></span></h2>
-      <p class="admin-gate-sub">이메일로 초대하면 <b>초대 링크</b>가 만들어집니다(유효 14일·1회용). 링크를 받은 본인이 <b>이름과 비밀번호를 직접 설정</b>해야 계정이 생성됩니다 — 기본 비밀번호는 존재하지 않습니다. <b>디자이너</b>=모든 구역 세팅 · <b>뷰어</b>=열람만</p>
+      <p class="admin-gate-sub">이메일로 초대하면 그 계정으로 바로 로그인됩니다(초기 비밀번호 <b>1</b>, 첫 로그인 후 변경). <b>디자이너</b>=모든 구역 세팅 · <b>뷰어</b>=열람만</p>
       <div class="pm-add-row">
         <input id="pm-email" class="admin-gate-input" type="email" autocomplete="off" placeholder="user@company.com" aria-label="배정할 이메일" />
         <select id="pm-role" class="admin-gate-input pm-role-sel" aria-label="권한">
@@ -1885,23 +1885,7 @@
         <button id="pm-add-btn" class="admin-gate-btn primary" type="button">＋ 초대</button>
       </div>
       <div id="pm-add-error" class="admin-gate-error hidden"></div>
-
-      <!-- [P40] 발급된 1회용 초대 링크 (토큰 원문은 이 순간에만 존재) -->
-      <div id="pm-invite-link-box" class="pm-invite-link-box hidden">
-        <div class="pm-add-row">
-          <input id="pm-invite-link" class="admin-gate-input" type="text" readonly aria-label="초대 링크" />
-          <button id="pm-invite-copy" class="admin-gate-btn primary" type="button">복사</button>
-        </div>
-        <div id="pm-invite-link-note" class="pm-sub-hint"></div>
-      </div>
-
       <div id="pm-list" class="members-list"></div>
-
-      <!-- [P40] 수락 대기 중인 초대 -->
-      <div id="pm-pending-invites" class="pm-access-reqs hidden">
-        <div class="pm-access-reqs-head">✉️ 초대 수락 대기</div>
-        <div id="pm-pending-invites-list"></div>
-      </div>
 
       <!-- 접근 신청 대기 목록 (관리자용) -->
       <div id="pm-access-reqs" class="pm-access-reqs hidden">
@@ -1962,7 +1946,7 @@
     <div class="admin-gate-backdrop"></div>
     <div class="admin-gate-card">
       <h2 id="pwc-title" class="admin-gate-title">비밀번호 변경</h2>
-      <p class="admin-gate-sub">비밀번호 변경이 필요한 계정입니다. 새 비밀번호를 설정하세요.</p>
+      <p class="admin-gate-sub">초대받은 계정의 초기 비밀번호(<b>1</b>)를 새 비밀번호로 변경하세요.</p>
       <input id="pwc-new" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 (4자 이상)" aria-label="새 비밀번호" />
       <input id="pwc-new2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인" style="margin-top:10px" />
       <div id="pwc-error" class="admin-gate-error hidden"></div>
@@ -1970,37 +1954,6 @@
         <button id="pwc-submit" class="admin-gate-btn primary full" type="button">변경하고 시작</button>
       </div>
     </div>
-  </div>
-
-  <!-- [P40] 프로젝트 초대 수락 (?invite=<token>) — 이름·비밀번호를 본인이 직접 설정한다(기본 비밀번호 없음) -->
-  <div id="invite-gate" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="inv-title">
-    <div class="admin-gate-backdrop"></div>
-    <div class="admin-gate-card">
-      <h2 id="inv-title" class="admin-gate-title">프로젝트 초대</h2>
-      <p class="admin-gate-sub"><b id="inv-project" class="par-proj-name">—</b> 프로젝트에 <b id="inv-role">뷰어</b> 로 초대되었습니다.<br><span id="inv-email" class="inv-email">—</span></p>
-      <div id="inv-existing-msg" class="par-pending-msg hidden">이미 가입된 계정입니다. 이름·비밀번호를 다시 입력하지 않아도 됩니다.</div>
-      <div id="inv-newacct-fields">
-        <input id="inv-name" class="admin-gate-input" type="text" autocomplete="name" placeholder="이름 (필수)" aria-label="이름" />
-        <input id="inv-pw" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="비밀번호 (8자 이상, 필수)" aria-label="비밀번호" style="margin-top:10px" />
-        <input id="inv-pw2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="비밀번호 확인" aria-label="비밀번호 확인" style="margin-top:10px" />
-      </div>
-      <div id="inv-error" class="admin-gate-error hidden"></div>
-      <div class="admin-gate-actions">
-        <button id="invite-gate-cancel" class="admin-gate-btn ghost" type="button">닫기</button>
-        <button id="inv-submit" class="admin-gate-btn primary" type="button">계정 만들고 참여</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- [P40] PWA 설치 유도 배너 — 하단 도크(.mobile-dock) 위에 띄워 작업 화면을 가리지 않는다 -->
-  <div id="pwa-install-banner" class="pwa-install-banner hidden" role="region" aria-label="홈 화면에 설치">
-    <div class="pwa-install-text">
-      <b>홈 화면에 설치</b>
-      <span id="pwa-install-ios" class="pwa-install-ios hidden">공유 <span aria-hidden="true">⬆︎</span> → “홈 화면에 추가”를 누르세요.</span>
-      <span class="pwa-install-sub">앱처럼 열리고 오프라인에서도 작업할 수 있습니다.</span>
-    </div>
-    <button id="pwa-install-accept" class="admin-gate-btn primary pwa-install-btn" type="button">설치</button>
-    <button id="pwa-install-close" class="pwa-install-x" type="button" aria-label="설치 안내 닫기">✕</button>
   </div>
 
   <!-- 범용 입력 모달 (프로젝트/데크 생성) -->
