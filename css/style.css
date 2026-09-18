@@ -3544,10 +3544,15 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   body.role-viewer .mnav-btn.designer-only { display: none; }
 
   /* 2) 사이드바 → 바텀시트(아래에서 위로 슬라이드, 기본 숨김) */
+  /* [WO 20260918 재조사] 근본원인: 기본(데스크톱) .sidebar 규칙(width:240px; max-width:30vw;)의
+     max-width:30vw 가 이 모바일 블록에서 재선언되지 않아 그대로 살아남는다. width:100%!important 는
+     "값"만 100%로 만들 뿐 max-width 캡을 지우지 못하므로, 최종 계산폭은 min(100%, 30vw) = 30vw
+     (375px 뷰포트 기준 112.5px)로 짓눌린다 — 지휘자 실측 112.5px 와 정확히 일치. 바텀시트는
+     화면 전체 폭을 써야 하므로 데스크톱용 30% 캡을 무효화한다. */
   .sidebar {
     position: fixed; left: 0; right: 0;
     bottom: calc(58px + env(safe-area-inset-bottom, 0px));
-    top: auto; width: 100% !important;
+    top: auto; width: 100% !important; max-width: none;
     max-height: 52vh; height: auto;
     border-right: none; border-top: 1px solid var(--border2);
     border-radius: 18px 18px 0 0;

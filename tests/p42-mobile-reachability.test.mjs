@@ -234,6 +234,33 @@ record(
   `mobileBlock내부=${hasFlexShrinkZero} 블록밖(전역)존재여부=${globalHasFlexShrinkZero}`
 );
 
+// ⑥ [WO 20260918 재조사] 데스크톱 .sidebar 의 max-width:30vw 가 모바일 바텀시트 블록에서 무효화되는지
+//    — 375px 뷰포트 기준 30vw=112.5px 로 짓눌리면 조작요소 다수가 overflow-x:hidden 에 가로로 잘려
+//    나간다(지휘자 실측 112.5px 결함의 근본원인). 정적 파싱으로 max-width 선언 유무를 확인한다.
+const mobileMaxWidthDecl = (() => {
+  const m = mobileBlock.match(/(?:^|[;\s])\.sidebar\s*\{[^}]*\}/s); // mobileBlock 은 이미 미디어 블록 내부 텍스트
+  const blockMatch = mobileBlock.match(/\.sidebar\s*\{([^}]*)\}/s);
+  if (!blockMatch) return null;
+  const mw = blockMatch[1].match(/max-width\s*:\s*([^;]+);/);
+  return mw ? mw[1].trim() : null;
+})();
+const desktopMaxWidth = findDecl(css, "\\.sidebar(?!-)(?!\\s*>)", "max-width", { last: false });
+record(
+  "⑥ 모바일 바텀시트 블록이 데스크톱 max-width(30vw) 캡을 무효화한다(max-width:none 등) — 없으면 width:100%!important 여도 실계산폭이 30vw로 짓눌림",
+  mobileMaxWidthDecl !== null && /none|100%|unset|initial/i.test(mobileMaxWidthDecl),
+  `desktop max-width=${desktopMaxWidth} mobile(760px블록) max-width선언=${mobileMaxWidthDecl}`
+);
+
+// ⑦ 실제 헤드리스 Chrome(CDP) 로 public/index.html + 실제 CSS 3종을 그대로 로드해 사이드바(바텀시트)를
+//    열고 조작요소 14개 전부가 (a) 뷰포트 안 (b) elementFromPoint 히트테스트 통과 하는지 실측(합성 DOM
+//    자가측정이 아님 — 이번 결함이 합성측정으로는 못 잡혔던 것의 재발 방지).
+const cdpReal = runTest("p42-cdp-real.mjs");
+record(
+  "⑦ CDP 실측 — 사이드바 조작요소 전부 화면안+히트테스트 통과(Chrome 미설치 시 SKIP=PASS 처리)",
+  cdpReal.ok,
+  `cdpReal.ok=${cdpReal.ok}` + (cdpReal.ok ? "" : ` :: out=${cdpReal.out.slice(-1200)}`)
+);
+
 for (const r of results) {
   console.log(`[${r.pass ? "PASS" : "FAIL"}] ${r.name} :: ${r.detail}`);
 }
