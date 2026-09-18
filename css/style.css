@@ -146,11 +146,16 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   line-height: 1;
 }
 .brand-logo:empty { display: none; }
-/* 로고는 흰 배경 PNG이므로 다크 UI에서 가독성 위해 흰 라운드 박스 위에 배치 */
+/* [WO 로고교체] 새 로고는 네이비 단색 배경(자체 다크 배경) — 다크 UI에 그대로 어울려
+   더 이상 흰 받침이 필요 없다(흰 배경 PNG였던 구버전 전용 처리였음). 흰 사각형 노출 방지 위해 배경 제거.
+   [WO 흰테두리제거] 배경이 투명이 된 뒤에도 box-shadow/border-radius 가 여전히 로고 뒤에
+   그림자·링 박스를 그려 "받침"처럼 보였다. 실측: 로고 네이비(rgb(1,48,82))와 상단바/파노 헤더
+   배경 --panel(#1d2025)의 명도대비 1.2:1(거의 동일) → 별도 받침 없이도 자연스럽게 녹아든다.
+   장식용 그림자/라운드를 제거해 로고 이미지만 그대로 노출한다. */
 .brand-logo--img {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(0,0,0,.35), 0 0 0 1px rgba(43,40,32,0.102);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
 .brand-logo-img {
   display: block;
@@ -3466,6 +3471,10 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   .mdock-chip svg{width:21px;height:21px;}
   .mdock-chip:active{transform:scale(.94);color:var(--gold-ink);}
   .mdock-chip.active{color:var(--gold-ink);}
+  /* [WO 20260918] 업로드 칩 — 비활성(올릴 것 없음)은 흐리게+클릭불가, 활성(대기 있음)은
+     기존 .active 톤 재사용(--gold-ink, 실측 4.58~4.69:1 — 새 색 도입 금지, 위 정의 참조). */
+  #mdock-upload:disabled{opacity:.4;cursor:default;}
+  #mdock-upload:not(:disabled){color:var(--gold-ink);}
   .mdock-chip.active::after{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
     width:18px;height:3px;border-radius:0 0 4px 4px;background:var(--gold-ink);}
   /* 포인트 추가 = 중앙 강조 FAB(1탭) — 디자이너 최빈 동작 빠르게 */
