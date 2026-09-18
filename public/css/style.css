@@ -3557,6 +3557,15 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     z-index: 145; overflow-y: auto;
     padding-bottom: 14px;
   }
+  /* [WO 20260918 mobile-reachability] 근본원인: .sidebar는 display:flex(세로) + max-height 캡인데
+     자식(.sidebar-section/#stb-toggle/#side-toolbar/#side-tree/#section-export 등)에 flex-shrink 기본값(1)이
+     걸려 있었다. 콘텐츠 총합이 max-height(52vh)를 넘으면 flexbox가 자식들을 강제로 짓눌러(overflow:hidden/
+     auto 를 가진 자식은 자동 최소높이가 0이라 0까지 짓눌림) 맞추므로, .sidebar 자신의 scrollHeight는 짓눌린
+     "이후" 크기로 계산돼 거의 clientHeight와 같아진다(실측 421 vs 422) — 스크롤이 생기지 않는다. 자식 내부
+     버튼들은 짓눌린 조상의 (여전히 자연스러운 흐름) 좌표에 그대로 존재하지만 조상의 overflow에 클리핑되어
+     화면 밖 도달불가로 남는다. flex-shrink:0 으로 자식이 짓눌리지 않게 하면 총합이 그대로 넘쳐 .sidebar의
+     overflow-y:auto가 정상적으로 scrollHeight>clientHeight를 만들어 전부 스크롤로 도달 가능해진다. */
+  .sidebar > * { flex-shrink: 0; }
   /* 시트 핸들(드래그 그립) */
   .sidebar::before {
     content: ""; display: block; position: sticky; top: 0;
@@ -4827,9 +4836,15 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
     font-weight:700;font-size:13px;font-family:var(--font-ui);cursor:pointer;}
   .stb-caret{display:inline-flex;transition:transform .25s var(--luxe-ease,ease);}
   body.tools-open .stb-caret{transform:rotate(180deg);}
-  .side-toolbar{max-height:0;overflow:hidden;padding-block:0;border-bottom:none;
+  .side-toolbar{max-height:0;flex-basis:0;overflow:hidden;padding-block:0;border-bottom:none;
     transition:max-height .28s cubic-bezier(.2,.9,.25,1);}
-  body.tools-open .side-toolbar{max-height:30vh;overflow-y:auto;padding-block:8px;border-bottom:1px solid var(--border2);}
+  /* [WO 20260918 mobile-reachability] flex-basis:auto(기본값) 는 콘텐츠 실제 높이(9그룹≈380px+)로
+     계산되고, max-height 는 "그려지는 크기"만 30vh 로 자르므로 flex-shrink:0 과 만나면 잘린 만큼이
+     레이아웃상 "빈 공간"으로 남아 그 다음 형제(#side-tree, #section-export)가 그만큼 더 아래로
+     밀려나 버린다(실측: 헤드리스 Chrome CDP, #btn-deploy 가 스크롤 최대치로도 도달 불가 확인).
+     flex-basis 를 max-height 와 동일값으로 명시해 "레이아웃이 차지하는 공간"과 "실제 그려지는
+     크기"를 일치시킨다 — 내부는 여전히 overflow-y:auto 로 자체 스크롤(디자인 의도 유지). */
+  body.tools-open .side-toolbar{max-height:30vh;flex-basis:30vh;overflow-y:auto;padding-block:8px;border-bottom:1px solid var(--border2);}
 }
 .stb-group{display:flex;align-items:center;gap:4px;}
 .stb-group::before{content:attr(data-g);flex:0 0 40px;font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.03em;}
@@ -4843,7 +4858,10 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 /* [WO 20260917-pin] 항목3: 사이드바(.sidebar)는 overflow:hidden — 트리가 항상 전체 표시되면
    길어져 다른 섹션(도구바/업로드 버튼)을 화면 밖으로 밀어낸다. 트리 자체에 세로 스크롤을 주고
    높이를 유한하게 잡아(vh 기반, 화면 크기에 비례) 다른 섹션은 밀리지 않게 한다. */
-.side-tree{padding:8px 6px;max-height:clamp(160px,34vh,320px);overflow-y:auto;}
+/* [WO 20260918 mobile-reachability] flex-basis 를 max-height 와 동일하게 명시(사유는 .side-toolbar
+   주석 참조) — 레이아웃 점유 공간과 실제 렌더 크기를 일치시켜 뒤따르는 형제(#section-export 등)가
+   실제보다 더 아래로 밀려나는 것을 막는다. */
+.side-tree{padding:8px 6px;max-height:clamp(160px,34vh,320px);flex-basis:clamp(160px,34vh,320px);overflow-y:auto;}
 /* [항목3] 페이지 태그(P1/P2…) — 본문 아님(보조 메타) → 기존 .tree-node-doc/.tree-node-pin 과
    동일하게 var(--text2) 재사용(신규 색 없음). 대비 실측(WCAG 2.1): #6b6457 on #faf7f0 = 5.48:1(패시브
    영역) · .tree-node.active 배경(골드 오버레이 rgba(201,150,42,.16) 블렌드 #f2e7d0) 위에서도 4.78:1 — 둘 다 4.5:1 이상. */
