@@ -3806,7 +3806,13 @@
         if (!State.autoSaveDepId) {
           // 신규: _createInitialSave 가 도면(R2 업로드)+핀 전체를 저장
           await this._createInitialSave();
-          if (!State.autoSaveDepId) { this._setSaveIndicator(navigator.onLine ? "error" : "offline"); return false; }
+          if (!State.autoSaveDepId) {
+            // [결함수정 2026-09-18] 모바일은 #autosave-text 가 CSS로 숨겨져(style.css) 인디케이터만으론
+            // 실패가 안 보인다 — 토스트로 반드시 알린다(기존 토스트 경로 재사용, 새 배지 없음).
+            this._setSaveIndicator(navigator.onLine ? "error" : "offline");
+            try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 도면 저장에 실패했습니다. 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+            return false;
+          }
           // 도면 업로드로 대기 중이던 구역 연결 마무리
           if (this._pendingDeckLink) {
             const p = this._pendingDeckLink; this._pendingDeckLink = null;

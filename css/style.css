@@ -42,6 +42,11 @@
   --pano-controls-h-mobile: 206px; /* 모바일 폭에서 버튼이 2줄로 래핑될 때 실측 높이(마스터 2026-09-17, 375×812) */
   --pinfilter-bottom-mobile: 64px; /* .pinfilter-bar 모바일(640px 이하/coarse) bottom과 동일 리터럴 */
   --pinfilter-h-mobile:      48px; /* 위 상태에서 칩바 실측 높이(마스터 2026-09-17, 375×812 — pin-filter-bar 303×48) */
+  /* [결함수정 2026-09-18] 모바일 우측하단 FAB류(#btn-save 등)가 안전하게 뜰 수 있는 최소 bottom.
+     지도 화면 우측하단 클러스터(.pin-grid-reopen: bottom 76px + height 46px, seastar-family-tokens.css/style.css
+     기존 리터럴 재사용, 새 매직넘버 아님) 위로 8px 갭을 두면 .mobile-dock·.pinfilter-bar 도 함께 피한다
+     (지휘자 프로덕션 실측: #btn-save 100×43 @x261,y753 가 mobile-dock 과 겹쳐 클릭이 막혔다). */
+  --mobile-fab-safe-bottom: calc(env(safe-area-inset-bottom, 0px) + 76px + 46px + 8px);
 }
 
 html, body {
@@ -2741,6 +2746,25 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
     padding: 5px 4px;
   }
   .pf-icon-chip svg { width: 16px; height: 16px; }
+
+  /* [마스터 요청 2026-09-18] 모바일에서는 사진만 등록 — 360/문서/노트/동영상/URL
+     버튼은 숨긴다. 데스크톱(이 미디어쿼리 밖)은 6개 그대로 유지.
+     기존 핀(다른 kind로 이미 저장된)의 보기/수정은 이 버튼과 무관하게
+     pin-file-info 요약 + note/url 필드가 데이터 기반으로 그대로 표시된다
+     (20_App.js editPin() — 버튼 표시여부를 참조하지 않음). */
+  .pf-tools .pf-tool:not(#btn-pin-file) { display: none; }
+  .pf-tools { grid-template-columns: 1fr; }
+}
+
+/* 모바일 전용 안내(데스크톱엔 숨김) — SoT: 문구는 여기 한 곳 */
+.pf-mobile-hint { display: none; }
+@media (max-width: 720px) {
+  .pf-mobile-hint {
+    display: block;
+    font-size: 11px; font-weight: 600; color: var(--text2);
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px;
+    padding: 6px 9px; margin: 2px 0 4px;
+  }
 }
 
 /* ── 자동 저장 표시기 (버튼 없이 즉시 저장) ── */

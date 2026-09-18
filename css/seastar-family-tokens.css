@@ -594,7 +594,10 @@ select option,
   /* 저장 버튼 = 화면에 떠 있는 알약(항상 보임) → 저장 여부 즉시 확인 */
   #btn-save.btn-save:not(.hidden) {
     position: fixed; right: 14px;
-    bottom: calc(16px + env(safe-area-inset-bottom));
+    /* [결함수정 2026-09-18] 기존 bottom:16px는 .mobile-dock(높이 58px)뿐 아니라
+       .pin-grid-reopen·.pinfilter-bar 와도 겹쳐 클릭이 하단 도크에 먹혔다(지휘자 프로덕션 실측 y=753).
+       style.css :root 의 --mobile-fab-safe-bottom(기존 리터럴만 조합, 새 매직넘버 없음) 재사용. */
+    bottom: var(--mobile-fab-safe-bottom, calc(16px + env(safe-area-inset-bottom)));
     z-index: 1300; padding: 13px 20px; font-size: 15px; border-radius: 26px;
     box-shadow: 0 6px 18px rgba(0,0,0,.45), 0 2px 10px rgba(200,144,31,.55);
   }
