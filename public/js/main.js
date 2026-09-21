@@ -5442,7 +5442,12 @@
                     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>' +
                   '</button>' +
                 '</div>'
-              : '') +
+              : (p.published
+                  // [WO 20260921 publish-guard] 배포됨인데 링크가 없는 경우(도면 미등록 — 서버가 신규
+                  // 배포는 막지만, 이 안내는 그 가드 이전에 이미 배포된 레거시 프로젝트도 함께 구제한다)
+                  // → 조용히 비워두지 않고 이유를 표시(CLAUDE.md §5: 값이 없으면 없다고 정직하게 표시).
+                  ? '<div class="hub-card-url-empty">⚠ 공유 링크 없음 — 도면(구역)을 등록해야 뷰어 주소가 생성됩니다.</div>'
+                  : '')) +
           '</div>' +
           (isDesigner && !isLocked
             ? '<div class="hub-card-actions">' +
@@ -5652,7 +5657,13 @@
       if (btn) { btn.disabled = true; btn.classList.add("busy"); }
       try {
         const r = await fetch("/api/projects/" + p.id + "/" + (willPublish ? "publish" : "unpublish"), { method: "POST", headers: Auth.headers() });
-        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (!r.ok) {
+          // [WO 20260921 publish-guard] 서버가 거부 사유(예: 도면 미등록)를 error 필드로 보낸다 —
+          // 그대로 사용자에게 노출한다("HTTP 400" 같은 무의미한 코드로 뭉개지 않는다, 조용한 실패 금지).
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (e) {}
+          throw new Error(msg);
+        }
         p.published = willPublish;
         Prompt && Prompt.toast && Prompt.toast(willPublish ? "'" + p.name + "' 배포 완료 — 뷰어가 열람할 수 있습니다." : "'" + p.name + "' 배포 취소 — 뷰어에게 비공개.", 2800);
         await this.load();

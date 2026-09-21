@@ -274,8 +274,11 @@ await withBrowser(async (browser) => {
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[Part C · 구코드 vs 신코드 대조 — PWA confirm() 무음 실패 조건]");
 await withBrowser(async (browser) => {
+  // [WO 20260921 test-fix] HEAD(93dc905)는 이 스위트가 검증하는 fix 자체를 이미 담은 커밋이라
+  // "구코드"로 쓸 수 없다(HEAD를 쓰면 신·구가 동일해져 publishCalls=0 이 재현되지 않는다 — 실측
+  // 확인: HEAD~1 에만 진짜 window.confirm() 버그가 남아있다).
   let oldProjectHubSrc;
-  try { oldProjectHubSrc = execSync('git show HEAD:public/js/modules/12_ProjectHub.js', { cwd: ROOT, encoding: "utf8" }); }
+  try { oldProjectHubSrc = execSync('git show HEAD~1:public/js/modules/12_ProjectHub.js', { cwd: ROOT, encoding: "utf8" }); }
   catch (e) { console.log("  FAIL git show 실패 — 구코드를 가져올 수 없다: " + e.message); failed++; return; }
 
   async function runWithBrokenConfirm(src, label) {

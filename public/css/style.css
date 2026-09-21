@@ -393,6 +393,13 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 .hub-card-url-copy:hover, .hub-card-url-share:hover { background: rgba(201,150,42,.14); border-color: rgba(201,150,42,.5); }
 .hub-card-url-copy svg, .hub-card-url-share svg { width: 15px; height: 15px; }
+/* [WO 20260921 publish-guard] 배포됨인데 도면 미등록으로 링크가 없는 경우의 안내 —
+   위 .hub-card-url 과 동일 색쌍(--text2 on --bg3 ≈ 4.98:1, 상단 4900행대 기존 실측) 재사용. */
+.hub-card-url-empty {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--border2);
+  font-size: 10.5px; color: var(--text2);
+}
 
 /* + 새 프로젝트 카드 */
 .hub-card-add {

@@ -2130,6 +2130,15 @@ app.post('/api/projects/:id/publish', async (c) => {
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const pid = c.req.param('id')
   if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  // [WO 20260921 publish-guard] 공유할 도면이 없는 배포는 "배포됨"인데 주소가 없는 모순을 만든다
+  // (뷰어 딥링크 ?d= 는 deployment_id 를 가진 decks 에서만 파생된다 — 12_ProjectHub._deployUrl 참조).
+  // → 배포 전에 최소 1개 도면(구역) 등록을 강제한다. 이유는 message 로 그대로 클라이언트에 전달.
+  const deckRow: any = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL'
+  ).bind(pid).first()
+  if (!deckRow || !deckRow.n) {
+    return c.json({ error: '도면을 먼저 등록해야 배포할 수 있습니다 — 도면(구역) 없이는 공유 링크를 만들 수 없습니다.' }, 400)
+  }
   const now = Date.now()
   await c.env.DB.prepare('UPDATE projects SET published = 1, published_at = ?, published_by = ?, updated_at = ? WHERE id = ? AND deleted = 0')
     .bind(now, user.email, now, pid).run()
