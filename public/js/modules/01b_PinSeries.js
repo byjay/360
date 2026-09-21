@@ -272,20 +272,15 @@
        숨김 = 표시만 감춘다. 저장 데이터·번호 계열은 필터와 무관하게 불변. */
     _filter: null,
 
-    /** 현재 필터 상태 { content, empty, checkboard } — 세션 유지 + localStorage 복원 */
+    /** 현재 필터 상태 { content, empty, checkboard } — 이 탭의 열람 세션 동안만 유지.
+     *  🔴 [WO 20260921 근본수정] 예전엔 localStorage(wm-pin-filter, 전역 키)에 영구 저장했다 —
+     *  프로젝트/배포본 구분이 없는 전역 키라, 한 프로젝트에서 "체크보드" 계열을 껐다 나가면
+     *  그 값이 브라우저에 남아 완전히 다른(새) 프로젝트를 열 때도 조용히 적용되어, 그 프로젝트의
+     *  핀이 전부(또는 한 계열이 전부) 안 보이는 유령 결함이 됐다(마스터 신고: "체크보드 모드일 때
+     *  핀이 안 생긴다"). 새로 열 때마다 항상 전체 표시로 시작하는 게 안전하므로 영구저장을 끊는다
+     *  (이 값은 이제 페이지 스크립트가 살아있는 동안의 메모리 상태일 뿐 — 새로고침/새 프로젝트=항상 전체표시). */
     filter() {
-      if (!this._filter) {
-        this._filter = { content: true, empty: true, checkboard: true };
-        try {
-          const raw = localStorage.getItem(this.FILTER_KEY);
-          if (raw) {
-            const v = JSON.parse(raw);
-            this.KINDS.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; });
-          }
-        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
-        // 전부 꺼진 상태는 "핀이 하나도 없다"는 거짓말이 된다 → 전체 표시로 복구
-        if (!this.KINDS.some(k => this._filter[k])) this._filter = { content: true, empty: true, checkboard: true };
-      }
+      if (!this._filter) this._filter = { content: true, empty: true, checkboard: true };
       return this._filter;
     },
 
@@ -297,15 +292,11 @@
     ICON_FILTER_KEY: "wm-pin-icon-filter",
     _iconFilter: null,
 
-    /** 아이콘별 표시 상태 맵 { iconId: boolean }. 키가 없으면 표시(기본 전체 표시). */
+    /** 아이콘별 표시 상태 맵 { iconId: boolean }. 키가 없으면 표시(기본 전체 표시).
+     *  🔴 [WO 20260921] 계열 필터(filter())와 같은 이유로 localStorage 영구저장 제거 —
+     *  전역 키가 프로젝트를 가리지 않고 새 프로젝트에도 조용히 적용되는 결함을 막는다. */
     iconFilter() {
-      if (!this._iconFilter) {
-        this._iconFilter = {};
-        try {
-          const raw = localStorage.getItem(this.ICON_FILTER_KEY);
-          if (raw) { const v = JSON.parse(raw); if (v && typeof v === "object") this._iconFilter = v; }
-        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
-      }
+      if (!this._iconFilter) this._iconFilter = {};
       return this._iconFilter;
     },
 
@@ -342,9 +333,8 @@
 
     showAllIcons() { this._iconFilter = {}; this._persistIcon(); },
 
-    _persistIcon() {
-      try { localStorage.setItem(this.ICON_FILTER_KEY, JSON.stringify(this.iconFilter())); } catch (e) {}
-    },
+    /** [WO 20260921] 더 이상 저장하지 않는다(위 iconFilter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
+    _persistIcon() {},
 
     /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND) */
     isVisible(pin) { return !!this.filter()[this.kindOf(pin)] && this.isIconVisible(pin); },
@@ -364,9 +354,8 @@
 
     showAll() { const f = this.filter(); this.KINDS.forEach(k => f[k] = true); this._persist(); },
 
-    _persist() {
-      try { localStorage.setItem(this.FILTER_KEY, JSON.stringify(this.filter())); } catch (e) {}
-    },
+    /** [WO 20260921] 더 이상 저장하지 않는다(위 filter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
+    _persist() {},
 
     /* ── [WO 20260917 멀티유저 ②·재설계] 사용자 구분 배지 — 4번째 축, 기존 3축(계열/등록여부/종류)과 별개.
        기존 3축은 핀 몸통 색·외곽 링 dasharray·머리 안 아이콘을 쓰므로, 사용자 구분은 겹치지 않게
