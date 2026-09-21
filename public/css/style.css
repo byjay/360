@@ -608,6 +608,8 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .admin-gate-btn:active { transform: translateY(0); }
 .admin-gate-card.wide { width: min(480px, 92vw); }
 .admin-gate-btn.full { width: 100%; flex: none; margin-top: 4px; }
+/* [P53] 공유 버튼 — 터치타깃 ≥44×44 (기존 .admin-gate-btn 은 padding 10px 0 뿐이라 미달) */
+.pm-share-btn { min-height: 44px; min-width: 44px; padding: 10px 14px; }
 
 /* ═══════════════════════════════════════════════════════
    PHOTO BATCH — 사진 폴더 일괄 매칭 모달 (.admin-gate 카드 재사용)

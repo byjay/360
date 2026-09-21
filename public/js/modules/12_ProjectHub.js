@@ -23,6 +23,9 @@
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
       // [P40] 초대 링크 복사
       $("pm-invite-copy") && $("pm-invite-copy").addEventListener("click", () => this._copyInviteLink());
+      // [P53] 초대 링크 공유 — navigator.share() 는 사용자 제스처 안에서 동기 호출해야 하므로
+      //   이 핸들러 자체를 async 로 만들지 않는다(await 를 앞세우면 제스처가 끊겨 브라우저가 거부한다).
+      $("pm-invite-share") && $("pm-invite-share").addEventListener("click", () => this._shareInviteLink());
       // [멀티테넌트] 서브도메인 부여
       $("pm-subdomain-btn") && $("pm-subdomain-btn").addEventListener("click", () => this.setSubdomain());
       // [마스터 요청] 디자이너/뷰어 선택 모달
@@ -263,6 +266,23 @@
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(inp.value).then(done).catch(() => {}); return; }
         inp.select(); document.execCommand("copy"); done();
       } catch (e) {}
+    },
+    /** [P53] 초대 링크 공유 — 폰에서 누르면 공유시트(카톡 등)가 뜬다.
+     *  navigator.share 미지원 환경(데스크톱 크롬 등)은 기존 복사 동작(_copyInviteLink, SoT)으로 대체한다.
+     *  🔴 navigator.share 는 사용자 제스처 컨텍스트 안에서만 호출되므로 이 함수는 async 가 아니고,
+     *  호출도 클릭 핸들러에서 await 없이 동기적으로 이뤄진다. */
+    _shareInviteLink() {
+      const inp = document.getElementById("pm-invite-link");
+      const url = inp && inp.value;
+      if (!url) return;
+      if (!navigator.share) { this._copyInviteLink(); return; }
+      const p = this._memProject;
+      const projectName = (p && (p.name || p.id)) || "프로젝트"; // SoT: 실제 프로젝트 값에서만 가져온다(하드코딩 금지)
+      navigator.share({ title: "SEASTAR 360 초대", text: '"' + projectName + '" 프로젝트 초대 링크', url: url })
+        .catch((e) => {
+          if (e && e.name === "AbortError") return; // 사용자가 공유시트를 취소 — 정상 동작, 오류 알림 금지
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("공유 실패: " + (e && e.message ? e.message : "알 수 없는 오류"));
+        });
     },
     /** 아직 수락되지 않은 초대 목록(토큰 원문은 서버가 절대 돌려주지 않는다) */
     async loadPendingInvites() {
