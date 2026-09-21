@@ -369,6 +369,31 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   border-radius: 999px; padding: 1px 8px; line-height: 1.5;
 }
 
+/* [WO 20260921 deploy-url] 배포된 프로젝트 카드 — 뷰어 주소 노출 + 복사·공유.
+   카드 본문은 밝은 크림 배경(--bg2/--bg3)이므로 썸네일용 반투명 다크칩(.hub-card-act)과는
+   별도 색쌍을 쓴다 — 대비 실측(WCAG 2.1): --gold-ink(#7e5d12) on --bg2(#faf7f0) ≈ 5.7:1,
+   --text2(#6b6457) on --bg3(#efe9dc) ≈ 4.98:1(이 파일 4900행대 기존 실측과 동일 색쌍 재사용). */
+.hub-card-url {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--border2);
+}
+.hub-card-url-text {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text2);
+  cursor: pointer;
+}
+/* 탭하면 펼침(전체 주소 확인 수단 — 말줄임만으론 부족) */
+.hub-card-url-text.is-expanded { white-space: normal; word-break: break-all; overflow: visible; text-overflow: clip; }
+.hub-card-url-copy, .hub-card-url-share {
+  flex: none; min-width: 44px; min-height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 1px solid var(--border2); background: transparent;
+  color: var(--gold-ink); cursor: pointer; transition: background .15s, border-color .15s;
+}
+.hub-card-url-copy:hover, .hub-card-url-share:hover { background: rgba(201,150,42,.14); border-color: rgba(201,150,42,.5); }
+.hub-card-url-copy svg, .hub-card-url-share svg { width: 15px; height: 15px; }
+
 /* + 새 프로젝트 카드 */
 .hub-card-add {
   align-items: center; justify-content: center;

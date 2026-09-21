@@ -447,6 +447,8 @@
         const deckTxt = (p.deck_count != null) ? (p.deck_count + " DECKS") : "";
         const dateTxt = this._fmtDate(p.created_at);
         const code = "SS-" + String(Math.abs(this._hash(p.id || p.name)) % 9000 + 1000);
+        // [WO 20260921 deploy-url] 배포된 프로젝트만 주소 노출 — SoT: p.published(배지와 동일 소스)
+        const deployUrl = p.published ? this._deployUrl(p) : "";
         const lockOverlay = isLocked
           ? '<div class="hub-card-lock" aria-hidden="true">' +
               '<svg class="hub-lock-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
@@ -470,6 +472,17 @@
               (dateTxt ? '<span class="hub-card-date">' + dateTxt + '</span>' : '') +
               (isPending ? '<span class="hub-card-req-badge">⏳ 신청 접수됨</span>' : '') +
             '</div>' +
+            (deployUrl
+              ? '<div class="hub-card-url">' +
+                  '<span class="hub-card-url-text" title="' + UI.escapeHtml(deployUrl) + '" data-act="url-toggle">' + UI.escapeHtml(deployUrl) + '</span>' +
+                  '<button class="hub-card-url-copy" type="button" title="주소 복사" aria-label="주소 복사" data-act="url-copy">' +
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+                  '</button>' +
+                  '<button class="hub-card-url-share" type="button" title="주소 공유" aria-label="주소 공유" data-act="url-share">' +
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>' +
+                  '</button>' +
+                '</div>'
+              : '') +
           '</div>' +
           (isDesigner && !isLocked
             ? '<div class="hub-card-actions">' +
@@ -523,6 +536,14 @@
         // [P3] 멤버 관리 버튼 — 이 프로젝트에 접근할 사용자 배정
         const mem = card.querySelector('[data-act="members"]');
         if (mem) mem.addEventListener("click", (e) => { e.stopPropagation(); this.openMembers(p); });
+
+        // [WO 20260921 deploy-url] 배포 주소 — 복사/공유/탭하면 펼침
+        const urlCopy = card.querySelector('[data-act="url-copy"]');
+        if (urlCopy) urlCopy.addEventListener("click", (e) => { e.stopPropagation(); this._copyDeployUrl(deployUrl); });
+        const urlShare = card.querySelector('[data-act="url-share"]');
+        if (urlShare) urlShare.addEventListener("click", (e) => { e.stopPropagation(); this._shareDeployUrl(deployUrl, p.name); });
+        const urlText = card.querySelector('[data-act="url-toggle"]');
+        if (urlText) urlText.addEventListener("click", (e) => { e.stopPropagation(); urlText.classList.toggle("is-expanded"); });
 
         grid.appendChild(card);
       });
@@ -672,6 +693,52 @@
       } catch (e) {
         Prompt && Prompt.toast && Prompt.toast("배포 처리 실패: " + (e && e.message ? e.message : "네트워크 오류"), 3200);
       } finally { if (btn) { btn.disabled = false; btn.classList.remove("busy"); } }
+    },
+
+    /** [WO 20260921 deploy-url] 배포된 프로젝트의 뷰어 주소 — SoT: p.subdomain(실 DB 값) +
+     *  현재 접속 호스트에서만 파생한다(도메인·ID 하드코딩 금지, src/index.tsx baseDomainOf 와 동일 규칙).
+     *  서브도메인이 없으면 고유 딥링크가 없으므로(멀티테넌트 서브도메인 미부여) 사이트 루트를 안내한다 —
+     *  뷰어는 로그인 후 허브 목록에서 이 프로젝트를 선택해 들어간다. */
+    _deployUrl(p) {
+      if (!p) return "";
+      const loc = (typeof location !== "undefined") ? location : { hostname: "", protocol: "https:", origin: "" };
+      const host = loc.hostname || "";
+      const parts = host.split(".");
+      const base = parts.length >= 2 ? parts.slice(-2).join(".") : host;
+      if (p.subdomain) return loc.protocol + "//" + p.subdomain + "." + base;
+      return loc.origin ? (loc.origin + "/") : (loc.protocol + "//" + host + "/");
+    },
+    /** 배포 주소 복사 — _copyInviteLink 와 동일한 클립보드 우선순위(SoT), 복사 후 알림 필수(조용한 실패 금지). */
+    _copyDeployUrl(url) {
+      if (!url) return;
+      const done = () => { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("주소를 복사했습니다."); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).then(done).catch(() => this._copyDeployUrlFallback(url, done)); return; }
+      } catch (e) {}
+      this._copyDeployUrlFallback(url, done);
+    },
+    _copyDeployUrlFallback(url, done) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url; ta.setAttribute("readonly", "");
+        ta.style.position = "fixed"; ta.style.top = "-9999px"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        done();
+      } catch (e) {}
+    },
+    /** 배포 주소 공유 — _shareInviteLink 와 동일한 패턴(navigator.share + 복사 폴백).
+     *  AbortError(사용자가 공유시트를 취소) 는 정상 동작 — 오류 알림 금지. */
+    _shareDeployUrl(url, projectName) {
+      if (!url) return;
+      if (!navigator.share) { this._copyDeployUrl(url); return; }
+      const name = projectName || "프로젝트"; // SoT: 실제 프로젝트 값에서만 가져온다(하드코딩 금지)
+      navigator.share({ title: "SEASTAR 360 뷰어 주소", text: '"' + name + '" 프로젝트 뷰어 주소', url: url })
+        .catch((e) => {
+          if (e && e.name === "AbortError") return; // 사용자가 공유시트를 취소 — 정상 동작, 오류 알림 금지
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("공유 실패: " + (e && e.message ? e.message : "알 수 없는 오류"));
+        });
     },
 
     _fmtDate(v) {
