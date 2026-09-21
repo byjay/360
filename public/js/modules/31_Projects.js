@@ -237,7 +237,7 @@
      *  🔴 새 그리기 도구 금지(Ponytail) — 기존 영역 그리기(Zones rect 드래그)를 그대로 재사용한다.
      *  Zones._commitZone/_cancelDraw 를 일시적으로 가로채 라벨 프롬프트 없이 bbox(%)만 받고 원복.
      *  드래그 없이 Esc/취소 → null(=페이지 전체, crop 미지정). */
-    _pickDeckCrop() {
+    _pickDeckCrop(hintMsg) {
       return new Promise((resolve) => {
         if (typeof Zones === "undefined") { resolve(null); return; }
         const origCommit = Zones._commitZone.bind(Zones);
@@ -260,8 +260,88 @@
         Zones._shape = "rect"; Zones._poly = null;
         State.drawingZone = true;
         if (Zones._syncToolUi) Zones._syncToolUi();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("도면에서 이 구역이 될 영역을 드래그하세요 — Esc를 누르면 페이지 전체가 구역이 됩니다");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(hintMsg || "도면에서 이 구역이 될 영역을 드래그하세요 — Esc를 누르면 페이지 전체가 구역이 됩니다");
       });
+    },
+
+    /** [WO 20260918-B] 🔴 여러 개의 뷰가 담긴 도면(A0 등)에서 **드래그한 부분만** 새 영역으로 뽑아낸다.
+     *  마스터 원문: "pdf 에 여러 개의 뷰가 있는 파일일 때 긁어서 그 부분만 복사하듯이
+     *  새로운 영역으로 만들어내는 기능".
+     *
+     *  🔴 비파괴(마스터 확정 — "pdf 원본은 유지한 채 그 영역만 보여주는 기능"):
+     *   · 원본 PDF·배포본(deployments 행)에는 **한 바이트도 쓰지 않는다.** decks 행 1개를 INSERT 할 뿐이다.
+     *   · 새 영역은 원본과 **같은 deployment_id** 를 가리키고 차이는 page+crop 뿐 —
+     *     잘라낸 픽셀을 따로 저장하는 "복사"가 아니라 원본을 들여다보는 **창(view)** 이다.
+     *   · 그래서 같은 도면에서 몇 번이든 반복해 뽑을 수 있고(요구①),
+     *     뽑은 영역을 지워도(DELETE /api/decks/:id = decks 행 soft delete) 원본은 그대로다(요구④).
+     *
+     *  좌표계(요구③): 드래그 좌표는 MapCtrl.viewportToPercent → **페이지 기준 %** 다.
+     *   크롭은 화면 줌/팬(MapCtrl.fitZone)과 고해상도 렌더 대상(PDF.setDeckCrop)만 바꿀 뿐
+     *   좌표 원점을 옮기지 않는다 → 영역 안에서 찍은 핀도 계속 페이지 기준 %로 저장된다.
+     *   배포본으로 내보낼 때만 App._mapZoneForCrop/_mapAnnoForCrop 과 **같은 규칙**
+     *   (MapCtrl.pageToDeckCropPct)으로 크롭 기준 %가 되고, MapCtrl.deckCropPctToPage 로 정확히 되돌아온다.
+     *  @param {object} [opts] { crop, name } — 테스트/자동화용 선주입(미지정 시 드래그·프롬프트로 물음)
+     *  @returns {Promise<object|null>} 생성된 구역(deck) 또는 null(취소/실패)
+     */
+    async extractRegionAsDeck(opts) {
+      opts = opts || {};
+      if (typeof Auth !== "undefined" && !Auth.isDesigner) { Prompt.toast && Prompt.toast("설계자만 영역을 추출할 수 있습니다"); return null; }
+      if (!this.currentProject) { Prompt.toast && Prompt.toast("먼저 프로젝트를 선택하세요"); return null; }
+      const src = this.currentDeck;
+      if (!src || !src.deployment_id) { Prompt.toast && Prompt.toast("먼저 도면이 등록된 구역을 여세요 — 그 도면 위에서 영역을 긁어냅니다"); return null; }
+      // 🔴 조용한 실패 금지 — 드래그 UI 를 띄우기 전에 끊는다(31_Projects.createDeck 과 같은 규칙).
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 영역을 추출할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
+      if (this._extractingRegion) return null;   // 연타 가드(_creatingDeck 과 같은 패턴)
+
+      const crop = opts.crop || await this._pickDeckCrop("도면에서 새 영역으로 만들 부분을 드래그하세요 — Esc 를 누르면 취소됩니다");
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) { Prompt.toast && Prompt.toast("영역 추출을 취소했습니다"); return null; }
+
+      // 지금 보고 있는 페이지(원본 구역이 특정 페이지를 가리키면 그 페이지) — 1-base
+      const page = (typeof State !== "undefined" && State.pdfPage) || src.page || 1;
+
+      let name = opts.name;
+      if (name == null) {
+        const res = await Prompt.ask({
+          title: "새 영역 이름",
+          sub: "긁어낸 영역의 이름을 정하세요 — 원본 도면은 그대로 유지됩니다",
+          placeholder: "예: 평면도, 측면도, A-A 단면",
+          value: this._nextRegionName(src.name)
+        });
+        if (!res) { Prompt.toast && Prompt.toast("영역 추출을 취소했습니다"); return null; }
+        name = res.value;
+      }
+      name = String(name || "").trim() || this._nextRegionName(src.name);
+      const dup = (this.decks || []).find((x) => String(x.name).trim().toLowerCase() === name.toLowerCase());
+      if (dup) { Prompt.toast && Prompt.toast("이미 '" + name + "' 구역이 있습니다 — 다른 이름을 쓰세요"); return null; }
+
+      this._extractingRegion = true;
+      try {
+        const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
+          method: "POST", headers: Auth.headers(),
+          // 🔴 원본과 같은 도면(deployment_id)을 가리킨다 — 픽셀 복사 없음, 원본 무변경.
+          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null })
+        });
+        const d = await r.json();
+        if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
+        await this.loadDecks();
+        const created = (this.decks || []).find((x) => x.id === d.id) || d;
+        // 🔴 반복 추출(요구①) — 현재 구역을 새 영역으로 바꾸지 않는다. 원본 도면 화면에 그대로 머물러
+        //    곧바로 다음 영역을 긁을 수 있다("복사하듯이"). 새 영역은 목록에서 눌러 들어간다.
+        Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 계속 드래그해 다른 영역도 만들 수 있어요(목록에서 눌러 열기)", 3600);
+        return created;
+      } catch (e) {
+        Prompt.toast && Prompt.toast(navigator.onLine ? "영역 추출 실패 — 네트워크 오류, 다시 시도해주세요" : "오프라인이라 지금은 영역을 추출할 수 없습니다");
+        return null;
+      } finally { this._extractingRegion = false; }
+    },
+
+    /** 추출 영역의 기본 이름 — "<원본이름> 영역 N". 이미 쓰는 이름이면 N 을 올려 항상 비어 있는 이름을 준다. */
+    _nextRegionName(srcName) {
+      const base = String(srcName || "도면").trim() + " 영역";
+      const taken = new Set((this.decks || []).map((x) => String(x.name).trim().toLowerCase()));
+      let n = 1;
+      while (taken.has((base + " " + n).toLowerCase())) n++;
+      return base + " " + n;
     },
 
     /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */
@@ -326,7 +406,12 @@
         row.className = "deck-row" + (isActive ? " active" : "");
         const hasDoc = !!d.deployment_id;
         // 트리 가이드(└) + 구역 아이콘 + 도면 등록 여부
-        const dot = hasDoc
+        // [WO 20260918-B] 도면에서 긁어낸 영역(crop 보유)은 목록에서 한눈에 구분되어야 한다(요구④).
+        //   새 CSS 없이 기존 .deck-hasdoc 스타일을 그대로 쓰고 아이콘/툴팁만 바꾼다.
+        const isRegion = !!(d.crop && d.crop.w > 0 && d.crop.h > 0);
+        const dot = isRegion
+          ? '<span class="deck-hasdoc" title="도면에서 긁어낸 영역 — 원본 도면은 그대로입니다"><i class="fa-solid fa-crop-simple"></i></span>'
+          : hasDoc
           ? '<span class="deck-hasdoc" title="도면 등록됨"><i class="fa-solid fa-file-lines"></i></span>'
           : '<span class="deck-nodoc" title="도면 미등록"><i class="fa-regular fa-folder-open"></i></span>';
         // [B4] 로컬에만 있고 서버 미저장 → '미저장' 배지('도면없음'과 구분)

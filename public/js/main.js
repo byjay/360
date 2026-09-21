@@ -4890,6 +4890,9 @@
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
       // [P40] 초대 링크 복사
       $("pm-invite-copy") && $("pm-invite-copy").addEventListener("click", () => this._copyInviteLink());
+      // [P53] 초대 링크 공유 — navigator.share() 는 사용자 제스처 안에서 동기 호출해야 하므로
+      //   이 핸들러 자체를 async 로 만들지 않는다(await 를 앞세우면 제스처가 끊겨 브라우저가 거부한다).
+      $("pm-invite-share") && $("pm-invite-share").addEventListener("click", () => this._shareInviteLink());
       // [멀티테넌트] 서브도메인 부여
       $("pm-subdomain-btn") && $("pm-subdomain-btn").addEventListener("click", () => this.setSubdomain());
       // [마스터 요청] 디자이너/뷰어 선택 모달
@@ -5130,6 +5133,23 @@
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(inp.value).then(done).catch(() => {}); return; }
         inp.select(); document.execCommand("copy"); done();
       } catch (e) {}
+    },
+    /** [P53] 초대 링크 공유 — 폰에서 누르면 공유시트(카톡 등)가 뜬다.
+     *  navigator.share 미지원 환경(데스크톱 크롬 등)은 기존 복사 동작(_copyInviteLink, SoT)으로 대체한다.
+     *  🔴 navigator.share 는 사용자 제스처 컨텍스트 안에서만 호출되므로 이 함수는 async 가 아니고,
+     *  호출도 클릭 핸들러에서 await 없이 동기적으로 이뤄진다. */
+    _shareInviteLink() {
+      const inp = document.getElementById("pm-invite-link");
+      const url = inp && inp.value;
+      if (!url) return;
+      if (!navigator.share) { this._copyInviteLink(); return; }
+      const p = this._memProject;
+      const projectName = (p && (p.name || p.id)) || "프로젝트"; // SoT: 실제 프로젝트 값에서만 가져온다(하드코딩 금지)
+      navigator.share({ title: "SEASTAR 360 초대", text: '"' + projectName + '" 프로젝트 초대 링크', url: url })
+        .catch((e) => {
+          if (e && e.name === "AbortError") return; // 사용자가 공유시트를 취소 — 정상 동작, 오류 알림 금지
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("공유 실패: " + (e && e.message ? e.message : "알 수 없는 오류"));
+        });
     },
     /** 아직 수락되지 않은 초대 목록(토큰 원문은 서버가 절대 돌려주지 않는다) */
     async loadPendingInvites() {
@@ -6249,6 +6269,15 @@
       ["rect", "circle", "poly"].forEach(sh => {
         const b = $("btn-zone-" + sh);
         if (b) b.addEventListener("click", () => this.pickShape(sh));
+      });
+      // [WO 20260918-B] 🔴 도면 영역 추출 — 여러 뷰가 담긴 도면에서 드래그한 부분만 새 영역(구역)으로.
+      //   그리기 도구와 같은 자리에서 관리한다(Projects._pickDeckCrop 이 이 모듈의 드래그를 그대로 재사용).
+      $("btn-region-extract") && $("btn-region-extract").addEventListener("click", () => {
+        if (typeof Projects === "undefined" || !Projects.extractRegionAsDeck) {
+          Prompt && Prompt.toast && Prompt.toast("영역 추출을 사용할 수 없습니다");   // 조용한 실패 금지
+          return;
+        }
+        Projects.extractRegionAsDeck();
       });
       // 레거시 단일 버튼 호환
       $("btn-zone") && $("btn-zone").addEventListener("click", () => this.toggleDraw());
@@ -14877,7 +14906,7 @@
      *  🔴 새 그리기 도구 금지(Ponytail) — 기존 영역 그리기(Zones rect 드래그)를 그대로 재사용한다.
      *  Zones._commitZone/_cancelDraw 를 일시적으로 가로채 라벨 프롬프트 없이 bbox(%)만 받고 원복.
      *  드래그 없이 Esc/취소 → null(=페이지 전체, crop 미지정). */
-    _pickDeckCrop() {
+    _pickDeckCrop(hintMsg) {
       return new Promise((resolve) => {
         if (typeof Zones === "undefined") { resolve(null); return; }
         const origCommit = Zones._commitZone.bind(Zones);
@@ -14900,8 +14929,88 @@
         Zones._shape = "rect"; Zones._poly = null;
         State.drawingZone = true;
         if (Zones._syncToolUi) Zones._syncToolUi();
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("도면에서 이 구역이 될 영역을 드래그하세요 — Esc를 누르면 페이지 전체가 구역이 됩니다");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(hintMsg || "도면에서 이 구역이 될 영역을 드래그하세요 — Esc를 누르면 페이지 전체가 구역이 됩니다");
       });
+    },
+
+    /** [WO 20260918-B] 🔴 여러 개의 뷰가 담긴 도면(A0 등)에서 **드래그한 부분만** 새 영역으로 뽑아낸다.
+     *  마스터 원문: "pdf 에 여러 개의 뷰가 있는 파일일 때 긁어서 그 부분만 복사하듯이
+     *  새로운 영역으로 만들어내는 기능".
+     *
+     *  🔴 비파괴(마스터 확정 — "pdf 원본은 유지한 채 그 영역만 보여주는 기능"):
+     *   · 원본 PDF·배포본(deployments 행)에는 **한 바이트도 쓰지 않는다.** decks 행 1개를 INSERT 할 뿐이다.
+     *   · 새 영역은 원본과 **같은 deployment_id** 를 가리키고 차이는 page+crop 뿐 —
+     *     잘라낸 픽셀을 따로 저장하는 "복사"가 아니라 원본을 들여다보는 **창(view)** 이다.
+     *   · 그래서 같은 도면에서 몇 번이든 반복해 뽑을 수 있고(요구①),
+     *     뽑은 영역을 지워도(DELETE /api/decks/:id = decks 행 soft delete) 원본은 그대로다(요구④).
+     *
+     *  좌표계(요구③): 드래그 좌표는 MapCtrl.viewportToPercent → **페이지 기준 %** 다.
+     *   크롭은 화면 줌/팬(MapCtrl.fitZone)과 고해상도 렌더 대상(PDF.setDeckCrop)만 바꿀 뿐
+     *   좌표 원점을 옮기지 않는다 → 영역 안에서 찍은 핀도 계속 페이지 기준 %로 저장된다.
+     *   배포본으로 내보낼 때만 App._mapZoneForCrop/_mapAnnoForCrop 과 **같은 규칙**
+     *   (MapCtrl.pageToDeckCropPct)으로 크롭 기준 %가 되고, MapCtrl.deckCropPctToPage 로 정확히 되돌아온다.
+     *  @param {object} [opts] { crop, name } — 테스트/자동화용 선주입(미지정 시 드래그·프롬프트로 물음)
+     *  @returns {Promise<object|null>} 생성된 구역(deck) 또는 null(취소/실패)
+     */
+    async extractRegionAsDeck(opts) {
+      opts = opts || {};
+      if (typeof Auth !== "undefined" && !Auth.isDesigner) { Prompt.toast && Prompt.toast("설계자만 영역을 추출할 수 있습니다"); return null; }
+      if (!this.currentProject) { Prompt.toast && Prompt.toast("먼저 프로젝트를 선택하세요"); return null; }
+      const src = this.currentDeck;
+      if (!src || !src.deployment_id) { Prompt.toast && Prompt.toast("먼저 도면이 등록된 구역을 여세요 — 그 도면 위에서 영역을 긁어냅니다"); return null; }
+      // 🔴 조용한 실패 금지 — 드래그 UI 를 띄우기 전에 끊는다(31_Projects.createDeck 과 같은 규칙).
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 영역을 추출할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
+      if (this._extractingRegion) return null;   // 연타 가드(_creatingDeck 과 같은 패턴)
+
+      const crop = opts.crop || await this._pickDeckCrop("도면에서 새 영역으로 만들 부분을 드래그하세요 — Esc 를 누르면 취소됩니다");
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) { Prompt.toast && Prompt.toast("영역 추출을 취소했습니다"); return null; }
+
+      // 지금 보고 있는 페이지(원본 구역이 특정 페이지를 가리키면 그 페이지) — 1-base
+      const page = (typeof State !== "undefined" && State.pdfPage) || src.page || 1;
+
+      let name = opts.name;
+      if (name == null) {
+        const res = await Prompt.ask({
+          title: "새 영역 이름",
+          sub: "긁어낸 영역의 이름을 정하세요 — 원본 도면은 그대로 유지됩니다",
+          placeholder: "예: 평면도, 측면도, A-A 단면",
+          value: this._nextRegionName(src.name)
+        });
+        if (!res) { Prompt.toast && Prompt.toast("영역 추출을 취소했습니다"); return null; }
+        name = res.value;
+      }
+      name = String(name || "").trim() || this._nextRegionName(src.name);
+      const dup = (this.decks || []).find((x) => String(x.name).trim().toLowerCase() === name.toLowerCase());
+      if (dup) { Prompt.toast && Prompt.toast("이미 '" + name + "' 구역이 있습니다 — 다른 이름을 쓰세요"); return null; }
+
+      this._extractingRegion = true;
+      try {
+        const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
+          method: "POST", headers: Auth.headers(),
+          // 🔴 원본과 같은 도면(deployment_id)을 가리킨다 — 픽셀 복사 없음, 원본 무변경.
+          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null })
+        });
+        const d = await r.json();
+        if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
+        await this.loadDecks();
+        const created = (this.decks || []).find((x) => x.id === d.id) || d;
+        // 🔴 반복 추출(요구①) — 현재 구역을 새 영역으로 바꾸지 않는다. 원본 도면 화면에 그대로 머물러
+        //    곧바로 다음 영역을 긁을 수 있다("복사하듯이"). 새 영역은 목록에서 눌러 들어간다.
+        Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 계속 드래그해 다른 영역도 만들 수 있어요(목록에서 눌러 열기)", 3600);
+        return created;
+      } catch (e) {
+        Prompt.toast && Prompt.toast(navigator.onLine ? "영역 추출 실패 — 네트워크 오류, 다시 시도해주세요" : "오프라인이라 지금은 영역을 추출할 수 없습니다");
+        return null;
+      } finally { this._extractingRegion = false; }
+    },
+
+    /** 추출 영역의 기본 이름 — "<원본이름> 영역 N". 이미 쓰는 이름이면 N 을 올려 항상 비어 있는 이름을 준다. */
+    _nextRegionName(srcName) {
+      const base = String(srcName || "도면").trim() + " 영역";
+      const taken = new Set((this.decks || []).map((x) => String(x.name).trim().toLowerCase()));
+      let n = 1;
+      while (taken.has((base + " " + n).toLowerCase())) n++;
+      return base + " " + n;
     },
 
     /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */
@@ -14966,7 +15075,12 @@
         row.className = "deck-row" + (isActive ? " active" : "");
         const hasDoc = !!d.deployment_id;
         // 트리 가이드(└) + 구역 아이콘 + 도면 등록 여부
-        const dot = hasDoc
+        // [WO 20260918-B] 도면에서 긁어낸 영역(crop 보유)은 목록에서 한눈에 구분되어야 한다(요구④).
+        //   새 CSS 없이 기존 .deck-hasdoc 스타일을 그대로 쓰고 아이콘/툴팁만 바꾼다.
+        const isRegion = !!(d.crop && d.crop.w > 0 && d.crop.h > 0);
+        const dot = isRegion
+          ? '<span class="deck-hasdoc" title="도면에서 긁어낸 영역 — 원본 도면은 그대로입니다"><i class="fa-solid fa-crop-simple"></i></span>'
+          : hasDoc
           ? '<span class="deck-hasdoc" title="도면 등록됨"><i class="fa-solid fa-file-lines"></i></span>'
           : '<span class="deck-nodoc" title="도면 미등록"><i class="fa-regular fa-folder-open"></i></span>';
         // [B4] 로컬에만 있고 서버 미저장 → '미저장' 배지('도면없음'과 구분)
@@ -16102,6 +16216,7 @@
       "zone-create": "구역/영역 만들기 — 도면 위에서 사각형·원형·다각형 도구를 선택한 뒤 그리면, 그 안에 속한 핀들을 하나의 구역(영역)으로 묶어 관리할 수 있습니다.",
       "drawing-upload": "도면 등록 — PDF 또는 이미지(JPG/PNG) 파일을 업로드하면 그 위에 포인트(핀)를 찍을 수 있는 캔버스가 만들어집니다.",
       "pin-place": "포인트(핀) 찍기 — 도면 위 원하는 위치를 클릭하면 그 자리에 360° 파노라마를 연결할 핀이 생성됩니다.",
+      "region-extract": "도면 영역 추출 — A0 같은 한 장짜리 도면에 평면도·측면도·단면도가 여러 개 들어 있을 때, 그중 하나를 드래그로 긁으면 그 부분만 보이는 새 영역(구역)이 만들어집니다. 원본 PDF 는 전혀 바뀌지 않고 '그 부분만 확대해서 보는 창'이 하나 더 생기는 것이라, 같은 도면에서 몇 번이든 반복해 뽑을 수 있고 뽑은 영역을 지워도 원본 도면은 그대로 남습니다. 새 영역 안에서 찍은 핀은 원본 도면 좌표로 그대로 저장되므로 원본과 영역 어느 쪽에서 봐도 같은 자리에 있습니다.",
       "zone-assign": "영역 지정 — 핀을 특정 구역(zone)에 소속시켜 도면이 복잡해도 구역별로 찾아보기 쉽게 정리합니다.",
       "photo-batch": "사진 폴더 일괄 매칭 — 핀을 순서대로 찍은 뒤 사진이 담긴 폴더를 선택하면, 촬영 시각 순서대로 핀 번호에 자동으로 1:1 매칭됩니다.",
       "deploy-viewer": "뷰어로 배포 — 지금까지 작업한 도면·핀·영역을 열람 전용 링크로 만들어 다른 사람과 공유합니다(공유받은 사람은 로그인 없이 볼 수 있습니다).",
@@ -16110,7 +16225,8 @@
       "checkboard-renumber": "체크보드 번호 일괄 변경 — 누르면 새 시작 번호를 물어보고, 이 페이지의 체크보드 핀 전체를 현재 순서 그대로 그 번호부터 다시 매깁니다(예: 1~40번 → 시작번호 101 입력 시 101~140번). 사진·노트는 번호가 아니라 핀 자체에 연결돼 있어 번호가 바뀌어도 그대로 유지됩니다. 번호 하나만 고치려면 핀을 눌러 '위치명/번호' 칸에서 직접 바꾸세요(이미 쓰는 번호로는 바꿀 수 없습니다).",
       "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다.",
       "offline-download": "오프라인 다운로드 — 이 프로젝트의 도면(PDF/이미지)과 배치된 핀, 그리고 핀에 연결된 360° 파노라마 사진을 전부 이 기기에 내려받습니다. 다운로드가 끝나면 인터넷이 끊긴 현장에서도 도면과 360° 사진을 그대로 열람하고 작업할 수 있고, 나중에 인터넷이 다시 연결되면 자동으로 서버와 동기화됩니다. 버튼에 '저장됨'이 표시되면 이미 내려받아 오프라인 사용 준비가 된 상태입니다.",
-      "pin-mobile-photo-only": "모바일에서는 사진만 등록할 수 있습니다(화면이 좁아 사진 등록에 집중). 360° 사진·문서·노트·동영상·URL 첨부는 PC(데스크톱)에서 추가하세요. 이미 등록된 다른 종류의 첨부는 모바일에서도 그대로 보이고 열람됩니다."
+      "pin-mobile-photo-only": "모바일에서는 사진만 등록할 수 있습니다(화면이 좁아 사진 등록에 집중). 360° 사진·문서·노트·동영상·URL 첨부는 PC(데스크톱)에서 추가하세요. 이미 등록된 다른 종류의 첨부는 모바일에서도 그대로 보이고 열람됩니다.",
+      "invite-share": "초대 링크 공유 — 누르면 폰의 공유 시트가 열려 카카오톡 등 원하는 앱으로 바로 보낼 수 있습니다. PC 등 지원하지 않는 환경에서는 자동으로 링크가 복사됩니다."
     },
 
     _inited: false,

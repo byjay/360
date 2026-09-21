@@ -13,6 +13,15 @@
         const b = $("btn-zone-" + sh);
         if (b) b.addEventListener("click", () => this.pickShape(sh));
       });
+      // [WO 20260918-B] 🔴 도면 영역 추출 — 여러 뷰가 담긴 도면에서 드래그한 부분만 새 영역(구역)으로.
+      //   그리기 도구와 같은 자리에서 관리한다(Projects._pickDeckCrop 이 이 모듈의 드래그를 그대로 재사용).
+      $("btn-region-extract") && $("btn-region-extract").addEventListener("click", () => {
+        if (typeof Projects === "undefined" || !Projects.extractRegionAsDeck) {
+          Prompt && Prompt.toast && Prompt.toast("영역 추출을 사용할 수 없습니다");   // 조용한 실패 금지
+          return;
+        }
+        Projects.extractRegionAsDeck();
+      });
       // 레거시 단일 버튼 호환
       $("btn-zone") && $("btn-zone").addEventListener("click", () => this.toggleDraw());
       // 다각형: 더블클릭/Enter 로 완료
