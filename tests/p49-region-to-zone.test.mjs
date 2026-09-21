@@ -107,20 +107,31 @@ function makeDB(st) {
               return null;
             },
             async all() {
-              if (like(q, "FROM decks WHERE project_id = ? AND deleted = 0"))
-                return { results: st.decks.filter((d) => d.project_id === a[0] && !d.deleted) };
+              // [WO 20260921-tree] GET /api/projects/:id/decks 는 이제 deployments 를 LEFT JOIN 해
+              //   도면 파일명을 함께 돌려준다(필드 추가). 가짜 D1 도 그 JOIN 을 그대로 흉내낸다.
+              if (like(q, "FROM decks WHERE project_id = ? AND deleted = 0") || like(q, "FROM decks d LEFT JOIN deployments"))
+                return { results: st.decks.filter((d) => d.project_id === a[0] && !d.deleted).map((d) => {
+                  const dp = d.deployment_id ? st.deployments[d.deployment_id] : null;
+                  return { ...d, deployment_title: dp ? (dp.title ?? null) : null, deployment_file_name: dp ? (dp.file_name ?? null) : null };
+                }) };
               return { results: [] };
             },
             async run() {
               st.writeLog.push({ sql: q, args: a });
+              // [WO 20260921-tree] 컬럼 위치 고정 파싱은 컬럼이 하나만 늘어도 조용히 틀린다
+              //   (parent_id 추가 때 실제로 깨졌다) → SQL 의 컬럼 목록을 읽어 이름으로 매핑한다.
               if (like(q, "INSERT INTO decks")) {
-                const [id, project_id, name, level_no, deployment_id, page, crop, created_at, updated_at] = a;
-                st.decks.push({ id, project_id, name, level_no, deployment_id, page, crop, created_at, updated_at, deleted: 0 });
+                const cols = (q.match(/INSERT INTO decks \(([^)]*)\)/) || ["", ""])[1].split(",").map((x) => x.trim());
+                const row = { deleted: 0 };
+                cols.forEach((cname, i) => { row[cname] = a[i]; });
+                st.decks.push(row);
               } else if (like(q, "UPDATE decks SET deleted = 1")) {
                 const d = st.decks.find((x) => x.id === a[1]); if (d) { d.deleted = 1; d.updated_at = a[0]; }
               } else if (like(q, "UPDATE decks SET name =")) {
-                const d = st.decks.find((x) => x.id === a[6]);
-                if (d) Object.assign(d, { name: a[0], level_no: a[1], deployment_id: a[2], page: a[3], crop: a[4], updated_at: a[5] });
+                const cols = (q.match(/UPDATE decks SET (.*) WHERE id = \?/) || ["", ""])[1]
+                  .split(",").map((x) => x.trim().replace(/\s*=\s*\?$/, ""));
+                const d = st.decks.find((x) => x.id === a[cols.length]);
+                if (d) cols.forEach((cname, i) => { d[cname] = a[i]; });
               } else if (like(q, "INSERT INTO app_settings")) {
                 if (!st.settings[a[0]]) st.settings[a[0]] = a[1];
               } else if (like(q, "UPDATE deployments") || like(q, "INSERT INTO deployments")) {

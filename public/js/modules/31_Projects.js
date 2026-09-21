@@ -135,6 +135,22 @@
         this.currentDeck = dup; this._renderDecks();
         return dup; // 중복 생성하지 않고 기존 구역 반환
       }
+      // ── [WO 20260921·마스터 요청] "새 파일 로드가 아니라 이미 로드된 파일에서 지정 시
+      //   캡처하듯이 완전한 새 페이지를 생성" — 사용자가 직접 만드는 구역(askDrawing !== false)은
+      //   ①기존 도면에서 영역 지정 / ②새 도면 파일 업로드 중 고르게 한다.
+      //   🔴 새 메커니즘 금지 — ①은 기존 extractRegionAsDeck()(WO 20260918-B)을 그대로 재사용한다.
+      //   opts.source 가 미리 정해져 있으면(테스트/내부 재호출) 묻지 않는다.
+      //   자동생성 경로(askDrawing:false, ensureDeck 등)는 건드리지 않는다 — 조건에서 제외.
+      if (opts.askDrawing !== false && !opts.source) {
+        const source = await this._chooseDeckSource();
+        if (!source) { Prompt.toast && Prompt.toast("구역 생성을 취소했습니다"); return null; }
+        opts.source = source;
+      }
+      if (opts.source === "region") {
+        // 이미 이름 검증(중복 포함)을 마쳤으므로 그대로 넘긴다 — extractRegionAsDeck 은 그 안에서
+        // currentProject/currentDeck.deployment_id/온라인 상태를 다시 확인한다(자체 가드 유지).
+        return await this.extractRegionAsDeck({ name });
+      }
       // ── [P1·마스터 요청] "구역을 등록하면 반드시 도면이 등록되어야 한다" ──
       //   사용자가 직접 만든 구역(askDrawing !== false)은 **도면 파일을 먼저 확정**한 뒤에야 POST 한다.
       //   파일창을 취소하면 구역 POST 자체를 하지 않으므로 '도면없음' 구역이 생기지 않는다(롤백 불필요).
@@ -264,6 +280,54 @@
       });
     },
 
+    /** [WO 20260921] 구역 생성 시 "①기존 도면에서 영역 지정" vs "②새 도면 파일 업로드" 선택.
+     *  🔴 로드된 도면(=deployment_id 가 있는 현재 구역)이 없으면 ①을 고를 수 없다 — 이때 조용히
+     *  비활성만 시키지 않고 이유를 화면에 안내한다(#dsm-region-reason).
+     *  마크업이 없으면(구버전 폴백) 묻지 않고 기존 동작(업로드)으로 진행한다.
+     *  @returns {Promise<"region"|"upload"|null>} null = 취소
+     */
+    _chooseDeckSource() {
+      return new Promise((resolve) => {
+        const m = document.getElementById("deck-source-modal");
+        if (!m) { resolve("upload"); return; } // 구버전 폴백 — 묻지 않고 종전 동작
+        const canExtract = !!(this.currentDeck && this.currentDeck.deployment_id);
+        const btnRegion = document.getElementById("dsm-btn-region");
+        const btnUpload = document.getElementById("dsm-btn-upload");
+        const reasonEl = document.getElementById("dsm-region-reason");
+        const subEl = document.getElementById("dsm-sub");
+        if (subEl) subEl.textContent = this.currentDeck ? ("현재 도면: " + this.currentDeck.name) : "";
+        if (btnRegion) {
+          btnRegion.disabled = !canExtract;
+          if (btnRegion.classList) btnRegion.classList.toggle("disabled", !canExtract);
+          // 🔴 실측(라이브 스크린샷) — .admin-gate-btn.primary 는 :disabled 전용 CSS 가 없어
+          // disabled=true 여도 금색 그대로 보여 "눌러도 되는 버튼"처럼 보였다. style.css 는
+          // 다른 트랙 점유 중(새 규칙 추가 금지)이라, 인라인 스타일로만 시각적으로도 비활성을 알린다.
+          if (btnRegion.style) {
+            btnRegion.style.opacity = canExtract ? "" : "0.45";
+            btnRegion.style.cursor = canExtract ? "" : "not-allowed";
+          }
+        }
+        if (reasonEl && reasonEl.classList) reasonEl.classList.toggle("hidden", canExtract);
+        let done = false;
+        const close = (val) => {
+          if (done) return; done = true;
+          if (m.classList) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
+          resolve(val);
+        };
+        const backdrop = document.getElementById("dsm-backdrop");
+        const cancelBtn = document.getElementById("dsm-cancel");
+        if (btnRegion) btnRegion.onclick = () => { if (!canExtract) return; close("region"); };
+        if (btnUpload) btnUpload.onclick = () => close("upload");
+        if (backdrop) backdrop.onclick = () => close(null);
+        if (cancelBtn) cancelBtn.onclick = () => close(null);
+        if (m.classList) {
+          m.classList.remove("hidden");
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => m.classList.add("on"));
+          else m.classList.add("on");
+        }
+      });
+    },
+
     /** [WO 20260918-B] 🔴 여러 개의 뷰가 담긴 도면(A0 등)에서 **드래그한 부분만** 새 영역으로 뽑아낸다.
      *  마스터 원문: "pdf 에 여러 개의 뷰가 있는 파일일 때 긁어서 그 부분만 복사하듯이
      *  새로운 영역으로 만들어내는 기능".
@@ -319,7 +383,9 @@
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           // 🔴 원본과 같은 도면(deployment_id)을 가리킨다 — 픽셀 복사 없음, 원본 무변경.
-          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null })
+          // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
+          // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
+          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
