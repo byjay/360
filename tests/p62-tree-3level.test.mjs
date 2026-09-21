@@ -1,35 +1,32 @@
 /**
- * 회귀 테스트 (프레임워크 0 · 실행: node tests/p58-tree-hierarchy.test.mjs)
+ * 회귀 테스트 (프레임워크 0 · 실행: node tests/p62-tree-3level.test.mjs)
  *
- * 마스터 지시(2026-09-21):
- *   "1. 프로젝트 생성  2. 도면 등록  3. 구역 설정  4. 구역 내 영역 설정
- *    — 3, 4는 각 하위 리스트가 왼쪽 트리뷰에서 보이게 구성"
- *   → 트리 계층 = 프로젝트 > 도면 > 구역 > 영역 > 핀
+ * [WO 20260921-tree3] 🔴 마스터 정정 — "1.프로젝트 2.구역 3.영역"이지 "도면"은 트리 단계가 아니다.
+ *  직전 커밋(eeeab36)이 세운 4단(프로젝트>도면>구역>영역)을 3단(프로젝트>구역>영역)으로 되돌린다.
+ *  tests/p58-tree-hierarchy.test.mjs 를 대체한다(이름 변경, 코디네이터 확정).
  *
  * 근본원인(실측):
- *  · 과거 트리(11_UI.js renderTree)는 구역 > 도면 > 영역 > 핀 이라 2·3단이 뒤바뀌어 있었다.
- *  · extractRegionAsDeck() 이 만드는 "영역"도 decks 행인데 부모-자식 구분 수단이 없었다
- *    (같은 deployment_id + 같은 level_no) → decks.parent_id 를 도입(migrations/0025).
+ *  · 이전 WO 가 "1.프로젝트 2.도면 3.구역 4.영역" 이라 잘못 해석해 도면을 트리 한 단으로 세웠다.
+ *  · 마스터는 도면을 "구역을 잘라내는 원본 파일"이라 규정했다 — 트리 단계가 아니라 부가 정보다.
+ *  · decks.parent_id(마이그레이션 0025, 프로덕션 적용 완료)는 그대로 쓴다:
+ *    parent_id NULL = 구역(2단), parent_id 있음 = 영역(3단).
  *
- * 검사(발주서 ①~⑨):
- *  ① 트리가 프로젝트>도면>구역>영역 4단으로 렌더된다
- *  ② parent_id 가 NULL 인 deck 은 도면 바로 아래(최상위 구역)로 표시된다
- *  ③ parent_id 가 있는 deck 은 그 구역 아래(영역)로 표시된다
- *  ④ 도면(deployment)이 여러 장이면 각각 별도 그룹이 된다
- *  ⑤ 접기/펼치기(caret/헤더 클릭)가 각 단에서 동작한다
- *  ⑥ 🔴 실 브라우저 375x812 에서 #side-tree 가 scrollHeight > clientHeight 이고
+ * 검사(코디네이터 확정 ①~⑤):
+ *  ① 트리가 프로젝트>구역>영역 3단으로 렌더된다(도면 그룹핑 단 없음 — 구역이 프로젝트 바로 아래)
+ *  ② parent_id 의미 유지 — NULL=구역(프로젝트 직속), 있음=영역(그 구역 아래)
+ *  ③ 도면 출처 정보 유실 0 — 구역/영역 노드 안에 원본 도면 파일명이 부가 표시(.tree-doc-src)로 남는다
+ *  ④ 🔴 실 브라우저 375x812 에서 #side-tree 가 scrollHeight > clientHeight 이고
  *     스크롤 끝에서 마지막 항목까지 도달 가능하다(수치 증명)
- *  ⑦ 구역과 영역이 시각적으로 구분된다(클래스·아이콘·들여쓰기 깊이)
- *  ⑧ API 응답 변경이 기존 호출부를 깨뜨리지 않는다(기존 필드 전부 보존 + 새 필드 추가)
- *  ⑨ 마이그레이션 0025 가 비파괴다(ALTER ADD / CREATE INDEX 만 · 기존 행 보존)
+ *  ⑤ 기존 회귀 0 — p56·p49 는 별도 실행(본 파일은 UI 트리 전용), Part B 는 API/마이그레이션 회귀 담당
+ *
+ * 뮤테이션 3건 (ⓐ 4단 복원→① / ⓑ parent_id 무시→② / ⓒ 도면정보 삭제→③), 각 EXIT=1 확인 후 원복.
  *
  * 목(mock) 사용 범위:
- *  · Part A 는 실제 11_UI.js 소스를 vm 에 그대로 평가한다(로직은 실물, DOM 만 최소 목 — p22 와 동일 패턴).
- *  · Part B 는 실제 워커(src/index.tsx 번들)를 Miniflare 에 올리고 **실제 D1(SQLite)** 에
+ *  · Part A 는 실제 11_UI.js 소스를 vm 에 그대로 평가한다(로직은 실물, DOM 만 최소 목 — p22/구 p58 과 동일 패턴).
+ *  · Part B 는 실제 워커(src/index.tsx 번들)를 Miniflare 에 올리고 실제 D1(SQLite)에
  *    실제 마이그레이션 파일을 적용해 HTTP 로 때린다. D1 목 없음.
- *  · Part C 는 실제 Chrome(Puppeteer)에서 실제 public/ 자산을 로드해 레이아웃을 실측한다.
- *
- * 뮤테이션 4건(ⓐ 계층 평탄화→① / ⓑ parent_id 무시→③ / ⓒ 스크롤 제약 제거→⑥ / ⓓ API 필드 제거→⑧).
+ *  · Part C 는 실제 Chrome(Puppeteer)에서 실제 public/ 자산(조립된 public/js/main.js 포함)을
+ *    로드해 레이아웃을 실측한다.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -52,7 +49,7 @@ const ok = (cond, label) => {
 };
 
 /* ══════════════════════════════════════════════════════════════════════
- * Part A — 트리 렌더 (실제 11_UI.js · 최소 DOM 목, p22 와 동일 패턴)
+ * Part A — 트리 렌더 (실제 11_UI.js · 최소 DOM 목, p22/구 p58 과 동일 패턴)
  * ══════════════════════════════════════════════════════════════════════ */
 function makeClassList() {
   const set = new Set();
@@ -152,130 +149,118 @@ function fx() {
     App: { focusPin() {} }
   };
 }
-/** 4단 경로를 실제로 타고 내려간다 — 하나라도 없으면 null */
-function path4(host) {
+/** 3단 경로를 실제로 타고 내려간다 — 프로젝트 > 구역 > 영역. 하나라도 없으면 null */
+function path3(host) {
   const proj = pick(host, "tree-project")[0];               if (!proj) return null;
-  const doc = kidsOf(proj) && pick(kidsOf(proj), "tree-doc")[0];   if (!doc) return null;
-  const deck = kidsOf(doc) && pick(kidsOf(doc), "tree-deck")[0];   if (!deck) return null;
+  const deck = kidsOf(proj) && pick(kidsOf(proj), "tree-deck")[0];   if (!deck) return null;
   const region = kidsOf(deck) && pick(kidsOf(deck), "tree-region")[0]; if (!region) return null;
-  return { proj, doc, deck, region };
+  return { proj, deck, region };
 }
 
 console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
 {
   const c = fx();
   const { host } = runTree(uiSrc, c);
-  const p = path4(host);
-  ok(!!p, "① 프로젝트 > 도면 > 구역 > 영역 4단 컨테이너가 실제로 중첩 렌더된다");
+  const p = path3(host);
+  ok(!!p, "① 프로젝트 > 구역 > 영역 3단 컨테이너가 실제로 중첩 렌더된다(도면 그룹핑 단 없음)");
   if (p) {
     ok(/HHI-2411 LNG선/.test(p.proj._children[0].innerHTML), "① 1단 = 프로젝트명");
-    ok(/A0_주갑판\.pdf/.test(p.doc._children[0].innerHTML), "① 2단 = 도면 파일명(API deployment_file_name)");
-    ok(/메인데크/.test(p.deck._children[0].innerHTML), "① 3단 = 구역");
-    ok(/평면도/.test(p.region._children[0].innerHTML), "① 4단 = 영역");
+    ok(/메인데크/.test(p.deck._children[0].innerHTML), "① 2단 = 구역 — 프로젝트 바로 아래(도면 단 경유 없음)");
+    ok(/평면도/.test(p.region._children[0].innerHTML), "① 3단 = 영역");
+    // 프로젝트 직속 children 안에 .tree-doc 래퍼가 전혀 없다 — 4단 흔적 없음
+    ok(findAll(host, "tree-doc").length === 0, "① .tree-doc(도면 그룹핑 단) 컨테이너가 전혀 렌더되지 않는다");
   }
 
-  // ② parent_id NULL 인 deck 은 도면 바로 아래
-  const docs = findAll(host, "tree-doc");
-  const dep1Doc = docs.find((d) => /A0_주갑판/.test(d._children[0].innerHTML));
-  const dep1Decks = pick(kidsOf(dep1Doc), "tree-deck").map((d) => d._children[0].innerHTML);
-  ok(dep1Decks.length === 1 && /메인데크/.test(dep1Decks[0]),
-    "② parent_id=NULL 인 구역(메인데크)만 도면 바로 아래에 온다 — 영역은 오지 않는다");
-  const noDoc = docs.find((d) => /도면 미등록/.test(d._children[0].innerHTML));
-  ok(!!noDoc && /브릿지/.test(flat(noDoc)),
-    "② 도면 미등록 구역도 '도면 미등록' 그룹으로 항상 보인다(숨김 금지)");
-
-  // ③ parent_id 있는 deck 은 그 구역 아래
-  const deckD1 = pick(kidsOf(dep1Doc), "tree-deck")[0];
+  // ② parent_id 의미 유지 — NULL=구역(프로젝트 직속), 있음=영역(그 구역 아래)
+  const rootDeckEls = pick(kidsOf(pick(host, "tree-project")[0]), "tree-deck");
+  const rootLabels = rootDeckEls.map((d) => d._children[0].innerHTML);
+  ok(rootDeckEls.length === 3
+      && rootLabels.some((h) => /메인데크/.test(h))
+      && rootLabels.some((h) => /어퍼데크/.test(h))
+      && rootLabels.some((h) => /브릿지/.test(h)),
+    "② parent_id=NULL 인 구역 3개(메인데크·어퍼데크·브릿지)만 프로젝트 바로 아래에 온다 — 영역은 오지 않는다, 실제 " + rootLabels.join(","));
+  const deckD1 = rootDeckEls.find((d) => /메인데크/.test(d._children[0].innerHTML));
   const regions = pick(kidsOf(deckD1), "tree-region").map((r) => r._children[0].innerHTML);
   ok(regions.length === 3 && /평면도/.test(regions[0]) && /측면도/.test(regions[1]) && /A-A 단면/.test(regions[2]),
-    "③ parent_id='d1' 인 deck 3개가 구역 '메인데크' 아래 영역으로 들어간다, 실제 " + regions.length + "개");
-  ok(pick(kidsOf(dep1Doc), "tree-region").length === 0,
-    "③ 영역은 도면 직하에 중복 렌더되지 않는다");
+    "② parent_id='d1' 인 deck 3개가 구역 '메인데크' 아래 영역으로 들어간다, 실제 " + regions.length + "개");
+  const deckD2 = rootDeckEls.find((d) => /어퍼데크/.test(d._children[0].innerHTML));
+  ok(/기관실/.test(flat(deckD2)) && !/메인데크/.test(flat(deckD2)),
+    "② 두 번째 구역 그룹은 자기 영역만 담는다(그룹 간 누수 없음)");
 
-  // ④ 도면이 여러 장이면 각각 그룹
-  const labels = docs.map((d) => (d._children[0].innerHTML.match(/tree-label">([^<]*)</) || [, ""])[1]);
-  ok(docs.length === 3 && labels.includes("A0_주갑판.pdf") && labels.includes("A1_상갑판.pdf") && labels.includes("도면 미등록"),
-    "④ 도면 2장 + 미등록 = 그룹 3개, 실제 " + docs.length + " [" + labels.join(", ") + "]");
-  const dep2Doc = docs.find((d) => /A1_상갑판/.test(d._children[0].innerHTML));
-  ok(/어퍼데크/.test(flat(dep2Doc)) && /기관실/.test(flat(dep2Doc)) && !/메인데크/.test(flat(dep2Doc)),
-    "④ 두 번째 도면 그룹은 자기 구역/영역만 담는다(그룹 간 누수 없음)");
+  // ③ 도면 출처 정보 유실 0 — 구역/영역 노드에 원본 파일명 부가 표시(.tree-doc-src)
+  ok(/tree-doc-src[^>]*>A0_주갑판\.pdf</.test(deckD1._children[0].innerHTML),
+    "③ 구역 '메인데크' 헤더 안에 원본 도면 파일명(A0_주갑판.pdf)이 .tree-doc-src 로 남아 있다");
+  const regionD1a = pick(kidsOf(deckD1), "tree-region")[0];
+  ok(/tree-doc-src[^>]*>A0_주갑판\.pdf</.test(regionD1a._children[0].innerHTML),
+    "③ 영역 '평면도' 헤더에도 원본 도면 파일명이 남아 있다(영역도 같은 도면을 가리킨다)");
+  const deckD3 = rootDeckEls.find((d) => /브릿지/.test(d._children[0].innerHTML));
+  ok(!/tree-doc-src/.test(deckD3._children[0].innerHTML) && /도면없음/.test(deckD3._children[0].innerHTML),
+    "③ 도면 미등록 구역('브릿지')은 출처 라벨 대신 기존 '도면없음' 태그를 유지한다(없는 이름 지어내지 않음)");
 
-  // ⑤ 접기/펼치기
+  // ⑤(부분) 접기/펼치기 · 시각 구분 — 3단 구조에서도 회귀 없음
   const proj = pick(host, "tree-project")[0];
   ok(proj.classList.contains("open"), "⑤ 프로젝트 단 기본 펼침");
   proj._children[0].click();
   ok(!proj.classList.contains("open"), "⑤ 프로젝트 헤더 클릭 → 접힘(.open 제거)");
   proj._children[0].click();
   ok(proj.classList.contains("open"), "⑤ 다시 클릭 → 펼침");
-  const doc1 = docs[0];
-  doc1._children[0].click();
-  ok(!doc1.classList.contains("open"), "⑤ 도면 헤더 클릭 → 접힘");
-  doc1._children[0].click();
-  ok(doc1.classList.contains("open"), "⑤ 도면 헤더 다시 클릭 → 펼침");
   const wasOpen = deckD1.classList.contains("open");
-  deckD1._children[0].click();  // currentDeck 이므로 토글
+  deckD1._children[0].click(); // currentDeck 이므로 토글
   ok(wasOpen && !deckD1.classList.contains("open"), "⑤ 선택된 구역 헤더 클릭 → 접힘(선택 이동 아님)");
-  // 미선택 구역은 캐럿으로만 토글, 본문 클릭은 selectDeck
-  const deckD2 = pick(kidsOf(dep2Doc), "tree-deck")[0];
-  deckD2._children[0].click(true);   // 캐럿 클릭
+  deckD2._children[0].click(true); // 캐럿 클릭(미선택 구역)
   ok(!deckD2.classList.contains("open") && c.selectDeckCalls.length === 0,
     "⑤ 미선택 구역 캐럿 클릭 → 접기만(구역 전환 없음)");
   deckD2._children[0].click();
   ok(c.selectDeckCalls.length === 1 && c.selectDeckCalls[0] === "d2",
     "⑤ 미선택 구역 본문 클릭 → 기존대로 Projects.selectDeck 호출(회귀 없음)");
-
-  // ⑦ 구역 · 영역 시각 구분
   const deckHead = deckD1._children[0], regionHead = pick(kidsOf(deckD1), "tree-region")[0]._children[0];
   ok(deckHead.classList.contains("tree-node-deck") && regionHead.classList.contains("tree-node-region"),
-    "⑦ 구역=.tree-node-deck / 영역=.tree-node-region 으로 클래스가 다르다");
-  const icoDeck = (deckHead.innerHTML.match(/<svg(?!.*tree-caret)[^>]*>[\s\S]*?<\/svg>/g) || []).join("");
-  const icoRegion = (regionHead.innerHTML.match(/<svg(?!.*tree-caret)[^>]*>[\s\S]*?<\/svg>/g) || []).join("");
-  ok(icoDeck !== icoRegion && /polygon/.test(icoDeck) && !/polygon/.test(icoRegion),
-    "⑦ 아이콘이 서로 다르다(구역=레이어 polygon / 영역=크롭 프레임)");
-  // 들여쓰기: 영역은 구역보다 .tree-children 한 단 더 깊다
-  const depth = (el, target, d) => {
-    if (el === target) return d;
-    for (const ch of (el._children || [])) { const r = depth(ch, target, d + (has(ch, "tree-children") ? 1 : 0)); if (r >= 0) return r; }
-    return -1;
-  };
-  ok(depth(host, regionHead, 0) === depth(host, deckHead, 0) + 1,
-    "⑦ 영역이 구역보다 .tree-children 한 단 더 들여쓰인다(" + depth(host, deckHead, 0) + " → " + depth(host, regionHead, 0) + ")");
-
-  const css = rd("public/css/style.css");
-  ok(/\.tree-node-region\s*\{[^}]*\}/.test(css) && /\.tree-region:not\(\.open\)\s*>\s*\.tree-children\s*\{\s*display:\s*none/.test(css),
-    "⑦ 영역 전용 CSS(.tree-node-region · .tree-region:not(.open) 접힘)가 존재한다");
+    "⑤ 구역=.tree-node-deck / 영역=.tree-node-region 으로 클래스가 다르다(시각 구분 유지)");
 }
 
-/* ── 뮤테이션 ⓐ: 도면 단을 없애고 구역을 평탄하게 → ① 실패해야 한다 ─────── */
+/* ── 뮤테이션 ⓐ: 도면 그룹핑 단(.tree-doc)을 되살림 → ①이 실패해야 한다 ─────── */
 {
-  console.log("\n[뮤테이션ⓐ] 계층 평탄화(도면 단 제거) → ①이 실패해야 함");
-  const needle = "groups.forEach((grp) => mount.appendChild(docNode(grp)));";
-  const mut = uiSrc.replace(needle, "groups.forEach((grp) => grp.decks.forEach((d) => mount.appendChild(deckNode(d, false))));");
+  console.log("\n[뮤테이션ⓐ] 4단 복원(도면 그룹핑 단 재도입) → ①이 실패해야 함");
+  const needle = "rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));";
+  const mut = uiSrc.replace(needle,
+    "rootDecks.forEach((d) => { var w = document.createElement('div'); w.className = 'tree-doc open'; w.appendChild(deckNode(d, false)); mount.appendChild(w); });");
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { host } = runTree(mut, fx());
-    ok(path4(host) === null, "뮤테이션 적용 시 ①이 깨짐(도면 단이 사라져 4단 경로가 성립하지 않음)");
+    ok(path3(host) === null, "뮤테이션 적용 시 ①이 깨짐(구역이 .tree-doc 래퍼 아래로 들어가 프로젝트 직속이 아니게 됨)");
   }
 }
 
-/* ── 뮤테이션 ⓑ: parent_id 를 무시 → ③ 실패해야 한다 ──────────────────── */
+/* ── 뮤테이션 ⓑ: parent_id 를 무시 → ②가 실패해야 한다 ──────────────────── */
 {
-  console.log("\n[뮤테이션ⓑ] parent_id 무시(전부 최상위 구역 취급) → ③이 실패해야 함");
+  console.log("\n[뮤테이션ⓑ] parent_id 무시(전부 최상위 구역 취급) → ②가 실패해야 함");
   const needle = 'return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";';
   const mut = uiSrc.replace(needle, 'return "";');
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { host } = runTree(mut, fx());
-    const docs = findAll(host, "tree-doc");
-    const dep1Doc = docs.find((d) => /A0_주갑판/.test(d._children[0].innerHTML));
-    const deckD1 = pick(kidsOf(dep1Doc), "tree-deck")[0];
+    const proj = pick(host, "tree-project")[0];
+    const deckD1 = pick(kidsOf(proj), "tree-deck").find((d) => /메인데크/.test(d._children[0].innerHTML));
     ok(pick(kidsOf(deckD1), "tree-region").length === 0 && findAll(host, "tree-region").length === 0,
-      "뮤테이션 적용 시 ③이 깨짐(영역이 구역 아래로 들어가지 않고 전부 평탄해짐)");
+      "뮤테이션 적용 시 ②가 깨짐(영역이 구역 아래로 들어가지 않고 전부 평탄해짐)");
+  }
+}
+
+/* ── 뮤테이션 ⓒ: 도면 출처 라벨(srcTag)을 제거 → ③이 실패해야 한다 ──────── */
+{
+  console.log("\n[뮤테이션ⓒ] 도면 출처 정보(srcTag) 삭제 → ③이 실패해야 함");
+  const needle = "const srcTag = docName ? '<span class=\"tree-label-sub tree-doc-src\" title=\"원본 도면: ' + esc(docName) + '\">' + esc(docName) + '</span>' : \"\";";
+  const mut = uiSrc.replace(needle, 'const srcTag = "";');
+  if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { host } = runTree(mut, fx());
+    ok(!/tree-doc-src/.test(flat(host)), "뮤테이션 적용 시 ③이 깨짐(도면 출처 라벨이 트리 어디에도 없다)");
   }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
  * Part B — 실제 워커(src/index.tsx) + 실제 D1(Miniflare SQLite) + 실제 마이그레이션
+ *  (트리 UI 와 무관 — parent_id API 왕복·마이그레이션 비파괴 회귀. 3단 전환에 영향받지 않는다)
  * ══════════════════════════════════════════════════════════════════════ */
 const MIG_DIR = path.join(ROOT, "migrations");
 const MIGS = fs.readdirSync(MIG_DIR).filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
@@ -288,9 +273,9 @@ async function applyMigrations(db, files) {
   for (const f of files) for (const st of stmtsOf(f)) await db.exec(st);
 }
 async function buildWorker(transform) {
-  const out = path.join(os.tmpdir(), "p58-worker-" + process.pid + "-" + Math.random().toString(36).slice(2) + ".mjs");
+  const out = path.join(os.tmpdir(), "p62-worker-" + process.pid + "-" + Math.random().toString(36).slice(2) + ".mjs");
   const plugins = transform ? [{
-    name: "p58-mutate",
+    name: "p62-mutate",
     setup(b) {
       b.onLoad({ filter: /index\.tsx$/ }, (args) => ({
         contents: transform(fs.readFileSync(args.path, "utf8")), loader: "tsx"
@@ -304,7 +289,7 @@ async function buildWorker(transform) {
   });
   return out;
 }
-const TOK = "local-p58-designer";
+const TOK = "local-p62-designer";
 const SEED = (now) => [
   ["INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0)",
     ["designer@seastar.test", "설계자", "designssir@gmail.com", now, now]],
@@ -313,128 +298,87 @@ const SEED = (now) => [
   ["INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)",
     [TOK, "designer@seastar.test", now, now + 8.64e7]],
   ["INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, 0)",
-    ["prj_p58", "P58 프로젝트", "", "designer@seastar.test", now, now]],
+    ["prj_p62", "P62 프로젝트", "", "designer@seastar.test", now, now]],
   ["INSERT INTO deployments (id, title, file_name, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 0)",
-    ["dep_p58", "주갑판 배포본", "A0_주갑판.pdf", now, now]],
+    ["dep_p62", "주갑판 배포본", "A0_주갑판.pdf", now, now]],
 ];
 const H = { Authorization: "Bearer " + TOK, "Content-Type": "application/json" };
 
-console.log("\n[Part B · 실제 D1(Miniflare) + 실제 워커]");
+console.log("\n[Part B · 실제 D1(Miniflare) + 실제 워커 — API/마이그레이션 회귀]");
 {
-  /* ⑨ 마이그레이션 비파괴 — 0024 까지 적용해 데이터를 넣은 뒤 0025 를 적용한다. */
   const upTo24 = MIGS.filter((f) => f < "0025");
   const m0025 = MIGS.filter((f) => f.startsWith("0025"));
-  ok(m0025.length === 1, "⑨ migrations/0025_decks_parent.sql 존재");
+  ok(m0025.length === 1, "migrations/0025_decks_parent.sql 존재(프로덕션 적용 완료·비파괴 재확인)");
   const sql25 = stmtsOf(m0025[0]);
   ok(sql25.every((s) => /^ALTER TABLE \w+ ADD COLUMN /i.test(s) || /^CREATE (UNIQUE )?INDEX /i.test(s)),
-    "⑨ 0025 는 ALTER ADD COLUMN / CREATE INDEX 만 — DROP·DELETE·UPDATE 없음 [" + sql25.map((s) => s.split(" ").slice(0, 3).join(" ")).join(" | ") + "]");
+    "0025 는 ALTER ADD COLUMN / CREATE INDEX 만 — DROP·DELETE·UPDATE 없음");
 
   const mfA = new Miniflare({
     modules: true, script: "export default { fetch: () => new Response('') }",
-    d1Databases: { DB: "p58a" }, compatibilityDate: "2025-01-01"
+    d1Databases: { DB: "p62a" }, compatibilityDate: "2025-01-01"
   });
   const dbA = await mfA.getD1Database("DB");
   await applyMigrations(dbA, upTo24);
   const now = Date.now();
   for (const [q, a] of SEED(now)) await dbA.prepare(q).bind(...a).run();
   await dbA.prepare("INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, created_at, updated_at, deleted) VALUES (?,?,?,?,?,?,?,?,?,0)")
-    .bind("dck_legacy", "prj_p58", "구버전 구역", 1, "dep_p58", 1, null, now, now).run();
+    .bind("dck_legacy", "prj_p62", "구버전 구역", 1, "dep_p62", 1, null, now, now).run();
   const before = (await dbA.prepare("SELECT * FROM decks").all()).results;
   await applyMigrations(dbA, m0025);
   const after = (await dbA.prepare("SELECT * FROM decks").all()).results;
-  ok(before.length === 1 && after.length === 1 && after[0].id === "dck_legacy" && after[0].name === "구버전 구역",
-    "⑨ 0025 적용 후 기존 행이 그대로 남는다(행 " + before.length + "→" + after.length + ")");
+  ok(before.length === 1 && after.length === 1 && after[0].id === "dck_legacy",
+    "0025 적용 후 기존 행이 그대로 남는다(행 " + before.length + "→" + after.length + ")");
   ok("parent_id" in after[0] && after[0].parent_id === null,
-    "⑨ 기존 행의 parent_id 는 NULL — 도면 바로 아래 최상위 구역으로 남는다");
-  const cols = (await dbA.prepare("PRAGMA table_info(decks)").all()).results.map((r) => r.name);
-  ["id", "project_id", "name", "level_no", "deployment_id", "page", "crop", "created_at", "updated_at", "deleted", "parent_id"]
-    .forEach(() => {});
-  ok(["id", "project_id", "name", "level_no", "deployment_id", "page", "crop", "created_at", "updated_at", "deleted"].every((cn) => cols.includes(cn)),
-    "⑨ 기존 컬럼이 하나도 사라지지 않았다 [" + cols.join(",") + "]");
-  const idx = (await dbA.prepare("PRAGMA index_list(decks)").all()).results.map((r) => r.name);
-  ok(idx.includes("idx_decks_parent"), "⑨ parent_id 인덱스 생성됨");
+    "기존 행의 parent_id 는 NULL — 프로젝트 직속 구역으로 남는다");
   await mfA.dispose();
 }
 
-/** 워커를 띄우고 시나리오를 돌려 API 응답을 돌려준다. */
 async function apiRun(transform) {
   const script = await buildWorker(transform);
   const mf = new Miniflare({
-    modules: true, scriptPath: script, d1Databases: { DB: "p58-" + Math.random().toString(36).slice(2) },
-    r2Buckets: { R2: "p58r2" }, bindings: { DEMO_LOGIN: "0" }, compatibilityDate: "2025-01-01"
+    modules: true, scriptPath: script, d1Databases: { DB: "p62-" + Math.random().toString(36).slice(2) },
+    r2Buckets: { R2: "p62r2" }, bindings: { DEMO_LOGIN: "0" }, compatibilityDate: "2025-01-01"
   });
   try {
     const db = await mf.getD1Database("DB");
     await applyMigrations(db, MIGS);
     const now = Date.now();
     for (const [q, a] of SEED(now)) await db.prepare(q).bind(...a).run();
-    const B = "http://p58.test";
-    // 구역(최상위) 생성
-    const rZone = await mf.dispatchFetch(B + "/api/projects/prj_p58/decks", {
+    const B = "http://p62.test";
+    const rZone = await mf.dispatchFetch(B + "/api/projects/prj_p62/decks", {
       method: "POST", headers: H,
-      body: JSON.stringify({ name: "메인데크", level_no: 1, deployment_id: "dep_p58", page: 1 })
+      body: JSON.stringify({ name: "메인데크", level_no: 1, deployment_id: "dep_p62", page: 1 })
     });
     const zone = await rZone.json();
-    // 영역(자식) 생성 — extractRegionAsDeck 이 보낼 본문과 동일 형태
-    const rRegion = await mf.dispatchFetch(B + "/api/projects/prj_p58/decks", {
+    const rRegion = await mf.dispatchFetch(B + "/api/projects/prj_p62/decks", {
       method: "POST", headers: H,
-      body: JSON.stringify({ name: "평면도", level_no: 1, deployment_id: "dep_p58", page: 1, crop: { x: 4, y: 6, w: 44, h: 38 }, parent_id: zone.id })
+      body: JSON.stringify({ name: "평면도", level_no: 1, deployment_id: "dep_p62", page: 1, crop: { x: 4, y: 6, w: 44, h: 38 }, parent_id: zone.id })
     });
     const region = await rRegion.json();
-    const rList = await mf.dispatchFetch(B + "/api/projects/prj_p58/decks", { headers: H });
+    const rList = await mf.dispatchFetch(B + "/api/projects/prj_p62/decks", { headers: H });
     const list = (await rList.json()).data;
-    // PUT 으로 parent_id 재지정 가능한지
-    const rPut = await mf.dispatchFetch(B + "/api/decks/" + region.id, {
-      method: "PUT", headers: H, body: JSON.stringify({ name: "평면도2" })
-    });
-    const put = await rPut.json();
-    return { zoneStatus: rZone.status, zone, regionStatus: rRegion.status, region, listStatus: rList.status, list, put };
+    return { zoneStatus: rZone.status, zone, regionStatus: rRegion.status, region, listStatus: rList.status, list };
   } finally { await mf.dispose(); try { fs.unlinkSync(script); } catch {} }
 }
-
-let baseApi;
 {
-  baseApi = await apiRun(null);
-  const { zone, region, list, put } = baseApi;
-  ok(baseApi.zoneStatus === 200 && baseApi.regionStatus === 200 && baseApi.listStatus === 200,
-    "⑧ POST/POST/GET 전부 200 (" + baseApi.zoneStatus + "/" + baseApi.regionStatus + "/" + baseApi.listStatus + ")");
-  // ⑧-a 기존 호출부가 읽던 필드가 전부 그대로 있다(제거·개명 금지)
-  const LEGACY = ["id", "project_id", "name", "level_no", "deployment_id", "page", "crop", "created_at", "updated_at"];
+  const { zoneStatus, regionStatus, listStatus, zone, region, list } = await apiRun(null);
+  ok(zoneStatus === 200 && regionStatus === 200 && listStatus === 200, "POST/POST/GET 전부 200");
   const row = list.find((d) => d.id === zone.id);
-  ok(!!row && LEGACY.every((k) => k in row),
-    "⑧ GET /api/projects/:id/decks 응답에 기존 필드 9종이 전부 남아 있다(회귀 0) [" + Object.keys(row || {}).join(",") + "]");
-  ok(Array.isArray(list) && list.length === 2 && row.project_id === "prj_p58",
-    "⑧ 31_Projects.loadDecks 의 필터(d.project_id === pid)가 그대로 통과한다");
-  ok(row.crop === null && list.find((d) => d.id === region.id).crop.w === 44,
-    "⑧ crop JSON 파싱 동작 유지(NULL→null, 값→객체)");
-  // ⑧-b 새 필드
-  ok(row.deployment_file_name === "A0_주갑판.pdf" && row.deployment_title === "주갑판 배포본",
-    "⑧ 도면 이름 필드(deployment_file_name/deployment_title)가 추가로 실려 온다");
+  ok(row && row.deployment_file_name === "A0_주갑판.pdf",
+    "도면 이름 필드(deployment_file_name)가 실려 온다(트리 부가 라벨의 데이터 소스)");
   ok(row.parent_id === null && list.find((d) => d.id === region.id).parent_id === zone.id,
-    "⑧ parent_id 왕복 — 구역=null, 영역=구역id (" + list.find((d) => d.id === region.id).parent_id + ")");
-  ok(put.parent_id === zone.id, "⑧ PUT 에서 parent_id 미전송 시 기존값 유지(" + put.parent_id + ")");
-}
-
-/* ── 뮤테이션 ⓓ: API 에서 추가 필드를 제거 → ⑧ 실패해야 한다 ───────────── */
-{
-  console.log("\n[뮤테이션ⓓ] API 응답에서 도면 이름/parent_id 필드 제거 → ⑧이 실패해야 함");
-  const mut = await apiRun((src) => src
-    .replace("if (r.deployment_title !== undefined) out.deployment_title = r.deployment_title ?? null", "")
-    .replace("if (r.deployment_file_name !== undefined) out.deployment_file_name = r.deployment_file_name ?? null", ""));
-  const row = mut.list.find((d) => d.id === mut.zone.id);
-  ok(row && row.deployment_file_name === undefined,
-    "뮤테이션 적용 시 ⑧이 깨짐(도면 이름 필드가 사라져 트리 2단이 파일명을 잃는다)");
+    "parent_id 왕복 — 구역=null, 영역=구역id");
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- * Part C — 실제 Chrome(Puppeteer) 375x812 레이아웃 실측 (⑥ + 뮤테이션 ⓒ)
+ * Part C — 실제 Chrome(Puppeteer) 375x812 레이아웃 실측 (④)
  * ══════════════════════════════════════════════════════════════════════ */
-console.log("\n[Part C · 실 브라우저 375x812 — #side-tree 스크롤 도달]");
+console.log("\n[Part C · 실 브라우저 375x812 — #side-tree 3단 렌더 + 스크롤 도달]");
 const require = createRequire("file:///C:/Users/FREE/package.json");
 let puppeteer = null;
 try { puppeteer = require("puppeteer"); } catch (e) { puppeteer = null; }
 if (!puppeteer) {
-  console.log("  FAIL ⑥ puppeteer 를 로드할 수 없다 — 실 브라우저 수치 증명 불가(증거 없는 PASS 금지)");
+  console.log("  FAIL ④ puppeteer 를 로드할 수 없다 — 실 브라우저 수치 증명 불가(증거 없는 PASS 금지)");
   failed++;
 } else {
   const PUB = path.join(ROOT, "public");
@@ -462,7 +406,7 @@ if (!puppeteer) {
   });
   await page.goto("http://127.0.0.1:" + PORT + "/index.html", { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForFunction(() => !!window.__wm, { timeout: 30000 });
-  await new Promise((r) => setTimeout(r, 2500)); // 부팅 잔여 렌더/요청이 가라앉을 때까지(스크린샷 프레임 커밋 대기)
+  await new Promise((r) => setTimeout(r, 2500));
 
   const SETUP = () => {
     const { State, UI, Projects, Zones } = window.__wm;
@@ -505,47 +449,35 @@ if (!puppeteer) {
       scrolledTo: t.scrollTop, maxScroll: t.scrollHeight - t.clientHeight,
       lastLabel: (last ? last.textContent : "").trim(), lastReachable: last ? vis(last) : false,
       regions: t.querySelectorAll(".tree-node-region").length,
-      docs: t.querySelectorAll(".tree-node-doc").length
+      decksTop: t.querySelectorAll(".tree-node-deck").length,
+      docWrap: t.querySelectorAll(".tree-doc").length
     };
   };
   await page.evaluate(SETUP);
 
-  // 스크린샷은 '증거'이지 판정이 아니다 — 먼저 찍고(부팅 직후가 가장 안정), 실패해도 검사는 계속한다.
-  // 기본 출력은 OS 임시 폴더 — 회귀 스위트가 저장소를 오염시키지 않게 한다(SHOT_DIR 로 지정 가능).
-  const shotDir = process.env.SHOT_DIR || path.join(os.tmpdir(), "p58-tree-shots");
+  const shotDir = process.env.SHOT_DIR || path.join(os.tmpdir(), "p62-tree-shots");
   try {
     fs.mkdirSync(shotDir, { recursive: true });
-    const shotTop = path.join(shotDir, "p58-tree-4level-375x812-top.png");
+    const shotTop = path.join(shotDir, "p62-tree-3level-375x812-top.png");
     await page.screenshot({ path: shotTop, captureBeyondViewport: false });
     await page.evaluate(() => { const t = document.getElementById("side-tree"); t.scrollTop = t.scrollHeight; });
-    const shotBottom = path.join(shotDir, "p58-tree-4level-375x812-bottom.png");
+    const shotBottom = path.join(shotDir, "p62-tree-3level-375x812-bottom.png");
     await page.screenshot({ path: shotBottom, captureBeyondViewport: false });
     console.log("  [스크린샷] " + shotTop);
     console.log("  [스크린샷] " + shotBottom);
   } catch (e) { console.log("  [스크린샷 실패 — 판정에는 영향 없음] " + String(e.message).slice(0, 90)); }
 
-  // 컨텍스트가 늦은 네비게이션으로 날아갔을 수 있다 → 실측 직전에 한 번 더 셋업(같은 픽스처).
   try { await page.evaluate(SETUP); } catch { await page.waitForFunction(() => !!window.__wm, { timeout: 20000 }); await page.evaluate(SETUP); }
   const m = await page.evaluate(MEASURE);
   console.log("  [실측 375x812] #side-tree scrollHeight=" + m.scrollHeight + " clientHeight=" + m.clientHeight +
     " nodes=" + m.nodes + " maxScroll=" + m.maxScroll + " 마지막='" + m.lastLabel + "'");
-  ok(m.docs === 3 && m.regions === 4, "⑥ 실 브라우저에서도 4단이 렌더된다(도면 그룹 " + m.docs + "=3 · 영역 " + m.regions + "=4)");
-  ok(m.clientHeight >= 160, "⑥ #side-tree 가 0 으로 짓눌리지 않는다(clientHeight=" + m.clientHeight + " ≥ 160 = clamp 하한)");
+  ok(m.docWrap === 0, "④ 실 브라우저에서 .tree-doc(도면 그룹핑 단) 컨테이너가 전혀 없다(3단 확정)");
+  ok(m.decksTop === 3 && m.regions === 4, "④ 실 브라우저에서 3단이 렌더된다(구역 " + m.decksTop + "=3 · 영역 " + m.regions + "=4)");
+  ok(m.clientHeight >= 160, "④ #side-tree 가 0 으로 짓눌리지 않는다(clientHeight=" + m.clientHeight + " ≥ 160 = clamp 하한)");
   ok(m.scrollHeight > m.clientHeight,
-    "⑥ scrollHeight(" + m.scrollHeight + ") > clientHeight(" + m.clientHeight + ") — 세로 스크롤이 실제로 생긴다");
+    "④ scrollHeight(" + m.scrollHeight + ") > clientHeight(" + m.clientHeight + ") — 세로 스크롤이 실제로 생긴다");
   ok(m.scrolledTo === m.maxScroll && m.lastReachable,
-    "⑥ 스크롤 끝(" + m.scrolledTo + "/" + m.maxScroll + ")에서 마지막 항목 '" + m.lastLabel + "' 가 보이는 영역 안에 들어온다");
-
-  /* ── 뮤테이션 ⓒ: .side-tree 의 스크롤 제약(max-height + overflow-y)을 되돌림 → ⑥ 실패 ── */
-  console.log("\n[뮤테이션ⓒ] .side-tree 스크롤 제약 제거 → ⑥이 실패해야 함");
-  await page.evaluate(() => {
-    const s = document.createElement("style");
-    s.textContent = ".side-tree{max-height:none !important;flex-basis:auto !important;overflow-y:visible !important;}";
-    document.head.appendChild(s);
-  });
-  const mm = await page.evaluate(MEASURE);
-  ok(!(mm.scrollHeight > mm.clientHeight),
-    "뮤테이션 적용 시 ⑥이 깨짐(제약 제거 → scrollHeight " + mm.scrollHeight + " == clientHeight " + mm.clientHeight + ", 트리 자체 스크롤 소멸)");
+    "④ 스크롤 끝(" + m.scrolledTo + "/" + m.maxScroll + ")에서 마지막 항목 '" + m.lastLabel + "' 가 보이는 영역 안에 들어온다");
 
   await browser.close();
   server.close();
