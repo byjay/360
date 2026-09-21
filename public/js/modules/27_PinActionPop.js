@@ -197,7 +197,28 @@
       $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
       const mediaTxt = hasContent ? "360° 미디어 있음" : "미디어 없음";
       const addrTxt = (pin.label && pin.label.trim()) ? pin.label : "위치명 없음";
-      $("pap-meta").textContent = addrTxt + " · " + mediaTxt + " · " + page + "페이지";
+      // 🔴 [2026-09-21 WO] 도면 마커 위성 배지 3종(이슈·중복·작성자) 제거 — 여기(단일 편집창)로 이관.
+      //   정본은 그대로 재사용(Notes.openCountFor / PinSeries.duplicateCheckboardIds / PinSeries.userMark) —
+      //   숫자를 여기서 다시 세지 않는다(§10 SoT).
+      const esc = (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml : (s) => String(s);
+      let metaHtml = esc(addrTxt) + " · " + mediaTxt + " · " + page + "페이지";
+      const openIssues = (typeof Notes !== "undefined" && Notes.openCountFor) ? Notes.openCountFor(pin.id) : 0;
+      if (openIssues > 0) {
+        metaHtml += ` <span class="pin-issue-badge" title="미해결 이슈 ${openIssues}건">${openIssues}</span>`;
+      }
+      const isDup = (typeof PinSeries !== "undefined" && PinSeries.duplicateCheckboardIds)
+        ? PinSeries.duplicateCheckboardIds(State.pins, page).has(pin.id) : false;
+      if (isDup) {
+        metaHtml += ' <span class="pin-dup-badge" title="번호 중복 — 현장 확인 후 직접 수정하세요">중복</span>';
+      }
+      const userMark = (typeof PinSeries !== "undefined" && PinSeries.userMark) ? PinSeries.userMark(pin, no) : null;
+      if (userMark) {
+        const bandTxt = userMark.band != null
+          ? ("번호 대역 " + (userMark.band * 100 + 1) + "~" + (userMark.band * 100 + 100))
+          : ("작성자: " + esc(userMark.author || ""));
+        metaHtml += ` <span style="color:${userMark.color};font-weight:700">● ${esc(bandTxt)}</span>`;
+      }
+      $("pap-meta").innerHTML = metaHtml;
       // 360° 보기 버튼은 미디어 있을 때 강조
       const viewBtn = $("pap-view");
       if (viewBtn) viewBtn.classList.toggle("dim", !hasContent);

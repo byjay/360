@@ -4503,8 +4503,6 @@
       // 🔴 번호/부류/색상 정본 = PinSeries (01b_PinSeries.js). 여기서 따로 세지 않는다.
       //    미니맵(07_Radar)도 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
       const numMap = PinSeries.numbers(State.pins, curPage);
-      // 🔴 [2026-09-17] 번호 중복 탐지(표시만·자동 재채번 금지 — 마스터 명시). 정본 = PinSeries.
-      const dupIds = PinSeries.duplicateCheckboardIds(State.pins, curPage);
       PinSeries.renderChips();
       let svgIdx = 0; // SVG gradient id 유일화용(필터로 건너뛰어도 충돌 없게 별도 카운터)
       State.pins.forEach((pin) => {
@@ -4532,22 +4530,10 @@
         //    → filled 축을 따로 받아 등록/미등록을 색·링 패턴으로 구분한다.
         const _st = PinSeries.markerStyle(pin);
         const hasContent = _st.filled;
-        const openIssues = (typeof Notes !== "undefined") ? Notes.openCountFor(pin.id) : 0;
-        const issueDot = openIssues > 0
-          ? `<span class="pin-marker-issue" title="미해결 이슈 ${openIssues}건">${openIssues}</span>` : "";
-        // 🔴 [2026-09-17] 번호 중복 경고(표시만·자동 재채번 금지 — 마스터 명시)
-        const dupDot = dupIds.has(pin.id)
-          ? `<span class="pin-marker-dup" title="번호 중복 — 현장 확인 후 직접 수정하세요">!</span>` : "";
-        // [WO 20260917 멀티유저 ①+②·재설계] 사용자 구분 배지 — 4번째 축. 체크보드는 번호 대역
-        //   (100번대/200번대…)에서, 그 외 계열은 작성자 이메일 해시에서 색을 파생(PinSeries.userMark
-        //   정본, SoT). hasContent/filled 와 무관하게 항상 그려져 속 빈 원(미등록)에서도 보인다.
-        //   기존 이슈(top-right)·중복(top-left) 뱃지와 자리 겹치지 않게 bottom-right.
-        const userMark = (typeof PinSeries !== "undefined" && PinSeries.userMark) ? PinSeries.userMark(pin, meta.no) : null;
-        const authorDot = userMark
-          // [WO 20260917 dpr] bottom:-4px/right:-5px 는 21px 폭 핀의 바늘 끝(실좌표)을 가린다(마스터 실측).
-          // → bottom:10px 로 올려 바늘 옆구리에 붙이고 끝점은 비운다. 크기도 축소해 issueDot/dupDot과 비겹침.
-          ? `<span class="pin-marker-author" title="${userMark.band != null ? ('번호 대역 ' + (userMark.band * 100 + 1) + '~' + (userMark.band * 100 + 100)) : ('작성자: ' + this.escapeHtml(userMark.author || ''))}" style="position:absolute;bottom:10px;right:-6px;z-index:4;min-width:10px;height:10px;padding:0 2px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:${userMark.color};color:#fff;font-size:7px;font-weight:800;font-family:var(--font-mono);line-height:1;border:1.2px solid #efe9dc;box-shadow:0 1px 4px rgba(0,0,0,.5)">${userMark.initial || ""}</span>`
-          : "";
+        // 🔴 [2026-09-21 WO] 위성 배지 3종(이슈·중복·작성자) 제거 — 마스터 지시("거추장스런 거 지워").
+        //   이슈/중복 정보는 버리지 않는다: PinActionPop(27_PinActionPop.js open())과
+        //   #pin-list(renderPinList, 위 pin-issue-badge/pin-dup-badge)에서 계속 보인다.
+        //   작성자 대역 정보도 PinActionPop meta 줄로 이관(PinSeries.userMark 그대로 재사용).
         if (hasContent) marker.classList.add("has-content");
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
@@ -4579,9 +4565,16 @@
         // [WO 20260917 형태단서 재설계] 21px 실크기에서 작은 점(지름 2.2px)은 안 보인다(마스터 실측).
         // → 속 원판(inner disc)의 실루엣 자체를 티어별로 바꾼다: photo/empty=원, content=둥근사각형.
         // 흑백(색 제거)에서도 면적 차이로 구분되도록 인라인 fill 유지(CSS 소비자에 의존 금지).
+        // [WO 2026-09-21] 마스터 직접 제안("동그라미를 겹친다든가") — photo(사진/영상)만
+        // 원 2개를 겹쳐 그린다. empty 는 원 1개만 유지해 photo/empty 가 더는 "완전히 같은 원"이
+        // 아니게 된다(이전엔 둘 다 단일 원이라 filled/hollow 머리색만으로 구분해야 했다).
+        // 🔴 p9 discTag 판정은 class="pin-tier-disc" 가 붙은 첫 번째 요소의 태그만 본다(circle
+        // 그대로) → 회귀 없음. 겹치는 두 번째 원은 표식용(클래스 없음)이라 판정에 관여하지 않는다.
         const tierDisc = (tier === "content")
           ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`
-          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;
+          : (tier === "photo")
+            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`
+            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;
         marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
@@ -4616,7 +4609,6 @@
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
-            ${issueDot}${dupDot}${authorDot}
           </div>`;
           /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
              수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */
@@ -13956,7 +13948,28 @@
       $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
       const mediaTxt = hasContent ? "360° 미디어 있음" : "미디어 없음";
       const addrTxt = (pin.label && pin.label.trim()) ? pin.label : "위치명 없음";
-      $("pap-meta").textContent = addrTxt + " · " + mediaTxt + " · " + page + "페이지";
+      // 🔴 [2026-09-21 WO] 도면 마커 위성 배지 3종(이슈·중복·작성자) 제거 — 여기(단일 편집창)로 이관.
+      //   정본은 그대로 재사용(Notes.openCountFor / PinSeries.duplicateCheckboardIds / PinSeries.userMark) —
+      //   숫자를 여기서 다시 세지 않는다(§10 SoT).
+      const esc = (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml : (s) => String(s);
+      let metaHtml = esc(addrTxt) + " · " + mediaTxt + " · " + page + "페이지";
+      const openIssues = (typeof Notes !== "undefined" && Notes.openCountFor) ? Notes.openCountFor(pin.id) : 0;
+      if (openIssues > 0) {
+        metaHtml += ` <span class="pin-issue-badge" title="미해결 이슈 ${openIssues}건">${openIssues}</span>`;
+      }
+      const isDup = (typeof PinSeries !== "undefined" && PinSeries.duplicateCheckboardIds)
+        ? PinSeries.duplicateCheckboardIds(State.pins, page).has(pin.id) : false;
+      if (isDup) {
+        metaHtml += ' <span class="pin-dup-badge" title="번호 중복 — 현장 확인 후 직접 수정하세요">중복</span>';
+      }
+      const userMark = (typeof PinSeries !== "undefined" && PinSeries.userMark) ? PinSeries.userMark(pin, no) : null;
+      if (userMark) {
+        const bandTxt = userMark.band != null
+          ? ("번호 대역 " + (userMark.band * 100 + 1) + "~" + (userMark.band * 100 + 100))
+          : ("작성자: " + esc(userMark.author || ""));
+        metaHtml += ` <span style="color:${userMark.color};font-weight:700">● ${esc(bandTxt)}</span>`;
+      }
+      $("pap-meta").innerHTML = metaHtml;
       // 360° 보기 버튼은 미디어 있을 때 강조
       const viewBtn = $("pap-view");
       if (viewBtn) viewBtn.classList.toggle("dim", !hasContent);

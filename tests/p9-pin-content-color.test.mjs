@@ -554,7 +554,10 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션H] content 를 원판(circle)으로 되돌림 → ⑬⑭ 가 실패해야 함");
-  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
+  // [2026-09-21 갱신] tierDisc 가 3분기(content/photo/empty)로 재설계됨(photo=겹친 원 2개,
+  // WO "동그라미를 겹친다" 반영) — needle 을 현재 소스와 일치시킨다(문자열이 안 맞으면
+  // 아래 replace 가 무효화되어 뮤테이션 자체가 시행되지 않는 거짓-패스가 된다).
+  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : (tier === "photo")\n            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`\n            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
   const mutated = uiSrc.replace(needle, 'const tierDisc = `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
@@ -573,9 +576,9 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션I] 형태 차이 제거·색만 다르게(content=circle+노란색) → ⑭ 가 실패해야 함");
-  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
+  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : (tier === "photo")\n            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`\n            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
   const mutated = uiSrc.replace(needle,
-    'const tierDisc = (tier === "content")\n          ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffcc00" opacity="0.99"/>`\n          : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
+    'const tierDisc = (tier === "content")\n          ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffcc00" opacity="0.99"/>`\n          : (tier === "photo")\n            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`\n            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ui = runUI(seriesSrc, mutated, FIXTURE_TIER()).pins;
