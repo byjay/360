@@ -390,20 +390,15 @@
        숨김 = 표시만 감춘다. 저장 데이터·번호 계열은 필터와 무관하게 불변. */
     _filter: null,
 
-    /** 현재 필터 상태 { content, empty, checkboard } — 세션 유지 + localStorage 복원 */
+    /** 현재 필터 상태 { content, empty, checkboard } — 이 탭의 열람 세션 동안만 유지.
+     *  🔴 [WO 20260921 근본수정] 예전엔 localStorage(wm-pin-filter, 전역 키)에 영구 저장했다 —
+     *  프로젝트/배포본 구분이 없는 전역 키라, 한 프로젝트에서 "체크보드" 계열을 껐다 나가면
+     *  그 값이 브라우저에 남아 완전히 다른(새) 프로젝트를 열 때도 조용히 적용되어, 그 프로젝트의
+     *  핀이 전부(또는 한 계열이 전부) 안 보이는 유령 결함이 됐다(마스터 신고: "체크보드 모드일 때
+     *  핀이 안 생긴다"). 새로 열 때마다 항상 전체 표시로 시작하는 게 안전하므로 영구저장을 끊는다
+     *  (이 값은 이제 페이지 스크립트가 살아있는 동안의 메모리 상태일 뿐 — 새로고침/새 프로젝트=항상 전체표시). */
     filter() {
-      if (!this._filter) {
-        this._filter = { content: true, empty: true, checkboard: true };
-        try {
-          const raw = localStorage.getItem(this.FILTER_KEY);
-          if (raw) {
-            const v = JSON.parse(raw);
-            this.KINDS.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; });
-          }
-        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
-        // 전부 꺼진 상태는 "핀이 하나도 없다"는 거짓말이 된다 → 전체 표시로 복구
-        if (!this.KINDS.some(k => this._filter[k])) this._filter = { content: true, empty: true, checkboard: true };
-      }
+      if (!this._filter) this._filter = { content: true, empty: true, checkboard: true };
       return this._filter;
     },
 
@@ -415,15 +410,11 @@
     ICON_FILTER_KEY: "wm-pin-icon-filter",
     _iconFilter: null,
 
-    /** 아이콘별 표시 상태 맵 { iconId: boolean }. 키가 없으면 표시(기본 전체 표시). */
+    /** 아이콘별 표시 상태 맵 { iconId: boolean }. 키가 없으면 표시(기본 전체 표시).
+     *  🔴 [WO 20260921] 계열 필터(filter())와 같은 이유로 localStorage 영구저장 제거 —
+     *  전역 키가 프로젝트를 가리지 않고 새 프로젝트에도 조용히 적용되는 결함을 막는다. */
     iconFilter() {
-      if (!this._iconFilter) {
-        this._iconFilter = {};
-        try {
-          const raw = localStorage.getItem(this.ICON_FILTER_KEY);
-          if (raw) { const v = JSON.parse(raw); if (v && typeof v === "object") this._iconFilter = v; }
-        } catch (e) { /* 사생활 모드/파손값 → 기본값(전체 표시) 유지 */ }
-      }
+      if (!this._iconFilter) this._iconFilter = {};
       return this._iconFilter;
     },
 
@@ -460,9 +451,8 @@
 
     showAllIcons() { this._iconFilter = {}; this._persistIcon(); },
 
-    _persistIcon() {
-      try { localStorage.setItem(this.ICON_FILTER_KEY, JSON.stringify(this.iconFilter())); } catch (e) {}
-    },
+    /** [WO 20260921] 더 이상 저장하지 않는다(위 iconFilter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
+    _persistIcon() {},
 
     /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND) */
     isVisible(pin) { return !!this.filter()[this.kindOf(pin)] && this.isIconVisible(pin); },
@@ -482,9 +472,8 @@
 
     showAll() { const f = this.filter(); this.KINDS.forEach(k => f[k] = true); this._persist(); },
 
-    _persist() {
-      try { localStorage.setItem(this.FILTER_KEY, JSON.stringify(this.filter())); } catch (e) {}
-    },
+    /** [WO 20260921] 더 이상 저장하지 않는다(위 filter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
+    _persist() {},
 
     /* ── [WO 20260917 멀티유저 ②·재설계] 사용자 구분 배지 — 4번째 축, 기존 3축(계열/등록여부/종류)과 별개.
        기존 3축은 핀 몸통 색·외곽 링 dasharray·머리 안 아이콘을 쓰므로, 사용자 구분은 겹치지 않게
@@ -4392,13 +4381,23 @@
       this.renderTree();
     },
 
-    /* [사이드바 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리.
-       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임.
-       [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 제거:
-         · 구역: 항상 전체 표시(과거에도 이미 그랬음 — decks.forEach 는 필터 없음, 유지).
-         · 영역/핀: 과거엔 State.pdfPage 와 일치하는 것만 표시했다 → 다른 페이지 항목이 안 보였다.
-           이제 로드된 구역(=State.currentDeploymentId 와 일치)의 전체 페이지 영역/핀을 항상 표시하고,
-           현재 페이지 항목만 .active 로 "구분"한다(숨기지 않는다).
+    /* [사이드바 재구성] 🔴 마스터 확정 계층(2026-09-21):
+         프로젝트 > 도면(deployment) > 구역(parent_id IS NULL 인 deck) > 영역(parent_id = 구역 id 인 deck) > 핀
+       데이터(Projects.currentProject / Projects.decks / State.zones / State.pins)를 읽어 렌더,
+       이벤트는 기존 함수(Projects.selectDeck / Zones.focus / App.focusPin)에 그대로 위임한다.
+
+       [WO 20260921-tree] 도면 단 신설 · decks.parent_id 도입:
+         · 과거 트리는 구역 > 도면 > 영역 > 핀 이라 2·3단이 마스터 요구와 뒤바뀌어 있었다.
+         · 이제 deployment_id 로 먼저 묶어 '도면'을 한 단으로 세우고, 그 아래에 구역을 건다.
+         · 도면 이름 정본 = API 가 JOIN 해 준 deployment_file_name/deployment_title.
+           없으면 현재 로드된 도면의 State.fileName, 그래도 없으면 일반 표기("등록 도면").
+           🔴 없는 이름을 지어내지 않는다.
+         · parent_id 가 NULL 인 deck = 도면 바로 아래 구역(마이그레이션 0025 이전 기존 행 전부).
+           parent_id 가 가리키는 부모가 목록에 없으면(삭제됨) 최상위로 승격 — 숨기지 않는다.
+
+       [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 없음:
+         · 구역/영역: 항상 전체 표시(필터 없음).
+         · 영역JSON(State.zones)/핀: 전체 페이지를 항상 표시하고, 현재 페이지 항목만 .active 로 "구분"한다.
          · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
            개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
     renderTree() {
@@ -4407,8 +4406,10 @@
       const esc = (s) => this.escapeHtml(s);
       const C = '<svg class="tree-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
       const ICO = {
+        project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
         deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
         doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+        region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
         pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
@@ -4429,40 +4430,80 @@
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
-      decks.forEach((deck) => {
-        const isCur = typeof Projects !== "undefined" && Projects.currentDeck && Projects.currentDeck.id === deck.id;
-        // [WO 20260917-pin] 이 구역의 도면이 '실제로 로드된 도면'인지(=State 에 zone/pin 데이터가 실존)
-        //   isCur(선택됨)와는 별개 — 선택 직후 비동기 로딩 중엔 isLoaded 가 false 인 게 정상(가짜 데이터 금지).
-        const isLoaded = !!(deck.deployment_id && deck.deployment_id === State.currentDeploymentId);
+
+      /* ── 계층 인덱스 ─────────────────────────────────────────────── */
+      const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
+      const byId = new Map();
+      decks.forEach((d) => byId.set(String(d.id), d));
+      // 부모가 실존할 때만 자식으로 접는다 — 부모가 삭제됐거나 자기참조면 최상위로 승격(숨김 금지).
+      const parentKey = (d) => {
+        const pid = d.parent_id != null ? String(d.parent_id) : "";
+        return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
+      };
+      const childrenOf = new Map();
+      decks.forEach((d) => {
+        const pid = parentKey(d);
+        if (!pid) return;
+        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+        childrenOf.get(pid).push(d);
+      });
+
+      /* ── 도면(deployment) 단위 그룹 — 영역(자식 deck)은 부모 구역을 따라가므로 최상위만 묶는다 ── */
+      const groups = [];
+      const gmap = new Map();
+      decks.forEach((d) => {
+        if (parentKey(d)) return;
+        const key = d.deployment_id ? String(d.deployment_id) : "__nodoc__";
+        let g = gmap.get(key);
+        if (!g) { g = { key, depId: d.deployment_id || null, decks: [] }; gmap.set(key, g); groups.push(g); }
+        g.decks.push(d);
+      });
+      const docLabel = (depId) => {
+        if (!depId) return "도면 미등록";
+        const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
+        if (hit) return hit.deployment_file_name || hit.deployment_title;
+        if (String(depId) === String(State.currentDeploymentId || "") && State.fileName) return State.fileName;
+        return "등록 도면";
+      };
+
+      /* 같은 도면을 여러 deck(구역/영역)이 가리키므로 State(영역JSON·핀)를 붙일 deck 을 하나로 정한다.
+         선택된 deck 이 그 도면 안에 있으면 그 deck 에만, 없으면 종전대로 로드된 deck 에 붙인다. */
+      const hasState = (deck) => {
+        if (!deck.deployment_id || String(deck.deployment_id) !== String(State.currentDeploymentId || "")) return false;
+        if (curDeck && String(curDeck.deployment_id || "") === String(deck.deployment_id)) return String(curDeck.id) === String(deck.id);
+        return true;
+      };
+
+      /* ── 구역/영역 노드(같은 생성기 — 깊이만 다르다) ───────────────── */
+      const deckNode = (deck, isRegion) => {
+        const isCur = !!(curDeck && String(curDeck.id) === String(deck.id));
+        const loaded = hasState(deck);
+        const subDecks = childrenOf.get(String(deck.id)) || [];
         const g = document.createElement("div");
-        g.className = "tree-deck" + (isLoaded ? " open" : ""); // [항목2] 기본 펼침(로드된 구역)
+        g.className = (isRegion ? "tree-region" : "tree-deck") + ((loaded || subDecks.length) ? " open" : "");
         const head = document.createElement("button");
-        head.className = "tree-node tree-node-deck" + (isCur ? " active" : "");
+        head.className = "tree-node " + (isRegion ? "tree-node-region" : "tree-node-deck") + (isCur ? " active" : "");
         // [B4] '도면없음'(구역에 도면 미등록) 과 '미저장'(로컬에만 있고 서버 미반영)을 구분 표시
         const _unsaved = (typeof App !== "undefined" && App.isDeckUnsaved) ? App.isDeckUnsaved(deck.id) : false;
         const _tag = _unsaved
           ? '<span class="tree-tag tree-tag-unsaved" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>'
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
-        // [항목4] 구역별 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
-        const zoneCntTag = isLoaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
-        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag + zoneCntTag;
-        head.addEventListener("click", () => {
+        // [항목4] 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
+        const zoneCntTag = loaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + esc(deck.name || (isRegion ? "영역" : "구역")) + '</span>' + _tag + zoneCntTag;
+        head.addEventListener("click", (e) => {
+          if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { g.classList.toggle("open"); return; }
           if (isCur) { g.classList.toggle("open"); }
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
-        // [WO 20260917-pin] 로드된 구역이면 전체 페이지의 영역/핀을 항상 표시(과거: 현재 페이지만).
-        //   State(도면/영역/핀)는 전역이라 다른 구역엔 데이터가 없으므로 isLoaded 구역에서만 하위 렌더.
-        if (isLoaded) {
-          const kids = document.createElement("div");
-          kids.className = "tree-children";
-          const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
-          if (fname) {
-            const dn = document.createElement("div");
-            dn.className = "tree-node tree-node-doc";
-            dn.innerHTML = ICO.doc + '<span class="tree-label">' + esc(fname) + '</span>';
-            kids.appendChild(dn);
-          }
+
+        const kids = document.createElement("div");
+        kids.className = "tree-children";
+        let any = false;
+        // 4단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck)
+        subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); any = true; });
+        if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
           const pins = State.pins || [];   // 전체 페이지(필터 없음)
           const used = new Set();
@@ -4490,10 +4531,47 @@
             kids.appendChild(zn);
           });
           pins.filter((p) => !used.has(p.id)).forEach((p) => kids.appendChild(pinNode(p)));
-          g.appendChild(kids);
+          any = true;
         }
-        host.appendChild(g);
-      });
+        if (any) g.appendChild(kids);
+        return g;
+      };
+
+      /* ── 2단: 도면 ──────────────────────────────────────────────── */
+      const docNode = (grp) => {
+        const wrap = document.createElement("div");
+        wrap.className = "tree-doc open"; // 기본 펼침 — 4단이 한눈에 보여야 한다
+        const head = document.createElement("button");
+        const isCurDoc = !!(grp.depId && String(grp.depId) === String(State.currentDeploymentId || ""));
+        head.className = "tree-node tree-node-doc" + (isCurDoc ? " active" : "");
+        head.innerHTML = C + ICO.doc + '<span class="tree-label">' + esc(docLabel(grp.depId)) + '</span><span class="tree-cnt" title="구역 수">' + grp.decks.length + '</span>';
+        head.addEventListener("click", () => { wrap.classList.toggle("open"); });
+        wrap.appendChild(head);
+        const kids = document.createElement("div");
+        kids.className = "tree-children";
+        grp.decks.forEach((d) => kids.appendChild(deckNode(d, false)));
+        wrap.appendChild(kids);
+        return wrap;
+      };
+
+      /* ── 1단: 프로젝트 ──────────────────────────────────────────── */
+      let mount = host;
+      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
+      if (proj) {
+        const pw = document.createElement("div");
+        pw.className = "tree-project open";
+        const ph = document.createElement("button");
+        ph.className = "tree-node tree-node-project";
+        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span><span class="tree-cnt" title="도면 수">' + groups.length + '</span>';
+        ph.addEventListener("click", () => { pw.classList.toggle("open"); });
+        pw.appendChild(ph);
+        const pk = document.createElement("div");
+        pk.className = "tree-children";
+        pw.appendChild(pk);
+        host.appendChild(pw);
+        mount = pk;
+      }
+      groups.forEach((grp) => mount.appendChild(docNode(grp)));
     },
 
     renderPinsOnMap(dropPinId) {
@@ -5309,6 +5387,8 @@
         const deckTxt = (p.deck_count != null) ? (p.deck_count + " DECKS") : "";
         const dateTxt = this._fmtDate(p.created_at);
         const code = "SS-" + String(Math.abs(this._hash(p.id || p.name)) % 9000 + 1000);
+        // [WO 20260921 deploy-url] 배포된 프로젝트만 주소 노출 — SoT: p.published(배지와 동일 소스)
+        const deployUrl = p.published ? this._deployUrl(p) : "";
         const lockOverlay = isLocked
           ? '<div class="hub-card-lock" aria-hidden="true">' +
               '<svg class="hub-lock-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
@@ -5332,6 +5412,17 @@
               (dateTxt ? '<span class="hub-card-date">' + dateTxt + '</span>' : '') +
               (isPending ? '<span class="hub-card-req-badge">⏳ 신청 접수됨</span>' : '') +
             '</div>' +
+            (deployUrl
+              ? '<div class="hub-card-url">' +
+                  '<span class="hub-card-url-text" title="' + UI.escapeHtml(deployUrl) + '" data-act="url-toggle">' + UI.escapeHtml(deployUrl) + '</span>' +
+                  '<button class="hub-card-url-copy" type="button" title="주소 복사" aria-label="주소 복사" data-act="url-copy">' +
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+                  '</button>' +
+                  '<button class="hub-card-url-share" type="button" title="주소 공유" aria-label="주소 공유" data-act="url-share">' +
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>' +
+                  '</button>' +
+                '</div>'
+              : '') +
           '</div>' +
           (isDesigner && !isLocked
             ? '<div class="hub-card-actions">' +
@@ -5385,6 +5476,14 @@
         // [P3] 멤버 관리 버튼 — 이 프로젝트에 접근할 사용자 배정
         const mem = card.querySelector('[data-act="members"]');
         if (mem) mem.addEventListener("click", (e) => { e.stopPropagation(); this.openMembers(p); });
+
+        // [WO 20260921 deploy-url] 배포 주소 — 복사/공유/탭하면 펼침
+        const urlCopy = card.querySelector('[data-act="url-copy"]');
+        if (urlCopy) urlCopy.addEventListener("click", (e) => { e.stopPropagation(); this._copyDeployUrl(deployUrl); });
+        const urlShare = card.querySelector('[data-act="url-share"]');
+        if (urlShare) urlShare.addEventListener("click", (e) => { e.stopPropagation(); this._shareDeployUrl(deployUrl, p.name); });
+        const urlText = card.querySelector('[data-act="url-toggle"]');
+        if (urlText) urlText.addEventListener("click", (e) => { e.stopPropagation(); urlText.classList.toggle("is-expanded"); });
 
         grid.appendChild(card);
       });
@@ -5534,6 +5633,52 @@
       } catch (e) {
         Prompt && Prompt.toast && Prompt.toast("배포 처리 실패: " + (e && e.message ? e.message : "네트워크 오류"), 3200);
       } finally { if (btn) { btn.disabled = false; btn.classList.remove("busy"); } }
+    },
+
+    /** [WO 20260921 deploy-url] 배포된 프로젝트의 뷰어 주소 — SoT: p.subdomain(실 DB 값) +
+     *  현재 접속 호스트에서만 파생한다(도메인·ID 하드코딩 금지, src/index.tsx baseDomainOf 와 동일 규칙).
+     *  서브도메인이 없으면 고유 딥링크가 없으므로(멀티테넌트 서브도메인 미부여) 사이트 루트를 안내한다 —
+     *  뷰어는 로그인 후 허브 목록에서 이 프로젝트를 선택해 들어간다. */
+    _deployUrl(p) {
+      if (!p) return "";
+      const loc = (typeof location !== "undefined") ? location : { hostname: "", protocol: "https:", origin: "" };
+      const host = loc.hostname || "";
+      const parts = host.split(".");
+      const base = parts.length >= 2 ? parts.slice(-2).join(".") : host;
+      if (p.subdomain) return loc.protocol + "//" + p.subdomain + "." + base;
+      return loc.origin ? (loc.origin + "/") : (loc.protocol + "//" + host + "/");
+    },
+    /** 배포 주소 복사 — _copyInviteLink 와 동일한 클립보드 우선순위(SoT), 복사 후 알림 필수(조용한 실패 금지). */
+    _copyDeployUrl(url) {
+      if (!url) return;
+      const done = () => { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("주소를 복사했습니다."); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).then(done).catch(() => this._copyDeployUrlFallback(url, done)); return; }
+      } catch (e) {}
+      this._copyDeployUrlFallback(url, done);
+    },
+    _copyDeployUrlFallback(url, done) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url; ta.setAttribute("readonly", "");
+        ta.style.position = "fixed"; ta.style.top = "-9999px"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        done();
+      } catch (e) {}
+    },
+    /** 배포 주소 공유 — _shareInviteLink 와 동일한 패턴(navigator.share + 복사 폴백).
+     *  AbortError(사용자가 공유시트를 취소) 는 정상 동작 — 오류 알림 금지. */
+    _shareDeployUrl(url, projectName) {
+      if (!url) return;
+      if (!navigator.share) { this._copyDeployUrl(url); return; }
+      const name = projectName || "프로젝트"; // SoT: 실제 프로젝트 값에서만 가져온다(하드코딩 금지)
+      navigator.share({ title: "SEASTAR 360 뷰어 주소", text: '"' + name + '" 프로젝트 뷰어 주소', url: url })
+        .catch((e) => {
+          if (e && e.name === "AbortError") return; // 사용자가 공유시트를 취소 — 정상 동작, 오류 알림 금지
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("공유 실패: " + (e && e.message ? e.message : "알 수 없는 오류"));
+        });
     },
 
     _fmtDate(v) {
@@ -14989,6 +15134,22 @@
         this.currentDeck = dup; this._renderDecks();
         return dup; // 중복 생성하지 않고 기존 구역 반환
       }
+      // ── [WO 20260921·마스터 요청] "새 파일 로드가 아니라 이미 로드된 파일에서 지정 시
+      //   캡처하듯이 완전한 새 페이지를 생성" — 사용자가 직접 만드는 구역(askDrawing !== false)은
+      //   ①기존 도면에서 영역 지정 / ②새 도면 파일 업로드 중 고르게 한다.
+      //   🔴 새 메커니즘 금지 — ①은 기존 extractRegionAsDeck()(WO 20260918-B)을 그대로 재사용한다.
+      //   opts.source 가 미리 정해져 있으면(테스트/내부 재호출) 묻지 않는다.
+      //   자동생성 경로(askDrawing:false, ensureDeck 등)는 건드리지 않는다 — 조건에서 제외.
+      if (opts.askDrawing !== false && !opts.source) {
+        const source = await this._chooseDeckSource();
+        if (!source) { Prompt.toast && Prompt.toast("구역 생성을 취소했습니다"); return null; }
+        opts.source = source;
+      }
+      if (opts.source === "region") {
+        // 이미 이름 검증(중복 포함)을 마쳤으므로 그대로 넘긴다 — extractRegionAsDeck 은 그 안에서
+        // currentProject/currentDeck.deployment_id/온라인 상태를 다시 확인한다(자체 가드 유지).
+        return await this.extractRegionAsDeck({ name });
+      }
       // ── [P1·마스터 요청] "구역을 등록하면 반드시 도면이 등록되어야 한다" ──
       //   사용자가 직접 만든 구역(askDrawing !== false)은 **도면 파일을 먼저 확정**한 뒤에야 POST 한다.
       //   파일창을 취소하면 구역 POST 자체를 하지 않으므로 '도면없음' 구역이 생기지 않는다(롤백 불필요).
@@ -15118,6 +15279,54 @@
       });
     },
 
+    /** [WO 20260921] 구역 생성 시 "①기존 도면에서 영역 지정" vs "②새 도면 파일 업로드" 선택.
+     *  🔴 로드된 도면(=deployment_id 가 있는 현재 구역)이 없으면 ①을 고를 수 없다 — 이때 조용히
+     *  비활성만 시키지 않고 이유를 화면에 안내한다(#dsm-region-reason).
+     *  마크업이 없으면(구버전 폴백) 묻지 않고 기존 동작(업로드)으로 진행한다.
+     *  @returns {Promise<"region"|"upload"|null>} null = 취소
+     */
+    _chooseDeckSource() {
+      return new Promise((resolve) => {
+        const m = document.getElementById("deck-source-modal");
+        if (!m) { resolve("upload"); return; } // 구버전 폴백 — 묻지 않고 종전 동작
+        const canExtract = !!(this.currentDeck && this.currentDeck.deployment_id);
+        const btnRegion = document.getElementById("dsm-btn-region");
+        const btnUpload = document.getElementById("dsm-btn-upload");
+        const reasonEl = document.getElementById("dsm-region-reason");
+        const subEl = document.getElementById("dsm-sub");
+        if (subEl) subEl.textContent = this.currentDeck ? ("현재 도면: " + this.currentDeck.name) : "";
+        if (btnRegion) {
+          btnRegion.disabled = !canExtract;
+          if (btnRegion.classList) btnRegion.classList.toggle("disabled", !canExtract);
+          // 🔴 실측(라이브 스크린샷) — .admin-gate-btn.primary 는 :disabled 전용 CSS 가 없어
+          // disabled=true 여도 금색 그대로 보여 "눌러도 되는 버튼"처럼 보였다. style.css 는
+          // 다른 트랙 점유 중(새 규칙 추가 금지)이라, 인라인 스타일로만 시각적으로도 비활성을 알린다.
+          if (btnRegion.style) {
+            btnRegion.style.opacity = canExtract ? "" : "0.45";
+            btnRegion.style.cursor = canExtract ? "" : "not-allowed";
+          }
+        }
+        if (reasonEl && reasonEl.classList) reasonEl.classList.toggle("hidden", canExtract);
+        let done = false;
+        const close = (val) => {
+          if (done) return; done = true;
+          if (m.classList) { m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200); }
+          resolve(val);
+        };
+        const backdrop = document.getElementById("dsm-backdrop");
+        const cancelBtn = document.getElementById("dsm-cancel");
+        if (btnRegion) btnRegion.onclick = () => { if (!canExtract) return; close("region"); };
+        if (btnUpload) btnUpload.onclick = () => close("upload");
+        if (backdrop) backdrop.onclick = () => close(null);
+        if (cancelBtn) cancelBtn.onclick = () => close(null);
+        if (m.classList) {
+          m.classList.remove("hidden");
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => m.classList.add("on"));
+          else m.classList.add("on");
+        }
+      });
+    },
+
     /** [WO 20260918-B] 🔴 여러 개의 뷰가 담긴 도면(A0 등)에서 **드래그한 부분만** 새 영역으로 뽑아낸다.
      *  마스터 원문: "pdf 에 여러 개의 뷰가 있는 파일일 때 긁어서 그 부분만 복사하듯이
      *  새로운 영역으로 만들어내는 기능".
@@ -15173,7 +15382,9 @@
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           // 🔴 원본과 같은 도면(deployment_id)을 가리킨다 — 픽셀 복사 없음, 원본 무변경.
-          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null })
+          // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
+          // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
+          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
@@ -16411,7 +16622,8 @@
       "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다.",
       "offline-download": "오프라인 다운로드 — 이 프로젝트의 도면(PDF/이미지)과 배치된 핀, 그리고 핀에 연결된 360° 파노라마 사진을 전부 이 기기에 내려받습니다. 다운로드가 끝나면 인터넷이 끊긴 현장에서도 도면과 360° 사진을 그대로 열람하고 작업할 수 있고, 나중에 인터넷이 다시 연결되면 자동으로 서버와 동기화됩니다. 버튼에 '저장됨'이 표시되면 이미 내려받아 오프라인 사용 준비가 된 상태입니다.",
       "pin-mobile-photo-only": "모바일에서는 사진만 등록할 수 있습니다(화면이 좁아 사진 등록에 집중). 360° 사진·문서·노트·동영상·URL 첨부는 PC(데스크톱)에서 추가하세요. 이미 등록된 다른 종류의 첨부는 모바일에서도 그대로 보이고 열람됩니다.",
-      "invite-share": "초대 링크 공유 — 누르면 폰의 공유 시트가 열려 카카오톡 등 원하는 앱으로 바로 보낼 수 있습니다. PC 등 지원하지 않는 환경에서는 자동으로 링크가 복사됩니다."
+      "invite-share": "초대 링크 공유 — 누르면 폰의 공유 시트가 열려 카카오톡 등 원하는 앱으로 바로 보낼 수 있습니다. PC 등 지원하지 않는 환경에서는 자동으로 링크가 복사됩니다.",
+      "deck-source-select": "구역 생성 방식 선택 — '+ 구역 생성'을 누르면 이 구역의 도면을 어떻게 마련할지 고를 수 있습니다. ① 기존 도면에서 영역 지정: 지금 열려 있는 도면 위에서 원하는 부분을 드래그로 긁으면, 원본은 그대로 둔 채 그 부분만 보이는 새 구역이 만들어집니다(도면 영역 추출과 동일 기능). ② 새 도면 파일 업로드: PDF·이미지 파일을 새로 올려 그 파일을 이 구역의 도면으로 씁니다. 지금 열려 있는 도면이 없으면 ①은 고를 수 없고 그 이유가 안내됩니다."
     },
 
     _inited: false,
