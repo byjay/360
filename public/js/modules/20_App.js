@@ -3505,9 +3505,22 @@
         imgEl.onload = _r0;
         // [오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
         //   로컬 draft(원본 dataURL)로 폴백하여 도면을 끊김없이 표시.
+        // [P52 결함수정] 로컬 draft 도 없으면(전형: R2 객체 404/403) 종전엔 여기서 아무 일도
+        //   안 일어나 핀·목록·구역이 영구히 렌더되지 않았다(State.pins 는 채워졌는데 화면은 빈 채로
+        //   조용히 실패 — 마스터 신고: "체크보드 모드에서 핀 목록은 생기는데 마커가 안 생긴다").
+        //   폴백 실패 시에도 _r0() 을 호출해 뷰포트+핀+구역만이라도 표시하고, 이미지만 못 불러왔다고
+        //   정직하게 알린다(가짜 성공 표시 금지, §10-no-hardcoding 조용한 실패 금지).
         imgEl.onerror = () => {
           if (/^\/api\/r2\/object\//.test(pages[0] || "")) {
-            this._restoreDraftLocal();
+            Promise.resolve(this._restoreDraftLocal()).then((restored) => {
+              if (!restored) {
+                _r0();
+                Prompt && Prompt.toast && Prompt.toast("도면 이미지를 불러오지 못했습니다 — 핀 목록은 정상 표시됩니다");
+              }
+            });
+          } else {
+            _r0();
+            Prompt && Prompt.toast && Prompt.toast("도면 이미지를 불러오지 못했습니다 — 핀 목록은 정상 표시됩니다");
           }
         };
         imgEl.src = Auth.r2(pages[0]);
@@ -3553,6 +3566,12 @@
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
         imgEl.onload = _r1;
+        // [P52 결함수정] 형제 호출부(loadDeckDrawing)와 동일한 결함 — 로컬 draft 이미지가
+        //   못 불러와지면(손상/미캐시) 종전엔 아무 렌더도 안 일어났다. 실패해도 핀·구역은 표시.
+        imgEl.onerror = () => {
+          _r1();
+          Prompt && Prompt.toast && Prompt.toast("도면 이미지를 불러오지 못했습니다 — 핀 목록은 정상 표시됩니다");
+        };
         imgEl.src = Auth.r2(d.pages[0]);
         imgEl.classList.remove("hidden");
         if (imgEl.complete && imgEl.naturalWidth) _r1();
@@ -4197,6 +4216,18 @@
           if (typeof Notes !== "undefined") Notes.loadSummary();
         };
         imgEl.onload = _r2;
+        // [P52 결함수정] 🔴 근본원인 — 이 경로(프로젝트 재진입 시 최신 배포본 자동복원)엔
+        //   onerror 핸들러가 아예 없었다. 도면 이미지가 R2 접근 실패(404/403/네트워크)로
+        //   못 불러와지면 _r2() 가 영영 안 불려 _showMapViewport()·renderPinsOnMap()·
+        //   renderPinList() 가 전부 스킵 — State.pins 는 채워졌는데 뷰포트는 hidden 그대로,
+        //   마커 0개로 조용히 실패했다(마스터 신고: "목록엔 생기는데 핀 마커가 안 생긴다").
+        //   #map-viewport 는 CSS 상 position:absolute inset:0(부모 기준 고정 크기)라 이미지
+        //   자연크기와 무관하게 뜨므로, 실패해도 _r2() 를 그대로 호출해 핀·목록·구역만은
+        //   정상 표시한다 — 대신 이미지가 안 떴다는 사실은 정직하게 알린다(가짜 성공 금지).
+        imgEl.onerror = () => {
+          _r2();
+          statusEl.textContent = "도면 이미지를 불러오지 못했습니다 — 핀은 정상 표시됩니다(사유: 이미지 접근 실패)";
+        };
         imgEl.src = Auth.r2(pages[0]);
         imgEl.classList.remove("hidden");
         if (imgEl.complete && imgEl.naturalWidth) _r2();
