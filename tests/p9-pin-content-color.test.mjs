@@ -272,14 +272,26 @@ function suiteShape(label, sSrc, rSrc) {
 function suiteContrast(label, sSrc, rSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
-  const ui = runUI(sSrc, uiSrc, fixture).pins;
+  const uiRes = runUI(sSrc, uiSrc, fixture);
+  const ui = uiRes.pins;
+  const PS = uiRes.PS;
   const rdr = runRadar(sSrc, rSrc, fixture, CURRENT(fixture)).pins;
   const WHITE = "#ffffff";
 
+  // [2026-09-21 WO 숫자풍선 제거] 마스터 지시로 머리 안 숫자 <text> 를 더 이상 그리지 않는다
+  // (아래에서 렌더된 <text> 가 없음을 직접 검증). 이 <text> 의 fill 색(txtFill = colorsOf().text)은
+  // 커스텀 아이콘을 고른 핀에서만 실제로 쓰이므로(PinIcons.headMarkup), WCAG 대비 검증은
+  // 렌더 여부와 무관하게 팔레트 함수(PinSeries.colorsOf) 자체를 직접 호출해 확인한다
+  // — 렌더링을 스킵해도 항상 검증되므로 이전(렌더된 텍스트만 검사)보다 커버리지가 넓어진다.
   ["c1", "e1", "bA", "bB"].forEach((id) => {
-    const r = contrast(ui[id].text, WHITE);
-    ok(r >= 4.5, `[본문 4.5:1] ${id} 숫자 ${ui[id].text} ↔ 흰 디스크 #fff = ${r.toFixed(2)}:1`);
+    ok(ui[id].text === null, `[WO 숫자풍선 제거] 도면 마커 ${id} 머리에 숫자 <text> 없음(현재=${ui[id].text})`);
   });
+  [["content", true, "c1"], ["empty", false, "e1"], ["checkboard", true, "bA"], ["checkboard", false, "bB"]]
+    .forEach(([kind, filled, refId]) => {
+      const c = PS.colorsOf(kind, filled);
+      const r = contrast(c.text, WHITE);
+      ok(r >= 4.5, `[본문 4.5:1(팔레트 직접검증, ${refId} 대응)] colorsOf(${kind},${filled}).text ${c.text} ↔ 흰 디스크 #fff = ${r.toFixed(2)}:1`);
+    });
   ["c1", "e1", "bA", "bB"].forEach((id) => {
     const r2 = contrast(ui[id].head2, WHITE);
     const r3 = contrast(ui[id].needle, WHITE);
@@ -354,12 +366,10 @@ function suiteHeadShape(label, sSrc) {
   ok(ui.bB.headFillAttr === "none", `체크보드 미등록(bB) 헤드 fill = 속 빈 원 → ${ui.bB.headFillAttr}`);
   ok(ui.bA.headFillAttr !== ui.bB.headFillAttr, "체크보드 등록↔미등록 헤드 fill 서로 다름");
 
-  // 숫자는 채움/속빈 둘 다 렌더되고(가독성용 흰 디스크 위) 대비 확보(⑥ 스위트와 동일 기준 재확인)
-  ok(ui.c1.text !== null && ui.e1.text !== null,
-    `채운 원·속 빈 원 모두 번호 렌더됨(text 색 c1=${ui.c1.text}, e1=${ui.e1.text})`);
-  const WHITE = "#ffffff";
-  const rE1 = contrast(ui.e1.text, WHITE);
-  ok(rE1 >= 4.5, `속 빈 원 숫자 대비(흰 디스크 위) = ${rE1.toFixed(2)}:1 (기준 4.5:1)`);
+  // [2026-09-21 WO 숫자풍선 제거] 채움/속빈 둘 다 이제 머리 안 숫자 <text> 를 그리지 않는다
+  // (⑥ 스위트에서 부재를 직접 검증하고, 팔레트 WCAG 대비도 거기서 직접 확인함 — 중복 방지).
+  ok(ui.c1.text === null && ui.e1.text === null,
+    `채운 원·속 빈 원 모두 머리 숫자 <text> 없음(c1=${ui.c1.text}, e1=${ui.e1.text})`);
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -587,6 +597,24 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
     const keys = [shapeSig(ui.p1), shapeSig(ui.p2), shapeSig(ui.p3)];
     ok(new Set(keys).size < 3,
       `뮤테이션 적용 시 색(fill hex)만 다르고 형태(태그/채움구조)는 같아 색 제거 서명이 붕괴함(⑭ 실효성 증명) → ${keys.join(", ")}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 J: [2026-09-21 WO] 숫자 <text> 복원(과거 방식으로 회귀) → ⑥의
+ *   "머리 안 숫자 <text> 없음" 검사가 실패해야 한다.
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션J] 숫자 <text> 복원 → ⑥ 의 숫자 부재 검사가 실패해야 함");
+  const needle = '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}';
+  const mutated = uiSrc.replace(needle,
+    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="13" font-weight="900" fill="${txtFill}">${dispNo}</text>`}');
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const fixture = FIXTURE();
+    const ui = runUI(seriesSrc, mutated, fixture).pins;
+    ok(ui.c1.text !== null,
+      `뮤테이션 적용 시 숫자 <text> 가 다시 렌더됨(테스트 실효성 증명, ⑥의 부재 검사가 깨짐) → c1.text=${ui.c1.text}`);
   }
 }
 

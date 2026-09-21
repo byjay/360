@@ -366,12 +366,15 @@
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
-              <!-- [마스터 요청 N10] 오빗 링 제거 — 숫자만 크고 또렷하게. 흰 디스크 확대 + 번호 확대 -->
+              <!-- [WO 20260921 숫자 풍선 제거] 마스터 지시("상태를 색이나 모양으로. 숫자 풍선 없애") —
+                   머리 안에 번호 글자 노드를 더는 그리지 않는다. 상태는 이미 3축(등록 fill 채움/속빈 ·
+                   tier 원판 실루엣 원/둥근사각/겹원 · 외곽 링 dash 패턴)만으로 흑백에서도 구분된다.
+                   번호 자체는 버리지 않는다 — #pin-list(.pin-num)·PinActionPop(#pap-no)에서 계속 확인 가능
+                   (dispNo/dataset.no 는 그대로 유지, 표시만 다른 화면으로 이관). 커스텀 아이콘을
+                   고른 핀만 예외적으로 그 아이콘을 머리에 그린다(번호 아님 — 기존 기능 보존). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central"
-                    font-family="'Segoe UI',sans-serif" font-size="13" font-weight="900"
-                    fill="${txtFill}">${dispNo}</text>`}
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
