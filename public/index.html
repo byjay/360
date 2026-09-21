@@ -1383,7 +1383,13 @@
 
         <!-- ═══ 하단: 사진 (미리보기 또는 등록 메뉴) ═══ -->
         <div id="pap-bottom" style="flex:1 1 50%;min-height:0;overflow-y:auto;padding-top:12px;">
-          <div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">사진</div>
+          <!-- [WO 20260921] 🔴 등록 종류 선택 — B(#section-pin-form)의 pf-tools 를 A 안으로 흡수(단일 창).
+               사진/URL 은 기존 pap-photo-* 를 그대로 재사용(중복 위젯 금지), 문서만 신규 등록 UI.
+               모바일(≤720px)에서는 사진만 노출(마스터 기존 지시, JS 로 판정 — CSS 는 타 팀 점유). -->
+          <div id="pap-reg-tools" class="pap-reg-tools" role="group" aria-label="등록 종류" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;"></div>
+          <div id="pap-reg-mobile-hint" class="hidden" style="font-size:11px;color:#94a3b8;margin:-4px 0 10px;">모바일에서는 사진만 등록할 수 있어요. 360·문서·노트·동영상·URL은 PC에서 추가하세요.</div>
+
+          <div id="pap-reg-title" style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">사진</div>
 
           <div id="pap-photo-preview" class="hidden">
             <img id="pap-photo-img" alt="360 미리보기" style="width:100%;border-radius:10px;display:block;cursor:pointer;" />
@@ -1399,6 +1405,14 @@
             </div>
             <div id="pap-photo-err" class="hidden" style="font-size:11px;color:#dc2626;margin-top:6px;"></div>
             <div id="pap-photo-status" style="font-size:11px;color:#64748b;margin-top:6px;"></div>
+          </div>
+
+          <!-- [WO 20260921] 문서 등록 — B 의 btn-pin-doc 대체(Cloud.uploadDoc 재사용, pin.attachments 에 직접 추가) -->
+          <div id="pap-doc-register" class="hidden">
+            <div style="font-size:12px;color:#64748b;margin-bottom:8px;">첨부 문서(PDF·Word·Excel 등)를 선택하세요.</div>
+            <input id="pap-doc-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style="font-size:12px;margin-bottom:8px;display:block;" />
+            <div id="pap-doc-list" style="font-size:12px;color:#334155;"></div>
+            <div id="pap-doc-status" style="font-size:11px;color:#64748b;margin-top:6px;"></div>
           </div>
         </div>
       </div>

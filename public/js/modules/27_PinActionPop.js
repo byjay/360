@@ -2,6 +2,20 @@
   const PAP_URL_RE = /^https?:\/\/.+\.(jpe?g|png|gif|webp|bmp|mp4|webm|mov)(\?.*)?$/i;
   const PAP_VIDEO_RE = /\.(mp4|webm|mov)(\?.*)?$/i;
 
+  /** [WO 20260921] 🔴 등록 종류(B#pf-tools 흡수) — SoT. 라벨/순서가 여기 하나뿐이면
+   *  중복 배치가 물리적으로 불가능하다(렌더 지점이 한 곳: _renderRegTools). */
+  const PAP_REG_CATS = [
+    { id: "photo", label: "사진" },
+    { id: "theta", label: "360" },
+    { id: "doc",   label: "문서" },
+    { id: "note",  label: "노트" },
+    { id: "video", label: "동영상" },
+    { id: "url",   label: "URL" }
+  ];
+  /** 모바일 기준(720px) — style.css 전역과 동일 값(2720/2769 등). CSS 는 타 팀 점유라
+   *  JS 로 직접 판정한다(인라인 스타일 방식은 이 파일 상단 주석과 동일 이유). */
+  const PAP_MOBILE_MQ = "(max-width: 720px)";
+
   const PinActionPop = {
     _pinId: null,
     _layoutDone: false,
@@ -44,11 +58,14 @@
         if (m) m.classList.add("edit-unlocked");
         Prompt.toast && Prompt.toast("'" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
       });
+      // [WO 20260921] 🔴 이중 편집창 제거 — B(#section-pin-form) 를 더 이상 열지 않는다.
+      //   A 안에서 이미 위치명·사진·문서·노트를 전부 편집할 수 있으므로, 라벨 입력에
+      //   포커스만 이동시켜 "여기서 바로 수정하라"는 신호만 준다(새 창 0).
       $("pap-edit") && $("pap-edit").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;
-        State.pinEditUnlocked = pin.id;
-        this.close();
-        App.editPin(pin.id);
+        const input = $("pap-label-input");
+        if (input && !input.readOnly) { input.focus(); input.select(); }
+        Prompt.toast && Prompt.toast("아래에서 위치명·사진·노트를 바로 수정하세요");
       });
       $("pap-del") && $("pap-del").addEventListener("click", () => {
         const pin = this._pin(); if (!pin) return;
@@ -72,9 +89,88 @@
       $("pap-photo-url-add") && $("pap-photo-url-add").addEventListener("click", () => this._registerPhotoUrl());
       // ── 노트(이슈) 등록 — 13_Notes.js 재사용(같은 /api/notes) ──
       $("pap-notes-submit") && $("pap-notes-submit").addEventListener("click", () => this._submitNote());
+      // ── [WO 20260921] 등록 종류 선택(위임 바인딩, 중복 방지) ──
+      const regGrid = $("pap-reg-tools");
+      if (regGrid && !regGrid._papBound) {
+        regGrid.addEventListener("click", (e) => {
+          const btn = e.target.closest(".pap-reg-btn");
+          if (!btn || btn.classList.contains("hidden")) return;
+          this._selectRegCategory(btn.dataset.reg);
+        });
+        regGrid._papBound = true;
+      }
+      // ── 문서 등록: 파일 선택(다중) ──
+      $("pap-doc-file") && $("pap-doc-file").addEventListener("change", (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        files.forEach((f) => this._registerDocFile(f));
+      });
+      // 화면 폭이 바뀌어도(모바일↔데스크톱 회전 등) 등록 종류 노출 상태를 다시 계산한다.
+      if (typeof window !== "undefined" && window.addEventListener) {
+        window.addEventListener("resize", () => { if (!el.classList.contains("hidden")) this._applyRegVisibility(); });
+      }
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !el.classList.contains("hidden")) this.close();
       });
+    },
+
+    /** [WO 20260921] 등록 종류 그리드 렌더 — 렌더 지점이 여기 하나뿐(중복 배치 물리적으로 불가). */
+    _renderRegTools() {
+      const grid = document.getElementById("pap-reg-tools");
+      if (!grid) return;
+      const cur = this._regCat || "photo";
+      grid.innerHTML = PAP_REG_CATS.map((c) => {
+        const active = c.id === cur;
+        const style = "padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;border:1px solid " +
+          (active ? "#0f172a;background:#0f172a;color:#fff;" : "rgba(0,0,0,.14);background:#f8fafc;color:#334155;");
+        return `<button type="button" class="pap-reg-btn" data-reg="${c.id}" aria-pressed="${active}" style="${style}">${c.label}</button>`;
+      }).join("");
+      this._applyRegVisibility();
+      this._selectRegCategory(cur); // 버튼 active 색상 + 문서박스 표시/숨김 상태를 한 곳(SoT)에서 동기화
+    },
+
+    /** querySelectorAll 미지원 환경(테스트 fake DOM 등)에서도 안전하게 빈 배열을 준다. */
+    _regBtns(grid) {
+      return (grid && typeof grid.querySelectorAll === "function") ? Array.from(grid.querySelectorAll(".pap-reg-btn")) : [];
+    },
+
+    /** 모바일(≤720px)에서는 '사진'만 노출 — 마스터 기존 지시(B#pf-tools 와 동일 규칙, CSS 미의존). */
+    _applyRegVisibility() {
+      const grid = document.getElementById("pap-reg-tools");
+      if (!grid) return;
+      const mobile = !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches);
+      this._regBtns(grid).forEach((btn) => {
+        btn.classList.toggle("hidden", mobile && btn.dataset.reg !== "photo");
+      });
+      const hint = document.getElementById("pap-reg-mobile-hint");
+      if (hint) hint.classList.toggle("hidden", !mobile);
+    },
+
+    /** 등록 종류 선택 — 사진/URL/360 은 기존 단일 위젯 재사용(중복 위젯 생성 금지),
+     *  노트는 이미 상단에 있는 위젯으로 포커스만 이동, 문서만 신규 위젯 표시. */
+    _selectRegCategory(cat) {
+      this._regCat = cat;
+      const grid = document.getElementById("pap-reg-tools");
+      this._regBtns(grid).forEach((b) => {
+        const active = b.dataset.reg === cat;
+        b.setAttribute("aria-pressed", String(active));
+        b.style.background = active ? "#0f172a" : "#f8fafc";
+        b.style.color = active ? "#fff" : "#334155";
+        b.style.borderColor = active ? "#0f172a" : "rgba(0,0,0,.14)";
+      });
+      const $ = (id) => document.getElementById(id);
+      const title = $("pap-reg-title");
+      const docBox = $("pap-doc-register");
+      if (docBox) docBox.classList.toggle("hidden", cat !== "doc");
+      if (title) title.textContent = (cat === "doc") ? "문서" : "사진";
+      if (cat === "note") {
+        const top = $("pap-top"); if (top) top.scrollTop = 0;
+        const noteInput = $("pap-notes-input"); if (noteInput) noteInput.focus();
+        return;
+      }
+      if (cat === "theta" && Prompt.toast) Prompt.toast("RICOH THETA 360 사진도 '사진'과 동일하게 등록됩니다(파일 선택 또는 경로)");
+      if (cat === "video" && Prompt.toast) Prompt.toast("동영상은 경로(URL, .mp4/.webm/.mov)로 등록하세요");
+      if (cat === "url" || cat === "video") { const u = $("pap-photo-url"); if (u) u.focus(); }
     },
     _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
 
@@ -121,6 +217,10 @@
 
       this._renderPhoto(pin, canEdit);
       this._loadNotes(pin, canEdit);
+      // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
+      this._regCat = "photo";
+      this._renderRegTools();
+      this._renderDocList(pin);
 
       el.classList.remove("hidden");
     },
@@ -244,6 +344,44 @@
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       if (statusEl) statusEl.textContent = "경로 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";
       this._renderPhoto(pin, true);
+    },
+
+    /** ── [WO 20260921] 문서 등록 — Cloud.uploadDoc/fileToDataURL 재사용(20_App.js 수정 0),
+     *  pin.attachments 에 직접 추가(20_App.js 의 기존 attachments 형태 {id,name,size,type/docId}와 동일 SoT). ── */
+    async _registerDocFile(file) {
+      const pin = this._pin(); if (!pin || !this._canEdit()) return;
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("pap-doc-status");
+      if (!file) return;
+      if (typeof Cloud !== "undefined" && Cloud.MAX_DOC_BYTES && file.size > Cloud.MAX_DOC_BYTES) {
+        const mb = (Cloud.MAX_DOC_BYTES / 1024 / 1024).toFixed(0);
+        if (statusEl) statusEl.textContent = "\"" + file.name + "\" 은 너무 큽니다(최대 " + mb + "MB).";
+        return;
+      }
+      if (statusEl) statusEl.textContent = "업로드 중…";
+      try {
+        const dataURL = await Cloud.fileToDataURL(file);
+        const docId = await Cloud.uploadDoc(file.name, dataURL);
+        if (!Array.isArray(pin.attachments)) pin.attachments = [];
+        pin.attachments.push({ id: "d" + Date.now() + Math.random().toString(36).slice(2, 6), name: file.name, size: file.size, docId });
+        if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+        if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); }
+        this._renderDocList(pin);
+        if (statusEl) statusEl.textContent = "문서 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";
+      } catch (e) {
+        if (statusEl) statusEl.textContent = "업로드 실패: " + (e.message || e);
+      }
+    },
+
+    /** 문서 첨부 목록 표시(등록된 문서 없으면 안내문) — pin.attachments 를 그대로 읽는다(SoT 1개). */
+    _renderDocList(pin) {
+      const list = document.getElementById("pap-doc-list");
+      if (!list) return;
+      const atts = (pin && pin.attachments) || [];
+      const esc = (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml : (s) => String(s);
+      list.innerHTML = atts.length
+        ? atts.map((a) => "<div>· " + esc(a.name || "문서") + "</div>").join("")
+        : "<span style=\"color:#94a3b8\">등록된 문서가 없습니다.</span>";
     },
 
     /** ── 노트(이슈) — 13_Notes.js 데이터/엔드포인트 재사용 ── */
