@@ -511,7 +511,8 @@ if (!puppeteer) {
   await page.evaluate(SETUP);
 
   // 스크린샷은 '증거'이지 판정이 아니다 — 먼저 찍고(부팅 직후가 가장 안정), 실패해도 검사는 계속한다.
-  const shotDir = process.env.SHOT_DIR || path.join(ROOT, ".shots");
+  // 기본 출력은 OS 임시 폴더 — 회귀 스위트가 저장소를 오염시키지 않게 한다(SHOT_DIR 로 지정 가능).
+  const shotDir = process.env.SHOT_DIR || path.join(os.tmpdir(), "p58-tree-shots");
   try {
     fs.mkdirSync(shotDir, { recursive: true });
     const shotTop = path.join(shotDir, "p58-tree-4level-375x812-top.png");
