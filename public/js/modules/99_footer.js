@@ -30,7 +30,17 @@
     const params  = new URLSearchParams(location.search);
     const urlMode = params.get("mode");
     const depId   = params.get("d");
-    if (depId) {
+    // [P61] 공유 주소 `/srview/<프로젝트명>-<토큰>` — 서버가 토큰을 이미 검증해 셸을 내줬다.
+    //   여기서는 토큰으로 프로젝트/배포본만 해석해 **열람 전용**으로 연다(?d= 와 동일 취급).
+    const shareTok = (typeof ShareLink !== "undefined") ? ShareLink.token() : null;
+    if (shareTok) {
+      State.viewerLocked = true;
+      (async () => {
+        const j = await ShareLink.resolve();
+        // 해석 실패(오프라인/링크 해제)여도 설계자 화면으로 새지 않는다 — 잠긴 뷰어 유지.
+        App.openApp("viewer", (j && j.project) ? { project: { id: j.project.id, name: j.project.name } } : undefined);
+      })();
+    } else if (depId) {
       // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
       State.viewerLocked = true;
       App.openApp("viewer");

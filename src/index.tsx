@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex } from './lib/util'
+import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment } from './lib/util'
 
 type Bindings = {
   DB: D1Database
@@ -1430,10 +1430,23 @@ async function tenantOf(c: any, user: any): Promise<string | null> {
   }
 }
 
+/** [P61] 프로젝트 행 → 공유 경로(`/srview/<이름>-<토큰>`). 토큰 없으면 null(=아직 배포 전/구 프로젝트).
+ *  🔴 slug 는 여기서 **매번 name 에서 파생**한다 — DB 에 저장하지 않으므로 이름 변경과 절대 갈라지지 않는다. */
+function sharePathOf(r: any): string | null {
+  return (r && r.share_token) ? sharePath(r.name, String(r.share_token)) : null
+}
+
 function mapProject(r: any) {
   return { id: r.id, name: r.name, description: r.description, owner: r.owner, created_at: r.created_at, updated_at: r.updated_at,
     published: !!r.published, published_at: r.published_at || null, published_by: r.published_by || null,
-    subdomain: r.subdomain || null }
+    subdomain: r.subdomain || null,
+    // [P61] 공유 주소. 토큰이 곧 열쇠이므로 노출 범위는 호출부에서 멤버로 제한한다(/api/projects 참조).
+    share_token: r.share_token || null, share_path: sharePathOf(r) }
+}
+/** [P61] 비멤버 응답에서 공유 열쇠를 제거한다 — "남의 프로젝트 주소를 유추/열거 불가" 요구의 강제점.
+ *  (뷰어는 배포된 프로젝트를 잠금 카드로 "보긴" 하지만, 그 주소를 손에 넣어선 안 된다) */
+function stripShareKey<T extends Record<string, any>>(o: T): T {
+  return { ...o, share_token: null, share_path: null }
 }
 function mapDeck(r: any) {
   // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
@@ -1565,7 +1578,9 @@ app.get('/api/projects', async (c) => {
     const isMember = !!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
     // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/전역디자이너/슈퍼 > 없음)
     const effRole = myRole.get(p.id) || ((isSuperUser || globalDesigner || isOwner) ? 'designer' : null)
-    return { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null }
+    const base = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null }
+    // [P61] 🔴 공유 토큰은 멤버(설계자/소유자/배정멤버/슈퍼)에게만. 비멤버에게 주면 열거 차단이 무의미해진다.
+    return isMember ? base : stripShareKey(base)
   }) })
 })
 
@@ -1680,6 +1695,112 @@ app.post('/api/projects/:id/subdomain', async (c) => {
   } catch (e: any) { domain = 'exception: ' + (e && e.message) }
   return c.json({ success: true, subdomain: sub, url: 'https://' + fqdn, domain })
 })
+
+/* ════════════════════════════════════════════════════════════
+   [P61] 공유 주소 — https://<도메인>/srview/<프로젝트명>-<토큰>
+   마스터 2026-09-21 "scan.seastar.work/프로젝트이름 이런 식으로 배포해줘"
+                     "배포되면 주소를 보이게 하고 주소 링크도 바로 복사 가능하게 해"
+   마스터 2026-09-18 "배포했을 시 주소 형태는 다른 프로젝트를 유추할 수 없도록"
+                     "보이는 건 seastar 과 srview 로 나오게 해줘"
+   ── 두 요구의 충돌 해소: **이름은 보이되 열쇠가 아니다.**
+      · 열쇠 = share_token (80비트 암호난수). 이름을 정확히 맞춰도 토큰이 없으면 404.
+      · slug = 이름에서 매번 파생(DB 저장 X). 이름을 바꿔도 토큰이 같으므로 옛 링크가 산다.
+      · 기존 `?d=<deployment_id>` 링크는 그대로 동작한다(하위호환, 회귀 금지).
+   ════════════════════════════════════════════════════════════ */
+
+/** 프로젝트에 공유 토큰이 없으면 1회 발급한다(있으면 손대지 않는다 = 링크 영속).
+ *  유니크 인덱스 충돌(천문학적 확률이지만 조용히 실패하면 안 된다) 시 최대 5회 재시도.
+ *  @returns 현재 유효한 토큰. 실패하면 null(호출부가 정직하게 null 을 응답에 싣는다). */
+async function ensureShareToken(c: any, pid: string): Promise<string | null> {
+  const cur: any = await c.env.DB.prepare('SELECT share_token FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
+  if (cur && cur.share_token) return String(cur.share_token)
+  for (let i = 0; i < 5; i++) {
+    const tok = randShareToken()
+    try {
+      await c.env.DB.prepare('UPDATE projects SET share_token = ?, updated_at = ? WHERE id = ? AND deleted = 0 AND share_token IS NULL')
+        .bind(tok, Date.now(), pid).run()
+    } catch (e) { continue }   // UNIQUE 충돌 → 새 토큰으로 재시도
+    const after: any = await c.env.DB.prepare('SELECT share_token FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
+    if (after && after.share_token) return String(after.share_token)
+  }
+  return null
+}
+
+/** 공유 토큰 → 배포된 프로젝트. 미배포·삭제·형식불량·미존재는 전부 null(구분해서 알려주지 않는다 = 열거 차단). */
+async function projectByShareToken(c: any, token: string): Promise<any | null> {
+  if (!isShareToken(token)) return null
+  const row: any = await c.env.DB.prepare(
+    'SELECT id, name, share_token, published FROM projects WHERE share_token = ? AND deleted = 0'
+  ).bind(token).first()
+  if (!row || !row.published) return null
+  return row
+}
+
+/** 공유 링크 해석(공개 · 인증 불필요) — 클라이언트가 경로에서 뽑은 토큰으로 프로젝트/배포본을 얻는다.
+ *  🔴 토큰이 유효하지 않으면 404 + 본문 동일 → "이름만 맞춘" 추측에 어떤 힌트도 주지 않는다. */
+app.get('/api/share/:token', async (c) => {
+  const row = await projectByShareToken(c, c.req.param('token'))
+  if (!row) return c.json({ matched: false }, 404)
+  // 뷰어가 실제로 열 배포본(= 기존 `?d=` 가 가리키던 그 값). 없으면 null 로 정직하게 알린다.
+  const deck: any = await c.env.DB.prepare(
+    'SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL ORDER BY level_no ASC, created_at ASC LIMIT 1'
+  ).bind(row.id).first().catch(() => null)
+  return c.json({
+    matched: true,
+    project: { id: row.id, name: row.name },
+    deployment_id: (deck && deck.deployment_id) ? String(deck.deployment_id) : null,
+    share_path: sharePath(row.name, String(row.share_token)),
+  })
+})
+
+/** 앱 셸(index.html) 서빙 — 정적 자산 폴백 로직의 단일 소스. 말미 app.all('*') 와 공유한다. */
+async function serveAppShell(c: any): Promise<Response> {
+  const assets = c.env.ASSETS
+  if (!assets || !assets.fetch) return c.text('Not Found', 404)
+  const origin = new URL(c.req.url).origin
+  const res = await assets.fetch(new Request(origin + '/index.html', { method: 'GET' }))
+  const out = new Response(res.body, res)
+  out.headers.set('Content-Type', 'text/html; charset=utf-8')
+  out.headers.set('Cache-Control', 'no-cache, must-revalidate')
+  // 공유 링크는 검색엔진에 올라가면 "유추 불가" 요구가 무너진다.
+  out.headers.set('X-Robots-Tag', 'noindex, nofollow')
+  return out
+}
+
+/** 🔴 `/srview/<이름>-<토큰>` — 토큰이 맞을 때만 앱 셸을 준다. 이름만으로는 절대 열리지 않는다.
+ *  정적 자산(/js, /css, /images)은 index.html 이 **절대경로**로 참조하므로 이 경로 아래로 새지 않는다
+ *  (public/index.html 의 src/href 를 `/js/...` 형태로 교정 — 상대경로였다면 /srview/js/main.js 로 요청돼 깨진다). */
+app.get('/srview/:seg', async (c) => {
+  const token = shareTokenFromSegment(c.req.param('seg'))
+  const row = token ? await projectByShareToken(c, token) : null
+  if (!row) return shareNotFound(c)
+  return await serveAppShell(c)
+})
+// 토큰 없는 `/srview` · `/srview/` 도 동일한 404 (목록을 주지 않는다)
+app.get('/srview', (c) => shareNotFound(c))
+app.get('/srview/', (c) => shareNotFound(c))
+
+/** 공유 링크 404 — 존재/미존재/미배포를 구분해서 알려주지 않는다(열거 차단). 대비 ≥ 7:1. */
+function shareNotFound(c: any): Response {
+  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>링크를 찾을 수 없습니다 — SEASTAR</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{background:#0b1220;color:#e6edf7;font-family:Pretendard,system-ui,-apple-system,"Segoe UI",sans-serif;
+       display:flex;align-items:center;justify-content:center;text-align:center;padding:24px}
+  .c{max-width:520px}
+  h1{font-size:20px;margin:0 0 12px;color:#e6edf7}
+  p{font-size:14px;line-height:1.7;margin:0 0 8px;color:#9fb0c9}
+  a{color:#f0b429;text-decoration:underline}
+</style></head><body><div class="c">
+<h1>링크를 찾을 수 없습니다</h1>
+<p>주소가 정확하지 않거나, 공유가 해제된 링크입니다.</p>
+<p>프로젝트 이름만으로는 열람할 수 없습니다 — 배포 담당자에게 전체 링크를 다시 요청하세요.</p>
+<p><a href="/">SEASTAR 360° 홈으로</a></p>
+</div></body></html>`
+  return new Response(html, { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } })
+}
 
 /* ════════════════════════════════════════════════════════════
    [마스터: 수익화] 과금/구독(Billing) — 테넌트(고객사)별 요금제 + 사용량 게이팅
@@ -2142,6 +2263,11 @@ app.post('/api/projects/:id/publish', async (c) => {
   const now = Date.now()
   await c.env.DB.prepare('UPDATE projects SET published = 1, published_at = ?, published_by = ?, updated_at = ? WHERE id = ? AND deleted = 0')
     .bind(now, user.email, now, pid).run()
+  // [P61] 공유 주소 토큰 — 없을 때만 1회 발급한다.
+  //   🔴 재배포/이름변경에서 **절대 재발급하지 않는다**: 이미 고객에게 나간 링크가 죽으면 안 된다.
+  //   slug 는 저장하지 않는다(응답 시 name 에서 파생) → 이름을 바꾸면 주소의 이름 부분만 따라 바뀌고
+  //   토큰은 그대로이므로 옛 링크·새 링크가 **둘 다** 열린다.
+  await ensureShareToken(c, pid)
   await logActivity(c, 'project.publish', { actor: user, targetType: 'project', targetId: pid })
   const row: any = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(pid).first()
   return c.json({ success: true, project: row ? mapProject(row) : null })

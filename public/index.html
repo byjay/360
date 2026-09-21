@@ -10,23 +10,23 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="360 Viewer" />
   <meta name="application-name" content="360 Viewer" />
-  <link rel="icon" type="image/svg+xml" href="images/favicon.svg" />
-  <link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png" />
-  <link rel="apple-touch-icon" sizes="192x192" href="images/icon-192.png" />
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/images/icon-64.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/images/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/images/icon-192.png" />
   <!-- [버그수정] FontAwesome 미로드로 fa-solid 아이콘 58곳이 백지였음 → CDN 로드 -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <!-- 본문 UI: Pretendard(한글 최적 모던 산세리프) · 수치/좌표: JetBrains Mono(CAD 가독성) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="/css/style.css" />
   <!-- SEASTAR 패밀리룩(구조패턴) 헬퍼 — 기존 스타일 위 가산. 컴포넌트가 .fl-* opt-in -->
-  <link rel="stylesheet" href="css/seastar-family-tokens.css" />
+  <link rel="stylesheet" href="/css/seastar-family-tokens.css" />
   <!-- [마스터] 다크 메탈릭 3D 스킨 — 외형만 가산 오버레이(맨 아래 로드) -->
-  <link rel="stylesheet" href="css/seastar-3d-skin.css" />
+  <link rel="stylesheet" href="/css/seastar-3d-skin.css" />
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
@@ -48,7 +48,8 @@
        ─────────────────────────────────────────────── */
     window.WM_BRAND = {
       // 회사 로고 (SEASTAR Inc.) — 실패 시 텍스트 워드마크로 자동 폴백
-      logoUrl:     "images/logo.png",
+      logoUrl:     "/images/logo.png",   // [P61] 🔴 절대경로 필수 — 공유 링크 /srview/<이름>-<토큰> 에서
+                                          //   상대경로면 /srview/images/logo.png 로 요청돼 로고가 깨진다(실측 확인).
       company:     "SEASTAR Inc.",
       companyShort:"SEASTAR",
       product:     "360° Location Viewer",
@@ -1237,9 +1238,9 @@
 <!-- Three.js (WebGL 360° panorama — UMD build) -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <!-- Firebase (본인 Google 계정 저장 — 설정 시 자동 활성화) -->
-<script src="js/firebase-config.js"></script>
-<script type="module" src="js/firebase-init.js"></script>
-<script src="js/main.js"></script>
+<script src="/js/firebase-config.js"></script>
+<script type="module" src="/js/firebase-init.js"></script>
+<script src="/js/main.js"></script>
 <!-- Service Worker 등록 (PWA 오프라인 앱 셸) — 새 버전 자동 감지·즉시 적용 -->
 <script>
   if ('serviceWorker' in navigator) {
@@ -1253,7 +1254,7 @@
     });
 
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').then(function (reg) {
+      navigator.serviceWorker.register('/sw.js').then(function (reg) {
         // 등록 즉시 업데이트 확인(캐시된 옛 SW 강제 교체)
         try { reg.update(); } catch (e) {}
 
@@ -1496,7 +1497,7 @@
 
       <!-- 하단: 씨스타 로고 (동영상 자리 대체) -->
       <div class="login-logo-bottom">
-        <img src="images/logo.png" alt="SEASTAR" />
+        <img src="/images/logo.png" alt="SEASTAR" />
         <span class="login-corp">© SEASTAR Inc.</span>
       </div>
     </div>

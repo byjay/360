@@ -551,7 +551,11 @@
       this._suppressDemoBadge = true;                    // 자동입장은 데모 배지를 띄우지 않는다
       // [P48] 🔴 배포 링크(?d=)로 들어온 세션은 **열람 전용** 토큰만 요청한다.
       //   쓰기 차단의 최종 방어선은 서버 미들웨어이고, 여기는 "애초에 쓰기 자격을 받지 않는다"는 1차 방어다.
-      const kind = new URLSearchParams(location.search).get("d") ? "viewer" : "designer";
+      let kind = new URLSearchParams(location.search).get("d") ? "viewer" : "designer";
+      // [P61] 🔴 공유 링크 `/srview/<이름>-<토큰>` 도 배포 링크(?d=)와 **완전히 동일한 열람전용**이다.
+      //   새 주소 체계가 쓰기 구멍이 되면 p48 에서 막은 사고가 경로만 바꿔 되살아난다.
+      //   판정은 ShareLink.token() 한 곳에서만 한다(SoT).
+      if (typeof ShareLink !== "undefined" && ShareLink.token()) kind = "viewer";
       this.idToken = await this._mintAutoEntryToken(kind) || AUTO_DESIGNER_TOKEN;
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
       await this.refresh();                              // 서버가 전용 토큰을 검증해 role='designer' 세팅

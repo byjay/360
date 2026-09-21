@@ -641,6 +641,59 @@
     }
   };
 
+  /* ══════════════════════════════════════════════════════════════════
+     [P61] ShareLink — 공유 주소 `/srview/<프로젝트명>-<토큰>`
+     마스터 2026-09-21: "scan.seastar.work/프로젝트이름 — 이런 식으로 배포해줘"
+     마스터 2026-09-18: "다른 프로젝트를 유추할 수 없도록" + "보이는 건 seastar 과 srview"
+
+     · 이름(slug)은 **장식**이다 — 고객이 주소만 보고 무슨 프로젝트인지 알게 하는 용도.
+     · 실제 열쇠는 **토큰**(서버 80비트 암호난수). 토큰이 틀리면 서버가 404 를 준다.
+     · 이름이 바뀌어도 토큰이 같으면 옛 링크가 그대로 열린다(slug 는 무시하고 파싱).
+
+     🔴 이 객체는 "현재 주소가 공유 링크인가"의 **단일 판정원(SoT)** 이다.
+        22_Auth(열람전용 토큰 요청) · 20_App(배포본 선택) · 99_footer(진입)가 전부 여기만 본다.
+        판정이 세 군데로 갈라지면 한 곳만 고쳐져 쓰기가 뚫린다(p48 사고와 동일 구조).
+  ══════════════════════════════════════════════════════════════════ */
+  const ShareLink = {
+    /** resolve() 로 채워지는 캐시 — 20_App.loadLatestDeployment 가 읽는다. */
+    deploymentId: null,
+    project: null,
+    _resolved: null,
+
+    /** 서버 src/lib/util.ts 의 isShareToken 과 동일 규격: base32 소문자 16자(=80비트). */
+    isToken(t) { return /^[a-z2-7]{16}$/.test(String(t || "")); },
+
+    /** 현재(또는 주어진) 주소가 공유 링크면 토큰, 아니면 null.
+     *  slug 에 하이픈이 몇 개 있든 **마지막 '-' 뒤**가 토큰이다(토큰 알파벳에 '-' 없음 → 분리 유일). */
+    token(loc) {
+      const L = loc || (typeof location !== "undefined" ? location : null);
+      if (!L) return null;
+      const m = String(L.pathname || "").match(/^\/srview\/([^/]+)\/?$/);
+      if (!m) return null;
+      let seg = m[1];
+      try { seg = decodeURIComponent(seg); } catch (e) {}
+      const i = seg.lastIndexOf("-");
+      const t = i >= 0 ? seg.slice(i + 1) : seg;
+      return this.isToken(t) ? t : null;
+    },
+
+    /** 토큰 → { project, deployment_id }. 실패하면 null(조용한 성공 위장 금지). */
+    async resolve() {
+      const t = this.token();
+      if (!t) return null;
+      try {
+        const r = await fetch("/api/share/" + encodeURIComponent(t));
+        if (!r.ok) return null;                       // 404 = 토큰 불일치/미배포 — 힌트 없음
+        const j = await r.json();
+        if (!j || !j.matched || !j.project) return null;
+        this.project = { id: j.project.id, name: j.project.name };
+        this.deploymentId = j.deployment_id || null;
+        this._resolved = j;
+        return j;
+      } catch (e) { return null; }                    // 오프라인 → 정직하게 실패
+    }
+  };
+
   const PDF = {
     // 로컬 번들 worker 우선(외부 CDN worker가 차단/지연될 때 PDF가 무한 로딩되는 문제 방지)
     WORKER_SRC: "/vendor/pdf.worker.min.js",
@@ -4381,19 +4434,21 @@
       this.renderTree();
     },
 
-    /* [사이드바 재구성] 🔴 마스터 확정 계층(2026-09-21):
-         프로젝트 > 도면(deployment) > 구역(parent_id IS NULL 인 deck) > 영역(parent_id = 구역 id 인 deck) > 핀
+    /* [사이드바 재구성] 🔴 마스터 확정 계층(2026-09-21 정정 — 3단):
+         프로젝트 > 구역(parent_id IS NULL 인 deck) > 영역(parent_id = 구역 id 인 deck) > 핀
        데이터(Projects.currentProject / Projects.decks / State.zones / State.pins)를 읽어 렌더,
        이벤트는 기존 함수(Projects.selectDeck / Zones.focus / App.focusPin)에 그대로 위임한다.
 
-       [WO 20260921-tree] 도면 단 신설 · decks.parent_id 도입:
-         · 과거 트리는 구역 > 도면 > 영역 > 핀 이라 2·3단이 마스터 요구와 뒤바뀌어 있었다.
-         · 이제 deployment_id 로 먼저 묶어 '도면'을 한 단으로 세우고, 그 아래에 구역을 건다.
+       [WO 20260921-tree3] 🔴 "도면"은 트리 단계가 아니다(마스터 정정):
+         · 직전 커밋(eeeab36)이 세운 4단(프로젝트>도면>구역>영역)을 3단으로 되돌린다.
+         · decks.parent_id(마이그레이션 0025, 프로덕션 적용 완료)는 그대로 쓴다 —
+           parent_id NULL = 구역, parent_id 있음 = 영역. 이 구조는 3단과 정확히 맞는다.
+         · 🔴 도면 출처 정보는 버리지 않는다 — 트리 "단"에서만 빼고, 구역/영역 노드 안에
+           부가 라벨(.tree-doc-src, docLabel())로 남긴다(아래 deckNode 참조).
          · 도면 이름 정본 = API 가 JOIN 해 준 deployment_file_name/deployment_title.
            없으면 현재 로드된 도면의 State.fileName, 그래도 없으면 일반 표기("등록 도면").
            🔴 없는 이름을 지어내지 않는다.
-         · parent_id 가 NULL 인 deck = 도면 바로 아래 구역(마이그레이션 0025 이전 기존 행 전부).
-           parent_id 가 가리키는 부모가 목록에 없으면(삭제됨) 최상위로 승격 — 숨기지 않는다.
+         · parent_id 가 가리키는 부모가 목록에 없으면(삭제됨) 최상위로 승격 — 숨기지 않는다.
 
        [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 없음:
          · 구역/영역: 항상 전체 표시(필터 없음).
@@ -4408,7 +4463,6 @@
       const ICO = {
         project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
         deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
-        doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
         region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
         pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
       };
@@ -4448,16 +4502,8 @@
         childrenOf.get(pid).push(d);
       });
 
-      /* ── 도면(deployment) 단위 그룹 — 영역(자식 deck)은 부모 구역을 따라가므로 최상위만 묶는다 ── */
-      const groups = [];
-      const gmap = new Map();
-      decks.forEach((d) => {
-        if (parentKey(d)) return;
-        const key = d.deployment_id ? String(d.deployment_id) : "__nodoc__";
-        let g = gmap.get(key);
-        if (!g) { g = { key, depId: d.deployment_id || null, decks: [] }; gmap.set(key, g); groups.push(g); }
-        g.decks.push(d);
-      });
+      /* ── 3단: 최상위 구역(parent_id 없음) 목록 — 도면 그룹핑 없이 프로젝트 바로 아래에 건다 ── */
+      const rootDecks = decks.filter((d) => !parentKey(d));
       const docLabel = (depId) => {
         if (!depId) return "도면 미등록";
         const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
@@ -4490,7 +4536,11 @@
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
         // [항목4] 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
         const zoneCntTag = loaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + esc(deck.name || (isRegion ? "영역" : "구역")) + '</span>' + _tag + zoneCntTag;
+        // [WO 20260921-tree3] 🔴 도면 출처 유실 금지 — 트리 "단"에서 도면을 뺀 대신, 구역/영역 이름
+        //   옆에 원본 도면 파일명을 부가 라벨로 남긴다(docLabel 은 없는 이름을 지어내지 않는다).
+        const docName = deck.deployment_id ? docLabel(deck.deployment_id) : null;
+        const srcTag = docName ? '<span class="tree-label-sub tree-doc-src" title="원본 도면: ' + esc(docName) + '">' + esc(docName) + '</span>' : "";
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + esc(deck.name || (isRegion ? "영역" : "구역")) + '</span>' + srcTag + _tag + zoneCntTag;
         head.addEventListener("click", (e) => {
           if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { g.classList.toggle("open"); return; }
           if (isCur) { g.classList.toggle("open"); }
@@ -4501,7 +4551,7 @@
         const kids = document.createElement("div");
         kids.className = "tree-children";
         let any = false;
-        // 4단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck)
+        // 3단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck)
         subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); any = true; });
         if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
@@ -4537,24 +4587,7 @@
         return g;
       };
 
-      /* ── 2단: 도면 ──────────────────────────────────────────────── */
-      const docNode = (grp) => {
-        const wrap = document.createElement("div");
-        wrap.className = "tree-doc open"; // 기본 펼침 — 4단이 한눈에 보여야 한다
-        const head = document.createElement("button");
-        const isCurDoc = !!(grp.depId && String(grp.depId) === String(State.currentDeploymentId || ""));
-        head.className = "tree-node tree-node-doc" + (isCurDoc ? " active" : "");
-        head.innerHTML = C + ICO.doc + '<span class="tree-label">' + esc(docLabel(grp.depId)) + '</span><span class="tree-cnt" title="구역 수">' + grp.decks.length + '</span>';
-        head.addEventListener("click", () => { wrap.classList.toggle("open"); });
-        wrap.appendChild(head);
-        const kids = document.createElement("div");
-        kids.className = "tree-children";
-        grp.decks.forEach((d) => kids.appendChild(deckNode(d, false)));
-        wrap.appendChild(kids);
-        return wrap;
-      };
-
-      /* ── 1단: 프로젝트 ──────────────────────────────────────────── */
+      /* ── 1단: 프로젝트 — 2단(구역)을 바로 붙인다(도면 그룹핑 단 없음, 마스터 정정) ──── */
       let mount = host;
       const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
       if (proj) {
@@ -4562,7 +4595,7 @@
         pw.className = "tree-project open";
         const ph = document.createElement("button");
         ph.className = "tree-node tree-node-project";
-        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span><span class="tree-cnt" title="도면 수">' + groups.length + '</span>';
+        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span><span class="tree-cnt" title="구역 수">' + rootDecks.length + '</span>';
         ph.addEventListener("click", () => { pw.classList.toggle("open"); });
         pw.appendChild(ph);
         const pk = document.createElement("div");
@@ -4571,7 +4604,7 @@
         host.appendChild(pw);
         mount = pk;
       }
-      groups.forEach((grp) => mount.appendChild(docNode(grp)));
+      rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));
     },
 
     renderPinsOnMap(dropPinId) {
@@ -5323,7 +5356,8 @@
     /** [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 딥링크(?d=)를 미리 조회해 캐시.
      *  실패해도 카드 렌더 자체는 정상 진행 — 주소 행만 조용히 생략(카드 붕괴 금지). */
     async _resolveDeployLinks() {
-      const targets = (this.list || []).filter((p) => p.published && !p.subdomain && this._deployLinkCache[p.id] === undefined);
+      // [P61] share_path 가 있으면 그것이 정본 주소다 → 레거시 `?d=` 조회를 할 이유가 없다(요청 절약).
+      const targets = (this.list || []).filter((p) => p.published && !p.share_path && !p.subdomain && this._deployLinkCache[p.id] === undefined);
       if (!targets.length) return;
       await Promise.all(targets.map(async (p) => {
         try {
@@ -5683,6 +5717,18 @@
       const host = loc.hostname || "";
       const parts = host.split(".");
       const base = parts.length >= 2 ? parts.slice(-2).join(".") : host;
+      const origin0 = loc.origin || (loc.protocol + "//" + host);
+      // [P61] 🔴 1순위 = 공유 주소 `/srview/<프로젝트명>-<토큰>`.
+      //   경로 문자열은 **서버가** projects.name 에서 파생해 내려준다(share_path) — 클라가 슬러그 규칙을
+      //   다시 구현하면 SoT 가 둘로 갈라진다. 여기서는 접속 origin 만 붙인다(도메인 하드코딩 0).
+      if (p.share_path) {
+        // 화면/복사는 **사람이 읽는 형태**로. 서버는 퍼센트인코딩된 정본을 주지만, 마스터 요구는
+        // "고객이 봐도 알 수 있게" 다 → 한글을 디코드해 보여준다(브라우저·메신저가 붙여넣기 시 재인코딩).
+        // 슬러그 문자집합에 공백·`/`·`?` 가 없으므로 디코드해도 링크가 끊기지 않는다.
+        let sp = p.share_path;
+        try { sp = decodeURIComponent(sp); } catch (e) {}
+        return origin0 + sp;
+      }
       if (p.subdomain) return loc.protocol + "//" + p.subdomain + "." + base;
       const depId = this._deployLinkCache[p.id];
       if (depId) {
@@ -11448,7 +11494,9 @@
       try {
         // [B1] 링크에 배포 ID(?d=)가 있으면 그 배포본을 정확히 로드
         const params = new URLSearchParams(location.search);
-        let wantId = params.get("d");
+        // [P61] 공유 링크 `/srview/<이름>-<토큰>` 으로 들어온 경우 서버가 해석해 준 배포본을 쓴다.
+        //   `?d=` 와 동일한 자리에 들어가므로 이후 로직(로드/폴백)은 한 줄도 갈라지지 않는다.
+        let wantId = params.get("d") || ((typeof ShareLink !== "undefined" && ShareLink.deploymentId) || null);
         let latest = null;
 
         // [N4] 설계자 프로젝트 재진입: 그 프로젝트 deck 의 배포본을 로드(작업 복원)
@@ -12315,7 +12363,11 @@
       this._suppressDemoBadge = true;                    // 자동입장은 데모 배지를 띄우지 않는다
       // [P48] 🔴 배포 링크(?d=)로 들어온 세션은 **열람 전용** 토큰만 요청한다.
       //   쓰기 차단의 최종 방어선은 서버 미들웨어이고, 여기는 "애초에 쓰기 자격을 받지 않는다"는 1차 방어다.
-      const kind = new URLSearchParams(location.search).get("d") ? "viewer" : "designer";
+      let kind = new URLSearchParams(location.search).get("d") ? "viewer" : "designer";
+      // [P61] 🔴 공유 링크 `/srview/<이름>-<토큰>` 도 배포 링크(?d=)와 **완전히 동일한 열람전용**이다.
+      //   새 주소 체계가 쓰기 구멍이 되면 p48 에서 막은 사고가 경로만 바꿔 되살아난다.
+      //   판정은 ShareLink.token() 한 곳에서만 한다(SoT).
+      if (typeof ShareLink !== "undefined" && ShareLink.token()) kind = "viewer";
       this.idToken = await this._mintAutoEntryToken(kind) || AUTO_DESIGNER_TOKEN;
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
       await this.refresh();                              // 서버가 전용 토큰을 검증해 role='designer' 세팅
@@ -17130,7 +17182,17 @@
     const params  = new URLSearchParams(location.search);
     const urlMode = params.get("mode");
     const depId   = params.get("d");
-    if (depId) {
+    // [P61] 공유 주소 `/srview/<프로젝트명>-<토큰>` — 서버가 토큰을 이미 검증해 셸을 내줬다.
+    //   여기서는 토큰으로 프로젝트/배포본만 해석해 **열람 전용**으로 연다(?d= 와 동일 취급).
+    const shareTok = (typeof ShareLink !== "undefined") ? ShareLink.token() : null;
+    if (shareTok) {
+      State.viewerLocked = true;
+      (async () => {
+        const j = await ShareLink.resolve();
+        // 해석 실패(오프라인/링크 해제)여도 설계자 화면으로 새지 않는다 — 잠긴 뷰어 유지.
+        App.openApp("viewer", (j && j.project) ? { project: { id: j.project.id, name: j.project.name } } : undefined);
+      })();
+    } else if (depId) {
       // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
       State.viewerLocked = true;
       App.openApp("viewer");

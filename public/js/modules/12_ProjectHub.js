@@ -383,7 +383,8 @@
     /** [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 딥링크(?d=)를 미리 조회해 캐시.
      *  실패해도 카드 렌더 자체는 정상 진행 — 주소 행만 조용히 생략(카드 붕괴 금지). */
     async _resolveDeployLinks() {
-      const targets = (this.list || []).filter((p) => p.published && !p.subdomain && this._deployLinkCache[p.id] === undefined);
+      // [P61] share_path 가 있으면 그것이 정본 주소다 → 레거시 `?d=` 조회를 할 이유가 없다(요청 절약).
+      const targets = (this.list || []).filter((p) => p.published && !p.share_path && !p.subdomain && this._deployLinkCache[p.id] === undefined);
       if (!targets.length) return;
       await Promise.all(targets.map(async (p) => {
         try {
@@ -743,6 +744,18 @@
       const host = loc.hostname || "";
       const parts = host.split(".");
       const base = parts.length >= 2 ? parts.slice(-2).join(".") : host;
+      const origin0 = loc.origin || (loc.protocol + "//" + host);
+      // [P61] 🔴 1순위 = 공유 주소 `/srview/<프로젝트명>-<토큰>`.
+      //   경로 문자열은 **서버가** projects.name 에서 파생해 내려준다(share_path) — 클라가 슬러그 규칙을
+      //   다시 구현하면 SoT 가 둘로 갈라진다. 여기서는 접속 origin 만 붙인다(도메인 하드코딩 0).
+      if (p.share_path) {
+        // 화면/복사는 **사람이 읽는 형태**로. 서버는 퍼센트인코딩된 정본을 주지만, 마스터 요구는
+        // "고객이 봐도 알 수 있게" 다 → 한글을 디코드해 보여준다(브라우저·메신저가 붙여넣기 시 재인코딩).
+        // 슬러그 문자집합에 공백·`/`·`?` 가 없으므로 디코드해도 링크가 끊기지 않는다.
+        let sp = p.share_path;
+        try { sp = decodeURIComponent(sp); } catch (e) {}
+        return origin0 + sp;
+      }
       if (p.subdomain) return loc.protocol + "//" + p.subdomain + "." + base;
       const depId = this._deployLinkCache[p.id];
       if (depId) {

@@ -4101,7 +4101,9 @@
       try {
         // [B1] 링크에 배포 ID(?d=)가 있으면 그 배포본을 정확히 로드
         const params = new URLSearchParams(location.search);
-        let wantId = params.get("d");
+        // [P61] 공유 링크 `/srview/<이름>-<토큰>` 으로 들어온 경우 서버가 해석해 준 배포본을 쓴다.
+        //   `?d=` 와 동일한 자리에 들어가므로 이후 로직(로드/폴백)은 한 줄도 갈라지지 않는다.
+        let wantId = params.get("d") || ((typeof ShareLink !== "undefined" && ShareLink.deploymentId) || null);
         let latest = null;
 
         // [N4] 설계자 프로젝트 재진입: 그 프로젝트 deck 의 배포본을 로드(작업 복원)

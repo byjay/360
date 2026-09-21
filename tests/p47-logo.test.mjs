@@ -62,8 +62,8 @@ record(
 // ══════════════════════════════════════════════════════════════
 const logoUrlMatch = html.match(/logoUrl:\s*"([^"]+)"/);
 record(
-  "③ logoUrl 경로가 여전히 images/logo.png",
-  !!logoUrlMatch && logoUrlMatch[1] === "images/logo.png",
+  "③ logoUrl 경로가 여전히 logo.png (P61: 상대→절대 교정, 파일은 동일)",
+  !!logoUrlMatch && /^\/?images\/logo\.png$/.test(logoUrlMatch[1]),
   `logoUrl=${logoUrlMatch ? logoUrlMatch[1] : "(없음)"}`
 );
 
@@ -75,7 +75,10 @@ const renderPoints = [
   { name: "#brand-logo-home (홈)", re: /<div id="brand-logo-home" class="brand-logo brand-logo-home"/ },
   { name: "#brand-logo-top (작업화면 상단바)", re: /<div id="brand-logo-top" class="brand-logo brand-logo-top"/ },
   { name: "#brand-logo-pano (파노라마)", re: /<div id="brand-logo-pano" class="brand-logo brand-logo-pano"/ },
-  { name: ".login-logo-bottom img (로그인 하단, 정정된 5번째 지점)", re: /<div class="login-logo-bottom">\s*<img src="images\/logo\.png"/ },
+  // [P61] src 는 상대/절대 둘 다 허용 — 공유 주소 `/srview/<이름>-<토큰>` 딥링크에서 상대경로가
+  //   /srview/images/logo.png 로 깨지므로 index.html 전체를 절대경로로 교정했다. 검사 의도는
+  //   "이 렌더 지점에 로고 마크업이 존재하는가" 이지 경로 표기 형식이 아니다.
+  { name: ".login-logo-bottom img (로그인 하단, 정정된 5번째 지점)", re: /<div class="login-logo-bottom">\s*<img src="\/?images\/logo\.png"/ },
 ];
 for (const rp of renderPoints) {
   record(`④ 렌더 지점 존재 — ${rp.name}`, rp.re.test(html), rp.re.test(html) ? "존재" : "마크업 없음(렌더 고아)");
