@@ -158,13 +158,23 @@
       this.renderTree();
     },
 
-    /* [사이드바 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리.
-       데이터(Projects.decks / State.zones / State.pins)를 읽어 렌더, 이벤트는 기존 함수에 위임.
-       [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 제거:
-         · 구역: 항상 전체 표시(과거에도 이미 그랬음 — decks.forEach 는 필터 없음, 유지).
-         · 영역/핀: 과거엔 State.pdfPage 와 일치하는 것만 표시했다 → 다른 페이지 항목이 안 보였다.
-           이제 로드된 구역(=State.currentDeploymentId 와 일치)의 전체 페이지 영역/핀을 항상 표시하고,
-           현재 페이지 항목만 .active 로 "구분"한다(숨기지 않는다).
+    /* [사이드바 재구성] 🔴 마스터 확정 계층(2026-09-21):
+         프로젝트 > 도면(deployment) > 구역(parent_id IS NULL 인 deck) > 영역(parent_id = 구역 id 인 deck) > 핀
+       데이터(Projects.currentProject / Projects.decks / State.zones / State.pins)를 읽어 렌더,
+       이벤트는 기존 함수(Projects.selectDeck / Zones.focus / App.focusPin)에 그대로 위임한다.
+
+       [WO 20260921-tree] 도면 단 신설 · decks.parent_id 도입:
+         · 과거 트리는 구역 > 도면 > 영역 > 핀 이라 2·3단이 마스터 요구와 뒤바뀌어 있었다.
+         · 이제 deployment_id 로 먼저 묶어 '도면'을 한 단으로 세우고, 그 아래에 구역을 건다.
+         · 도면 이름 정본 = API 가 JOIN 해 준 deployment_file_name/deployment_title.
+           없으면 현재 로드된 도면의 State.fileName, 그래도 없으면 일반 표기("등록 도면").
+           🔴 없는 이름을 지어내지 않는다.
+         · parent_id 가 NULL 인 deck = 도면 바로 아래 구역(마이그레이션 0025 이전 기존 행 전부).
+           parent_id 가 가리키는 부모가 목록에 없으면(삭제됨) 최상위로 승격 — 숨기지 않는다.
+
+       [WO 20260917-pin] 마스터 지시("항상 리스트가 보이게, 모든 항목에 대해") — 조건부 숨김 없음:
+         · 구역/영역: 항상 전체 표시(필터 없음).
+         · 영역JSON(State.zones)/핀: 전체 페이지를 항상 표시하고, 현재 페이지 항목만 .active 로 "구분"한다.
          · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
            개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
     renderTree() {
@@ -173,8 +183,10 @@
       const esc = (s) => this.escapeHtml(s);
       const C = '<svg class="tree-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
       const ICO = {
+        project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
         deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
         doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+        region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
         pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
@@ -195,40 +207,80 @@
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
-      decks.forEach((deck) => {
-        const isCur = typeof Projects !== "undefined" && Projects.currentDeck && Projects.currentDeck.id === deck.id;
-        // [WO 20260917-pin] 이 구역의 도면이 '실제로 로드된 도면'인지(=State 에 zone/pin 데이터가 실존)
-        //   isCur(선택됨)와는 별개 — 선택 직후 비동기 로딩 중엔 isLoaded 가 false 인 게 정상(가짜 데이터 금지).
-        const isLoaded = !!(deck.deployment_id && deck.deployment_id === State.currentDeploymentId);
+
+      /* ── 계층 인덱스 ─────────────────────────────────────────────── */
+      const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
+      const byId = new Map();
+      decks.forEach((d) => byId.set(String(d.id), d));
+      // 부모가 실존할 때만 자식으로 접는다 — 부모가 삭제됐거나 자기참조면 최상위로 승격(숨김 금지).
+      const parentKey = (d) => {
+        const pid = d.parent_id != null ? String(d.parent_id) : "";
+        return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
+      };
+      const childrenOf = new Map();
+      decks.forEach((d) => {
+        const pid = parentKey(d);
+        if (!pid) return;
+        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+        childrenOf.get(pid).push(d);
+      });
+
+      /* ── 도면(deployment) 단위 그룹 — 영역(자식 deck)은 부모 구역을 따라가므로 최상위만 묶는다 ── */
+      const groups = [];
+      const gmap = new Map();
+      decks.forEach((d) => {
+        if (parentKey(d)) return;
+        const key = d.deployment_id ? String(d.deployment_id) : "__nodoc__";
+        let g = gmap.get(key);
+        if (!g) { g = { key, depId: d.deployment_id || null, decks: [] }; gmap.set(key, g); groups.push(g); }
+        g.decks.push(d);
+      });
+      const docLabel = (depId) => {
+        if (!depId) return "도면 미등록";
+        const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
+        if (hit) return hit.deployment_file_name || hit.deployment_title;
+        if (String(depId) === String(State.currentDeploymentId || "") && State.fileName) return State.fileName;
+        return "등록 도면";
+      };
+
+      /* 같은 도면을 여러 deck(구역/영역)이 가리키므로 State(영역JSON·핀)를 붙일 deck 을 하나로 정한다.
+         선택된 deck 이 그 도면 안에 있으면 그 deck 에만, 없으면 종전대로 로드된 deck 에 붙인다. */
+      const hasState = (deck) => {
+        if (!deck.deployment_id || String(deck.deployment_id) !== String(State.currentDeploymentId || "")) return false;
+        if (curDeck && String(curDeck.deployment_id || "") === String(deck.deployment_id)) return String(curDeck.id) === String(deck.id);
+        return true;
+      };
+
+      /* ── 구역/영역 노드(같은 생성기 — 깊이만 다르다) ───────────────── */
+      const deckNode = (deck, isRegion) => {
+        const isCur = !!(curDeck && String(curDeck.id) === String(deck.id));
+        const loaded = hasState(deck);
+        const subDecks = childrenOf.get(String(deck.id)) || [];
         const g = document.createElement("div");
-        g.className = "tree-deck" + (isLoaded ? " open" : ""); // [항목2] 기본 펼침(로드된 구역)
+        g.className = (isRegion ? "tree-region" : "tree-deck") + ((loaded || subDecks.length) ? " open" : "");
         const head = document.createElement("button");
-        head.className = "tree-node tree-node-deck" + (isCur ? " active" : "");
+        head.className = "tree-node " + (isRegion ? "tree-node-region" : "tree-node-deck") + (isCur ? " active" : "");
         // [B4] '도면없음'(구역에 도면 미등록) 과 '미저장'(로컬에만 있고 서버 미반영)을 구분 표시
         const _unsaved = (typeof App !== "undefined" && App.isDeckUnsaved) ? App.isDeckUnsaved(deck.id) : false;
         const _tag = _unsaved
           ? '<span class="tree-tag tree-tag-unsaved" title="로컬에만 있음 — ‘저장’을 눌러 서버에 반영하세요">미저장</span>'
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
-        // [항목4] 구역별 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
-        const zoneCntTag = isLoaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
-        head.innerHTML = C + ICO.deck + '<span class="tree-label">' + esc(deck.name || "구역") + '</span>' + _tag + zoneCntTag;
-        head.addEventListener("click", () => {
+        // [항목4] 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
+        const zoneCntTag = loaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + esc(deck.name || (isRegion ? "영역" : "구역")) + '</span>' + _tag + zoneCntTag;
+        head.addEventListener("click", (e) => {
+          if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { g.classList.toggle("open"); return; }
           if (isCur) { g.classList.toggle("open"); }
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
-        // [WO 20260917-pin] 로드된 구역이면 전체 페이지의 영역/핀을 항상 표시(과거: 현재 페이지만).
-        //   State(도면/영역/핀)는 전역이라 다른 구역엔 데이터가 없으므로 isLoaded 구역에서만 하위 렌더.
-        if (isLoaded) {
-          const kids = document.createElement("div");
-          kids.className = "tree-children";
-          const fname = State.fileName || (deck.deployment_id ? "등록 도면" : null);
-          if (fname) {
-            const dn = document.createElement("div");
-            dn.className = "tree-node tree-node-doc";
-            dn.innerHTML = ICO.doc + '<span class="tree-label">' + esc(fname) + '</span>';
-            kids.appendChild(dn);
-          }
+
+        const kids = document.createElement("div");
+        kids.className = "tree-children";
+        let any = false;
+        // 4단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck)
+        subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); any = true; });
+        if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
           const pins = State.pins || [];   // 전체 페이지(필터 없음)
           const used = new Set();
@@ -256,10 +308,47 @@
             kids.appendChild(zn);
           });
           pins.filter((p) => !used.has(p.id)).forEach((p) => kids.appendChild(pinNode(p)));
-          g.appendChild(kids);
+          any = true;
         }
-        host.appendChild(g);
-      });
+        if (any) g.appendChild(kids);
+        return g;
+      };
+
+      /* ── 2단: 도면 ──────────────────────────────────────────────── */
+      const docNode = (grp) => {
+        const wrap = document.createElement("div");
+        wrap.className = "tree-doc open"; // 기본 펼침 — 4단이 한눈에 보여야 한다
+        const head = document.createElement("button");
+        const isCurDoc = !!(grp.depId && String(grp.depId) === String(State.currentDeploymentId || ""));
+        head.className = "tree-node tree-node-doc" + (isCurDoc ? " active" : "");
+        head.innerHTML = C + ICO.doc + '<span class="tree-label">' + esc(docLabel(grp.depId)) + '</span><span class="tree-cnt" title="구역 수">' + grp.decks.length + '</span>';
+        head.addEventListener("click", () => { wrap.classList.toggle("open"); });
+        wrap.appendChild(head);
+        const kids = document.createElement("div");
+        kids.className = "tree-children";
+        grp.decks.forEach((d) => kids.appendChild(deckNode(d, false)));
+        wrap.appendChild(kids);
+        return wrap;
+      };
+
+      /* ── 1단: 프로젝트 ──────────────────────────────────────────── */
+      let mount = host;
+      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
+      if (proj) {
+        const pw = document.createElement("div");
+        pw.className = "tree-project open";
+        const ph = document.createElement("button");
+        ph.className = "tree-node tree-node-project";
+        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span><span class="tree-cnt" title="도면 수">' + groups.length + '</span>';
+        ph.addEventListener("click", () => { pw.classList.toggle("open"); });
+        pw.appendChild(ph);
+        const pk = document.createElement("div");
+        pk.className = "tree-children";
+        pw.appendChild(pk);
+        host.appendChild(pw);
+        mount = pk;
+      }
+      groups.forEach((grp) => mount.appendChild(docNode(grp)));
     },
 
     renderPinsOnMap(dropPinId) {

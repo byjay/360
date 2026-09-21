@@ -4877,12 +4877,31 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-node svg{flex:0 0 auto;}
 .tree-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .tree-node-deck{font-weight:700;}
-.tree-node-doc{font-size:11.5px;color:var(--text2);}
+/* [WO 20260921-tree] 마스터 확정 4단(프로젝트>도면>구역>영역) — 각 단을 글자 굵기/크기로 구분한다.
+   들여쓰기는 .tree-children(padding-left 12px + margin-left 10px + 좌측 괘선)이 단마다 누적해 준다.
+   🔴 색 대비는 **런타임 실측**이다(소스 :root 값이 아니다 — seastar-3d-skin.css 가 :root 팔레트를
+      무조건 다크로 remap 하므로 이 파일의 라이트 기준 수치는 실제와 다르다).
+      헤드리스 Chrome 375x812 getComputedStyle + 알파 합성 실측(WCAG 2.1):
+        .tree-node-project / .tree-node-region : var(--text)  #e9eaee on #1d2025 = 13.59:1
+        .tree-node-doc(비활성)                 : var(--text2) #9095a0 on #1d2025 =  5.44:1
+      ⚠️ 기존 공유 규칙 .tree-node.active(var(--gold-ink) #7e5d12 on 합성 #393326)는 2.07:1 로
+         AA 미달이다 — 이 WO 이전부터 모든 트리 행에 걸려 있던 결함이며, 고치려면 다크 스킨에
+         --gold-ink 를 remap 해야 해 전역 영향이 있다. 별도 작업으로 분리한다. */
+.tree-node-project{font-weight:800;font-size:13px;color:var(--text);}
+.tree-node-doc{font-size:12px;font-weight:700;color:var(--text2);}
+/* 영역(구역의 자식 deck) — 구역(700/12.5px/--text)보다 한 단 가볍게 + 전용 아이콘으로 구분 */
+.tree-node-region{font-size:12px;font-weight:500;color:var(--text);}
 .tree-node-pin{font-size:12px;color:var(--text2);}
 .tree-caret{width:13px;height:13px;transition:transform .18s;color:var(--text3);}
-.tree-deck:not(.open) .tree-node-deck .tree-caret,.tree-zone:not(.open) .tree-node-zone .tree-caret{transform:rotate(-90deg);}
+.tree-deck:not(.open) .tree-node-deck .tree-caret,.tree-zone:not(.open) .tree-node-zone .tree-caret,
+.tree-project:not(.open) .tree-node-project .tree-caret,
+.tree-doc:not(.open) .tree-node-doc .tree-caret,
+.tree-region:not(.open) .tree-node-region .tree-caret{transform:rotate(-90deg);}
 .tree-deck:not(.open) > .tree-children{display:none;}
 .tree-zone:not(.open) > .tree-children{display:none;}
+.tree-project:not(.open) > .tree-children{display:none;}
+.tree-doc:not(.open) > .tree-children{display:none;}
+.tree-region:not(.open) > .tree-children{display:none;}
 .tree-children{padding-left:12px;border-left:1px solid var(--border2);margin-left:10px;}
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
 .tree-cnt{min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;

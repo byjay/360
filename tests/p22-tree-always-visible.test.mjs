@@ -136,6 +136,19 @@ function flattenHtml(el) {
   return out;
 }
 
+/** [WO 20260921-tree] 마스터 확정 4단(프로젝트>도면>구역>영역>핀) 도입으로 DOM 깊이가 깊어졌다.
+ *  이 테스트의 '의도'는 구조 좌표가 아니라 "숨김 없음 · 핸들러 동일"이므로,
+ *  인덱스 고정 접근(host._children[0]...) 대신 클래스명 재귀 탐색으로 바꾼다. */
+function findAll(el, cls, out) {
+  out = out || [];
+  const re = new RegExp("(^| )" + cls + "( |$)");
+  (el._children || []).forEach((c) => { if (re.test(c.className || "")) out.push(c); findAll(c, cls, out); });
+  return out;
+}
+function nodeByText(host, cls, text) {
+  return findAll(host, cls).find((b) => new RegExp(text).test(b._html || ""));
+}
+
 console.log("\n[정상 소스]");
 
 // ① 다른 페이지의 영역/핀도 표시된다
@@ -160,10 +173,8 @@ console.log("\n[정상 소스]");
 {
   const fx = baseFixture();
   const { host } = runTree(uiSrc, fx);
-  // tree-zone 구조: g(tree-deck) > kids > zn(tree-zone) > zh(tree-node-zone)
-  const deckDiv = host._children[0];
-  const kids = deckDiv._children[1]; // [0]=head button, [1]=kids container
-  const zoneNodes = kids._children.filter((c) => /tree-zone/.test(c.className));
+  // tree-zone 구조: ... > g(tree-deck) > kids > zn(tree-zone) > zh(tree-node-zone)
+  const zoneNodes = findAll(host, "tree-zone");
   const z1 = zoneNodes[0], z2 = zoneNodes[1];
   const zh1 = z1._children[0], zh2 = z2._children[0];
   ok(zh1.classList.contains("active"), "③ 현재 페이지(z1) 영역 헤더에 active 클래스 부여");
@@ -174,12 +185,9 @@ console.log("\n[정상 소스]");
 {
   const fx = baseFixture();
   const { host } = runTree(uiSrc, fx);
-  const deckDiv = host._children[0];
-  const head = deckDiv._children[0];
+  const head = nodeByText(host, "tree-node-deck", "1층");
   ok(/tree-cnt[^>]*>2</.test(head.innerHTML), `④ 구역(1층) 영역 수 배지 = 2 (실제 head html 일부: ${(head.innerHTML.match(/tree-cnt[^<]*<\/span>[^<]*<\/span>/) || [""])[0]})`);
-  const kids = deckDiv._children[1];
-  const zoneNodes = kids._children.filter((c) => /tree-zone/.test(c.className));
-  const zh1 = zoneNodes[0]._children[0];
+  const zh1 = findAll(host, "tree-zone")[0]._children[0];
   ok(/tree-cnt[^>]*>1</.test(zh1.innerHTML), "④ 영역(00룸) 핀 수 배지 = 1");
 }
 
@@ -195,9 +203,7 @@ console.log("\n[정상 소스]");
 {
   const fx = baseFixture();
   const { host } = runTree(uiSrc, fx);
-  const deckDiv = host._children[0];
-  const kids = deckDiv._children[1];
-  const zoneNodes = kids._children.filter((c) => /tree-zone/.test(c.className));
+  const zoneNodes = findAll(host, "tree-zone");
   const zh1 = zoneNodes[0]._children[0];
   zh1.click();
   ok(fx.zoneFocusCalls.length === 1 && fx.zoneFocusCalls[0] === "z1", "⑥ 영역 클릭 → Zones.focus('z1') 호출(기존 그대로)");
@@ -207,8 +213,7 @@ console.log("\n[정상 소스]");
   ok(fx.focusPinCalls.length === 1 && fx.focusPinCalls[0] === "p1", "⑥ 핀 클릭 → App.focusPin('p1') 호출(기존 그대로)");
 
   // 다른(비선택) 구역 클릭 → Projects.selectDeck 호출
-  const deck2Div = host._children[1];
-  const head2 = deck2Div._children[0];
+  const head2 = nodeByText(host, "tree-node-deck", "2층");
   head2.click();
   ok(fx.selectDeckCalls.length === 1 && fx.selectDeckCalls[0] === "d2", "⑥ 미선택 구역 클릭 → Projects.selectDeck('d2') 호출(기존 그대로)");
 }
@@ -243,10 +248,7 @@ console.log("\n[정상 소스]");
   else {
     const fx = baseFixture();
     const { host } = runTree(mutated, fx);
-    const deckDiv = host._children[0];
-    const kids = deckDiv._children[1];
-    const zoneNodes = kids._children.filter((c) => /tree-zone/.test(c.className));
-    const zh1 = zoneNodes[0]._children[0];
+    const zh1 = findAll(host, "tree-zone")[0]._children[0];
     ok(!zh1.classList.contains("active"),
       "뮤테이션 적용 시 ③이 깨짐(테스트 실효성 증명 — 현재 페이지 영역도 active 없음)");
   }

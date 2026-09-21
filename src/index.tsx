@@ -1439,7 +1439,15 @@ function mapDeck(r: any) {
   // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
   let crop: any = null
   if (r.crop) { try { crop = JSON.parse(r.crop) } catch { crop = null } }
-  return { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, created_at: r.created_at, updated_at: r.updated_at }
+  // [WO 20260921] parent_id — NULL = 최상위 구역(도면 바로 아래), 값 있으면 그 구역 안의 영역.
+  //   마이그레이션 0025 적용 전 행(컬럼 부재)은 undefined → null 로 정규화(구버전과 동일 취급).
+  const out: any = { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, parent_id: r.parent_id ?? null, created_at: r.created_at, updated_at: r.updated_at }
+  // [WO 20260921] 도면(deployment) 이름 — 트리의 '도면' 단이 파일명을 보여줘야 한다.
+  //   🔴 필드 '추가'만 한다(기존 필드 제거·개명 없음 → 기존 호출부 무해).
+  //   JOIN 하지 않은 경로(POST/PUT 응답)에서는 키 자체를 넣지 않는다 — 없는 값을 날조하지 않는다.
+  if (r.deployment_title !== undefined) out.deployment_title = r.deployment_title ?? null
+  if (r.deployment_file_name !== undefined) out.deployment_file_name = r.deployment_file_name ?? null
+  return out
 }
 
 // 프로젝트 목록 (누구나 조회 가능 — 뷰어도 탐색)
@@ -2145,8 +2153,14 @@ app.post('/api/projects/:id/unpublish', async (c) => {
 app.get('/api/projects/:id/decks', async (c) => {
   if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)  // [보안] 무인증 프로젝트 구조 열람 차단
   const pid = c.req.param('id')
+  // [WO 20260921] 트리의 '도면' 단을 그리려면 deployment 의 파일명이 필요하다 → LEFT JOIN 으로 동봉.
+  //   d.* 로 기존 컬럼은 전부 그대로 나가고, 별칭 2개만 추가된다(응답 필드 추가 전용).
   const { results } = await c.env.DB.prepare(
-    'SELECT * FROM decks WHERE project_id = ? AND deleted = 0 ORDER BY COALESCE(level_no, 999999), created_at'
+    `SELECT d.*, dp.title AS deployment_title, dp.file_name AS deployment_file_name
+       FROM decks d
+       LEFT JOIN deployments dp ON dp.id = d.deployment_id AND dp.deleted = 0
+      WHERE d.project_id = ? AND d.deleted = 0
+      ORDER BY COALESCE(d.level_no, 999999), d.created_at`
   ).bind(pid).all()
   return c.json({ data: (results || []).map(mapDeck) })
 })
@@ -2165,11 +2179,13 @@ app.post('/api/projects/:id/decks', async (c) => {
   // [WO 20260916] page/crop — 미전송(undefined)이면 NULL(구버전과 동일 취급). 새 필드는 추가만.
   const page = body.page != null ? Number(body.page) : null
   const crop = body.crop != null ? JSON.stringify(body.crop) : null
+  // [WO 20260921] parent_id — 상위 구역 id. 미전송이면 NULL(=최상위 구역, 구버전과 동일).
+  const parentId = body.parent_id != null && String(body.parent_id) !== '' ? String(body.parent_id) : null
   await c.env.DB.prepare(
-    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, now, now).run()
-  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, created_at: now, updated_at: now }))
+    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, parentId, now, now).run()
+  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, created_at: now, updated_at: now }))
 })
 
 // 데크 수정 (디자이너) — 배포본 연결/이름/층번호
@@ -2187,10 +2203,15 @@ app.put('/api/decks/:id', async (c) => {
   // [WO 20260916] page/crop 부분 수정 지원 — 미전송 필드는 기존값 유지(추가 전용)
   const page = body.page !== undefined ? body.page : row.page
   const crop = body.crop !== undefined ? (body.crop != null ? JSON.stringify(body.crop) : null) : row.crop
+  // [WO 20260921] parent_id 부분 수정 — 미전송이면 기존값 유지. 자기 자신을 부모로 두는 순환은 거부.
+  let parentId = body.parent_id !== undefined
+    ? (body.parent_id != null && String(body.parent_id) !== '' ? String(body.parent_id) : null)
+    : (row.parent_id ?? null)
+  if (parentId === id) return c.json({ error: 'parent_id cannot be self' }, 400)
   await c.env.DB.prepare(
-    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, updated_at = ? WHERE id = ?'
-  ).bind(name, level, dep, page, crop, Date.now(), id).run()
-  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop }))
+    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, updated_at = ? WHERE id = ?'
+  ).bind(name, level, dep, page, crop, parentId, Date.now(), id).run()
+  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId }))
 })
 
 // 데크 삭제 (디자이너)
