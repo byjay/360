@@ -87,6 +87,56 @@
       const err = document.getElementById("prompt-modal-error"); if (err) { err.textContent = ""; err.classList.add("hidden"); }
       const r = this._resolve; this._resolve = null;
       if (r) r(result);
+    },
+
+    /** [WO 20260921 publish-fix] 커스텀 확인 모달 — Promise<boolean>.
+     *  근본원인: window.confirm()/alert()/prompt()는 PWA 독립실행모드(display:standalone,
+     *  manifest.webmanifest 참조)에서 플랫폼에 따라 아무 표시 없이 즉시 false를 반환하며 조용히
+     *  실패한다(iOS 홈화면 추가 앱의 알려진 WebKit 제약). 배포 버튼이 "아무 일도 하지 않던" 원인이
+     *  이것 — confirm()이 무음으로 false를 반환해 즉시 return된 것으로, 자체 DOM 모달은 이 제약을
+     *  받지 않는다. #prompt-modal(admin-gate) 과 동일한 CSS를 재사용해 신규 스타일 불필요. */
+    confirm(title, message) {
+      return new Promise((resolve) => {
+        let modal = document.getElementById("wm-confirm-modal");
+        if (!modal) {
+          modal = document.createElement("div");
+          modal.id = "wm-confirm-modal";
+          modal.className = "admin-gate hidden";
+          modal.setAttribute("role", "dialog");
+          modal.setAttribute("aria-modal", "true");
+          modal.innerHTML =
+            '<div class="admin-gate-backdrop"></div>' +
+            '<div class="admin-gate-card">' +
+              '<h2 class="admin-gate-title" id="wm-confirm-title"></h2>' +
+              '<p class="admin-gate-sub" id="wm-confirm-msg" style="white-space:pre-line"></p>' +
+              '<div class="admin-gate-actions">' +
+                '<button id="wm-confirm-cancel" class="admin-gate-btn ghost" type="button">취소</button>' +
+                '<button id="wm-confirm-ok" class="admin-gate-btn primary" type="button">확인</button>' +
+              '</div>' +
+            '</div>';
+          document.body.appendChild(modal);
+        }
+        document.getElementById("wm-confirm-title").textContent = title || "확인";
+        document.getElementById("wm-confirm-msg").textContent = message || "";
+        const okBtn = document.getElementById("wm-confirm-ok");
+        const cancelBtn = document.getElementById("wm-confirm-cancel");
+        const backdrop = modal.querySelector(".admin-gate-backdrop");
+        const close = (result) => {
+          modal.classList.remove("on");
+          setTimeout(() => modal.classList.add("hidden"), 200);
+          okBtn.removeEventListener("click", onOk);
+          cancelBtn.removeEventListener("click", onCancel);
+          backdrop.removeEventListener("click", onCancel);
+          resolve(result);
+        };
+        const onOk = () => close(true);
+        const onCancel = () => close(false);
+        okBtn.addEventListener("click", onOk);
+        cancelBtn.addEventListener("click", onCancel);
+        backdrop.addEventListener("click", onCancel);
+        modal.classList.remove("hidden");
+        requestAnimationFrame(() => modal.classList.add("on"));
+      });
     }
   };
 

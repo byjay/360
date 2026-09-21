@@ -4943,6 +4943,9 @@
   const ProjectHub = {
     list: [],
     _loaded: false,
+    // [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 뷰어 딥링크(?d=) 캐시.
+    //   project_id → deployment_id(string) | null(도면 없음, 조회 완료) — SoT: /api/projects/:id/decks.
+    _deployLinkCache: {},
 
     init() {
       const $ = (id) => document.getElementById(id);
@@ -5307,6 +5310,7 @@
         } finally { clearTimeout(t); }
         this.list = data || [];
         this._offline = false;
+        await this._resolveDeployLinks();
       } catch (e) {
         // 네트워크 실패/타임아웃 → 오프라인 번들로 폴백(있으면)
         try { this.list = (typeof OfflineLoad !== "undefined") ? (await OfflineLoad.projects()).filter(Boolean) : []; this._offline = true; }
@@ -5314,6 +5318,22 @@
       }
       this._loaded = true;
       this.render();
+    },
+
+    /** [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 딥링크(?d=)를 미리 조회해 캐시.
+     *  실패해도 카드 렌더 자체는 정상 진행 — 주소 행만 조용히 생략(카드 붕괴 금지). */
+    async _resolveDeployLinks() {
+      const targets = (this.list || []).filter((p) => p.published && !p.subdomain && this._deployLinkCache[p.id] === undefined);
+      if (!targets.length) return;
+      await Promise.all(targets.map(async (p) => {
+        try {
+          const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/decks", { headers: Auth.headers() });
+          if (!r.ok) { this._deployLinkCache[p.id] = null; return; }
+          const { data } = await r.json();
+          const withDep = (data || []).find((d) => d.deployment_id);
+          this._deployLinkCache[p.id] = withDep ? withDep.deployment_id : null;
+        } catch (e) { this._deployLinkCache[p.id] = null; }
+      }));
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
@@ -5621,8 +5641,14 @@
     async togglePublish(p, btn) {
       if (!Auth.isDesigner) { Auth.requireDesigner(() => this.togglePublish(p)); return; }
       const willPublish = !p.published;
-      if (willPublish && !confirm("'" + p.name + "' 프로젝트를 뷰어에게 배포할까요?\n\n배포하면 이 프로젝트에 권한이 부여된 뷰어가 열람할 수 있습니다.")) return;
-      if (!willPublish && !confirm("'" + p.name + "' 배포를 취소할까요?\n\n뷰어에게 더 이상 보이지 않게 됩니다.")) return;
+      // [WO 20260921 publish-fix] window.confirm() → Prompt.confirm() (SoT: 30_Prompt.js).
+      //  근본원인: PWA 독립실행모드에서 window.confirm()이 무음으로 false를 반환해 배포 버튼이
+      //  아무 요청도 보내지 않았다(재현: 네트워크 0건·토스트 0건·콘솔오류 없음). 커스텀 DOM 모달은
+      //  이 제약이 없다.
+      const proceed = willPublish
+        ? await Prompt.confirm("배포", "'" + p.name + "' 프로젝트를 뷰어에게 배포할까요?\n\n배포하면 이 프로젝트에 권한이 부여된 뷰어가 열람할 수 있습니다.")
+        : await Prompt.confirm("배포 취소", "'" + p.name + "' 배포를 취소할까요?\n\n뷰어에게 더 이상 보이지 않게 됩니다.");
+      if (!proceed) return;
       if (btn) { btn.disabled = true; btn.classList.add("busy"); }
       try {
         const r = await fetch("/api/projects/" + p.id + "/" + (willPublish ? "publish" : "unpublish"), { method: "POST", headers: Auth.headers() });
@@ -5635,10 +5661,11 @@
       } finally { if (btn) { btn.disabled = false; btn.classList.remove("busy"); } }
     },
 
-    /** [WO 20260921 deploy-url] 배포된 프로젝트의 뷰어 주소 — SoT: p.subdomain(실 DB 값) +
-     *  현재 접속 호스트에서만 파생한다(도메인·ID 하드코딩 금지, src/index.tsx baseDomainOf 와 동일 규칙).
-     *  서브도메인이 없으면 고유 딥링크가 없으므로(멀티테넌트 서브도메인 미부여) 사이트 루트를 안내한다 —
-     *  뷰어는 로그인 후 허브 목록에서 이 프로젝트를 선택해 들어간다. */
+    /** [WO 20260921 deploy-url, 수정 publish-fix] 배포된 프로젝트를 "식별하는" 뷰어 주소 —
+     *  SoT: p.subdomain(실 DB 값) 우선, 없으면 _deployLinkCache(실 deployment_id, /api/projects/:id/decks
+     *  에서 조회)로 만든 뷰어 딥링크(?d=). 현재 접속 호스트에서만 파생한다(도메인 하드코딩 금지).
+     *  🔴 사이트 루트 폴백 금지 — 루트 주소는 프로젝트를 식별하지 못해 공유해도 쓸모가 없다.
+     *  둘 다 없으면(도면 미등록) 빈 문자열 반환 → 카드에 주소 행 자체가 생기지 않는다(거짓 주소보다 낫다). */
     _deployUrl(p) {
       if (!p) return "";
       const loc = (typeof location !== "undefined") ? location : { hostname: "", protocol: "https:", origin: "" };
@@ -5646,7 +5673,12 @@
       const parts = host.split(".");
       const base = parts.length >= 2 ? parts.slice(-2).join(".") : host;
       if (p.subdomain) return loc.protocol + "//" + p.subdomain + "." + base;
-      return loc.origin ? (loc.origin + "/") : (loc.protocol + "//" + host + "/");
+      const depId = this._deployLinkCache[p.id];
+      if (depId) {
+        const origin = loc.origin || (loc.protocol + "//" + host);
+        return origin + "/?d=" + encodeURIComponent(depId);
+      }
+      return "";
     },
     /** 배포 주소 복사 — _copyInviteLink 와 동일한 클립보드 우선순위(SoT), 복사 후 알림 필수(조용한 실패 금지). */
     _copyDeployUrl(url) {
@@ -14991,6 +15023,56 @@
       const err = document.getElementById("prompt-modal-error"); if (err) { err.textContent = ""; err.classList.add("hidden"); }
       const r = this._resolve; this._resolve = null;
       if (r) r(result);
+    },
+
+    /** [WO 20260921 publish-fix] 커스텀 확인 모달 — Promise<boolean>.
+     *  근본원인: window.confirm()/alert()/prompt()는 PWA 독립실행모드(display:standalone,
+     *  manifest.webmanifest 참조)에서 플랫폼에 따라 아무 표시 없이 즉시 false를 반환하며 조용히
+     *  실패한다(iOS 홈화면 추가 앱의 알려진 WebKit 제약). 배포 버튼이 "아무 일도 하지 않던" 원인이
+     *  이것 — confirm()이 무음으로 false를 반환해 즉시 return된 것으로, 자체 DOM 모달은 이 제약을
+     *  받지 않는다. #prompt-modal(admin-gate) 과 동일한 CSS를 재사용해 신규 스타일 불필요. */
+    confirm(title, message) {
+      return new Promise((resolve) => {
+        let modal = document.getElementById("wm-confirm-modal");
+        if (!modal) {
+          modal = document.createElement("div");
+          modal.id = "wm-confirm-modal";
+          modal.className = "admin-gate hidden";
+          modal.setAttribute("role", "dialog");
+          modal.setAttribute("aria-modal", "true");
+          modal.innerHTML =
+            '<div class="admin-gate-backdrop"></div>' +
+            '<div class="admin-gate-card">' +
+              '<h2 class="admin-gate-title" id="wm-confirm-title"></h2>' +
+              '<p class="admin-gate-sub" id="wm-confirm-msg" style="white-space:pre-line"></p>' +
+              '<div class="admin-gate-actions">' +
+                '<button id="wm-confirm-cancel" class="admin-gate-btn ghost" type="button">취소</button>' +
+                '<button id="wm-confirm-ok" class="admin-gate-btn primary" type="button">확인</button>' +
+              '</div>' +
+            '</div>';
+          document.body.appendChild(modal);
+        }
+        document.getElementById("wm-confirm-title").textContent = title || "확인";
+        document.getElementById("wm-confirm-msg").textContent = message || "";
+        const okBtn = document.getElementById("wm-confirm-ok");
+        const cancelBtn = document.getElementById("wm-confirm-cancel");
+        const backdrop = modal.querySelector(".admin-gate-backdrop");
+        const close = (result) => {
+          modal.classList.remove("on");
+          setTimeout(() => modal.classList.add("hidden"), 200);
+          okBtn.removeEventListener("click", onOk);
+          cancelBtn.removeEventListener("click", onCancel);
+          backdrop.removeEventListener("click", onCancel);
+          resolve(result);
+        };
+        const onOk = () => close(true);
+        const onCancel = () => close(false);
+        okBtn.addEventListener("click", onOk);
+        cancelBtn.addEventListener("click", onCancel);
+        backdrop.addEventListener("click", onCancel);
+        modal.classList.remove("hidden");
+        requestAnimationFrame(() => modal.classList.add("on"));
+      });
     }
   };
 
