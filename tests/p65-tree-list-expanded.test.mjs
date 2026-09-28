@@ -228,9 +228,11 @@ console.log("\n[Part A' · 프로덕션 재현 — parent_id NULL 40개 전부 �
 
 /* ── 뮤테이션 ⓑ: "이름 없음" 대체문구 제거 → ③이 실패해야 한다 ───────── */
 {
+  // [WO 20260929-tree-label] 🔴 이름 폴백이 UI.deckLabelHtml(deck) 공유 함수(11_UI.js)로 이관됐다
+  //   (12_ProjectHub.js 허브 카드 트리와 공유 — SoT). 뮤테이션 대상도 그 함수 안으로 옮긴다.
   console.log("\n[뮤테이션ⓑ] '이름 없음' 대체문구 제거 → ③이 실패해야 함");
-  const needle = "const _nameLabel = deck.name ? esc(deck.name) : '<span class=\"tree-name-missing\">이름 없음</span>';";
-  const mut = uiSrc.replace(needle, "const _nameLabel = esc(deck.name || \"\");");
+  const needle = 'return (deck && deck.name) ? esc(deck.name) : \'<span class="tree-name-missing">(이름 없음)</span>\';';
+  const mut = uiSrc.replace(needle, "return esc(deck && deck.name || \"\");");
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { UI, registry } = makeUI(mut, fx());

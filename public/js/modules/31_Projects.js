@@ -109,6 +109,10 @@
       this._renderDecks();
       // [B4] 로컬 draft 스캔 → '미저장' 배지 동기화(비차단)
       try { if (typeof App !== "undefined" && App._refreshUnsavedDecks) App._refreshUnsavedDecks(); } catch (e) {}
+      // [WO 20260928-hub-tree] 🔴 공유 지점(SoT) — createDeck/extractRegionAsDeck/드래그크롭 생성이
+      //   전부 이 loadDecks() 를 거치므로 허브 카드 트리 갱신은 여기 한 곳에만 둔다(각 생성 함수마다
+      //   중복 호출 금지). 허브 화면이 지금 안 보이면(screen-projects 비활성) 아무 일도 안 한다.
+      try { if (typeof ProjectHub !== "undefined" && ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible(); } catch (e) {}
     },
 
     /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */

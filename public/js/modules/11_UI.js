@@ -179,6 +179,39 @@
          · 영역JSON(State.zones)/핀: 전체 페이지를 항상 표시하고, 현재 페이지 항목만 .active 로 "구분"한다.
          · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
            개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
+    /** [WO 20260928-hub-tree] 🔴 공유 지점(SoT) — 구역/영역 분류 규칙은 여기 한 곳에만 둔다.
+     *  사이드바 트리(renderTree, 아래)와 허브 카드(12_ProjectHub.js)가 이 함수를 함께 쓴다.
+     *  parent_id 가 가리키는 부모가 없거나(삭제됨) 자기참조면 최상위로 승격(숨김 금지).
+     *  @param {Array} decks
+     *  @returns {{roots: Array, childrenOf: Map<string, Array>}} */
+    groupDecksByParent(decks) {
+      decks = decks || [];
+      const byId = new Map();
+      decks.forEach((d) => byId.set(String(d.id), d));
+      const parentKey = (d) => {
+        const pid = d.parent_id != null ? String(d.parent_id) : "";
+        return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
+      };
+      const childrenOf = new Map();
+      decks.forEach((d) => {
+        const pid = parentKey(d);
+        if (!pid) return;
+        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+        childrenOf.get(pid).push(d);
+      });
+      const roots = decks.filter((d) => !parentKey(d));
+      return { roots, childrenOf };
+    },
+
+    /** [WO 20260929-tree-label] 🔴 공유 지점(SoT) — 트리 라벨은 항상 deck.name(파일명이 아니다).
+     *  마스터 지적: "이 트리가 제대로 제목이 안나오잖아" — 사이드바 트리(renderTree)와 허브 카드
+     *  트리(12_ProjectHub.js)가 각자 이름 폴백을 따로 구현하면 반드시 갈라진다(§5) — 이 함수 하나만 쓴다.
+     *  @returns {string} 이스케이프된 HTML — 이름 있으면 그대로, 없으면 "(이름 없음)" */
+    deckLabelHtml(deck) {
+      const esc = (s) => this.escapeHtml(s);
+      return (deck && deck.name) ? esc(deck.name) : '<span class="tree-name-missing">(이름 없음)</span>';
+    },
+
     renderTree() {
       const host = this.$("side-tree");
       if (!host) return;
@@ -215,25 +248,9 @@
         return n;
       };
 
-      /* ── 계층 인덱스 ─────────────────────────────────────────────── */
+      /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
-      const byId = new Map();
-      decks.forEach((d) => byId.set(String(d.id), d));
-      // 부모가 실존할 때만 자식으로 접는다 — 부모가 삭제됐거나 자기참조면 최상위로 승격(숨김 금지).
-      const parentKey = (d) => {
-        const pid = d.parent_id != null ? String(d.parent_id) : "";
-        return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
-      };
-      const childrenOf = new Map();
-      decks.forEach((d) => {
-        const pid = parentKey(d);
-        if (!pid) return;
-        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-        childrenOf.get(pid).push(d);
-      });
-
-      /* ── 3단: 최상위 구역(parent_id 없음) 목록 — 도면 그룹핑 없이 프로젝트 바로 아래에 건다 ── */
-      const rootDecks = decks.filter((d) => !parentKey(d));
+      const { roots: rootDecks, childrenOf } = this.groupDecksByParent(decks);
       const docLabel = (depId) => {
         if (!depId) return "도면 미등록";
         const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
@@ -272,10 +289,13 @@
         //   옆에 원본 도면 파일명을 부가 라벨로 남긴다(docLabel 은 없는 이름을 지어내지 않는다).
         const docName = deck.deployment_id ? docLabel(deck.deployment_id) : null;
         const srcTag = docName ? '<span class="tree-label-sub tree-doc-src" title="원본 도면: ' + esc(docName) + '">' + esc(docName) + '</span>' : "";
-        // [WO 20260928-tree-expand] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라 "이름 없음"으로
-        // 정직하게 표시(CLAUDE.md §5 — 값이 없으면 없다고 표시, 지어내지 않는다).
-        const _nameLabel = deck.name ? esc(deck.name) : '<span class="tree-name-missing">이름 없음</span>';
+        // [WO 20260928-tree-expand→20260929-tree-label] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라
+        // "(이름 없음)"으로 정직하게 표시(CLAUDE.md §5). SoT: UI.deckLabelHtml(deck.name, 파일명 아님).
+        const _nameLabel = this.deckLabelHtml(deck);
         head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + srcTag + _tag + zoneCntTag;
+        // [WO 20260929-tree-label] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그 이상은 줄임표라
+        // 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
+        head.title = deck.name ? deck.name : "(이름 없음)";
         // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {

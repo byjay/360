@@ -6,6 +6,10 @@
     // [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 뷰어 딥링크(?d=) 캐시.
     //   project_id → deployment_id(string) | null(도면 없음, 조회 완료) — SoT: /api/projects/:id/decks.
     _deployLinkCache: {},
+    // [WO 20260928-hub-tree] 카드 아래 구역→영역 트리용 캐시.
+    //   project_id → decks 배열(해당 프로젝트, deleted 제외) | undefined(아직 조회 안 됨 — "모름"과
+    //   "0개"를 구분해야 하므로 빈 배열과 undefined 를 섞지 않는다, CLAUDE.md §5 조용한 실패 금지).
+    _deckTreeCache: {},
 
     init() {
       const $ = (id) => document.getElementById(id);
@@ -390,7 +394,7 @@
         } finally { clearTimeout(t); }
         this.list = data || [];
         this._offline = false;
-        await this._resolveDeployLinks();
+        await Promise.all([this._resolveDeployLinks(), this._loadDeckTrees()]);
       } catch (e) {
         // 네트워크 실패/타임아웃 → 오프라인 번들로 폴백(있으면)
         try { this.list = (typeof OfflineLoad !== "undefined") ? (await OfflineLoad.projects()).filter(Boolean) : []; this._offline = true; }
@@ -415,6 +419,51 @@
           this._deployLinkCache[p.id] = withDep ? withDep.deployment_id : null;
         } catch (e) { this._deployLinkCache[p.id] = null; }
       }));
+    },
+
+    /** [WO 20260928-hub-tree] 카드 아래 구역→영역 트리용 decks 조회.
+     *  🔴 프로젝트별 요청 1회씩이지만 Promise.all 로 병렬화(N+1 아님 — _resolveDeployLinks 와 동일
+     *  기존 관행). 배치 엔드포인트가 없고 src/** 는 이번 작업 범위 밖(발주서 파일 점유 제한)이라
+     *  기존 /api/projects/:id/decks 를 그대로 쓴다. 실패해도 카드 렌더는 계속(트리만 생략).
+     *  잠긴(비멤버) 카드는 조회하지 않는다 — 접근 못하는 프로젝트의 구조를 드러내지 않는다. */
+    async _loadDeckTrees() {
+      const targets = (this.list || []).filter((p) => !(Auth.idToken && p.is_member === false));
+      await Promise.all(targets.map(async (p) => {
+        try {
+          const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/decks", { headers: Auth.headers() });
+          if (!r.ok) { this._deckTreeCache[p.id] = []; return; }
+          const { data } = await r.json();
+          // [WO 20260928-hub-tree] 서버가 이미 deleted=0 만 내려주지만(SoT: src/index.tsx GET decks),
+          //   방어적으로도 한 번 더 거른다(§5 — deleted=1 은 안 보여야 한다).
+          this._deckTreeCache[p.id] = (data || []).filter((d) => !d.deleted);
+        } catch (e) { this._deckTreeCache[p.id] = []; }
+      }));
+    },
+
+    /** [WO 20260928-hub-tree] 카드 하나의 구역→영역 트리 HTML.
+     *  캐시가 아직 없으면(오프라인/잠김 등 "모름") 빈 문자열 — "구역 없음"을 함부로 단정하지 않는다. */
+    _renderDeckTreeHtml(p) {
+      const decks = this._deckTreeCache[p.id];
+      if (decks === undefined) return "";
+      const esc = (s) => UI.escapeHtml(s);
+      // [WO 20260929-tree-label] 🔴 공유 지점(SoT) — UI.deckLabelHtml(11_UI.js) 하나만 쓴다.
+      // 이 카드 트리와 사이드바 트리(renderTree)가 각자 이름 폴백을 만들면 반드시 갈라진다.
+      const titleOf = (d) => esc(d.name ? d.name : "(이름 없음)");
+      if (!decks.length) {
+        return '<div class="hub-card-tree"><p class="hub-tree-empty">구역 없음</p></div>';
+      }
+      const { roots, childrenOf } = UI.groupDecksByParent(decks);
+      const regionsHtml = (deck) => {
+        const kids = childrenOf.get(String(deck.id)) || [];
+        if (!kids.length) return "";
+        return '<ul class="hub-tree-regions">' + kids.map((r) =>
+          '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
+        ).join("") + '</ul>';
+      };
+      const rootsHtml = roots.map((d) =>
+        '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">' + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>'
+      ).join("");
+      return '<div class="hub-card-tree"><ul class="hub-tree-decks">' + rootsHtml + '</ul></div>';
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
@@ -549,7 +598,10 @@
                   '<span class="hub-card-act-label">삭제</span>' +
                 '</button>' +
               '</div>'
-            : '');
+            : '') +
+          // [WO 20260928-hub-tree] 마스터: "전체 프로젝트 페이지에 구역-영역 리스트, 이름이
+          // 동시에 보여야" — 잠긴(비멤버) 카드는 구조를 드러내지 않는다(§ 개인정보/권한).
+          (isLocked ? '' : this._renderDeckTreeHtml(p));
 
         // 카드 클릭
         card.addEventListener("click", (e) => {
@@ -590,6 +642,24 @@
         if (urlShare) urlShare.addEventListener("click", (e) => { e.stopPropagation(); this._shareDeployUrl(deployUrl, p.name); });
         const urlText = card.querySelector('[data-act="url-toggle"]');
         if (urlText) urlText.addEventListener("click", (e) => { e.stopPropagation(); urlText.classList.toggle("is-expanded"); });
+
+        // [WO 20260928-hub-tree] 구역/영역 클릭 → 그 구역/영역으로 바로 진입(기존 열기 경로 재사용).
+        const treeEl = card.querySelector(".hub-card-tree");
+        if (treeEl) {
+          const openDeckNode = (e) => {
+            const node = e.target.closest("[data-deck-id]");
+            if (!node) return;
+            e.stopPropagation();
+            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"));
+          };
+          treeEl.addEventListener("click", openDeckNode);
+          treeEl.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            if (!e.target.closest("[data-deck-id]")) return;
+            e.preventDefault();
+            openDeckNode(e);
+          });
+        }
 
         grid.appendChild(card);
       });
@@ -632,6 +702,21 @@
       }
       const nm = document.getElementById("pms-proj-name"); if (nm) nm.textContent = p.name || p.id;
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
+    },
+
+    /** [WO 20260928-hub-tree] 카드의 구역/영역 클릭 → 그 구역으로 바로 진입.
+     *  🔴 새 진입 로직을 만들지 않는다 — openProject()(기존 진입) 뒤에 Projects.selectDeck()
+     *  (기존 "구역 열기" 정본, 31_Projects.js)을 그대로 호출한다.
+     *  requireDesigner 게이트가 열려(로그인 대기) 편집모드 진입이 아직 안 끝났으면 여기서
+     *  멈춘다 — 로그인 완료 후에는 기존 동작(최신 배포본 진입)으로 이어진다(회귀 없음). */
+    async openProjectAtDeck(p, deckId) {
+      await this.openProject(p);
+      if (!Auth.isDesigner) return;
+      try {
+        await Projects.loadDecks();
+        const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
+        if (deck && Projects.selectDeck) await Projects.selectDeck(deck);
+      } catch (e) {}
     },
     closeModeSelect() {
       const m = document.getElementById("proj-mode-select-modal");

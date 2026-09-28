@@ -177,5 +177,12 @@ body{ background:#0e1014 !important; color:var(--text) !important; }
 .fl-table tbody td{ color:var(--text) !important; }
 .fl-chip{ color:var(--gold) !important; background:rgba(201,150,42,.16) !important; border-color:rgba(201,150,42,.4) !important; }
 
+/* [WO 20260929-tree-label] 🔴 사이드바 트리 선택행(.tree-node.active) 대비 수정 —
+   style.css 의 --gold-ink(#7e5d12)는 밝은 배경 전용 어두운 톤인데, 이 파일의 :root remap
+   목록에 --gold-ink 가 없어(다른 20여 곳이 그 변수를 공유해 전역 remap은 블라스트 반경이 큼)
+   다크 런타임에서도 그대로 남아 "검정 위 검정"(2.07:1, AA 미달)이 됐다. --gold-ink 는 그대로
+   두고 이 선택자에만 이미 다크용으로 remap 된 --gold(#e0b14a)를 쓴다(실측 6.30:1). */
+.tree-node.active{ color:var(--gold) !important; }
+
 /* ════ 스크롤바 ════ */
 ::-webkit-scrollbar-thumb{ background:#3a3e45 !important; border:2px solid #15171b !important; }
