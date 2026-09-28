@@ -14,8 +14,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const PORT = 9337;
-const SITE_PORT = 8796;
+// [WO 20260928 격리수정] 고정 포트(9337/8796)는 node --test 동시실행 시 다른 프로세스
+// (p42 본체 자신 + p51 가 execFileSync 로 spawn 하는 사본)가 동시에 같은 포트를 bind 하려다
+// EADDRINUSE 로 충돌한다(재현: 두 인스턴스 동시 실행 → 2번째가 EADDRINUSE:8796). port:0(OS 임의
+// 할당)으로 프로세스마다 고유 포트를 받도록 고쳐 근본 원인(고정 포트)을 제거한다.
 const ROOT = path.join(__dirname, "..", "public");
 
 if (!fs.existsSync(CHROME)) {
@@ -36,14 +38,28 @@ function serveStatic() {
       res.end(data);
     });
   });
-  return new Promise((resolve) => server.listen(SITE_PORT, "127.0.0.1", () => resolve(server)));
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
 }
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
-async function getWsUrl() {
+// Chrome 이 --remote-debugging-port=0 으로 뜰 때 실제 배정된 포트는 user-data-dir 안의
+// DevToolsActivePort 파일 1행에 기록된다(고정 포트 대신 이 파일에서 읽어 충돌을 원천 차단).
+async function readDevToolsPort(profileDir) {
+  const file = path.join(profileDir, "DevToolsActivePort");
+  for (let i = 0; i < 40; i++) {
+    try {
+      const txt = fs.readFileSync(file, "utf8");
+      const port = parseInt(txt.split("\n")[0].trim(), 10);
+      if (port > 0) return port;
+    } catch (e) {}
+    await wait(150);
+  }
+  throw new Error("DevToolsActivePort 파일을 찾지 못함(" + file + ")");
+}
+async function getWsUrl(port) {
   for (let i = 0; i < 40; i++) {
     try {
       const list = await new Promise((resolve, reject) => {
-        http.get(`http://127.0.0.1:${PORT}/json/list`, (r) => {
+        http.get(`http://127.0.0.1:${port}/json/list`, (r) => {
           let d = ""; r.on("data", (c) => (d += c)); r.on("end", () => resolve(JSON.parse(d)));
         }).on("error", reject);
       });
@@ -144,10 +160,11 @@ const measureJs = `
 
 async function run() {
   const server = await serveStatic();
+  const sitePort = server.address().port;
   const profileDir = path.join(process.env.TEMP || "C:\\Windows\\Temp", "cdp-p42-" + Date.now() + "-" + Math.random().toString(36).slice(2));
   const chrome = spawn(CHROME, [
     "--headless=new", "--disable-gpu", "--no-sandbox",
-    `--remote-debugging-port=${PORT}`,
+    "--remote-debugging-port=0",
     `--user-data-dir=${profileDir}`,
     "--window-size=375,812",
     "about:blank",
@@ -155,7 +172,8 @@ async function run() {
   let exitCode = 1;
   try {
     await wait(800);
-    const wsUrl = await getWsUrl();
+    const port = await readDevToolsPort(profileDir);
+    const wsUrl = await getWsUrl(port);
     const ws = new WebSocket(wsUrl);
     await new Promise((r) => ws.on("open", r));
     await send(ws, "Page.enable");
@@ -185,7 +203,7 @@ async function run() {
       };
       ws.on("message", h);
     });
-    await send(ws, "Page.navigate", { url: `http://127.0.0.1:${SITE_PORT}/index.html` });
+    await send(ws, "Page.navigate", { url: `http://127.0.0.1:${sitePort}/index.html` });
     await loadFired;
     await wait(600);
     let ok = false;
