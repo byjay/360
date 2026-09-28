@@ -4194,6 +4194,28 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pap-note { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
 .pap-del { background: #fef2f2; border-color: #fecaca; color: #dc2626; grid-column: 1 / -1; }
 .pap-hint { margin: 12px 0 0; font-size: 11px; color: #94a3b8; line-height: 1.5; }
+/* [WO 20260928 마스터: "까만 영역을 없애 글자 안보여"] 근본원인(실측) — 이 패널의 #pap-* 입력칸은
+   public/index.html 인라인 style 로 color:#0f172a(라이트 전용 진한 남색)만 고정돼 있고 배경은
+   지정하지 않는다. 배경은 style.css 전역 규칙(input[type], textarea, select { background: var(--bg2) })을
+   그대로 물려받는데, seastar-3d-skin.css 가 :root --bg2 를 다크(#1d2025)로 remap 하면서 어두운
+   글자(#0f172a)+어두운 배경(#1d2025) 조합이 되어 대비 1.09:1(사실상 안 보임)까지 떨어졌다.
+   전역 다크 remap(:root --bg2)은 건드리지 않고, 이 패널(#pin-action-pop) 범위로만 흰 배경을
+   고정한다 — ID 선택자라 다크 스킨 로드 순서와 무관하게 항상 이긴다. */
+#pin-action-pop input[type="text"],
+#pin-action-pop input[type="url"],
+#pin-action-pop input[type="number"],
+#pin-action-pop input[type="email"],
+#pin-action-pop input[type="search"],
+#pin-action-pop textarea,
+#pin-action-pop select {
+  background: #ffffff;
+  color: #0f172a;
+}
+#pin-action-pop input::placeholder,
+#pin-action-pop textarea::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
 .pin-marker.edit-unlocked .pin-pin { animation: papWiggle .6s ease-in-out infinite; }
 @keyframes papWiggle { 0%,100% { transform: rotate(-6deg) scale(1.15); } 50% { transform: rotate(6deg) scale(1.15); } }
 
@@ -4962,6 +4984,8 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 /* 영역(구역의 자식 deck) — 구역(700/12.5px/--text)보다 한 단 가볍게 + 전용 아이콘으로 구분 */
 .tree-node-region{font-size:12px;font-weight:500;color:var(--text);}
 .tree-node-pin{font-size:12px;color:var(--text2);}
+/* [WO 20260928-tree-pinlist] 트리 핀 행 번호 배지 — 번호 SoT(PinSeries.numbers)를 그대로 표시 */
+.tree-pin-no{flex:0 0 auto;font-weight:800;font-size:11px;color:var(--text);opacity:.82;}
 .tree-caret{width:13px;height:13px;transition:transform .18s;color:var(--text3);}
 .tree-deck:not(.open) .tree-node-deck .tree-caret,.tree-zone:not(.open) .tree-node-zone .tree-caret,
 .tree-project:not(.open) .tree-node-project .tree-caret,

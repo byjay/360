@@ -2,19 +2,21 @@
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p54-pin-no-number-balloon.test.mjs)
  *
  * 마스터 지시(2026-09-21): "이런 거 보기 싫어. 상태를 색이나 모양으로 변경하라고. 숫자 풍선 없애고"
+ * → 마스터 지시(2026-09-28): "번호가 안본다" (체크보드 핀 6개가 흰 원판만, 번호 없음)
  *
- * 근본원인: 11_UI.js renderPinsOnMap() 이 커스텀 아이콘이 없는 모든 핀 머리에
- *   흰 원판(pin-tier-disc) 위 <text>{번호}</text> ("숫자 풍선")를 항상 그렸다.
- *   이미 존재하던 3축(등록여부=헤드 fill 채움/속빈 · 콘텐츠 3상태=tier 원판 실루엣(원/둥근사각/겹원)
- *   · 계열=외곽 링 dash 패턴)만으로 흑백에서도 상태 구분이 충분한데, 그 위에 숫자까지 얹어
- *   "풍선"으로 보였다.
+ * 근본원인(9/21→9/28 회귀): 9/21 지시("숫자 풍선 없애")를 "머리 안 번호까지 제거"로 오해석해
+ *   11_UI.js renderPinsOnMap() 이 커스텀 아이콘 없는 모든 핀 머리에서 <text>{번호}</text> 를
+ *   완전히 지워버렸다. 실제로 지워야 했던 건 "풍선"(머리 밖 별도 숫자 배지)이었는데, 애초에
+ *   그런 배지는 존재한 적이 없다 — 지울 대상이 아니라 머리 안 번호 자체를 지운 게 회귀.
  *
- * 조치: 커스텀 아이콘이 없는 핀은 <text> 를 그리지 않는다(11_UI.js). 번호 자체는 버리지 않고
- *   dataset.no 는 유지 + #pin-list(.pin-num)·PinActionPop(#pap-no)에서 계속 확인 가능.
+ * 조치(9/28): 흰 원판(pin-tier-disc, 항상 흰색) 위에 번호 <text> 를 다시 그린다. 상태 3축
+ *   (등록 fill 채움/속빈 · tier 원판 실루엣 원/둥근사각/겹원 · 계열 링 dash 패턴)은 그대로 유지.
+ *   원판이 항상 흰색이므로 진한 계열색 txtFill 과 대비 ≥4.5:1 항상 보장. 3자리 이상 번호는
+ *   폰트를 축소해 원판 밖으로 넘치지 않게 한다. 머리 밖 별도 숫자 배지(풍선)는 계속 없다.
  *
  * 실제 모듈 소스(01b_PinSeries.js / 11_UI.js / 07_Radar.js / style.css / 27_PinActionPop.js)를
  * 그대로 vm 에 평가하거나 원문을 직접 grep 한다(목 구현 아님).
- * 뮤테이션 3건(ⓐ번호 복원 ⓑ형태 제거·색만 ⓒ핀 확대)이 붙어 있어, 되돌리면 반드시 실패한다.
+ * 뮤테이션 3건(ⓐ번호 제거 회귀 재현 ⓑ형태 제거·색만 ⓒ핀 확대)이 붙어 있어, 되돌리면 반드시 실패한다.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +30,7 @@ const uiSrc     = rd("public/js/modules/11_UI.js");
 const radarSrc  = rd("public/js/modules/07_Radar.js");
 const cssSrc    = rd("public/css/style.css");
 const popupSrc  = rd("public/js/modules/27_PinActionPop.js");
+const iconsSrc  = rd("public/js/modules/23b_PinIcons.js");
 
 let failed = 0;
 const ok = (cond, label) => {
@@ -101,7 +104,10 @@ function runUI(sSrc, uSrc, pins, page = 1) {
   const sandbox = { console, document, State, localStorage: makeLocalStorage(), App: AppMock, JSON, Map, Set };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(sSrc + "\n" + uSrc + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
+  // PinIcons 실제 모듈도 로드(icon 핀은 headMarkup 렌더 대상이지, 번호 <text> 대상이 아님을
+  // 실제 정의로 검증 — sandbox 에 PinIcons 가 없으면 typeof 가드가 항상 false 로 빠져
+  // icon 핀도 번호 폴백을 타는 허위 실패가 난다).
+  vm.runInContext(iconsSrc + "\n" + sSrc + "\n" + uSrc + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
   sandbox.__UI.renderPinsOnMap();
   const out = {};
   registry["pins-layer"]._children.forEach((m) => {
@@ -145,33 +151,39 @@ const FIXTURE = () => [
 const CURRENT = (f) => f[0];
 
 /* ────────────────────────────────────────────────────────────
- * ① 핀 마커 SVG 에 번호 <text> 가 없다 (커스텀 아이콘 예외 제외)
+ * ① 핀 마커 SVG 머리 안(흰 원판 위)에 번호 <text> 가 있다 (커스텀 아이콘 예외 제외)
  * ──────────────────────────────────────────────────────────── */
-function suiteNoNumberText(label, sSrc) {
+function suiteHeadHasNumberText(label, sSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
   const ui = runUI(sSrc, uiSrc, fixture).pins;
+  const expectNo = { photo1: "1", content1: "2", empty1: "3", cbPhoto: "1", cbEmpty: "2" };
   ["photo1", "content1", "empty1", "cbPhoto", "cbEmpty"].forEach((id) => {
-    ok(!/<text\b/.test(ui[id].html), `① ${id}: 머리 SVG 에 <text> 요소 없음`);
-    ok(!/>\d+<\/text>/.test(ui[id].html), `① ${id}: 숫자 텍스트 노드 없음`);
+    ok(/<text\b/.test(ui[id].html), `① ${id}: 머리 SVG 에 <text> 요소 있음(번호 복구)`);
+    const re = new RegExp(`>${expectNo[id]}</text>`);
+    ok(re.test(ui[id].html), `① ${id}: 번호 텍스트 값이 dataset.no(${expectNo[id]})와 일치`);
   });
-  // 커스텀 아이콘 핀은 번호가 아니라 아이콘(PinIcons)이 렌더 시도 대상 — <text> 는 여전히 없어야 함
-  ok(!/<text\b/.test(ui.iconPin.html), "① iconPin: 커스텀 아이콘 핀도 <text> 없음(번호 아님)");
+  // 커스텀 아이콘 핀은 번호 대신 아이콘(PinIcons)이 렌더 대상 — <text> 없어야 함(기존 기능 보존)
+  ok(!/<text\b/.test(ui.iconPin.html), "① iconPin: 커스텀 아이콘 핀은 <text> 없음(아이콘으로 대체)");
 }
 
 /* ────────────────────────────────────────────────────────────
- * ② 흰 원판(pin-tier-disc)이 숫자 담는 용도로 남아있지 않다
- *   (원판 다음에 곧바로 오는 숫자 텍스트가 없음 — ①과 함께 구조적으로 증명)
+ * ② 번호는 머리 안(흰 원판 위)에만 있고, 머리 밖 별도 숫자 배지("풍선")는 없다.
+ *   원판(pin-tier-disc) 뒤에 곧바로 번호 <text> 가 이어붙어 같은 SVG 안에서 그려지고,
+ *   marker.html 안에 svg 밖 별도 배지 요소(div.pin-num-badge 등)가 없어야 한다.
  * ──────────────────────────────────────────────────────────── */
-function suiteDiscNotNumberCarrier(label, sSrc) {
+function suiteNumberInsideHeadOnly(label, sSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
   const ui = runUI(sSrc, uiSrc, fixture).pins;
   ["photo1", "content1", "empty1"].forEach((id) => {
     ok(!!ui[id].discTag, `② ${id}: pin-tier-disc 는 여전히 형태 단서로 존재(discTag=${ui[id].discTag})`);
-    // 원판 렌더 뒤에 숫자 <text> 가 이어붙지 않음(원판=형태 단서 전용, 숫자 캐리어 아님)
+    // 원판 렌더 뒤에 숫자 <text> 가 같은 SVG 안에서 이어붙음(머리 안에서 완결)
     const afterDisc = ui[id].html.slice(ui[id].html.indexOf('class="pin-tier-disc"'));
-    ok(!/>\d+<\/text>/.test(afterDisc), `② ${id}: 원판 뒤에 숫자 텍스트 없음(원판=형태 전용)`);
+    ok(/>\d+<\/text>/.test(afterDisc), `② ${id}: 원판 뒤(같은 svg 안)에 번호 텍스트 있음`);
+    // svg 밖(마커 최상위)에 별도 숫자 배지 div 는 없음(풍선=머리 밖 배지는 여전히 없음)
+    ok(!/<div[^>]*(pin-num-badge|number-badge|pin-badge)/.test(ui[id].html),
+      `② ${id}: 머리 밖 별도 숫자 배지(풍선) 요소 없음`);
   });
 }
 
@@ -262,8 +274,8 @@ function suiteRadarParity(label, sSrc, rSrc) {
 }
 
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */
-suiteNoNumberText("① 번호 <text> 없음 (정상 소스)", seriesSrc);
-suiteDiscNotNumberCarrier("② 원판이 숫자 캐리어가 아님 (정상 소스)", seriesSrc);
+suiteHeadHasNumberText("① 머리 안 번호 <text> 있음 (정상 소스)", seriesSrc);
+suiteNumberInsideHeadOnly("② 번호는 머리 안에만, 머리 밖 배지 없음 (정상 소스)", seriesSrc);
 suiteShapeOnly3State("③ 색 제거해도 3상태 형태로 구분 (정상 소스)", seriesSrc);
 suiteSeriesKind("④ 계열 구분 유지 (정상 소스)", seriesSrc);
 suiteFilledHollow("⑤ 등록여부 구분 유지 (정상 소스)", seriesSrc);
@@ -272,18 +284,18 @@ suitePinSize("⑦ 핀 크기 불변 (정상 소스)", cssSrc);
 suiteRadarParity("⑧ 미니맵 정합 (정상 소스)", seriesSrc, radarSrc);
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 ⓐ: 번호 <text> 복원 → ①이 실패해야 한다
+ * 뮤테이션 ⓐ: 번호 <text> 제거(9/21→9/28 실제 회귀 재현) → ①이 실패해야 한다
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션ⓐ] 번호 <text> 복원 → ①이 실패해야 함");
-  const needle = '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}';
+  console.log("\n[뮤테이션ⓐ] 번호 <text> 제거(회귀 재현) → ①이 실패해야 함");
+  const needle = '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}';
   const mutated = uiSrc.replace(needle,
-    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="13" font-weight="900" fill="${txtFill}">${dispNo}</text>`}');
+    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const fixture = FIXTURE();
     const ui = runUI(seriesSrc, mutated, fixture).pins;
-    ok(/<text\b/.test(ui.photo1.html), `뮤테이션 적용 시 <text> 복원됨(①붕괴 증명) → ${ui.photo1.html.includes("<text") }`);
+    ok(!/<text\b/.test(ui.photo1.html), `뮤테이션 적용 시 <text> 사라짐(①붕괴 증명, 회귀 재현) → hasText=${/<text\b/.test(ui.photo1.html)}`);
   }
 }
 

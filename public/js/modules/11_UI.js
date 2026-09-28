@@ -239,11 +239,24 @@
         : (State.pdfPages || 1);
       const showPageTag = totalPages > 1;
       const pageTag = (pg) => showPageTag ? ' <span class="tree-label-sub">P' + (pg || 1) + '</span>' : "";
-      const pinNode = (p) => {
+      /* [WO 20260928-tree-pinlist] 🔴 번호 SoT = PinSeries.numbers()(01b_PinSeries.js) —
+         여기서 직접 채번하지 않는다(도면 마커·미니맵과 항상 같은 번호가 나오게).
+         numbers() 는 페이지 1개 기준이라, 트리는 전체 페이지를 항상 보여주므로(WO 20260917-pin)
+         핀에 등장하는 모든 page 값에 대해 한 번씩 돌려 병합한다(핀 id 는 전역 유일이라 충돌 없음). */
+      const numbersAcrossPages = (pins) => {
+        const map = new Map();
+        if (typeof PinSeries === "undefined" || !PinSeries.numbers) return map;
+        const pages = new Set((pins || []).map((p) => p.page || 1));
+        pages.forEach((pg) => { PinSeries.numbers(pins, pg).forEach((v, k) => map.set(k, v)); });
+        return map;
+      };
+      const pinNode = (p, numMap) => {
         const n = document.createElement("button");
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
-        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
+        const meta = numMap ? numMap.get(p.id) : null;
+        const noLabel = meta ? '<span class="tree-pin-no">#' + esc(String(meta.no)) + '</span>' : "";
+        n.innerHTML = ICO.pin + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
@@ -326,13 +339,34 @@
         if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
           const pins = State.pins || [];   // 전체 페이지(필터 없음)
-          const used = new Set();
+          const numMap = numbersAcrossPages(pins);
+          const sortByNo = (a, b) => ((numMap.get(a.id) || {}).no || 0) - ((numMap.get(b.id) || {}).no || 0);
+          // [WO 20260928-tree-pinlist] 🔴 소속 = 가장 깊은(면적 작은) 영역 하나 — 겹치는 영역이
+          // 있으면 바운딩박스(zone.w*zone.h, 페이지%) 가 더 작은 쪽. 못 찾으면 구역 직속.
+          const zoneOfPin = new Map(); // pinId -> zone
+          pins.forEach((p) => {
+            const ppage = p.page || 1;
+            let best = null, bestArea = Infinity;
+            zones.forEach((zone) => {
+              if ((zone.page || 1) !== ppage) return;
+              if (!(typeof Zones !== "undefined" && Zones._contains && Zones._contains(zone, p.x, p.y))) return;
+              const area = Math.max(0, +zone.w || 0) * Math.max(0, +zone.h || 0);
+              if (area < bestArea) { bestArea = area; best = zone; }
+            });
+            if (best) zoneOfPin.set(p.id, best);
+          });
+          const pinsOfZone = new Map();
+          zones.forEach((z) => pinsOfZone.set(z.id, []));
+          const rootPins = [];
+          pins.forEach((p) => {
+            const z = zoneOfPin.get(p.id);
+            if (z && pinsOfZone.has(z.id)) pinsOfZone.get(z.id).push(p);
+            else rootPins.push(p);
+          });
           zones.forEach((zone) => {
             const zpage = zone.page || 1;
             const isCurZonePage = zpage === curPage;
-            const zpins = pins.filter((p) => (p.page || 1) === zpage &&
-              ((typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false));
-            zpins.forEach((p) => used.add(p.id));
+            const zpins = (pinsOfZone.get(zone.id) || []).slice().sort(sortByNo);
             const zn = document.createElement("div");
             zn.className = "tree-zone open"; // [항목2] 기본 펼침
             const zh = document.createElement("button");
@@ -346,11 +380,11 @@
             zn.appendChild(zh);
             const zc = document.createElement("div");
             zc.className = "tree-children";
-            zpins.forEach((p) => zc.appendChild(pinNode(p)));
+            zpins.forEach((p) => zc.appendChild(pinNode(p, numMap)));
             zn.appendChild(zc);
             kids.appendChild(zn);
           });
-          pins.filter((p) => !used.has(p.id)).forEach((p) => kids.appendChild(pinNode(p)));
+          rootPins.sort(sortByNo).forEach((p) => kids.appendChild(pinNode(p, numMap)));
           any = true;
         }
         if (any) g.appendChild(kids);
@@ -481,15 +515,16 @@
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
-              <!-- [WO 20260921 숫자 풍선 제거] 마스터 지시("상태를 색이나 모양으로. 숫자 풍선 없애") —
-                   머리 안에 번호 글자 노드를 더는 그리지 않는다. 상태는 이미 3축(등록 fill 채움/속빈 ·
-                   tier 원판 실루엣 원/둥근사각/겹원 · 외곽 링 dash 패턴)만으로 흑백에서도 구분된다.
-                   번호 자체는 버리지 않는다 — #pin-list(.pin-num)·PinActionPop(#pap-no)에서 계속 확인 가능
-                   (dispNo/dataset.no 는 그대로 유지, 표시만 다른 화면으로 이관). 커스텀 아이콘을
-                   고른 핀만 예외적으로 그 아이콘을 머리에 그린다(번호 아님 — 기존 기능 보존). -->
+              <!-- [WO 20260928 번호 복구] 마스터 지시("번호가 안본다") — 9/21 지시는 "숫자 풍선"
+                   (머리 밖 별도 배지)을 없애라는 뜻이었는데 머리 안 번호까지 지워 회귀가 났다.
+                   상태(등록 fill/tier 원판/링 dash)는 그대로 유지하고, 흰 원판(tierDisc) 위에
+                   번호만 다시 그린다 — 원판이 항상 흰색이라 txtFill(진한 계열색)과 대비 ≥4.5:1 보장.
+                   3자리 이상(101~)은 원판을 넘치지 않게 폰트를 축소한다. 커스텀 아이콘을 고른
+                   핀만 예외적으로 그 아이콘을 그린다(번호 대신). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))
+                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
