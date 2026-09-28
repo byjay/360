@@ -167,8 +167,9 @@
          · 직전 커밋(eeeab36)이 세운 4단(프로젝트>도면>구역>영역)을 3단으로 되돌린다.
          · decks.parent_id(마이그레이션 0025, 프로덕션 적용 완료)는 그대로 쓴다 —
            parent_id NULL = 구역, parent_id 있음 = 영역. 이 구조는 3단과 정확히 맞는다.
-         · 🔴 도면 출처 정보는 버리지 않는다 — 트리 "단"에서만 빼고, 구역/영역 노드 안에
-           부가 라벨(.tree-doc-src, docLabel())로 남긴다(아래 deckNode 참조).
+         · 🔴 도면 출처 정보는 버리지 않는다 — 트리 "단"에서 빼고(2026-09-28: 부가 라벨도
+           같은 파일명이 반복되며 이름을 가려 마스터가 재지적 → title 툴팁으로 재이동),
+           구역/영역 노드의 head.title(docLabel())로 남긴다(아래 deckNode 참조).
          · 도면 이름 정본 = API 가 JOIN 해 준 deployment_file_name/deployment_title.
            없으면 현재 로드된 도면의 State.fileName, 그래도 없으면 일반 표기("등록 도면").
            🔴 없는 이름을 지어내지 않는다.
@@ -285,17 +286,20 @@
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
         // [항목4] 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
         const zoneCntTag = loaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
-        // [WO 20260921-tree3] 🔴 도면 출처 유실 금지 — 트리 "단"에서 도면을 뺀 대신, 구역/영역 이름
-        //   옆에 원본 도면 파일명을 부가 라벨로 남긴다(docLabel 은 없는 이름을 지어내지 않는다).
+        // [WO 20260921-tree3→20260928-tree-title] 마스터 2026-09-28 지시로 대체: 구역·영역이 같은
+        //   deployment(같은 도면)를 가리켜 모든 행에 똑같은 긴 파일명이 붙으면서 정작 구별해야 할
+        //   이름("ㅁ"/"ㅁㄴㅇ")이 묻혔다("이 트리가 제대로 제목이 안나오잖아"). 행에는 이름만 보이고,
+        //   원본 도면 파일명은 title(네이티브 툴팁)로만 제공한다(docLabel 은 없는 이름을 지어내지
+        //   않는다 — 유실이 아니라 이동).
         const docName = deck.deployment_id ? docLabel(deck.deployment_id) : null;
-        const srcTag = docName ? '<span class="tree-label-sub tree-doc-src" title="원본 도면: ' + esc(docName) + '">' + esc(docName) + '</span>' : "";
         // [WO 20260928-tree-expand→20260929-tree-label] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라
         // "(이름 없음)"으로 정직하게 표시(CLAUDE.md §5). SoT: UI.deckLabelHtml(deck.name, 파일명 아님).
         const _nameLabel = this.deckLabelHtml(deck);
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + srcTag + _tag + zoneCntTag;
-        // [WO 20260929-tree-label] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그 이상은 줄임표라
-        // 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
-        head.title = deck.name ? deck.name : "(이름 없음)";
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + zoneCntTag;
+        // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
+        // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
+        // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.
+        head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\n원본 도면: " + docName : "");
         // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {

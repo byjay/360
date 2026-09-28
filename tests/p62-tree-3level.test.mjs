@@ -14,7 +14,10 @@
  * 검사(코디네이터 확정 ①~⑤):
  *  ① 트리가 프로젝트>구역>영역 3단으로 렌더된다(도면 그룹핑 단 없음 — 구역이 프로젝트 바로 아래)
  *  ② parent_id 의미 유지 — NULL=구역(프로젝트 직속), 있음=영역(그 구역 아래)
- *  ③ 도면 출처 정보 유실 0 — 구역/영역 노드 안에 원본 도면 파일명이 부가 표시(.tree-doc-src)로 남는다
+ *  ③ 도면 출처 정보 유실 0 — 구역/영역 노드의 head.title(네이티브 툴팁)에 원본 도면 파일명이
+ *     남는다([WO 20260928-tree-title] 마스터 재지적으로 .tree-doc-src 부가 라벨(행에 보이는
+ *     텍스트)에서 title 전용으로 이동 — 같은 도면을 가리키는 구역·영역 모든 행에 똑같이 긴
+ *     파일명이 붙어 정작 구별해야 할 이름을 가렸었다)
  *  ④ 🔴 실 브라우저 375x812 에서 #side-tree 가 scrollHeight > clientHeight 이고
  *     스크롤 끝에서 마지막 항목까지 도달 가능하다(수치 증명)
  *  ⑤ 기존 회귀 0 — p56·p49 는 별도 실행(본 파일은 UI 트리 전용), Part B 는 API/마이그레이션 회귀 담당
@@ -188,15 +191,17 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
   ok(/기관실/.test(flat(deckD2)) && !/메인데크/.test(flat(deckD2)),
     "② 두 번째 구역 그룹은 자기 영역만 담는다(그룹 간 누수 없음)");
 
-  // ③ 도면 출처 정보 유실 0 — 구역/영역 노드에 원본 파일명 부가 표시(.tree-doc-src)
-  ok(/tree-doc-src[^>]*>A0_주갑판\.pdf</.test(deckD1._children[0].innerHTML),
-    "③ 구역 '메인데크' 헤더 안에 원본 도면 파일명(A0_주갑판.pdf)이 .tree-doc-src 로 남아 있다");
+  // ③ 도면 출처 정보 유실 0 — 구역/영역 노드에 보이는 텍스트는 이름만, 파일명은 head.title 로 이동
+  ok(!/tree-doc-src/.test(deckD1._children[0].innerHTML) && !/A0_주갑판\.pdf/.test(deckD1._children[0].innerHTML),
+    "③ 구역 '메인데크' 행의 보이는 텍스트(innerHTML)엔 파일명이 없다(더 이상 .tree-doc-src 부가 라벨 없음)");
+  ok(deckD1._children[0].title.indexOf("A0_주갑판.pdf") !== -1,
+    "③ 구역 '메인데크' head.title 에 원본 도면 파일명(A0_주갑판.pdf)이 남아 있다(유실 아니라 이동) — 실제 " + JSON.stringify(deckD1._children[0].title));
   const regionD1a = pick(kidsOf(deckD1), "tree-region")[0];
-  ok(/tree-doc-src[^>]*>A0_주갑판\.pdf</.test(regionD1a._children[0].innerHTML),
-    "③ 영역 '평면도' 헤더에도 원본 도면 파일명이 남아 있다(영역도 같은 도면을 가리킨다)");
+  ok(regionD1a._children[0].title.indexOf("A0_주갑판.pdf") !== -1,
+    "③ 영역 '평면도' head.title 에도 원본 도면 파일명이 남아 있다(영역도 같은 도면을 가리킨다) — 실제 " + JSON.stringify(regionD1a._children[0].title));
   const deckD3 = rootDeckEls.find((d) => /브릿지/.test(d._children[0].innerHTML));
-  ok(!/tree-doc-src/.test(deckD3._children[0].innerHTML) && /도면없음/.test(deckD3._children[0].innerHTML),
-    "③ 도면 미등록 구역('브릿지')은 출처 라벨 대신 기존 '도면없음' 태그를 유지한다(없는 이름 지어내지 않음)");
+  ok(deckD3._children[0].title.indexOf("원본 도면") === -1 && /도면없음/.test(deckD3._children[0].innerHTML),
+    "③ 도면 미등록 구역('브릿지')은 title 에 출처 표기가 없고 기존 '도면없음' 태그를 유지한다(없는 이름 지어내지 않음)");
 
   // ⑤(부분) 접기/펼치기 · 시각 구분 — 3단 구조에서도 회귀 없음
   const proj = pick(host, "tree-project")[0];
@@ -247,15 +252,18 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
   }
 }
 
-/* ── 뮤테이션 ⓒ: 도면 출처 라벨(srcTag)을 제거 → ③이 실패해야 한다 ──────── */
+/* ── 뮤테이션 ⓒ: head.title 에서 도면 출처 정보를 제거 → ③이 실패해야 한다 ──────── */
 {
-  console.log("\n[뮤테이션ⓒ] 도면 출처 정보(srcTag) 삭제 → ③이 실패해야 함");
-  const needle = "const srcTag = docName ? '<span class=\"tree-label-sub tree-doc-src\" title=\"원본 도면: ' + esc(docName) + '\">' + esc(docName) + '</span>' : \"\";";
-  const mut = uiSrc.replace(needle, 'const srcTag = "";');
+  console.log("\n[뮤테이션ⓒ] head.title 의 도면 출처 정보(docName) 삭제 → ③이 실패해야 함");
+  const needle = 'head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\\n원본 도면: " + docName : "");';
+  const mut = uiSrc.replace(needle, 'head.title = (deck.name ? deck.name : "(이름 없음)");');
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { host } = runTree(mut, fx());
-    ok(!/tree-doc-src/.test(flat(host)), "뮤테이션 적용 시 ③이 깨짐(도면 출처 라벨이 트리 어디에도 없다)");
+    const proj = pick(host, "tree-project")[0];
+    const deckD1 = pick(kidsOf(proj), "tree-deck").find((d) => /메인데크/.test(d._children[0].innerHTML));
+    ok(deckD1._children[0].title.indexOf("A0_주갑판.pdf") === -1,
+      "뮤테이션 적용 시 ③이 깨짐(head.title 에서 도면 출처 정보가 사라짐)");
   }
 }
 

@@ -37,11 +37,19 @@
  * UI.deckLabelHtml() 공유 함수가 항상 deck.name 을 1차 라벨로 쓰고, 파일명은 .tree-doc-src
  * 보조 라벨일 뿐이었다. 진짜 결함은 .tree-label 1줄 말줄임 CSS(긴 이름이 "…"로 안 읽힘)와
  * .tree-node.active 색 대비 2.07:1(AA 미달) 이었다):
- *  ⑧ 사이드바 트리 라벨 SoT = deck.name(파일명 아님) — 파일명과 다른 이름으로 렌더 검증
+ *  ① 사이드바 트리 라벨 SoT = deck.name(파일명 아님) — 파일명과 다른 이름으로 렌더 검증
  *  ⑨ 허브 카드 트리와 사이드바 트리가 같은 UI.deckLabelHtml() 공유 함수를 쓴다
- *  ⑩ 전체 이름은 title(네이티브 툴팁)로 항상 확인 가능(잘려도 유실 없음)
+ *  ④ 전체 이름은 title(네이티브 툴팁)로 항상 확인 가능(잘려도 유실 없음)
  *  ⑪ .tree-node.active 색 대비 실측 ≥ 4.5:1(실 브라우저 computed 값 알파합성)
- *  뮤테이션ⓓ: deckNode 라벨을 파일명(docName)으로 되돌림 → ⑧이 실패해야 함
+ *  뮤테이션ⓓ: deckNode 라벨을 파일명(docName)으로 되돌림 → ①이 실패해야 함
+ *
+ * [WO 20260928-tree-title 추가분] 마스터 재지적: 구역·영역이 같은 deployment(같은 도면)를
+ * 가리켜 srcTag(.tree-doc-src 부가 라벨)가 모든 행에 똑같이 긴 파일명을 붙이며 정작 구별해야
+ * 할 이름("ㅁ"/"ㅁㄴㅇ")을 가렸다 — srcTag 를 제거하고 파일명은 head.title 로만 이동:
+ *  ③ 구역 행과 영역 행의 보이는 텍스트가 서로 다르다(같은 파일명으로 뭉개지지 않는다)
+ *  ⑤ 최상위 노드(프로젝트) 텍스트 = 프로젝트 이름("tes")
+ *  뮤테이션ⓔ: srcTag 를 되살림 → ①이 실패해야 함
+ *  뮤테이션ⓕ: title 에서 파일명을 제거 → ④가 실패해야 함
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -437,13 +445,18 @@ async function measureSidebarTree(browser, uiSource) {
   }, FILE_NAME);
   const m = await page.evaluate(() => {
     const labels = Array.from(document.querySelectorAll(".tree-label")).map((n) => n.textContent.trim());
-    const subs = Array.from(document.querySelectorAll(".tree-doc-src")).map((n) => n.textContent.trim());
+    const projectHead = document.querySelector(".tree-node-project");
     const deckHead = document.querySelector(".tree-node-deck");
     const regionHead = document.querySelector(".tree-node-region");
+    // 행 전체 보이는 텍스트(제목·아이콘·태그 전부 포함, title 속성은 textContent 에 안 잡힘) —
+    // .tree-label 만 보면 형제 span(예: 부가 라벨)에 숨은 텍스트를 놓친다(뮤테이션ⓔ 실증).
+    const rowText = (h) => (h ? h.textContent.trim() : null);
     const activeNode = document.querySelector(".tree-node.active");
     const cs = activeNode ? getComputedStyle(activeNode) : null;
     return {
-      labels, subs,
+      labels,
+      deckRowText: rowText(deckHead), regionRowText: rowText(regionHead),
+      projectLabel: projectHead ? projectHead.querySelector(".tree-label").textContent.trim() : null,
       deckTitle: deckHead ? deckHead.title : null,
       regionTitle: regionHead ? regionHead.title : null,
       activeColor: cs ? cs.color : null,
@@ -468,11 +481,17 @@ console.log("\n[Part E · 편집화면 사이드바 트리 — 라벨 SoT(deck.n
 await withBrowser(async (browser) => {
   const { m, shots } = await measureSidebarTree(browser, uiSrc);
 
-  ok(m.labels.includes("ㅁ") && m.labels.includes("ㅁㄴㅇ"), "⑧ 사이드바 트리 라벨이 deck.name('ㅁ'/'ㅁㄴㅇ')이다 — 실제 " + JSON.stringify(m.labels));
-  ok(!m.labels.some((l) => l.indexOf("ARCTIC VOYAGER") !== -1), "⑧ 도면 파일명이 1차 라벨(.tree-label)로 쓰이지 않는다(SoT=deck.name)");
-  ok(m.subs.some((s) => s.indexOf("ARCTIC VOYAGER") !== -1), "사전조건 — 도면 파일명은 보조 라벨(.tree-doc-src)로만 남아있다");
-  ok(m.deckTitle === "ㅁ" && m.regionTitle === "ㅁㄴㅇ",
-    "⑩ head.title 에 전체 이름이 그대로 들어있다(잘려도 유실 없음) — 실제 " + JSON.stringify({ deck: m.deckTitle, region: m.regionTitle }));
+  // [WO 20260928-tree-title] 마스터 재지적: 구역·영역이 같은 도면을 가리켜 srcTag(부가 라벨)가
+  // 모든 행에 똑같이 길게 붙으며 정작 구별해야 할 이름을 가렸다 — 파일명은 title 로만 이동.
+  ok(m.labels.includes("ㅁ") && m.labels.includes("ㅁㄴㅇ"), "① 사이드바 트리 라벨이 deck.name('ㅁ'/'ㅁㄴㅇ')이다 — 실제 " + JSON.stringify(m.labels));
+  ok(m.deckRowText.indexOf("ARCTIC") === -1 && m.regionRowText.indexOf("ARCTIC") === -1,
+    "① 행 전체 보이는 텍스트(title 제외, 형제 라벨 포함)에 도면 파일명('ARCTIC…')이 없다 — 실제 " + JSON.stringify({ deck: m.deckRowText, region: m.regionRowText }));
+  ok(m.deckRowText !== m.regionRowText, "③ 구역 행과 영역 행의 보이는 텍스트가 서로 다르다(같은 파일명으로 뭉개지지 않는다) — 실제 " + JSON.stringify({ deck: m.deckRowText, region: m.regionRowText }));
+  ok(!!m.deckTitle && m.deckTitle.indexOf("ARCTIC") !== -1 && !!m.regionTitle && m.regionTitle.indexOf("ARCTIC") !== -1,
+    "④ head.title 에 원본 도면 파일명이 들어있다(유실 아니라 이동) — 실제 " + JSON.stringify({ deck: m.deckTitle, region: m.regionTitle }));
+  ok(!!m.deckTitle && m.deckTitle.indexOf("ㅁ") === 0 && !!m.regionTitle && m.regionTitle.indexOf("ㅁㄴㅇ") === 0,
+    "④ title 이 이름으로 시작한다(잘려도 유실 없음) — 실제 " + JSON.stringify({ deck: m.deckTitle, region: m.regionTitle }));
+  ok(m.projectLabel === "tes", "⑤ 최상위 노드(프로젝트) 텍스트가 'tes' 이다 — 실제 " + JSON.stringify(m.projectLabel));
 
   const activeRgb = parseRgb(m.activeColor);
   const sidebarRgb = parseRgb(m.sidebarBg);
@@ -501,6 +520,31 @@ await withBrowser(async (browser) => {
   else {
     const { m } = await measureSidebarTree(browser, mutated);
     ok(m.labels.some((l) => l.indexOf("ARCTIC VOYAGER") !== -1), "뮤테이션 적용 시 1차 라벨이 파일명으로 바뀐다(⑧이 깨짐을 확인) — 실제 " + JSON.stringify(m.labels));
+  }
+});
+
+console.log("\n[뮤테이션ⓔ] srcTag(도면 출처 부가 라벨)를 되살림 → ①이 실패해야 함");
+await withBrowser(async (browser) => {
+  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + zoneCntTag;";
+  const srcTag = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
+  const mutated = uiSrc.replace(needle,
+    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + srcTag + " + _tag + zoneCntTag;");
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { m } = await measureSidebarTree(browser, mutated);
+    ok(m.deckRowText.indexOf("ARCTIC") !== -1 || m.regionRowText.indexOf("ARCTIC") !== -1,
+      "뮤테이션 적용 시 ①이 깨짐(파일명 부가 라벨이 되살아나 행 전체 보이는 텍스트에 다시 섞인다) — 실제 " + JSON.stringify({ deck: m.deckRowText, region: m.regionRowText }));
+  }
+});
+
+console.log("\n[뮤테이션ⓕ] title 에서 파일명을 제거 → ④가 실패해야 함");
+await withBrowser(async (browser) => {
+  const needle = 'head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\\n원본 도면: " + docName : "");';
+  const mutated = uiSrc.replace(needle, 'head.title = (deck.name ? deck.name : "(이름 없음)");');
+  if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { m } = await measureSidebarTree(browser, mutated);
+    ok(!(m.deckTitle && m.deckTitle.indexOf("ARCTIC") !== -1), "뮤테이션 적용 시 ④가 깨짐(title 에서 파일명이 사라져 도면 출처를 확인할 수 없다) — 실제 " + JSON.stringify(m.deckTitle));
   }
 });
 
