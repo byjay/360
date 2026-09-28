@@ -8237,8 +8237,6 @@
         const cbEnterLbl = UI.$("btn-checkboard-enter-label");
         if (cbEnter) cbEnter.classList.toggle("active", isCheckboard);
         if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드 시작";
-        const startInput = UI.$("input-checkboard-start");
-        if (startInput) startInput.value = String(App._checkboardStart(State.pdfPage || 1));
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
         //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
@@ -8681,18 +8679,9 @@
       // 삭제했다. #btn-photobatch(사이드 툴바 "사진" 그룹)가 현재 모드 계열로 자동 매칭해
       // 동일 기능을 커버한다(35_PhotoBatch.js _defaultRange).
 
-      // 체크보드 구역별 시작 번호 입력
-      const cbStart = UI.$("input-checkboard-start");
-      if (cbStart) {
-        const applyStart = () => {
-          const n = this._setCheckboardStart(State.pdfPage || 1, cbStart.value);
-          cbStart.value = String(n);
-          // [토스트 스팸 제거] change+blur 두 이벤트에 물려 있어 한 번 입력에 2회 발화했다.
-          // 적용된 값은 입력창에 그대로 보인다 → 토스트 불필요.
-        };
-        cbStart.addEventListener("change", applyStart);
-        cbStart.addEventListener("blur", applyStart);
-      }
+      // [WO 20260928 이관] 구 체크보드 시작 번호 입력(#input-checkboard-start)은
+      // #section-checkboard 가 영구 hidden(style.css)이라 렌더 고아였다 — 설정 패널
+      // (#settings-checkboard-start, 24_Settings.js)로 옮겼다. 정본 _setCheckboardStart()는 그대로 재사용.
 
       // "다음 포인트 지정" — 연속 배치
       UI.$("btn-next-point").addEventListener("click", () => {
@@ -8705,11 +8694,29 @@
       UI.$("input-pin-file").addEventListener("change", e => {
         const f = e.target.files[0];
         e.target.value = "";
-        if (!f) return;
+        // [WO 20260928] 체크보드 자동첨부 진행 여부를 먼저 뗀다(아래 어느 경로로 리턴하든
+        //   깜빡이는 대기 상태(State.editingPinId/pending)가 남지 않게).
+        const wasCheckboardAuto = State._checkboardAutoConfirm;
+        if (wasCheckboardAuto) State._checkboardAutoConfirm = false;
+        if (!f) {
+          // 체크보드에서 사진 선택을 취소해도 핀(번호)은 그대로 남는다(조용히 삭제 금지).
+          if (wasCheckboardAuto) { State.editingPinId = null; State.pending = null; }
+          return;
+        }
         const isImg = f.type.startsWith("image/");
         const isVid = f.type.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(f.name);
-        if (!isImg && !isVid) { alert("이미지(.jpg/.png) 또는 360° 영상(.mp4) 파일을 선택하세요."); return; }
+        if (!isImg && !isVid) {
+          alert("이미지(.jpg/.png) 또는 360° 영상(.mp4) 파일을 선택하세요.");
+          if (wasCheckboardAuto) { State.editingPinId = null; State.pending = null; }
+          return;
+        }
         this._acceptPinMediaFile(f, isVid, false);
+        if (wasCheckboardAuto) {
+          // [WO 20260928] 체크보드 자동첨부 — 기존 핀 편집 저장 경로(_confirmPin)를 그대로
+          //   재사용한다. 폼(#section-pin-form)이 열려있지 않아도 State.editingPinId/pending
+          //   이 채워져 있으면 동일하게 저장된다(새 "등록창"은 뜨지 않는다).
+          setTimeout(() => this._confirmPin(), 120);
+        }
       });
 
       // ── [마스터 요청] RICOH THETA 360° 전용 버튼 (삼성폰) ──
@@ -9572,6 +9579,45 @@
       this._autoSave && this._autoSave();
       this._updateCheckboardQuickStatus(curPage);
       Prompt && Prompt.toast && Prompt.toast("체크 포인트 #" + no + " 추가 · 자동저장");
+      // [WO 20260928] 마스터 요청: "포인트찍으면 사진을 기본으로 등록하게" — 번호 핀을 찍은
+      //   직후 곧바로 사진(360) 선택창을 연다. 기존 핀 편집의 미디어 업로드 경로(editPin()이
+      //   채우는 State 필드 + _confirmPin())를 그대로 재사용 — 새 업로드 로직 없음.
+      //   editPin() 과 달리 _openPinForm() 은 절대 호출하지 않는다(사진 첨부 시 "또 다른
+      //   등록창"이 뜨는 과거 치명 결함 재발 방지, 마스터: "치명적인 결함").
+      this._openCheckboardMediaPicker(pin);
+    },
+
+    /** 체크보드 핀 배치 직후 사진 선택창을 연다(마스터 2026-09-28 요청).
+     *  🔴 iOS Safari 는 파일 선택창을 "사용자 클릭 활성화" 동기 흐름 안에서 열어야 막히지
+     *  않는다 — _placeCheckboardPin() 은 지도 클릭 핸들러(_handlePlaceClick)에서 동기 호출
+     *  되므로 여기서도 setTimeout 없이 즉시 .click() 한다(지연 없음 = 활성화 유지).
+     *  취소하면(파일 미선택) 핀은 번호만 가진 채 그대로 남는다(조용히 삭제 금지). */
+    _openCheckboardMediaPicker(pin) {
+      const fi = UI.$("input-pin-file");
+      if (!fi) return;
+      // 기존 editPin()과 동일한 "편집 대상" 상태만 세팅(재사용) — 폼(_openPinForm)은 열지 않는다.
+      State.editingPinId = pin.id;
+      State.pending = { x: pin.x, y: pin.y };
+      State.pendingFile = null; State.pendingIsVideo = false; State.pendingDocs = [];
+      State.pendingIcon = pin.icon || "number";
+      UI.$("input-pin-label").value = pin.label || "";
+      UI.clearVal("input-pin-note");
+      UI.clearVal("input-pin-url");
+      UI.clearVal("input-pin-imgname");
+      State._checkboardAutoConfirm = true; // input-pin-file 의 change 핸들러가 소비하고 끈다
+      // [방어적 폴백] 파일 선택창을 "취소"하면 change 이벤트가 아예 안 오는 브라우저가 있다
+      //   (change 는 선택 완료 시에만 보장). window 포커스 복귀 후 일정 시간 안에 change 가
+      //   안 왔으면 취소로 간주해 대기 상태만 정리한다(핀 자체는 이미 저장돼 있어 영향 없음).
+      window.addEventListener("focus", () => {
+        setTimeout(() => {
+          if (State._checkboardAutoConfirm) {
+            State._checkboardAutoConfirm = false;
+            State.editingPinId = null;
+            State.pending = null;
+          }
+        }, 400);
+      }, { once: true });
+      fi.click();
     },
 
     /** [마스터 요청 2026-09-03] 사이드바 툴레일 "포인트" 버튼의 진입점 — 클릭 한 번으로
@@ -13643,6 +13689,19 @@
       $("btn-open-ai") && $("btn-open-ai").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openAI(); });
       $("btn-open-codemap") && $("btn-open-codemap").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openCodemap(); });
       $("btn-open-firebase") && $("btn-open-firebase").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openFirebase(); });
+      // [WO 20260928] 체크보드 시작 번호 — 정본 App._setCheckboardStart()/_renumberCheckboard() 재사용.
+      $("btn-settings-checkboard-apply") && $("btn-settings-checkboard-apply").addEventListener("click", () => {
+        const input = $("settings-checkboard-start");
+        if (!input || input.disabled) return;
+        const n = App._setCheckboardStart(State.pdfPage || 1, input.value);
+        input.value = String(n);
+        Prompt.toast && Prompt.toast("다음 번호부터 " + n + "번으로 시작합니다");
+      });
+      $("btn-settings-checkboard-renumber") && $("btn-settings-checkboard-renumber").addEventListener("click", () => {
+        const btn = $("btn-settings-checkboard-renumber");
+        if (btn && btn.disabled) return;
+        App._renumberCheckboard(); // 기존 Prompt.ask(시작번호 입력)+Prompt.confirm 흐름 그대로
+      });
       // 설정 패널 내 로그아웃
       $("btn-settings-signout") && $("btn-settings-signout").addEventListener("click", () => {
         Auth.signOut();
@@ -13663,6 +13722,28 @@
         `<button type="button" class="pincolor-sw${p.id === cur ? " active" : ""}" data-pincolor="${p.id}" title="${p.name}" aria-label="${p.name}" style="background:${p.head};border-color:${p.head2};">` +
         (p.id === cur ? '<i class="fa-solid fa-check"></i>' : '') + `</button>`
       ).join("");
+    },
+
+    /** [WO 20260928] 설정 패널의 "체크보드 시작 번호" 항목 렌더 — 현재 구역(도면) 값을 채우고,
+     *  도면이 로드 안 됐으면 비활성 + 이유를 표시한다(조용히 무시 금지). */
+    _renderCheckboardStart() {
+      const $ = (id) => document.getElementById(id);
+      const input = $("settings-checkboard-start");
+      const hint  = $("settings-checkboard-hint");
+      const applyBtn = $("btn-settings-checkboard-apply");
+      const renumberBtn = $("btn-settings-checkboard-renumber");
+      if (!input) return;
+      const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
+      input.disabled = !hasDrawing;
+      if (applyBtn) applyBtn.disabled = !hasDrawing;
+      if (renumberBtn) renumberBtn.disabled = !hasDrawing;
+      if (!hasDrawing) {
+        input.value = "";
+        if (hint) hint.textContent = "도면(구역)을 먼저 불러와야 시작 번호를 설정할 수 있습니다.";
+        return;
+      }
+      input.value = (typeof App !== "undefined" && App._checkboardStart) ? String(App._checkboardStart(State.pdfPage || 1)) : "1";
+      if (hint) hint.textContent = "개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.";
     },
 
     open() {
@@ -13708,6 +13789,7 @@
         $("settings-designer-actions") && $("settings-designer-actions").classList.toggle("hidden", !Auth.isDesigner);
         $("settings-viewer-note")      && $("settings-viewer-note").classList.toggle("hidden", Auth.isDesigner);
         $("settings-super-actions")    && $("settings-super-actions").classList.toggle("hidden", !Auth.isSuper);
+        if (Auth.isDesigner) this._renderCheckboardStart();
       } else {
         // 미로그인 — 구글 로그인 안내
         out && out.classList.remove("hidden");
