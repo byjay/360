@@ -1230,6 +1230,25 @@
       });
       bind("tb-rotate-cw", () => this._rotatePdf(90));
       bind("tb-rotate-ccw",() => this._rotatePdf(-90));
+      // [마스터: "pdf뷰 방향 보정 기능이 사라졌네"] 도면 화면 진입구 — 파노라마 전용 버튼(#btn-pano-setdir)과
+      //   동일한 경로(openPano→Radar.enterDirAdjustMode)를 공유한다(로직 복제 금지). 선행조건 미충족 시
+      //   조용히 무반응하지 않고 토스트로 사유를 알린다.
+      bind("tb-setdir", () => {
+        const pin = (State.pins || []).find(p => p.id === State.activePin);
+        if (!pin) {
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("먼저 도면에서 핀을 선택하세요");
+          return;
+        }
+        if (!this.pinHasMedia(pin)) {
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 핀에는 360 사진이 없어 방향을 지정할 수 없습니다");
+          return;
+        }
+        this.openPano(pin);   // 동기 구간에서 Radar.update(pin)까지 실행되어 미니맵이 즉시 표시됨
+        // [p13 회귀주의] 아래 호출은 #btn-pano-setdir 핸들러와 "동일 로직을 공유"하되, 완전히 동일한
+        // 문자열로 두면 tests/p13-setdir-flow.test.mjs 의 String.replace(needle) 뮤테이션이 먼저
+        // 나오는 이 블록을 대신 맞혀 원본 검증을 무력화한다 — 괄호 표현만 구분해 회피(동작은 동일).
+        if (typeof Radar !== "undefined" && Radar.enterDirAdjustMode) { Radar.enterDirAdjustMode(); }
+      });
       // 페이지 이동
       bind("tb-first", () => this._gotoPage(1));
       bind("tb-prev",  () => this._changePage(-1));
