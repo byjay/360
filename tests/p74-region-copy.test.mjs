@@ -347,6 +347,50 @@ async function suiteApp(label, aSrc) {
   }
 }
 
+/* ═════ 6. Prompt.confirm 연달아 띄우기 — 라이브에서 두 번째 창이 사라져 영구 대기한 결함 ═════
+ *  원본 없음 → [지금은 기존 방식으로] → 곧바로 "창 방식으로 만들까요?" 가 뜬다. 앞 창의 200ms 지연 숨김이
+ *  새 창을 숨기면 사용자는 아무 버튼도 못 누른다(Playwright 실측: class="admin-gate on hidden"). */
+const promptSrc = rd("public/js/modules/30_Prompt.js");
+async function suitePromptChain(label, src) {
+  console.log("\n[" + label + "]");
+  const mkEl = (id) => {
+    const cls = new Set(), ls = {};
+    return { id, textContent: "", innerHTML: "", className: "", style: {},
+      classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c), toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)) },
+      setAttribute() {}, addEventListener: (t, f) => { (ls[t] = ls[t] || []).push(f); },
+      removeEventListener: (t, f) => { ls[t] = (ls[t] || []).filter((x) => x !== f); },
+      click() { (ls.click || []).slice().forEach((f) => f()); }, _cls: cls };
+  };
+  const els = {};
+  const modal = mkEl("wm-confirm-modal");
+  const backdrop = mkEl("bd");
+  modal.querySelector = () => backdrop;
+  for (const id of ["wm-confirm-title", "wm-confirm-msg", "wm-confirm-ok", "wm-confirm-cancel"]) els[id] = mkEl(id);
+  let appended = false;
+  const sb = { console, setTimeout, clearTimeout, Promise,
+    requestAnimationFrame: (f) => setTimeout(f, 16),
+    document: {
+      getElementById: (id) => (id === "wm-confirm-modal" ? (appended ? modal : null) : els[id] || null),
+      createElement: () => modal, body: { appendChild: () => { appended = true; } } } };
+  sb.window = sb;
+  vm.createContext(sb);
+  vm.runInContext(src + "\n;globalThis.__PR = Prompt;", sb);
+  const PR = sb.__PR;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const p1 = PR.confirm("첫 창", "a");
+  await wait(40);
+  els["wm-confirm-cancel"].click();                // 사용자가 첫 창에서 [지금은 기존 방식으로]
+  const r1 = await p1;
+  const p2 = PR.confirm("둘째 창", "b");            // 곧바로 다음 확인창
+  await wait(320);                                 // 앞 창의 지연 숨김(200ms)이 지난 뒤
+  const visible = !modal._cls.has("hidden") && modal._cls.has("on");
+  ok(r1 === false && visible, `두 번째 확인창이 보인다(class=${[...modal._cls].join(" ")})`);
+  els["wm-confirm-ok"].click();
+  ok((await Promise.race([p2, wait(200).then(() => "timeout")])) === true, "두 번째 확인창 버튼이 눌리고 약속이 끝난다");
+  await wait(260);
+  ok(modal._cls.has("hidden"), "닫은 뒤에는 숨겨진다(종전 동작 유지)");
+}
+
 /* ═════ 실행 ═════ */
 const P = loadPDF();
 await suiteBox("1. crop % → PDF 상자(실제 pdf.js 대조)", P);
@@ -354,6 +398,7 @@ await suiteCopy("2. 실제 pdf-lib 복사 → pdf.js 재측정", P);
 suiteMismatch(P);
 await suiteFlow("4. extractRegionAsDeck 흐름", P);
 await suiteApp("5. App 경계(원본 등록·복사본 저장)", appSrc);
+await suitePromptChain("6. Prompt.confirm 연달아 띄우기", promptSrc);
 
 /* ═════ 뮤테이션 ═════ */
 async function mutate(label, run) {
@@ -394,6 +439,13 @@ console.log("\n[뮤테이션]");
     projSrcBox.v = projSrc.replace(needle, needle + " State.pins = State.pins.filter((p) => !(p.x < 40 && p.y < 45));");
     try { await suiteFlow("M3b", P); } finally { projSrcBox.v = save; }
   });
+}
+
+{
+  const needle = "clearTimeout(modal._hideTimer);";
+  ok(promptSrc.includes(needle), "M4 대상 존재");
+  await mutate("M4 확인창 지연 숨김 타이머 취소 제거", async () => { await suitePromptChain("M4", promptSrc.replace(needle, "")
+    .replace('modal._hideTimer = setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);', 'setTimeout(() => modal.classList.add("hidden"), 200);')); });
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nALL PASS");

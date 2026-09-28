@@ -121,9 +121,13 @@
         const okBtn = document.getElementById("wm-confirm-ok");
         const cancelBtn = document.getElementById("wm-confirm-cancel");
         const backdrop = modal.querySelector(".admin-gate-backdrop");
+        // 🔴 [WO 20260928-copy · 라이브 실측] 확인창을 연달아 띄우면(닫자마자 다음 confirm) 앞 창의
+        //   200ms 지연 숨김 타이머가 새 창에 "hidden" 을 붙여 두 번째 창이 사라지고 약속이 영원히 대기했다.
+        //   열 때 앞 타이머를 취소하고, 닫힐 때는 그 사이 다시 열리지 않았을 때만 숨긴다.
+        clearTimeout(modal._hideTimer);
         const close = (result) => {
           modal.classList.remove("on");
-          setTimeout(() => modal.classList.add("hidden"), 200);
+          modal._hideTimer = setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);
           okBtn.removeEventListener("click", onOk);
           cancelBtn.removeEventListener("click", onCancel);
           backdrop.removeEventListener("click", onCancel);
