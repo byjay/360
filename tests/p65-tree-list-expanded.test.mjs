@@ -45,6 +45,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import { listenSafePort } from "./_lib/safe-listen.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -300,7 +301,7 @@ if (!puppeteer) {
     res.writeHead(200, { "content-type": MIME[path.extname(f)] || "application/octet-stream" });
     res.end(fs.readFileSync(f));
   });
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  await listenSafePort(server, "127.0.0.1");
   const PORT = server.address().port;
   const browser = await puppeteer.launch({ headless: "new", protocolTimeout: 180000, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   const page = await browser.newPage();

@@ -11,6 +11,7 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "node:url";
+import { listenSafePort } from "./_lib/safe-listen.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -38,7 +39,7 @@ function serveStatic() {
       res.end(data);
     });
   });
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+  return listenSafePort(server, "127.0.0.1");
 }
 function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // Chrome 이 --remote-debugging-port=0 으로 뜰 때 실제 배정된 포트는 user-data-dir 안의
