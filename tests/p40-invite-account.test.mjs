@@ -33,6 +33,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { Miniflare } from "miniflare";
+import { majorityVerdict, CHI_THRESHOLD } from "./_lib/chi-judge.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -60,6 +61,19 @@ function sliceThroughObject(src, needle) { return src.slice(0, endOfBlock(src, n
 function extractBalanced(src, needle) {
   const start = src.indexOf(needle);
   return src.slice(start, endOfBlock(src, needle) + 1);
+}
+/** 실제 src/lib/util.ts 의 randInviteToken() 소스를 그대로 추출해 vm 에서 평가한다
+ *  (HTTP 왕복 없이 in-process 로 대량 표본을 빠르게 뽑아 통계 검정 표본 수를 늘리기 위함).
+ *  TS 반환형 주석(": string")만 벗겨낸다 — 로직은 원문 그대로다. */
+function loadRealRandInviteToken() {
+  const utilSrc = rd("src/lib/util.ts");
+  const fnSrc = extractBalanced(utilSrc, "export function randInviteToken()")
+    .replace(/^export\s+/, "")
+    .replace(/\)\s*:\s*string(?=\s*\{)/, ")");
+  const sandbox = { crypto };
+  vm.createContext(sandbox);
+  vm.runInContext(fnSrc + "\nglobalThis.__fn = randInviteToken;", sandbox);
+  return sandbox.__fn;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -163,7 +177,8 @@ const sha = async (s) => Array.from(new Uint8Array(await crypto.subtle.digest("S
   .map((b) => b.toString(16).padStart(2, "0")).join("");
 ok(invRow.token_hash === (await sha(rawToken)), "② 저장값 = SHA-256(token) — 해시만 보관");
 
-// 런타임 난수 품질: 200개 발급 → 전부 유일 + hex 자리 분포가 균등(카이제곱)
+// 런타임 난수 품질: 200개 발급(HTTP, 실서버 경로) → 전부 유일 + hex 자리 분포가 균등(카이제곱)
+let httpTokens;
 {
   const tokens = [];
   for (let i = 0; i < 200; i++) {
@@ -171,11 +186,40 @@ ok(invRow.token_hash === (await sha(rawToken)), "② 저장값 = SHA-256(token) 
     tokens.push(new URL(r.body.invite_url).searchParams.get("invite"));
   }
   ok(new Set(tokens).size === 200, "② 200개 토큰 전부 유일(충돌 0)");
-  const hist = new Array(16).fill(0);
-  for (const t of tokens) for (const ch of t) hist[parseInt(ch, 16)]++;
-  const n = 200 * 64, exp = n / 16;
-  const chi = hist.reduce((a, o) => a + (o - exp) * (o - exp) / exp, 0);
-  ok(chi < 37.7, "② hex 자리 분포 균등(카이제곱 " + chi.toFixed(1) + " < 37.7 = df15 p.001)");
+  httpTokens = tokens;
+}
+// 🔴 표본 1회 카이제곱 판정(임계값 37.7=df15 p=0.001)은 정상 난수도 약 1/1000 확률로 거짓 실패한다
+// (2026-09-28 실측: node --test 3연속 중 1회 발생). → 독립 표본 3회 중 2회 이상 통과로 완화
+// (거짓 실패율 ≈ 3e-6, tests/_lib/chi-judge.mjs 참조). 표본1=실서버 HTTP 200개, 표본2·3=
+// 같은 실제 randInviteToken() 소스를 in-process 로 평가해 빠르게 추가 표본 확보(HTTP 375회 왕복 회피).
+{
+  const realGen = loadRealRandInviteToken();
+  const trial2 = Array.from({ length: 200 }, () => realGen());
+  const trial3 = Array.from({ length: 200 }, () => realGen());
+  ok(new Set(trial2).size === 200 && new Set(trial3).size === 200, "② in-process 표본도 전부 유일(충돌 0)");
+  const v = majorityVerdict([httpTokens, trial2, trial3]);
+  ok(v.ok, "🔴② hex 자리 분포 균등 — 독립 표본 3회 중 " + v.passCount + "/3 통과(각 카이제곱 "
+     + v.chis.map((c) => c.toFixed(1)).join(", ") + " / 임계값 " + CHI_THRESHOLD + "=df15 p.001)");
+
+  // 카나리아 ①: Math.random 기반 소스였다면 정적 검사가 여전히 거부하는지(판정 로직 자체 회귀 방지)
+  const fakeMathRandomSrc = "function randInviteToken() {\n  let h = '';\n"
+    + "  for (let i = 0; i < 64; i++) h += Math.floor(Math.random() * 16).toString(16);\n  return h\n}";
+  const wouldPassStaticCheck = fakeMathRandomSrc.includes("crypto.getRandomValues") && !fakeMathRandomSrc.includes("Math.random");
+  ok(wouldPassStaticCheck === false, "🔴② 카나리아①: Math.random 기반 생성기 소스는 아래 정적 검사가 여전히 걸러낸다");
+
+  // 카나리아 ②: hex 한 자리를 약하게 편향(0~e 만, 'f' 배제)시킨 생성기는 majorityVerdict 가 여전히 잡아내는지
+  const biasedToken = () => {
+    let h = "";
+    for (let i = 0; i < 64; i++) {
+      let d; do { d = Math.floor(Math.random() * 16); } while (d === 15);
+      h += d.toString(16);
+    }
+    return h;
+  };
+  const biasedTrials = [0, 1, 2].map(() => Array.from({ length: 200 }, biasedToken));
+  const biasedVerdict = majorityVerdict(biasedTrials);
+  ok(biasedVerdict.ok === false, "🔴② 카나리아②: 0~e 편향 생성기(3/3 표본)는 판정이 여전히 FAIL(카이제곱 "
+     + biasedVerdict.chis.map((c) => c.toFixed(1)).join(", ") + ") — 통계 검정이 실제로 약화되지 않았음을 증명");
 }
 // 🔴 CSPRNG 여부는 출력만 봐서는 PRNG 와 구별할 수 없다(이론적 한계) → 생성기 소스를 직접 확인한다.
 {
