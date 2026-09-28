@@ -41,3 +41,6 @@ public/js/main.js.ORIG_BACKUP
 2ND (*.JPG
 _archive/
 _code-export/
+
+# 임시 작업 폴더 — C: 드라이브 사용 금지(마스터 2026-09-29). 테스트·빌드 TEMP 는 여기로.
+.tmp/
