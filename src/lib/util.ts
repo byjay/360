@@ -149,3 +149,22 @@ export async function verifyPassword(password: string, saltHex: string, hashHex:
   for (let i = 0; i < hash.length; i++) diff |= hash.charCodeAt(i) ^ hashHex.charCodeAt(i)
   return diff === 0
 }
+
+/* ══ [P68] 회사명 대조 — 허용되지 않은 회사 리젝트의 1차 규칙 ══════════════
+ * 🔴 손입력 회사명은 표기가 흔들린다. 이 정규화 + 정확일치의 실측 일치율은 **66.7%(16/24)**
+ *   (2026-09-28, 조선/해양 협력사 24표본). 'HANLA ENS'·'DSME'·'HHI' 같은 영문·약어 표기를
+ *   정당한 협력사인데도 8건 리젝트했다 → 규칙이 못 잡은 건만 Jev 로 넘긴다(src/lib/jev.ts).
+ *   🔴 규칙이 통과시키면 Jev 를 호출하지 않는다(스킬 §6 「기존 규칙이 확신을 갖고 답을 냈으면」). */
+
+/** 법인 접미사·공백·기호·대소문자를 걷어낸 비교용 형태. 표기 차이만 흡수하고 뜻은 바꾸지 않는다. */
+export function normalizeCompany(s: string): string {
+  return String(s || '').toLowerCase()
+    .replace(/\(주\)|㈜|주식회사|inc\.?|co\.?,?\s*ltd\.?/g, '')
+    .replace(/[^0-9a-z가-힣]/g, '')
+}
+
+/** 정규화 후 정확 일치. 🔴 빈 값은 일치가 아니다(빈 입력이 모든 회사와 같아지면 게이트가 무너진다). */
+export function companyRuleMatch(allowed: string, input: string): boolean {
+  const a = normalizeCompany(allowed), b = normalizeCompany(input)
+  return !!a && !!b && a === b
+}

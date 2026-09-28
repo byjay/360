@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment,
   randShareCode, normalizeShareCode, isShareCode } from './lib/util'
+import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
 
 type Bindings = {
   DB: D1Database
@@ -15,6 +16,9 @@ type Bindings = {
   AI_API_KEY?: string          // OpenAI 호환 API 키 (Groq 등)
   AI_BASE_URL?: string         // 예) https://api.groq.com/openai/v1
   AI_MODEL?: string            // 예) openai/gpt-oss-120b
+  // [P68] Jev(TypeSafe System One) — 회사명 게이트의 2차 판정. 🔴 시크릿으로만 주입, 프론트 노출 금지.
+  //   설정: `wrangler pages secret put OPENROUTER_API_KEY` (없으면 게이트는 규칙 결과=리젝트로 폴백)
+  OPENROUTER_API_KEY?: string
   // [P0-3] 데모 로그인 스위치. 운영 봉인 시 `wrangler pages secret put DEMO_LOGIN` (값 0).
   DEMO_LOGIN?: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
@@ -2003,7 +2007,7 @@ app.post('/api/share/verify', async (c) => {
   }
   const hash = await sha256Hex(normalizeShareCode(rawCode))
   const row: any = await c.env.DB.prepare(
-    'SELECT id, label, expires_at, revoked FROM project_share_codes WHERE project_id = ? AND code_hash = ?'
+    'SELECT id, label, company, expires_at, revoked FROM project_share_codes WHERE project_id = ? AND code_hash = ?'
   ).bind(proj.id, hash).first().catch(() => null)
   const now = Date.now()
   const bad = !row ? 'unknown-code' : (row.revoked ? 'revoked-code' : ((row.expires_at && row.expires_at <= now) ? 'expired-code' : null))
@@ -2011,6 +2015,30 @@ app.post('/api/share/verify', async (c) => {
     await logActivity(c, 'share.denied', { actor: { email: '' }, targetType: 'project', targetId: proj.id,
       detail: { reason: bad, company, name: person, code_id: row ? row.id : null, url: c.req.header('Referer') || null } })
     return fail(bad)
+  }
+  /* [P68] 🔴 허락되지 않은 회사 리젝트 — 코드에 company 가 지정된 경우에만 작동한다.
+   *   NULL 이면 검사 없음 = 기존 링크 무손상. 판정 순서·임계값은 src/lib/jev.ts 가 정본(SoT).
+   *   ⚠️ 대조 기준은 label 이 아니라 company 다(label 은 "대한중공업 배관팀" 같은 폐기 단위 이름). */
+  const gate = await decideCompanyGate({
+    allowed: row.company, input: company,
+    ask: (a, b) => askJevSameCompany(c.env, a, b),
+  })
+  if (gate.verdict !== 'pass') {
+    const pending = gate.verdict === 'pending'
+    await logActivity(c, pending ? 'share.pending' : 'share.denied', {
+      actor: { email: '' }, targetType: 'project', targetId: proj.id,
+      detail: { reason: gate.reason, company, name: person, allowed_company: row.company,
+                code_id: row.id, code_label: row.label, jev: gate.jev,
+                url: c.req.header('Referer') || null } })
+    return c.json({
+      error: pending ? 'company pending approval' : 'company not allowed',
+      ok: false, contact: SUPPORT_CONTACT_EMAIL,
+      // 🔴 어느 회사가 등록돼 있는지는 알려주지 않는다(추측 공격에 정답을 주는 셈).
+      message: (pending
+        ? '입력하신 회사명이 이 링크에 등록된 회사와 같은지 확인하지 못했습니다. 담당자 확인이 필요합니다. '
+        : '이 링크는 허용된 회사만 열람할 수 있습니다. ') +
+        SUPPORT_CONTACT_EMAIL + ' 으로 링크를 다시 요청하세요.',
+    }, 403)
   }
   const pass = await mintAutoEntryToken(c, 'viewer', String(proj.id))
   if (!pass) return c.json({ error: 'gate unavailable', ok: false, contact: SUPPORT_CONTACT_EMAIL, message: '일시적인 오류입니다. 잠시 후 다시 시도하세요.' }, 503)
@@ -2021,6 +2049,8 @@ app.post('/api/share/verify', async (c) => {
   await logActivity(c, 'share.access', { actor: { email: '' }, targetType: 'project', targetId: proj.id,
     detail: { company, name: person, code_id: row.id, code_label: row.label,
               url: c.req.header('Referer') || (t ? sharePath(proj.name, t) : ('/?d=' + d)),
+              // [P68] 회사 대조가 어떻게 통과했는지(규칙/추정) 남긴다 — 감사 질의에 답하기 위해
+              allowed_company: row.company || null, gate_reason: gate.reason, jev: gate.jev,
               retention_days: PERSONAL_LOG_RETENTION_DAYS } })
   return c.json({ ok: true, token: pass.token, exp: pass.exp, readonly: true,
                   project: { id: proj.id, name: proj.name } })
@@ -2033,12 +2063,15 @@ app.get('/api/projects/:id/share-codes', async (c) => {
   const pid = c.req.param('id')
   if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
   const { results } = await c.env.DB.prepare(
-    'SELECT id, label, code_hint, created_by, created_at, expires_at, revoked, revoked_at, last_used_at, use_count FROM project_share_codes WHERE project_id = ? ORDER BY created_at DESC'
+    'SELECT id, label, company, code_hint, created_by, created_at, expires_at, revoked, revoked_at, last_used_at, use_count FROM project_share_codes WHERE project_id = ? ORDER BY created_at DESC'
   ).bind(pid).all().catch(() => ({ results: [] as any[] }))
   const now = Date.now()
   return c.json({
     data: (results || []).map((r: any) => ({ ...r, revoked: !!r.revoked,
+      // [P68] company 가 없는 코드는 회사 대조를 하지 않는다 — 목록에서 그 사실이 보여야 한다
+      company: r.company || null, company_gate: !!r.company,
       active: !r.revoked && (!r.expires_at || r.expires_at > now) })),
+    company_gate_threshold: COMPANY_GATE_PASS_P,
     // 🔴 원문은 없다 — 발급 순간에만 보여준다(해시 저장 정책). 재확인 불가 = 재발급하라.
     plaintext_available: false,
     retention_days: PERSONAL_LOG_RETENTION_DAYS,
@@ -2054,17 +2087,22 @@ app.post('/api/projects/:id/share-codes', async (c) => {
   try { body = await c.req.json() } catch {}
   const label = String(body.label || '').trim().slice(0, 60)
   if (!label) return c.json({ error: '발급 단위 이름(협력사/현장)을 입력하세요 — 유출 시 이 단위로 폐기합니다.' }, 400)
+  /* [P68] 허용 회사(옵션). 지정하면 열람자가 입력한 소속과 대조해 다른 회사를 리젝트한다.
+   *   🔴 비우면 대조하지 않는다(기존 동작). label 을 자동으로 끌어다 쓰지 않는다 —
+   *      label 은 "대한중공업 배관팀" 처럼 팀명이 붙어 있어 대조 기준으로 쓰면 전원 리젝트된다. */
+  const allowedCompany = String(body.company || '').trim().slice(0, 80) || null
   const days = Number(body.ttl_days)
   const expires_at = Number.isFinite(days) && days > 0 ? Date.now() + days * 86400000 : null
   const code = randShareCode()
   const norm = normalizeShareCode(code)
   const id = genId('psc')
   await c.env.DB.prepare(
-    'INSERT INTO project_share_codes (id, project_id, label, code_hash, code_hint, created_by, created_at, expires_at, revoked, use_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)'
-  ).bind(id, pid, label, await sha256Hex(norm), norm.slice(0, 4), user.email, Date.now(), expires_at).run()
-  await logActivity(c, 'share.code.create', { actor: user, targetType: 'project', targetId: pid, detail: { code_id: id, label, expires_at } })
+    // [P68] company 는 **마지막 컬럼**으로 붙인다 — 앞쪽 바인딩 순서를 건드리지 않는다
+    'INSERT INTO project_share_codes (id, project_id, label, code_hash, code_hint, created_by, created_at, expires_at, revoked, use_count, company) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)'
+  ).bind(id, pid, label, await sha256Hex(norm), norm.slice(0, 4), user.email, Date.now(), expires_at, allowedCompany).run()
+  await logActivity(c, 'share.code.create', { actor: user, targetType: 'project', targetId: pid, detail: { code_id: id, label, company: allowedCompany, expires_at } })
   // 🔴 원문은 이 응답에서만 나간다(DB 에는 해시만).
-  return c.json({ success: true, id, label, code, expires_at, once_only: true })
+  return c.json({ success: true, id, label, company: allowedCompany, company_gate: !!allowedCompany, code, expires_at, once_only: true })
 })
 
 app.post('/api/share-codes/:codeId/revoke', async (c) => {

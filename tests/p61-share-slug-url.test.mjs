@@ -53,7 +53,9 @@ let buildSeq = 0;
 async function buildWorker(patches = []) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "p61-src-"));
   fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
-  const files = { "index.tsx": rd("src/index.tsx"), "lib/util.ts": rd("src/lib/util.ts") };
+  // 🔴 src/lib/*.ts 를 손목록으로 적지 않는다 — 새 lib 파일이 추가되면 조용히 번들이 깨진다(P68 실사고).
+  const files = { "index.tsx": rd("src/index.tsx") };
+  for (const f of fs.readdirSync(path.join(ROOT, "src/lib"))) if (/\.tsx?$/.test(f)) files["lib/" + f] = rd("src/lib/" + f);
   for (const p of patches) {
     const cur = files[p.file];
     if (cur === undefined) throw new Error("unknown patch file " + p.file);
