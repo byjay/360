@@ -34,6 +34,19 @@
       $("btn-open-ai") && $("btn-open-ai").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openAI(); });
       $("btn-open-codemap") && $("btn-open-codemap").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openCodemap(); });
       $("btn-open-firebase") && $("btn-open-firebase").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openFirebase(); });
+      // [WO 20260928] 체크보드 시작 번호 — 정본 App._setCheckboardStart()/_renumberCheckboard() 재사용.
+      $("btn-settings-checkboard-apply") && $("btn-settings-checkboard-apply").addEventListener("click", () => {
+        const input = $("settings-checkboard-start");
+        if (!input || input.disabled) return;
+        const n = App._setCheckboardStart(State.pdfPage || 1, input.value);
+        input.value = String(n);
+        Prompt.toast && Prompt.toast("다음 번호부터 " + n + "번으로 시작합니다");
+      });
+      $("btn-settings-checkboard-renumber") && $("btn-settings-checkboard-renumber").addEventListener("click", () => {
+        const btn = $("btn-settings-checkboard-renumber");
+        if (btn && btn.disabled) return;
+        App._renumberCheckboard(); // 기존 Prompt.ask(시작번호 입력)+Prompt.confirm 흐름 그대로
+      });
       // 설정 패널 내 로그아웃
       $("btn-settings-signout") && $("btn-settings-signout").addEventListener("click", () => {
         Auth.signOut();
@@ -54,6 +67,28 @@
         `<button type="button" class="pincolor-sw${p.id === cur ? " active" : ""}" data-pincolor="${p.id}" title="${p.name}" aria-label="${p.name}" style="background:${p.head};border-color:${p.head2};">` +
         (p.id === cur ? '<i class="fa-solid fa-check"></i>' : '') + `</button>`
       ).join("");
+    },
+
+    /** [WO 20260928] 설정 패널의 "체크보드 시작 번호" 항목 렌더 — 현재 구역(도면) 값을 채우고,
+     *  도면이 로드 안 됐으면 비활성 + 이유를 표시한다(조용히 무시 금지). */
+    _renderCheckboardStart() {
+      const $ = (id) => document.getElementById(id);
+      const input = $("settings-checkboard-start");
+      const hint  = $("settings-checkboard-hint");
+      const applyBtn = $("btn-settings-checkboard-apply");
+      const renumberBtn = $("btn-settings-checkboard-renumber");
+      if (!input) return;
+      const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
+      input.disabled = !hasDrawing;
+      if (applyBtn) applyBtn.disabled = !hasDrawing;
+      if (renumberBtn) renumberBtn.disabled = !hasDrawing;
+      if (!hasDrawing) {
+        input.value = "";
+        if (hint) hint.textContent = "도면(구역)을 먼저 불러와야 시작 번호를 설정할 수 있습니다.";
+        return;
+      }
+      input.value = (typeof App !== "undefined" && App._checkboardStart) ? String(App._checkboardStart(State.pdfPage || 1)) : "1";
+      if (hint) hint.textContent = "개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.";
     },
 
     open() {
@@ -99,6 +134,7 @@
         $("settings-designer-actions") && $("settings-designer-actions").classList.toggle("hidden", !Auth.isDesigner);
         $("settings-viewer-note")      && $("settings-viewer-note").classList.toggle("hidden", Auth.isDesigner);
         $("settings-super-actions")    && $("settings-super-actions").classList.toggle("hidden", !Auth.isSuper);
+        if (Auth.isDesigner) this._renderCheckboardStart();
       } else {
         // 미로그인 — 구글 로그인 안내
         out && out.classList.remove("hidden");

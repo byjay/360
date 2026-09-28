@@ -4665,6 +4665,26 @@ body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }
 }
 .settings-pincolor-label{ font-size:12.5px; font-weight:700; color:var(--text,#2b2820); white-space:nowrap; }
 .settings-pincolor-swatches{ display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+
+/* [WO 20260928] 설정 패널 — 체크보드 시작 번호(구 #section-checkboard 입력을 이관, SoT 단일화).
+   .checkboard-start-row/-label/-input 은 기존 클래스 재사용(새 스타일 없음). */
+.settings-checkboard-block{
+  margin-top:10px; padding:10px 12px;
+  background:var(--bg3,#efe9dc); border:1px solid var(--border,#e4dccb); border-radius:10px;
+}
+.settings-checkboard-block .checkboard-start-row{ margin-bottom:8px; }
+.settings-checkboard-actions{ display:flex; gap:8px; }
+.settings-checkboard-actions .admin-gate-btn{ flex:1; padding:8px 10px; font-size:12px; }
+/* [대비] var(--text-muted)는 :root 에 정의되지 않은 변수라 폴백(#6b7280)이 항상 쓰이는데,
+   다크 스킨(seastar-3d-skin.css) 배경 --bg3(#23262c) 위에서 3.14:1로 AA(4.5:1) 미달이다.
+   대신 --text2 를 쓴다 — 라이트 #6b6457 on #efe9dc=4.98:1, 다크 remap #9095a0 on #23262c=5.04:1
+   (이미 이 파일 5013행에서 같은 색쌍이 검증된 패턴, §공통 작업 규율 준수). */
+.settings-note-sm{
+  margin:8px 0 0; font-size:11px; line-height:1.5; font-family:var(--font-ui);
+  color:var(--text2,#6b6457);
+}
+.settings-checkboard-block input:disabled,
+.settings-checkboard-block button:disabled{ opacity:.5; cursor:not-allowed; }
 .pincolor-sw{
   width:26px; height:26px; border-radius:50%; border:2px solid; cursor:pointer;
   display:grid; place-items:center; color:#fff; font-size:11px;

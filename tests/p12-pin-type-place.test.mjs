@@ -107,6 +107,8 @@ function makeLightApp(pins, appSource) {
     $: (id) => document.getElementById(id),
     hide(id) { const e = document.getElementById(id); if (e) e.classList.add("hidden"); },
     text(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; },
+    val(id) { const e = document.getElementById(id); return e ? e.value : ""; },
+    clearVal(id) { const e = document.getElementById(id); if (e) e.value = ""; },
     togglePinList() {}, renderPinList() {}, renderPinsOnMap() {}
   };
   const sandbox = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State, UI, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate() };

@@ -488,10 +488,9 @@
             <span class="checkboard-menu-title">체크보드</span>
           </div>
           <p class="checkboard-menu-desc">도면(구역)을 등록하고 핀에 <b>번호만</b> 매기는 모드입니다. 사진·이름 입력 없이 클릭만으로 번호가 자동 부여됩니다.</p>
-          <div class="checkboard-start-row">
-            <label for="input-checkboard-start" class="checkboard-start-label">현재 구역 시작 번호</label>
-            <input id="input-checkboard-start" class="checkboard-start-input" type="number" min="1" step="1" value="1" inputmode="numeric" title="이 구역(페이지)에서 시작할 번호. 클릭마다 1씩 증가합니다." />
-          </div>
+          <!-- [WO 20260928 제거] 구 시작번호 입력(#input-checkboard-start)은 이 카드(#section-checkboard)가
+               style.css 의 도구바+트리 통합 규칙(#section-checkboard{display:none!important})으로 영구
+               숨겨져 렌더 고아였다 — 설정(#settings-modal)의 "체크보드 시작 번호"로 이관했다(SoT 단일화). -->
           <!-- [마스터 요청 2026-09-03] "핀을 종류별로 박는거" — 찍기 전에 종류를 고르면 연속 배치
                내내 유지된다. 새 CSS 없이 핀 편집 폼의 아이콘 그리드(.pf-icon-section/.pf-icon-grid/
                .pf-icon-chip)를 그대로 재사용(20_App.js _renderIconPicker("cb-icon-grid","cb-icon-label")).
@@ -2225,6 +2224,20 @@
           <div class="settings-pincolor-row">
             <span class="settings-pincolor-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>핀 기본 색상</span>
             <div id="settings-pincolor" class="settings-pincolor-swatches"></div>
+          </div>
+          <!-- [WO 20260928] 체크보드 시작 번호 — 구 #section-checkboard 의 #input-checkboard-start
+               (style.css 의 #section-checkboard{display:none!important} 로 렌더 고아였음)를 이관.
+               기존 App._checkboardStart/_setCheckboardStart/_renumberCheckboard() 정본 재사용, 새 저장 로직 없음. -->
+          <div id="settings-checkboard-block" class="settings-checkboard-block">
+            <div class="checkboard-start-row">
+              <label for="settings-checkboard-start" class="checkboard-start-label">체크보드 시작 번호</label>
+              <input id="settings-checkboard-start" class="checkboard-start-input" type="number" min="1" step="1" inputmode="numeric" title="이 구역(페이지)에서 다음에 찍을 번호. 클릭마다 1씩 증가합니다." />
+            </div>
+            <div class="settings-checkboard-actions">
+              <button id="btn-settings-checkboard-apply" class="admin-gate-btn ghost" type="button">적용</button>
+              <button id="btn-settings-checkboard-renumber" class="admin-gate-btn ghost" type="button">전체 번호 일괄 변경</button>
+            </div>
+            <p id="settings-checkboard-hint" class="settings-note-sm">개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.</p>
           </div>
         </div>
         <div id="settings-viewer-note" class="settings-note hidden">

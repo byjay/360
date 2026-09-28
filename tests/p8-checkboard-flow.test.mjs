@@ -93,6 +93,8 @@ function makeLightEnv(pins) {
     $: (id) => document.getElementById(id),
     hide(id) { const e = document.getElementById(id); if (e) e.classList.add("hidden"); },
     text(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; },
+    val(id) { const e = document.getElementById(id); return e ? e.value : ""; },
+    clearVal(id) { const e = document.getElementById(id); if (e) e.value = ""; },
     togglePinList() {}, renderPinList() {}, renderPinsOnMap() {}
   };
   const sandbox = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State, UI, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate() };
@@ -111,6 +113,8 @@ function makeFullEnv(pins) {
     $: (id) => document.getElementById(id),
     hide(id) { const e = document.getElementById(id); if (e) e.classList.add("hidden"); },
     text(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; },
+    val(id) { const e = document.getElementById(id); return e ? e.value : ""; },
+    clearVal(id) { const e = document.getElementById(id); if (e) e.value = ""; },
     togglePinList() {}, renderPinList() {}, renderPinsOnMap() {}
   };
   const sandbox = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State, UI, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate() };
@@ -199,6 +203,8 @@ function makeFullEnv(pins) {
     $: (id) => document.getElementById(id),
     hide(id) { const e = document.getElementById(id); if (e) e.classList.add("hidden"); },
     text(id, t) { const e = document.getElementById(id); if (e) e.textContent = t; },
+    val(id) { const e = document.getElementById(id); return e ? e.value : ""; },
+    clearVal(id) { const e = document.getElementById(id); if (e) e.value = ""; },
     togglePinList() {}, renderPinList() {}, renderPinsOnMap() {}
   };
   const sandbox = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State, UI, Prompt: { toast() {} }, requestAnimationFrame: (cb) => cb(), JSON, Array, Map, Set, Date: makeSeqDate() };
@@ -225,7 +231,7 @@ function makeFullEnv(pins) {
   else {
     const { document: docM, registry: regM } = makeDoc();
     const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: [], checkboardStart: { 1: 10 } };
-    const UIm = { $: (id) => docM.getElementById(id), hide() {}, text() {}, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
+    const UIm = { $: (id) => docM.getElementById(id), hide() {}, text() {}, val(id) { const e = docM.getElementById(id); return e ? e.value : ""; }, clearVal(id) { const e = docM.getElementById(id); if (e) e.value = ""; }, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
     const sandboxM = { console, document: docM, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State: StateM, UI: UIm, Prompt: { toast() {} }, requestAnimationFrame: (cb) => cb(), JSON, Array, Map, Set, Date: makeSeqDate() };
     vm.createContext(sandboxM);
     vm.runInContext(seriesSrc + "\n" + mutated + "\n" + appSrc + "\n;globalThis.__App = App; globalThis.__PB = PhotoBatch;", sandboxM);
