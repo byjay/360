@@ -132,17 +132,16 @@
      *  SOFT_LIMIT 강등으로 요청(maxDim)보다 낮아진 실제 값을 배포본에 정직하게 기록하기 위함. */
     lastSnapshotDims: null,
 
-    /* [WO 20260917-dpr] 대형 페이지 가중 픽셀 예산 — 출처: PDF VIEW°917 pdfCore.js:315-329
-       largePagePenalty() (MIT). 로직만 이식(임계·계수는 우리 구조에 맞게 재정의, 코드 비복붙).
-       [근본원인] canvasPxCap() 은 페이지 크기와 무관한 고정 상한이다. 그런데 renderCrop() 이
-       전면 캔버스(#pdf-canvas)와 별도로 크롭 오버레이(#pdf-canvas-hi)를 동시에 띄울 수 있어
-       (02_PDF.js:_ensureCrop), A1 이상 대형 페이지에서는 두 캔버스가 각각 상한까지 차
-       실제 메모리가 상한의 최대 2배(LARGE_PAGE_SHARE_COUNT)에 이를 수 있다.
-       → 대형 페이지(원본 pt 기준)일수록 상한을 나눠 써 두 캔버스 합산이 기존 단일 상한
-       안에 들어오게 한다. 일반 도면(A4~A1 미만)은 전혀 영향받지 않는다. */
-    LARGE_PAGE_CAP_PT: 900,       // 짧은 변 기준(출처 동일값) — A1(1684×2384pt)부터 적용, A4(595×842pt) 는 무관
-    LARGE_PAGE_SHARE_COUNT: 2,    // 동시 상주 가능 캔버스 수(base + crop 오버레이)
-    LARGE_PAGE_MIN_WEIGHT: 0.35,  // 이 아래로 나누면 화면이 보이지 않을 정도로 뭉개짐(출처 동일 하한)
+    /* [회귀수정 2026-09-28] 0c5a7b6 의 pageWeightedPxCap()/LARGE_PAGE_SHARE_COUNT 를 제거했다.
+       [근본원인] 그 코드는 "페이지 크기(A1 이상)"만으로 예산을 무조건 반으로 깎았다 — 마스터
+       요구(대형 도면일수록 해상도가 더 필요하다)와 정반대 방향이었고, 근거로 든 "base+crop
+       두 캔버스 동시 상주"도 실제로는 renderCrop() 호출 시에만 성립(평상시 crop 캔버스는
+       DOM 에 없음) 하는데 평상시에도 무조건 적용돼 A1 이 이유 없이 반토막났다.
+       → 페이지 크기는 예산 산정 근거에서 제외한다(YAGNI). 대신 "지금 실제로 동시에 화면에
+       떠 있는 캔버스 수" 로만 나눈다: 평상시 1장(=전체 예산 그대로) / 크롭 오버레이 렌더 중엔
+       2장(=절반씩, 메모리 안전 유지). 상주 수는 각 호출부의 실제 실행 맥락에서 정해진다
+       (base 캔버스 경로는 renderCrop 이전에 항상 _clearCrop 되므로 1, renderCrop() 은
+       정의상 base 위에 겹쳐 그리므로 2 — 아래 각 호출부 주석 참조). */
 
     /** 기기별 캔버스 면적 상한 (순수 함수 — 테스트 가능) */
     canvasPxCap(env) {
@@ -153,21 +152,12 @@
       return this.CANVAS_PX_DESKTOP;
     },
 
-    /** [WO 20260917-dpr] 대형 페이지일수록 픽셀 예산을 보수적으로 나눈다(순수 함수).
-     *  pageW/pageH = 페이지 원본 pt(scale:1 viewport) — 항상 "전체 페이지" 기준이다(크롭 영역 아님).
-     *  🔴 기존 pxCap(모바일 16.7M/데스크톱 40M) 자체는 올리지 않는다 — 이 값 이하로만 조정한다. */
-    pageWeightedPxCap(pageW, pageH, pxCap) {
-      const cap = pxCap || this.CANVAS_PX_DESKTOP;
-      const w = Math.max(1, pageW || 1), h = Math.max(1, pageH || 1);
-      if (Math.max(w, h) < this.LARGE_PAGE_CAP_PT) return cap;
-      const weight = Math.max(this.LARGE_PAGE_MIN_WEIGHT, 1 / this.LARGE_PAGE_SHARE_COUNT);
-      return Math.min(cap, cap * weight);
-    },
-
-    /** [WO 20260917-dpr] canvasPxCap()+pageWeightedPxCap() 합성 — clampScale 에 넘길
-     *  "실제 적용 예산" 단일 진입점(공유 함수 1곳만 고치면 3개 호출부 모두 반영된다). */
-    effectivePxCap(env, pageW, pageH) {
-      return this.pageWeightedPxCap(pageW, pageH, this.canvasPxCap(env));
+    /** [회귀수정 2026-09-28] clampScale 에 넘길 "실제 적용 예산" 단일 진입점
+     *  (공유 함수 1곳만 고치면 호출부 전체 반영). residentCanvasCount = 지금 이 호출 시점에
+     *  동시 상주하는 캔버스 수(기본 1). 🔴 페이지 크기는 입력에서 제외 — 크기로 깎지 않는다. */
+    effectivePxCap(env, residentCanvasCount) {
+      const n = Math.max(1, residentCanvasCount || 1);
+      return this.canvasPxCap(env) / n;
     },
 
     /* [WO 20260917-dpr] 상주 페이지 수 기준 dpr 상한 — 출처: PDF VIEW°917 pdfCore.js:331-347
@@ -176,7 +166,9 @@
        고정값이라, 화면에 실제로 뜬 페이지가 몇 장이든 같은 dpr 을 요구했다(가드 없음).
        → dpr² × 페이지당 픽셀 × 상주 페이지 수 ≤ pxCap 을 만족하는 dpr 로 자른다.
        residentPages 기본 1 — 우리 뷰어는 페이지 1장만 캔버스로 렌더하는 단일 캔버스 구조라
-       "전체 페이지 수" 가 아니라 "실제로 화면에 뜬 페이지 수(=1)" 를 쓴다(이식 1 요구사항). */
+       "전체 페이지 수" 가 아니라 "실제로 화면에 뜬 페이지 수(=1)" 를 쓴다(이식 1 요구사항).
+       [회귀수정 2026-09-28] pxCap 인자로 effectivePxCap() 결과를 넘겨받게 해 "동시 상주 캔버스
+       수 나누기" 를 dpr 산정에도 동일하게 적용한다(개념 통합 — 별도 페이지수 가중을 두지 않음). */
     residentDpr(o) {
       const opt = o || {};
       const raw = Math.min(opt.devicePixelRatio || (typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
@@ -272,7 +264,8 @@
       // baseCssScale: 도면 1포인트가 화면 몇 px 로 보이는가 (디자이너 첫 표시 기준).
       // 여기서는 캔버스의 CSS 폭 = base.width 로 두고, 줌은 별도로 처리한다.
       // [WO 20260917-dpr] 상주 페이지 수(=1, 단일 캔버스 구조) 기준 dpr — residentDpr 참조.
-      const dpr = this.residentDpr({ pageW: base.width, pageH: base.height, pxCap: this.canvasPxCap(this._env()), residentPages: 1 });
+      // [회귀수정 2026-09-28] 이 시점은 항상 _clearCrop() 직후(위 260행) → 상주 캔버스 1개.
+      const dpr = this.residentDpr({ pageW: base.width, pageH: base.height, pxCap: this.effectivePxCap(this._env(), 1), residentPages: 1 });
       // 논리(=화면 1배) CSS 크기는 PDF 1포인트 = 1px 로 고정한다.
       // → map-transform/pins-layer 레이아웃 크기가 줌 재렌더와 무관하게 불변(핀 % 좌표 정합 보장).
       const baseCss = 1;
@@ -296,7 +289,9 @@
     async _rasterize(page, canvas, renderScale, rot, cssScale) {
       // 캔버스 면적/변 상한으로 클램프 (안정성)
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
-      const rs = this.clampScale(renderScale, baseVp.width, baseVp.height, this.effectivePxCap(this._env(), baseVp.width, baseVp.height), this.MAX_SIDE_HARD);
+      // [회귀수정 2026-09-28] base 캔버스 래스터화 경로는 renderPage(_clearCrop 직후) 또는
+      // requestZoomRerender 의 "_clearCrop() 이후 재래스터" 분기에서만 호출된다 → 상주 1개.
+      const rs = this.clampScale(renderScale, baseVp.width, baseVp.height, this.effectivePxCap(this._env(), 1), this.MAX_SIDE_HARD);
       const vp = page.getViewport({ scale: rs, rotation: rot });
       const ctx = canvas.getContext("2d", { alpha: false });
       // 진행 중 task 취소 (줌 연타 시 누적 방지)
@@ -338,13 +333,17 @@
           const rot = ((page.rotate || 0) + (st.rotation || 0)) % 360;
           const baseVp = page.getViewport({ scale: 1, rotation: rot });
           // [WO 20260917-dpr] 상주 페이지 수(=1) 기준 dpr — baseVp 확보 후 계산(residentDpr 참조).
-          const dpr = this.residentDpr({ pageW: baseVp.width, pageH: baseVp.height, pxCap: this.canvasPxCap(this._env()), residentPages: 1 });
+          // [회귀수정 2026-09-28] plan.capped 는 "크롭 없이 base 만 다시 그리면 도달 가능한
+          // 배율" 을 뜻한다(아래에서 실제로 그 분기를 타면 _clearCrop() 후 _rasterize 한다)
+          // → 이 계획 단계의 pxCap 도 상주 1개 기준이어야 한다(크롭이 이겨도 무방 — 그 경우
+          // 아래 renderCrop() 이 자신의 pxCap 을 별도로 상주 2개로 다시 계산한다).
+          const dpr = this.residentDpr({ pageW: baseVp.width, pageH: baseVp.height, pxCap: this.effectivePxCap(this._env(), 1), residentPages: 1 });
           // 🔴 실익 판정은 "상한으로 자른 뒤" 한다 — 상한에 걸려 화질이 안 오르는데
           //    대형 PDF 를 다시 그리면 화면만 멈추고 얻는 게 없다(구 코드의 실제 버그).
           const plan = this.planRerender({
             zoom: st.lastZoom, dpr: dpr, baseCssScale: st.baseCssScale, renderScale: st.renderScale,
             pageW: baseVp.width, pageH: baseVp.height,
-            pxCap: this.effectivePxCap(this._env(), baseVp.width, baseVp.height), maxSide: this.MAX_SIDE_HARD
+            pxCap: this.effectivePxCap(this._env(), 1), maxSide: this.MAX_SIDE_HARD
           });
           // [WO 20260917] 구역(deck) 크롭이 고정돼 있으면 전체 페이지 임계와 무관하게
           //   항상 그 영역만 렌더 대상으로 삼는다 — 같은 픽셀 예산을 그 영역에 집중시켜
@@ -406,9 +405,11 @@
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
       const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
       const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
-      // pageW/pageH 는 크롭 영역(w0/h0)이 아니라 원본 전체 페이지(baseVp) 기준 — 대형 페이지
-      // 가중은 "이 페이지가 A1급이냐"로 판정하지, 지금 보이는 크롭 크기로 판정하지 않는다.
-      const rs = this.clampScale(scale, w0, h0, this.effectivePxCap(this._env(), baseVp.width, baseVp.height), this.MAX_SIDE_HARD);
+      // [회귀수정 2026-09-28] renderCrop() 은 정의상 "전면(base) 캔버스 위에 겹쳐 그린다"
+      // (함수 상단 주석) — 이 함수가 실행되는 순간 base 는 이미 DOM 에 존재하고 이 크롭
+      // 오버레이가 그 위에 추가로 상주한다 → 상주 캔버스는 항상 2개(고정 상수가 아니라
+      // 이 함수의 실행 전제 자체가 2다).
+      const rs = this.clampScale(scale, w0, h0, this.effectivePxCap(this._env(), 2), this.MAX_SIDE_HARD);
       // 전면 캔버스보다 선명하지 않으면 얹을 이유가 없다(메모리만 먹는다).
       if (rs <= (st.renderScale || 0) * this.RERENDER_GAIN) { this._clearCrop(); return; }
       const cv = this._ensureCrop(baseCanvas);
