@@ -116,7 +116,9 @@
       opts = opts || {};
       if (!this.currentProject) { alert("먼저 프로젝트를 선택하세요."); return null; }
       // ── [마스터 요청] 생성 버튼 연타 가드: 진행 중이면 중복 생성 차단 ──
-      if (this._creatingDeck) { return null; }
+      // [WO AM·재현 실측] 이 가드가 조용히 null 만 반환해 연타(또는 파일선택창이 아직 떠 있는
+      // 최대 60초 창) 시 "버튼이 눌러도 반응 없음"처럼 보였다(§5 조용한 실패). 이유를 알린다.
+      if (this._creatingDeck) { Prompt.toast && Prompt.toast("구역을 만드는 중입니다 — 잠시 후 다시 시도하세요"); return null; }
       // [WO 20260918] 🔴 조용한 실패 금지 — 이 흐름은 파일선택창까지 여는 동기 흐름이라
       // OpLog 큐잉 대상이 아니다(사유는 파일 상단 주석). 오프라인이면 파일창을 열기 전에 중단.
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 구역을 생성할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
