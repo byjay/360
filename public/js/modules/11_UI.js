@@ -182,6 +182,12 @@
     renderTree() {
       const host = this.$("side-tree");
       if (!host) return;
+      /* [WO 20260928-tree-expand] 🔴 마스터: "구역·영역이 리스트로, 기본 펼침" —
+         접기/펼치기는 유지하되 기본값은 항상 열림. 상태는 세션 메모리(this._treeCollapsed,
+         deck.id 키 — 전역 프로젝트 구분 없는 localStorage 금지, 1e71772 핀필터 사고 재발 방지)
+         에만 남긴다. 새로고침하면 초기화되고, deck.id 는 프로젝트별로 유일하므로 다른
+         프로젝트 설정이 새어 들어올 수 없다. */
+      const collapsed = this._treeCollapsed || (this._treeCollapsed = new Set());
       const esc = (s) => this.escapeHtml(s);
       const C = '<svg class="tree-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
       const ICO = {
@@ -249,8 +255,10 @@
         const isCur = !!(curDeck && String(curDeck.id) === String(deck.id));
         const loaded = hasState(deck);
         const subDecks = childrenOf.get(String(deck.id)) || [];
+        // [WO 20260928-tree-expand] 🔴 기본 펼침 — 사용자가 직접 닫은 적이 없으면 항상 open.
+        const collapseKey = String(deck.id);
         const g = document.createElement("div");
-        g.className = (isRegion ? "tree-region" : "tree-deck") + ((loaded || subDecks.length) ? " open" : "");
+        g.className = (isRegion ? "tree-region" : "tree-deck") + (collapsed.has(collapseKey) ? "" : " open");
         const head = document.createElement("button");
         head.className = "tree-node " + (isRegion ? "tree-node-region" : "tree-node-deck") + (isCur ? " active" : "");
         // [B4] '도면없음'(구역에 도면 미등록) 과 '미저장'(로컬에만 있고 서버 미반영)을 구분 표시
@@ -264,10 +272,15 @@
         //   옆에 원본 도면 파일명을 부가 라벨로 남긴다(docLabel 은 없는 이름을 지어내지 않는다).
         const docName = deck.deployment_id ? docLabel(deck.deployment_id) : null;
         const srcTag = docName ? '<span class="tree-label-sub tree-doc-src" title="원본 도면: ' + esc(docName) + '">' + esc(docName) + '</span>' : "";
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + esc(deck.name || (isRegion ? "영역" : "구역")) + '</span>' + srcTag + _tag + zoneCntTag;
+        // [WO 20260928-tree-expand] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라 "이름 없음"으로
+        // 정직하게 표시(CLAUDE.md §5 — 값이 없으면 없다고 표시, 지어내지 않는다).
+        const _nameLabel = deck.name ? esc(deck.name) : '<span class="tree-name-missing">이름 없음</span>';
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + srcTag + _tag + zoneCntTag;
+        // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
+        const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {
-          if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { g.classList.toggle("open"); return; }
-          if (isCur) { g.classList.toggle("open"); }
+          if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { toggleOpen(); return; }
+          if (isCur) { toggleOpen(); }
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
@@ -275,8 +288,17 @@
         const kids = document.createElement("div");
         kids.className = "tree-children";
         let any = false;
-        // 3단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck)
-        subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); any = true; });
+        // 3단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck). 🔴 마스터: "구역 아래 영역이
+        // 리스트로 나열돼야 한다" — 0개여도 숨기지 않고 "영역 없음"으로 알린다(구역 레벨 한정,
+        // 영역 자신의 하위는 데이터가 있을 때만 표시해 기존 4단 방지 회귀(p62)를 건드리지 않는다).
+        if (!isRegion) {
+          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
+          any = true;
+        } else if (subDecks.length) {
+          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          any = true;
+        }
         if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
           const pins = State.pins || [];   // 전체 페이지(필터 없음)
