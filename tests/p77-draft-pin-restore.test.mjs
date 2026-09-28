@@ -188,9 +188,23 @@ const okRes = (j) => ({ ok: true, status: 200, json: async () => j });
   ok(calls.loadLatest === 0 && State.pins.length === 1, "⑤ keepDrawing 전환: 재로드 0회 · 핀 유지");
   App.openApp("designer", { project: { id: "prjX", name: "tes" } });
   ok(calls.loadLatest === 1, "⑤ 프로젝트 진입(keepDrawing 없음)은 종전대로 로드");
-  // 전환 버튼 호출부가 실제로 keepDrawing 을 넘기는지(위 동작이 버튼 경로에 연결돼 있는지)
-  const toggleCall = /const next = State\.checkboard \? "designer" : "checkboard";[\s\S]{0,400}?App\.openApp\(next, \{[^}]*keepDrawing: true/.test(appSrc);
-  ok(toggleCall, "⑤ 체크보드 전환 버튼(toggleCheckboard)이 keepDrawing:true 로 openApp 호출");
+  // [WO 20260929 갱신] toggleCheckboard 는 이제 _setRegMode() 로 위임한다(전 20260916 발주서의
+  // 직접 openApp() 호출 구조는 3모드 세그먼트 도입으로 리팩터됐다 — 동작(keepDrawing 유지)은
+  // 그대로, 경로만 단일 SoT(_setRegMode)로 합쳐졌다). 전 버전 정규식(직접 openApp 호출 문자열
+  // 매칭)은 더는 appSrc 와 일치하지 않아 삭제 — 아래로 대체.
+  const toggleDelegates = /const toggleCheckboard = \(\) => \{\s*this\._setRegMode\(/.test(appSrc);
+  const setRegModeKeepsDrawing = /_setRegMode\(next\) \{[\s\S]{0,600}?this\.openApp\([^;]*?\{[^}]*keepDrawing: true/.test(appSrc);
+  ok(toggleDelegates, "⑤ 체크보드 전환 버튼(toggleCheckboard)이 단일 SoT _setRegMode() 로 귀결됨");
+  ok(setRegModeKeepsDrawing, "⑤ _setRegMode() 가 keepDrawing:true 로 openApp 호출(도면 재로드 없음 보장)");
+
+  console.log("\n[뮤테이션⑤] _setRegMode 가 keepDrawing 을 안 넘기게 바꾸면 — 실패해야 함");
+  const mutatedNoKeep = appSrc.replace(
+    "{ project: (typeof Projects !== \"undefined\" && Projects.currentProject) || null, keepDrawing: true });",
+    "{ project: (typeof Projects !== \"undefined\" && Projects.currentProject) || null });"
+  );
+  ok(mutatedNoKeep !== appSrc, "뮤테이션⑤ 치환 적중(소스와 정확히 일치)");
+  const setRegModeKeepsDrawingMutated = /_setRegMode\(next\) \{[\s\S]{0,600}?this\.openApp\([^;]*?\{[^}]*keepDrawing: true/.test(mutatedNoKeep);
+  ok(!setRegModeKeepsDrawingMutated, "뮤테이션 적용 시 keepDrawing:true 검사가 실패함(⑤가 깨짐을 증명)");
 }
 
 /* ══ ⑥ 복원된 핀 삭제 — Prompt.confirm 모달: 취소면 유지, 확인이면 화면·draft 에서 모두 제거 ══ */

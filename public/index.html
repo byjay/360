@@ -198,6 +198,13 @@
     <span class="topbar-sep">·</span>
     <span id="file-name-label" class="file-name-label">도면 없음</span>
 
+    <!-- [WO 20260929] 편집화면 3모드 세그먼트 — 보기/체크보드/사진등록. State.regMode(20_App.js) SoT. -->
+    <div id="regmode-seg" class="regmode-seg designer-only" role="group" aria-label="편집 모드 선택">
+      <button id="btn-regmode-view" class="regmode-btn" type="button" title="보기 — 생성·편집 없음, 핀 클릭 시 보기">보기</button>
+      <button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="체크보드 — 도면 클릭 시 번호 핀만 생성">체크보드</button>
+      <button id="btn-regmode-photo" class="regmode-btn" type="button" title="사진 등록 — 핀 생성 즉시 사진 파일창">사진 등록</button>
+    </div>
+
     <!-- 수동 저장 버튼 (자동저장 OFF — 마스터 요청) -->
     <button id="btn-save" class="btn-save hidden" type="button" title="작업 내용을 서버에 저장"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장</button>
     <span id="autosave-indicator" class="autosave-indicator hidden" title="저장 상태">

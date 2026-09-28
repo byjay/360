@@ -121,47 +121,67 @@ function makeAppEnv() {
   return { App, State, UI, registry, calls, sandbox };
 }
 
-/* ══ ① 체크보드 핀 배치 직후 사진 선택창(input-pin-file.click) 자동 호출 ══ */
-console.log("\n[① 체크보드 배치 → 사진 선택창 자동 오픈]");
+/* ══ ① [WO 20260929 마스터 정정] 체크보드 모드: _placeCheckboardPin 은 번호 핀만 만든다
+ *  ("빈 곳 클릭 → 다른 반응 없음"). 사진 선택창은 절대 자동으로 뜨지 않는다. ══ */
+console.log("\n[① 체크보드 배치 — 파일창 자동 오픈 없음(WO 20260929 정정)]");
 {
-  const { App, State, registry, calls } = makeAppEnv();
-  State.checkboard = true;
+  const { App, State, registry } = makeAppEnv();
+  State.checkboard = true; State.regMode = "checkboard";
   let fileClicked = 0;
   registry["input-pin-file"].addEventListener("click", () => { fileClicked++; });
-  App._placeCheckboardPin({ x: 10, y: 10 });
+  const pin = App._placeCheckboardPin({ x: 10, y: 10 });
+  ok(State.pins.length === 1 && State.pins[0].label === "1", "핀이 번호 '1'로 생성됨");
+  ok(!!pin && pin.id === State.pins[0].id, "_placeCheckboardPin 이 생성한 핀을 반환함(사진등록 모드 호출부가 재사용)");
+  ok(fileClicked === 0, "체크보드는 '다른 반응 없음' — 사진 선택창이 열리지 않음");
+  ok(State.editingPinId === null, "편집 대상 상태도 건드리지 않음(폼·팝업 없음)");
+
+  console.log("\n[뮤테이션①] _placeCheckboardPin 이 다시 파일창을 열도록 되돌리면(체크보드에서도 반응) — 실패해야 함");
+  const needle = "      // 🔴 [WO 20260929 마스터 정정] 이 함수는 항상 \"번호 핀만\" 만든다";
+  if (!appSrc.includes(needle)) { console.log("  FAIL 뮤테이션① 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const mutated = appSrc.replace("      return pin;\n    },", "      this._openPinMediaPicker(pin);\n      return pin;\n    },");
+    if (mutated === appSrc) { console.log("  FAIL 뮤테이션① 치환 실패(needle 중복/불일치)"); failed++; }
+    else {
+      const { document: docM, registry: regM } = makeDoc();
+      const StateM = { checkboard: true, regMode: "checkboard", mode: "designer", pdfPage: 1, pins: [], checkboardStart: {}, editingPinId: null, pending: null, pendingIcon: "number" };
+      const UIm = makeUI(docM);
+      const sandboxM = { console, document: docM, window: { addEventListener() {} }, navigator: { onLine: false }, SyncQueue: { enqueue: async () => "op" }, Cloud: { _cache: {}, resizeImage: async () => ({ dataURL: "d", width: 1, height: 1 }) }, State: StateM, UI: UIm, Prompt: { toast() {} }, MapCtrl: { flyTo() {} }, JSON, Array, Map, Set, Date: makeSeqDate(), setTimeout };
+      vm.createContext(sandboxM);
+      vm.runInContext(seriesSrc + "\n" + mutated + "\n;globalThis.__App = App;", sandboxM);
+      sandboxM.__App._updateSyncBadge = () => {};
+      let clickedM = 0;
+      const fiM = regM["input-pin-file"] = regM["input-pin-file"] || makeEl();
+      fiM.addEventListener("click", () => { clickedM++; });
+      sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
+      ok(clickedM === 1, "뮤테이션 적용 시 체크보드에서도 파일창이 열림(①이 깨짐을 증명) → click 호출 " + clickedM + "회");
+    }
+  }
+}
+
+/* ══ ①' [WO 20260929] 사진 등록 모드: 핀 생성 직후 즉시 사진 선택창(동기 호출) ══ */
+console.log("\n[①' 사진 등록 모드 — 핀 생성 직후 사진 선택창 자동 오픈]");
+{
+  const { App, State, registry } = makeAppEnv();
+  State.checkboard = true; State.regMode = "photo";
+  let fileClicked = 0;
+  registry["input-pin-file"].addEventListener("click", () => { fileClicked++; });
+  const pin = App._placeCheckboardPin({ x: 10, y: 10 });
+  App._openPinMediaPicker(pin); // _handlePlaceClick 의 photo 분기가 실제로 호출하는 두 함수(동기 순서 재현)
   ok(State.pins.length === 1 && State.pins[0].label === "1", "핀이 번호 '1'로 생성됨");
   ok(fileClicked === 1, "핀 생성 직후 input-pin-file.click() 이 곧바로(동기) 호출됨(모바일 user-activation 유지)");
   ok(State.editingPinId === State.pins[0].id, "편집 대상 상태가 방금 만든 핀으로 세팅됨(기존 editPin() 경로 재사용)");
   ok(registry["input-pin-label"].value === "1", "라벨 입력 필드가 핀 번호로 미리 채워짐(← _confirmPin() 이 기본라벨로 덮어쓰지 않게)");
-
-  console.log("\n[뮤테이션①] _openCheckboardMediaPicker() 호출을 제거하면 사진창이 안 뜬다 — 실패해야 함");
-  const needle = "      this._openCheckboardMediaPicker(pin);\n    },";
-  const mutated = appSrc.replace(needle, "      // [뮤테이션] 호출 제거\n    },");
-  if (mutated === appSrc) { console.log("  FAIL 뮤테이션① 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
-  else {
-    const { document: docM, registry: regM } = makeDoc();
-    const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: [], checkboardStart: {}, editingPinId: null, pending: null, pendingIcon: "number" };
-    const UIm = makeUI(docM);
-    const sandboxM = { console, document: docM, window: { addEventListener() {} }, navigator: { onLine: false }, SyncQueue: { enqueue: async () => "op" }, Cloud: { _cache: {}, resizeImage: async () => ({ dataURL: "d", width: 1, height: 1 }) }, State: StateM, UI: UIm, Prompt: { toast() {} }, MapCtrl: { flyTo() {} }, JSON, Array, Map, Set, Date: makeSeqDate(), setTimeout };
-    vm.createContext(sandboxM);
-    vm.runInContext(seriesSrc + "\n" + mutated + "\n;globalThis.__App = App;", sandboxM);
-    sandboxM.__App._updateSyncBadge = () => {};
-    let clickedM = 0;
-    const fiM = regM["input-pin-file"] = regM["input-pin-file"] || makeEl();
-    fiM.addEventListener("click", () => { clickedM++; });
-    sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
-    ok(clickedM !== 1, "뮤테이션 적용 시 사진 선택창이 안 열림(①이 깨짐을 증명) → click 호출 " + clickedM + "회");
-  }
 }
 
 /* ══ ①b 사진을 고르면 그 핀에 첨부되고, "또 다른 등록창"은 뜨지 않는다 ══ */
 console.log("\n[①b 사진 선택 → 같은 핀에 첨부, 등록창(section-pin-form) 안 뜸]");
 {
   const { App, State, registry, calls } = makeAppEnv();
-  State.checkboard = true;
+  State.checkboard = true; State.regMode = "photo"; // [WO 20260929] 첨부 파일창은 사진등록 모드 전용
   const pinForm = registry["section-pin-form"] = registry["section-pin-form"] || makeEl();
   pinForm.classList.add("hidden"); // 실제 기본 상태(index.html) 재현
-  App._placeCheckboardPin({ x: 20, y: 20 });
+  const newPin = App._placeCheckboardPin({ x: 20, y: 20 });
+  App._openPinMediaPicker(newPin);
   const pinId = State.pins[0].id;
   ok(pinForm.classList.contains("hidden"), "배치 직후에도 등록 폼(section-pin-form)은 여전히 hidden");
 
@@ -184,8 +204,9 @@ console.log("\n[①b 사진 선택 → 같은 핀에 첨부, 등록창(section-p
 console.log("\n[①c 사진 선택 취소 → 핀 유지(삭제 안 됨)]");
 {
   const { App, State, registry } = makeAppEnv();
-  State.checkboard = true;
-  App._placeCheckboardPin({ x: 5, y: 5 });
+  State.checkboard = true; State.regMode = "photo"; // [WO 20260929] 첨부 파일창은 사진등록 모드 전용
+  const cPin = App._placeCheckboardPin({ x: 5, y: 5 });
+  App._openPinMediaPicker(cPin);
   const pinId = State.pins[0].id;
   registry["input-pin-file"]._handlers.change.forEach((fn) => fn({ target: { files: [], value: "" } }));
   ok(State.pins.length === 1 && State.pins[0].id === pinId, "취소해도 핀이 삭제되지 않고 그대로 남음");
@@ -206,7 +227,9 @@ console.log("\n[①c 사진 선택 취소 → 핀 유지(삭제 안 됨)]");
     vm.runInContext(seriesSrc + "\n" + mutated + "\n;globalThis.__App = App;", sandboxM);
     sandboxM.__App._updateSyncBadge = () => {};
     sandboxM.__App._bindSidebar();
-    sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
+    StateM.regMode = "photo"; // [WO 20260929] 첨부 파일창은 사진등록 모드 전용
+    const pinM = sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
+    sandboxM.__App._openPinMediaPicker(pinM);
     const pinIdM = StateM.pins[0].id;
     regM["input-pin-file"]._handlers.change.forEach((fn) => fn({ target: { files: [], value: "" } }));
     ok(StateM.pins.length !== 1 || StateM.pins.find((p) => p.id === pinIdM) === undefined,

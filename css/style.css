@@ -3481,6 +3481,17 @@ body.role-viewer #drop-tap-cta,
 body.role-viewer #section-checkboard,
 body.role-viewer #btn-checkboard-toggle,
 body.role-viewer #btn-checkboard-enter { display: none !important; }
+/* [WO 20260929] 편집화면 3모드 세그먼트(보기/체크보드/사진등록) — 신규 클래스, 타 규칙과 충돌 없음. */
+.regmode-seg { display: flex; gap: 4px; align-items: center; margin: 0 6px; flex-shrink: 0; }
+.regmode-btn {
+  padding: 6px 10px; font-size: 12px; font-weight: 600; border-radius: 8px; cursor: pointer;
+  border: 1px solid rgba(0,0,0,.14); background: #f8fafc; color: #334155; white-space: nowrap;
+}
+.regmode-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+@media (max-width: 760px) {
+  .regmode-seg { gap: 6px; }
+  .regmode-btn { min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 13px; }
+}
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
 @media (max-width: 760px) { .topbar-quick { display: none; } .btn-settings span { display: none; } }
 /* [마스터] 모바일 상단바 전수 아이콘화 — 텍스트 라벨은 CSS로만 숨김(HTML span 유지: JS가 innerHTML/textContent 갱신) */

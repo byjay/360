@@ -490,7 +490,19 @@
           : (tier === "photo")
             ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`
             : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;
-        marker.innerHTML = `
+        // [WO 20260929] 체크보드 모드에서는 체크보드 핀의 번호만 보이게 — 장식(펄스·그라디언트·
+        // 그림자·티어 원판 모양 구분·아이콘 오버라이드) 최소화. 앵커(tip 18,60)는 원본과 동일
+        // 유지해 좌표 위치가 어긋나지 않는다. 대비 쌍(흰 원판+txtFill)도 기존 검증값 그대로 재사용.
+        const simplifiedCheckboard = (State.regMode === "checkboard" && pin.checkboard === true);
+        marker.innerHTML = simplifiedCheckboard ? `
+          <div class="pin-pin">
+            <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14.2 22 L18 60 L21.8 22 Z" fill="${headFill2}"/>
+              <circle cx="18" cy="15" r="12.4" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
+              <circle cx="18" cy="15" r="8.6" fill="#ffffff"/>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+            </svg>
+          </div>` : `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
             <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
@@ -592,8 +604,11 @@
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
             if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
-            // ── 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업(기존 유지) ──
-            if (State.editMode && typeof PinActionPop !== "undefined") {
+            // ── [WO 20260929 마스터 정정] 체크보드·사진등록 모드에서 기존 핀 클릭 = 항상 패널
+            //   (번호수정·사진/노트 등록 가능). ISO 전환/줌(onPinTap)이 화면을 되돌리던 결함을
+            //   막는다 — 핀 클릭이 배치 클릭보다 우선한다(지휘자 정정 원문, 새 핀 겹쳐 생기지 않음).
+            const wantsPanel = State.editMode || State.regMode === "checkboard" || State.regMode === "photo";
+            if (wantsPanel && typeof PinActionPop !== "undefined") {
               App.setActivePin(pin.id);
               PinActionPop.open(pin.id);
             } else {
