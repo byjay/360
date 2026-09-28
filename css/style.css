@@ -4728,13 +4728,8 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
   .zpager-name{ max-width:90px; }
 }
 
-/* [마스터 규칙] 구역 미등록 시 도면 업로드 버튼 잠금 표시 */
-.btn-upload.upload-locked{
-  opacity:.62; cursor:not-allowed;
-  background:repeating-linear-gradient(45deg, rgba(120,130,145,.18), rgba(120,130,145,.18) 8px, rgba(120,130,145,.08) 8px, rgba(120,130,145,.08) 16px);
-  border:1px dashed rgba(150,160,175,.55); color:#7a8696;
-}
-.btn-upload.upload-locked:hover{ filter:none; transform:none; }
+/* [WO 20260928] '.btn-upload.upload-locked' 삭제 — 도면 등록이 구역을 전제하지 않게 되어
+   업로드 버튼 잠금 자체가 사라졌다(31_Projects._syncUploadLock). 고아 CSS 금지. */
 
 /* ── Firebase 연결 모달: 안내 가이드 ── */
 .fb-guide { margin: 8px 0 12px; border: 1px solid var(--border2, rgba(0,0,0,.12)); border-radius: 8px; background: rgba(0,0,0,.02); }

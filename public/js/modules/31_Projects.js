@@ -273,6 +273,9 @@
           restore();
           resolve(null);
         };
+        // 🔴 [WO 20260928 · 라이브 실측] 모바일 사이드 시트가 열려 있으면 화면 하단 절반을 덮어
+        //   도면을 드래그할 수 없다. 크롭 지정을 요구하는 **모든** 경로가 이 함수를 지나므로 여기서 닫는다.
+        if (typeof App !== "undefined" && App._closeSidebarSheet) App._closeSidebarSheet();
         Zones._shape = "rect"; Zones._poly = null;
         State.drawingZone = true;
         if (Zones._syncToolUi) Zones._syncToolUi();
@@ -290,7 +293,10 @@
       return new Promise((resolve) => {
         const m = document.getElementById("deck-source-modal");
         if (!m) { resolve("upload"); return; } // 구버전 폴백 — 묻지 않고 종전 동작
-        const canExtract = !!(this.currentDeck && this.currentDeck.deployment_id);
+        // 🔴 [WO 20260928] "도면 있음 + 구역 0" 도 ①을 고를 수 있다 — 구역이 아직 없어도 로드된
+        //   도면에서 첫 영역을 지정하면 그게 **첫 구역**이 된다(createDeckFromLoadedDrawing).
+        //   중복 UI 금지(요구4): 새 모달을 만들지 않고 이 선택지의 활성 조건만 넓힌다.
+        const canExtract = !!(this.currentDeck && this.currentDeck.deployment_id) || this._canExtractFromLoadedDrawing();
         const btnRegion = document.getElementById("dsm-btn-region");
         const btnUpload = document.getElementById("dsm-btn-upload");
         const reasonEl = document.getElementById("dsm-region-reason");
@@ -352,7 +358,13 @@
       if (typeof Auth !== "undefined" && !Auth.isDesigner) { Prompt.toast && Prompt.toast("설계자만 영역을 추출할 수 있습니다"); return null; }
       if (!this.currentProject) { Prompt.toast && Prompt.toast("먼저 프로젝트를 선택하세요"); return null; }
       const src = this.currentDeck;
-      if (!src || !src.deployment_id) { Prompt.toast && Prompt.toast("먼저 도면이 등록된 구역을 여세요 — 그 도면 위에서 영역을 긁어냅니다"); return null; }
+      if (!src || !src.deployment_id) {
+        // 🔴 [WO 20260928] "도면 있음 + 구역 0" — **첫 영역 지정이 곧 첫 구역 생성**이다.
+        //   모든 진입경로(#btn-region-extract · #deck-source-modal ① · #side-tree CTA)가 이 함수로
+        //   수렴하므로 분기도 여기 한 곳에만 둔다(형제 호출부 분열 금지 — CLAUDE.md §G-2-5).
+        if (this._canExtractFromLoadedDrawing()) return await this.createDeckFromLoadedDrawing(opts);
+        Prompt.toast && Prompt.toast("먼저 도면이 등록된 구역을 여세요 — 그 도면 위에서 영역을 긁어냅니다"); return null;
+      }
       // 🔴 조용한 실패 금지 — 드래그 UI 를 띄우기 전에 끊는다(31_Projects.createDeck 과 같은 규칙).
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 영역을 추출할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
       if (this._extractingRegion) return null;   // 연타 가드(_creatingDeck 과 같은 패턴)
@@ -401,22 +413,110 @@
       } finally { this._extractingRegion = false; }
     },
 
-    /** 추출 영역의 기본 이름 — "<원본이름> 영역 N". 이미 쓰는 이름이면 N 을 올려 항상 비어 있는 이름을 준다. */
-    _nextRegionName(srcName) {
-      const base = String(srcName || "도면").trim() + " 영역";
+    /** [WO 20260928] "도면 있음 + 구역 0" 상태 판정 — 구역은 아직 없지만 도면이 로드돼 있어
+     *  첫 영역 지정만으로 첫 구역을 만들 수 있는 상태. State.fileType 이 '도면 로드됨'의 SoT 다.
+     *  🔴 판정을 한 곳에 모은다 — _chooseDeckSource(활성 조건)와 extractRegionAsDeck(위임 조건)이
+     *  같은 사실을 각자 계산하면 반드시 갈라진다(§SoT). */
+    _canExtractFromLoadedDrawing() {
+      return !!(this.currentProject && !(this.decks || []).length
+        && typeof State !== "undefined" && !!State.fileType);
+    },
+
+    /** [WO 20260928·마스터 확정] 🔴 "도면 있음 + 구역 0" 에서 **첫 영역 지정 = 첫 구역 생성**.
+     *  마스터 원문: "처음 도면을 등록했을 때는 구역 이름을 지정하게 하지 마. 1.프로젝트 2.구역 3.영역 이니까"
+     *            / "구역을 등록할 때 기존 도면에서 영역을 지정할 건지 새로운 도면으로 할 건지 선택하게 해".
+     *
+     *  도면 등록 단계에서는 어떤 행도 만들지 않으므로(20_App._afterDrawingLoaded), 이 함수가
+     *  **배포본(deployments) + 구역(decks, parent_id=NULL) + crop** 을 한 번에 묶어 확정한다.
+     *  🔴 새 메커니즘 0 — 배포본은 App._ensureDrawingDeployment()(=기존 _createInitialSave),
+     *  구역 INSERT 는 기존 POST /api/projects/:id/decks, 드래그는 기존 _pickDeckCrop() 을 그대로 쓴다.
+     *  extractRegionAsDeck() 를 재사용할 수 없는 이유: 그쪽은 src.deployment_id(=**이미 저장된** 도면)를
+     *  전제하는데, 여기서는 그 배포본이 아직 존재하지 않는다.
+     *
+     *  순서(원자성): 영역·이름을 **먼저** 받는다 → 취소하면 서버에 아무것도 만들어지지 않는다.
+     *  배포본까지 만들고 구역 INSERT 가 실패하면 State.autoSaveDepId 가 남아 재시도 시 **같은 배포본**을
+     *  재사용하므로 고아 배포본이 누적되지 않는다.
+     *
+     *  좌표계: crop 은 _pickDeckCrop → MapCtrl.viewportToPercent 로 얻은 **페이지 기준 %** 다.
+     *  crop 은 렌더 대상/줌만 바꾸고 좌표 원점을 옮기지 않으므로 핀은 계속 페이지 기준 %로 저장되고,
+     *  MapCtrl.pageToDeckCropPct ↔ deckCropPctToPage 로 정확히 왕복한다(기존 규칙 그대로).
+     *  @param {object} [opts] { crop, name } — 선주입(미지정 시 드래그·프롬프트로 물음)
+     *  @returns {Promise<object|null>} 생성된 구역(deck) 또는 null(취소/실패)
+     */
+    async createDeckFromLoadedDrawing(opts) {
+      opts = opts || {};
+      if (typeof Auth !== "undefined" && !Auth.isDesigner) { Prompt.toast && Prompt.toast("설계자만 구역을 만들 수 있습니다"); return null; }
+      if (!this.currentProject) { Prompt.toast && Prompt.toast("먼저 프로젝트를 선택하세요"); return null; }
+      if (typeof State === "undefined" || !State.fileType) { Prompt.toast && Prompt.toast("먼저 도면을 등록하세요 — 그 도면에서 영역을 지정해 구역을 만듭니다"); return null; }
+      // 🔴 조용한 실패 금지 — 드래그 UI 를 띄우기 전에 끊는다(extractRegionAsDeck 과 같은 규칙).
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 구역을 만들 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
+      if (this._extractingRegion) return null;   // 연타 가드(extractRegionAsDeck 와 같은 플래그 — 동시 진행 금지)
+
+      const crop = opts.crop || await this._pickDeckCrop("이 도면에서 구역이 될 영역을 드래그하세요 — Esc 를 누르면 취소됩니다");
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) { Prompt.toast && Prompt.toast("구역 생성을 취소했습니다"); return null; }
+
+      // 이름은 **영역을 지정한 뒤에** 묻는다(요구2) — 도면 등록 단계에서는 절대 묻지 않는다(요구1).
+      let name = opts.name;
+      if (name == null) {
+        const res = await Prompt.ask({
+          title: "구역 이름",
+          sub: "지정한 영역을 어떤 구역으로 저장할까요? (나중에 바꿀 수 있습니다)",
+          placeholder: "예: Main Deck, Engine Room, No.1 Hold",
+          value: this._nextFreeName("구역")
+        });
+        if (!res) { Prompt.toast && Prompt.toast("구역 생성을 취소했습니다"); return null; }
+        name = res.value;
+      }
+      name = String(name || "").trim() || this._nextFreeName("구역");
+      const dup = (this.decks || []).find((x) => String(x.name).trim().toLowerCase() === name.toLowerCase());
+      if (dup) { Prompt.toast && Prompt.toast("이미 '" + name + "' 구역이 있습니다 — 다른 이름을 쓰세요"); return null; }
+
+      const page = (typeof State !== "undefined" && State.pdfPage) || 1;   // 지금 보고 있는 페이지(1-base)
+      this._extractingRegion = true;
+      try {
+        // ① 로드된 도면을 서버 배포본으로 확정(이미 있으면 그걸 재사용 — 중복 배포본 0)
+        const depId = (typeof App !== "undefined" && App._ensureDrawingDeployment)
+          ? await App._ensureDrawingDeployment() : null;
+        if (!depId) { Prompt.toast && Prompt.toast("도면 저장에 실패해 구역을 만들지 못했습니다 — 네트워크를 확인하고 다시 시도하세요"); return null; }
+        // ② 구역(루트) INSERT — 프로젝트 > 구역 > 영역 에서 이 구역은 최상위라 parent_id = NULL.
+        const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
+          method: "POST", headers: Auth.headers(),
+          body: JSON.stringify({ name, page, crop, deployment_id: depId, parent_id: null })
+        });
+        const d = await r.json();
+        if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "구역 생성 실패 — 권한을 확인하세요"); return null; }
+        await this.loadDecks();
+        const created = (this.decks || []).find((x) => x.id === d.id) || d;
+        // ③ 이 구역을 현재 컨텍스트로 — 이후 저장/배포/핀이 이 구역에 붙는다(고아 배포본 방지).
+        this.currentDeck = created;
+        if (typeof App !== "undefined") App._pendingDeckLink = null;   // 배포본은 이미 구역에 직결됨
+        this._renderDecks();
+        // 🔴 마스터 확정: "바운더리를 선택하면 그 바운더리를 잘라서 별도의 페이지로 구성" →
+        //   생성 직후 그 구역을 **독립 페이지처럼** 연다(공유 지점 _applyDeckCropView — selectDeck 과 동일).
+        //   이 상태에서 다시 드래그하면 이 구역 하위의 '영역'이 된다(계층 3단: 프로젝트>구역>영역).
+        this._applyDeckCropView(created);
+        Prompt.toast && Prompt.toast("구역 '" + name + "' 생성 — 잘라낸 영역이 별도 페이지로 열렸습니다. 다시 드래그하면 이 구역 안의 '영역'이 됩니다", 4200);
+        return created;
+      } catch (e) {
+        Prompt.toast && Prompt.toast(navigator.onLine ? "구역 생성 실패 — 네트워크 오류, 다시 시도해주세요" : "오프라인이라 지금은 구역을 만들 수 없습니다");
+        return null;
+      } finally { this._extractingRegion = false; }
+    },
+
+    /** 자동 제안 이름 — "<base> N". 이미 쓰는 이름이면 N 을 올려 항상 비어 있는 이름을 준다.
+     *  🔴 **제안값일 뿐 확정이 아니다** — 호출부는 반드시 사용자에게 물어 고칠 기회를 준다
+     *  (도면 등록만으로 이름이 자동 확정되는 옛 동작은 금지 — 마스터 확정 WO 20260928). */
+    _nextFreeName(base) {
+      base = String(base || "구역").trim();
       const taken = new Set((this.decks || []).map((x) => String(x.name).trim().toLowerCase()));
       let n = 1;
       while (taken.has((base + " " + n).toLowerCase())) n++;
       return base + " " + n;
     },
 
-    /** #3: 구역이 하나도 없으면 자동으로 기본 구역을 만들어 반환(도면 등록 전 보장). */
-    async ensureDeck() {
-      if (this.currentDeck) return this.currentDeck;
-      if (this.decks.length) { this.currentDeck = this.decks[0]; this._renderDecks(); return this.currentDeck; }
-      // 구역이 전혀 없음 → 강제 생성 (도면 등록 흐름 중 자동생성 — 파일창을 또 띄우면 무한루프)
-      const created = await this.createDeck({ name: "구역 1", select: true, askDrawing: false });
-      return created;
+    /** 추출 영역의 기본 이름 — "<원본이름> 영역 N". (구현 SoT = _nextFreeName) */
+    _nextRegionName(srcName) {
+      return this._nextFreeName(String(srcName || "도면").trim() + " 영역");
     },
 
     async deleteDeck(id, name) {
@@ -439,14 +539,23 @@
         // [WO 20260916] 구역=도면의 한 조각 — page 로 전환 + crop 있으면 그 부분만 확대(재사용: fitZone).
         // 구버전 구역(page/crop 없음)은 이 분기가 그냥 건너뛰어져 종전대로 동작.
         if (d.page && typeof App._gotoPage === "function") { try { await App._gotoPage(d.page); } catch (e) {} }
-        try { document.body.classList.toggle("deck-view-active", !!d.crop); } catch (e) {}
-        // [WO 20260917] 크롭 렌더 대상 고정 — 같은 픽셀 예산을 구역 영역에 집중(재사용: PDF.renderCrop).
-        // crop 없으면 null 로 해제(구버전 구역은 종전대로 전체 페이지 렌더).
-        if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(d.crop || null);
-        if (d.crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(d.crop, 0.14, 640);
+        this._applyDeckCropView(d);
       } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
         App.offerDeckDrawingLink(d);
       }
+    },
+
+    /** 🔴 [WO 20260928] "바운더리를 잘라서 별도의 페이지로 구성" (마스터 확정) —
+     *  구역(crop 보유)을 **독립 페이지처럼** 화면에 적용한다: 크롭 렌더 대상 고정 + 그 영역으로 화면 맞춤.
+     *  🔴 비파괴 — 원본 PDF/배포본은 그대로고, 이건 원본을 들여다보는 **창(view)** 이다(픽셀 재저장 0).
+     *  🔴 공유 지점(§G-2-5): selectDeck(트리에서 열기)과 createDeckFromLoadedDrawing(첫 구역 생성 직후)이
+     *  같은 3줄을 각자 들고 있으면 반드시 갈라진다 → 여기 한 곳에서만 한다.
+     *  crop 없는 구버전 구역은 null 로 해제해 종전대로 전체 페이지 렌더(회귀 0). */
+    _applyDeckCropView(d) {
+      try { document.body.classList.toggle("deck-view-active", !!(d && d.crop)); } catch (e) {}
+      const crop = (d && d.crop) || null;
+      if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
+      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
     },
 
     _renderDecks() {
@@ -516,33 +625,49 @@
       const host = document.getElementById("side-tree");
       if (!host) return;
       if (!this.currentProject) { host.innerHTML = ""; return; } // 프로젝트 미선택 — 안내 없음
+      // ── 🔴 [WO 20260928] "도면 있음 + 구역 0" 은 이제 **정상 상태**다(도면 등록이 구역을 만들지 않음).
+      //   이 상태에서 "구역이 없습니다 → 구역을 만들면 도면을 등록할 수 있습니다" 를 그대로 보여주면
+      //   이미 도면을 올린 사용자에게 **거짓 안내**가 된다(빈 화면과 같은 급의 조용한 실패).
+      //   → 분기해서 다음 행동(영역 지정)을 정확히 알린다. CTA 는 기존 경로(extractRegionAsDeck)로만 간다.
+      if (typeof State !== "undefined" && State.fileType) {
+        host.innerHTML =
+          '<div class="side-tree-empty">' +
+            '<p class="side-tree-empty-msg">도면이 등록됐습니다.<br>도면에서 <b>영역을 지정</b>해 구역을 만드세요.</p>' +
+            '<button type="button" class="side-tree-empty-cta" id="side-tree-make-deck-region">+ 영역 지정해 구역 만들기</button>' +
+          '</div>';
+        const rb = document.getElementById("side-tree-make-deck-region");
+        // extractRegionAsDeck() 이 "구역 0 + 도면 로드" 를 감지해 createDeckFromLoadedDrawing 으로 위임한다.
+        if (rb) rb.addEventListener("click", () => this.extractRegionAsDeck());
+        return;
+      }
       host.innerHTML =
         '<div class="side-tree-empty">' +
-          '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>구역을 만들면 도면을 등록할 수 있습니다.</p>' +
+          // [WO 20260928] 옛 문구("구역을 만들면 도면을 등록할 수 있습니다")는 이제 사실이 아니다 —
+          // 도면 등록은 구역을 전제하지 않는다. 실제 순서를 그대로 말한다.
+          '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>도면을 등록한 뒤, 도면에서 <b>영역을 지정</b>하면 구역이 만들어집니다.</p>' +
           '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>' +
         '</div>';
       const btn = document.getElementById("side-tree-create-deck");
       if (btn) btn.addEventListener("click", () => this.createDeck());
     },
 
-    /** [마스터 규칙] 구역이 없으면 도면 업로드 버튼을 잠그고 안내, 있으면 해제 */
+    /** [WO 20260928] 🔴 옛 '구역 선행 강제' 게이트의 **시각적 절반**이었다 — 구역이 0개면 업로드
+     *  버튼을 "먼저 구역을 등록하세요" 로 바꿔 잠갔다. 도면 등록은 이제 구역을 전제하지 않으므로
+     *  잠금을 없애고(항상 해제), 힌트로 다음 행동만 알린다(조용한 차단·빈 화면 금지).
+     *  🔴 함수를 지우지 않는 이유: _renderDecks() 가 부르는 유일한 '업로드 버튼 상태 동기화' 지점이라,
+     *  잠금을 지우고도 origText 원복·힌트 갱신은 계속 필요하다(호출부 분열 금지). */
     _syncUploadLock() {
       const btn = document.getElementById("btn-upload-drawing");
       const hint = document.getElementById("upload-zone-hint");
-      if (!btn) return;
-      // 프로젝트가 선택된 디자이너 동선에서만 잠금 적용
-      const hasProject = !!this.currentProject;
-      const hasDeck = (this.decks || []).length > 0;
-      const locked = hasProject && !hasDeck;
-      btn.classList.toggle("upload-locked", locked);
-      btn.setAttribute("aria-disabled", locked ? "true" : "false");
-      if (locked) {
-        btn.dataset.origText = btn.dataset.origText || btn.textContent;
-        btn.textContent = "먼저 구역을 등록하세요";
-        if (hint) hint.textContent = "도면을 올리려면 위 ‘구역’에서 + 생성으로 구역을 먼저 만드세요.";
-      } else {
+      if (btn) {
+        btn.classList.remove("upload-locked");
+        btn.setAttribute("aria-disabled", "false");
         if (btn.dataset.origText) btn.textContent = btn.dataset.origText;
-        if (hint) hint.textContent = "구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다.";
+      }
+      if (hint) {
+        hint.textContent = (this.decks || []).length > 0
+          ? "구역을 선택하면 해당 구역에 도면이 등록·자동저장됩니다."
+          : "도면을 등록한 뒤, 그 도면에서 영역을 지정하면 구역이 만들어집니다.";
       }
     },
 

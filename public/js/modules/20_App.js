@@ -479,27 +479,17 @@
       if (plClose)  plClose.addEventListener("click", (e) => { e.stopPropagation(); UI.togglePinList(false); });
 
       UI.$("btn-upload-drawing").addEventListener("click", async () => {
-        // ── [마스터 규칙] 프로젝트 하부에 '구역'이 없으면 도면 등록 차단 → 반드시 구역부터 등록 ──
-        //  (자동생성으로 우회하지 않고, 사용자가 직접 구역을 먼저 만들도록 강제)
+        // ── [WO 20260928·마스터 확정] 🔴 "프로젝트에 처음 도면 등록 시에는 그냥 등록만 해" ──
+        //  계층은 **프로젝트 > 구역 > 영역** 이고, 도면은 트리 단계가 아니라 **구역을 잘라낼 원본 파일**이다.
+        //  그래서 도면 등록은 구역을 전제하지 않는다 → 옛 "구역 0개면 업로드 차단 + createDeck() 강제"
+        //  게이트를 제거한다(이름 모달 0 · 자동 이름 0 · 자동 구역 생성 0).
+        //  구역은 이 도면 위에서 **첫 영역을 지정할 때** 비로소 생긴다(Projects.createDeckFromLoadedDrawing).
+        //  구역이 **이미 있을 때만** "어느 구역에 붙일지"를 정한다(기존 동작 유지 — 회귀 방지).
         if (typeof Projects !== "undefined" && Projects.currentProject) {
           const decks = Projects.decks || [];
-          // 1) 구역이 0개 → 업로드 차단 + 구역 생성 유도
-          if (decks.length === 0) {
-            Prompt.toast && Prompt.toast("먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다. 구역을 생성하세요.");
-            const db = document.getElementById("decks-block");
-            if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
-            // 구역 생성 다이얼로그 바로 띄움
-            // [P1] createDeck() 는 이제 '이름 → 도면 파일 확정 → 구역 POST → 도면 로드'까지 한 번에 처리한다.
-            //   (파일창을 취소하면 구역 자체가 만들어지지 않음) → 여기서 흐름을 끝내고 별도 파일창을 띄우지 않는다.
-            try {
-              await Projects.createDeck();
-              return;
-            } catch (e) { return; }
-          }
-          // 2) 구역은 있는데 미선택 → 선택 유도(차단)
-          if (!Projects.currentDeck) {
-            if ((Projects.decks || []).length === 1) {
-              Projects.currentDeck = Projects.decks[0];
+          if (decks.length > 0 && !Projects.currentDeck) {
+            if (decks.length === 1) {
+              Projects.currentDeck = decks[0];
               if (Projects._renderDecks) Projects._renderDecks();
             } else {
               Prompt.toast && Prompt.toast("도면을 등록할 ‘구역’을 먼저 선택하세요.");
@@ -1802,19 +1792,15 @@
         Prompt && Prompt.toast && Prompt.toast("뷰어는 도면을 등록할 수 없습니다. 편집모드에서만 가능합니다.");
         return;
       }
-      // ── [마스터 규칙] 구역(deck) 선행 등록 강제: 프로젝트에 구역이 없거나 미선택이면 도면 로드 차단 ──
-      //  (버튼/드래그앤드롭/시트 등 모든 진입 경로를 여기서 중앙 차단)
+      // ── [WO 20260928·마스터 확정] 🔴 도면 등록 = 파일을 올리는 것, 그게 전부 ──
+      //  버튼/단축키/드래그앤드롭/시트 등 모든 진입 경로가 이 함수로 수렴하므로 정책도 여기 한 곳에 둔다.
+      //  옛 "구역 0개면 도면 로드 차단 + createDeck({askDrawing:false}) 로 구역부터 생성" 게이트를 제거한다 —
+      //  그 게이트가 "도면 등록 = 구역 생성" 을 코드에서 한 덩어리로 묶고 있던 근본 원인이었다.
+      //  구역이 0개여도 도면은 그냥 로드된다. 구역은 첫 영역 지정 시 생긴다(31_Projects.createDeckFromLoadedDrawing).
       if (typeof Projects !== "undefined" && Projects.currentProject) {
         const decks = Projects.decks || [];
-        if (decks.length === 0) {
-          Prompt && Prompt.toast && Prompt.toast("먼저 ‘구역’을 등록해야 도면을 올릴 수 있습니다.");
-          const db = document.getElementById("decks-block");
-          if (db) { db.classList.add("zone-required-flash"); setTimeout(() => db.classList.remove("zone-required-flash"), 1800); }
-          // askDrawing:false — 이미 파일(file 인자)이 선택된 상태로 로드 중이므로 파일창을 또 띄우지 않음.
-          try { const created = await Projects.createDeck({ askDrawing: false }); if (!created) return; } catch (e) { return; }
-        }
-        if (!Projects.currentDeck) {
-          if ((Projects.decks || []).length === 1) { Projects.currentDeck = Projects.decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
+        if (decks.length > 0 && !Projects.currentDeck) {
+          if (decks.length === 1) { Projects.currentDeck = decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
           else {
             Prompt && Prompt.toast && Prompt.toast("도면을 등록할 ‘구역’을 먼저 선택하세요.");
             const db = document.getElementById("decks-block");
@@ -3343,10 +3329,15 @@
       //   아래 try 안(스냅샷/구역보장)에서 예외가 나도 미저장 표시는 반드시 남도록 try 밖에 둔다.
       this._dirtyPages = true; this._markDirty();
       try {
-        // 1) 구역이 없으면 강제 생성(현재 구역 보장)
+        // 1) 🔴 [WO 20260928·마스터 확정] 구역 자동생성 금지.
+        //    옛 Projects.ensureDeck() 는 구역이 0개면 **"구역 1" 이라는 자동 이름** 구역을 만들어
+        //    "도면 등록만으로 구역이 생기는" 상태를 만들었다(마스터가 두 번 지적한 바로 그 지점).
+        //    이제 **이미 존재하는** 구역만 컨텍스트로 채택한다. 0개면 deck = null 로 두고,
+        //    첫 영역 지정 시 Projects.createDeckFromLoadedDrawing() 이 배포본+구역+crop 을 묶어 만든다.
         let deck = null;
         if (typeof Projects !== "undefined" && Projects.currentProject) {
-          deck = await Projects.ensureDeck();
+          deck = Projects.currentDeck || (Projects.decks && Projects.decks[0]) || null;
+          if (deck && Projects.currentDeck !== deck) Projects.currentDeck = deck;
         }
         // 2) 도면 교체 지원: 구역에 기존 도면이 있으면 그 배포본을 덮어써서 교체(고아 방지),
         //    없으면 새 배포본 생성. (구역당 도면 1개 유지 — 구역을 여러 개 만들면 도면 다수 등록)
@@ -3360,9 +3351,57 @@
           if (deck) this._pendingDeckLink = { deckId: deck.id, deck };  // 저장 시 생성+연결
         }
         await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지)
-        if (deck) { try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
-        Prompt.toast && Prompt.toast((isReplace ? "도면 교체됨" : "도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요" + (deck ? " (구역: " + deck.name + ")" : ""));
+        // 🔴 [WO 20260928] deck 이 null(구역 0개)일 때도 반드시 다시 그려야 한다 —
+        //   #side-tree 의 빈 상태 안내가 "도면 없음" → "도면 있음 + 구역 0" 분기로 갈아타는 지점이다.
+        //   (여기서 건너뛰면 도면을 올렸는데 사이드바가 옛 안내에 머물러 다음 행동을 알 수 없다)
+        try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {}
+        if (deck) {
+          Prompt.toast && Prompt.toast((isReplace ? "도면 교체됨" : "도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요 (구역: " + deck.name + ")");
+        } else {
+          // 🔴 [WO 20260928 · 라이브 실측] 375×812 에서 #side-tree 는 바텀시트 안(y≈1045px = 화면 밖)이라
+          //   안내를 그려도 사용자는 보지 못한다("도면만 올라가고 다음 행동을 모르는" 상태 = 빈 화면과 동급).
+          //   구역이 0개일 때만 그 시트를 열어 안내를 화면 안으로 올린다. 데스크톱은 무해(무변화).
+          this._openSidebarSheet();
+          Prompt.toast && Prompt.toast("도면이 등록됐습니다 — 도면에서 영역을 드래그하면 그 부분이 '구역'이 됩니다", 5200);
+        }
       } catch (e) { /* 비치명적 */ }
+    },
+
+    /** [WO 20260928] 모바일 사이드 시트(트리)를 연다.
+     *  🔴 새 UI 0 — 상태 SoT 인 body.sidebar-open 과 기존 메뉴 칩을 그대로 쓴다.
+     *  해당 CSS 는 @media (max-width:760px) 안에만 있어 데스크톱에서는 아무 효과가 없다(실측 확인). */
+    _openSidebarSheet() {
+      try {
+        document.body.classList.add("sidebar-open");
+        ["mnav-menu", "tq-menu"].forEach((id) => { const b = UI.$(id); if (b && b.classList) b.classList.add("active"); });
+        const chip = document.querySelector('.mobile-dock [data-act="menu"]');
+        if (chip && chip.classList) chip.classList.add("active");
+      } catch (e) {}
+    },
+
+    /** [WO 20260928] 사이드 시트를 닫는다 — 도면 위 드래그(크롭 지정)를 시작할 때 필수.
+     *  시트는 화면 하단 절반을 덮으므로, 열린 채로 드래그를 요구하면 사용자는 도면을 만질 수 없다.
+     *  🔴 시트를 여는 쪽(_openSidebarSheet)과 짝을 이루는 같은 SoT(body.sidebar-open)만 쓴다. */
+    _closeSidebarSheet() {
+      try {
+        document.body.classList.remove("sidebar-open");
+        ["mnav-menu", "tq-menu"].forEach((id) => { const b = UI.$(id); if (b && b.classList) b.classList.remove("active"); });
+        const chip = document.querySelector('.mobile-dock [data-act="menu"]');
+        if (chip && chip.classList) chip.classList.remove("active");
+      } catch (e) {}
+    },
+
+    /** [WO 20260928] 로드된 도면을 서버 배포본(deployments 행)으로 확정하고 그 id 를 돌려준다.
+     *  이미 있으면 그대로 재사용한다(중복 배포본 0).
+     *  🔴 새 저장 경로 금지 — 기존 _createInitialSave()(R2 업로드 + POST /tables/deployments)를 그대로 쓴다.
+     *  '도면 등록'이 더는 구역을 만들지 않게 된 뒤, **첫 영역 지정 시점**에 배포본이 필요해져 신설했다
+     *  (31_Projects.createDeckFromLoadedDrawing 의 유일한 호출부 — decks.deployment_id 가 가리킬 대상).
+     *  @returns {Promise<string|null>} 배포본 id · 실패 시 null(조용한 성공 위장 금지) */
+    async _ensureDrawingDeployment() {
+      if (State.autoSaveDepId) return State.autoSaveDepId;
+      if (!State.fileType) return null;
+      await this._createInitialSave();
+      return State.autoSaveDepId || null;
     },
 
     /** ── [마스터 요청] 도면↔구역 연결을 즉시 시도하고, 실패하면 재시도 큐에 넣어

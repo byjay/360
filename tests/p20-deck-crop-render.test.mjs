@@ -164,7 +164,14 @@ function suite7(label, PDF, MapCtrl) {
  * ══════════════════════════════════════════════════════════════════ */
 function suiteWiring(label, src) {
   console.log("\n[" + label + " · 배선]");
-  ok(/PDF\.setDeckCrop\(d\.crop \|\| null\)/.test(src), "selectDeck 이 PDF.setDeckCrop(d.crop||null) 호출 — 구역 진입마다 렌더 대상 고정/해제");
+  // [WO 20260928] 크롭 적용 3줄이 selectDeck 안에 있던 것을 _applyDeckCropView(d) 공유 지점으로 옮겼다
+  //   — 첫 구역 생성 직후(createDeckFromLoadedDrawing)에도 같은 처리가 필요해져, 같은 사실을 두 곳에
+  //   두지 않기 위해서다(§G-2-5/SoT). 같은 보장을 '위임 + 공유 지점 본문' 2줄로 검사한다(강도 ↓ 없음).
+  //   행동(실제 호출) 검증은 p56③(selectDeck)·p64④(생성 직후)가 실 모듈로 이미 수행한다.
+  ok(/this\._applyDeckCropView\(d\)/.test(src),
+    "selectDeck 이 크롭 적용 공유 지점(_applyDeckCropView)에 위임");
+  ok(/_applyDeckCropView\(d\)\s*\{[\s\S]*?const crop = \(d && d\.crop\) \|\| null;[\s\S]*?PDF\.setDeckCrop\(crop\)/.test(src),
+    "_applyDeckCropView 가 PDF.setDeckCrop(crop || null) 호출 — 구역 진입마다 렌더 대상 고정/해제");
 }
 
 console.log("=== 회귀: 구역 표시 = 크롭 영역만 렌더 ===");

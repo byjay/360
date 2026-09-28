@@ -91,13 +91,16 @@ async function p1Suite(label, projectsSrc, expect) {
     ok(calls.loadDrawing.length === expect.okLoads && calls.loadDrawing[0] === (expect.okLoads ? file : undefined),
       `정상 흐름 선택 파일로 _loadDrawing 호출 = ${calls.loadDrawing.length}`);
   }
-  // ③ ensureDeck 자동생성(askDrawing:false) → 파일창 없이 생성(무한루프 방지)
+  // ③ 🔴 [WO 20260928·마스터 확정 — 정책 반전] 구역 자동생성 금지.
+  //    옛 ensureDeck() 은 구역이 0개면 이름을 묻지 않고 "구역 1" 자동 이름으로 구역을 만들어
+  //    "도면 등록 = 구역 생성" 을 강제했다. 마스터 원문("프로젝트에 처음 도면 등록 시에는 그냥
+  //    등록만 해")에 따라 그 API 자체가 사라져야 한다. 이전 버전의 ③은 사라진 정책을 검사하고
+  //    있었으므로 **반전된 계약**으로 대체한다(삭제 아님 — 되돌아오면 잡힌다).
   {
     const { P, calls } = makeProjects(projectsSrc, { pickResult: null });
-    const r = await P.ensureDeck();
-    ok(calls.pick === 0, `ensureDeck 파일창 호출 0회 (실제 ${calls.pick})`);
-    ok(!!r && calls.post === 1, "ensureDeck 자동 구역 생성 1회");
-    ok(calls.loadDrawing.length === 0, "ensureDeck 도면 로드 안 함");
+    ok(typeof P.ensureDeck === "undefined", `③ 자동생성 API ensureDeck() 제거됨 (실제 ${typeof P.ensureDeck})`);
+    ok(!/"구역 1"/.test(projectsSrc), "③ '구역 1' 자동 이름 하드코딩 0건");
+    ok(calls.post === 0, `③ 아무 호출 없이 구역이 만들어지지 않음 (POST ${calls.post})`);
   }
 }
 
