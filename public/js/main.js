@@ -5205,7 +5205,19 @@
           : (tier === "photo")
             ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`
             : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;
-        marker.innerHTML = `
+        // [WO 20260929] 체크보드 모드에서는 체크보드 핀의 번호만 보이게 — 장식(펄스·그라디언트·
+        // 그림자·티어 원판 모양 구분·아이콘 오버라이드) 최소화. 앵커(tip 18,60)는 원본과 동일
+        // 유지해 좌표 위치가 어긋나지 않는다. 대비 쌍(흰 원판+txtFill)도 기존 검증값 그대로 재사용.
+        const simplifiedCheckboard = (State.regMode === "checkboard" && pin.checkboard === true);
+        marker.innerHTML = simplifiedCheckboard ? `
+          <div class="pin-pin">
+            <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14.2 22 L18 60 L21.8 22 Z" fill="${headFill2}"/>
+              <circle cx="18" cy="15" r="12.4" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
+              <circle cx="18" cy="15" r="8.6" fill="#ffffff"/>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+            </svg>
+          </div>` : `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
             <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
@@ -5307,8 +5319,11 @@
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
             if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
-            // ── 포인트 수정 모드: 핀 클릭 → 수정/이동/삭제/보기 팝업(기존 유지) ──
-            if (State.editMode && typeof PinActionPop !== "undefined") {
+            // ── [WO 20260929 마스터 정정] 체크보드·사진등록 모드에서 기존 핀 클릭 = 항상 패널
+            //   (번호수정·사진/노트 등록 가능). ISO 전환/줌(onPinTap)이 화면을 되돌리던 결함을
+            //   막는다 — 핀 클릭이 배치 클릭보다 우선한다(지휘자 정정 원문, 새 핀 겹쳐 생기지 않음).
+            const wantsPanel = State.editMode || State.regMode === "checkboard" || State.regMode === "photo";
+            if (wantsPanel && typeof PinActionPop !== "undefined") {
               App.setActivePin(pin.id);
               PinActionPop.open(pin.id);
             } else {
@@ -8194,11 +8209,18 @@
     },
 
     openApp(mode, opts) {
-      // 체크보드 모드: 내부적으로 디자이너와 동일하게 동작(도면등록/핀 추가/이동/삭제),
-      // 차이는 ① 핀에 이름 대신 번호만 자동 부여 ② 상단 라벨/색상이 'CHECKBOARD'.
+      // 체크보드/사진등록 모드: 내부적으로 디자이너와 동일하게 동작(도면등록/핀 추가/이동/삭제).
+      // 🔴 [WO 20260929 3모드 재설계] 편집화면 SoT = State.regMode('view'|'checkboard'|'photo').
+      //   State.checkboard(번호핀 계열 여부)는 이 값에서만 파생한다(전역 CLAUDE.md §10 SoT —
+      //   여러 곳에서 따로 세팅하면 반드시 갈라진다).
       const isCheckboard = mode === "checkboard";
-      State.checkboard = isCheckboard;
-      State.mode = isCheckboard ? "designer" : mode;   // 도구 분기(mode==='designer')를 그대로 재사용
+      const isPhoto = mode === "photo";
+      const isQuickTool = isCheckboard || isPhoto; // 번호핀 계열 공용(시각 강조색도 공유)
+      State.checkboard = isQuickTool;
+      State.mode = isQuickTool ? "designer" : mode;   // 도구 분기(mode==='designer')를 그대로 재사용
+      if (mode === "designer" || isQuickTool) {
+        State.regMode = isCheckboard ? "checkboard" : (isPhoto ? "photo" : "view");
+      }
       opts = opts || {};
       const isDesigner = State.mode === "designer";
       if (typeof Log !== "undefined") Log.push(mode === "viewer" ? "viewer.open" : "app.open", null, { mode });
@@ -8206,13 +8228,13 @@
       document.body.classList.toggle("role-designer", isDesigner);
       document.body.classList.toggle("role-viewer", !isDesigner);
       document.body.classList.toggle("mode-checkboard", isCheckboard);
-      const accentVar = isCheckboard ? "var(--blue)" : (isDesigner ? "var(--gold)" : "var(--green)");
+      const accentVar = isQuickTool ? "var(--blue)" : (isDesigner ? "var(--gold)" : "var(--green)");
       document.documentElement.style.setProperty("--accent", accentVar);
-      UI.$("topbar").style.borderBottomColor = isCheckboard ? "rgba(47,109,181,.28)" : (isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)");
+      UI.$("topbar").style.borderBottomColor = isQuickTool ? "rgba(47,109,181,.28)" : (isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)");
       const dot = UI.$("topbar-dot");
       if (dot) dot.style.background = accentVar;
       // [마스터 요청 N5] "DESIGNER MODE" 글자 → 아이콘화 (글자 안어울림)
-      const _modeIcon = isCheckboard
+      const _modeIcon = isQuickTool
         ? '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'
         : isDesigner
         ? '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>'
@@ -8221,7 +8243,7 @@
       if (_ml) {
         _ml.innerHTML = _modeIcon;
         _ml.style.color = accentVar;
-        _ml.title = isCheckboard ? "체크보드 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
+        _ml.title = isCheckboard ? "체크보드 모드" : isPhoto ? "사진 등록 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
         _ml.style.display = "inline-flex"; _ml.style.alignItems = "center";
       }
 
@@ -8229,7 +8251,9 @@
       //  (사용자 요청: "뷰어는 업로드가 왜 필요하지. 뷰어만 완벽하게 되게 만들어")
       UI.toggle("section-projects",  isDesigner);   // 프로젝트/데크 관리
       UI.toggle("section-upload",    isDesigner);   // 도면 업로드
-      UI.toggle("section-place",     isDesigner);   // 위치 포인트 추가 (도구 패널 — 항상 유지)
+      // [WO 20260929] 보기(view) 모드는 "생성 없음" — 배치 진입 UI 자체를 숨긴다(단일 SoT는
+      // _togglePlacing() 가드가 진짜 관문이고, 여기는 그 상태를 화면에 반영만 한다).
+      UI.toggle("section-place",     isDesigner && State.regMode !== "view");   // 위치 포인트 추가
       UI.toggle("section-checkboard", isDesigner);  // 체크보드 상설 메뉴 (디자이너 전용)
       // 체크보드 메뉴 카드의 진입 버튼 라벨/활성 상태 동기화
       try {
@@ -8317,11 +8341,15 @@
       const cbLabel = UI.$("btn-checkboard-enter-label");
       if (cbLabel) cbLabel.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드";
       const placeBtn = UI.$("btn-place");
-      if (placeBtn) placeBtn.textContent = isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
+      if (placeBtn) placeBtn.textContent = isPhoto ? "+ 번호 핀 + 사진" : isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
       const placeHint = UI.$("place-hint");
-      if (placeHint) placeHint.textContent = isCheckboard
+      if (placeHint) placeHint.textContent = isPhoto
+        ? "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다"
+        : isCheckboard
         ? "도면 위를 클릭하면 번호가 자동으로 매겨집니다"
         : "도면 위 원하는 위치를 클릭하세요";
+      // [WO 20260929] 3모드 세그먼트(보기/체크보드/사진등록) 활성 표시 동기화 — 신규 진입점.
+      this._syncRegModeButtons();
 
       UI.showScreen("screen-app");
       // 🔴 [WO 20260928-pinloss] 모드 전환(편집 ↔ 체크보드)은 **같은 도면 위에서 도구만 바꾸는 것**이다.
@@ -8648,21 +8676,19 @@
       // 포인트 배치 모드 토글
       UI.$("btn-place").addEventListener("click", () => this._togglePlacing());
 
-      // 체크보드 모드 토글 (디자이너 ↔ 체크보드) — 두 버튼 공용 핸들러
+      // 체크보드 모드 토글 (보기 ↔ 체크보드) — 두 버튼 공용 핸들러. [WO 20260929] 신규 SoT(_setRegMode)로 귀결.
       const toggleCheckboard = () => {
-        if (State.placing) this._togglePlacing();
-        const next = State.checkboard ? "designer" : "checkboard";
-        // [마스터 요청 2026-09-18] 사용자가 명시 전환한 모드는 다음 진입 때도 유지
-        if (typeof PinSeries !== "undefined") PinSeries.setPreferredMode(next);
-        App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null, keepDrawing: true });
-        // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
-        if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
-        if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
+        this._setRegMode(State.regMode === "checkboard" ? "view" : "checkboard");
       };
       const cbBtn = UI.$("btn-checkboard-toggle");
       if (cbBtn) cbBtn.addEventListener("click", toggleCheckboard);
       const cbEnter = UI.$("btn-checkboard-enter");
       if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
+      // [WO 20260929] 편집화면 3모드 세그먼트(보기/체크보드/사진등록) — 신규 진입점, 같은 SoT로 귀결.
+      ["view", "checkboard", "photo"].forEach((m) => {
+        const b = UI.$("btn-regmode-" + m);
+        if (b) b.addEventListener("click", () => this._setRegMode(m));
+      });
 
       // [WO 20260918] 체크보드 번호 일괄 변경 진입점 — App._renumberCheckboard() 재사용.
       const cbRenumber = UI.$("btn-checkboard-renumber");
@@ -8796,7 +8822,49 @@
       });
     },
 
+    /** [WO 20260929] 편집화면 3모드 SoT — 보기(view)/체크보드(checkboard)/사진등록(photo).
+     *  🔴 기존 진입점(btn-checkboard-enter/btn-checkboard-toggle·포인트 추가 버튼들)도
+     *  모두 이 함수로 귀결된다 — 상태를 여러 곳에서 따로 세팅하면 반드시 갈라진다
+     *  (전역 CLAUDE.md §10 SoT). openApp(keepDrawing:true) 재사용 — 도면 재로드 없음
+     *  (WO 20260928-pinloss 교훈, 모드 전환 시 핀 소실 재발 방지). */
+    _setRegMode(next) {
+      if (next !== "view" && next !== "checkboard" && next !== "photo") return;
+      if (State.mode !== "designer") return; // 편집 화면 전용(뷰어 앱에는 세그먼트가 없음)
+      if (State.placing) this._togglePlacing();
+      if (typeof PinSeries !== "undefined" && PinSeries.setPreferredMode) {
+        PinSeries.setPreferredMode(next === "checkboard" ? "checkboard" : "designer");
+      }
+      this.openApp(next === "view" ? "designer" : next,
+        { project: (typeof Projects !== "undefined" && Projects.currentProject) || null, keepDrawing: true });
+      if (next !== "view") {
+        // [WO 20260929 마스터 정정] 체크보드/사진등록은 클릭 즉시 동작하는 도구 — 진입과 동시에
+        //   배치모드를 자동 시작한다(기존 체크보드 진입 패턴 그대로 재사용).
+        setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
+      }
+    },
+
+    /** 3모드 세그먼트 버튼(#btn-regmode-view/checkboard/photo) 활성 표시 동기화.
+     *  렌더 지점 하나(§10 SoT) — openApp()·_setRegMode() 어디서 전환되든 여기만 부른다. */
+    _syncRegModeButtons() {
+      ["view", "checkboard", "photo"].forEach((m) => {
+        const b = UI.$("btn-regmode-" + m);
+        if (!b) return;
+        const active = State.regMode === m;
+        b.classList.toggle("active", active);
+        b.setAttribute && b.setAttribute("aria-pressed", String(active));
+      });
+    },
+
     _togglePlacing() {
+      // [WO 20260929] 보기(view) 모드는 "생성 없음" — 배치 진입 자체를 막는다.
+      //   🔴 단일 관문: quickpoint·mobile dock·btn-place 등 모든 진입로가 이 함수를 거치므로
+      //   여기 한 곳만 막으면 어느 버튼으로 들어와도 view 모드에서 생성이 불가능하다.
+      if (!State.placing && State.regMode === "view") {
+        if (typeof Prompt !== "undefined" && Prompt.toast) {
+          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — 체크보드/사진 등록 모드로 전환하세요");
+        }
+        return;
+      }
       // ── [마스터 요청 #6] 배치 모드를 켜기 전, 진행 중이던 다른 명령(영역그리기·
       //   핀이동잠금·편집폼·팝업)을 먼저 조용히 종료한다. (placing 자신은 토글에 맡김)
       if (!State.placing) {
@@ -9578,21 +9646,18 @@
       this._updateSyncBadge && this._updateSyncBadge();
       this._autoSave && this._autoSave();
       this._updateCheckboardQuickStatus(curPage);
-      Prompt && Prompt.toast && Prompt.toast("체크 포인트 #" + no + " 추가 · 자동저장");
-      // [WO 20260928] 마스터 요청: "포인트찍으면 사진을 기본으로 등록하게" — 번호 핀을 찍은
-      //   직후 곧바로 사진(360) 선택창을 연다. 기존 핀 편집의 미디어 업로드 경로(editPin()이
-      //   채우는 State 필드 + _confirmPin())를 그대로 재사용 — 새 업로드 로직 없음.
-      //   editPin() 과 달리 _openPinForm() 은 절대 호출하지 않는다(사진 첨부 시 "또 다른
-      //   등록창"이 뜨는 과거 치명 결함 재발 방지, 마스터: "치명적인 결함").
-      this._openCheckboardMediaPicker(pin);
+      // 🔴 [WO 20260929 마스터 정정] 이 함수는 항상 "번호 핀만" 만든다 — 폼·팝업·파일창·확인창·
+      //   토스트 스팸 없음("체크보드 빈 곳 클릭 = 다른 반응 없음"). 사진 즉시등록(photo 모드)은
+      //   호출부(_handlePlaceClick)가 반환된 pin 으로 별도 _openPinMediaPicker() 를 부른다.
+      return pin;
     },
 
-    /** 체크보드 핀 배치 직후 사진 선택창을 연다(마스터 2026-09-28 요청).
-     *  🔴 iOS Safari 는 파일 선택창을 "사용자 클릭 활성화" 동기 흐름 안에서 열어야 막히지
-     *  않는다 — _placeCheckboardPin() 은 지도 클릭 핸들러(_handlePlaceClick)에서 동기 호출
-     *  되므로 여기서도 setTimeout 없이 즉시 .click() 한다(지연 없음 = 활성화 유지).
+    /** 핀에 사진(360/일반) 선택창을 연다 — 체크보드 계열 핀 생성 직후(사진등록 모드, 마스터
+     *  2026-09-29 요청)에 재사용. 🔴 iOS Safari 는 파일 선택창을 "사용자 클릭 활성화" 동기
+     *  흐름 안에서 열어야 막히지 않는다 — 호출부(_handlePlaceClick)가 지도 클릭 핸들러에서
+     *  동기 호출하므로 여기서도 setTimeout 없이 즉시 .click() 한다(지연 없음 = 활성화 유지).
      *  취소하면(파일 미선택) 핀은 번호만 가진 채 그대로 남는다(조용히 삭제 금지). */
-    _openCheckboardMediaPicker(pin) {
+    _openPinMediaPicker(pin) {
       const fi = UI.$("input-pin-file");
       if (!fi) return;
       // 기존 editPin()과 동일한 "편집 대상" 상태만 세팅(재사용) — 폼(_openPinForm)은 열지 않는다.
@@ -9672,11 +9737,18 @@
       const pct = MapCtrl.viewportToPercent(e.clientX, e.clientY);
       if (!pct) return;
 
-      // 체크보드 모드: 이름/사진 입력 없이 즉시 번호 핀만 찍는다.
+      // [WO 20260929 마스터 정정] 체크보드 모드: 번호 핀만 — 폼·팝업·파일창·확인창 없음.
       // 연속 배치 — placing 을 유지해 클릭마다 번호가 1씩 증가하며 계속 찍힌다.
-      if (State.checkboard) {
+      if (State.regMode === "checkboard") {
         this._placeCheckboardPin(pct);
         return; // placing 유지(다음 클릭도 번호 핀). 종료는 '＋ 번호 핀 찍기' 토글로.
+      }
+      // [WO 20260929 마스터 정정] 사진 등록 모드: 핀 생성 직후 즉시 사진 선택창(동기 호출,
+      //   모바일 user-activation 유지). 첨부되면 그 핀에 붙고, 취소해도 핀은 유지된다.
+      if (State.regMode === "photo") {
+        const pin = this._placeCheckboardPin(pct);
+        if (pin) this._openPinMediaPicker(pin);
+        return; // placing 유지 — 계속 클릭하면 다음 번호 핀 + 파일창.
       }
 
       State.pending = pct;
@@ -16904,6 +16976,14 @@
      *  crop 없는 구버전 구역은 null 로 해제해 종전대로 전체 페이지 렌더(회귀 0). */
     _applyDeckCropView(d) {
       try { document.body.classList.toggle("deck-view-active", !!(d && d.crop)); } catch (e) {}
+      // [WO 20260929-title] 🔴 관찰: 구역/영역을 열어도(생성 직후 포함) 상단 헤더 제목
+      // (#file-name-label)이 원본 도면 파일명에 그대로 머물렀다 — SoT 는 여기 하나
+      // (selectDeck·createDeckFromLoadedDrawing 공유 지점)뿐, 다른 곳에서 또 갱신하지 않는다.
+      try {
+        if (typeof UI !== "undefined" && UI.text) {
+          UI.text("file-name-label", (d && d.name) ? d.name : "도면 없음");
+        }
+      } catch (e) {}
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
       if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
