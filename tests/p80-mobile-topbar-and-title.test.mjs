@@ -172,9 +172,11 @@ await withBrowser(async (browser) => {
   server.close();
 });
 
-console.log("\n[뮤테이션ⓐ] `#btn-back, #regmode-seg { order: -1; }` 제거 → ①이 실패해야 함");
+console.log("\n[뮤테이션ⓐ] `#btn-back, #regmode-seg, #btn-settings { order: -1; }` 제거 → ①이 실패해야 함");
 await withBrowser(async (browser) => {
-  const needle = "#btn-back, #regmode-seg { order: -1; }";
+  // [WO 20260929-settings-offscreen] #btn-settings 도 같은 order:-1 그룹에 합류(p82 참조).
+  // 문자열이 바뀌었을 뿐 뮤테이션 의도(①을 깨뜨림)는 동일 — needle만 실제 소스에 맞춰 갱신.
+  const needle = "#btn-back, #regmode-seg, #btn-settings { order: -1; }";
   const mutated = cssStyle.replace(needle, "");
   if (mutated === cssStyle) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; return; }
   const dir = buildLayoutHtml(mutated);
