@@ -687,6 +687,14 @@
      *  crop 없는 구버전 구역은 null 로 해제해 종전대로 전체 페이지 렌더(회귀 0). */
     _applyDeckCropView(d) {
       try { document.body.classList.toggle("deck-view-active", !!(d && d.crop)); } catch (e) {}
+      // [WO 20260929-title] 🔴 관찰: 구역/영역을 열어도(생성 직후 포함) 상단 헤더 제목
+      // (#file-name-label)이 원본 도면 파일명에 그대로 머물렀다 — SoT 는 여기 하나
+      // (selectDeck·createDeckFromLoadedDrawing 공유 지점)뿐, 다른 곳에서 또 갱신하지 않는다.
+      try {
+        if (typeof UI !== "undefined" && UI.text) {
+          UI.text("file-name-label", (d && d.name) ? d.name : "도면 없음");
+        }
+      } catch (e) {}
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
       if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
