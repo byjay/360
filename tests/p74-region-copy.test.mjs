@@ -149,17 +149,22 @@ function suiteMismatch(P) {
 
 /* ═════ 4. 흐름 — 31_Projects.extractRegionAsDeck (실제 PDF 모듈 + 실제 pdf-lib · App 은 I/O 경계만 기록) ═════ */
 const SRC_DEP = "dep_src";
-function makeClient(P, { source, confirms = [], file = null, pins = [], app = {} } = {}) {
-  const rec = { toasts: [], confirms: [], decksPost: [], copies: [], attaches: [], otherFetch: [] };
+const ENSURED_DEP = "dep_ensured";
+function makeClient(P, { source, confirms = [], file = null, pins = [], app = {}, noDeck = false } = {}) {
+  const rec = { toasts: [], confirms: [], decksPost: [], copies: [], attaches: [], otherFetch: [], ensureCalls: 0 };
   const labels = { ok: { textContent: "확인" }, cancel: { textContent: "취소" } };
-  const State = { mode: "designer", pdfPage: 1, autoSaveDepId: SRC_DEP, pins };
-  const decks = [{ id: "dck_root", name: "ㅁ", deployment_id: SRC_DEP, page: 1, crop: null, parent_id: null }];
+  // noDeck(WO 20260928-unify): "도면 있음 + 구역 0" — createDeckFromLoadedDrawing 시나리오.
+  // 배포본이 아직 없으므로 State.autoSaveDepId 는 App._ensureDrawingDeployment 가 확정할 때까지 null.
+  const State = { mode: "designer", pdfPage: 1, autoSaveDepId: noDeck ? null : SRC_DEP, pins, fileType: noDeck ? "pdf" : undefined };
+  const decks = noDeck ? [] : [{ id: "dck_root", name: "ㅁ", deployment_id: SRC_DEP, page: 1, crop: null, parent_id: null }];
   const App = {
     _regionSource: async () => source,
     _regionExpect: (meta, snapCount) => ({ count: snapCount, pw: 600, ph: 400 }),
     _pickPdfFile: async () => file,
     _attachSourcePdf: async (depId, bytes) => { rec.attaches.push({ depId, bytes }); return true; },
     _createRegionCopyDeployment: async (name, bytes) => { rec.copies.push({ name, bytes }); return "dep_copy_" + rec.copies.length; },
+    _ensureDrawingDeployment: async () => { rec.ensureCalls++; State.autoSaveDepId = ENSURED_DEP; return ENSURED_DEP; },
+    _pendingDeckLink: null,
   };
   Object.assign(App, app);
   const sb = {
@@ -192,7 +197,7 @@ function makeClient(P, { source, confirms = [], file = null, pins = [], app = {}
   const J = sb.__J;
   J.currentProject = { id: "prj" };
   J.decks = decks.slice();
-  J.currentDeck = decks[0];
+  J.currentDeck = noDeck ? null : decks[0];
   J.loadDecks = async () => { J.decks = decks.slice(); };
   J._renderDecks = () => {};
   return { J, rec, labels, State };
@@ -280,6 +285,42 @@ async function suiteFlow(label, P, pSrc) {
     const c = makeClient(P, { source: { bytes: srcBytes, expect: null }, app: { _createRegionCopyDeployment: async () => null } });
     const d = await c.J.extractRegionAsDeck({ crop: CROP, name: "z" });
     ok(d === null && c.rec.decksPost.length === 0 && c.rec.toasts.some((t) => /새 페이지 저장 실패/.test(t)), "D 복사본 저장 실패 → deck 0 + 실패 안내");
+  }
+}
+
+/* ═════ 4b. WO 20260928-unify — createDeckFromLoadedDrawing(구역 생성)이 extractRegionAsDeck 과
+ *   **같은** 벡터복사 계획 함수(_planRegionCopy)를 쓴다. parent_id=null 만 다르다(§G-2-5 공유 지점). ═════ */
+async function suiteCreateFromLoaded(label, P, pSrc) {
+  console.log("\n[" + label + "]");
+  const srcBytes = await makeSrcPdf(0, { mb: [0, 0, 600, 400] });
+
+  // A 원본 있음 → 구역(루트)도 벡터 복사본 배포본을 가리킨다(crop 없음, parent_id=null)
+  {
+    const c = makeClient(P, { noDeck: true, source: { bytes: srcBytes, expect: { count: 1, pw: 600, ph: 400 } } });
+    const d = await c.J.createDeckFromLoadedDrawing({ crop: CROP, name: "평면도" });
+    const b = c.rec.decksPost[0] || {};
+    ok(!!d && b.deployment_id === "dep_copy_1" && b.crop === null && b.page === 1,
+      `A 구역(루트) → 새 배포본(${b.deployment_id}) · crop=${JSON.stringify(b.crop)} · page=${b.page}`);
+    ok(b.parent_id === null, "A parent_id = null(루트) — 영역(부모 유지)과 다른 유일한 차이");
+    ok(c.rec.ensureCalls === 1, "A 배포본을 먼저 확정(App._ensureDrawingDeployment) 뒤 복사 계획을 세운다");
+    ok(c.rec.copies.length === 1, "A extractRegionAsDeck 과 같은 _createRegionCopyDeployment 를 통해 복사(로직 두 벌 금지)");
+    ok(c.rec.toasts.some((t) => /새 페이지로 복사했습니다/.test(t)), "A 복사 완료 안내");
+  }
+  // B 원본 없음 → extractRegionAsDeck 과 똑같은 분기([원본 PDF 올리기]/[지금은 기존 방식으로])
+  {
+    const c = makeClient(P, { noDeck: true, source: { missing: true, snapCount: 1 }, confirms: [false, true] });
+    const d = await c.J.createDeckFromLoadedDrawing({ crop: CROP, name: "단면" });
+    const b = c.rec.decksPost[0] || {};
+    ok(c.rec.confirms[0] && /원본 PDF 가 없는/.test(c.rec.confirms[0].t), "B 원본 없음 → 조용히 흐린 복사본 대신 먼저 묻는다");
+    ok(!!d && b.deployment_id === ENSURED_DEP && b.crop && b.crop.w === CROP.w && b.parent_id === null,
+      "B 창 방식 폴백 — 확정된 배포본 + crop(원본 없는 구버전 동작 그대로)");
+    ok(c.rec.copies.length === 0, "B 원본 없이 복사본 생성 0");
+  }
+  // C 취소하면 배포본은 이미 확정됐어도 구역(decks) 행은 만들지 않는다(고아 배포본은 재시도 시 재사용됨)
+  {
+    const c = makeClient(P, { noDeck: true, source: { missing: true, snapCount: 1 }, confirms: [false, false] });
+    const d = await c.J.createDeckFromLoadedDrawing({ crop: CROP, name: "x" });
+    ok(d === null && c.rec.decksPost.length === 0, "C 창 방식도 거절 → deck 0");
   }
 }
 
@@ -412,8 +453,10 @@ async function suiteFitOnOpen(label, src) {
   ok(a.beforeLoad === 0 && a.fit === 1, `복사본 영역 · 이미지 로드 전 → 로드 이벤트 뒤에 맞춤 1회 (전 ${a.beforeLoad} / 후 ${a.fit})`);
   const b = run({ id: "r", crop: null, parent_id: "root" }, true);
   ok(b.fit === 1, "복사본 영역 · 이미 로드됨 → 곧바로 맞춤 1회");
+  // [WO 20260928-unify] 구역(루트)도 createDeckFromLoadedDrawing 이 같은 벡터복사 경로를 쓰게 되면서
+  // crop:null 인 루트 구역도 열면 페이지 맞춤이 된다(parent_id 로 더 이상 가르지 않는다 — SoT).
   const c = run({ id: "root", crop: null, parent_id: null }, true);
-  ok(c.fit === 0, "루트 구역(부모 없음) → 종전 동작(맞춤 호출 0)");
+  ok(c.fit === 1, "복사본 구역(루트, crop 없음) → 페이지 맞춤 1회(parent_id 무관)");
   const d = run({ id: "w", crop: { x: 1, y: 1, w: 5, h: 5 }, parent_id: "root" }, true);
   ok(d.fit === 0 && d.fitZone === 1, "창 방식 영역(crop) → 종전 fitZone 경로");
 }
@@ -424,6 +467,7 @@ await suiteBox("1. crop % → PDF 상자(실제 pdf.js 대조)", P);
 await suiteCopy("2. 실제 pdf-lib 복사 → pdf.js 재측정", P);
 suiteMismatch(P);
 await suiteFlow("4. extractRegionAsDeck 흐름", P);
+await suiteCreateFromLoaded("4b. createDeckFromLoadedDrawing(구역 생성) = 같은 벡터복사 경로", P);
 await suiteApp("5. App 경계(원본 등록·복사본 저장)", appSrc);
 await suitePromptChain("6. Prompt.confirm 연달아 띄우기", promptSrc);
 await suiteFitOnOpen("7. 복사본 영역 열기 = 페이지 맞춤", projSrc);
@@ -449,9 +493,24 @@ console.log("\n[뮤테이션]");
   const needle = "if (!bytes) {";
   ok(projSrc.includes(needle), "M2 대상 존재");
   const mSrc = projSrc.replace(needle, "if (false) {");
-  await mutate("M2 원본 없음 분기 우회(묻지 않고 진행)", async () => {
+  await mutate("M2 원본 없음 분기 우회(묻지 않고 진행) — extractRegionAsDeck", async () => {
     const save = projSrcBox.v; projSrcBox.v = mSrc;
     try { await suiteFlow("M2", P); } finally { projSrcBox.v = save; }
+  });
+  // 🔴 공유 지점 증명 — createDeckFromLoadedDrawing(구역 생성)도 같은 _planRegionCopy 를 쓰므로
+  //   같은 우회가 이쪽도 깨뜨려야 한다(§G-2-5, 한쪽만 고치면 형제가 안 깨지는 게 아니라 안 잡히는 결함).
+  await mutate("M2b 원본 없음 분기 우회 — createDeckFromLoadedDrawing(구역)", async () => {
+    const save = projSrcBox.v; projSrcBox.v = mSrc;
+    try { await suiteCreateFromLoaded("M2b", P); } finally { projSrcBox.v = save; }
+  });
+}
+{
+  const needle = "body: JSON.stringify(plan.depId\n            ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }\n            : { name, page, crop, deployment_id: depId, parent_id: null })";
+  ok(projSrc.includes(needle), "M6 대상 존재");
+  const mSrc = projSrc.replace(needle, "body: JSON.stringify({ name, page, crop, deployment_id: depId, parent_id: null })");
+  await mutate("M6 구역 생성이 옛 창 방식으로 회귀(벡터복사 결과 무시)", async () => {
+    const save = projSrcBox.v; projSrcBox.v = mSrc;
+    try { await suiteCreateFromLoaded("M6", P); } finally { projSrcBox.v = save; }
   });
 }
 {
@@ -477,9 +536,9 @@ console.log("\n[뮤테이션]");
 }
 
 {
-  const needle = "else if (!crop && d && d.parent_id && typeof MapCtrl !== \"undefined\" && MapCtrl.fit) {";
+  const needle = "else if (!crop && d && typeof MapCtrl !== \"undefined\" && MapCtrl.fit) {";
   ok(projSrc.includes(needle), "M5 대상 존재");
-  await mutate("M5 복사본 영역 열기 맞춤 제거", async () => { await suiteFitOnOpen("M5", projSrc.replace(needle, "else if (false) {")); });
+  await mutate("M5 복사본 영역/구역 열기 맞춤 제거", async () => { await suiteFitOnOpen("M5", projSrc.replace(needle, "else if (false) {")); });
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nALL PASS");
