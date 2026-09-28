@@ -216,6 +216,14 @@
         : "도면 위 원하는 위치를 클릭하세요";
 
       UI.showScreen("screen-app");
+      // 🔴 [WO 20260928-pinloss] 모드 전환(편집 ↔ 체크보드)은 **같은 도면 위에서 도구만 바꾸는 것**이다.
+      //   종전엔 전환마다 아래 loadLatestDeployment 가 돌아 "프로젝트의 첫 구역" 서버본으로 화면을 갈아엎었다 —
+      //   보던 구역이 바뀌고(제목이 다른 도면 파일명으로) 방금 찍은 핀이 사라졌다(라이브 재현).
+      //   도면이 이미 떠 있으면 다시 불러오지 않고 현재 State 를 그대로 다시 그린다.
+      if (opts.keepDrawing && State.fileType) {
+        UI.renderPinList(); UI.renderPinsOnMap();
+        return;
+      }
       // [마스터 요청 N4 + 멀티테넌트] 작업 사라짐 수정 + 서브도메인/카드로 특정 프로젝트 지정 시 그 프로젝트 스코프.
       //   프로젝트가 지정되면(설계자 재진입·서브도메인·카드클릭) 그 프로젝트 배포본, 없으면 최신(일반 뷰어).
       this.loadLatestDeployment(opts.project || null);
@@ -538,7 +546,7 @@
         const next = State.checkboard ? "designer" : "checkboard";
         // [마스터 요청 2026-09-18] 사용자가 명시 전환한 모드는 다음 진입 때도 유지
         if (typeof PinSeries !== "undefined") PinSeries.setPreferredMode(next);
-        App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
+        App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null, keepDrawing: true });
         // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
         if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
         if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
@@ -3650,6 +3658,11 @@
         // 서버 배포본 ID 가 없어도 로컬 draft 가 있으면 복원 시도(오프라인 신규 등록분)
         return await this._restoreDraftLocal();
       }
+      const seq = this._beginLoad();   // 🔴 [WO 20260928-pinloss] 늦게 도착한 이전 로드가 이 결과를 덮지 못하게
+      const dkey = this._draftKey();   // await 전에 확정 — 로드 중 구역이 바뀌어도 이 구역의 draft 만 본다
+      // 🔴 서버 fetch **전에** 읽는다 — 재접속 자동업로드(_flushDirtyDrafts)가 fetch 도중 draft 를 clean 으로
+      //   바꿔도 이 로드는 작업분을 놓치지 않는다(서버본이 더 새로우면 _draftVsServer 가 id 병합).
+      const draft = await this._readDirtyDraft(dkey, deploymentId);
       try {
         // [오프라인 작업지시서 ] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
         let dep = null;
@@ -3661,6 +3674,7 @@
           if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
           dep = await r.json();
         }
+        if (!this._isCurrentLoad(seq)) return;   // 그 사이 다른 구역/모드 로드가 시작됨 → 이 결과는 폐기
         let pages = [];
         try { pages = JSON.parse(dep.pages_data || "[]"); } catch { pages = []; }
         if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];
@@ -3681,6 +3695,9 @@
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
         try { State.checkboardStart = JSON.parse(dep.checkboard_start || "{}") || {}; } catch { State.checkboardStart = {}; }
+        // 🔴 [WO 20260928-pinloss] 저장 안 한 로컬 작업분(dirty draft)이 있으면 서버본 위에 복원.
+        //   렌더(_r0) 전에 끝내야 첫 화면부터 draft 핀이 보이고, 이후 저장/자동보관이 draft 를 빈 목록으로 덮지 않는다.
+        this._applyDirtyDraft(draft, dkey, dep.version);
 
         const imgEl = UI.$("map-image");
         // ponytail: fired flag prevents double-fire when image is already browser-cached
@@ -3784,6 +3801,53 @@
       return (did && did !== "nodeck") ? did : "";
     },
 
+    /** 🔴 [WO 20260928-pinloss] 도면 로드 세대 번호 — 서버본 로더(loadDeckDrawing/loadLatestDeployment)는
+     *  await 사이에 다른 로드가 시작되면(허브 구역 클릭 = openApp 의 자동 로드 + selectDeck 동시 발화)
+     *  늦게 도착한 쪽이 State.pins 를 엉뚱한 구역의 서버본으로 덮었다. 마지막에 시작한 로드만 State 를 쓴다. */
+    _loadSeq: 0,
+    _beginLoad() { return ++this._loadSeq; },
+    _isCurrentLoad(seq) { return seq === this._loadSeq; },
+
+    /** 🔴 [WO 20260928-pinloss] 이 구역(key)의 **저장 안 한** 로컬 작업분(dirty draft)을 읽는다.
+     *  다른 배포본을 기준으로 만든 draft(depId 불일치)는 이 서버본에 얹지 않는다(엉뚱한 도면에 핀 이식 금지). */
+    async _readDirtyDraft(key, depId) {
+      if (!key || typeof SyncQueue === "undefined" || !SyncQueue.loadDraft) return null;
+      let d = null;
+      try { d = await SyncQueue.loadDraft(key); } catch (e) { return null; }
+      if (!d || !d.dirty) return null;
+      if (d.depId && depId && String(d.depId) !== String(depId)) return null;
+      return d;
+    },
+
+    /** 🔴 [WO 20260928-pinloss] 서버본 vs 로컬 draft 충돌 규칙 — **단일 출처**.
+     *  화면 복원(_applyDirtyDraft)과 온라인 복귀 업로드(_flushDirtyDrafts)가 같은 규칙을 쓴다(갈라지면 한쪽이 핀을 잃는다).
+     *  ① draft 가 기준으로 삼은 서버 버전(baseVer) == 지금 서버 버전 → 그 사이 아무도 저장 안 함 → draft 그대로
+     *     (로컬에서 지운 핀이 서버본에서 되살아나지 않는다)
+     *  ② 서버가 더 새롭거나 기준 버전을 모름(구버전 draft) → id 병합: 서버에만 있는 항목 보존 + 같은 id 는 draft 우선 */
+    _draftVsServer(d, srvPins, srvZones, srvVer) {
+      const same = d && d.baseVer != null && srvVer != null && Number(d.baseVer) === Number(srvVer);
+      const dPins = Array.isArray(d && d.pins) ? d.pins : [];
+      const dZones = Array.isArray(d && d.zones) ? d.zones : [];
+      return same
+        ? { pins: dPins, zones: dZones }
+        : { pins: this._mergeById(srvPins || [], dPins), zones: this._mergeById(srvZones || [], dZones) };
+    },
+
+    /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
+     *  종전엔 '미저장' 배지만 뜨고 핀은 서버본(0개)으로 그려졌고, 이어서 '저장'/다음 편집이 빈 목록으로
+     *  draft 를 덮어 작업분이 영구 소실됐다(라이브 재현: 체크보드 핀 → 모드 전환 → 핀 사라짐 → 저장 → draft 0개). */
+    _applyDirtyDraft(d, key, srvVer) {
+      if (!d) return false;
+      const m = this._draftVsServer(d, State.pins, State.zones, srvVer);
+      State.pins = m.pins;
+      State.zones = m.zones;
+      if (Array.isArray(d.annotations)) State.annotations = d.annotations;
+      if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = d.checkboardStart;
+      this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
+      this._markDeckUnsaved(this._deckIdOfKey(key), true);
+      return true;
+    },
+
     /** [B4] 로컬에만 있고 서버 미저장인 구역 id 집합 — 사이드바 '미저장' 배지의 단일 출처 */
     _unsavedDecks: {},
     isDeckUnsaved(deckId) { return !!(deckId && this._unsavedDecks[deckId]); },
@@ -3884,8 +3948,12 @@
                 try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
               }
             } catch (e) {}
-            if (srvPins) body.pins = JSON.stringify(this._mergeById(srvPins, d.pins || []));
-            if (srvZones) body.zones = JSON.stringify(this._mergeById(srvZones, d.zones || []));
+            // 🔴 [WO 20260928-pinloss] 충돌 규칙은 화면 복원과 같은 단일 출처(_draftVsServer)
+            if (srvPins || srvZones) {
+              const m = this._draftVsServer(d, srvPins, srvZones, baseVer);
+              if (srvPins) body.pins = JSON.stringify(m.pins);
+              if (srvZones) body.zones = JSON.stringify(m.zones);
+            }
             body.base_version = baseVer;
             res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
               method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
@@ -3959,6 +4027,8 @@
           annotations: State.annotations || [],
           checkboardStart: State.checkboardStart || {}, // [WO 20260917 멀티유저 ①]
           depId:       State.autoSaveDepId || null,
+          // 🔴 [WO 20260928-pinloss] 이 작업분이 기준으로 삼은 서버 버전 — 재로드 시 충돌 규칙(_draftVsServer) 판정용
+          baseVer:     (State.autoSaveDepId && State.depVersion != null) ? Number(State.depVersion) : null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
         const dkey = this._draftKey();
@@ -4284,6 +4354,8 @@
 
     /* ── 뷰어: 최신 배포본 자동 로드 ── */
     async loadLatestDeployment(projectForDesigner) {
+      const seq = this._beginLoad();   // 🔴 [WO 20260928-pinloss] 늦게 도착하면 폐기(아래 _isCurrentLoad)
+      let draftKey = null, draft = null; // 설계자 재진입으로 연 구역의 dirty draft(복원 대상)
       const statusEl = UI.$("viewer-load-status");
       statusEl.textContent = "도면 불러오는 중...";
 
@@ -4316,9 +4388,16 @@
                 if (typeof OfflineLoad !== "undefined") decks = (await OfflineLoad.decks(projectForDesigner.id)) || [];
               }
             }
+            // 🔴 [WO 20260928-pinloss] 그 사이 selectDeck 등 다른 로드가 시작됐으면 현재 구역을 빼앗지 않는다
+            if (!this._isCurrentLoad(seq)) return;
             if (typeof Projects !== "undefined") Projects.decks = decks;
             const deck = decks.find(d => d.deployment_id);
             if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck; }
+            // 🔴 [WO 20260928-pinloss] 저장 안 한 작업분은 배포본 fetch **전에** 읽는다(형제 loadDeckDrawing 과 같은 이유)
+            if (deck && State.mode === "designer") {
+              draftKey = projectForDesigner.id + "::" + deck.id;
+              draft = await this._readDirtyDraft(draftKey, wantId);
+            }
           } catch (e) {}
           if (!wantId) {   // 새/빈 프로젝트 → 도면 없음(다른 프로젝트 도면을 잘못 띄우지 않음)
             statusEl.textContent = "";
@@ -4368,6 +4447,7 @@
           latest = rows[0];
         }
 
+        if (!this._isCurrentLoad(seq)) return;   // 🔴 [WO 20260928-pinloss] 늦게 도착한 로드 — State 를 덮지 않는다
         // 페이지 배열 복원 (신규 pages_data → 레거시 drawing_data)
         let pages = [];
         try { pages = JSON.parse(latest.pages_data || "[]"); } catch { pages = []; }
@@ -4394,6 +4474,8 @@
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
         try { State.checkboardStart = JSON.parse(latest.checkboard_start || "{}") || {}; }
         catch { State.checkboardStart = {}; }
+        // 🔴 [WO 20260928-pinloss] 형제 로더(loadDeckDrawing)와 같은 공유 지점 — 저장 안 한 작업분 복원
+        if (draft && latest.id === wantId) this._applyDirtyDraft(draft, draftKey, latest.version);
 
         const imgEl = UI.$("map-image");
         let _ld2 = false;

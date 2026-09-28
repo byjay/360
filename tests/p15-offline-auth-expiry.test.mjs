@@ -214,9 +214,13 @@ function makeAuthRefreshSandbox(src, authResp) {
 console.log("\n[① App._flushDirtyDrafts — 401 시 draft 보존]");
 function makeFlushDraftsSandbox(patchRes) {
   const block = extractBalanced(appSrc, "async _flushDirtyDrafts() {");
+  // [WO 20260928-pinloss] _flushDirtyDrafts 가 충돌 규칙 단일 출처(_draftVsServer)를 호출하게 됐다 —
+  //   하네스에도 **실 소스**를 그대로 싣는다(스텁 아님). 이 블록의 assertion 은 한 줄도 바꾸지 않았다.
+  const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer) {");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +
     "  _mergeById(a, b) { return (a || []).concat(b || []); },\n" +
+    "  " + ruleBlock + ",\n" +
     "  _markDeckUnsaved() {},\n" +
     "  _draftKey() { return 'noproj::nodeck'; },\n" +
     "  _setSaveIndicator() {},\n" +
