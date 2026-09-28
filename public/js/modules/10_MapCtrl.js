@@ -1,5 +1,11 @@
   const MapCtrl = {
     viewport: null, transform: null, _flyRaf: null,
+    // [WO 20260928-crop] 구역(crop)이 "새 페이지"로 열려 있는 동안의 경계.
+    // {x,y,w,h}(% 단위, 페이지 기준) 또는 null(경계 없음 = 종전 전체 페이지 동작).
+    _cropBoundary: null,
+    _boundaryFitZoom: null,        // 경계를 화면에 꽉 채우는(cover) 최소 배율(캐시)
+    BOUNDARY_ZOOM_HEADROOM: 6,     // 경계 최소 배율 대비 추가로 확대 가능한 배수
+    BOUNDARY_ZOOM_MAX_HARD: 64,    // 절대 상한(메모리 예산은 PDF.effectivePxCap 이 별도로 지킴)
 
     init(viewport, transform) {
       this.viewport = viewport; this.transform = transform;
@@ -23,7 +29,98 @@
       return State.fileType === "pdf" && !!State.pdfDoc;
     },
 
+    /** [WO 20260928-crop] 구역 경계를 활성/해제한다. crop 이 {x,y,w,h}(%, w>0,h>0) 면 그
+     *  사각형을 "이 페이지의 전체"로 취급(바깥 클리핑 + 줌/팬 경계). crop 이 null/무효면
+     *  해제(= 크롭 없는 구버전 구역·일반 도면은 종전대로 전체 페이지 동작, 회귀 0).
+     *  단일 진입점: PDF.setDeckCrop() 이 호출한다(§G-2-5 공유 지점 한 곳). */
+    setCropBoundary(crop) {
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) {
+        this._cropBoundary = null;
+        this._boundaryFitZoom = null;
+        this._clearBoundaryClip();
+        return null;
+      }
+      this._cropBoundary = { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+      this._boundaryFitZoom = null; // _enforceBoundary 가 실제 뷰포트 크기로 재계산
+      this._applyBoundaryClip(this._cropBoundary);
+      return this._cropBoundary;
+    },
+
+    /** 경계 밖을 숨긴다. clip-path 는 transform 적용 "이전"의 로컬 레이아웃 박스 기준
+     *  %로 해석되므로(스펙), pan/zoom(transform)과 무관하게 항상 도면의 같은 영역을 가린다. */
+    _applyBoundaryClip(b) {
+      if (!this.transform) return;
+      const top    = Math.max(0, Math.min(100, b.y));
+      const left   = Math.max(0, Math.min(100, b.x));
+      const right  = Math.max(0, Math.min(100, 100 - b.x - b.w));
+      const bottom = Math.max(0, Math.min(100, 100 - b.y - b.h));
+      try { this.transform.style.clipPath = `inset(${top}% ${right}% ${bottom}% ${left}%)`; } catch (e) {}
+    },
+    _clearBoundaryClip() {
+      try { if (this.transform) this.transform.style.clipPath = ""; } catch (e) {}
+    },
+
+    /** 순수함수(테스트 가능): bbox(%)가 vw×vh 화면을 "덮도록"(cover, 여백 없음) 하는 배율.
+     *  cw/ch = 콘텐츠(도면)의 로컬(줌1) CSS 크기. 유효하지 않으면 null. */
+    computeCoverZoom(bbox, vw, vh, cw, ch) {
+      if (!bbox || !(bbox.w > 0) || !(bbox.h > 0) || !vw || !vh || !cw || !ch) return null;
+      const zoneW = (bbox.w / 100) * cw, zoneH = (bbox.h / 100) * ch;
+      if (!(zoneW > 0) || !(zoneH > 0)) return null;
+      return Math.max(vw / zoneW, vh / zoneH);
+    },
+
+    /** 순수함수(테스트 가능): pan 을 "경계(bbox) 화면 영역이 뷰포트를 항상 덮도록" 가둔다.
+     *  zoom >= cover 배율일 때 범위가 유효(min<=max)하다. */
+    clampPanToBoundary(pan, zoom, bbox, cw, ch, vw, vh) {
+      if (!bbox || !cw || !ch || !vw || !vh || !(zoom > 0)) return pan;
+      const x0 = (bbox.x / 100) * cw, y0 = (bbox.y / 100) * ch;
+      const w0 = (bbox.w / 100) * cw, h0 = (bbox.h / 100) * ch;
+      let minX = vw - zoom * (x0 + w0), maxX = -zoom * x0;
+      let minY = vh - zoom * (y0 + h0), maxY = -zoom * y0;
+      if (minX > maxX) { const mid = (minX + maxX) / 2; minX = maxX = mid; }
+      if (minY > maxY) { const mid = (minY + maxY) / 2; minY = maxY = mid; }
+      return {
+        x: Math.max(minX, Math.min(maxX, pan.x)),
+        y: Math.max(minY, Math.min(maxY, pan.y))
+      };
+    },
+
+    /** applyTransform() 매 호출마다 경계를 강제한다(휠/드래그/flyTo/fit 전부 여길 거친다).
+     *  ISO(3D 기울임)는 화면좌표 산식이 달라 대상에서 제외(경계 없이 종전 동작). */
+    _enforceBoundary() {
+      if (!this._cropBoundary || State.isoView) return;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      if (!cw || !ch || !vw || !vh) return;
+      const minZ = this.computeCoverZoom(this._cropBoundary, vw, vh, cw, ch);
+      if (!(minZ > 0)) return;
+      this._boundaryFitZoom = minZ;
+      const maxZ = Math.min(this.BOUNDARY_ZOOM_MAX_HARD, Math.max(8, minZ * this.BOUNDARY_ZOOM_HEADROOM));
+      if (State.zoom < minZ) State.zoom = minZ;
+      else if (State.zoom > maxZ) State.zoom = maxZ;
+      const clamped = this.clampPanToBoundary(State.pan, State.zoom, this._cropBoundary, cw, ch, vw, vh);
+      State.pan.x = clamped.x; State.pan.y = clamped.y;
+    },
+
+    /** F(화면 맞춤)를 경계로 리다이렉트 — 경계 활성 시 "새 페이지"(크롭)를 화면에 꽉 채운다. */
+    _fitBoundary() {
+      const b = this._cropBoundary;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      if (!cw || !ch || !vw || !vh) return;
+      const z = this.computeCoverZoom(b, vw, vh, cw, ch);
+      if (!(z > 0)) return;
+      const x0 = (b.x / 100) * cw, y0 = (b.y / 100) * ch;
+      const w0 = (b.w / 100) * cw, h0 = (b.h / 100) * ch;
+      this._animateTo({
+        z,
+        x: (vw - w0 * z) / 2 - x0 * z,
+        y: (vh - h0 * z) / 2 - y0 * z
+      });
+    },
+
     applyTransform() {
+      this._enforceBoundary();
       const { x, y } = State.pan;
       // 이미지/뷰어(스냅샷) 모드에서는 CSS rotate 로 회전(디자이너 PDF 는 캔버스 재렌더로 처리하므로 0).
       const cssRot = (State.mode !== "viewer" && State.fileType === "pdf") ? 0 : (State.pdfRotation || 0);
@@ -345,9 +442,12 @@
       this.applyTransform();
     },
 
-    /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록 */
+    /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록.
+     *  [WO 20260928-crop] 구역 경계가 활성(구역이 "새 페이지"로 열려 있음)이면
+     *  원본 전체가 아니라 그 경계를 화면에 꽉 채운다(요구④). */
     fit() {
       this.cancelFly();
+      if (this._cropBoundary) { this._fitBoundary(); return; }
       const size = this._contentSize();
       if (!size) return;
       const vw = this.viewport.clientWidth;

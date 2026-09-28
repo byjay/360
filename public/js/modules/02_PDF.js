@@ -279,6 +279,9 @@
       // [WO 20260917] 새 문서/페이지 로드 시 이전 구역의 크롭 고정을 초기화(누출 방지).
       // 구역 진입 시 selectDeck 이 다시 PDF.setDeckCrop 으로 설정한다.
       this._renderState.deckCrop = null;
+      // [WO 20260928-crop] 이 경로는 setDeckCrop() 을 거치지 않는 직접 초기화라
+      // MapCtrl 페이지 경계(클리핑+줌/팬 한계)도 여기서 별도로 풀어야 한다(요구⑦, 누출 방지).
+      if (typeof MapCtrl !== "undefined" && MapCtrl.setCropBoundary) MapCtrl.setCropBoundary(null);
       // 첫 렌더 해상도: 초기 화질 확보를 위해 scale(권장 1.5)×dpr 로 미리 선명하게.
       // 이후 줌인하면 requestZoomRerender 가 더 높은 해상도로 재래스터화한다.
       const initRender = Math.max(1, scale) * dpr;
@@ -377,9 +380,12 @@
 
     /** 활성 구역 크롭을 렌더 상태에 고정 — 이후 렌더는 "현재 보이는 영역" 대신
      *  이 영역을 대상으로 삼는다(같은 픽셀 예산을 그 영역에 집중). crop 이 없으면 해제
-     *  (= 구버전 구역·페이지 전체 구역은 종전대로 visibleDrawingRect 로 동작). */
+     *  (= 구버전 구역·페이지 전체 구역은 종전대로 visibleDrawingRect 로 동작).
+     *  [WO 20260928-crop] 같은 crop 을 MapCtrl 의 "페이지 경계"(클리핑+줌/팬 한계)에도
+     *  전달하는 단일 진입점(§G-2-5) — 호출부(31_Projects.js)를 건드리지 않고 여기서 겸한다. */
     setDeckCrop(crop) {
       this._renderState.deckCrop = this.deckCropToFraction(crop);
+      if (typeof MapCtrl !== "undefined" && MapCtrl.setCropBoundary) MapCtrl.setCropBoundary(crop);
       return this._renderState.deckCrop;
     },
 
