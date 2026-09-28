@@ -5,7 +5,8 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v15';   // [캐시버스트] 새 로고/파비콘(favicon.svg) 셸 추가 + 옛 캐시 정리
+const CACHE = 'wm-shell-v17';   // [AC-2] 미디어(R2 객체) 캐시를 별도(MEDIA_CACHE)로 분리 → 구버전(v16)에
+                                 //   섞여있던 대용량 360사진/도면을 activate 시 통째로 정리하기 위해 버전 상승
 const SHELL = [
   './',
   'index.html',
@@ -23,7 +24,11 @@ const SHELL = [
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   'https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js',
   'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css',
-  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap'
+  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap',
+  // ★[아이콘 누락 방지] FontAwesome CSS + 웹폰트 — 어떤 상황(오프라인/CDN차단)에서도 fa-* 아이콘 유지
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.woff2',
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-regular-400.woff2'
 ];
 
 self.addEventListener('install', (e) => {
@@ -40,8 +45,8 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      // 'wm-shared'(공유 임시저장)는 유지 — 공유 직후 클라가 읽어가야 함
-      Promise.all(keys.filter((k) => k !== CACHE && k !== 'wm-shared').map((k) => caches.delete(k)))
+      // 'wm-shared'(공유 임시저장)·MEDIA_CACHE(미디어, 상한은 trimMediaCache가 관리)는 유지
+      Promise.all(keys.filter((k) => k !== CACHE && k !== 'wm-shared' && k !== MEDIA_CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
@@ -66,6 +71,53 @@ function isApi(url) {
          url.pathname.startsWith('/tables/') ||
          url.pathname.includes('/api/') ||
          url.pathname.includes('/tables/');
+}
+
+// ═══ [AC-2] 미디어(R2 객체) 캐시 — 앱셸(CACHE)과 분리 + 용량 상한 자동 정리 ═══
+// 배경: 360 사진/도면은 장당 수 MB — cache-first로 무한히 쌓이면 모바일 저장공간이 찬다.
+// 🔴 이 캐시는 CACHE(wm-shell-v17)·'wm-shared'와 완전히 다른 저장소이며, "오프라인 프로젝트
+//   다운로드"(Offline.Bundle.download, 32_Offline.js)가 쓰는 IndexedDB(SyncQueue)와도 무관하다.
+//   확인: 32_Offline.js는 /tables/pano_images/* 를 fetch하고, isApi()는 '/tables/'로 시작하는
+//   경로를 가로채지 않는다(위 isApi 참조) → 이 요청은 애초에 이 SW를 거쳐 캐시에 들어가지 않는다.
+//   즉 이 미디어 캐시를 아무리 비워도 사용자가 명시적으로 받은 오프라인 데이터는 유실되지 않는다.
+const MEDIA_CACHE = 'wm-media-v1';
+const MEDIA_CACHE_MAX_ENTRIES = 60;             // 근거: 360사진 평균 3~5MB 기준 최대 ~300MB 유지
+const MEDIA_CACHE_MAX_ENTRIES_LOW_STORAGE = 20; // 기기 저장공간 여유가 적을 때 더 공격적으로 축소
+const STORAGE_LOW_RATIO = 0.2;                  // navigator.storage.estimate() 여유비율 <20% → 공격 모드
+
+// ponytail: Cache Storage API는 항목별 삽입 시각을 노출하지 않는다. cache.keys() 반환 순서
+//   (=삽입 순서, 주요 브라우저 구현상 보장되나 스펙이 명시하진 않음)를 "오래된 순"으로 취급하는
+//   단순 FIFO로 구현한다(LRU보다 구현이 단순, 근거: 이 캐시는 cache-first 불변 R2 객체의
+//   재조회용일 뿐이라 순서가 다소 어긋나도 "가끔 최근 것도 같이 지워진다" 정도의 사소한 저하에
+//   그친다 — 오프라인 원본은 IndexedDB에 별도 보관되므로 데이터 유실이 아니다).
+// entries: [{ key, order, protected }] — order 오름차순 = 오래된 것.
+//   protected=true 항목은 상한 초과여도 절대 삭제 후보에 넣지 않는다(방어적 이중 안전장치 — 이
+//   함수가 장차 다른 캐시에도 재사용되더라도 앱셸/공유/오프라인 항목이 섞여 들어오면 보호한다).
+function selectEvictions(entries, limit) {
+  const trimmable = entries.filter((e) => !e.protected);
+  const overflow = trimmable.length - limit;
+  if (overflow <= 0) return [];
+  return trimmable.slice().sort((a, b) => a.order - b.order).slice(0, overflow).map((e) => e.key);
+}
+
+async function trimMediaCache() {
+  try {
+    const cache = await caches.open(MEDIA_CACHE);
+    const keys = await cache.keys();
+    const entries = keys.map((req, i) => ({ key: req, order: i, protected: false }));
+    let limit = MEDIA_CACHE_MAX_ENTRIES;
+    try {
+      const storage = self.navigator && self.navigator.storage;
+      if (storage && storage.estimate) {
+        const est = await storage.estimate();
+        if (est && est.quota > 0 && (est.quota - (est.usage || 0)) / est.quota < STORAGE_LOW_RATIO) {
+          limit = MEDIA_CACHE_MAX_ENTRIES_LOW_STORAGE; // 저장공간 여유 부족 → 공격적 정리(폴백: estimate 미지원 시 기본 상한 유지)
+        }
+      }
+    } catch (e) {}
+    const toEvict = selectEvictions(entries, limit);
+    await Promise.all(toEvict.map((req) => cache.delete(req)));
+  } catch (e) {}
 }
 
 self.addEventListener('fetch', (e) => {
@@ -126,11 +178,15 @@ self.addEventListener('fetch', (e) => {
   //   (R2 키는 내용 기반이라 내용이 바뀌면 URL 자체가 달라지므로 stale 위험 없음)
   if (isR2Object(url)) {
     e.respondWith(
-      caches.open(CACHE).then((cache) =>
+      caches.open(MEDIA_CACHE).then((cache) =>
         cache.match(req).then((cached) => {
           if (cached) return cached;            // 캐시 히트 → 오프라인에서도 즉시 표시
           return fetch(req).then((res) => {
-            if (res && res.status === 200) cache.put(req, res.clone()).catch(() => {});
+            if (res && res.status === 200) {
+              // [AC-2] 저장 후 용량 상한 정리 — SW가 일찍 종료되지 않도록 waitUntil로 생명 연장
+              const persistAndTrim = cache.put(req, res.clone()).then(() => trimMediaCache()).catch(() => {});
+              e.waitUntil(persistAndTrim);
+            }
             return res;
           });
         })

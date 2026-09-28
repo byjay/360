@@ -401,6 +401,37 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   font-size: 10.5px; color: var(--text2);
 }
 
+/* ── [WO 20260928-hub-tree] 프로젝트 카드 아래 구역→영역 트리 ──
+   마스터: "전체 프로젝트 페이지에 하위 구역-영역... 이름을 동시에 리스트에" · 기본 펼침(접기 없음).
+   🔴 색 대비 실측(다크 스킨 seastar-3d-skin.css 런타임 — 카드 배경 #23262c 기준):
+     var(--text) on 카드배경 ≈ 12.58:1 / var(--text2) ≈ 5.04:1 — 둘 다 AA(4.5:1) 통과.
+     var(--text3) ≈ 3.04:1 로 미달이라 여기서는 쓰지 않는다(.tree-node.active 2.07:1 재사용 금지 — 같은 함정 반복 금지). */
+.hub-card-tree {
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.hub-tree-decks, .hub-tree-regions { list-style: none; }
+.hub-tree-regions { margin: 2px 0 6px 16px; }
+.hub-tree-deck, .hub-tree-region {
+  display: block; cursor: pointer; border-radius: var(--radius-sm);
+  padding: 4px 6px; margin: 1px 0;
+  overflow-wrap: break-word;
+  transition: background .12s var(--ease);
+}
+.hub-tree-deck { font-weight: 600; color: var(--text); }
+.hub-tree-region { color: var(--text2); font-size: 11.5px; }
+.hub-tree-deck::before { content: "▸ "; opacity: .6; }
+.hub-tree-region::before { content: "– "; opacity: .55; }
+.hub-tree-deck:hover, .hub-tree-region:hover,
+.hub-tree-deck:focus-visible, .hub-tree-region:focus-visible {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  outline: none;
+}
+/* [WO 20260929-tree-label] 이름 없는 구역/영역 — 사이드바 트리(.tree-node)와 공유하는 클래스(SoT: UI.deckLabelHtml) */
+.tree-name-missing { font-style: italic; opacity: .85; }
+.hub-tree-empty { color: var(--text2); font-size: 11.5px; padding: 2px 6px; }
+
 /* + 새 프로젝트 카드 */
 .hub-card-add {
   align-items: center; justify-content: center;
@@ -4163,6 +4194,28 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pap-note { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
 .pap-del { background: #fef2f2; border-color: #fecaca; color: #dc2626; grid-column: 1 / -1; }
 .pap-hint { margin: 12px 0 0; font-size: 11px; color: #94a3b8; line-height: 1.5; }
+/* [WO 20260928 마스터: "까만 영역을 없애 글자 안보여"] 근본원인(실측) — 이 패널의 #pap-* 입력칸은
+   public/index.html 인라인 style 로 color:#0f172a(라이트 전용 진한 남색)만 고정돼 있고 배경은
+   지정하지 않는다. 배경은 style.css 전역 규칙(input[type], textarea, select { background: var(--bg2) })을
+   그대로 물려받는데, seastar-3d-skin.css 가 :root --bg2 를 다크(#1d2025)로 remap 하면서 어두운
+   글자(#0f172a)+어두운 배경(#1d2025) 조합이 되어 대비 1.09:1(사실상 안 보임)까지 떨어졌다.
+   전역 다크 remap(:root --bg2)은 건드리지 않고, 이 패널(#pin-action-pop) 범위로만 흰 배경을
+   고정한다 — ID 선택자라 다크 스킨 로드 순서와 무관하게 항상 이긴다. */
+#pin-action-pop input[type="text"],
+#pin-action-pop input[type="url"],
+#pin-action-pop input[type="number"],
+#pin-action-pop input[type="email"],
+#pin-action-pop input[type="search"],
+#pin-action-pop textarea,
+#pin-action-pop select {
+  background: #ffffff;
+  color: #0f172a;
+}
+#pin-action-pop input::placeholder,
+#pin-action-pop textarea::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
 .pin-marker.edit-unlocked .pin-pin { animation: papWiggle .6s ease-in-out infinite; }
 @keyframes papWiggle { 0%,100% { transform: rotate(-6deg) scale(1.15); } 50% { transform: rotate(6deg) scale(1.15); } }
 
@@ -4562,6 +4615,10 @@ button { font-family: var(--font-ui); }
     overflow: visible; clip: auto; white-space: nowrap;
     font-family: var(--font-ui); font-size: 10.5px; font-weight: 700;
   }
+  /* [WO 20260928-hub-tree] 모바일 — 카드가 너무 길어져 목록 훑기가 안 되지 않도록 들여쓰기·글자 압축 */
+  .hub-card-tree { padding: 8px 12px 10px; font-size: 11px; }
+  .hub-tree-region { font-size: 10.5px; }
+  .hub-tree-regions { margin-left: 12px; }
 }
 
 /* 아주 좁은 화면(≤380px): 디자이너 관리 라벨 텍스트 숨김(아이콘만) */
@@ -4902,7 +4959,12 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-node:hover{background:rgba(201,150,42,.08);}
 .tree-node.active{background:rgba(201,150,42,.16);color:var(--gold-ink);}
 .tree-node svg{flex:0 0 auto;}
-.tree-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* [WO 20260929-tree-label] 🔴 마스터: "이 트리가 제대로 제목이 안나오잖아" — 1줄 말줄임(…)으로
+   긴 구역/영역 이름이 읽을 수 없게 잘렸다. 2줄까지 허용하고(줄바꿈), 그래도 넘치면 그때만 줄임표.
+   min-width:0 필수 — flex 아이템 기본 min-width:auto 는 overflow:hidden 을 무시하고 내용 폭만큼
+   늘어나(플렉스박스 알려진 함정) 행 전체가 옆으로 밀려나던 원인이었다. 전체 이름은 head.title
+   (11_UI.js deckNode, 네이티브 툴팁)로 항상 확인 가능. */
+.tree-label{flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:break-word;line-height:1.3;}
 .tree-node-deck{font-weight:700;}
 /* [WO 20260921-tree] 마스터 확정 4단(프로젝트>도면>구역>영역) — 각 단을 글자 굵기/크기로 구분한다.
    들여쓰기는 .tree-children(padding-left 12px + margin-left 10px + 좌측 괘선)이 단마다 누적해 준다.
@@ -4911,14 +4973,19 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
       헤드리스 Chrome 375x812 getComputedStyle + 알파 합성 실측(WCAG 2.1):
         .tree-node-project / .tree-node-region : var(--text)  #e9eaee on #1d2025 = 13.59:1
         .tree-node-doc(비활성)                 : var(--text2) #9095a0 on #1d2025 =  5.44:1
-      ⚠️ 기존 공유 규칙 .tree-node.active(var(--gold-ink) #7e5d12 on 합성 #393326)는 2.07:1 로
-         AA 미달이다 — 이 WO 이전부터 모든 트리 행에 걸려 있던 결함이며, 고치려면 다크 스킨에
-         --gold-ink 를 remap 해야 해 전역 영향이 있다. 별도 작업으로 분리한다. */
+      [WO 20260929-tree-label] 🔴 .tree-node.active(var(--gold-ink) #7e5d12 on 합성 #393326)가
+         2.07:1(AA 미달)이던 결함 — --gold-ink 는 3d-skin.css 의 :root remap 목록에 없어(다른 20여개
+         곳이 이 값을 쓰므로 전역 remap은 별도 작업 범위) 다크 런타임에서도 라이트 전용 어두운 값이
+         그대로 남아 "검정 위 검정"이 됐다. --gold-ink 자체는 건드리지 않고, seastar-3d-skin.css 에
+         .tree-node.active 전용 스코프 오버라이드만 추가해 실측 6.30:1(var(--gold) #e0b14a on 합성)로
+         고쳤다(헤드리스 Chrome 375x812 getComputedStyle 실측 — tests/p70-hub-deck-tree.test.mjs). */
 .tree-node-project{font-weight:800;font-size:13px;color:var(--text);}
 .tree-node-doc{font-size:12px;font-weight:700;color:var(--text2);}
 /* 영역(구역의 자식 deck) — 구역(700/12.5px/--text)보다 한 단 가볍게 + 전용 아이콘으로 구분 */
 .tree-node-region{font-size:12px;font-weight:500;color:var(--text);}
 .tree-node-pin{font-size:12px;color:var(--text2);}
+/* [WO 20260928-tree-pinlist] 트리 핀 행 번호 배지 — 번호 SoT(PinSeries.numbers)를 그대로 표시 */
+.tree-pin-no{flex:0 0 auto;font-weight:800;font-size:11px;color:var(--text);opacity:.82;}
 .tree-caret{width:13px;height:13px;transition:transform .18s;color:var(--text3);}
 .tree-deck:not(.open) .tree-node-deck .tree-caret,.tree-zone:not(.open) .tree-node-zone .tree-caret,
 .tree-project:not(.open) .tree-node-project .tree-caret,

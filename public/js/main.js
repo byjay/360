@@ -1136,6 +1136,9 @@
       // [WO 20260917] 새 문서/페이지 로드 시 이전 구역의 크롭 고정을 초기화(누출 방지).
       // 구역 진입 시 selectDeck 이 다시 PDF.setDeckCrop 으로 설정한다.
       this._renderState.deckCrop = null;
+      // [WO 20260928-crop] 이 경로는 setDeckCrop() 을 거치지 않는 직접 초기화라
+      // MapCtrl 페이지 경계(클리핑+줌/팬 한계)도 여기서 별도로 풀어야 한다(요구⑦, 누출 방지).
+      if (typeof MapCtrl !== "undefined" && MapCtrl.setCropBoundary) MapCtrl.setCropBoundary(null);
       // 첫 렌더 해상도: 초기 화질 확보를 위해 scale(권장 1.5)×dpr 로 미리 선명하게.
       // 이후 줌인하면 requestZoomRerender 가 더 높은 해상도로 재래스터화한다.
       const initRender = Math.max(1, scale) * dpr;
@@ -1234,9 +1237,12 @@
 
     /** 활성 구역 크롭을 렌더 상태에 고정 — 이후 렌더는 "현재 보이는 영역" 대신
      *  이 영역을 대상으로 삼는다(같은 픽셀 예산을 그 영역에 집중). crop 이 없으면 해제
-     *  (= 구버전 구역·페이지 전체 구역은 종전대로 visibleDrawingRect 로 동작). */
+     *  (= 구버전 구역·페이지 전체 구역은 종전대로 visibleDrawingRect 로 동작).
+     *  [WO 20260928-crop] 같은 crop 을 MapCtrl 의 "페이지 경계"(클리핑+줌/팬 한계)에도
+     *  전달하는 단일 진입점(§G-2-5) — 호출부(31_Projects.js)를 건드리지 않고 여기서 겸한다. */
     setDeckCrop(crop) {
       this._renderState.deckCrop = this.deckCropToFraction(crop);
+      if (typeof MapCtrl !== "undefined" && MapCtrl.setCropBoundary) MapCtrl.setCropBoundary(crop);
       return this._renderState.deckCrop;
     },
 
@@ -1315,6 +1321,123 @@
       st.cropTask = null; st.cropScale = 0;
       try { if (st.crop && st.crop.parentNode) st.crop.parentNode.removeChild(st.crop); } catch (e) {}
       st.crop = null;
+    },
+
+    /* ══════════════════════════════════════════════════════════════════
+       [WO 20260928-copy] 영역 = "지정한 부분만 복사한 새 1페이지 PDF" (마스터: "확대하면 해상도가 깨지잖아")
+       원본 페이지를 pdf-lib 로 통째 복사(벡터 그대로)한 뒤 MediaBox/CropBox 를 영역 사각형으로
+       좁힌다 → 새 PDF 의 페이지 자체가 그 영역이라, 열면 일반 도면처럼 벡터 재렌더로 선명하다.
+       pdf-lib(MIT 1.17.1)는 /vendor 에 벤더링 — CDN 금지, 영역 생성 때만 지연 로드(첫 화면 비용 0).
+       ══════════════════════════════════════════════════════════════════ */
+    PDFLIB_SRC: "/vendor/pdf-lib.min.js",
+    _pdfLibPromise: null,
+
+    /** pdf-lib 지연 로드(1회). 실패하면 약속을 비워 다음 시도에서 다시 받는다. */
+    ensurePdfLib() {
+      if (typeof window !== "undefined" && window.PDFLib) return Promise.resolve(window.PDFLib);
+      if (this._pdfLibPromise) return this._pdfLibPromise;
+      this._pdfLibPromise = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = this.PDFLIB_SRC;
+        s.async = true;
+        s.onload = () => (window.PDFLib ? resolve(window.PDFLib) : reject(new Error("pdf-lib 로드 실패")));
+        s.onerror = () => reject(new Error("pdf-lib 로드 실패"));
+        document.head.appendChild(s);
+      }).catch((e) => { this._pdfLibPromise = null; throw e; });
+      return this._pdfLibPromise;
+    },
+
+    /** 영역 crop(%, 화면=pdf.js 뷰포트 기준, 원점 좌상단) → PDF 사용자 공간 사각형(pt). 순수 함수.
+     *  view   = [x0,y0,x1,y1] 페이지 보이는 상자(pdf.js page.view 와 같은 정의 = CropBox∩MediaBox)
+     *  rotate = 페이지 /Rotate (0/90/180/270, 시계방향 — pdf.js 뷰포트 기본 회전과 동일)
+     *  🔴 PDF 사용자 공간은 원점이 **좌하단**(y 가 위로 증가) — 화면 v(아래로 증가)를 뒤집어야 한다.
+     *  @returns {{x,y,width,height}|null} */
+    cropPctToPdfBox(crop, view, rotate) {
+      const f = this.deckCropToFraction(crop);
+      if (!f || !Array.isArray(view) || view.length < 4) return null;
+      const r = ((Math.round(Number(rotate) || 0) % 360) + 360) % 360;
+      if (r % 90) return null;
+      const x0 = Math.min(view[0], view[2]), x1 = Math.max(view[0], view[2]);
+      const y0 = Math.min(view[1], view[3]), y1 = Math.max(view[1], view[3]);
+      const W = x1 - x0, H = y1 - y0;
+      if (!(W > 0) || !(H > 0)) return null;
+      // (u,v) = 화면 분수(u: 왼→오, v: 위→아래) → 사용자 공간. 회전별로 화면 좌상단이 가리키는 모서리가 다르다.
+      const toUser = (u, v) => {
+        if (r === 90)  return [x0 + v * W, y0 + u * H];
+        if (r === 180) return [x1 - u * W, y0 + v * H];
+        if (r === 270) return [x1 - v * W, y1 - u * H];
+        return [x0 + u * W, y1 - v * H];                    // 0° — y 뒤집기(좌하단 원점)
+      };
+      const a = toUser(f.x, f.y), b = toUser(f.x + f.w, f.y + f.h);
+      const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+      return { x, y, width: Math.abs(b[0] - a[0]), height: Math.abs(b[1] - a[1]) };
+    },
+
+    /** 원본 PDF 가 화면의 도면(스냅샷)과 같은 파일인지 — 다르면 crop % 가 엉뚱한 곳을 가리킨다. 순수 함수.
+     *  expect = { count?, pw?, ph? (스냅샷이 기록한 페이지 pt) , w?, h? (스냅샷 px — 비율만 비교) }
+     *  actual = { count, w, h } (원본 PDF 의 해당 페이지, 회전 반영한 화면 기준 pt)
+     *  @returns {string|null} 불일치 사유(사용자에게 그대로 보여줄 문장) · 일치/판단불가면 null */
+    regionSizeMismatch(expect, actual, tol) {
+      if (!expect || !actual) return null;
+      const t = tol > 0 ? tol : 0.01;
+      const off = (a, b) => Math.abs(a - b) / b > t;
+      if (expect.count > 0 && actual.count !== expect.count)
+        return "페이지 수가 다릅니다(도면 " + expect.count + "쪽 · 올린 PDF " + actual.count + "쪽)";
+      if (expect.pw > 0 && expect.ph > 0) {
+        if (off(actual.w, expect.pw) || off(actual.h, expect.ph))
+          return "페이지 크기가 다릅니다(도면 " + Math.round(expect.pw) + "×" + Math.round(expect.ph) + "pt · 올린 PDF " + Math.round(actual.w) + "×" + Math.round(actual.h) + "pt)";
+        return null;
+      }
+      if (expect.w > 0 && expect.h > 0 && actual.w > 0 && actual.h > 0) {
+        if (off(actual.w / actual.h, expect.w / expect.h)) return "페이지 가로세로 비율이 다릅니다";
+      }
+      return null;
+    },
+
+    /** pdf-lib 페이지의 보이는 상자 [x0,y0,x1,y1] — pdf.js page.view 와 같은 규칙(CropBox∩MediaBox). */
+    _pdfLibView(pg) {
+      const mb = pg.getMediaBox();
+      const m = [mb.x, mb.y, mb.x + mb.width, mb.y + mb.height];
+      let c = m;
+      try { const cb = pg.getCropBox(); c = [cb.x, cb.y, cb.x + cb.width, cb.y + cb.height]; } catch (e) {}
+      const v = [Math.max(m[0], c[0]), Math.max(m[1], c[1]), Math.min(m[2], c[2]), Math.min(m[3], c[3])];
+      return (v[2] > v[0] && v[3] > v[1]) ? v : m;
+    },
+
+    /** 원본 PDF 한 페이지의 영역만 담은 새 1페이지 PDF 를 만든다(벡터 복사 — 래스터 0).
+     *  원본 바이트는 읽기만 한다(원본 파일·배포본 무변경).
+     *  @param {ArrayBuffer|Uint8Array} srcBytes 원본 PDF
+     *  @param {number} pageNo 1-base
+     *  @param {object} crop {x,y,w,h} %
+     *  @param {object} [expect] regionSizeMismatch 의 기대값 — 다르면 code="SIZE_MISMATCH" 로 throw
+     *  @returns {Promise<{bytes:Uint8Array, box:{x,y,width,height}, rotate:number, pageCount:number}>} */
+    async copyRegionToPdf(srcBytes, pageNo, crop, expect) {
+      const L = await this.ensurePdfLib();
+      const src = await L.PDFDocument.load(srcBytes, { ignoreEncryption: true, updateMetadata: false });
+      const n = src.getPageCount();
+      const idx = Math.round(Number(pageNo) || 1) - 1;
+      if (idx < 0 || idx >= n) { const e = new Error("원본 PDF 에 " + (idx + 1) + "쪽이 없습니다"); e.code = "SIZE_MISMATCH"; throw e; }
+      const sp = src.getPage(idx);
+      const rot = ((((sp.getRotation() && sp.getRotation().angle) || 0) % 360) + 360) % 360;
+      const view = this._pdfLibView(sp);
+      const vw = view[2] - view[0], vh = view[3] - view[1];
+      const why = this.regionSizeMismatch(expect, { count: n, w: rot % 180 ? vh : vw, h: rot % 180 ? vw : vh });
+      if (why) { const e = new Error(why); e.code = "SIZE_MISMATCH"; throw e; }
+      const box = this.cropPctToPdfBox(crop, view, rot);
+      if (!box || !(box.width > 0) || !(box.height > 0)) throw new Error("영역 좌표를 PDF 좌표로 바꿀 수 없습니다");
+      const out = await L.PDFDocument.create();
+      const copied = await out.copyPages(src, [idx]);   // 페이지 내용(벡터·폰트·이미지)을 그대로 복사
+      const pg = copied[0];
+      out.addPage(pg);
+      // 보이는 상자를 영역으로 — 5종 상자를 모두 맞춰야 뷰어마다 같은 크기로 보인다.
+      pg.setMediaBox(box.x, box.y, box.width, box.height);
+      pg.setCropBox(box.x, box.y, box.width, box.height);
+      pg.setBleedBox(box.x, box.y, box.width, box.height);
+      pg.setTrimBox(box.x, box.y, box.width, box.height);
+      pg.setArtBox(box.x, box.y, box.width, box.height);
+      pg.setRotation(L.degrees(rot));                   // 회전 유지 → 원본 화면과 같은 방향
+      const bytes = await out.save();
+      return { bytes, box, rotate: rot, pageCount: n };
     },
 
     /** [WO 20260917] 구역 크롭이 있는 페이지의 스냅샷 렌더 대상 사각형(페이지 포인트 단위). 순수 함수.
@@ -3053,9 +3176,10 @@
         + "모바일/저사양 기기에서는 브라우저 탭이 강제 종료될 수 있습니다. 계속하시겠습니까?";
     },
 
-    /** 대용량 확인 다이얼로그(기존 UI 패턴 재사용 — window.confirm) */
-    _confirmLargeE57(msg) {
-      return (typeof window !== "undefined" && typeof window.confirm === "function") ? window.confirm(msg) : true;
+    /** 대용량 확인 다이얼로그(PWA 독립실행모드에서 window.confirm()이 무음 false를
+     *  반환하는 문제 때문에 Prompt.confirm — SoT: 30_Prompt.js — 로 통일) */
+    async _confirmLargeE57(msg) {
+      return await Prompt.confirm("대용량 파일", msg);
     },
 
     /** ArrayBuffer + 파일명 → 파싱 후 렌더 */
@@ -3065,7 +3189,7 @@
       if (badge) badge.textContent = ext ? ("." + ext) : "";
       if (ext === "e57") {
         const warn = this._e57SizeWarning(buf.byteLength);
-        if (warn && !this._confirmLargeE57(warn)) { this._show("fls-empty"); return; }
+        if (warn && !(await this._confirmLargeE57(warn))) { this._show("fls-empty"); return; }
       }
       let parsed = null;
       try {
@@ -3953,6 +4077,12 @@
   ══════════════════════════════════════════ */
   const MapCtrl = {
     viewport: null, transform: null, _flyRaf: null,
+    // [WO 20260928-crop] 구역(crop)이 "새 페이지"로 열려 있는 동안의 경계.
+    // {x,y,w,h}(% 단위, 페이지 기준) 또는 null(경계 없음 = 종전 전체 페이지 동작).
+    _cropBoundary: null,
+    _boundaryFitZoom: null,        // 경계를 화면에 꽉 채우는(cover) 최소 배율(캐시)
+    BOUNDARY_ZOOM_HEADROOM: 6,     // 경계 최소 배율 대비 추가로 확대 가능한 배수
+    BOUNDARY_ZOOM_MAX_HARD: 64,    // 절대 상한(메모리 예산은 PDF.effectivePxCap 이 별도로 지킴)
 
     init(viewport, transform) {
       this.viewport = viewport; this.transform = transform;
@@ -3976,7 +4106,98 @@
       return State.fileType === "pdf" && !!State.pdfDoc;
     },
 
+    /** [WO 20260928-crop] 구역 경계를 활성/해제한다. crop 이 {x,y,w,h}(%, w>0,h>0) 면 그
+     *  사각형을 "이 페이지의 전체"로 취급(바깥 클리핑 + 줌/팬 경계). crop 이 null/무효면
+     *  해제(= 크롭 없는 구버전 구역·일반 도면은 종전대로 전체 페이지 동작, 회귀 0).
+     *  단일 진입점: PDF.setDeckCrop() 이 호출한다(§G-2-5 공유 지점 한 곳). */
+    setCropBoundary(crop) {
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) {
+        this._cropBoundary = null;
+        this._boundaryFitZoom = null;
+        this._clearBoundaryClip();
+        return null;
+      }
+      this._cropBoundary = { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+      this._boundaryFitZoom = null; // _enforceBoundary 가 실제 뷰포트 크기로 재계산
+      this._applyBoundaryClip(this._cropBoundary);
+      return this._cropBoundary;
+    },
+
+    /** 경계 밖을 숨긴다. clip-path 는 transform 적용 "이전"의 로컬 레이아웃 박스 기준
+     *  %로 해석되므로(스펙), pan/zoom(transform)과 무관하게 항상 도면의 같은 영역을 가린다. */
+    _applyBoundaryClip(b) {
+      if (!this.transform) return;
+      const top    = Math.max(0, Math.min(100, b.y));
+      const left   = Math.max(0, Math.min(100, b.x));
+      const right  = Math.max(0, Math.min(100, 100 - b.x - b.w));
+      const bottom = Math.max(0, Math.min(100, 100 - b.y - b.h));
+      try { this.transform.style.clipPath = `inset(${top}% ${right}% ${bottom}% ${left}%)`; } catch (e) {}
+    },
+    _clearBoundaryClip() {
+      try { if (this.transform) this.transform.style.clipPath = ""; } catch (e) {}
+    },
+
+    /** 순수함수(테스트 가능): bbox(%)가 vw×vh 화면을 "덮도록"(cover, 여백 없음) 하는 배율.
+     *  cw/ch = 콘텐츠(도면)의 로컬(줌1) CSS 크기. 유효하지 않으면 null. */
+    computeCoverZoom(bbox, vw, vh, cw, ch) {
+      if (!bbox || !(bbox.w > 0) || !(bbox.h > 0) || !vw || !vh || !cw || !ch) return null;
+      const zoneW = (bbox.w / 100) * cw, zoneH = (bbox.h / 100) * ch;
+      if (!(zoneW > 0) || !(zoneH > 0)) return null;
+      return Math.max(vw / zoneW, vh / zoneH);
+    },
+
+    /** 순수함수(테스트 가능): pan 을 "경계(bbox) 화면 영역이 뷰포트를 항상 덮도록" 가둔다.
+     *  zoom >= cover 배율일 때 범위가 유효(min<=max)하다. */
+    clampPanToBoundary(pan, zoom, bbox, cw, ch, vw, vh) {
+      if (!bbox || !cw || !ch || !vw || !vh || !(zoom > 0)) return pan;
+      const x0 = (bbox.x / 100) * cw, y0 = (bbox.y / 100) * ch;
+      const w0 = (bbox.w / 100) * cw, h0 = (bbox.h / 100) * ch;
+      let minX = vw - zoom * (x0 + w0), maxX = -zoom * x0;
+      let minY = vh - zoom * (y0 + h0), maxY = -zoom * y0;
+      if (minX > maxX) { const mid = (minX + maxX) / 2; minX = maxX = mid; }
+      if (minY > maxY) { const mid = (minY + maxY) / 2; minY = maxY = mid; }
+      return {
+        x: Math.max(minX, Math.min(maxX, pan.x)),
+        y: Math.max(minY, Math.min(maxY, pan.y))
+      };
+    },
+
+    /** applyTransform() 매 호출마다 경계를 강제한다(휠/드래그/flyTo/fit 전부 여길 거친다).
+     *  ISO(3D 기울임)는 화면좌표 산식이 달라 대상에서 제외(경계 없이 종전 동작). */
+    _enforceBoundary() {
+      if (!this._cropBoundary || State.isoView) return;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      if (!cw || !ch || !vw || !vh) return;
+      const minZ = this.computeCoverZoom(this._cropBoundary, vw, vh, cw, ch);
+      if (!(minZ > 0)) return;
+      this._boundaryFitZoom = minZ;
+      const maxZ = Math.min(this.BOUNDARY_ZOOM_MAX_HARD, Math.max(8, minZ * this.BOUNDARY_ZOOM_HEADROOM));
+      if (State.zoom < minZ) State.zoom = minZ;
+      else if (State.zoom > maxZ) State.zoom = maxZ;
+      const clamped = this.clampPanToBoundary(State.pan, State.zoom, this._cropBoundary, cw, ch, vw, vh);
+      State.pan.x = clamped.x; State.pan.y = clamped.y;
+    },
+
+    /** F(화면 맞춤)를 경계로 리다이렉트 — 경계 활성 시 "새 페이지"(크롭)를 화면에 꽉 채운다. */
+    _fitBoundary() {
+      const b = this._cropBoundary;
+      const cw = this.transform.offsetWidth, ch = this.transform.offsetHeight;
+      const vw = this.viewport.clientWidth, vh = this.viewport.clientHeight;
+      if (!cw || !ch || !vw || !vh) return;
+      const z = this.computeCoverZoom(b, vw, vh, cw, ch);
+      if (!(z > 0)) return;
+      const x0 = (b.x / 100) * cw, y0 = (b.y / 100) * ch;
+      const w0 = (b.w / 100) * cw, h0 = (b.h / 100) * ch;
+      this._animateTo({
+        z,
+        x: (vw - w0 * z) / 2 - x0 * z,
+        y: (vh - h0 * z) / 2 - y0 * z
+      });
+    },
+
     applyTransform() {
+      this._enforceBoundary();
       const { x, y } = State.pan;
       // 이미지/뷰어(스냅샷) 모드에서는 CSS rotate 로 회전(디자이너 PDF 는 캔버스 재렌더로 처리하므로 0).
       const cssRot = (State.mode !== "viewer" && State.fileType === "pdf") ? 0 : (State.pdfRotation || 0);
@@ -4298,9 +4519,12 @@
       this.applyTransform();
     },
 
-    /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록 */
+    /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록.
+     *  [WO 20260928-crop] 구역 경계가 활성(구역이 "새 페이지"로 열려 있음)이면
+     *  원본 전체가 아니라 그 경계를 화면에 꽉 채운다(요구④). */
     fit() {
       this.cancelFly();
+      if (this._cropBoundary) { this._fitBoundary(); return; }
       const size = this._contentSize();
       if (!size) return;
       const vw = this.viewport.clientWidth;
@@ -4658,8 +4882,9 @@
          · 직전 커밋(eeeab36)이 세운 4단(프로젝트>도면>구역>영역)을 3단으로 되돌린다.
          · decks.parent_id(마이그레이션 0025, 프로덕션 적용 완료)는 그대로 쓴다 —
            parent_id NULL = 구역, parent_id 있음 = 영역. 이 구조는 3단과 정확히 맞는다.
-         · 🔴 도면 출처 정보는 버리지 않는다 — 트리 "단"에서만 빼고, 구역/영역 노드 안에
-           부가 라벨(.tree-doc-src, docLabel())로 남긴다(아래 deckNode 참조).
+         · 🔴 도면 출처 정보는 버리지 않는다 — 트리 "단"에서 빼고(2026-09-28: 부가 라벨도
+           같은 파일명이 반복되며 이름을 가려 마스터가 재지적 → title 툴팁으로 재이동),
+           구역/영역 노드의 head.title(docLabel())로 남긴다(아래 deckNode 참조).
          · 도면 이름 정본 = API 가 JOIN 해 준 deployment_file_name/deployment_title.
            없으면 현재 로드된 도면의 State.fileName, 그래도 없으면 일반 표기("등록 도면").
            🔴 없는 이름을 지어내지 않는다.
@@ -4670,6 +4895,39 @@
          · 영역JSON(State.zones)/핀: 전체 페이지를 항상 표시하고, 현재 페이지 항목만 .active 로 "구분"한다.
          · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
            개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
+    /** [WO 20260928-hub-tree] 🔴 공유 지점(SoT) — 구역/영역 분류 규칙은 여기 한 곳에만 둔다.
+     *  사이드바 트리(renderTree, 아래)와 허브 카드(12_ProjectHub.js)가 이 함수를 함께 쓴다.
+     *  parent_id 가 가리키는 부모가 없거나(삭제됨) 자기참조면 최상위로 승격(숨김 금지).
+     *  @param {Array} decks
+     *  @returns {{roots: Array, childrenOf: Map<string, Array>}} */
+    groupDecksByParent(decks) {
+      decks = decks || [];
+      const byId = new Map();
+      decks.forEach((d) => byId.set(String(d.id), d));
+      const parentKey = (d) => {
+        const pid = d.parent_id != null ? String(d.parent_id) : "";
+        return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
+      };
+      const childrenOf = new Map();
+      decks.forEach((d) => {
+        const pid = parentKey(d);
+        if (!pid) return;
+        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+        childrenOf.get(pid).push(d);
+      });
+      const roots = decks.filter((d) => !parentKey(d));
+      return { roots, childrenOf };
+    },
+
+    /** [WO 20260929-tree-label] 🔴 공유 지점(SoT) — 트리 라벨은 항상 deck.name(파일명이 아니다).
+     *  마스터 지적: "이 트리가 제대로 제목이 안나오잖아" — 사이드바 트리(renderTree)와 허브 카드
+     *  트리(12_ProjectHub.js)가 각자 이름 폴백을 따로 구현하면 반드시 갈라진다(§5) — 이 함수 하나만 쓴다.
+     *  @returns {string} 이스케이프된 HTML — 이름 있으면 그대로, 없으면 "(이름 없음)" */
+    deckLabelHtml(deck) {
+      const esc = (s) => this.escapeHtml(s);
+      return (deck && deck.name) ? esc(deck.name) : '<span class="tree-name-missing">(이름 없음)</span>';
+    },
+
     renderTree() {
       const host = this.$("side-tree");
       if (!host) return;
@@ -4696,35 +4954,32 @@
         : (State.pdfPages || 1);
       const showPageTag = totalPages > 1;
       const pageTag = (pg) => showPageTag ? ' <span class="tree-label-sub">P' + (pg || 1) + '</span>' : "";
-      const pinNode = (p) => {
+      /* [WO 20260928-tree-pinlist] 🔴 번호 SoT = PinSeries.numbers()(01b_PinSeries.js) —
+         여기서 직접 채번하지 않는다(도면 마커·미니맵과 항상 같은 번호가 나오게).
+         numbers() 는 페이지 1개 기준이라, 트리는 전체 페이지를 항상 보여주므로(WO 20260917-pin)
+         핀에 등장하는 모든 page 값에 대해 한 번씩 돌려 병합한다(핀 id 는 전역 유일이라 충돌 없음). */
+      const numbersAcrossPages = (pins) => {
+        const map = new Map();
+        if (typeof PinSeries === "undefined" || !PinSeries.numbers) return map;
+        const pages = new Set((pins || []).map((p) => p.page || 1));
+        pages.forEach((pg) => { PinSeries.numbers(pins, pg).forEach((v, k) => map.set(k, v)); });
+        return map;
+      };
+      const pinNode = (p, numMap) => {
         const n = document.createElement("button");
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
-        n.innerHTML = ICO.pin + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
+        const meta = numMap ? numMap.get(p.id) : null;
+        const noLabel = meta ? '<span class="tree-pin-no">#' + esc(String(meta.no)) + '</span>' : "";
+        n.innerHTML = ICO.pin + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
 
-      /* ── 계층 인덱스 ─────────────────────────────────────────────── */
+      /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
-      const byId = new Map();
-      decks.forEach((d) => byId.set(String(d.id), d));
-      // 부모가 실존할 때만 자식으로 접는다 — 부모가 삭제됐거나 자기참조면 최상위로 승격(숨김 금지).
-      const parentKey = (d) => {
-        const pid = d.parent_id != null ? String(d.parent_id) : "";
-        return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
-      };
-      const childrenOf = new Map();
-      decks.forEach((d) => {
-        const pid = parentKey(d);
-        if (!pid) return;
-        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-        childrenOf.get(pid).push(d);
-      });
-
-      /* ── 3단: 최상위 구역(parent_id 없음) 목록 — 도면 그룹핑 없이 프로젝트 바로 아래에 건다 ── */
-      const rootDecks = decks.filter((d) => !parentKey(d));
+      const { roots: rootDecks, childrenOf } = this.groupDecksByParent(decks);
       const docLabel = (depId) => {
         if (!depId) return "도면 미등록";
         const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
@@ -4759,14 +5014,20 @@
           : (deck.deployment_id ? "" : '<span class="tree-tag" title="이 구역에 등록된 도면이 없습니다 — 구역을 눌러 도면을 등록하세요">도면없음</span>');
         // [항목4] 영역 수 배지 — 로드된 구역만(미로드 구역은 실제 개수를 모른다·0 날조 금지)
         const zoneCntTag = loaded ? '<span class="tree-cnt" title="영역 수">' + (State.zones || []).length + '</span>' : "";
-        // [WO 20260921-tree3] 🔴 도면 출처 유실 금지 — 트리 "단"에서 도면을 뺀 대신, 구역/영역 이름
-        //   옆에 원본 도면 파일명을 부가 라벨로 남긴다(docLabel 은 없는 이름을 지어내지 않는다).
+        // [WO 20260921-tree3→20260928-tree-title] 마스터 2026-09-28 지시로 대체: 구역·영역이 같은
+        //   deployment(같은 도면)를 가리켜 모든 행에 똑같은 긴 파일명이 붙으면서 정작 구별해야 할
+        //   이름("ㅁ"/"ㅁㄴㅇ")이 묻혔다("이 트리가 제대로 제목이 안나오잖아"). 행에는 이름만 보이고,
+        //   원본 도면 파일명은 title(네이티브 툴팁)로만 제공한다(docLabel 은 없는 이름을 지어내지
+        //   않는다 — 유실이 아니라 이동).
         const docName = deck.deployment_id ? docLabel(deck.deployment_id) : null;
-        const srcTag = docName ? '<span class="tree-label-sub tree-doc-src" title="원본 도면: ' + esc(docName) + '">' + esc(docName) + '</span>' : "";
-        // [WO 20260928-tree-expand] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라 "이름 없음"으로
-        // 정직하게 표시(CLAUDE.md §5 — 값이 없으면 없다고 표시, 지어내지 않는다).
-        const _nameLabel = deck.name ? esc(deck.name) : '<span class="tree-name-missing">이름 없음</span>';
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + srcTag + _tag + zoneCntTag;
+        // [WO 20260928-tree-expand→20260929-tree-label] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라
+        // "(이름 없음)"으로 정직하게 표시(CLAUDE.md §5). SoT: UI.deckLabelHtml(deck.name, 파일명 아님).
+        const _nameLabel = this.deckLabelHtml(deck);
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + zoneCntTag;
+        // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
+        // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
+        // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.
+        head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\n원본 도면: " + docName : "");
         // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {
@@ -4793,13 +5054,34 @@
         if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
           const pins = State.pins || [];   // 전체 페이지(필터 없음)
-          const used = new Set();
+          const numMap = numbersAcrossPages(pins);
+          const sortByNo = (a, b) => ((numMap.get(a.id) || {}).no || 0) - ((numMap.get(b.id) || {}).no || 0);
+          // [WO 20260928-tree-pinlist] 🔴 소속 = 가장 깊은(면적 작은) 영역 하나 — 겹치는 영역이
+          // 있으면 바운딩박스(zone.w*zone.h, 페이지%) 가 더 작은 쪽. 못 찾으면 구역 직속.
+          const zoneOfPin = new Map(); // pinId -> zone
+          pins.forEach((p) => {
+            const ppage = p.page || 1;
+            let best = null, bestArea = Infinity;
+            zones.forEach((zone) => {
+              if ((zone.page || 1) !== ppage) return;
+              if (!(typeof Zones !== "undefined" && Zones._contains && Zones._contains(zone, p.x, p.y))) return;
+              const area = Math.max(0, +zone.w || 0) * Math.max(0, +zone.h || 0);
+              if (area < bestArea) { bestArea = area; best = zone; }
+            });
+            if (best) zoneOfPin.set(p.id, best);
+          });
+          const pinsOfZone = new Map();
+          zones.forEach((z) => pinsOfZone.set(z.id, []));
+          const rootPins = [];
+          pins.forEach((p) => {
+            const z = zoneOfPin.get(p.id);
+            if (z && pinsOfZone.has(z.id)) pinsOfZone.get(z.id).push(p);
+            else rootPins.push(p);
+          });
           zones.forEach((zone) => {
             const zpage = zone.page || 1;
             const isCurZonePage = zpage === curPage;
-            const zpins = pins.filter((p) => (p.page || 1) === zpage &&
-              ((typeof Zones !== "undefined" && Zones._contains) ? Zones._contains(zone, p.x, p.y) : false));
-            zpins.forEach((p) => used.add(p.id));
+            const zpins = (pinsOfZone.get(zone.id) || []).slice().sort(sortByNo);
             const zn = document.createElement("div");
             zn.className = "tree-zone open"; // [항목2] 기본 펼침
             const zh = document.createElement("button");
@@ -4813,11 +5095,11 @@
             zn.appendChild(zh);
             const zc = document.createElement("div");
             zc.className = "tree-children";
-            zpins.forEach((p) => zc.appendChild(pinNode(p)));
+            zpins.forEach((p) => zc.appendChild(pinNode(p, numMap)));
             zn.appendChild(zc);
             kids.appendChild(zn);
           });
-          pins.filter((p) => !used.has(p.id)).forEach((p) => kids.appendChild(pinNode(p)));
+          rootPins.sort(sortByNo).forEach((p) => kids.appendChild(pinNode(p, numMap)));
           any = true;
         }
         if (any) g.appendChild(kids);
@@ -4948,15 +5230,16 @@
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->
               <circle cx="18" cy="15" r="11.8" fill="${_st.filled ? `url(#pgbody${pageIdx})` : "none"}" stroke="${_st.filled ? "#ffffff" : headFill2}" stroke-width="${_st.filled ? 2.4 : 3.2}"/>
-              <!-- [WO 20260921 숫자 풍선 제거] 마스터 지시("상태를 색이나 모양으로. 숫자 풍선 없애") —
-                   머리 안에 번호 글자 노드를 더는 그리지 않는다. 상태는 이미 3축(등록 fill 채움/속빈 ·
-                   tier 원판 실루엣 원/둥근사각/겹원 · 외곽 링 dash 패턴)만으로 흑백에서도 구분된다.
-                   번호 자체는 버리지 않는다 — #pin-list(.pin-num)·PinActionPop(#pap-no)에서 계속 확인 가능
-                   (dispNo/dataset.no 는 그대로 유지, 표시만 다른 화면으로 이관). 커스텀 아이콘을
-                   고른 핀만 예외적으로 그 아이콘을 머리에 그린다(번호 아님 — 기존 기능 보존). -->
+              <!-- [WO 20260928 번호 복구] 마스터 지시("번호가 안본다") — 9/21 지시는 "숫자 풍선"
+                   (머리 밖 별도 배지)을 없애라는 뜻이었는데 머리 안 번호까지 지워 회귀가 났다.
+                   상태(등록 fill/tier 원판/링 dash)는 그대로 유지하고, 흰 원판(tierDisc) 위에
+                   번호만 다시 그린다 — 원판이 항상 흰색이라 txtFill(진한 계열색)과 대비 ≥4.5:1 보장.
+                   3자리 이상(101~)은 원판을 넘치지 않게 폰트를 축소한다. 커스텀 아이콘을 고른
+                   핀만 예외적으로 그 아이콘을 그린다(번호 대신). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))
+                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
@@ -5216,6 +5499,10 @@
     // [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 뷰어 딥링크(?d=) 캐시.
     //   project_id → deployment_id(string) | null(도면 없음, 조회 완료) — SoT: /api/projects/:id/decks.
     _deployLinkCache: {},
+    // [WO 20260928-hub-tree] 카드 아래 구역→영역 트리용 캐시.
+    //   project_id → decks 배열(해당 프로젝트, deleted 제외) | undefined(아직 조회 안 됨 — "모름"과
+    //   "0개"를 구분해야 하므로 빈 배열과 undefined 를 섞지 않는다, CLAUDE.md §5 조용한 실패 금지).
+    _deckTreeCache: {},
 
     init() {
       const $ = (id) => document.getElementById(id);
@@ -5550,7 +5837,7 @@
 
     async removeMember(email) {
       const p = this._memProject; if (!p) return;
-      if (!window.confirm(email + " 의 '" + (p.name || p.id) + "' 프로젝트 배정을 해제할까요?")) return;
+      if (!await Prompt.confirm("배정 해제", email + " 의 '" + (p.name || p.id) + "' 프로젝트 배정을 해제할까요?")) return;
       try {
         await fetch("/api/projects/" + encodeURIComponent(p.id) + "/members/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.loadMembers();
@@ -5600,7 +5887,7 @@
         } finally { clearTimeout(t); }
         this.list = data || [];
         this._offline = false;
-        await this._resolveDeployLinks();
+        await Promise.all([this._resolveDeployLinks(), this._loadDeckTrees()]);
       } catch (e) {
         // 네트워크 실패/타임아웃 → 오프라인 번들로 폴백(있으면)
         try { this.list = (typeof OfflineLoad !== "undefined") ? (await OfflineLoad.projects()).filter(Boolean) : []; this._offline = true; }
@@ -5625,6 +5912,51 @@
           this._deployLinkCache[p.id] = withDep ? withDep.deployment_id : null;
         } catch (e) { this._deployLinkCache[p.id] = null; }
       }));
+    },
+
+    /** [WO 20260928-hub-tree] 카드 아래 구역→영역 트리용 decks 조회.
+     *  🔴 프로젝트별 요청 1회씩이지만 Promise.all 로 병렬화(N+1 아님 — _resolveDeployLinks 와 동일
+     *  기존 관행). 배치 엔드포인트가 없고 src/** 는 이번 작업 범위 밖(발주서 파일 점유 제한)이라
+     *  기존 /api/projects/:id/decks 를 그대로 쓴다. 실패해도 카드 렌더는 계속(트리만 생략).
+     *  잠긴(비멤버) 카드는 조회하지 않는다 — 접근 못하는 프로젝트의 구조를 드러내지 않는다. */
+    async _loadDeckTrees() {
+      const targets = (this.list || []).filter((p) => !(Auth.idToken && p.is_member === false));
+      await Promise.all(targets.map(async (p) => {
+        try {
+          const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/decks", { headers: Auth.headers() });
+          if (!r.ok) { this._deckTreeCache[p.id] = []; return; }
+          const { data } = await r.json();
+          // [WO 20260928-hub-tree] 서버가 이미 deleted=0 만 내려주지만(SoT: src/index.tsx GET decks),
+          //   방어적으로도 한 번 더 거른다(§5 — deleted=1 은 안 보여야 한다).
+          this._deckTreeCache[p.id] = (data || []).filter((d) => !d.deleted);
+        } catch (e) { this._deckTreeCache[p.id] = []; }
+      }));
+    },
+
+    /** [WO 20260928-hub-tree] 카드 하나의 구역→영역 트리 HTML.
+     *  캐시가 아직 없으면(오프라인/잠김 등 "모름") 빈 문자열 — "구역 없음"을 함부로 단정하지 않는다. */
+    _renderDeckTreeHtml(p) {
+      const decks = this._deckTreeCache[p.id];
+      if (decks === undefined) return "";
+      const esc = (s) => UI.escapeHtml(s);
+      // [WO 20260929-tree-label] 🔴 공유 지점(SoT) — UI.deckLabelHtml(11_UI.js) 하나만 쓴다.
+      // 이 카드 트리와 사이드바 트리(renderTree)가 각자 이름 폴백을 만들면 반드시 갈라진다.
+      const titleOf = (d) => esc(d.name ? d.name : "(이름 없음)");
+      if (!decks.length) {
+        return '<div class="hub-card-tree"><p class="hub-tree-empty">구역 없음</p></div>';
+      }
+      const { roots, childrenOf } = UI.groupDecksByParent(decks);
+      const regionsHtml = (deck) => {
+        const kids = childrenOf.get(String(deck.id)) || [];
+        if (!kids.length) return "";
+        return '<ul class="hub-tree-regions">' + kids.map((r) =>
+          '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
+        ).join("") + '</ul>';
+      };
+      const rootsHtml = roots.map((d) =>
+        '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">' + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>'
+      ).join("");
+      return '<div class="hub-card-tree"><ul class="hub-tree-decks">' + rootsHtml + '</ul></div>';
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
@@ -5759,7 +6091,10 @@
                   '<span class="hub-card-act-label">삭제</span>' +
                 '</button>' +
               '</div>'
-            : '');
+            : '') +
+          // [WO 20260928-hub-tree] 마스터: "전체 프로젝트 페이지에 구역-영역 리스트, 이름이
+          // 동시에 보여야" — 잠긴(비멤버) 카드는 구조를 드러내지 않는다(§ 개인정보/권한).
+          (isLocked ? '' : this._renderDeckTreeHtml(p));
 
         // 카드 클릭
         card.addEventListener("click", (e) => {
@@ -5800,6 +6135,24 @@
         if (urlShare) urlShare.addEventListener("click", (e) => { e.stopPropagation(); this._shareDeployUrl(deployUrl, p.name); });
         const urlText = card.querySelector('[data-act="url-toggle"]');
         if (urlText) urlText.addEventListener("click", (e) => { e.stopPropagation(); urlText.classList.toggle("is-expanded"); });
+
+        // [WO 20260928-hub-tree] 구역/영역 클릭 → 그 구역/영역으로 바로 진입(기존 열기 경로 재사용).
+        const treeEl = card.querySelector(".hub-card-tree");
+        if (treeEl) {
+          const openDeckNode = (e) => {
+            const node = e.target.closest("[data-deck-id]");
+            if (!node) return;
+            e.stopPropagation();
+            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"));
+          };
+          treeEl.addEventListener("click", openDeckNode);
+          treeEl.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            if (!e.target.closest("[data-deck-id]")) return;
+            e.preventDefault();
+            openDeckNode(e);
+          });
+        }
 
         grid.appendChild(card);
       });
@@ -5843,6 +6196,21 @@
       const nm = document.getElementById("pms-proj-name"); if (nm) nm.textContent = p.name || p.id;
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
     },
+
+    /** [WO 20260928-hub-tree] 카드의 구역/영역 클릭 → 그 구역으로 바로 진입.
+     *  🔴 새 진입 로직을 만들지 않는다 — openProject()(기존 진입) 뒤에 Projects.selectDeck()
+     *  (기존 "구역 열기" 정본, 31_Projects.js)을 그대로 호출한다.
+     *  requireDesigner 게이트가 열려(로그인 대기) 편집모드 진입이 아직 안 끝났으면 여기서
+     *  멈춘다 — 로그인 완료 후에는 기존 동작(최신 배포본 진입)으로 이어진다(회귀 없음). */
+    async openProjectAtDeck(p, deckId) {
+      await this.openProject(p);
+      if (!Auth.isDesigner) return;
+      try {
+        await Projects.loadDecks();
+        const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
+        if (deck && Projects.selectDeck) await Projects.selectDeck(deck);
+      } catch (e) {}
+    },
     closeModeSelect() {
       const m = document.getElementById("proj-mode-select-modal");
       if (!m) return; m.classList.remove("on"); setTimeout(() => m.classList.add("hidden"), 200);
@@ -5883,7 +6251,7 @@
 
     async deleteProject(p) {
       if (!Auth.isDesigner) return;
-      if (!confirm("'" + p.name + "' 프로젝트와 모든 데크를 삭제할까요?")) return;
+      if (!await Prompt.confirm("프로젝트 삭제", "'" + p.name + "' 프로젝트와 모든 데크를 삭제할까요?")) return;
       try {
         await fetch("/api/projects/" + p.id, { method: "DELETE", headers: Auth.headers() });
         await this.load();
@@ -6459,7 +6827,7 @@
     },
 
     async remove(id) {
-      if (!confirm("이 이슈/노트를 삭제할까요?")) return;
+      if (!await Prompt.confirm("노트 삭제", "이 이슈/노트를 삭제할까요?")) return;
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         this._list = (this._list || []).filter((x) => x.id !== id);
         try { await OpLog.recordCurrent("note", "delete", id); await this._saveSnapshot(this._list, Date.now()); } catch (e) {}
@@ -7250,11 +7618,11 @@
       if (MapCtrl.flyTo) MapCtrl.flyTo(cx, cy, z, 650);
     },
 
-    remove(id) {
-      if (!this.isDesigner()) return;
+    async remove(id) {
+      if (!this.isDesigner()) return false;
       const z = (State.zones || []).find(x => x.id === id);
-      if (!z) return;
-      if (!confirm(`영역 “${z.label}”을(를) 삭제할까요?`)) return;
+      if (!z) return false;
+      if (!await Prompt.confirm("영역 삭제", `영역 "${z.label}"을(를) 삭제할까요?`)) return false;
       State.zones = (State.zones || []).filter(x => x.id !== id);
       if (this._active === id) this._active = null;
       this.render();
@@ -7264,6 +7632,7 @@
         OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
+      return true;
     },
 
     /** 핀 추가/이동 후 영역-핀 연결 갱신 */
@@ -7401,11 +7770,11 @@
       });
       // 액션
       body.querySelectorAll(".insp-btn").forEach(b => {
-        b.addEventListener("click", () => {
+        b.addEventListener("click", async () => {
           const act = b.dataset.act;
           if (act === "zoom") { if (typeof App !== "undefined" && App.enterZoneView) App.enterZoneView(z.id); }
           else if (act === "fly") Zones.focus(z.id);
-          else if (act === "del") { Zones.remove(z.id); this.close(); }
+          else if (act === "del") { if (await Zones.remove(z.id)) this.close(); }
           else if (act === "rename") {
             const nv = prompt("구역 이름", z.label || "");
             if (nv != null) { z.label = nv.trim() || z.label; Zones.render(); Zones.renderList(); this.showZone(z); if (App._autoSave) App._autoSave(); }
@@ -7457,12 +7826,12 @@
         </div>
       `;
       body.querySelectorAll(".insp-btn").forEach(b => {
-        b.addEventListener("click", () => {
+        b.addEventListener("click", async () => {
           const act = b.dataset.act;
           if (act === "open" && typeof PanoViewer !== "undefined") PanoViewer.open(p);
           else if (act === "fly" && MapCtrl.flyTo) MapCtrl.flyTo(p.x, p.y, 2.4, 600);
           else if (act === "edit" && App.editPin) { App.editPin(p.id); this.close(); }
-          else if (act === "del" && App.deletePin) { App.deletePin(p.id); this.close(); }
+          else if (act === "del" && App.deletePin) { if (await App.deletePin(p.id)) this.close(); }
         });
       });
       this._open();
@@ -9142,7 +9511,7 @@
       const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value);
       if (!result.ok) { Prompt.toast && Prompt.toast(result.reason || "변경할 수 없습니다"); return; }
       const first = result.changes[0].newLabel, last = result.changes[result.changes.length - 1].newLabel;
-      if (!confirm("체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
+      if (!await Prompt.confirm("번호 일괄 변경", "체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
       const byId = new Map((State.pins || []).map((p) => [p.id, p]));
       result.changes.forEach((c) => {
         const pin = byId.get(c.id);
@@ -10338,10 +10707,10 @@
       if (openAfter) setTimeout(() => this.openPano(pin), 250);
     },
 
-    deletePin(id) {
+    async deletePin(id) {
       const removed = State.pins.find(p => p.id === id);
-      if (!removed) return;
-      if (!confirm(`'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return;
+      if (!removed) return false;
+      if (!await Prompt.confirm("포인트 삭제", `'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return false;
       if (removed.videoUrl) _revokeVideoBlob(removed.videoUrl); // [B5] 삭제 시 즉시 해제
       State.pins = State.pins.filter(p => p.id !== id);
       if (State.activePin === id) State.activePin = null;
@@ -10355,6 +10724,7 @@
         OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }
       this._autoSave();
+      return true;
     },
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */
@@ -10699,7 +11069,128 @@
       }
       const pages = Array.isArray(dims) ? dims
         : (Array.isArray(PDF.lastSnapshotDims) ? PDF.lastSnapshotDims : []);
+      return this._sourceMetaJson(url, pages);
+    },
+
+    /** source_meta 직렬화 형식의 SoT — 도면 등록·영역 복사·원본 사후 등록이 같은 형식을 쓴다. */
+    _sourceMetaJson(url, pages) {
+      pages = Array.isArray(pages) ? pages : [];
       return JSON.stringify({ v: 1, pdf_url: url, pages: pages });
+    },
+
+    /* ══════════════════════════════════════════════════════════════════
+       [WO 20260928-copy] 영역 = 원본에서 복사한 새 1페이지 PDF 배포본
+       (31_Projects.extractRegionAsDeck 가 지휘. 여기는 원본 확보·업로드·배포본 생성만.)
+       🔴 원본 배포본의 핀·구역·주석은 읽지도 쓰지도 않는다 — 원본 쪽 쓰기는
+          _attachSourcePdf 의 source_meta 한 칸뿐(서버 PATCH 는 미전송 필드를 보존한다).
+       ══════════════════════════════════════════════════════════════════ */
+
+    /** 복사 전 대조 기대값 — 화면 도면(스냅샷)과 원본 PDF 가 같은 파일/같은 크기인지.
+     *  meta.pages[p].pw/ph(스냅샷 pt)가 있으면 크기로, 없으면 화면 이미지 비율로 비교한다. */
+    _regionExpect(meta, snapCount, pageNo, live) {
+      const pages = meta && Array.isArray(meta.pages) ? meta.pages : [];
+      const e = { count: snapCount > 0 ? snapCount : pages.length };
+      const d = pages[(pageNo || 1) - 1];
+      if (d && d.pw > 0 && d.ph > 0) { e.pw = d.pw; e.ph = d.ph; return e; }
+      if (live) {
+        const img = UI.$("map-image");
+        if (img && img.naturalWidth && !img.classList.contains("hidden")) { e.w = img.naturalWidth; e.h = img.naturalHeight; }
+      }
+      return e;
+    },
+
+    /** 배포본의 원본 PDF 바이트 확보.
+     *  @returns {Promise<{bytes, expect}|{missing:true, snapCount}|{error:string}>} */
+    async _regionSource(depId, pageNo) {
+      const live = State.autoSaveDepId === depId;
+      // ① 편집모드에 PDF 원본이 떠 있다 — 화면이 곧 그 PDF 라 좌표 대조가 필요 없다(네트워크 0)
+      if (live && State.fileType === "pdf" && State.fileData) return { bytes: State.fileData, expect: null };
+      let meta = null, snapCount = 0;
+      if (live) {
+        meta = State.sourceMeta || (State.sourcePdfUrl ? { pdf_url: State.sourcePdfUrl } : null);
+        snapCount = Array.isArray(State.viewerPages) ? State.viewerPages.length : 0;
+      } else {
+        try {
+          const r = await fetch("/tables/deployments/" + encodeURIComponent(depId), { headers: Auth.headers() });
+          if (!r.ok) return { error: "도면 정보를 불러오지 못했습니다(HTTP " + r.status + ")" };
+          const dep = await r.json();
+          try { meta = JSON.parse((dep && dep.source_meta) || "null"); } catch (e) { meta = null; }
+          try { const pg = JSON.parse((dep && dep.pages_data) || "[]"); snapCount = Array.isArray(pg) ? pg.length : 0; } catch (e) {}
+        } catch (e) { return { error: "도면 정보를 불러오지 못했습니다 — 네트워크를 확인하세요" }; }
+      }
+      if (!meta || typeof meta.pdf_url !== "string" || !meta.pdf_url) return { missing: true, snapCount };
+      const expect = this._regionExpect(meta, snapCount, pageNo, live);
+      this._srcProgress(-1);
+      let ab = null;
+      try { ab = await this._fetchSourcePdf(meta.pdf_url); } catch (e) { ab = null; }
+      this._srcProgress(null);
+      if (!ab) return { error: "원본 PDF 를 내려받지 못했습니다" };
+      return { bytes: ab, expect };
+    },
+
+    /** 원본 없는 구버전 도면 — 사용자가 고른 PDF 파일(취소면 null). */
+    _pickPdfFile() {
+      return new Promise((resolve) => {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.accept = "application/pdf,.pdf";
+        let done = false;
+        const fin = (f) => { if (done) return; done = true; resolve(f || null); };
+        inp.addEventListener("change", () => fin(inp.files && inp.files[0]));
+        inp.addEventListener("cancel", () => fin(null));
+        inp.click();
+      });
+    },
+
+    /** 구버전 배포본에 원본 PDF 를 사후 등록 — 🔴 source_meta 한 칸만 보낸다(핀·구역·주석 미전송 =
+     *  서버 부분 갱신이 그대로 보존). 스냅샷 실측 픽셀은 기록이 없어 pages=[] → 뷰어는 이미지 크기로 폴백.
+     *  @returns {Promise<boolean>} */
+    async _attachSourcePdf(depId, ab) {
+      const url = await this._uploadSourcePdf(ab);
+      if (!url) return false;
+      const meta = this._sourceMetaJson(url, []);
+      const build = () => ({ source_meta: meta });
+      const live = State.autoSaveDepId === depId;
+      let ok = false;
+      try {
+        if (live) ok = (await this._patchDeployment(depId, build)).ok;   // 낙관적 잠금 버전도 함께 갱신
+        else {
+          const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
+            method: "PATCH", headers: Auth.headers(), body: JSON.stringify(build())
+          });
+          ok = res.ok;
+        }
+      } catch (e) { ok = false; }
+      if (ok && live) this._applySourceMeta({ source_meta: meta });   // 지금 화면도 곧바로 원본 지연 로드 가능
+      return ok;
+    },
+
+    /** 영역 PDF(bytes)로 새 배포본 생성 → id. 실패 시 null(조용한 성공 위장 금지).
+     *  🔴 원본 PDF 업로드가 실패하면 아무것도 만들지 않는다 — 스냅샷 이미지만 있는 "깨지는 복사본" 금지.
+     *  스냅샷·R2·저장 형식은 도면 등록과 같은 경로(snapshotAllPages · _uploadPagesToR2 · _deploymentBody). */
+    async _createRegionCopyDeployment(name, bytes) {
+      const pdfUrl = await this._uploadSourcePdf(bytes);
+      if (!pdfUrl) return null;
+      const prevDims = PDF.lastSnapshotDims;   // 전역 실측값 오염 방지(편집 중 도면의 저장에 섞이면 안 된다)
+      let pages = [], dims = [], doc = null;
+      try {
+        doc = await PDF.load(bytes);
+        pages = await PDF.snapshotAllPages(doc);
+        dims = PDF.lastSnapshotDims || [];
+      } catch (e) { pages = []; }
+      finally {
+        PDF.lastSnapshotDims = prevDims;
+        try { if (doc && doc.destroy) doc.destroy(); } catch (e) {}
+      }
+      if (!pages.length) return null;
+      const r2pages = await this._uploadPagesToR2(pages);
+      const body = this._deploymentBody({ title: name, fileName: name + ".pdf" }, r2pages, this._sourceMetaJson(pdfUrl, dims));
+      try {
+        const res = await fetch("/tables/deployments", { method: "POST", headers: Auth.headers(), body: JSON.stringify(body) });
+        if (!res.ok) return null;
+        const rec = await res.json();
+        return (rec && rec.id) || null;
+      } catch (e) { return null; }
     },
 
     /** 배포본 레코드의 source_meta 를 State 에 반영 (도면 로드 경로 공용).
@@ -10930,17 +11421,26 @@
       }).filter(Boolean);
       const deployableZones = (State.zones || []).map(z => this._mapZoneForCrop(z, deckCrop)).filter(Boolean);
       const deployableAnnotations = (State.annotations || []).map(a => this._mapAnnoForCrop(a, deckCrop)).filter(Boolean);
+      return this._deploymentBody({
+        title: State.fileName || "도면", fileName: State.fileName || "",
+        pins: deployablePins, zones: deployableZones, annotations: deployableAnnotations,
+        checkboardStart: State.checkboardStart
+      }, pagesData, sourceMeta);
+    },
+
+    /** 배포본 저장 본문 형식의 SoT — 도면 저장(_buildSavePayload)과 영역 복사본 생성이 공유한다. */
+    _deploymentBody(o, pagesData, sourceMeta) {
       const body = {
-        title:       State.fileName || "도면",
-        file_name:   State.fileName || "",
-        pins:        JSON.stringify(deployablePins),
-        zones:       JSON.stringify(deployableZones),
-        annotations: JSON.stringify(deployableAnnotations)
+        title:       o.title || "도면",
+        file_name:   o.fileName || "",
+        pins:        JSON.stringify(o.pins || []),
+        zones:       JSON.stringify(o.zones || []),
+        annotations: JSON.stringify(o.annotations || [])
       };
       // [WO 20260917 멀티유저 ①] 체크보드 시작번호(페이지별) 영속화 — 항상 함께 보낸다(작아서
       //   조건부 전송할 이유가 없음). 서버는 컬럼 자체가 없던 구버전에서도 부분갱신 규칙(§merged)
       //   대로 안전히 저장한다. 값이 비어도 "{}" 로 보내 구버전(값 없음=1) 폴백을 그대로 재현.
-      body.checkboard_start = JSON.stringify(State.checkboardStart || {});
+      body.checkboard_start = JSON.stringify(o.checkboardStart || {});
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
         body.pages_data   = JSON.stringify(pagesData);
@@ -13450,7 +13950,7 @@
       } catch (e) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); }
     },
     async remove(email) {
-      if (!confirm(email + " 의 디자이너 권한을 해제할까요?")) return;
+      if (!await Prompt.confirm("권한 해제", email + " 의 디자이너 권한을 해제할까요?")) return;
       try {
         await fetch("/api/designers/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.render();
@@ -13726,7 +14226,7 @@
     },
     async reject(q) {
       if (this._reqBusy) return;
-      if (!confirm((q.name || q.email) + " 의 신청을 거절/회수할까요?")) return;
+      if (!await Prompt.confirm("신청 거절", (q.name || q.email) + " 의 신청을 거절/회수할까요?")) return;
       this._reqBusy = true;
       try {
         const r = await fetch("/api/access-requests/" + encodeURIComponent(q.id) + "/reject", { method: "POST", headers: Auth.headers() });
@@ -13830,7 +14330,7 @@
       } catch (e) {}
     },
     async purgeLogs() {
-      if (!confirm("모든 활동 로그를 비울까요? (되돌릴 수 없습니다)")) return;
+      if (!await Prompt.confirm("로그 전체 삭제", "모든 활동 로그를 비울까요? (되돌릴 수 없습니다)")) return;
       try {
         const r = await fetch("/api/activity-logs?all=1", { method: "DELETE", headers: Auth.headers() });
         if (r.ok) { Prompt.toast("로그를 정리했습니다"); this.loadLogActions(); this.loadLogs(true); }
@@ -14145,7 +14645,7 @@
       catch (e) {} finally { this._busy = false; await this.load(); }
     },
     async _delMember(email) {
-      if (!window.confirm(email + " 사용자의 가입을 취소(삭제)하시겠습니까?")) return;
+      if (!await Prompt.confirm("가입 취소", email + " 사용자의 가입을 취소(삭제)하시겠습니까?")) return;
       if (this._busy) return; this._busy = true;
       try { await fetch("/api/local-users/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() }); }
       catch (e) {} finally { this._busy = false; await this.load(); }
@@ -14155,7 +14655,7 @@
     async _bulkRole(role) {
       const emails = Array.from(this._selected);
       if (!emails.length) return;
-      if (!window.confirm("선택한 " + emails.length + "명을 " + (role === "designer" ? "디자이너" : "뷰어") + "로 지정할까요?")) return;
+      if (!await Prompt.confirm("역할 일괄 지정", "선택한 " + emails.length + "명을 " + (role === "designer" ? "디자이너" : "뷰어") + "로 지정할까요?")) return;
       this._busy = true;
       try {
         for (const email of emails) {
@@ -14168,7 +14668,7 @@
     async _bulkDelete() {
       const emails = Array.from(this._selected);
       if (!emails.length) return;
-      if (!window.confirm("선택한 " + emails.length + "명의 가입을 취소(삭제)할까요? (가입 사용자만 삭제됩니다)")) return;
+      if (!await Prompt.confirm("가입 일괄 취소", "선택한 " + emails.length + "명의 가입을 취소(삭제)할까요? (가입 사용자만 삭제됩니다)")) return;
       this._busy = true;
       try { for (const email of emails) await fetch("/api/local-users/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() }); }
       catch (e) {} finally { this._busy = false; this._selected.clear(); await this.load(); }
@@ -14299,9 +14799,9 @@
         }
       }
     },
-    clearPage() {
+    async clearPage() {
       if (!State.annotations.some(a => (a.page || 1) === State.pdfPage)) return;
-      if (typeof confirm === "function" && !confirm("현재 페이지의 모든 주석을 삭제할까요?")) return;
+      if (!await Prompt.confirm("주석 전체 삭제", "현재 페이지의 모든 주석을 삭제할까요?")) return;
       State.annotations = State.annotations.filter(a => (a.page || 1) !== State.pdfPage);
       this._render(); this._persist();
     },
@@ -14467,10 +14967,9 @@
         if (input && !input.readOnly) { input.focus(); input.select(); }
         Prompt.toast && Prompt.toast("아래에서 위치명·사진·노트를 바로 수정하세요");
       });
-      $("pap-del") && $("pap-del").addEventListener("click", () => {
+      $("pap-del") && $("pap-del").addEventListener("click", async () => {
         const pin = this._pin(); if (!pin) return;
-        this.close();
-        App.deletePin(pin.id);
+        if (await App.deletePin(pin.id)) this.close();
       });
       // ── 등록정보(위치명) / 번호 수정 — 저장은 명시 버튼(자동저장 OFF, 미저장 표시만) ──
       $("pap-label-save") && $("pap-label-save").addEventListener("click", () => this._saveLabel());
@@ -15526,9 +16025,13 @@
         const okBtn = document.getElementById("wm-confirm-ok");
         const cancelBtn = document.getElementById("wm-confirm-cancel");
         const backdrop = modal.querySelector(".admin-gate-backdrop");
+        // 🔴 [WO 20260928-copy · 라이브 실측] 확인창을 연달아 띄우면(닫자마자 다음 confirm) 앞 창의
+        //   200ms 지연 숨김 타이머가 새 창에 "hidden" 을 붙여 두 번째 창이 사라지고 약속이 영원히 대기했다.
+        //   열 때 앞 타이머를 취소하고, 닫힐 때는 그 사이 다시 열리지 않았을 때만 숨긴다.
+        clearTimeout(modal._hideTimer);
         const close = (result) => {
           modal.classList.remove("on");
-          setTimeout(() => modal.classList.add("hidden"), 200);
+          modal._hideTimer = setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);
           okBtn.removeEventListener("click", onOk);
           cancelBtn.removeEventListener("click", onCancel);
           backdrop.removeEventListener("click", onCancel);
@@ -15615,7 +16118,7 @@
 
     async deleteProject() {
       if (!this.currentProject) return;
-      if (!confirm(`'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
+      if (!await Prompt.confirm("프로젝트 삭제", `'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 삭제할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       try {
         await fetch("/api/projects/" + this.currentProject.id, { method: "DELETE", headers: Auth.headers() });
@@ -15659,6 +16162,10 @@
       this._renderDecks();
       // [B4] 로컬 draft 스캔 → '미저장' 배지 동기화(비차단)
       try { if (typeof App !== "undefined" && App._refreshUnsavedDecks) App._refreshUnsavedDecks(); } catch (e) {}
+      // [WO 20260928-hub-tree] 🔴 공유 지점(SoT) — createDeck/extractRegionAsDeck/드래그크롭 생성이
+      //   전부 이 loadDecks() 를 거치므로 허브 카드 트리 갱신은 여기 한 곳에만 둔다(각 생성 함수마다
+      //   중복 호출 금지). 허브 화면이 지금 안 보이면(screen-projects 비활성) 아무 일도 안 한다.
+      try { if (typeof ProjectHub !== "undefined" && ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible(); } catch (e) {}
     },
 
     /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */
@@ -15896,6 +16403,9 @@
      *  마스터 원문: "pdf 에 여러 개의 뷰가 있는 파일일 때 긁어서 그 부분만 복사하듯이
      *  새로운 영역으로 만들어내는 기능".
      *
+     *  🔴 [WO 20260928-copy] 갱신 — 원본 PDF 가 있으면 아래 "창" 대신 **복사본**(지정 부분만 담은 새 1페이지
+     *     PDF 배포본, crop 없음)을 만든다(_planRegionCopy). 원본 배포본의 핀·구역·주석은 여전히 무변경이다.
+     *     아래 창 방식은 원본 PDF 가 없는 구버전 도면에서 사용자가 고를 때만 쓰인다.
      *  🔴 비파괴(마스터 확정 — "pdf 원본은 유지한 채 그 영역만 보여주는 기능"):
      *   · 원본 PDF·배포본(deployments 행)에는 **한 바이트도 쓰지 않는다.** decks 행 1개를 INSERT 할 뿐이다.
      *   · 새 영역은 원본과 **같은 deployment_id** 를 가리키고 차이는 page+crop 뿐 —
@@ -15950,12 +16460,19 @@
 
       this._extractingRegion = true;
       try {
+        // 🔴 [WO 20260928-copy] 마스터: "지정한 영역만 복사해서 새로운 페이지" / "확대하면 해상도가 깨지잖아".
+        //   원본 PDF 가 있으면 그 부분만 벡터 복사한 새 1페이지 PDF 배포본을 만들어 가리킨다(crop 없음).
+        //   원본이 없으면(구버전) 조용히 이미지 복사본을 만들지 않고 사용자에게 묻는다(_planRegionCopy).
+        const plan = await this._planRegionCopy(src, page, crop, name);
+        if (!plan) return null;   // 취소/실패 — 사유는 _planRegionCopy 가 이미 화면에 알렸다
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
-          // 🔴 원본과 같은 도면(deployment_id)을 가리킨다 — 픽셀 복사 없음, 원본 무변경.
+          // 복사본: 새 배포본(그 페이지 자체가 영역) · 창 방식: 원본과 같은 도면 + crop(원본 무변경).
           // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
           // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
-          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
+          body: JSON.stringify(plan.depId
+            ? { name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }
+            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
@@ -15963,12 +16480,102 @@
         const created = (this.decks || []).find((x) => x.id === d.id) || d;
         // 🔴 반복 추출(요구①) — 현재 구역을 새 영역으로 바꾸지 않는다. 원본 도면 화면에 그대로 머물러
         //    곧바로 다음 영역을 긁을 수 있다("복사하듯이"). 새 영역은 목록에서 눌러 들어간다.
-        Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 계속 드래그해 다른 영역도 만들 수 있어요(목록에서 눌러 열기)", 3600);
+        if (plan.depId) {
+          // 🔴 핀은 옮기지 않는다(원본 무변경) — 영역 안에 있던 핀 수를 사실대로 알린다(0이면 생략).
+          const live = typeof State !== "undefined" && State.autoSaveDepId === src.deployment_id;
+          const n = live ? this._pinsInCrop(State.pins, page, crop) : 0;
+          Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 지정한 부분을 새 페이지로 복사했습니다(확대해도 선명)"
+            + (n > 0 ? " · 원본 구역에 있던 핀 " + n + "개는 원본에 그대로 있습니다" : ""), 5200);
+        } else {
+          Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 계속 드래그해 다른 영역도 만들 수 있어요(목록에서 눌러 열기)"
+            + (plan.limited ? " · 원본 PDF 가 없어 확대 시 선명도에 한계가 있습니다" : ""), plan.limited ? 5200 : 3600);
+        }
         return created;
       } catch (e) {
         Prompt.toast && Prompt.toast(navigator.onLine ? "영역 추출 실패 — 네트워크 오류, 다시 시도해주세요" : "오프라인이라 지금은 영역을 추출할 수 없습니다");
         return null;
       } finally { this._extractingRegion = false; }
+    },
+
+    /** [WO 20260928-copy] 영역을 "복사본(새 PDF 배포본)"으로 만들지 "창(crop)"으로 만들지 결정한다.
+     *  @returns {Promise<{depId, box}|{mode:"window", limited?}|null>} null = 취소/실패(사유는 이미 표시)
+     *  · 원본 있음  → 벡터 복사 → 새 배포본 id
+     *  · 원본 없음  → 묻는다: [원본 PDF 올리기](원본 등록 후 복사) / [창 방식](선명도 한계 고지) / 취소
+     *  🔴 원본 없이 스냅샷 이미지로 "복사본"을 만드는 경로는 없다(마스터가 거부한 결과). */
+    async _planRegionCopy(src, page, crop, name) {
+      const canCopy = typeof App !== "undefined" && App._regionSource && App._createRegionCopyDeployment
+        && App._attachSourcePdf && App._pickPdfFile && typeof PDF !== "undefined" && PDF.copyRegionToPdf;
+      if (!canCopy) return { mode: "window" };   // 복사 모듈이 없는 구버전 번들 — 종전 창 방식
+      const say = (m, ms) => { if (Prompt.toast) Prompt.toast(m, ms); };
+      const askWindow = async (why) => (await this._confirmLabeled("기존 방식(창)으로 만들까요?",
+        why + "\n\n창 방식은 원본 도면을 그대로 들여다보므로 확대하면 선명도에 한계가 있습니다.",
+        "창 방식으로 만들기", "취소")) ? { mode: "window", limited: true } : (say("영역 추출을 취소했습니다"), null);
+
+      say("원본 PDF 를 확인하는 중…", 2400);
+      const s = (await App._regionSource(src.deployment_id, page)) || { error: "원본 확인 실패" };
+      if (s.error) return await askWindow(s.error + " — 선명한 복사본을 만들 수 없습니다.");
+      let bytes = s.bytes, expect = s.expect, attach = false;
+      if (!bytes) {
+        const up = await this._confirmLabeled("원본 PDF 가 없는 도면입니다",
+          "이 도면은 원본 PDF 가 없어 확대하면 깨집니다.\n원본 PDF 를 올리면 지정한 부분을 선명한 새 페이지로 복사합니다.",
+          "원본 PDF 올리기", "지금은 기존 방식으로");
+        if (!up) return await askWindow("원본 PDF 없이 진행합니다.");
+        const file = await App._pickPdfFile();
+        if (!file) { say("영역 추출을 취소했습니다"); return null; }
+        try { bytes = await file.arrayBuffer(); } catch (e) { say("파일을 읽지 못했습니다 — 다시 시도하세요"); return null; }
+        const live = typeof State !== "undefined" && State.autoSaveDepId === src.deployment_id;
+        expect = App._regionExpect ? App._regionExpect(null, s.snapCount, page, live) : null;
+        attach = true;
+      }
+      let res = null;
+      try { res = await PDF.copyRegionToPdf(bytes, page, crop, expect); }
+      catch (e) {
+        const msg = (e && e.message) || "알 수 없는 오류";
+        if (!(e && e.code === "SIZE_MISMATCH")) {
+          if (attach) { say("PDF 를 읽지 못했습니다 — " + msg); return null; }
+          return await askWindow("원본 PDF 를 읽지 못했습니다(" + msg + ").");
+        }
+        if (!attach) return await askWindow("원본 PDF 와 화면의 도면이 맞지 않습니다 — " + msg + ".");
+        // 사용자가 직접 고른 파일이 화면 도면과 다르다 — 엉뚱한 부분이 복사된다. 알고 진행할 때만 계속.
+        const go = await this._confirmLabeled("다른 파일일 수 있습니다",
+          msg + "\n화면의 도면과 다른 PDF 를 올리면 엉뚱한 부분이 복사됩니다.", "그래도 이 PDF 로 진행", "취소");
+        if (!go) { say("영역 추출을 취소했습니다"); return null; }
+        try { res = await PDF.copyRegionToPdf(bytes, page, crop, null); }
+        catch (e2) { say("PDF 를 읽지 못했습니다 — " + ((e2 && e2.message) || "")); return null; }
+      }
+      if (attach) {
+        say("원본 PDF 를 도면에 등록하는 중…", 2400);
+        if (!(await App._attachSourcePdf(src.deployment_id, bytes))) { say("원본 PDF 등록 실패 — 네트워크를 확인하고 다시 시도하세요"); return null; }
+      }
+      say("지정한 부분을 새 페이지로 복사하는 중…", 2400);
+      const depId = await App._createRegionCopyDeployment(name, res.bytes);
+      if (!depId) { say("새 페이지 저장 실패 — 네트워크를 확인하고 다시 시도하세요"); return null; }
+      return { depId, box: res.box };
+    },
+
+    /** Prompt.confirm 을 버튼 문구만 바꿔 쓴다(닫히면 원래 문구 복원 — 다른 확인창에 새지 않게).
+     *  🔴 window.confirm 금지(PWA standalone 에서 무음 false). Prompt.confirm 이 없으면 "아니오". */
+    async _confirmLabeled(title, msg, okLabel, cancelLabel) {
+      if (typeof Prompt === "undefined" || !Prompt.confirm) return false;
+      const p = Prompt.confirm(title, msg);
+      const okB = document.getElementById("wm-confirm-ok");
+      const noB = document.getElementById("wm-confirm-cancel");
+      const prev = [okB ? okB.textContent : null, noB ? noB.textContent : null];
+      if (okB && okLabel) okB.textContent = okLabel;
+      if (noB && cancelLabel) noB.textContent = cancelLabel;
+      try { return !!(await p); }
+      finally { if (okB) okB.textContent = prev[0]; if (noB) noB.textContent = prev[1]; }
+    },
+
+    /** 영역(crop %) 안에 있는 그 페이지 핀 수 — 알림용 집계만(핀 배열은 읽기만 한다). 순수 함수. */
+    _pinsInCrop(pins, page, crop) {
+      if (!Array.isArray(pins) || !crop || !(crop.w > 0) || !(crop.h > 0)) return 0;
+      const pg = page || 1, x1 = crop.x + crop.w, y1 = crop.y + crop.h;
+      return pins.filter((p) => {
+        if (!p || (p.page || 1) !== pg) return false;
+        const x = Number(p.x), y = Number(p.y);
+        return x >= crop.x && x <= x1 && y >= crop.y && y <= y1;
+      }).length;
     },
 
     /** [WO 20260928 → 20260929 이음매 수정] "도면이 화면에 로드돼 있는가" 상태 판정.
@@ -16083,7 +16690,7 @@
     },
 
     async deleteDeck(id, name) {
-      if (!confirm(`구역 '${name}' 를 삭제할까요?`)) return;
+      if (!await Prompt.confirm("구역 삭제", `구역 '${name}' 를 삭제할까요?`)) return;
       try {
         await fetch("/api/decks/" + id, { method: "DELETE", headers: Auth.headers() });
         if (this.currentDeck && this.currentDeck.id === id) this.currentDeck = null;
@@ -16119,6 +16726,16 @@
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
       if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
+      // 🔴 [WO 20260928-copy · 라이브 실측] 복사본 영역(crop 없음 · 부모 있음)은 그 페이지 자체가 영역이다 →
+      //   열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가 이미지 load 때 zoom=1 로
+      //   되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에 불린다 + 한 프레임 뒤).
+      //   루트 구역(부모 없음)은 종전 동작 그대로.
+      else if (!crop && d && d.parent_id && typeof MapCtrl !== "undefined" && MapCtrl.fit) {
+        const img = document.getElementById("map-image");
+        const go = () => { const f = () => MapCtrl.fit(); if (typeof requestAnimationFrame === "function") requestAnimationFrame(f); else f(); };
+        if (img && img.complete && img.naturalWidth) go();
+        else if (img && img.addEventListener) img.addEventListener("load", go, { once: true });
+      }
     },
 
     _renderDecks() {
@@ -17204,7 +17821,7 @@
       if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("매칭할 핀·사진이 없습니다"); return; }
       if (leftoverPins.length || leftoverRows.length) {
         const msg = (leftoverPins.length ? leftoverPins.length + "개 핀 남음 " : "") + (leftoverRows.length ? leftoverRows.length + "장 사진 남음" : "");
-        if (!confirm("개수가 일치하지 않습니다 — " + msg + ". " + matches.length + "건만 매칭해 진행할까요?")) return;
+        if (!await Prompt.confirm("사진 일괄 매칭", "개수가 일치하지 않습니다 — " + msg + ". " + matches.length + "건만 매칭해 진행할까요?")) return;
       }
       this._busy = true;
       const runBtn = document.getElementById("btn-photobatch-run");
