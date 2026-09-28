@@ -391,6 +391,33 @@ async function suitePromptChain(label, src) {
   ok(modal._cls.has("hidden"), "닫은 뒤에는 숨겨진다(종전 동작 유지)");
 }
 
+/* ═════ 7. 복사본 영역을 열면 페이지 전체가 화면에 맞춰진다("크게") — 라이브 실측: 종전엔 100% 좌상단 ═════ */
+async function suiteFitOnOpen(label, src) {
+  console.log("\n[" + label + "]");
+  const run = (deck, complete) => {
+    const calls = { fit: 0, fitZone: 0 }; let onLoad = null;
+    const img = { complete, naturalWidth: complete ? 100 : 0, addEventListener: (t, f) => { if (t === "load") onLoad = f; } };
+    const sb = { console, JSON, Math, Promise, setTimeout,
+      requestAnimationFrame: (f) => f(),
+      document: { getElementById: (id) => (id === "map-image" ? img : null), body: { classList: { toggle() {} } } },
+      PDF: { setDeckCrop() {} }, MapCtrl: { fit: () => calls.fit++, fitZone: () => calls.fitZone++ } };
+    vm.createContext(sb);
+    vm.runInContext(src + "\n;globalThis.__J = Projects;", sb);
+    sb.__J._applyDeckCropView(deck);
+    const beforeLoad = calls.fit;
+    if (onLoad) onLoad();
+    return { beforeLoad, ...calls };
+  };
+  const a = run({ id: "r", crop: null, parent_id: "root" }, false);
+  ok(a.beforeLoad === 0 && a.fit === 1, `복사본 영역 · 이미지 로드 전 → 로드 이벤트 뒤에 맞춤 1회 (전 ${a.beforeLoad} / 후 ${a.fit})`);
+  const b = run({ id: "r", crop: null, parent_id: "root" }, true);
+  ok(b.fit === 1, "복사본 영역 · 이미 로드됨 → 곧바로 맞춤 1회");
+  const c = run({ id: "root", crop: null, parent_id: null }, true);
+  ok(c.fit === 0, "루트 구역(부모 없음) → 종전 동작(맞춤 호출 0)");
+  const d = run({ id: "w", crop: { x: 1, y: 1, w: 5, h: 5 }, parent_id: "root" }, true);
+  ok(d.fit === 0 && d.fitZone === 1, "창 방식 영역(crop) → 종전 fitZone 경로");
+}
+
 /* ═════ 실행 ═════ */
 const P = loadPDF();
 await suiteBox("1. crop % → PDF 상자(실제 pdf.js 대조)", P);
@@ -399,6 +426,7 @@ suiteMismatch(P);
 await suiteFlow("4. extractRegionAsDeck 흐름", P);
 await suiteApp("5. App 경계(원본 등록·복사본 저장)", appSrc);
 await suitePromptChain("6. Prompt.confirm 연달아 띄우기", promptSrc);
+await suiteFitOnOpen("7. 복사본 영역 열기 = 페이지 맞춤", projSrc);
 
 /* ═════ 뮤테이션 ═════ */
 async function mutate(label, run) {
@@ -446,6 +474,12 @@ console.log("\n[뮤테이션]");
   ok(promptSrc.includes(needle), "M4 대상 존재");
   await mutate("M4 확인창 지연 숨김 타이머 취소 제거", async () => { await suitePromptChain("M4", promptSrc.replace(needle, "")
     .replace('modal._hideTimer = setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);', 'setTimeout(() => modal.classList.add("hidden"), 200);')); });
+}
+
+{
+  const needle = "else if (!crop && d && d.parent_id && typeof MapCtrl !== \"undefined\" && MapCtrl.fit) {";
+  ok(projSrc.includes(needle), "M5 대상 존재");
+  await mutate("M5 복사본 영역 열기 맞춤 제거", async () => { await suiteFitOnOpen("M5", projSrc.replace(needle, "else if (false) {")); });
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nALL PASS");

@@ -65,7 +65,7 @@
 
     async deleteProject() {
       if (!this.currentProject) return;
-      if (!confirm(`'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
+      if (!await Prompt.confirm("프로젝트 삭제", `'${this.currentProject.name}' 프로젝트와 모든 데크를 삭제할까요?`)) return;
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 프로젝트를 삭제할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       try {
         await fetch("/api/projects/" + this.currentProject.id, { method: "DELETE", headers: Auth.headers() });
@@ -637,7 +637,7 @@
     },
 
     async deleteDeck(id, name) {
-      if (!confirm(`구역 '${name}' 를 삭제할까요?`)) return;
+      if (!await Prompt.confirm("구역 삭제", `구역 '${name}' 를 삭제할까요?`)) return;
       try {
         await fetch("/api/decks/" + id, { method: "DELETE", headers: Auth.headers() });
         if (this.currentDeck && this.currentDeck.id === id) this.currentDeck = null;
@@ -673,6 +673,16 @@
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
       if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
+      // 🔴 [WO 20260928-copy · 라이브 실측] 복사본 영역(crop 없음 · 부모 있음)은 그 페이지 자체가 영역이다 →
+      //   열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가 이미지 load 때 zoom=1 로
+      //   되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에 불린다 + 한 프레임 뒤).
+      //   루트 구역(부모 없음)은 종전 동작 그대로.
+      else if (!crop && d && d.parent_id && typeof MapCtrl !== "undefined" && MapCtrl.fit) {
+        const img = document.getElementById("map-image");
+        const go = () => { const f = () => MapCtrl.fit(); if (typeof requestAnimationFrame === "function") requestAnimationFrame(f); else f(); };
+        if (img && img.complete && img.naturalWidth) go();
+        else if (img && img.addEventListener) img.addEventListener("load", go, { once: true });
+      }
     },
 
     _renderDecks() {
