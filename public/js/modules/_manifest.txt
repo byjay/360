@@ -2,6 +2,7 @@
 01_State.js
 01b_PinSeries.js
 01c_ShareLink.js
+01d_ShareGate.js
 02_PDF.js
 03_Log.js
 04_Cloud.js

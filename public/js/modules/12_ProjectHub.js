@@ -26,6 +26,15 @@
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
       // [P40] 초대 링크 복사
       $("pm-invite-copy") && $("pm-invite-copy").addEventListener("click", () => this._copyInviteLink());
+      // [P63] 뷰어 초대코드 — 발급·복사·공유(폐기는 목록 행에서 위임)
+      $("pm-code-add") && $("pm-code-add").addEventListener("click", () => this.createShareCode());
+      $("pm-code-copy") && $("pm-code-copy").addEventListener("click", () => {
+        const el = $("pm-code-new"); if (el) this._copyDeployUrl(el.value);
+      });
+      $("pm-code-share") && $("pm-code-share").addEventListener("click", () => {
+        const el = $("pm-code-new");
+        if (el) this._shareDeployUrl(el.value, "뷰어 초대코드");
+      });
       // [P53] 초대 링크 공유 — navigator.share() 는 사용자 제스처 안에서 동기 호출해야 하므로
       //   이 핸들러 자체를 async 로 만들지 않는다(await 를 앞세우면 제스처가 끊겨 브라우저가 거부한다).
       $("pm-invite-share") && $("pm-invite-share").addEventListener("click", () => this._shareInviteLink());
@@ -93,8 +102,12 @@
         const baseEl = document.getElementById("pm-sub-base"); if (baseEl && t && t.base) baseEl.textContent = t.base;
         if (p.subdomain && t && t.base) this._renderSubdomainStatus(p.subdomain, "https://" + p.subdomain + "." + t.base);
       } catch (e) {}
+      // [P63] 직전 발급물은 모달을 열 때마다 감춘다 — 원문은 발급 순간에만 존재한다.
+      const codeBox = document.getElementById("pm-code-new-box"); if (codeBox) codeBox.classList.add("hidden");
+      const codeErr = document.getElementById("pm-code-error"); if (codeErr) codeErr.classList.add("hidden");
+      const codeLbl = document.getElementById("pm-code-label"); if (codeLbl) codeLbl.value = "";
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
-      await Promise.all([this.loadMembers(), this.loadAccessReqs(), this.loadPendingInvites()]);
+      await Promise.all([this.loadMembers(), this.loadAccessReqs(), this.loadPendingInvites(), this.loadShareCodes()]);
     },
     closeMembers() {
       const m = document.getElementById("proj-members-modal");
@@ -346,6 +359,13 @@
     },
 
     async load() {
+      // [P63] 공유·배포 링크 세션은 프로젝트 목록을 아예 불러오지도·그리지도 않는다.
+      if (this._isShareEntry()) {
+        this.list = []; this._loaded = true;
+        const grid = document.getElementById("hub-grid"); if (grid) grid.innerHTML = "";
+        const empty = document.getElementById("hub-empty"); if (empty) empty.classList.add("hidden");
+        return;
+      }
       // [마스터 핵심 워크플로 — 오프라인] 끊긴 상태면 서버 대신 다운로드한 번들(IndexedDB)에서
       //   프로젝트 목록을 복원한다. (폰에서 오프라인으로 앱을 열어도 받아둔 프로젝트가 보임)
       if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
@@ -738,6 +758,18 @@
      *  에서 조회)로 만든 뷰어 딥링크(?d=). 현재 접속 호스트에서만 파생한다(도메인 하드코딩 금지).
      *  🔴 사이트 루트 폴백 금지 — 루트 주소는 프로젝트를 식별하지 못해 공유해도 쓸모가 없다.
      *  둘 다 없으면(도면 미등록) 빈 문자열 반환 → 카드에 주소 행 자체가 생기지 않는다(거짓 주소보다 낫다). */
+    /** [P63] 공유·배포 링크로 들어온 진입인가 — 허브를 그리면 안 되는 상황의 단일 판정원.
+     *  🔴 라이브에서 실측: 초대코드 모달 뒤로 **다른 프로젝트 이름들이 그대로 비쳤다.**
+     *  그러면 "다른 프로젝트를 유추할 수 없도록"(마스터 2026-09-18) 요구가 깨진다.
+     *  ⚠️ 이 헬퍼를 open() 과 load() **사이**에 두지 마라 — p24 가 그 두 함수의 인접성을 기준으로
+     *     open() 본문을 잘라낸다(실제로 한 번 깨뜨렸다). URL 파생이라 _deployUrl 옆이 제자리다. */
+    _isShareEntry() {
+      try {
+        if (typeof ShareLink !== "undefined" && ShareLink.token()) return true;
+        return !!new URLSearchParams(location.search).get("d");
+      } catch (e) { return false; }
+    },
+
     _deployUrl(p) {
       if (!p) return "";
       const loc = (typeof location !== "undefined") ? location : { hostname: "", protocol: "https:", origin: "" };
@@ -764,6 +796,85 @@
       }
       return "";
     },
+    /* ══ [P63] 뷰어 초대코드 관리 — 유출 대응 3종(폐기·만료·기록)의 UI 측 ══
+     * 마스터 "그런데 그 링크가 유출된다면?" → 링크만 샐다면 코드에서 막히고,
+     * 코드까지 샐다면 **즉시 폐기**한다. 그래서 폐기 버튼은 목록 모든 행에 있다. */
+    async loadShareCodes() {
+      const box = document.getElementById("pm-code-list");
+      if (!box || !this._memProject) return;
+      box.innerHTML = "";
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(this._memProject.id) + "/share-codes", { headers: Auth.headers() });
+        if (!r.ok) { box.innerHTML = '<div class="pm-sub-hint">코드 목록을 불러오지 못했습니다.</div>'; return; }
+        const { data } = await r.json();
+        this._renderShareCodes(data || []);
+      } catch (e) {
+        box.innerHTML = '<div class="pm-sub-hint">코드 목록을 불러오지 못했습니다(오프라인).</div>';
+      }
+    },
+    _renderShareCodes(list) {
+      const box = document.getElementById("pm-code-list");
+      if (!box) return;
+      if (!list.length) {
+        // 🔴 코드가 하나도 없으면 게이트가 꺼져 있다 — 그 사실을 숨기지 않는다.
+        box.innerHTML = '<div class="pm-sub-hint">⚠ 발급된 코드가 없습니다 — 지금은 <b>링크를 가진 누구나</b> 열람합니다. 코드를 1개 발급하면 즉시 잠꺑니다.</div>';
+        return;
+      }
+      box.innerHTML = "";
+      list.forEach((c) => {
+        const row = document.createElement("div");
+        row.className = "member-row";
+        const state = c.revoked ? "🚫 폐기됨" : (c.active ? "● 사용가능" : "⏱ 만료됨");
+        const exp = c.expires_at ? this._fmtDate(c.expires_at) + " 만료" : "무기한";
+        const used = (c.use_count || 0) + "회" + (c.last_used_at ? (" · 최근 " + this._fmtDate(c.last_used_at)) : "");
+        row.innerHTML =
+          '<div class="member-info"><span class="member-email">' + UI.escapeHtml(c.label) + '</span>' +
+          '<span class="member-role">' + state + ' · ' + UI.escapeHtml(String(c.code_hint || "")) + '… · ' + exp + ' · ' + used + '</span></div>';
+        if (!c.revoked) {
+          const btn = document.createElement("button");
+          btn.className = "member-del"; btn.type = "button"; btn.title = "코드 폐기(즉시 차단)";
+          btn.textContent = "폐기";
+          btn.addEventListener("click", () => this.revokeShareCode(c.id, c.label));
+          row.appendChild(btn);
+        }
+        box.appendChild(row);
+      });
+    },
+    async createShareCode() {
+      const errEl = document.getElementById("pm-code-error");
+      const show = (m) => { if (errEl) { errEl.textContent = m; errEl.classList.remove("hidden"); } };
+      if (errEl) errEl.classList.add("hidden");
+      if (!this._memProject) return;
+      const label = (document.getElementById("pm-code-label") || {}).value || "";
+      const ttl = (document.getElementById("pm-code-ttl") || {}).value || "";
+      if (!label.trim()) { show("발급 단위 이름을 적으세요 — 유출 시 이 단위로 폐기합니다."); return; }
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(this._memProject.id) + "/share-codes", {
+          method: "POST", headers: Auth.headers(),
+          body: JSON.stringify({ label: label.trim(), ttl_days: ttl ? Number(ttl) : undefined })
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.code) { show((j && j.error) || "코드 발급에 실패했습니다."); return; }
+        const box = document.getElementById("pm-code-new-box");
+        const out = document.getElementById("pm-code-new");
+        if (out) out.value = j.code;            // 🔴 원문은 이 순간에만 존재한다(DB 는 해시만 보관)
+        if (box) box.classList.remove("hidden");
+        const lbl = document.getElementById("pm-code-label"); if (lbl) lbl.value = "";
+        Prompt && Prompt.toast && Prompt.toast("초대코드를 발급했습니다 — 지금 복사해 전달하세요.", 3200);
+        await this.loadShareCodes();
+      } catch (e) { show("네트워크 오류입니다."); }
+    },
+    async revokeShareCode(id, label) {
+      const ok = await Prompt.confirm("코드 폐기", "'" + label + "' 코드를 폐기할까요?\n\n이 코드로 들어오던 사람은 즉시 막힘니다(이미 통과한 세션도 만료 시 재입력 필요).");
+      if (!ok) return;
+      try {
+        const r = await fetch("/api/share-codes/" + encodeURIComponent(id) + "/revoke", { method: "POST", headers: Auth.headers(), body: "{}" });
+        if (!r.ok) { Prompt && Prompt.toast && Prompt.toast("폐기에 실패했습니다."); return; }
+        Prompt && Prompt.toast && Prompt.toast("코드를 폐기했습니다.");
+        await this.loadShareCodes();
+      } catch (e) { Prompt && Prompt.toast && Prompt.toast("네트워크 오류입니다."); }
+    },
+
     /** 배포 주소 복사 — _copyInviteLink 와 동일한 클립보드 우선순위(SoT), 복사 후 알림 필수(조용한 실패 금지). */
     _copyDeployUrl(url) {
       if (!url) return;

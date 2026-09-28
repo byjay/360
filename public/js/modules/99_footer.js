@@ -36,14 +36,26 @@
     if (shareTok) {
       State.viewerLocked = true;
       (async () => {
+        // [P63] 🔴 도면보다 **먼저** 초대코드 게이트를 지난다. 통과 전에는 서버가 데이터를 주지 않으므로
+        //   여기서 먼저 통행증을 받아야 뒤의 열람 요청이 성립한다(UI 가리기가 아니다).
+        if (typeof ShareGate !== "undefined") await ShareGate.ensure({ t: shareTok });
         const j = await ShareLink.resolve();
-        // 해석 실패(오프라인/링크 해제)여도 설계자 화면으로 새지 않는다 — 잠긴 뷰어 유지.
-        App.openApp("viewer", (j && j.project) ? { project: { id: j.project.id, name: j.project.name } } : undefined);
+        if (!j || !j.project) {
+          // 해석 실패(링크 해제/삭제) — 조용한 빈 화면 대신 이유와 재요청처를 보여준다.
+          if (typeof ShareGate !== "undefined") ShareGate.showDeadLink();
+          return;
+        }
+        App.openApp("viewer", { project: { id: j.project.id, name: j.project.name } });
       })();
     } else if (depId) {
       // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
       State.viewerLocked = true;
-      App.openApp("viewer");
+      (async () => {
+        // [P63] 🔴 `?d=` 에도 같은 게이트를 적용한다 — 적용하지 않으면 이 경로가 게이트 우회로가 된다.
+        //   링크가 죽는 게 아니라 코드 입력 화면이 먼저 뜰 뿐이라 하위호환은 그대로다.
+        if (typeof ShareGate !== "undefined") await ShareGate.ensure({ d: depId });
+        App.openApp("viewer");
+      })();
     } else if (urlMode === "designer") {
       // 설계자 직접 진입 — 로그인+디자이너 권한 필요, 통과 시 프로젝트 허브로
       Auth.requireDesigner(() => ProjectHub.open());

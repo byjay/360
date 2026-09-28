@@ -295,11 +295,44 @@ console.log("\n[③ 토큰 엔트로피 · 암호난수 · 저장 형태]");
   ok(bits >= 64, "③g 엔트로피 " + bits + "비트 ≥ 64비트");
 
   // 🔴 저장 형태 판단 근거 — 초대 토큰(sha256Hex 해시 저장)과 달리 **평문**으로 저장한다.
+  //   [P63] 판정: 과거엔 소스 전체에서 /sha256Hex\([^)]*share/i 를 찾아 "없으면 평문"이라 판정했는데,
+  //   뒤에 추가된 **초대코드** 해시 sha256Hex(normalizeShareCode(...)) 가 같은 패턴에 걸려 오탐이 났다.
+  //   검사 대상은 "공유 **토큰**을 다루는 두 함수"뿐이므로 그 본문만 정확히 떼어내 본다.
   const idx = rd("src/index.tsx");
-  ok(/share_token = \?/.test(idx) && !/sha256Hex\([^)]*share/i.test(idx),
+  const fnBody = (name) => {
+    const i = idx.indexOf("function " + name + "(");
+    if (i < 0) return null;
+    const open = idx.indexOf("{", i);
+    let d = 0;
+    for (let k = open; k < idx.length; k++) {
+      if (idx[k] === "{") d++;
+      else if (idx[k] === "}") { d--; if (d === 0) return idx.slice(i, k + 1); }
+    }
+    return null;
+  };
+  const ensureFn = fnBody("ensureShareToken"), lookupFn = fnBody("projectByShareToken");
+  ok(!!ensureFn && !!lookupFn, "③h-0 사전조건 — ensureShareToken/projectByShareToken 본문을 찾았다");
+  ok(!!ensureFn && !/sha256Hex/.test(ensureFn), "③h-1 저장 경로(ensureShareToken)가 토큰을 해싱하지 않는다(평문 저장)");
+  ok(!!lookupFn && !/sha256Hex/.test(lookupFn), "③h-2 조회 경로(projectByShareToken)가 URL 토큰을 그대로 대조한다(해시 경유 아님)");
+  ok(/UPDATE projects SET share_token = \?/.test(idx) && /WHERE share_token = \? AND deleted = 0/.test(idx),
     "③h DB 에는 토큰 **평문** 저장 — 근거: 이 링크는 허브 카드에서 **반복 재표시·복사**되어야 한다" +
     "(초대 토큰처럼 1회 발급 후 버리는 값이 아니다). 해시 저장이면 다시 보여줄 수 없다." +
     " 잔여위험: DB 읽기 권한자는 전 프로젝트 링크를 얻는다 — 단 그 권한자는 이미 프로젝트 데이터 전체를 읽을 수 있으므로 추가 노출 0.");
+}
+
+{
+  const idx0 = rd("src/index.tsx");
+  const mutated = idx0.replace(
+    "  if (!isShareToken(token)) return null",
+    "  if (!isShareToken(token)) return null" + String.fromCharCode(10) + "  token = await sha256Hex(token)");
+  if (mutated === idx0) { console.log("  FAIL mutation target not found (projectByShareToken)"); failed++; }
+  else {
+    const i = mutated.indexOf("function projectByShareToken(");
+    const open = mutated.indexOf("{", i);
+    let d = 0, body = "";
+    for (let k = open; k < mutated.length; k++) { if (mutated[k] === "{") d++; else if (mutated[k] === "}") { d--; if (d === 0) { body = mutated.slice(i, k + 1); break; } } }
+    ok(/sha256Hex/.test(body), "뮤테이션ⓑ-2 적용 시 조회 경로가 해싱을 타게 되어 ③h-2 가 깨진다");
+  }
 }
 
 console.log("\n[뮤테이션ⓑ] 토큰 생성기를 비암호 PRNG 로 바꾸면 ③이 실패해야 함");

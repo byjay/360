@@ -80,6 +80,42 @@ export function shareTokenFromSegment(seg: string): string | null {
   return isShareToken(t) ? t : null
 }
 
+/* ══ [P63] 뷰어 초대코드 — 공유 링크 게이트의 **유일한 열쇠** ═══════════════
+ * 사람이 카톡/전화로 전달하고 손으로 입력하는 값이라, 강도와 타이핑 편의를 둘 다 만족해야 한다.
+ *   · Crockford base32(혼동문자 i·l·o·u 제외) 15자 = **75비트** — 해시 저장이 안전한 하한을 넘는다.
+ *   · 5자씩 하이픈으로 끊어 보여준다(xxxxx-xxxxx-xxxxx) — 구두 전달/입력 오류 감소.
+ *   · 입력은 대소문자·하이픈·공백 무관하게 정규화하고 O→0, I/L→1 로 교정한다. */
+const CROCKFORD32 = '0123456789abcdefghjkmnpqrstvwxyz'
+
+/** [P63] 초대코드 생성 — 🔴 암호난수(crypto.getRandomValues)만 사용한다.
+ *  비암호 PRNG 는 출력 몇 개로 내부 상태가 복원돼 다른 협력사 코드를 예측당한다
+ *  (randInviteToken/randShareToken 과 동일 원칙). 반환값은 하이픈 포함 표시형이다. */
+export function randShareCode(): string {
+  const a = new Uint8Array(10)   // 80비트 뽑아 75비트 사용
+  crypto.getRandomValues(a)
+  let acc = 0, bits = 0, out = ''
+  for (const x of a) {
+    acc = (acc << 8) | x; bits += 8
+    while (bits >= 5 && out.length < 15) { bits -= 5; out += CROCKFORD32[(acc >> bits) & 31] }
+  }
+  return out.slice(0, 5) + '-' + out.slice(5, 10) + '-' + out.slice(10, 15)
+}
+
+/** [P63] 입력 코드 정규화 — 표시형/구두전달 오차를 흡수해 **해시 대조 전 단일 형태**로 만든다. */
+export function normalizeShareCode(raw: string): string {
+  return String(raw || '').toLowerCase()
+    .replace(/[^0-9a-z]/g, '')     // 하이픈·공백 제거
+    .replace(/o/g, '0')            // O ↔ 0
+    .replace(/[il]/g, '1')         // I, L ↔ 1
+    .replace(/u/g, 'v')            // Crockford 규약: U 는 쓰지 않는다 → 오타로 보고 V 로
+    .slice(0, 32)
+}
+
+/** [P63] 코드 형식 검증 — 정규화 후 15자 Crockford 알파벳. */
+export function isShareCode(raw: string): boolean {
+  return /^[0123456789abcdefghjkmnpqrstvwxyz]{15}$/.test(normalizeShareCode(raw))
+}
+
 /** SHA-256 hex. 초대 토큰(고엔트로피)의 저장용 해시 — 원문 추측이 불가하므로 스트레칭 불필요. */
 export async function sha256Hex(s: string): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))

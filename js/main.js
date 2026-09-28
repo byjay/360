@@ -694,6 +694,167 @@
     }
   };
 
+  /* ══════════════════════════════════════════════════════════════════
+     [P63] ShareGate — 공유 링크 진입 시 "누구인지 남기고" 들어오게 하는 게이트
+
+     마스터 확정(2026-09-21): "1단계 = 접속 기록 / 차단은 초대 계정" → "좋아 그렇게 해. 초대코드"
+       [회사명][이름][초대코드] → 코드 유효면 열람 + 기록 / 무효면 거부 + 재요청처 안내
+
+     🔴 열쇠는 **초대코드 하나**다. 회사명·이름은 자기 신고라 신뢰하지 않고 기록만 한다
+        (대조할 명단이 DB 에 없다 — 없는 대조를 흉내내면 거짓 보안이 된다).
+     🔴 차단의 최종 방어선은 이 모달이 아니라 **서버 미들웨어**다(src/index.tsx 의 게이트 가드).
+        여기는 "UI 를 가린다"가 아니라 "통행증을 받아온다"가 역할이다.
+     🔴 마스터 "그 링크가 유출된다면?" → 링크만 유출되면 여기서 막힌다.
+        코드까지 유출되면 폐기(revoke)·만료·접속기록으로 대응한다(서버 3종 모두 구현).
+  ══════════════════════════════════════════════════════════════════ */
+  const ShareGate = {
+    /** 🔴 사용자에게 보여줄 문의 주소. 서버 SUPPORT_CONTACT_EMAIL 과 같은 값이어야 한다.
+     *  개발 관리자 gmail 주소는 어떤 화면에도 쓰지 않는다(마스터 확정). */
+    CONTACT: "designsir@seastargo.com",
+    /** 통행증 보관 키 — 프로젝트별로 따로 둔다(한 브라우저가 여러 현장을 볼 수 있다). */
+    _passKey(pid) { return "wm_share_pass_" + pid; },
+
+    ctx: null,        // { t } 또는 { d } — 어느 링크로 들어왔는지
+    project: null,
+    deploymentId: null,
+
+    /** 저장해 둔 통행증 꺼내기(만료 지난 건 버린다). */
+    storedPass(pid) {
+      try {
+        const raw = localStorage.getItem(this._passKey(pid));
+        if (!raw) return null;
+        const j = JSON.parse(raw);
+        if (!j || !j.token || (j.exp && j.exp < Date.now())) { localStorage.removeItem(this._passKey(pid)); return null; }
+        return j.token;
+      } catch (e) { return null; }
+    },
+    savePass(pid, token, exp) {
+      try { localStorage.setItem(this._passKey(pid), JSON.stringify({ token, exp })); } catch (e) {}
+    },
+
+    /** 통행증을 현재 세션 토큰으로 승격. 🔴 서버가 kind='viewer' 로 강제 서명하므로 쓰기 권한은 생기지 않는다. */
+    _useToken(token) {
+      if (!token || typeof Auth === "undefined") return;
+      Auth.idToken = token;
+      try { sessionStorage.setItem("wm_id_token", token); } catch (e) {}
+    },
+
+    /** 게이트 상태 조회. 반환 null = 링크 자체가 유효하지 않음. */
+    async check(ctx) {
+      this.ctx = ctx;
+      const q = ctx.t ? ("t=" + encodeURIComponent(ctx.t)) : ("d=" + encodeURIComponent(ctx.d || ""));
+      try {
+        const r = await fetch("/api/share-gate?" + q, { headers: (typeof Auth !== "undefined" && Auth.headers) ? Auth.headers() : {} });
+        if (!r.ok) return null;
+        const j = await r.json();
+        if (!j || !j.matched) return null;
+        this.project = j.project || null;
+        this.deploymentId = j.deployment_id || null;
+        return j;
+      } catch (e) { return null; }   // 오프라인 → 정직하게 실패(통과시키지 않는다)
+    },
+
+    /** 🔴 진입 지점: 필요하면 통행증을 확보한다. true = 열람 가능. */
+    async ensure(ctx) {
+      // ① 저장된 통행증이 있으면 먼저 제시한다(요구 11: 재입력 없이 계속 열람)
+      let info = await this.check(ctx);
+      // 🔴 프로젝트를 특정할 수 없으면(구 배포본에 decks 행이 없는 등) 게이트를 걸 수 없다.
+      //   서버 가드도 같은 조건에서 통과시킨다 — 클라가 더 엄격하면 **레거시 `?d=` 링크만 죽는다**.
+      //   차단의 정본은 어차피 서버이므로 여기서 더 막아도 보안은 늘지 않고 회귀만 생긴다.
+      if (!info) return true;
+      if (!info.gated) return true;                    // 코드 미발급 프로젝트 = 게이트 꺼짐
+      if (info.passed) return true;
+      const saved = this.storedPass(info.project.id);
+      if (saved) {
+        this._useToken(saved);
+        if (typeof Auth !== "undefined" && Auth.refresh) { try { await Auth.refresh(); } catch (e) {} }
+        info = await this.check(ctx);
+        if (info && info.passed) return true;
+        try { localStorage.removeItem(this._passKey(ctx._pid || (this.project && this.project.id))); } catch (e) {}
+      }
+      // ② 입력 화면
+      return await this.prompt();
+    },
+
+    /** 코드 입력 모달. 통과할 때까지(또는 포기할 때까지) 떠 있는다 — 열람 전에 반드시 지난다. */
+    prompt() {
+      const $ = (id) => document.getElementById(id);
+      const modal = $("share-gate-modal");
+      if (!modal) return Promise.resolve(false);
+      const nameEl = $("sg-proj-name");
+      if (nameEl) nameEl.textContent = (this.project && this.project.name) || "";
+      const note = $("sg-contact-note");
+      if (note) note.textContent = "코드를 못 받으셨나요? " + this.CONTACT + " 으로 링크를 다시 요청하세요.";
+      const err = $("sg-error");
+      const show = (msg) => { if (err) { err.textContent = msg; err.classList.remove("hidden"); } };
+      const hideErr = () => { if (err) err.classList.add("hidden"); };
+      // 🔴 .admin-gate 는 `hidden` 을 빼는 것만으로는 보이지 않는다 — style.css:558 에서
+      //   opacity:0 · pointer-events:none 이고 `.on` 이 붙어야 보이고 클릭된다.
+      //   (라이브에서 실제로 모달이 뜼긴 했는데 버튼이 안 눌렸다 — 기존 모달들과 동일 패턴을 따른다)
+      modal.classList.remove("hidden");
+      requestAnimationFrame(() => modal.classList.add("on"));
+      const company = $("sg-company"), person = $("sg-name"), code = $("sg-code"), btn = $("sg-submit");
+      try { if (company) company.value = localStorage.getItem("wm_share_company") || ""; } catch (e) {}
+      try { if (person) person.value = localStorage.getItem("wm_share_person") || ""; } catch (e) {}
+      if (company) company.focus();
+
+      return new Promise((resolve) => {
+        const submit = async () => {
+          hideErr();
+          const body = {
+            company: (company && company.value || "").trim(),
+            name: (person && person.value || "").trim(),
+            code: (code && code.value || "").trim(),
+          };
+          if (this.ctx && this.ctx.t) body.t = this.ctx.t; else if (this.ctx) body.d = this.ctx.d;
+          if (!body.company || !body.name) { show("회사명과 이름을 입력하세요."); return; }
+          if (!body.code) { show("초대코드를 입력하세요."); return; }
+          if (btn) { btn.disabled = true; btn.textContent = "확인 중…"; }
+          let j = null;
+          try {
+            const r = await fetch("/api/share/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+              // 🔴 거부 사유와 **재요청처**를 반드시 보여준다(조용한 실패 금지).
+              show((j && j.message) || ("초대코드가 올바르지 않습니다. " + this.CONTACT + " 으로 링크를 다시 요청하세요."));
+              return;
+            }
+          } catch (e) {
+            show("네트워크 오류입니다. 잠시 후 다시 시도하세요."); return;
+          } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "열람하기"; }
+          }
+          try { localStorage.setItem("wm_share_company", body.company); localStorage.setItem("wm_share_person", body.name); } catch (e) {}
+          this.savePass(j.project.id, j.token, j.exp);
+          this._useToken(j.token);
+          if (typeof Auth !== "undefined" && Auth.refresh) { try { await Auth.refresh(); } catch (e) {} }
+          modal.classList.remove("on");
+          modal.classList.add("hidden");
+          resolve(true);
+        };
+        if (btn) btn.addEventListener("click", submit);
+        [company, person, code].forEach((el) => {
+          if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+        });
+      });
+    },
+
+    /** 링크 자체가 무효할 때(삭제/미배포) — 조용히 빈 화면을 주지 않는다. */
+    showDeadLink() {
+      const modal = document.getElementById("share-gate-modal");
+      if (!modal) return;
+      const $ = (id) => document.getElementById(id);
+      const t = $("sg-title"); if (t) t.textContent = "링크를 찾을 수 없습니다";
+      const sub = modal.querySelector(".admin-gate-sub");
+      if (sub) sub.textContent = "주소가 정확하지 않거나, 공유가 해제된 링크입니다.";
+      ["sg-company", "sg-name", "sg-code", "sg-submit"].forEach((id) => { const e = $(id); if (e) e.classList.add("hidden"); });
+      const note = $("sg-contact-note");
+      if (note) note.textContent = this.CONTACT + " 으로 링크를 다시 요청하세요.";
+      modal.classList.remove("hidden");
+      requestAnimationFrame(() => modal.classList.add("on"));
+    }
+  };
+
   const PDF = {
     // 로컬 번들 worker 우선(외부 CDN worker가 차단/지연될 때 PDF가 무한 로딩되는 문제 방지)
     WORKER_SRC: "/vendor/pdf.worker.min.js",
@@ -4999,6 +5160,15 @@
       if (pmEmail) pmEmail.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.addMember(); } });
       // [P40] 초대 링크 복사
       $("pm-invite-copy") && $("pm-invite-copy").addEventListener("click", () => this._copyInviteLink());
+      // [P63] 뷰어 초대코드 — 발급·복사·공유(폐기는 목록 행에서 위임)
+      $("pm-code-add") && $("pm-code-add").addEventListener("click", () => this.createShareCode());
+      $("pm-code-copy") && $("pm-code-copy").addEventListener("click", () => {
+        const el = $("pm-code-new"); if (el) this._copyDeployUrl(el.value);
+      });
+      $("pm-code-share") && $("pm-code-share").addEventListener("click", () => {
+        const el = $("pm-code-new");
+        if (el) this._shareDeployUrl(el.value, "뷰어 초대코드");
+      });
       // [P53] 초대 링크 공유 — navigator.share() 는 사용자 제스처 안에서 동기 호출해야 하므로
       //   이 핸들러 자체를 async 로 만들지 않는다(await 를 앞세우면 제스처가 끊겨 브라우저가 거부한다).
       $("pm-invite-share") && $("pm-invite-share").addEventListener("click", () => this._shareInviteLink());
@@ -5066,8 +5236,12 @@
         const baseEl = document.getElementById("pm-sub-base"); if (baseEl && t && t.base) baseEl.textContent = t.base;
         if (p.subdomain && t && t.base) this._renderSubdomainStatus(p.subdomain, "https://" + p.subdomain + "." + t.base);
       } catch (e) {}
+      // [P63] 직전 발급물은 모달을 열 때마다 감춘다 — 원문은 발급 순간에만 존재한다.
+      const codeBox = document.getElementById("pm-code-new-box"); if (codeBox) codeBox.classList.add("hidden");
+      const codeErr = document.getElementById("pm-code-error"); if (codeErr) codeErr.classList.add("hidden");
+      const codeLbl = document.getElementById("pm-code-label"); if (codeLbl) codeLbl.value = "";
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
-      await Promise.all([this.loadMembers(), this.loadAccessReqs(), this.loadPendingInvites()]);
+      await Promise.all([this.loadMembers(), this.loadAccessReqs(), this.loadPendingInvites(), this.loadShareCodes()]);
     },
     closeMembers() {
       const m = document.getElementById("proj-members-modal");
@@ -5319,6 +5493,13 @@
     },
 
     async load() {
+      // [P63] 공유·배포 링크 세션은 프로젝트 목록을 아예 불러오지도·그리지도 않는다.
+      if (this._isShareEntry()) {
+        this.list = []; this._loaded = true;
+        const grid = document.getElementById("hub-grid"); if (grid) grid.innerHTML = "";
+        const empty = document.getElementById("hub-empty"); if (empty) empty.classList.add("hidden");
+        return;
+      }
       // [마스터 핵심 워크플로 — 오프라인] 끊긴 상태면 서버 대신 다운로드한 번들(IndexedDB)에서
       //   프로젝트 목록을 복원한다. (폰에서 오프라인으로 앱을 열어도 받아둔 프로젝트가 보임)
       if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
@@ -5711,6 +5892,18 @@
      *  에서 조회)로 만든 뷰어 딥링크(?d=). 현재 접속 호스트에서만 파생한다(도메인 하드코딩 금지).
      *  🔴 사이트 루트 폴백 금지 — 루트 주소는 프로젝트를 식별하지 못해 공유해도 쓸모가 없다.
      *  둘 다 없으면(도면 미등록) 빈 문자열 반환 → 카드에 주소 행 자체가 생기지 않는다(거짓 주소보다 낫다). */
+    /** [P63] 공유·배포 링크로 들어온 진입인가 — 허브를 그리면 안 되는 상황의 단일 판정원.
+     *  🔴 라이브에서 실측: 초대코드 모달 뒤로 **다른 프로젝트 이름들이 그대로 비쳤다.**
+     *  그러면 "다른 프로젝트를 유추할 수 없도록"(마스터 2026-09-18) 요구가 깨진다.
+     *  ⚠️ 이 헬퍼를 open() 과 load() **사이**에 두지 마라 — p24 가 그 두 함수의 인접성을 기준으로
+     *     open() 본문을 잘라낸다(실제로 한 번 깨뜨렸다). URL 파생이라 _deployUrl 옆이 제자리다. */
+    _isShareEntry() {
+      try {
+        if (typeof ShareLink !== "undefined" && ShareLink.token()) return true;
+        return !!new URLSearchParams(location.search).get("d");
+      } catch (e) { return false; }
+    },
+
     _deployUrl(p) {
       if (!p) return "";
       const loc = (typeof location !== "undefined") ? location : { hostname: "", protocol: "https:", origin: "" };
@@ -5737,6 +5930,85 @@
       }
       return "";
     },
+    /* ══ [P63] 뷰어 초대코드 관리 — 유출 대응 3종(폐기·만료·기록)의 UI 측 ══
+     * 마스터 "그런데 그 링크가 유출된다면?" → 링크만 샐다면 코드에서 막히고,
+     * 코드까지 샐다면 **즉시 폐기**한다. 그래서 폐기 버튼은 목록 모든 행에 있다. */
+    async loadShareCodes() {
+      const box = document.getElementById("pm-code-list");
+      if (!box || !this._memProject) return;
+      box.innerHTML = "";
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(this._memProject.id) + "/share-codes", { headers: Auth.headers() });
+        if (!r.ok) { box.innerHTML = '<div class="pm-sub-hint">코드 목록을 불러오지 못했습니다.</div>'; return; }
+        const { data } = await r.json();
+        this._renderShareCodes(data || []);
+      } catch (e) {
+        box.innerHTML = '<div class="pm-sub-hint">코드 목록을 불러오지 못했습니다(오프라인).</div>';
+      }
+    },
+    _renderShareCodes(list) {
+      const box = document.getElementById("pm-code-list");
+      if (!box) return;
+      if (!list.length) {
+        // 🔴 코드가 하나도 없으면 게이트가 꺼져 있다 — 그 사실을 숨기지 않는다.
+        box.innerHTML = '<div class="pm-sub-hint">⚠ 발급된 코드가 없습니다 — 지금은 <b>링크를 가진 누구나</b> 열람합니다. 코드를 1개 발급하면 즉시 잠꺑니다.</div>';
+        return;
+      }
+      box.innerHTML = "";
+      list.forEach((c) => {
+        const row = document.createElement("div");
+        row.className = "member-row";
+        const state = c.revoked ? "🚫 폐기됨" : (c.active ? "● 사용가능" : "⏱ 만료됨");
+        const exp = c.expires_at ? this._fmtDate(c.expires_at) + " 만료" : "무기한";
+        const used = (c.use_count || 0) + "회" + (c.last_used_at ? (" · 최근 " + this._fmtDate(c.last_used_at)) : "");
+        row.innerHTML =
+          '<div class="member-info"><span class="member-email">' + UI.escapeHtml(c.label) + '</span>' +
+          '<span class="member-role">' + state + ' · ' + UI.escapeHtml(String(c.code_hint || "")) + '… · ' + exp + ' · ' + used + '</span></div>';
+        if (!c.revoked) {
+          const btn = document.createElement("button");
+          btn.className = "member-del"; btn.type = "button"; btn.title = "코드 폐기(즉시 차단)";
+          btn.textContent = "폐기";
+          btn.addEventListener("click", () => this.revokeShareCode(c.id, c.label));
+          row.appendChild(btn);
+        }
+        box.appendChild(row);
+      });
+    },
+    async createShareCode() {
+      const errEl = document.getElementById("pm-code-error");
+      const show = (m) => { if (errEl) { errEl.textContent = m; errEl.classList.remove("hidden"); } };
+      if (errEl) errEl.classList.add("hidden");
+      if (!this._memProject) return;
+      const label = (document.getElementById("pm-code-label") || {}).value || "";
+      const ttl = (document.getElementById("pm-code-ttl") || {}).value || "";
+      if (!label.trim()) { show("발급 단위 이름을 적으세요 — 유출 시 이 단위로 폐기합니다."); return; }
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(this._memProject.id) + "/share-codes", {
+          method: "POST", headers: Auth.headers(),
+          body: JSON.stringify({ label: label.trim(), ttl_days: ttl ? Number(ttl) : undefined })
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.code) { show((j && j.error) || "코드 발급에 실패했습니다."); return; }
+        const box = document.getElementById("pm-code-new-box");
+        const out = document.getElementById("pm-code-new");
+        if (out) out.value = j.code;            // 🔴 원문은 이 순간에만 존재한다(DB 는 해시만 보관)
+        if (box) box.classList.remove("hidden");
+        const lbl = document.getElementById("pm-code-label"); if (lbl) lbl.value = "";
+        Prompt && Prompt.toast && Prompt.toast("초대코드를 발급했습니다 — 지금 복사해 전달하세요.", 3200);
+        await this.loadShareCodes();
+      } catch (e) { show("네트워크 오류입니다."); }
+    },
+    async revokeShareCode(id, label) {
+      const ok = await Prompt.confirm("코드 폐기", "'" + label + "' 코드를 폐기할까요?\n\n이 코드로 들어오던 사람은 즉시 막힘니다(이미 통과한 세션도 만료 시 재입력 필요).");
+      if (!ok) return;
+      try {
+        const r = await fetch("/api/share-codes/" + encodeURIComponent(id) + "/revoke", { method: "POST", headers: Auth.headers(), body: "{}" });
+        if (!r.ok) { Prompt && Prompt.toast && Prompt.toast("폐기에 실패했습니다."); return; }
+        Prompt && Prompt.toast && Prompt.toast("코드를 폐기했습니다.");
+        await this.loadShareCodes();
+      } catch (e) { Prompt && Prompt.toast && Prompt.toast("네트워크 오류입니다."); }
+    },
+
     /** 배포 주소 복사 — _copyInviteLink 와 동일한 클립보드 우선순위(SoT), 복사 후 알림 필수(조용한 실패 금지). */
     _copyDeployUrl(url) {
       if (!url) return;
@@ -17188,14 +17460,26 @@
     if (shareTok) {
       State.viewerLocked = true;
       (async () => {
+        // [P63] 🔴 도면보다 **먼저** 초대코드 게이트를 지난다. 통과 전에는 서버가 데이터를 주지 않으므로
+        //   여기서 먼저 통행증을 받아야 뒤의 열람 요청이 성립한다(UI 가리기가 아니다).
+        if (typeof ShareGate !== "undefined") await ShareGate.ensure({ t: shareTok });
         const j = await ShareLink.resolve();
-        // 해석 실패(오프라인/링크 해제)여도 설계자 화면으로 새지 않는다 — 잠긴 뷰어 유지.
-        App.openApp("viewer", (j && j.project) ? { project: { id: j.project.id, name: j.project.name } } : undefined);
+        if (!j || !j.project) {
+          // 해석 실패(링크 해제/삭제) — 조용한 빈 화면 대신 이유와 재요청처를 보여준다.
+          if (typeof ShareGate !== "undefined") ShareGate.showDeadLink();
+          return;
+        }
+        App.openApp("viewer", { project: { id: j.project.id, name: j.project.name } });
       })();
     } else if (depId) {
       // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
       State.viewerLocked = true;
-      App.openApp("viewer");
+      (async () => {
+        // [P63] 🔴 `?d=` 에도 같은 게이트를 적용한다 — 적용하지 않으면 이 경로가 게이트 우회로가 된다.
+        //   링크가 죽는 게 아니라 코드 입력 화면이 먼저 뜰 뿐이라 하위호환은 그대로다.
+        if (typeof ShareGate !== "undefined") await ShareGate.ensure({ d: depId });
+        App.openApp("viewer");
+      })();
     } else if (urlMode === "designer") {
       // 설계자 직접 진입 — 로그인+디자이너 권한 필요, 통과 시 프로젝트 허브로
       Auth.requireDesigner(() => ProjectHub.open());

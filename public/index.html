@@ -1948,6 +1948,34 @@
         <div id="pm-pending-invites-list"></div>
       </div>
 
+      <!-- [P63] 뷰어 초대코드 — 공유 링크를 받은 사람이 입력할 열쇠.
+           🔴 새 화면을 만들지 않고 멤버 모달 안에 붙인다(기존 .pm-access-reqs 패턴 재사용). -->
+      <div id="pm-share-codes" class="pm-access-reqs">
+        <div class="pm-access-reqs-head">🔑 뷰어 초대코드</div>
+        <div class="pm-sub-hint">발급 단위(협력사·현장)별로 만듭니다. 유출되면 해당 코드만 <b>폐기</b>하면 됩니다.
+          코드 원문은 <b>발급 순간에만</b> 보입니다(DB 에는 해시만 저장). 잊으셨으면 새로 발급하세요.</div>
+        <div class="pm-add-row">
+          <input id="pm-code-label" class="admin-gate-input" type="text" autocomplete="off" placeholder="발급 단위 이름 (예: 대한중공업 배관팀)" aria-label="발급 단위 이름" />
+          <select id="pm-code-ttl" class="admin-gate-input pm-role-sel" aria-label="유효기간">
+            <option value="">무기한</option>
+            <option value="30">30일</option>
+            <option value="90">90일</option>
+            <option value="180">180일</option>
+          </select>
+          <button id="pm-code-add" class="admin-gate-btn primary" type="button">＋ 발급</button>
+        </div>
+        <div id="pm-code-error" class="admin-gate-error hidden"></div>
+        <div id="pm-code-new-box" class="pm-invite-link-box hidden">
+          <div class="pm-add-row">
+            <input id="pm-code-new" class="admin-gate-input" type="text" readonly aria-label="발급된 초대코드" />
+            <button id="pm-code-share" class="admin-gate-btn primary pm-share-btn" type="button" aria-label="코드 공유">공유</button>
+            <button id="pm-code-copy" class="admin-gate-btn primary" type="button">복사</button>
+          </div>
+          <div class="pm-sub-hint">🔴 이 창을 닫으면 다시 볼 수 없습니다 — 지금 복사해 전달하세요.</div>
+        </div>
+        <div id="pm-code-list"></div>
+      </div>
+
       <!-- 접근 신청 대기 목록 (관리자용) -->
       <div id="pm-access-reqs" class="pm-access-reqs hidden">
         <div class="pm-access-reqs-head">⏳ 접근 신청 대기</div>
@@ -1985,6 +2013,26 @@
         <button id="par-cancel" class="admin-gate-btn ghost" type="button">취소</button>
         <button id="par-submit" class="admin-gate-btn primary" type="button">신청하기</button>
       </div>
+    </div>
+  </div>
+
+  <!-- [P63] 뷰어 초대코드 게이트 — 공유 링크(/srview/·?d=) 진입 시 **도면보다 먼저** 뜼는 화면.
+       회사명·이름은 자기신고라 기록용이고, 실제 열쇠는 초대코드다.
+       🔴 새 CSS 0 — .admin-gate 패턴 그대로 재사용. -->
+  <div id="share-gate-modal" class="admin-gate hidden" role="dialog" aria-modal="true" aria-labelledby="sg-title">
+    <div class="admin-gate-backdrop"></div>
+    <div class="admin-gate-card">
+      <h2 id="sg-title" class="admin-gate-title">열람 확인</h2>
+      <p class="admin-gate-sub">이 도면은 <b id="sg-proj-name" class="par-proj-name"></b> 의 공유 링크입니다.<br>
+        열람 기록을 위해 <b>회사명·이름</b>을 적고, 받으신 <b>초대코드</b>를 입력하세요.</p>
+      <input id="sg-company" class="admin-gate-input" type="text" autocomplete="organization" placeholder="회사명 (예: 대한중공업)" aria-label="회사명" />
+      <input id="sg-name" class="admin-gate-input" type="text" autocomplete="name" placeholder="이름" aria-label="이름" />
+      <input id="sg-code" class="admin-gate-input" type="text" autocomplete="off" spellcheck="false" placeholder="초대코드 (xxxxx-xxxxx-xxxxx)" aria-label="초대코드" />
+      <div id="sg-error" class="admin-gate-error hidden"></div>
+      <div class="admin-gate-actions">
+        <button id="sg-submit" class="admin-gate-btn primary full" type="button">열람하기</button>
+      </div>
+      <p class="admin-gate-sub" id="sg-contact-note"></p>
     </div>
   </div>
 

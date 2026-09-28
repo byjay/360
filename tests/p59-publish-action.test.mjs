@@ -274,12 +274,22 @@ await withBrowser(async (browser) => {
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[Part C · 구코드 vs 신코드 대조 — PWA confirm() 무음 실패 조건]");
 await withBrowser(async (browser) => {
-  // [WO 20260921 test-fix] HEAD(93dc905)는 이 스위트가 검증하는 fix 자체를 이미 담은 커밋이라
-  // "구코드"로 쓸 수 없다(HEAD를 쓰면 신·구가 동일해져 publishCalls=0 이 재현되지 않는다 — 실측
-  // 확인: HEAD~1 에만 진짜 window.confirm() 버그가 남아있다).
+  // 🔴 [P63 test-fix] 여기는 **HEAD 상대 참조를 쓰면 안 된다.**
+  //   원래 `HEAD~1` 이었는데, 작성 당시 HEAD=93dc905(=fix 커밋)라서 HEAD~1 이 버그본이었다.
+  //   그 뒤 커밋이 3개 쌓이자 HEAD~1 이 "이미 고쳐진 코드"를 가리켜 신·구가 동일해졌고,
+  //   재현이 성립하지 않아 이 검사가 영구 FAIL 로 남았다(실측: publishCalls 구=1, 신=1).
+  //   "버그가 남아 있던 마지막 상태"는 **불변의 과거 사실**이므로 절대 커밋으로 고정한다.
+  //   93dc905 = window.confirm() → Prompt.confirm() 교체 커밋 → 그 부모(^)가 버그본이다.
+  // 🔴 `93dc905^` 로 쓰면 안 된다 — execSync 는 Windows 에서 cmd.exe 를 거치고 `^` 는 cmd 의
+  //   **이스케이프 문자**라 조용히 삼켜진다(= 93dc905 = fix 커밋 자체를 구코드로 쓰게 된다. 실측함).
+  //   `~1` 은 셸 메타문자가 아니라 안전하다.
+  const PRE_FIX_REF = '93dc905~1';   // = 82468ea. togglePublish 가 window.confirm() 을 쓰던 마지막 상태
   let oldProjectHubSrc;
-  try { oldProjectHubSrc = execSync('git show HEAD~1:public/js/modules/12_ProjectHub.js', { cwd: ROOT, encoding: "utf8" }); }
+  try { oldProjectHubSrc = execSync(`git show ${PRE_FIX_REF}:public/js/modules/12_ProjectHub.js`, { cwd: ROOT, encoding: "utf8" }); }
   catch (e) { console.log("  FAIL git show 실패 — 구코드를 가져올 수 없다: " + e.message); failed++; return; }
+  if (!/[^.\w]confirm\(/.test(oldProjectHubSrc)) {
+    console.log("  FAIL 대조군 전제 붕괴 — " + PRE_FIX_REF + " 에 window.confirm() 이 없다(참조가 틀렸다)"); failed++; return;
+  }
 
   async function runWithBrokenConfirm(src, label) {
     let publishCalls = 0;
@@ -311,7 +321,7 @@ await withBrowser(async (browser) => {
     return publishCalls;
   }
 
-  const oldCalls = await runWithBrokenConfirm(oldProjectHubSrc, "구코드(HEAD)");
+  const oldCalls = await runWithBrokenConfirm(oldProjectHubSrc, "구코드(" + PRE_FIX_REF + ")");
   ok(oldCalls === 0, "구코드는 PWA confirm() 무음 조건에서 요청 0건 — 프로덕션 증상 재현 성공");
 
   const newCalls = await runWithBrokenConfirm(projectHubSrc, "신코드(수정본)");

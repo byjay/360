@@ -107,8 +107,8 @@ async function runEntry(search) {
 console.log("\n[뮤테이션 M1] 조건을 urlMode===\"viewer\"||depId 로 되돌리면 케이스③이 실패해야 함");
 {
   const mutatedFooter = footerSrc.replace(
-    'if (depId) {',
-    'if (urlMode === "viewer" || depId) {'
+    '} else if (depId) {',
+    '} else if (urlMode === "viewer" || depId) {'
   );
   if (mutatedFooter === footerSrc) { console.log("  FAIL M1 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
@@ -131,8 +131,10 @@ console.log("\n[뮤테이션 M1] 조건을 urlMode===\"viewer\"||depId 로 되�
 console.log("\n[뮤테이션 M2] depId 분기를 제거하면 케이스①·②가 실패해야 함");
 {
   const mutatedFooter = footerSrc.replace(
-    'if (depId) {\n      // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.\n      State.viewerLocked = true;\n      App.openApp("viewer");\n    } else if (urlMode === "designer") {',
-    'if (false) {\n      State.viewerLocked = true;\n      App.openApp("viewer");\n    } else if (urlMode === "designer") {'
+    // 🔴 [P63] 니들은 **분기 조건식 한 줄**만 잡는다 — 이전엔 분기 블록 전체를
+    //   문자열로 떠서, 본문을 한 줄만 고쳐도(게이트 추가) 뜻하지 않게 무효화됐다.
+    '} else if (depId) {',
+    '} else if (false) {'
   );
   if (mutatedFooter === footerSrc) { console.log("  FAIL M2 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {

@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment } from './lib/util'
+import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment,
+  randShareCode, normalizeShareCode, isShareCode } from './lib/util'
 
 type Bindings = {
   DB: D1Database
@@ -91,11 +92,25 @@ function autoDesignerFromToken(token: string): any | null {
 const AUTO_ENTRY_PREFIX  = 'ae1.'
 const AUTO_ENTRY_TTL_MS  = 7 * 24 * 60 * 60 * 1000     // 자동입장 서명 토큰 유효기간(7일)
 const AUTO_ENTRY_SKEY    = 'auto_entry_secret'          // app_settings(scope='*') 자동생성 비밀키 행
+/* ══ [P63] 뷰어 초대코드 게이트 상수 — 값의 단일 진실 소스(매직넘버 중복 금지) ══ */
+/** 게이트 통과 세션 유효기간. 🔴 마스터 요구("한 번 통과하면 재입력 없이 계속 열람")와
+ *  "유출 시 끊을 수 있어야 한다"의 절충: 코드 폐기가 반영돼야 하므로 무기한은 안 된다.
+ *  30일이면 현장 한 공정을 재입력 없이 넘기고, 폐기 후 최장 30일 내 전원 재인증된다. */
+const SHARE_GATE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/** 🔴 사용자에게 보여줄 문의 주소. 개발 관리자 gmail 주소는 어떤 화면에도 쓰지 않는다(마스터 확정). */
+const SUPPORT_CONTACT_EMAIL = 'designsir@seastargo.com'
+/** 🔴 개인정보(이름·소속·IP) 보관 기간 — activity_log 정리 정책의 **단일 정본**.
+ *  근거: 도면 열람 기록은 계약·감사 대응상 최소 1년 필요, 그 이상은 목적 달성에 불필요
+ *  (개인정보보호법 제21조 파기 원칙). 자동 삭제 배치는 마스터 확인 전이라 만들지 않았다 —
+ *  정리 스크립트/배치를 붙일 때 반드시 이 상수를 참조할 것(값이 두 곳에 생기면 반드시 갈라진다). */
+const PERSONAL_LOG_RETENTION_DAYS = 365
 /** 변경(쓰기) HTTP 메서드 — readOnlyGuard 의 단일 진실 소스. */
 const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
 /** 열람전용 주체에게도 허용하는 비-콘텐츠 경로(로그인/가입/자동입장 발급 = 권한을 얻는 통로 자체).
  *  이 목록 밖의 모든 변경 요청은 거부된다(allowlist 방식 — 새 쓰기 라우트가 자동으로 보호됨). */
-const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log']
+// [P63] '/api/share/verify' = 초대코드 제출 = **권한을 얻는 통로 자체**라 열람전용에도 열어야 한다
+//   (로그인/가입 엔드포인트와 동일한 성격). 그 외 /api/share/* 쓰기는 여전히 거부된다.
+const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify']
 
 const b64u = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const b64uDec = (s: string) => atob(s.replace(/-/g, '+').replace(/_/g, '/'))
@@ -128,12 +143,18 @@ async function hmacB64u(secret: string, msg: string): Promise<string> {
   return b64u(String.fromCharCode(...new Uint8Array(sig)))
 }
 
-/** 자동입장 서명 토큰 발급. kind='designer' 면 편집 가능, 'viewer' 면 열람 전용. */
-async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer'): Promise<{ token: string, exp: number } | null> {
+/** 자동입장 서명 토큰 발급. kind='designer' 면 편집 가능, 'viewer' 면 열람 전용.
+ *  [P63] gatePid 를 주면 그 프로젝트의 **초대코드 게이트를 통과했다**는 클레임(g)이 실린다.
+ *    🔴 게이트 통과는 열람 자격일 뿐이다 — kind 는 언제나 'viewer'(열람 전용)로 강제한다.
+ *    서명이 붙으므로 클라이언트가 g 를 위조할 수 없다(기존 HMAC 경로 재사용 = SoT). */
+async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string): Promise<{ token: string, exp: number } | null> {
   const secret = await autoEntrySecret(c)
   if (!secret) return null
-  const exp = Date.now() + AUTO_ENTRY_TTL_MS
-  const payload = b64u(JSON.stringify({ k: kind, exp, n: randToken('') }))
+  if (gatePid) kind = 'viewer'   // [불변식] 게이트 통과가 쓰기 권한이 되는 경로를 원천 차단
+  const exp = Date.now() + (gatePid ? SHARE_GATE_TTL_MS : AUTO_ENTRY_TTL_MS)
+  const body: any = { k: kind, exp, n: randToken('') }
+  if (gatePid) body.g = String(gatePid)
+  const payload = b64u(JSON.stringify(body))
   return { token: AUTO_ENTRY_PREFIX + payload + '.' + (await hmacB64u(secret, payload)), exp }
 }
 
@@ -157,7 +178,8 @@ async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
   try { p = JSON.parse(b64uDec(payload)) } catch { return null }
   if (!p || typeof p.exp !== 'number' || p.exp < Date.now()) return null
   if (p.k !== 'designer' && p.k !== 'viewer') return null
-  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer' }
+  // [P63] _gate = 초대코드를 통과한 프로젝트 id(없으면 null). 🔴 쓰기 권한과 무관하다.
+  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null }
 }
 
 function superAdmin(c: any): string {
@@ -586,6 +608,57 @@ app.use('*', async (c, next) => {
     return c.json({ error: 'forbidden — read-only session (view link)', readonly: true }, 403)
   }
   return next()
+})
+
+/* ══ [P63] 🔴 열람 차단 단일 지점 — 초대코드 게이트 ═══════════════════════════
+ * 마스터 요구: "코드 통과 전에는 도면 데이터를 내려보내지 마라 — UI 만 가리는 건 무의미."
+ * 그래서 UI 가 아니라 **서버 미들웨어**에서 끊는다(p48 의 readOnlyGuard 와 같은 구조).
+ *
+ * 적용 대상(좁게): isShareGateSubject — 공유/배포 링크 세션과 데모 뷰어뿐이다.
+ *   실계정(로컬 세션/구글 로그인)·설계자 자동입장은 대상이 아니다 — 그들은 이미 신원이 있다.
+ *
+ * 🔴 `?d=` 에도 적용한다: 적용하지 않으면 `?d=<배포ID>` 가 게이트 우회로가 되어
+ *   같은 도면을 코드 없이 보게 되므로 게이트 자체가 무의미해진다.
+ *   하위호환은 유지된다 — 링크가 죽는 게 아니라 **코드 입력 화면이 먼저 뜬다**.
+ *
+ * 🔴 "코드가 하나도 없는 프로젝트"는 게이트를 켜지 않는다(opt-in by issuance).
+ *   근거: 마이그레이션 직후 기존 공유 링크가 전부 막히면 현장이 즉시 멈춘다. 오늘 상태(게이트 0)
+ *   대비 회귀가 아니며, 마스터가 코드를 1개 발급하는 순간 그 프로젝트만 즉시 잠긴다.
+ *
+ * 🔴 정직 보고(남은 구멍): 이 게이트는 익명이 `/api/auth/auto-entry` 에 kind='designer' 를
+ *   그냥 요청하는 기존 우회로(위 P48 주석)보다 강할 수 없다.
+ *   **CF 시크릿 AUTO_ENTRY_DESIGNER_KEY 를 설정하는 순간** 그 우회가 막히고 게이트가 실효를 갖는다.
+ *   코드 변경 없이 설정 하나로 닫힌다 — 배포 시 반드시 설정할 것.
+ *
+ * 게이트 대상 = **프로젝트를 특정할 수 있는** 읽기 경로만.
+ * 🔴 정직 보고(범위 밖): `/tables/pano_images` 목록은 project_id 컬럼이 없어 프로젝트로 매핑할 수
+ *   없다(스키마 변경 필요). 이번 작업으로 나빠지지 않았고(종전에도 동일하게 열려 있었다),
+ *   실사용 경로에서는 pano id 가 게이트된 배포본 JSON 안에서만 나오므로 전이적으로 보호된다.
+ *   완전 차단은 pano_images 에 project_id 를 추가하는 별도 작업이 필요하다(후속 권고). */
+const GATED_READ_PREFIXES = ['/tables/deployments', '/api/notes', '/api/projects/']
+app.use('*', async (c, next) => {
+  const m = c.req.method.toUpperCase()
+  if (m !== 'GET' && m !== 'HEAD') return next()          // 쓰기는 readOnlyGuard 가 이미 끊었다
+  const p = c.req.path
+  if (!GATED_READ_PREFIXES.some((x) => p.startsWith(x))) return next()
+  const user = await getUser(c)
+  if (!isShareGateSubject(user)) return next()
+  // 🔴 한 배포본을 여러 프로젝트의 decks 가 참조할 수 있다(실측함).
+  //   LIMIT 1 로 하나만 골라 판정하면 **게이트가 꺼진 쪽이 뽑히면 그대로 뚫린다**(fail-open).
+  //   따라서 참조하는 프로젝트를 전부 보고, **하나라도 잠겨 있으면 잠근다**(fail-closed).
+  const pids = await gatedProjectIdsOf(c, p)
+  if (!pids.length) return next()                        // 프로젝트를 특정할 수 없으면 원래 라우트 판단에 맡긴다
+  if (user._gate && pids.includes(String(user._gate))) return next()   // 이 프로젝트 게이트 통과 세션
+  let lockedPid: string | null = null
+  for (const pid of pids) { if (await projectHasActiveShareCode(c, pid)) { lockedPid = pid; break } }
+  if (!lockedPid) return next()                          // 어느 프로젝트도 코드 미발급 = 게이트 꺼짐
+  return c.json({
+    error: 'gate required — invite code',
+    gate_required: true,
+    project_id: lockedPid,
+    contact: SUPPORT_CONTACT_EMAIL,
+    message: '초대코드가 필요합니다. ' + SUPPORT_CONTACT_EMAIL + ' 으로 링크를 다시 요청하세요.',
+  }, 403)
 })
 
 /* [P48] 자동입장 토큰 발급 — 서버 서명본. 고정 문자열 상수를 대체한다.
@@ -1132,7 +1205,10 @@ async function logActivity(
         ? 'super'
         : (await isDesigner(c, actor.email).catch(() => false)) ? 'designer' : 'viewer'
     }
-    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || ''
+    // [P63] 🔴 IP 가 없으면 문자열 '' 가 아니라 null 로 남긴다 — "기록했는데 빈 값"과
+    //   "모른다"는 다른 사실이다(로컬·프록시 미경유 시 실제로 빈 값이 들어가는 것을 라이브에서 확인했다).
+    //   운영(CF)에서는 CF-Connecting-IP 가 항상 붙는다. 없는 값을 지어내지 않는다.
+    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null
     const ua = (c.req.header('User-Agent') || '').slice(0, 180)
     const detail = opts.detail == null
       ? null
@@ -1796,11 +1872,213 @@ function shareNotFound(c: any): Response {
 </style></head><body><div class="c">
 <h1>링크를 찾을 수 없습니다</h1>
 <p>주소가 정확하지 않거나, 공유가 해제된 링크입니다.</p>
-<p>프로젝트 이름만으로는 열람할 수 없습니다 — 배포 담당자에게 전체 링크를 다시 요청하세요.</p>
+<p>프로젝트 이름만으로는 열람할 수 없습니다.</p>
+<p><strong>${SUPPORT_CONTACT_EMAIL}</strong> 으로 링크를 다시 요청하세요.</p>
 <p><a href="/">SEASTAR 360° 홈으로</a></p>
 </div></body></html>`
   return new Response(html, { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } })
 }
+
+/* ════════════════════════════════════════════════════════════
+   [P63] 뷰어 초대코드 게이트 — 코드가 열쇠, 이름·소속은 기록용
+   마스터 확정: "1단계 = 접속 기록 / 차단은 초대 계정" → "좋아 그렇게 해. 초대코드"
+   마스터 "그런데 그 링크가 유출된다면?" → 링크만 유출되면 코드에서 막히고,
+   코드까지 유출되면 **폐기(revoke)·만료·접속기록** 3종으로 대응한다.
+   ════════════════════════════════════════════════════════════ */
+
+/** 🔴 게이트 대상 주체인가 — "링크를 가졌다"만으로 들어온 사람인가.
+ *  · 자동입장 **열람전용**(공유/배포 링크 세션) → 대상
+ *  · 데모 **뷰어** → 대상. 운영엔 DEMO_LOGIN='0' 으로 봉인되지만,
+ *    로컬에서 이 토큰으로 게이트가 통째로 뚫리는 것을 실측했다 → 막는다.
+ *  · 자동입장 designer · 데모 designer/super · 실계정(로컬세션/구글) → 대상 아니다. */
+function isShareGateSubject(user: any): boolean {
+  if (!user) return false
+  if (user._auto) return !!user._readonly
+  if (user._demo) return String(user.role || '') === 'viewer'
+  return false
+}
+
+/** 요청 경로 → 게이트를 걸 프로젝트 id **목록**. 특정 불가면 빈 배열.
+ *  🔴 복수인 이유: 같은 deployment_id 를 서로 다른 프로젝트의 decks 가 가리킬 수 있다.
+ *  하나만 골라보면 잠긴 프로젝트를 놓치고 게이트가 뚫린다(라이브 재현함). */
+async function gatedProjectIdsOf(c: any, path: string): Promise<string[]> {
+  try {
+    // /api/projects/<pid>/...
+    let m = path.match(/^\/api\/projects\/([^/]+)/)
+    if (m) return [decodeURIComponent(m[1])]
+    // /tables/deployments/<depId>
+    m = path.match(/^\/tables\/deployments\/([^/]+)/)
+    let depId = m ? decodeURIComponent(m[1]) : ''
+    // /api/notes?deployment_id=... · /api/notes/summary?deployment_id=...
+    if (!depId && path.startsWith('/api/notes')) depId = String(c.req.query('deployment_id') || '')
+    if (!depId) return []
+    const { results } = await c.env.DB.prepare(
+      'SELECT project_id FROM decks WHERE deployment_id = ? AND deleted = 0'
+    ).bind(depId).all()
+    const out: string[] = []
+    for (const r of (results || [])) { const v = (r as any).project_id; if (v && !out.includes(String(v))) out.push(String(v)) }
+    return out
+  } catch { return [] }
+}
+
+/** 이 프로젝트에 **살아있는** 초대코드가 하나라도 있나 = 게이트 ON 여부. */
+async function projectHasActiveShareCode(c: any, pid: string): Promise<boolean> {
+  try {
+    const row: any = await c.env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM project_share_codes WHERE project_id = ? AND revoked = 0 AND (expires_at IS NULL OR expires_at > ?)'
+    ).bind(pid, Date.now()).first()
+    return !!(row && row.n)
+  } catch {
+    // 🔴 테이블 부재(마이그레이션 전) = 게이트 미도입 상태 → 종전대로 열람(조용한 전면 차단 금지)
+    return false
+  }
+}
+
+/** 공유 링크/배포 링크의 게이트 상태 조회(공개). 클라이언트가 입력 화면을 띄울지 결정하는 단일 소스.
+ *  🔴 경로가 `/api/share/gate` 가 아닌 이유: 위쪽에 이미 등록된 `/api/share/:token` 이 같은 요청을
+ *     먼저 잡아 404 를 돌려준다(Hono 는 등록 순서대로 핸들러를 실행한다). 라우트 순서에 의존하는
+ *     설계는 다음 사람이 줄을 옮기는 순간 조용히 깨지므로, 충돌하지 않는 경로를 쓴다. */
+app.get('/api/share-gate', async (c) => {
+  const t = String(c.req.query('t') || '')
+  const d = String(c.req.query('d') || '')
+  let proj: any = null, depId: string | null = null
+  if (t) {
+    proj = await projectByShareToken(c, t)
+    if (proj) {
+      const deck: any = await c.env.DB.prepare(
+        'SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL ORDER BY level_no ASC, created_at ASC LIMIT 1'
+      ).bind(proj.id).first().catch(() => null)
+      depId = (deck && deck.deployment_id) ? String(deck.deployment_id) : null
+    }
+  } else if (d) {
+    const deck: any = await c.env.DB.prepare(
+      'SELECT project_id FROM decks WHERE deployment_id = ? AND deleted = 0 LIMIT 1'
+    ).bind(d).first().catch(() => null)
+    if (deck && deck.project_id) {
+      proj = await c.env.DB.prepare('SELECT id, name FROM projects WHERE id = ? AND deleted = 0').bind(deck.project_id).first()
+      depId = d
+    }
+  }
+  if (!proj) return c.json({ matched: false, contact: SUPPORT_CONTACT_EMAIL }, 404)
+  const gated = await projectHasActiveShareCode(c, proj.id)
+  const user = await getUser(c)
+  // 실계정/설계자는 게이트 대상이 아니다 — 이미 통과한 것으로 본다.
+  const exempt = !!user && !isShareGateSubject(user)
+  const passed = exempt || !!(user && user._gate && String(user._gate) === String(proj.id))
+  return c.json({
+    matched: true,
+    project: { id: proj.id, name: proj.name },
+    deployment_id: depId,
+    gated, passed,
+    contact: SUPPORT_CONTACT_EMAIL,
+  })
+})
+
+/** 🔴 초대코드 제출 → 통과 시 서명된 게이트 통행증(열람 전용) 발급 + 접속 기록.
+ *  이름·회사는 **자기 신고**라 대조하지 않는다(대조할 명단이 없다) — activity_log 에 기록만 한다. */
+app.post('/api/share/verify', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const company = String(body.company || '').trim().slice(0, 80)
+  const person  = String(body.name || '').trim().slice(0, 60)
+  const rawCode = String(body.code || '')
+  const fail = (reason: string, status: 400 | 403 = 403) =>
+    c.json({ error: reason, ok: false, contact: SUPPORT_CONTACT_EMAIL,
+             message: '초대코드가 올바르지 않습니다. ' + SUPPORT_CONTACT_EMAIL + ' 으로 링크를 다시 요청하세요.' }, status)
+
+  // 대상 프로젝트 해석 — 공유 토큰(t) 또는 기존 배포 링크(d)
+  let proj: any = null
+  const t = String(body.t || ''), d = String(body.d || '')
+  if (t) proj = await projectByShareToken(c, t)
+  else if (d) {
+    const deck: any = await c.env.DB.prepare('SELECT project_id FROM decks WHERE deployment_id = ? AND deleted = 0 LIMIT 1').bind(d).first().catch(() => null)
+    if (deck && deck.project_id) proj = await c.env.DB.prepare('SELECT id, name FROM projects WHERE id = ? AND deleted = 0').bind(deck.project_id).first()
+  }
+  if (!proj) return fail('link not found')
+  if (!company || !person) return c.json({ error: 'company/name required', ok: false, contact: SUPPORT_CONTACT_EMAIL, message: '회사명과 이름을 입력하세요.' }, 400)
+  if (!isShareCode(rawCode)) {
+    await logActivity(c, 'share.denied', { actor: { email: '' }, targetType: 'project', targetId: proj.id,
+      detail: { reason: 'malformed-code', company, name: person, url: c.req.header('Referer') || null } })
+    return fail('invalid code')
+  }
+  const hash = await sha256Hex(normalizeShareCode(rawCode))
+  const row: any = await c.env.DB.prepare(
+    'SELECT id, label, expires_at, revoked FROM project_share_codes WHERE project_id = ? AND code_hash = ?'
+  ).bind(proj.id, hash).first().catch(() => null)
+  const now = Date.now()
+  const bad = !row ? 'unknown-code' : (row.revoked ? 'revoked-code' : ((row.expires_at && row.expires_at <= now) ? 'expired-code' : null))
+  if (bad) {
+    await logActivity(c, 'share.denied', { actor: { email: '' }, targetType: 'project', targetId: proj.id,
+      detail: { reason: bad, company, name: person, code_id: row ? row.id : null, url: c.req.header('Referer') || null } })
+    return fail(bad)
+  }
+  const pass = await mintAutoEntryToken(c, 'viewer', String(proj.id))
+  if (!pass) return c.json({ error: 'gate unavailable', ok: false, contact: SUPPORT_CONTACT_EMAIL, message: '일시적인 오류입니다. 잠시 후 다시 시도하세요.' }, 503)
+  await c.env.DB.prepare('UPDATE project_share_codes SET use_count = use_count + 1, last_used_at = ? WHERE id = ?')
+    .bind(now, row.id).run().catch(() => {})
+  // 🔴 접속 기록 — 이름·소속·접속주소는 detail 에, IP·UA·시각은 logActivity 가 공통으로 넣는다(SoT).
+  //   actor_email 은 비운다: 자기 신고 이름은 **검증된 신원이 아니다**(날조 금지).
+  await logActivity(c, 'share.access', { actor: { email: '' }, targetType: 'project', targetId: proj.id,
+    detail: { company, name: person, code_id: row.id, code_label: row.label,
+              url: c.req.header('Referer') || (t ? sharePath(proj.name, t) : ('/?d=' + d)),
+              retention_days: PERSONAL_LOG_RETENTION_DAYS } })
+  return c.json({ ok: true, token: pass.token, exp: pass.exp, readonly: true,
+                  project: { id: proj.id, name: proj.name } })
+})
+
+/* ── 마스터/설계자용: 초대코드 발급·목록·폐기 ─────────────────────────── */
+app.get('/api/projects/:id/share-codes', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, label, code_hint, created_by, created_at, expires_at, revoked, revoked_at, last_used_at, use_count FROM project_share_codes WHERE project_id = ? ORDER BY created_at DESC'
+  ).bind(pid).all().catch(() => ({ results: [] as any[] }))
+  const now = Date.now()
+  return c.json({
+    data: (results || []).map((r: any) => ({ ...r, revoked: !!r.revoked,
+      active: !r.revoked && (!r.expires_at || r.expires_at > now) })),
+    // 🔴 원문은 없다 — 발급 순간에만 보여준다(해시 저장 정책). 재확인 불가 = 재발급하라.
+    plaintext_available: false,
+    retention_days: PERSONAL_LOG_RETENTION_DAYS,
+  })
+})
+
+app.post('/api/projects/:id/share-codes', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const label = String(body.label || '').trim().slice(0, 60)
+  if (!label) return c.json({ error: '발급 단위 이름(협력사/현장)을 입력하세요 — 유출 시 이 단위로 폐기합니다.' }, 400)
+  const days = Number(body.ttl_days)
+  const expires_at = Number.isFinite(days) && days > 0 ? Date.now() + days * 86400000 : null
+  const code = randShareCode()
+  const norm = normalizeShareCode(code)
+  const id = genId('psc')
+  await c.env.DB.prepare(
+    'INSERT INTO project_share_codes (id, project_id, label, code_hash, code_hint, created_by, created_at, expires_at, revoked, use_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)'
+  ).bind(id, pid, label, await sha256Hex(norm), norm.slice(0, 4), user.email, Date.now(), expires_at).run()
+  await logActivity(c, 'share.code.create', { actor: user, targetType: 'project', targetId: pid, detail: { code_id: id, label, expires_at } })
+  // 🔴 원문은 이 응답에서만 나간다(DB 에는 해시만).
+  return c.json({ success: true, id, label, code, expires_at, once_only: true })
+})
+
+app.post('/api/share-codes/:codeId/revoke', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const cid = c.req.param('codeId')
+  const row: any = await c.env.DB.prepare('SELECT id, project_id, label FROM project_share_codes WHERE id = ?').bind(cid).first().catch(() => null)
+  if (!row) return c.json({ error: 'not found' }, 404)
+  if (!(await canManageProject(c, user, String(row.project_id)))) return c.json({ error: 'forbidden' }, 403)
+  await c.env.DB.prepare('UPDATE project_share_codes SET revoked = 1, revoked_at = ?, revoked_by = ? WHERE id = ?')
+    .bind(Date.now(), user.email, cid).run()
+  await logActivity(c, 'share.code.revoke', { actor: user, targetType: 'project', targetId: String(row.project_id), detail: { code_id: cid, label: row.label } })
+  return c.json({ success: true })
+})
 
 /* ════════════════════════════════════════════════════════════
    [마스터: 수익화] 과금/구독(Billing) — 테넌트(고객사)별 요금제 + 사용량 게이팅
