@@ -989,6 +989,18 @@
      *  SOFT_LIMIT 강등으로 요청(maxDim)보다 낮아진 실제 값을 배포본에 정직하게 기록하기 위함. */
     lastSnapshotDims: null,
 
+    /* [WO 20260917-dpr] 대형 페이지 가중 픽셀 예산 — 출처: PDF VIEW°917 pdfCore.js:315-329
+       largePagePenalty() (MIT). 로직만 이식(임계·계수는 우리 구조에 맞게 재정의, 코드 비복붙).
+       [근본원인] canvasPxCap() 은 페이지 크기와 무관한 고정 상한이다. 그런데 renderCrop() 이
+       전면 캔버스(#pdf-canvas)와 별도로 크롭 오버레이(#pdf-canvas-hi)를 동시에 띄울 수 있어
+       (02_PDF.js:_ensureCrop), A1 이상 대형 페이지에서는 두 캔버스가 각각 상한까지 차
+       실제 메모리가 상한의 최대 2배(LARGE_PAGE_SHARE_COUNT)에 이를 수 있다.
+       → 대형 페이지(원본 pt 기준)일수록 상한을 나눠 써 두 캔버스 합산이 기존 단일 상한
+       안에 들어오게 한다. 일반 도면(A4~A1 미만)은 전혀 영향받지 않는다. */
+    LARGE_PAGE_CAP_PT: 900,       // 짧은 변 기준(출처 동일값) — A1(1684×2384pt)부터 적용, A4(595×842pt) 는 무관
+    LARGE_PAGE_SHARE_COUNT: 2,    // 동시 상주 가능 캔버스 수(base + crop 오버레이)
+    LARGE_PAGE_MIN_WEIGHT: 0.35,  // 이 아래로 나누면 화면이 보이지 않을 정도로 뭉개짐(출처 동일 하한)
+
     /** 기기별 캔버스 면적 상한 (순수 함수 — 테스트 가능) */
     canvasPxCap(env) {
       const e = env || {};
@@ -996,6 +1008,43 @@
       const mem = e.deviceMemory;
       if (typeof mem === "number" && mem > 0 && mem <= this.LOW_MEMORY_GB) return this.CANVAS_PX_MOBILE;
       return this.CANVAS_PX_DESKTOP;
+    },
+
+    /** [WO 20260917-dpr] 대형 페이지일수록 픽셀 예산을 보수적으로 나눈다(순수 함수).
+     *  pageW/pageH = 페이지 원본 pt(scale:1 viewport) — 항상 "전체 페이지" 기준이다(크롭 영역 아님).
+     *  🔴 기존 pxCap(모바일 16.7M/데스크톱 40M) 자체는 올리지 않는다 — 이 값 이하로만 조정한다. */
+    pageWeightedPxCap(pageW, pageH, pxCap) {
+      const cap = pxCap || this.CANVAS_PX_DESKTOP;
+      const w = Math.max(1, pageW || 1), h = Math.max(1, pageH || 1);
+      if (Math.max(w, h) < this.LARGE_PAGE_CAP_PT) return cap;
+      const weight = Math.max(this.LARGE_PAGE_MIN_WEIGHT, 1 / this.LARGE_PAGE_SHARE_COUNT);
+      return Math.min(cap, cap * weight);
+    },
+
+    /** [WO 20260917-dpr] canvasPxCap()+pageWeightedPxCap() 합성 — clampScale 에 넘길
+     *  "실제 적용 예산" 단일 진입점(공유 함수 1곳만 고치면 3개 호출부 모두 반영된다). */
+    effectivePxCap(env, pageW, pageH) {
+      return this.pageWeightedPxCap(pageW, pageH, this.canvasPxCap(env));
+    },
+
+    /* [WO 20260917-dpr] 상주 페이지 수 기준 dpr 상한 — 출처: PDF VIEW°917 pdfCore.js:331-347
+       pickDpr() (MIT). 로직만 이식(단위·상수는 우리 구조에 맞게 재정의).
+       [근본원인] 종전 dpr = min(devicePixelRatio, 2) 는 페이지 크기·상주 페이지 수와 무관한
+       고정값이라, 화면에 실제로 뜬 페이지가 몇 장이든 같은 dpr 을 요구했다(가드 없음).
+       → dpr² × 페이지당 픽셀 × 상주 페이지 수 ≤ pxCap 을 만족하는 dpr 로 자른다.
+       residentPages 기본 1 — 우리 뷰어는 페이지 1장만 캔버스로 렌더하는 단일 캔버스 구조라
+       "전체 페이지 수" 가 아니라 "실제로 화면에 뜬 페이지 수(=1)" 를 쓴다(이식 1 요구사항). */
+    residentDpr(o) {
+      const opt = o || {};
+      const raw = Math.min(opt.devicePixelRatio || (typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
+      const resident = Math.max(1, opt.residentPages || 1);
+      const pageW = Math.max(1, opt.pageW || 1), pageH = Math.max(1, opt.pageH || 1);
+      const perPagePx = pageW * pageH;
+      const pxCap = opt.pxCap || this.CANVAS_PX_DESKTOP;
+      if (!(perPagePx > 0) || !(pxCap > 0)) return raw;
+      const allowed = Math.sqrt(pxCap / (perPagePx * resident));
+      // 1 미만으로는 내리지 않는다(그 아래는 눈에 보이게 흐려진다 — 출처 동일 하한).
+      return Math.max(1, Math.min(raw, allowed));
     },
 
     /** 현재 실행 환경 스냅샷 (canvasPxCap 입력) */
@@ -1079,7 +1128,8 @@
       // 초기 렌더는 "화면 1배(=CSS 100%)" 에 맞는 해상도로 그린다.
       // baseCssScale: 도면 1포인트가 화면 몇 px 로 보이는가 (디자이너 첫 표시 기준).
       // 여기서는 캔버스의 CSS 폭 = base.width 로 두고, 줌은 별도로 처리한다.
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // [WO 20260917-dpr] 상주 페이지 수(=1, 단일 캔버스 구조) 기준 dpr — residentDpr 참조.
+      const dpr = this.residentDpr({ pageW: base.width, pageH: base.height, pxCap: this.canvasPxCap(this._env()), residentPages: 1 });
       // 논리(=화면 1배) CSS 크기는 PDF 1포인트 = 1px 로 고정한다.
       // → map-transform/pins-layer 레이아웃 크기가 줌 재렌더와 무관하게 불변(핀 % 좌표 정합 보장).
       const baseCss = 1;
@@ -1103,7 +1153,7 @@
     async _rasterize(page, canvas, renderScale, rot, cssScale) {
       // 캔버스 면적/변 상한으로 클램프 (안정성)
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
-      const rs = this.clampScale(renderScale, baseVp.width, baseVp.height, this.canvasPxCap(this._env()), this.MAX_SIDE_HARD);
+      const rs = this.clampScale(renderScale, baseVp.width, baseVp.height, this.effectivePxCap(this._env(), baseVp.width, baseVp.height), this.MAX_SIDE_HARD);
       const vp = page.getViewport({ scale: rs, rotation: rot });
       const ctx = canvas.getContext("2d", { alpha: false });
       // 진행 중 task 취소 (줌 연타 시 누적 방지)
@@ -1136,7 +1186,6 @@
       if (!st.pdfDoc) return;
       const canvas = this._baseEl();
       if (!canvas) { this._clearCrop(); return; }
-      const dpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
       st.lastZoom = zoom;
       clearTimeout(st.pending);
       const wait = Math.max(this.SETTLE_MS, delayMs || 0);
@@ -1145,12 +1194,14 @@
           const page = await st.pdfDoc.getPage(st.pageNum);
           const rot = ((page.rotate || 0) + (st.rotation || 0)) % 360;
           const baseVp = page.getViewport({ scale: 1, rotation: rot });
+          // [WO 20260917-dpr] 상주 페이지 수(=1) 기준 dpr — baseVp 확보 후 계산(residentDpr 참조).
+          const dpr = this.residentDpr({ pageW: baseVp.width, pageH: baseVp.height, pxCap: this.canvasPxCap(this._env()), residentPages: 1 });
           // 🔴 실익 판정은 "상한으로 자른 뒤" 한다 — 상한에 걸려 화질이 안 오르는데
           //    대형 PDF 를 다시 그리면 화면만 멈추고 얻는 게 없다(구 코드의 실제 버그).
           const plan = this.planRerender({
             zoom: st.lastZoom, dpr: dpr, baseCssScale: st.baseCssScale, renderScale: st.renderScale,
             pageW: baseVp.width, pageH: baseVp.height,
-            pxCap: this.canvasPxCap(this._env()), maxSide: this.MAX_SIDE_HARD
+            pxCap: this.effectivePxCap(this._env(), baseVp.width, baseVp.height), maxSide: this.MAX_SIDE_HARD
           });
           // [WO 20260917] 구역(deck) 크롭이 고정돼 있으면 전체 페이지 임계와 무관하게
           //   항상 그 영역만 렌더 대상으로 삼는다 — 같은 픽셀 예산을 그 영역에 집중시켜
@@ -1212,7 +1263,9 @@
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
       const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
       const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
-      const rs = this.clampScale(scale, w0, h0, this.canvasPxCap(this._env()), this.MAX_SIDE_HARD);
+      // pageW/pageH 는 크롭 영역(w0/h0)이 아니라 원본 전체 페이지(baseVp) 기준 — 대형 페이지
+      // 가중은 "이 페이지가 A1급이냐"로 판정하지, 지금 보이는 크롭 크기로 판정하지 않는다.
+      const rs = this.clampScale(scale, w0, h0, this.effectivePxCap(this._env(), baseVp.width, baseVp.height), this.MAX_SIDE_HARD);
       // 전면 캔버스보다 선명하지 않으면 얹을 이유가 없다(메모리만 먹는다).
       if (rs <= (st.renderScale || 0) * this.RERENDER_GAIN) { this._clearCrop(); return; }
       const cv = this._ensureCrop(baseCanvas);
@@ -15770,15 +15823,21 @@
       return new Promise((resolve) => {
         const m = document.getElementById("deck-source-modal");
         if (!m) { resolve("upload"); return; } // 구버전 폴백 — 묻지 않고 종전 동작
-        // 🔴 [WO 20260928] "도면 있음 + 구역 0" 도 ①을 고를 수 있다 — 구역이 아직 없어도 로드된
-        //   도면에서 첫 영역을 지정하면 그게 **첫 구역**이 된다(createDeckFromLoadedDrawing).
+        // 🔴 [WO 20260929] 도면이 화면에 로드돼 있으면(구역 소속·개수와 무관하게) ①을 고를 수 있다 —
+        //   이미 저장된 도면(currentDeck.deployment_id)이면 기존 extractRegionAsDeck 경로,
+        //   아직 저장 전인 로드된 도면이면 createDeckFromLoadedDrawing 경로로 위임한다.
         //   중복 UI 금지(요구4): 새 모달을 만들지 않고 이 선택지의 활성 조건만 넓힌다.
         const canExtract = !!(this.currentDeck && this.currentDeck.deployment_id) || this._canExtractFromLoadedDrawing();
         const btnRegion = document.getElementById("dsm-btn-region");
         const btnUpload = document.getElementById("dsm-btn-upload");
         const reasonEl = document.getElementById("dsm-region-reason");
         const subEl = document.getElementById("dsm-sub");
-        if (subEl) subEl.textContent = this.currentDeck ? ("현재 도면: " + this.currentDeck.name) : "";
+        // 🔴 [WO 20260929·마스터 지적] "현재 도면: ㅁ" 이 구역 이름을 보여주고 있었다 — 이 화면은
+        //   "어느 도면에서 영역을 지정할지" 를 알려야 하므로 도면 파일명(State.fileName)이 SoT다.
+        //   화면에 로드된 도면이 없을 때만(예외적으로) 구역 이름으로 폴백한다.
+        const loadedName = (typeof State !== "undefined" && State.fileName)
+          || (this.currentDeck && this.currentDeck.name) || "";
+        if (subEl) subEl.textContent = loadedName ? ("현재 도면: " + loadedName) : "";
         if (btnRegion) {
           btnRegion.disabled = !canExtract;
           if (btnRegion.classList) btnRegion.classList.toggle("disabled", !canExtract);
@@ -15840,7 +15899,7 @@
         //   모든 진입경로(#btn-region-extract · #deck-source-modal ① · #side-tree CTA)가 이 함수로
         //   수렴하므로 분기도 여기 한 곳에만 둔다(형제 호출부 분열 금지 — CLAUDE.md §G-2-5).
         if (this._canExtractFromLoadedDrawing()) return await this.createDeckFromLoadedDrawing(opts);
-        Prompt.toast && Prompt.toast("먼저 도면이 등록된 구역을 여세요 — 그 도면 위에서 영역을 긁어냅니다"); return null;
+        Prompt.toast && Prompt.toast("먼저 도면을 등록하세요 — 그 도면에서 영역을 지정해 구역을 만듭니다"); return null;
       }
       // 🔴 조용한 실패 금지 — 드래그 UI 를 띄우기 전에 끊는다(31_Projects.createDeck 과 같은 규칙).
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 영역을 추출할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
@@ -15890,12 +15949,17 @@
       } finally { this._extractingRegion = false; }
     },
 
-    /** [WO 20260928] "도면 있음 + 구역 0" 상태 판정 — 구역은 아직 없지만 도면이 로드돼 있어
-     *  첫 영역 지정만으로 첫 구역을 만들 수 있는 상태. State.fileType 이 '도면 로드됨'의 SoT 다.
+    /** [WO 20260928 → 20260929 이음매 수정] "도면이 화면에 로드돼 있는가" 상태 판정.
+     *  🔴 [WO 20260929·마스터 실사고] 원래 조건은 `decks.length === 0`(구역이 아예 없을 때)만
+     *  전제해 "이미 다른 구역이 있는 프로젝트에서, 아직 저장 전인 도면을 화면에 띄워 놓고
+     *  새 구역을 만들려는" 훨씬 흔한 경우를 놓쳤다 — 이때 도면이 뻔히 로드돼 있는데도
+     *  ①이 비활성으로 보이는 실사고가 났다(마스터 스크린샷). 구역 개수는 이 판정과 무관하다:
+     *  이미 저장된 도면(currentDeck.deployment_id)은 _chooseDeckSource 의 다른 분기가 처리하므로,
+     *  여기는 오직 "화면에 도면이 떠 있는가"(State.fileType)만 보면 된다.
      *  🔴 판정을 한 곳에 모은다 — _chooseDeckSource(활성 조건)와 extractRegionAsDeck(위임 조건)이
      *  같은 사실을 각자 계산하면 반드시 갈라진다(§SoT). */
     _canExtractFromLoadedDrawing() {
-      return !!(this.currentProject && !(this.decks || []).length
+      return !!(this.currentProject
         && typeof State !== "undefined" && !!State.fileType);
     },
 

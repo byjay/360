@@ -293,15 +293,21 @@
       return new Promise((resolve) => {
         const m = document.getElementById("deck-source-modal");
         if (!m) { resolve("upload"); return; } // 구버전 폴백 — 묻지 않고 종전 동작
-        // 🔴 [WO 20260928] "도면 있음 + 구역 0" 도 ①을 고를 수 있다 — 구역이 아직 없어도 로드된
-        //   도면에서 첫 영역을 지정하면 그게 **첫 구역**이 된다(createDeckFromLoadedDrawing).
+        // 🔴 [WO 20260929] 도면이 화면에 로드돼 있으면(구역 소속·개수와 무관하게) ①을 고를 수 있다 —
+        //   이미 저장된 도면(currentDeck.deployment_id)이면 기존 extractRegionAsDeck 경로,
+        //   아직 저장 전인 로드된 도면이면 createDeckFromLoadedDrawing 경로로 위임한다.
         //   중복 UI 금지(요구4): 새 모달을 만들지 않고 이 선택지의 활성 조건만 넓힌다.
         const canExtract = !!(this.currentDeck && this.currentDeck.deployment_id) || this._canExtractFromLoadedDrawing();
         const btnRegion = document.getElementById("dsm-btn-region");
         const btnUpload = document.getElementById("dsm-btn-upload");
         const reasonEl = document.getElementById("dsm-region-reason");
         const subEl = document.getElementById("dsm-sub");
-        if (subEl) subEl.textContent = this.currentDeck ? ("현재 도면: " + this.currentDeck.name) : "";
+        // 🔴 [WO 20260929·마스터 지적] "현재 도면: ㅁ" 이 구역 이름을 보여주고 있었다 — 이 화면은
+        //   "어느 도면에서 영역을 지정할지" 를 알려야 하므로 도면 파일명(State.fileName)이 SoT다.
+        //   화면에 로드된 도면이 없을 때만(예외적으로) 구역 이름으로 폴백한다.
+        const loadedName = (typeof State !== "undefined" && State.fileName)
+          || (this.currentDeck && this.currentDeck.name) || "";
+        if (subEl) subEl.textContent = loadedName ? ("현재 도면: " + loadedName) : "";
         if (btnRegion) {
           btnRegion.disabled = !canExtract;
           if (btnRegion.classList) btnRegion.classList.toggle("disabled", !canExtract);
@@ -363,7 +369,7 @@
         //   모든 진입경로(#btn-region-extract · #deck-source-modal ① · #side-tree CTA)가 이 함수로
         //   수렴하므로 분기도 여기 한 곳에만 둔다(형제 호출부 분열 금지 — CLAUDE.md §G-2-5).
         if (this._canExtractFromLoadedDrawing()) return await this.createDeckFromLoadedDrawing(opts);
-        Prompt.toast && Prompt.toast("먼저 도면이 등록된 구역을 여세요 — 그 도면 위에서 영역을 긁어냅니다"); return null;
+        Prompt.toast && Prompt.toast("먼저 도면을 등록하세요 — 그 도면에서 영역을 지정해 구역을 만듭니다"); return null;
       }
       // 🔴 조용한 실패 금지 — 드래그 UI 를 띄우기 전에 끊는다(31_Projects.createDeck 과 같은 규칙).
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 지금은 영역을 추출할 수 없습니다 — 연결 후 다시 시도하세요"); return null; }
@@ -413,12 +419,17 @@
       } finally { this._extractingRegion = false; }
     },
 
-    /** [WO 20260928] "도면 있음 + 구역 0" 상태 판정 — 구역은 아직 없지만 도면이 로드돼 있어
-     *  첫 영역 지정만으로 첫 구역을 만들 수 있는 상태. State.fileType 이 '도면 로드됨'의 SoT 다.
+    /** [WO 20260928 → 20260929 이음매 수정] "도면이 화면에 로드돼 있는가" 상태 판정.
+     *  🔴 [WO 20260929·마스터 실사고] 원래 조건은 `decks.length === 0`(구역이 아예 없을 때)만
+     *  전제해 "이미 다른 구역이 있는 프로젝트에서, 아직 저장 전인 도면을 화면에 띄워 놓고
+     *  새 구역을 만들려는" 훨씬 흔한 경우를 놓쳤다 — 이때 도면이 뻔히 로드돼 있는데도
+     *  ①이 비활성으로 보이는 실사고가 났다(마스터 스크린샷). 구역 개수는 이 판정과 무관하다:
+     *  이미 저장된 도면(currentDeck.deployment_id)은 _chooseDeckSource 의 다른 분기가 처리하므로,
+     *  여기는 오직 "화면에 도면이 떠 있는가"(State.fileType)만 보면 된다.
      *  🔴 판정을 한 곳에 모은다 — _chooseDeckSource(활성 조건)와 extractRegionAsDeck(위임 조건)이
      *  같은 사실을 각자 계산하면 반드시 갈라진다(§SoT). */
     _canExtractFromLoadedDrawing() {
-      return !!(this.currentProject && !(this.decks || []).length
+      return !!(this.currentProject
         && typeof State !== "undefined" && !!State.fileType);
     },
 
