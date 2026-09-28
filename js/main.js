@@ -8326,6 +8326,14 @@
         : "도면 위 원하는 위치를 클릭하세요";
 
       UI.showScreen("screen-app");
+      // 🔴 [WO 20260928-pinloss] 모드 전환(편집 ↔ 체크보드)은 **같은 도면 위에서 도구만 바꾸는 것**이다.
+      //   종전엔 전환마다 아래 loadLatestDeployment 가 돌아 "프로젝트의 첫 구역" 서버본으로 화면을 갈아엎었다 —
+      //   보던 구역이 바뀌고(제목이 다른 도면 파일명으로) 방금 찍은 핀이 사라졌다(라이브 재현).
+      //   도면이 이미 떠 있으면 다시 불러오지 않고 현재 State 를 그대로 다시 그린다.
+      if (opts.keepDrawing && State.fileType) {
+        UI.renderPinList(); UI.renderPinsOnMap();
+        return;
+      }
       // [마스터 요청 N4 + 멀티테넌트] 작업 사라짐 수정 + 서브도메인/카드로 특정 프로젝트 지정 시 그 프로젝트 스코프.
       //   프로젝트가 지정되면(설계자 재진입·서브도메인·카드클릭) 그 프로젝트 배포본, 없으면 최신(일반 뷰어).
       this.loadLatestDeployment(opts.project || null);
@@ -8648,7 +8656,7 @@
         const next = State.checkboard ? "designer" : "checkboard";
         // [마스터 요청 2026-09-18] 사용자가 명시 전환한 모드는 다음 진입 때도 유지
         if (typeof PinSeries !== "undefined") PinSeries.setPreferredMode(next);
-        App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null });
+        App.openApp(next, { project: (typeof Projects !== "undefined" && Projects.currentProject) || null, keepDrawing: true });
         // [토스트 스팸 감소] 편집모드 복귀는 화면 전환으로 보인다 → 체크보드 진입 사용법만 안내.
         if (next === "checkboard") Prompt && Prompt.toast && Prompt.toast("체크보드 모드 — 도면을 클릭하면 번호 핀이 1씩 증가하며 찍힙니다");
         if (next === "checkboard") setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
@@ -11760,6 +11768,11 @@
         // 서버 배포본 ID 가 없어도 로컬 draft 가 있으면 복원 시도(오프라인 신규 등록분)
         return await this._restoreDraftLocal();
       }
+      const seq = this._beginLoad();   // 🔴 [WO 20260928-pinloss] 늦게 도착한 이전 로드가 이 결과를 덮지 못하게
+      const dkey = this._draftKey();   // await 전에 확정 — 로드 중 구역이 바뀌어도 이 구역의 draft 만 본다
+      // 🔴 서버 fetch **전에** 읽는다 — 재접속 자동업로드(_flushDirtyDrafts)가 fetch 도중 draft 를 clean 으로
+      //   바꿔도 이 로드는 작업분을 놓치지 않는다(서버본이 더 새로우면 _draftVsServer 가 id 병합).
+      const draft = await this._readDirtyDraft(dkey, deploymentId);
       try {
         // [오프라인 작업지시서 ] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
         let dep = null;
@@ -11771,6 +11784,7 @@
           if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
           dep = await r.json();
         }
+        if (!this._isCurrentLoad(seq)) return;   // 그 사이 다른 구역/모드 로드가 시작됨 → 이 결과는 폐기
         let pages = [];
         try { pages = JSON.parse(dep.pages_data || "[]"); } catch { pages = []; }
         if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];
@@ -11791,6 +11805,9 @@
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
         try { State.checkboardStart = JSON.parse(dep.checkboard_start || "{}") || {}; } catch { State.checkboardStart = {}; }
+        // 🔴 [WO 20260928-pinloss] 저장 안 한 로컬 작업분(dirty draft)이 있으면 서버본 위에 복원.
+        //   렌더(_r0) 전에 끝내야 첫 화면부터 draft 핀이 보이고, 이후 저장/자동보관이 draft 를 빈 목록으로 덮지 않는다.
+        this._applyDirtyDraft(draft, dkey, dep.version);
 
         const imgEl = UI.$("map-image");
         // ponytail: fired flag prevents double-fire when image is already browser-cached
@@ -11894,6 +11911,53 @@
       return (did && did !== "nodeck") ? did : "";
     },
 
+    /** 🔴 [WO 20260928-pinloss] 도면 로드 세대 번호 — 서버본 로더(loadDeckDrawing/loadLatestDeployment)는
+     *  await 사이에 다른 로드가 시작되면(허브 구역 클릭 = openApp 의 자동 로드 + selectDeck 동시 발화)
+     *  늦게 도착한 쪽이 State.pins 를 엉뚱한 구역의 서버본으로 덮었다. 마지막에 시작한 로드만 State 를 쓴다. */
+    _loadSeq: 0,
+    _beginLoad() { return ++this._loadSeq; },
+    _isCurrentLoad(seq) { return seq === this._loadSeq; },
+
+    /** 🔴 [WO 20260928-pinloss] 이 구역(key)의 **저장 안 한** 로컬 작업분(dirty draft)을 읽는다.
+     *  다른 배포본을 기준으로 만든 draft(depId 불일치)는 이 서버본에 얹지 않는다(엉뚱한 도면에 핀 이식 금지). */
+    async _readDirtyDraft(key, depId) {
+      if (!key || typeof SyncQueue === "undefined" || !SyncQueue.loadDraft) return null;
+      let d = null;
+      try { d = await SyncQueue.loadDraft(key); } catch (e) { return null; }
+      if (!d || !d.dirty) return null;
+      if (d.depId && depId && String(d.depId) !== String(depId)) return null;
+      return d;
+    },
+
+    /** 🔴 [WO 20260928-pinloss] 서버본 vs 로컬 draft 충돌 규칙 — **단일 출처**.
+     *  화면 복원(_applyDirtyDraft)과 온라인 복귀 업로드(_flushDirtyDrafts)가 같은 규칙을 쓴다(갈라지면 한쪽이 핀을 잃는다).
+     *  ① draft 가 기준으로 삼은 서버 버전(baseVer) == 지금 서버 버전 → 그 사이 아무도 저장 안 함 → draft 그대로
+     *     (로컬에서 지운 핀이 서버본에서 되살아나지 않는다)
+     *  ② 서버가 더 새롭거나 기준 버전을 모름(구버전 draft) → id 병합: 서버에만 있는 항목 보존 + 같은 id 는 draft 우선 */
+    _draftVsServer(d, srvPins, srvZones, srvVer) {
+      const same = d && d.baseVer != null && srvVer != null && Number(d.baseVer) === Number(srvVer);
+      const dPins = Array.isArray(d && d.pins) ? d.pins : [];
+      const dZones = Array.isArray(d && d.zones) ? d.zones : [];
+      return same
+        ? { pins: dPins, zones: dZones }
+        : { pins: this._mergeById(srvPins || [], dPins), zones: this._mergeById(srvZones || [], dZones) };
+    },
+
+    /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
+     *  종전엔 '미저장' 배지만 뜨고 핀은 서버본(0개)으로 그려졌고, 이어서 '저장'/다음 편집이 빈 목록으로
+     *  draft 를 덮어 작업분이 영구 소실됐다(라이브 재현: 체크보드 핀 → 모드 전환 → 핀 사라짐 → 저장 → draft 0개). */
+    _applyDirtyDraft(d, key, srvVer) {
+      if (!d) return false;
+      const m = this._draftVsServer(d, State.pins, State.zones, srvVer);
+      State.pins = m.pins;
+      State.zones = m.zones;
+      if (Array.isArray(d.annotations)) State.annotations = d.annotations;
+      if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = d.checkboardStart;
+      this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
+      this._markDeckUnsaved(this._deckIdOfKey(key), true);
+      return true;
+    },
+
     /** [B4] 로컬에만 있고 서버 미저장인 구역 id 집합 — 사이드바 '미저장' 배지의 단일 출처 */
     _unsavedDecks: {},
     isDeckUnsaved(deckId) { return !!(deckId && this._unsavedDecks[deckId]); },
@@ -11994,8 +12058,12 @@
                 try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
               }
             } catch (e) {}
-            if (srvPins) body.pins = JSON.stringify(this._mergeById(srvPins, d.pins || []));
-            if (srvZones) body.zones = JSON.stringify(this._mergeById(srvZones, d.zones || []));
+            // 🔴 [WO 20260928-pinloss] 충돌 규칙은 화면 복원과 같은 단일 출처(_draftVsServer)
+            if (srvPins || srvZones) {
+              const m = this._draftVsServer(d, srvPins, srvZones, baseVer);
+              if (srvPins) body.pins = JSON.stringify(m.pins);
+              if (srvZones) body.zones = JSON.stringify(m.zones);
+            }
             body.base_version = baseVer;
             res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
               method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
@@ -12069,6 +12137,8 @@
           annotations: State.annotations || [],
           checkboardStart: State.checkboardStart || {}, // [WO 20260917 멀티유저 ①]
           depId:       State.autoSaveDepId || null,
+          // 🔴 [WO 20260928-pinloss] 이 작업분이 기준으로 삼은 서버 버전 — 재로드 시 충돌 규칙(_draftVsServer) 판정용
+          baseVer:     (State.autoSaveDepId && State.depVersion != null) ? Number(State.depVersion) : null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
         const dkey = this._draftKey();
@@ -12394,6 +12464,8 @@
 
     /* ── 뷰어: 최신 배포본 자동 로드 ── */
     async loadLatestDeployment(projectForDesigner) {
+      const seq = this._beginLoad();   // 🔴 [WO 20260928-pinloss] 늦게 도착하면 폐기(아래 _isCurrentLoad)
+      let draftKey = null, draft = null; // 설계자 재진입으로 연 구역의 dirty draft(복원 대상)
       const statusEl = UI.$("viewer-load-status");
       statusEl.textContent = "도면 불러오는 중...";
 
@@ -12426,9 +12498,16 @@
                 if (typeof OfflineLoad !== "undefined") decks = (await OfflineLoad.decks(projectForDesigner.id)) || [];
               }
             }
+            // 🔴 [WO 20260928-pinloss] 그 사이 selectDeck 등 다른 로드가 시작됐으면 현재 구역을 빼앗지 않는다
+            if (!this._isCurrentLoad(seq)) return;
             if (typeof Projects !== "undefined") Projects.decks = decks;
             const deck = decks.find(d => d.deployment_id);
             if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck; }
+            // 🔴 [WO 20260928-pinloss] 저장 안 한 작업분은 배포본 fetch **전에** 읽는다(형제 loadDeckDrawing 과 같은 이유)
+            if (deck && State.mode === "designer") {
+              draftKey = projectForDesigner.id + "::" + deck.id;
+              draft = await this._readDirtyDraft(draftKey, wantId);
+            }
           } catch (e) {}
           if (!wantId) {   // 새/빈 프로젝트 → 도면 없음(다른 프로젝트 도면을 잘못 띄우지 않음)
             statusEl.textContent = "";
@@ -12478,6 +12557,7 @@
           latest = rows[0];
         }
 
+        if (!this._isCurrentLoad(seq)) return;   // 🔴 [WO 20260928-pinloss] 늦게 도착한 로드 — State 를 덮지 않는다
         // 페이지 배열 복원 (신규 pages_data → 레거시 drawing_data)
         let pages = [];
         try { pages = JSON.parse(latest.pages_data || "[]"); } catch { pages = []; }
@@ -12504,6 +12584,8 @@
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
         try { State.checkboardStart = JSON.parse(latest.checkboard_start || "{}") || {}; }
         catch { State.checkboardStart = {}; }
+        // 🔴 [WO 20260928-pinloss] 형제 로더(loadDeckDrawing)와 같은 공유 지점 — 저장 안 한 작업분 복원
+        if (draft && latest.id === wantId) this._applyDirtyDraft(draft, draftKey, latest.version);
 
         const imgEl = UI.$("map-image");
         let _ld2 = false;
@@ -16592,24 +16674,29 @@
         && typeof State !== "undefined" && !!State.fileType);
     },
 
-    /** [WO 20260928·마스터 확정] 🔴 "도면 있음 + 구역 0" 에서 **첫 영역 지정 = 첫 구역 생성**.
+    /** [WO 20260928·마스터 확정 → WO 20260928-unify 갱신] 🔴 "도면 있음 + 구역 0" 에서
+     *  **첫 영역 지정 = 첫 구역 생성**.
      *  마스터 원문: "처음 도면을 등록했을 때는 구역 이름을 지정하게 하지 마. 1.프로젝트 2.구역 3.영역 이니까"
-     *            / "구역을 등록할 때 기존 도면에서 영역을 지정할 건지 새로운 도면으로 할 건지 선택하게 해".
+     *            / "구역을 등록할 때 기존 도면에서 영역을 지정할 건지 새로운 도면으로 할 건지 선택하게 해"
+     *            / (WO 20260928-unify) "구역은 선택한 만큼을 남기고 나머지를 다 지우든 복사한 후 새로
+     *              만들든 쉽게 빠르게해" → 구역(루트)도 영역과 **같은 벡터복사** 결과물이어야 한다.
      *
      *  도면 등록 단계에서는 어떤 행도 만들지 않으므로(20_App._afterDrawingLoaded), 이 함수가
-     *  **배포본(deployments) + 구역(decks, parent_id=NULL) + crop** 을 한 번에 묶어 확정한다.
+     *  **배포본(deployments) + 구역(decks, parent_id=NULL)** 을 한 번에 묶어 확정한다.
      *  🔴 새 메커니즘 0 — 배포본은 App._ensureDrawingDeployment()(=기존 _createInitialSave),
-     *  구역 INSERT 는 기존 POST /api/projects/:id/decks, 드래그는 기존 _pickDeckCrop() 을 그대로 쓴다.
-     *  extractRegionAsDeck() 를 재사용할 수 없는 이유: 그쪽은 src.deployment_id(=**이미 저장된** 도면)를
-     *  전제하는데, 여기서는 그 배포본이 아직 존재하지 않는다.
+     *  드래그는 기존 _pickDeckCrop(), **복사 계획은 extractRegionAsDeck 과 똑같이 _planRegionCopy()
+     *  를 재사용**한다(복사 로직 두 벌 금지 — §SoT). 차이는 parent_id=null(루트) 뿐이다.
+     *  extractRegionAsDeck() 자체를 통째로 재사용할 수 없는 이유는 그대로다: 그쪽은
+     *  src.deployment_id(=**이미 저장된** 도면)를 전제하는데, 여기서는 그 배포본이 아직 없다
+     *  (그래서 ①에서 먼저 확정한다).
      *
      *  순서(원자성): 영역·이름을 **먼저** 받는다 → 취소하면 서버에 아무것도 만들어지지 않는다.
      *  배포본까지 만들고 구역 INSERT 가 실패하면 State.autoSaveDepId 가 남아 재시도 시 **같은 배포본**을
      *  재사용하므로 고아 배포본이 누적되지 않는다.
      *
      *  좌표계: crop 은 _pickDeckCrop → MapCtrl.viewportToPercent 로 얻은 **페이지 기준 %** 다.
-     *  crop 은 렌더 대상/줌만 바꾸고 좌표 원점을 옮기지 않으므로 핀은 계속 페이지 기준 %로 저장되고,
-     *  MapCtrl.pageToDeckCropPct ↔ deckCropPctToPage 로 정확히 왕복한다(기존 규칙 그대로).
+     *  _planRegionCopy 가 원본이 있으면 그 %를 PDF 상자로 바꿔 벡터 복사(crop:null 결과)하고,
+     *  원본이 없는 구버전 도면이면 종전처럼 crop 이 그대로 저장된다(창 방식 — 원본 없음 분기와 동일 규칙).
      *  @param {object} [opts] { crop, name } — 선주입(미지정 시 드래그·프롬프트로 물음)
      *  @returns {Promise<object|null>} 생성된 구역(deck) 또는 null(취소/실패)
      */
@@ -16648,16 +16735,24 @@
         const depId = (typeof App !== "undefined" && App._ensureDrawingDeployment)
           ? await App._ensureDrawingDeployment() : null;
         if (!depId) { Prompt.toast && Prompt.toast("도면 저장에 실패해 구역을 만들지 못했습니다 — 네트워크를 확인하고 다시 시도하세요"); return null; }
-        // ② 구역(루트) INSERT — 프로젝트 > 구역 > 영역 에서 이 구역은 최상위라 parent_id = NULL.
+        // ② 🔴 공유 지점(§G-2-5) — extractRegionAsDeck 과 **같은** 벡터복사 계획 함수(_planRegionCopy).
+        //   차이는 parent_id=null(루트) 뿐 — 원본이 있으면 벡터 복사(crop:null), 없으면 종전 창 방식으로
+        //   묻는 분기까지 그대로 공유한다(복사 로직 두 벌 금지).
+        const plan = await this._planRegionCopy({ deployment_id: depId }, page, crop, name);
+        if (!plan) return null;   // 취소/실패 — 사유는 _planRegionCopy 가 이미 화면에 알렸다
+        // ③ 구역(루트) INSERT — 프로젝트 > 구역 > 영역 에서 이 구역은 최상위라 parent_id = NULL.
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
-          body: JSON.stringify({ name, page, crop, deployment_id: depId, parent_id: null })
+          // 복사본: 새 배포본(그 페이지 자체가 구역) · 창 방식(원본 없는 구버전 도면): 로드된 도면 + crop.
+          body: JSON.stringify(plan.depId
+            ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }
+            : { name, page, crop, deployment_id: depId, parent_id: null })
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "구역 생성 실패 — 권한을 확인하세요"); return null; }
         await this.loadDecks();
         const created = (this.decks || []).find((x) => x.id === d.id) || d;
-        // ③ 이 구역을 현재 컨텍스트로 — 이후 저장/배포/핀이 이 구역에 붙는다(고아 배포본 방지).
+        // ④ 이 구역을 현재 컨텍스트로 — 이후 저장/배포/핀이 이 구역에 붙는다(고아 배포본 방지).
         this.currentDeck = created;
         if (typeof App !== "undefined") App._pendingDeckLink = null;   // 배포본은 이미 구역에 직결됨
         this._renderDecks();
@@ -16665,7 +16760,11 @@
         //   생성 직후 그 구역을 **독립 페이지처럼** 연다(공유 지점 _applyDeckCropView — selectDeck 과 동일).
         //   이 상태에서 다시 드래그하면 이 구역 하위의 '영역'이 된다(계층 3단: 프로젝트>구역>영역).
         this._applyDeckCropView(created);
-        Prompt.toast && Prompt.toast("구역 '" + name + "' 생성 — 잘라낸 영역이 별도 페이지로 열렸습니다. 다시 드래그하면 이 구역 안의 '영역'이 됩니다", 4200);
+        Prompt.toast && Prompt.toast((plan.depId
+          ? "구역 '" + name + "' 생성 — 지정한 부분을 새 페이지로 복사했습니다(확대해도 선명)"
+          : "구역 '" + name + "' 생성 — 잘라낸 영역이 별도 페이지로 열렸습니다")
+          + (plan.limited ? " · 원본 PDF 가 없어 확대 시 선명도에 한계가 있습니다" : "")
+          + ". 다시 드래그하면 이 구역 안의 '영역'이 됩니다", plan.limited ? 5200 : 4200);
         return created;
       } catch (e) {
         Prompt.toast && Prompt.toast(navigator.onLine ? "구역 생성 실패 — 네트워크 오류, 다시 시도해주세요" : "오프라인이라 지금은 구역을 만들 수 없습니다");
@@ -16726,11 +16825,13 @@
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
       if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
-      // 🔴 [WO 20260928-copy · 라이브 실측] 복사본 영역(crop 없음 · 부모 있음)은 그 페이지 자체가 영역이다 →
-      //   열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가 이미지 load 때 zoom=1 로
-      //   되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에 불린다 + 한 프레임 뒤).
-      //   루트 구역(부모 없음)은 종전 동작 그대로.
-      else if (!crop && d && d.parent_id && typeof MapCtrl !== "undefined" && MapCtrl.fit) {
+      // 🔴 [WO 20260928-copy → WO 20260928-unify 갱신] 벡터 복사본(crop 없음)은 그 배포본의 페이지
+      //   자체가 이 구역/영역이다 → 열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가
+      //   이미지 load 때 zoom=1 로 되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에
+      //   불린다 + 한 프레임 뒤). 🔴 parent_id 로 가르지 않는다(SoT) — 구역(루트)도 영역과 같은 벡터복사
+      //   경로를 쓰게 되면서(createDeckFromLoadedDrawing) crop 없음이 곧 "복사본"이라는 사실이 계층과
+      //   무관해졌다. crop 이 있는 구버전 창 방식 구역/영역만 위 fitZone 분기로 남는다.
+      else if (!crop && d && typeof MapCtrl !== "undefined" && MapCtrl.fit) {
         const img = document.getElementById("map-image");
         const go = () => { const f = () => MapCtrl.fit(); if (typeof requestAnimationFrame === "function") requestAnimationFrame(f); else f(); };
         if (img && img.complete && img.naturalWidth) go();
