@@ -67,10 +67,9 @@
         if (input && !input.readOnly) { input.focus(); input.select(); }
         Prompt.toast && Prompt.toast("아래에서 위치명·사진·노트를 바로 수정하세요");
       });
-      $("pap-del") && $("pap-del").addEventListener("click", () => {
+      $("pap-del") && $("pap-del").addEventListener("click", async () => {
         const pin = this._pin(); if (!pin) return;
-        this.close();
-        App.deletePin(pin.id);
+        if (await App.deletePin(pin.id)) this.close();
       });
       // ── 등록정보(위치명) / 번호 수정 — 저장은 명시 버튼(자동저장 OFF, 미저장 표시만) ──
       $("pap-label-save") && $("pap-label-save").addEventListener("click", () => this._saveLabel());

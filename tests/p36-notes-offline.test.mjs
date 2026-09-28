@@ -213,7 +213,7 @@ function makeNotesSandbox() {
   const sandbox = {
     console, document, State, Auth, OpLog, UI, JSON, Object, Array, Date, Math, String,
     navigator: { onLine: false }, fetch: async () => { throw new Error("네트워크 오류(테스트에서 호출되면 안 됨)"); },
-    confirm: () => true
+    confirm: () => true, Prompt: { confirm: async () => true, toast: () => {} }
   };
   vm.createContext(sandbox);
   vm.runInContext(objSrc + ";globalThis.__Notes = Notes;", sandbox);

@@ -129,7 +129,7 @@ function makeAppSandbox(pins, { online = true, promptValue = "101", confirmYes =
     navigator: { onLine: online },
     confirm: () => confirmYes,
     State, UI,
-    Prompt: { ask: async () => (promptValue == null ? null : { value: promptValue }), toast: (t) => toastCalls.push(t) },
+    Prompt: { ask: async () => (promptValue == null ? null : { value: promptValue }), toast: (t) => toastCalls.push(t), confirm: async () => confirmYes },
     Log: { push: (...a) => logCalls.push(a) },
     OpLog: { recordCurrent: (...a) => { opLogCalls.push(a); } }
   };
@@ -176,7 +176,7 @@ function makeAppSandbox(pins, { online = true, promptValue = "101", confirmYes =
       console, JSON, Map, Set, Date, Array,
       navigator: { onLine: true }, confirm: () => true,
       State: State2, UI: { $: () => null, renderPinsOnMap() {}, renderPinList() {} },
-      Prompt: { ask: async () => ({ value: "101" }), toast: () => {} },
+      Prompt: { ask: async () => ({ value: "101" }), toast: () => {}, confirm: async () => true },
       Log: { push() {} }, OpLog: { recordCurrent() {} }
     };
     vm.createContext(sandboxM);

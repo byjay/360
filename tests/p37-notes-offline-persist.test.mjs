@@ -184,7 +184,7 @@ function makeNotesSandbox(sq, dep, opts, srcOverride) {
   const src = srcOverride || notesSrc;
   const objSrc = src.slice(src.indexOf("const Notes = {"), src.indexOf("\n  };") + 5);
   const toasts = [];
-  const Prompt = { toast: (m) => toasts.push(m) };
+  const Prompt = { toast: (m) => toasts.push(m), confirm: async () => (opts.confirmValue !== undefined ? opts.confirmValue : true) };
   const State = { currentDeploymentId: dep };
   const Auth = { user: { name: "현장자", email: "field@test.com" }, isDesigner: false, headers: () => ({}) };
   const UI = { escapeHtml: (s) => s };

@@ -161,7 +161,7 @@ function makeClient(db) {
     location: { search: "" },
     document: { getElementById: () => null, createElement: () => el(), querySelector: () => null, body: { appendChild() {}, classList: { toggle() {} } } },
     Auth: { headers: () => ({ Authorization: "Bearer local-designer-tok", "Content-Type": "application/json" }), isDesigner: true },
-    Prompt: { ask: async () => ({ value: "" }), toast: (m) => calls.toasts.push(String(m)) },
+    Prompt: { ask: async () => ({ value: "" }), toast: (m) => calls.toasts.push(String(m)), confirm: async () => true },
     UI: { renderTree() {}, $: () => null },
     State: { mode: "designer", drawingZone: false, pdfPage: 1 },
     PDF: { load: async () => ({ numPages: 1, destroy() {} }), setDeckCrop: (c) => calls.setDeckCrop.push(c) },

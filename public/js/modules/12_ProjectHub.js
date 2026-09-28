@@ -344,7 +344,7 @@
 
     async removeMember(email) {
       const p = this._memProject; if (!p) return;
-      if (!window.confirm(email + " 의 '" + (p.name || p.id) + "' 프로젝트 배정을 해제할까요?")) return;
+      if (!await Prompt.confirm("배정 해제", email + " 의 '" + (p.name || p.id) + "' 프로젝트 배정을 해제할까요?")) return;
       try {
         await fetch("/api/projects/" + encodeURIComponent(p.id) + "/members/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.loadMembers();
@@ -758,7 +758,7 @@
 
     async deleteProject(p) {
       if (!Auth.isDesigner) return;
-      if (!confirm("'" + p.name + "' 프로젝트와 모든 데크를 삭제할까요?")) return;
+      if (!await Prompt.confirm("프로젝트 삭제", "'" + p.name + "' 프로젝트와 모든 데크를 삭제할까요?")) return;
       try {
         await fetch("/api/projects/" + p.id, { method: "DELETE", headers: Auth.headers() });
         await this.load();

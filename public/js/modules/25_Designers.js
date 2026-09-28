@@ -307,7 +307,7 @@
       } catch (e) { err.textContent = "네트워크 오류"; err.classList.remove("hidden"); }
     },
     async remove(email) {
-      if (!confirm(email + " 의 디자이너 권한을 해제할까요?")) return;
+      if (!await Prompt.confirm("권한 해제", email + " 의 디자이너 권한을 해제할까요?")) return;
       try {
         await fetch("/api/designers/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() });
         await this.render();
@@ -583,7 +583,7 @@
     },
     async reject(q) {
       if (this._reqBusy) return;
-      if (!confirm((q.name || q.email) + " 의 신청을 거절/회수할까요?")) return;
+      if (!await Prompt.confirm("신청 거절", (q.name || q.email) + " 의 신청을 거절/회수할까요?")) return;
       this._reqBusy = true;
       try {
         const r = await fetch("/api/access-requests/" + encodeURIComponent(q.id) + "/reject", { method: "POST", headers: Auth.headers() });
@@ -687,7 +687,7 @@
       } catch (e) {}
     },
     async purgeLogs() {
-      if (!confirm("모든 활동 로그를 비울까요? (되돌릴 수 없습니다)")) return;
+      if (!await Prompt.confirm("로그 전체 삭제", "모든 활동 로그를 비울까요? (되돌릴 수 없습니다)")) return;
       try {
         const r = await fetch("/api/activity-logs?all=1", { method: "DELETE", headers: Auth.headers() });
         if (r.ok) { Prompt.toast("로그를 정리했습니다"); this.loadLogActions(); this.loadLogs(true); }

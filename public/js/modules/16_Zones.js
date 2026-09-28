@@ -416,11 +416,11 @@
       if (MapCtrl.flyTo) MapCtrl.flyTo(cx, cy, z, 650);
     },
 
-    remove(id) {
-      if (!this.isDesigner()) return;
+    async remove(id) {
+      if (!this.isDesigner()) return false;
       const z = (State.zones || []).find(x => x.id === id);
-      if (!z) return;
-      if (!confirm(`영역 “${z.label}”을(를) 삭제할까요?`)) return;
+      if (!z) return false;
+      if (!await Prompt.confirm("영역 삭제", `영역 "${z.label}"을(를) 삭제할까요?`)) return false;
       State.zones = (State.zones || []).filter(x => x.id !== id);
       if (this._active === id) this._active = null;
       this.render();
@@ -430,6 +430,7 @@
         OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
+      return true;
     },
 
     /** 핀 추가/이동 후 영역-핀 연결 갱신 */

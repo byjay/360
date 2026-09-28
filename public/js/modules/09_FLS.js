@@ -86,9 +86,10 @@
         + "모바일/저사양 기기에서는 브라우저 탭이 강제 종료될 수 있습니다. 계속하시겠습니까?";
     },
 
-    /** 대용량 확인 다이얼로그(기존 UI 패턴 재사용 — window.confirm) */
-    _confirmLargeE57(msg) {
-      return (typeof window !== "undefined" && typeof window.confirm === "function") ? window.confirm(msg) : true;
+    /** 대용량 확인 다이얼로그(PWA 독립실행모드에서 window.confirm()이 무음 false를
+     *  반환하는 문제 때문에 Prompt.confirm — SoT: 30_Prompt.js — 로 통일) */
+    async _confirmLargeE57(msg) {
+      return await Prompt.confirm("대용량 파일", msg);
     },
 
     /** ArrayBuffer + 파일명 → 파싱 후 렌더 */
@@ -98,7 +99,7 @@
       if (badge) badge.textContent = ext ? ("." + ext) : "";
       if (ext === "e57") {
         const warn = this._e57SizeWarning(buf.byteLength);
-        if (warn && !this._confirmLargeE57(warn)) { this._show("fls-empty"); return; }
+        if (warn && !(await this._confirmLargeE57(warn))) { this._show("fls-empty"); return; }
       }
       let parsed = null;
       try {

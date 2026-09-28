@@ -300,7 +300,7 @@
       catch (e) {} finally { this._busy = false; await this.load(); }
     },
     async _delMember(email) {
-      if (!window.confirm(email + " 사용자의 가입을 취소(삭제)하시겠습니까?")) return;
+      if (!await Prompt.confirm("가입 취소", email + " 사용자의 가입을 취소(삭제)하시겠습니까?")) return;
       if (this._busy) return; this._busy = true;
       try { await fetch("/api/local-users/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() }); }
       catch (e) {} finally { this._busy = false; await this.load(); }
@@ -310,7 +310,7 @@
     async _bulkRole(role) {
       const emails = Array.from(this._selected);
       if (!emails.length) return;
-      if (!window.confirm("선택한 " + emails.length + "명을 " + (role === "designer" ? "디자이너" : "뷰어") + "로 지정할까요?")) return;
+      if (!await Prompt.confirm("역할 일괄 지정", "선택한 " + emails.length + "명을 " + (role === "designer" ? "디자이너" : "뷰어") + "로 지정할까요?")) return;
       this._busy = true;
       try {
         for (const email of emails) {
@@ -323,7 +323,7 @@
     async _bulkDelete() {
       const emails = Array.from(this._selected);
       if (!emails.length) return;
-      if (!window.confirm("선택한 " + emails.length + "명의 가입을 취소(삭제)할까요? (가입 사용자만 삭제됩니다)")) return;
+      if (!await Prompt.confirm("가입 일괄 취소", "선택한 " + emails.length + "명의 가입을 취소(삭제)할까요? (가입 사용자만 삭제됩니다)")) return;
       this._busy = true;
       try { for (const email of emails) await fetch("/api/local-users/" + encodeURIComponent(email), { method: "DELETE", headers: Auth.headers() }); }
       catch (e) {} finally { this._busy = false; this._selected.clear(); await this.load(); }

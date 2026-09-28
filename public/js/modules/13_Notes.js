@@ -315,7 +315,7 @@
     },
 
     async remove(id) {
-      if (!confirm("이 이슈/노트를 삭제할까요?")) return;
+      if (!await Prompt.confirm("노트 삭제", "이 이슈/노트를 삭제할까요?")) return;
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         this._list = (this._list || []).filter((x) => x.id !== id);
         try { await OpLog.recordCurrent("note", "delete", id); await this._saveSnapshot(this._list, Date.now()); } catch (e) {}

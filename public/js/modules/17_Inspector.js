@@ -107,11 +107,11 @@
       });
       // 액션
       body.querySelectorAll(".insp-btn").forEach(b => {
-        b.addEventListener("click", () => {
+        b.addEventListener("click", async () => {
           const act = b.dataset.act;
           if (act === "zoom") { if (typeof App !== "undefined" && App.enterZoneView) App.enterZoneView(z.id); }
           else if (act === "fly") Zones.focus(z.id);
-          else if (act === "del") { Zones.remove(z.id); this.close(); }
+          else if (act === "del") { if (await Zones.remove(z.id)) this.close(); }
           else if (act === "rename") {
             const nv = prompt("구역 이름", z.label || "");
             if (nv != null) { z.label = nv.trim() || z.label; Zones.render(); Zones.renderList(); this.showZone(z); if (App._autoSave) App._autoSave(); }
@@ -163,12 +163,12 @@
         </div>
       `;
       body.querySelectorAll(".insp-btn").forEach(b => {
-        b.addEventListener("click", () => {
+        b.addEventListener("click", async () => {
           const act = b.dataset.act;
           if (act === "open" && typeof PanoViewer !== "undefined") PanoViewer.open(p);
           else if (act === "fly" && MapCtrl.flyTo) MapCtrl.flyTo(p.x, p.y, 2.4, 600);
           else if (act === "edit" && App.editPin) { App.editPin(p.id); this.close(); }
-          else if (act === "del" && App.deletePin) { App.deletePin(p.id); this.close(); }
+          else if (act === "del" && App.deletePin) { if (await App.deletePin(p.id)) this.close(); }
         });
       });
       this._open();

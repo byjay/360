@@ -1401,7 +1401,7 @@
       const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value);
       if (!result.ok) { Prompt.toast && Prompt.toast(result.reason || "변경할 수 없습니다"); return; }
       const first = result.changes[0].newLabel, last = result.changes[result.changes.length - 1].newLabel;
-      if (!confirm("체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
+      if (!await Prompt.confirm("번호 일괄 변경", "체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
       const byId = new Map((State.pins || []).map((p) => [p.id, p]));
       result.changes.forEach((c) => {
         const pin = byId.get(c.id);
@@ -2597,10 +2597,10 @@
       if (openAfter) setTimeout(() => this.openPano(pin), 250);
     },
 
-    deletePin(id) {
+    async deletePin(id) {
       const removed = State.pins.find(p => p.id === id);
-      if (!removed) return;
-      if (!confirm(`'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return;
+      if (!removed) return false;
+      if (!await Prompt.confirm("포인트 삭제", `'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return false;
       if (removed.videoUrl) _revokeVideoBlob(removed.videoUrl); // [B5] 삭제 시 즉시 해제
       State.pins = State.pins.filter(p => p.id !== id);
       if (State.activePin === id) State.activePin = null;
@@ -2614,6 +2614,7 @@
         OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
       }
       this._autoSave();
+      return true;
     },
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */

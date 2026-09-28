@@ -107,9 +107,9 @@
         }
       }
     },
-    clearPage() {
+    async clearPage() {
       if (!State.annotations.some(a => (a.page || 1) === State.pdfPage)) return;
-      if (typeof confirm === "function" && !confirm("현재 페이지의 모든 주석을 삭제할까요?")) return;
+      if (!await Prompt.confirm("주석 전체 삭제", "현재 페이지의 모든 주석을 삭제할까요?")) return;
       State.annotations = State.annotations.filter(a => (a.page || 1) !== State.pdfPage);
       this._render(); this._persist();
     },

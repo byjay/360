@@ -27,10 +27,10 @@ const ok = (cond, label) => {
 const near = (a, b, eps = 1e-6) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= eps;
 
 /** 모듈 블록(`const FLS = {...};`)을 그대로 평가해 FLS 객체를 얻는다.
- *  winStub/docStub 은 크기 가드(window.confirm)·loadBuffer(document.getElementById) 테스트용 주입. */
-function loadFLS(src, winStub, docStub) {
-  return new Function("THREE", "Cloud", "document", "window", (src || SRC) + "\n;return FLS;")(
-    undefined, undefined, docStub, winStub
+ *  promptStub/docStub 은 크기 가드(Prompt.confirm)·loadBuffer(document.getElementById) 테스트용 주입. */
+function loadFLS(src, promptStub, docStub) {
+  return new Function("THREE", "Cloud", "document", "Prompt", (src || SRC) + "\n;return FLS;")(
+    undefined, undefined, docStub, promptStub || { confirm: async () => true }
   );
 }
 
@@ -519,14 +519,12 @@ console.log("\n[⑧ 대용량 E57 크기 가드 — 임계값·문구·저사양
     ok(FLS._e57SizeWarning(FLS.E57_LARGE_FILE_BYTES / 2 + 1) !== null, "저사양 임계값 기준으로도 초과분 경고");
   } finally { delete globalThis.navigator; }
 
-  // 기존 UI(window.confirm) 재사용 — 새 모달 없음
-  let confirmCalled = 0, confirmMsg = "";
-  const FLS2 = loadFLS(null, { confirm: (m) => { confirmCalled++; confirmMsg = m; return false; } });
-  ok(FLS2._confirmLargeE57("test-msg") === false, "window.confirm 반환값을 그대로 전달");
-  ok(confirmCalled === 1 && confirmMsg === "test-msg", "window.confirm 을 실제로 호출(새 모달 없이 기존 패턴 재사용)");
-
-  const FLS3 = loadFLS(); // window 없음(SSR 등)
-  ok(FLS3._confirmLargeE57("x") === true, "window 없으면 차단하지 않고 통과(true)");
+  // [WO 20260928] PWA 독립실행모드에서 window.confirm()이 무음 false 를 반환하는 문제 때문에
+  //  Prompt.confirm(커스텀 DOM 모달, SoT: 30_Prompt.js)으로 통일 — window.confirm 의존 제거.
+  let confirmCalled = 0, confirmTitle = "", confirmMsg = "";
+  const FLS2 = loadFLS(null, { confirm: async (t, m) => { confirmCalled++; confirmTitle = t; confirmMsg = m; return false; } });
+  ok((await FLS2._confirmLargeE57("test-msg")) === false, "Prompt.confirm 반환값을 그대로 전달");
+  ok(confirmCalled === 1 && confirmMsg === "test-msg" && !!confirmTitle, "Prompt.confirm 을 실제로 호출(네이티브 window.confirm 미사용)");
 }
 
 /* ══════════════════════════════════════════════════════════════
