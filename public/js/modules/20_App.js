@@ -2958,7 +2958,128 @@
       }
       const pages = Array.isArray(dims) ? dims
         : (Array.isArray(PDF.lastSnapshotDims) ? PDF.lastSnapshotDims : []);
+      return this._sourceMetaJson(url, pages);
+    },
+
+    /** source_meta 직렬화 형식의 SoT — 도면 등록·영역 복사·원본 사후 등록이 같은 형식을 쓴다. */
+    _sourceMetaJson(url, pages) {
+      pages = Array.isArray(pages) ? pages : [];
       return JSON.stringify({ v: 1, pdf_url: url, pages: pages });
+    },
+
+    /* ══════════════════════════════════════════════════════════════════
+       [WO 20260928-copy] 영역 = 원본에서 복사한 새 1페이지 PDF 배포본
+       (31_Projects.extractRegionAsDeck 가 지휘. 여기는 원본 확보·업로드·배포본 생성만.)
+       🔴 원본 배포본의 핀·구역·주석은 읽지도 쓰지도 않는다 — 원본 쪽 쓰기는
+          _attachSourcePdf 의 source_meta 한 칸뿐(서버 PATCH 는 미전송 필드를 보존한다).
+       ══════════════════════════════════════════════════════════════════ */
+
+    /** 복사 전 대조 기대값 — 화면 도면(스냅샷)과 원본 PDF 가 같은 파일/같은 크기인지.
+     *  meta.pages[p].pw/ph(스냅샷 pt)가 있으면 크기로, 없으면 화면 이미지 비율로 비교한다. */
+    _regionExpect(meta, snapCount, pageNo, live) {
+      const pages = meta && Array.isArray(meta.pages) ? meta.pages : [];
+      const e = { count: snapCount > 0 ? snapCount : pages.length };
+      const d = pages[(pageNo || 1) - 1];
+      if (d && d.pw > 0 && d.ph > 0) { e.pw = d.pw; e.ph = d.ph; return e; }
+      if (live) {
+        const img = UI.$("map-image");
+        if (img && img.naturalWidth && !img.classList.contains("hidden")) { e.w = img.naturalWidth; e.h = img.naturalHeight; }
+      }
+      return e;
+    },
+
+    /** 배포본의 원본 PDF 바이트 확보.
+     *  @returns {Promise<{bytes, expect}|{missing:true, snapCount}|{error:string}>} */
+    async _regionSource(depId, pageNo) {
+      const live = State.autoSaveDepId === depId;
+      // ① 편집모드에 PDF 원본이 떠 있다 — 화면이 곧 그 PDF 라 좌표 대조가 필요 없다(네트워크 0)
+      if (live && State.fileType === "pdf" && State.fileData) return { bytes: State.fileData, expect: null };
+      let meta = null, snapCount = 0;
+      if (live) {
+        meta = State.sourceMeta || (State.sourcePdfUrl ? { pdf_url: State.sourcePdfUrl } : null);
+        snapCount = Array.isArray(State.viewerPages) ? State.viewerPages.length : 0;
+      } else {
+        try {
+          const r = await fetch("/tables/deployments/" + encodeURIComponent(depId), { headers: Auth.headers() });
+          if (!r.ok) return { error: "도면 정보를 불러오지 못했습니다(HTTP " + r.status + ")" };
+          const dep = await r.json();
+          try { meta = JSON.parse((dep && dep.source_meta) || "null"); } catch (e) { meta = null; }
+          try { const pg = JSON.parse((dep && dep.pages_data) || "[]"); snapCount = Array.isArray(pg) ? pg.length : 0; } catch (e) {}
+        } catch (e) { return { error: "도면 정보를 불러오지 못했습니다 — 네트워크를 확인하세요" }; }
+      }
+      if (!meta || typeof meta.pdf_url !== "string" || !meta.pdf_url) return { missing: true, snapCount };
+      const expect = this._regionExpect(meta, snapCount, pageNo, live);
+      this._srcProgress(-1);
+      let ab = null;
+      try { ab = await this._fetchSourcePdf(meta.pdf_url); } catch (e) { ab = null; }
+      this._srcProgress(null);
+      if (!ab) return { error: "원본 PDF 를 내려받지 못했습니다" };
+      return { bytes: ab, expect };
+    },
+
+    /** 원본 없는 구버전 도면 — 사용자가 고른 PDF 파일(취소면 null). */
+    _pickPdfFile() {
+      return new Promise((resolve) => {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.accept = "application/pdf,.pdf";
+        let done = false;
+        const fin = (f) => { if (done) return; done = true; resolve(f || null); };
+        inp.addEventListener("change", () => fin(inp.files && inp.files[0]));
+        inp.addEventListener("cancel", () => fin(null));
+        inp.click();
+      });
+    },
+
+    /** 구버전 배포본에 원본 PDF 를 사후 등록 — 🔴 source_meta 한 칸만 보낸다(핀·구역·주석 미전송 =
+     *  서버 부분 갱신이 그대로 보존). 스냅샷 실측 픽셀은 기록이 없어 pages=[] → 뷰어는 이미지 크기로 폴백.
+     *  @returns {Promise<boolean>} */
+    async _attachSourcePdf(depId, ab) {
+      const url = await this._uploadSourcePdf(ab);
+      if (!url) return false;
+      const meta = this._sourceMetaJson(url, []);
+      const build = () => ({ source_meta: meta });
+      const live = State.autoSaveDepId === depId;
+      let ok = false;
+      try {
+        if (live) ok = (await this._patchDeployment(depId, build)).ok;   // 낙관적 잠금 버전도 함께 갱신
+        else {
+          const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
+            method: "PATCH", headers: Auth.headers(), body: JSON.stringify(build())
+          });
+          ok = res.ok;
+        }
+      } catch (e) { ok = false; }
+      if (ok && live) this._applySourceMeta({ source_meta: meta });   // 지금 화면도 곧바로 원본 지연 로드 가능
+      return ok;
+    },
+
+    /** 영역 PDF(bytes)로 새 배포본 생성 → id. 실패 시 null(조용한 성공 위장 금지).
+     *  🔴 원본 PDF 업로드가 실패하면 아무것도 만들지 않는다 — 스냅샷 이미지만 있는 "깨지는 복사본" 금지.
+     *  스냅샷·R2·저장 형식은 도면 등록과 같은 경로(snapshotAllPages · _uploadPagesToR2 · _deploymentBody). */
+    async _createRegionCopyDeployment(name, bytes) {
+      const pdfUrl = await this._uploadSourcePdf(bytes);
+      if (!pdfUrl) return null;
+      const prevDims = PDF.lastSnapshotDims;   // 전역 실측값 오염 방지(편집 중 도면의 저장에 섞이면 안 된다)
+      let pages = [], dims = [], doc = null;
+      try {
+        doc = await PDF.load(bytes);
+        pages = await PDF.snapshotAllPages(doc);
+        dims = PDF.lastSnapshotDims || [];
+      } catch (e) { pages = []; }
+      finally {
+        PDF.lastSnapshotDims = prevDims;
+        try { if (doc && doc.destroy) doc.destroy(); } catch (e) {}
+      }
+      if (!pages.length) return null;
+      const r2pages = await this._uploadPagesToR2(pages);
+      const body = this._deploymentBody({ title: name, fileName: name + ".pdf" }, r2pages, this._sourceMetaJson(pdfUrl, dims));
+      try {
+        const res = await fetch("/tables/deployments", { method: "POST", headers: Auth.headers(), body: JSON.stringify(body) });
+        if (!res.ok) return null;
+        const rec = await res.json();
+        return (rec && rec.id) || null;
+      } catch (e) { return null; }
     },
 
     /** 배포본 레코드의 source_meta 를 State 에 반영 (도면 로드 경로 공용).
@@ -3189,17 +3310,26 @@
       }).filter(Boolean);
       const deployableZones = (State.zones || []).map(z => this._mapZoneForCrop(z, deckCrop)).filter(Boolean);
       const deployableAnnotations = (State.annotations || []).map(a => this._mapAnnoForCrop(a, deckCrop)).filter(Boolean);
+      return this._deploymentBody({
+        title: State.fileName || "도면", fileName: State.fileName || "",
+        pins: deployablePins, zones: deployableZones, annotations: deployableAnnotations,
+        checkboardStart: State.checkboardStart
+      }, pagesData, sourceMeta);
+    },
+
+    /** 배포본 저장 본문 형식의 SoT — 도면 저장(_buildSavePayload)과 영역 복사본 생성이 공유한다. */
+    _deploymentBody(o, pagesData, sourceMeta) {
       const body = {
-        title:       State.fileName || "도면",
-        file_name:   State.fileName || "",
-        pins:        JSON.stringify(deployablePins),
-        zones:       JSON.stringify(deployableZones),
-        annotations: JSON.stringify(deployableAnnotations)
+        title:       o.title || "도면",
+        file_name:   o.fileName || "",
+        pins:        JSON.stringify(o.pins || []),
+        zones:       JSON.stringify(o.zones || []),
+        annotations: JSON.stringify(o.annotations || [])
       };
       // [WO 20260917 멀티유저 ①] 체크보드 시작번호(페이지별) 영속화 — 항상 함께 보낸다(작아서
       //   조건부 전송할 이유가 없음). 서버는 컬럼 자체가 없던 구버전에서도 부분갱신 규칙(§merged)
       //   대로 안전히 저장한다. 값이 비어도 "{}" 로 보내 구버전(값 없음=1) 폴백을 그대로 재현.
-      body.checkboard_start = JSON.stringify(State.checkboardStart || {});
+      body.checkboard_start = JSON.stringify(o.checkboardStart || {});
       if (pagesData && pagesData.length) {
         body.drawing_data = pagesData[0];
         body.pages_data   = JSON.stringify(pagesData);

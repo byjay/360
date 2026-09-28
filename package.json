@@ -19,11 +19,13 @@
     "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local"
   },
   "dependencies": {
-    "hono": "^4.12.23"
+    "hono": "^4.12.23",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "@hono/vite-build": "^1.2.0",
     "@hono/vite-dev-server": "^0.25.2",
+    "pdfjs-dist": "^3.11.174",
     "vite": "^6.3.5",
     "wrangler": "^4.4.0"
   }

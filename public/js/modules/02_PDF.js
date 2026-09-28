@@ -466,6 +466,123 @@
       st.crop = null;
     },
 
+    /* ══════════════════════════════════════════════════════════════════
+       [WO 20260928-copy] 영역 = "지정한 부분만 복사한 새 1페이지 PDF" (마스터: "확대하면 해상도가 깨지잖아")
+       원본 페이지를 pdf-lib 로 통째 복사(벡터 그대로)한 뒤 MediaBox/CropBox 를 영역 사각형으로
+       좁힌다 → 새 PDF 의 페이지 자체가 그 영역이라, 열면 일반 도면처럼 벡터 재렌더로 선명하다.
+       pdf-lib(MIT 1.17.1)는 /vendor 에 벤더링 — CDN 금지, 영역 생성 때만 지연 로드(첫 화면 비용 0).
+       ══════════════════════════════════════════════════════════════════ */
+    PDFLIB_SRC: "/vendor/pdf-lib.min.js",
+    _pdfLibPromise: null,
+
+    /** pdf-lib 지연 로드(1회). 실패하면 약속을 비워 다음 시도에서 다시 받는다. */
+    ensurePdfLib() {
+      if (typeof window !== "undefined" && window.PDFLib) return Promise.resolve(window.PDFLib);
+      if (this._pdfLibPromise) return this._pdfLibPromise;
+      this._pdfLibPromise = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = this.PDFLIB_SRC;
+        s.async = true;
+        s.onload = () => (window.PDFLib ? resolve(window.PDFLib) : reject(new Error("pdf-lib 로드 실패")));
+        s.onerror = () => reject(new Error("pdf-lib 로드 실패"));
+        document.head.appendChild(s);
+      }).catch((e) => { this._pdfLibPromise = null; throw e; });
+      return this._pdfLibPromise;
+    },
+
+    /** 영역 crop(%, 화면=pdf.js 뷰포트 기준, 원점 좌상단) → PDF 사용자 공간 사각형(pt). 순수 함수.
+     *  view   = [x0,y0,x1,y1] 페이지 보이는 상자(pdf.js page.view 와 같은 정의 = CropBox∩MediaBox)
+     *  rotate = 페이지 /Rotate (0/90/180/270, 시계방향 — pdf.js 뷰포트 기본 회전과 동일)
+     *  🔴 PDF 사용자 공간은 원점이 **좌하단**(y 가 위로 증가) — 화면 v(아래로 증가)를 뒤집어야 한다.
+     *  @returns {{x,y,width,height}|null} */
+    cropPctToPdfBox(crop, view, rotate) {
+      const f = this.deckCropToFraction(crop);
+      if (!f || !Array.isArray(view) || view.length < 4) return null;
+      const r = ((Math.round(Number(rotate) || 0) % 360) + 360) % 360;
+      if (r % 90) return null;
+      const x0 = Math.min(view[0], view[2]), x1 = Math.max(view[0], view[2]);
+      const y0 = Math.min(view[1], view[3]), y1 = Math.max(view[1], view[3]);
+      const W = x1 - x0, H = y1 - y0;
+      if (!(W > 0) || !(H > 0)) return null;
+      // (u,v) = 화면 분수(u: 왼→오, v: 위→아래) → 사용자 공간. 회전별로 화면 좌상단이 가리키는 모서리가 다르다.
+      const toUser = (u, v) => {
+        if (r === 90)  return [x0 + v * W, y0 + u * H];
+        if (r === 180) return [x1 - u * W, y0 + v * H];
+        if (r === 270) return [x1 - v * W, y1 - u * H];
+        return [x0 + u * W, y1 - v * H];                    // 0° — y 뒤집기(좌하단 원점)
+      };
+      const a = toUser(f.x, f.y), b = toUser(f.x + f.w, f.y + f.h);
+      const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+      return { x, y, width: Math.abs(b[0] - a[0]), height: Math.abs(b[1] - a[1]) };
+    },
+
+    /** 원본 PDF 가 화면의 도면(스냅샷)과 같은 파일인지 — 다르면 crop % 가 엉뚱한 곳을 가리킨다. 순수 함수.
+     *  expect = { count?, pw?, ph? (스냅샷이 기록한 페이지 pt) , w?, h? (스냅샷 px — 비율만 비교) }
+     *  actual = { count, w, h } (원본 PDF 의 해당 페이지, 회전 반영한 화면 기준 pt)
+     *  @returns {string|null} 불일치 사유(사용자에게 그대로 보여줄 문장) · 일치/판단불가면 null */
+    regionSizeMismatch(expect, actual, tol) {
+      if (!expect || !actual) return null;
+      const t = tol > 0 ? tol : 0.01;
+      const off = (a, b) => Math.abs(a - b) / b > t;
+      if (expect.count > 0 && actual.count !== expect.count)
+        return "페이지 수가 다릅니다(도면 " + expect.count + "쪽 · 올린 PDF " + actual.count + "쪽)";
+      if (expect.pw > 0 && expect.ph > 0) {
+        if (off(actual.w, expect.pw) || off(actual.h, expect.ph))
+          return "페이지 크기가 다릅니다(도면 " + Math.round(expect.pw) + "×" + Math.round(expect.ph) + "pt · 올린 PDF " + Math.round(actual.w) + "×" + Math.round(actual.h) + "pt)";
+        return null;
+      }
+      if (expect.w > 0 && expect.h > 0 && actual.w > 0 && actual.h > 0) {
+        if (off(actual.w / actual.h, expect.w / expect.h)) return "페이지 가로세로 비율이 다릅니다";
+      }
+      return null;
+    },
+
+    /** pdf-lib 페이지의 보이는 상자 [x0,y0,x1,y1] — pdf.js page.view 와 같은 규칙(CropBox∩MediaBox). */
+    _pdfLibView(pg) {
+      const mb = pg.getMediaBox();
+      const m = [mb.x, mb.y, mb.x + mb.width, mb.y + mb.height];
+      let c = m;
+      try { const cb = pg.getCropBox(); c = [cb.x, cb.y, cb.x + cb.width, cb.y + cb.height]; } catch (e) {}
+      const v = [Math.max(m[0], c[0]), Math.max(m[1], c[1]), Math.min(m[2], c[2]), Math.min(m[3], c[3])];
+      return (v[2] > v[0] && v[3] > v[1]) ? v : m;
+    },
+
+    /** 원본 PDF 한 페이지의 영역만 담은 새 1페이지 PDF 를 만든다(벡터 복사 — 래스터 0).
+     *  원본 바이트는 읽기만 한다(원본 파일·배포본 무변경).
+     *  @param {ArrayBuffer|Uint8Array} srcBytes 원본 PDF
+     *  @param {number} pageNo 1-base
+     *  @param {object} crop {x,y,w,h} %
+     *  @param {object} [expect] regionSizeMismatch 의 기대값 — 다르면 code="SIZE_MISMATCH" 로 throw
+     *  @returns {Promise<{bytes:Uint8Array, box:{x,y,width,height}, rotate:number, pageCount:number}>} */
+    async copyRegionToPdf(srcBytes, pageNo, crop, expect) {
+      const L = await this.ensurePdfLib();
+      const src = await L.PDFDocument.load(srcBytes, { ignoreEncryption: true, updateMetadata: false });
+      const n = src.getPageCount();
+      const idx = Math.round(Number(pageNo) || 1) - 1;
+      if (idx < 0 || idx >= n) { const e = new Error("원본 PDF 에 " + (idx + 1) + "쪽이 없습니다"); e.code = "SIZE_MISMATCH"; throw e; }
+      const sp = src.getPage(idx);
+      const rot = ((((sp.getRotation() && sp.getRotation().angle) || 0) % 360) + 360) % 360;
+      const view = this._pdfLibView(sp);
+      const vw = view[2] - view[0], vh = view[3] - view[1];
+      const why = this.regionSizeMismatch(expect, { count: n, w: rot % 180 ? vh : vw, h: rot % 180 ? vw : vh });
+      if (why) { const e = new Error(why); e.code = "SIZE_MISMATCH"; throw e; }
+      const box = this.cropPctToPdfBox(crop, view, rot);
+      if (!box || !(box.width > 0) || !(box.height > 0)) throw new Error("영역 좌표를 PDF 좌표로 바꿀 수 없습니다");
+      const out = await L.PDFDocument.create();
+      const copied = await out.copyPages(src, [idx]);   // 페이지 내용(벡터·폰트·이미지)을 그대로 복사
+      const pg = copied[0];
+      out.addPage(pg);
+      // 보이는 상자를 영역으로 — 5종 상자를 모두 맞춰야 뷰어마다 같은 크기로 보인다.
+      pg.setMediaBox(box.x, box.y, box.width, box.height);
+      pg.setCropBox(box.x, box.y, box.width, box.height);
+      pg.setBleedBox(box.x, box.y, box.width, box.height);
+      pg.setTrimBox(box.x, box.y, box.width, box.height);
+      pg.setArtBox(box.x, box.y, box.width, box.height);
+      pg.setRotation(L.degrees(rot));                   // 회전 유지 → 원본 화면과 같은 방향
+      const bytes = await out.save();
+      return { bytes, box, rotate: rot, pageCount: n };
+    },
+
     /** [WO 20260917] 구역 크롭이 있는 페이지의 스냅샷 렌더 대상 사각형(페이지 포인트 단위). 순수 함수.
      *  crop 없으면 페이지 전체(종전 동작) — snapshotAllPages 자체는 변경하지 않는다(비파괴). */
     deckSnapshotRect(crop, pageW, pageH) {

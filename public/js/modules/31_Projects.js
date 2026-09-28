@@ -350,6 +350,9 @@
      *  마스터 원문: "pdf 에 여러 개의 뷰가 있는 파일일 때 긁어서 그 부분만 복사하듯이
      *  새로운 영역으로 만들어내는 기능".
      *
+     *  🔴 [WO 20260928-copy] 갱신 — 원본 PDF 가 있으면 아래 "창" 대신 **복사본**(지정 부분만 담은 새 1페이지
+     *     PDF 배포본, crop 없음)을 만든다(_planRegionCopy). 원본 배포본의 핀·구역·주석은 여전히 무변경이다.
+     *     아래 창 방식은 원본 PDF 가 없는 구버전 도면에서 사용자가 고를 때만 쓰인다.
      *  🔴 비파괴(마스터 확정 — "pdf 원본은 유지한 채 그 영역만 보여주는 기능"):
      *   · 원본 PDF·배포본(deployments 행)에는 **한 바이트도 쓰지 않는다.** decks 행 1개를 INSERT 할 뿐이다.
      *   · 새 영역은 원본과 **같은 deployment_id** 를 가리키고 차이는 page+crop 뿐 —
@@ -404,12 +407,19 @@
 
       this._extractingRegion = true;
       try {
+        // 🔴 [WO 20260928-copy] 마스터: "지정한 영역만 복사해서 새로운 페이지" / "확대하면 해상도가 깨지잖아".
+        //   원본 PDF 가 있으면 그 부분만 벡터 복사한 새 1페이지 PDF 배포본을 만들어 가리킨다(crop 없음).
+        //   원본이 없으면(구버전) 조용히 이미지 복사본을 만들지 않고 사용자에게 묻는다(_planRegionCopy).
+        const plan = await this._planRegionCopy(src, page, crop, name);
+        if (!plan) return null;   // 취소/실패 — 사유는 _planRegionCopy 가 이미 화면에 알렸다
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
-          // 🔴 원본과 같은 도면(deployment_id)을 가리킨다 — 픽셀 복사 없음, 원본 무변경.
+          // 복사본: 새 배포본(그 페이지 자체가 영역) · 창 방식: 원본과 같은 도면 + crop(원본 무변경).
           // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
           // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
-          body: JSON.stringify({ name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
+          body: JSON.stringify(plan.depId
+            ? { name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }
+            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
@@ -417,12 +427,102 @@
         const created = (this.decks || []).find((x) => x.id === d.id) || d;
         // 🔴 반복 추출(요구①) — 현재 구역을 새 영역으로 바꾸지 않는다. 원본 도면 화면에 그대로 머물러
         //    곧바로 다음 영역을 긁을 수 있다("복사하듯이"). 새 영역은 목록에서 눌러 들어간다.
-        Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 계속 드래그해 다른 영역도 만들 수 있어요(목록에서 눌러 열기)", 3600);
+        if (plan.depId) {
+          // 🔴 핀은 옮기지 않는다(원본 무변경) — 영역 안에 있던 핀 수를 사실대로 알린다(0이면 생략).
+          const live = typeof State !== "undefined" && State.autoSaveDepId === src.deployment_id;
+          const n = live ? this._pinsInCrop(State.pins, page, crop) : 0;
+          Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 지정한 부분을 새 페이지로 복사했습니다(확대해도 선명)"
+            + (n > 0 ? " · 원본 구역에 있던 핀 " + n + "개는 원본에 그대로 있습니다" : ""), 5200);
+        } else {
+          Prompt.toast && Prompt.toast("영역 '" + name + "' 생성 — 계속 드래그해 다른 영역도 만들 수 있어요(목록에서 눌러 열기)"
+            + (plan.limited ? " · 원본 PDF 가 없어 확대 시 선명도에 한계가 있습니다" : ""), plan.limited ? 5200 : 3600);
+        }
         return created;
       } catch (e) {
         Prompt.toast && Prompt.toast(navigator.onLine ? "영역 추출 실패 — 네트워크 오류, 다시 시도해주세요" : "오프라인이라 지금은 영역을 추출할 수 없습니다");
         return null;
       } finally { this._extractingRegion = false; }
+    },
+
+    /** [WO 20260928-copy] 영역을 "복사본(새 PDF 배포본)"으로 만들지 "창(crop)"으로 만들지 결정한다.
+     *  @returns {Promise<{depId, box}|{mode:"window", limited?}|null>} null = 취소/실패(사유는 이미 표시)
+     *  · 원본 있음  → 벡터 복사 → 새 배포본 id
+     *  · 원본 없음  → 묻는다: [원본 PDF 올리기](원본 등록 후 복사) / [창 방식](선명도 한계 고지) / 취소
+     *  🔴 원본 없이 스냅샷 이미지로 "복사본"을 만드는 경로는 없다(마스터가 거부한 결과). */
+    async _planRegionCopy(src, page, crop, name) {
+      const canCopy = typeof App !== "undefined" && App._regionSource && App._createRegionCopyDeployment
+        && App._attachSourcePdf && App._pickPdfFile && typeof PDF !== "undefined" && PDF.copyRegionToPdf;
+      if (!canCopy) return { mode: "window" };   // 복사 모듈이 없는 구버전 번들 — 종전 창 방식
+      const say = (m, ms) => { if (Prompt.toast) Prompt.toast(m, ms); };
+      const askWindow = async (why) => (await this._confirmLabeled("기존 방식(창)으로 만들까요?",
+        why + "\n\n창 방식은 원본 도면을 그대로 들여다보므로 확대하면 선명도에 한계가 있습니다.",
+        "창 방식으로 만들기", "취소")) ? { mode: "window", limited: true } : (say("영역 추출을 취소했습니다"), null);
+
+      say("원본 PDF 를 확인하는 중…", 2400);
+      const s = (await App._regionSource(src.deployment_id, page)) || { error: "원본 확인 실패" };
+      if (s.error) return await askWindow(s.error + " — 선명한 복사본을 만들 수 없습니다.");
+      let bytes = s.bytes, expect = s.expect, attach = false;
+      if (!bytes) {
+        const up = await this._confirmLabeled("원본 PDF 가 없는 도면입니다",
+          "이 도면은 원본 PDF 가 없어 확대하면 깨집니다.\n원본 PDF 를 올리면 지정한 부분을 선명한 새 페이지로 복사합니다.",
+          "원본 PDF 올리기", "지금은 기존 방식으로");
+        if (!up) return await askWindow("원본 PDF 없이 진행합니다.");
+        const file = await App._pickPdfFile();
+        if (!file) { say("영역 추출을 취소했습니다"); return null; }
+        try { bytes = await file.arrayBuffer(); } catch (e) { say("파일을 읽지 못했습니다 — 다시 시도하세요"); return null; }
+        const live = typeof State !== "undefined" && State.autoSaveDepId === src.deployment_id;
+        expect = App._regionExpect ? App._regionExpect(null, s.snapCount, page, live) : null;
+        attach = true;
+      }
+      let res = null;
+      try { res = await PDF.copyRegionToPdf(bytes, page, crop, expect); }
+      catch (e) {
+        const msg = (e && e.message) || "알 수 없는 오류";
+        if (!(e && e.code === "SIZE_MISMATCH")) {
+          if (attach) { say("PDF 를 읽지 못했습니다 — " + msg); return null; }
+          return await askWindow("원본 PDF 를 읽지 못했습니다(" + msg + ").");
+        }
+        if (!attach) return await askWindow("원본 PDF 와 화면의 도면이 맞지 않습니다 — " + msg + ".");
+        // 사용자가 직접 고른 파일이 화면 도면과 다르다 — 엉뚱한 부분이 복사된다. 알고 진행할 때만 계속.
+        const go = await this._confirmLabeled("다른 파일일 수 있습니다",
+          msg + "\n화면의 도면과 다른 PDF 를 올리면 엉뚱한 부분이 복사됩니다.", "그래도 이 PDF 로 진행", "취소");
+        if (!go) { say("영역 추출을 취소했습니다"); return null; }
+        try { res = await PDF.copyRegionToPdf(bytes, page, crop, null); }
+        catch (e2) { say("PDF 를 읽지 못했습니다 — " + ((e2 && e2.message) || "")); return null; }
+      }
+      if (attach) {
+        say("원본 PDF 를 도면에 등록하는 중…", 2400);
+        if (!(await App._attachSourcePdf(src.deployment_id, bytes))) { say("원본 PDF 등록 실패 — 네트워크를 확인하고 다시 시도하세요"); return null; }
+      }
+      say("지정한 부분을 새 페이지로 복사하는 중…", 2400);
+      const depId = await App._createRegionCopyDeployment(name, res.bytes);
+      if (!depId) { say("새 페이지 저장 실패 — 네트워크를 확인하고 다시 시도하세요"); return null; }
+      return { depId, box: res.box };
+    },
+
+    /** Prompt.confirm 을 버튼 문구만 바꿔 쓴다(닫히면 원래 문구 복원 — 다른 확인창에 새지 않게).
+     *  🔴 window.confirm 금지(PWA standalone 에서 무음 false). Prompt.confirm 이 없으면 "아니오". */
+    async _confirmLabeled(title, msg, okLabel, cancelLabel) {
+      if (typeof Prompt === "undefined" || !Prompt.confirm) return false;
+      const p = Prompt.confirm(title, msg);
+      const okB = document.getElementById("wm-confirm-ok");
+      const noB = document.getElementById("wm-confirm-cancel");
+      const prev = [okB ? okB.textContent : null, noB ? noB.textContent : null];
+      if (okB && okLabel) okB.textContent = okLabel;
+      if (noB && cancelLabel) noB.textContent = cancelLabel;
+      try { return !!(await p); }
+      finally { if (okB) okB.textContent = prev[0]; if (noB) noB.textContent = prev[1]; }
+    },
+
+    /** 영역(crop %) 안에 있는 그 페이지 핀 수 — 알림용 집계만(핀 배열은 읽기만 한다). 순수 함수. */
+    _pinsInCrop(pins, page, crop) {
+      if (!Array.isArray(pins) || !crop || !(crop.w > 0) || !(crop.h > 0)) return 0;
+      const pg = page || 1, x1 = crop.x + crop.w, y1 = crop.y + crop.h;
+      return pins.filter((p) => {
+        if (!p || (p.page || 1) !== pg) return false;
+        const x = Number(p.x), y = Number(p.y);
+        return x >= crop.x && x <= x1 && y >= crop.y && y <= y1;
+      }).length;
     },
 
     /** [WO 20260928 → 20260929 이음매 수정] "도면이 화면에 로드돼 있는가" 상태 판정.
