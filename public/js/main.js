@@ -5246,12 +5246,19 @@
                    (머리 밖 별도 배지)을 없애라는 뜻이었는데 머리 안 번호까지 지워 회귀가 났다.
                    상태(등록 fill/tier 원판/링 dash)는 그대로 유지하고, 흰 원판(tierDisc) 위에
                    번호만 다시 그린다 — 원판이 항상 흰색이라 txtFill(진한 계열색)과 대비 ≥4.5:1 보장.
-                   3자리 이상(101~)은 원판을 넘치지 않게 폰트를 축소한다. 커스텀 아이콘을 고른
-                   핀만 예외적으로 그 아이콘을 그린다(번호 대신). -->
+                   3자리 이상(101~)은 원판을 넘치지 않게 폰트를 축소한다.
+                   [WO 20260929 재회귀 수정] 마스터: "번호가 왜 사라졌는지" — 커스텀 아이콘을
+                   고른 핀은 번호 텍스트 대신 아이콘만 그려서 여전히 번호가 안 보였다. 이제
+                   아이콘 유무와 무관하게 번호는 항상 그리고, 아이콘은 버리지 않고 머리 우상단
+                   모서리의 작은 보조 배지(중심은 머리 원 반경 12.4 위 45° 지점 — 표준 "아바타
+                   코너 배지" 위치)로 옮긴다. 배지 아이콘 색도 txtFill 재사용(원판과 동일하게
+                   대비 ≥4.5:1 이미 보장된 값이라 별도 실측 불필요 — ≥3:1 요구보다 넉넉함). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))
-                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")
+                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`
+                : ""}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
@@ -10161,6 +10168,8 @@
       //   프로젝트·구역 컨텍스트가 없는 그 상태로 저장하면 어느 구역에도 안 붙는 고아 배포본이 생겼다.
       //   → 실제 변경(새 도면 업로드)은 _afterDrawingLoaded() 가, 핀/영역 편집은 _autoSave() 가
       //     각각 dirty 를 세운다. 표시 함수는 상태를 바꾸지 않는다.
+      // 🔴 [WO 20260929-fitrace2] 리셋+표시 완료 — 이 뒤에야 뷰포트 크기가 실재한다(whenDisplayed 대기자 해제).
+      this._settleDisplay(true);
     },
 
     _readAsArrayBuffer(file) {
@@ -11936,6 +11945,7 @@
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
+        this._armDisplay();   // [WO 20260929-fitrace2] _r0→_showMapViewport 가 settle
         imgEl.onload = _r0;
         // [오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
         //   로컬 draft(원본 dataURL)로 폴백하여 도면을 끊김없이 표시.
@@ -11999,6 +12009,7 @@
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
+        this._armDisplay();   // [WO 20260929-fitrace2] _r1→_showMapViewport 가 settle
         imgEl.onload = _r1;
         // [P52 결함수정] 형제 호출부(loadDeckDrawing)와 동일한 결함 — 로컬 draft 이미지가
         //   못 불러와지면(손상/미캐시) 종전엔 아무 렌더도 안 일어났다. 실패해도 핀·구역은 표시.
@@ -12033,8 +12044,28 @@
      *  await 사이에 다른 로드가 시작되면(허브 구역 클릭 = openApp 의 자동 로드 + selectDeck 동시 발화)
      *  늦게 도착한 쪽이 State.pins 를 엉뚱한 구역의 서버본으로 덮었다. 마지막에 시작한 로드만 State 를 쓴다. */
     _loadSeq: 0,
-    _beginLoad() { return ++this._loadSeq; },
+    _beginLoad() { this._settleDisplay(false); return ++this._loadSeq; },
     _isCurrentLoad(seq) { return seq === this._loadSeq; },
+
+    /** 🔴 [WO 20260929-fitrace2] "도면이 화면에 표시됐다" 신호(SoT) — 로더가 이미지를 걸 때 arm,
+     *  _showMapViewport()(zoom=1/pan=0 리셋 + 뷰포트 표시)가 끝나면 true 로 settle, 새 로드가 시작되면
+     *  (_beginLoad) 이전 대기를 false 로 settle 한다. 표시 후 줌을 잡아야 하는 호출부(구역 크롭 맞춤)는
+     *  img.complete 가 아니라 이 신호를 기다린다 — 실브라우저 실측: data: URL 도면은 img.complete 가
+     *  load 이벤트(_r0→_showMapViewport)보다 **먼저** true 가 되어, 숨은 뷰포트(0×0)에서 fitZone 이
+     *  조용히 무시되고 직후 _showMapViewport 가 identity 로 덮었다(prod dep_muksj6py 재현).
+     *  대기 중인 표시가 없으면 즉시 true(이미 화면에 있는 도면). */
+    _displayWait: null,
+    _displayResolve: null,
+    _armDisplay() {
+      if (this._displayResolve) return;   // 같은 로드의 폴백 경로(_restoreDraftLocal)는 기존 대기를 이어 쓴다
+      this._displayWait = new Promise((res) => { this._displayResolve = res; });
+    },
+    _settleDisplay(ok) {
+      const res = this._displayResolve;
+      this._displayResolve = null; this._displayWait = null;
+      if (res) res(!!ok);
+    },
+    whenDisplayed() { return this._displayWait || Promise.resolve(true); },
 
     /** 🔴 [WO 20260928-pinloss] 이 구역(key)의 **저장 안 한** 로컬 작업분(dirty draft)을 읽는다.
      *  다른 배포본을 기준으로 만든 draft(depId 불일치)는 이 서버본에 얹지 않는다(엉뚱한 도면에 핀 이식 금지). */
@@ -12716,6 +12747,7 @@
           if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
           if (typeof Notes !== "undefined") Notes.loadSummary();
         };
+        this._armDisplay();   // [WO 20260929-fitrace2] _r2→_showMapViewport 가 settle
         imgEl.onload = _r2;
         // [P52 결함수정] 🔴 근본원인 — 이 경로(프로젝트 재진입 시 최신 배포본 자동복원)엔
         //   onerror 핸들러가 아예 없었다. 도면 이미지가 R2 접근 실패(404/403/네트워크)로
@@ -13699,14 +13731,20 @@
     /** id → 정의(없으면 기본) */
     def(id) { return this.SET.find(s => s.id === id) || this.SET[0]; },
 
-    /** 핀 머리 안에 들어갈 아이콘 SVG 문자열(흰 원 중심 18,12 / 반경≈7.3 기준).
-     *  number 이면 null 반환(호출측에서 숫자 text 를 그린다). */
-    headMarkup(iconId, color, cy) {
+    /** 핀 머리 안(또는 임의 위치의 작은 배지 안)에 들어갈 아이콘 SVG 문자열.
+     *  number 이면 null 반환(호출측에서 숫자 text 를 그린다).
+     *  [WO 20260929] 번호가 항상 최우선으로 보여야 해서(마스터: "번호가 없잖아") 커스텀
+     *  아이콘은 더는 번호를 대체하지 않고 작은 보조 배지로 옮겨 그린다 — 그 배지용으로
+     *  중심 좌표(cx)와 크기(scale)를 선택적으로 받게 확장. 기존 호출부(cx/scale 생략,
+     *  머리 중앙 18,cy 기준 0.56배)는 전부 그대로 동작(하위호환). */
+    headMarkup(iconId, color, cy, cx, scale) {
       const d = this.def(iconId);
       if (!d.body) return null;
-      // 24x24 아이콘을 핀 머리 흰 원 안에 배치. cy = 머리 중심 y(기본 12, 360-ISO 마커는 15).
+      // 24x24 아이콘을 배치. cy = 중심 y(기본 12, 360-ISO 마커 머리는 15), cx = 중심 x(기본 18).
       const cyc = (typeof cy === 'number') ? cy : 12;
-      const s = 0.56, tx = 18 - 12 * s, ty = cyc - 12 * s;
+      const cxc = (typeof cx === 'number') ? cx : 18;
+      const s = (typeof scale === 'number') ? scale : 0.56;
+      const tx = cxc - 12 * s, ty = cyc - 12 * s;
       return `<g transform="translate(${tx} ${ty}) scale(${s})"
                  fill="none" stroke="${color || '#065f46'}" stroke-width="2.2"
                  stroke-linecap="round" stroke-linejoin="round">${d.body}</g>`;
@@ -16986,38 +17024,25 @@
       } catch (e) {}
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
-      // 🔴 [WO 20260929-fitrace] 근본원인 — loadDeckDrawing()이 반환(await 완료)돼도 <img id="map-image">
-      //   의 네트워크 로드는 아직 끝나지 않았을 수 있다(캐시 미스). 그 상태에서 fitZone()을 바로 부르면
-      //   #map-transform 이 아직 0×0(이미지 자연크기 미확정)이라 fitZone 내부 가드로 조용히 아무 일도
-      //   안 하고, 뒤늦게 이미지가 load 되면 loadDeckDrawing 의 onload(_r0→_showMapViewport)가
-      //   zoom=1/pan={0,0}로 되돌려 화면은 계속 잘리지 않은 원본 크기로 남는다(라이브 재현: matrix(1,0,0,1,0,0)).
-      //   아래 !crop 분기(WO 20260928-copy)가 이미 쓰던 "로드 완료 이벤트에 건다" 패턴을 그대로 재사용
-      //   (공유 지점 — 두 분기가 따로 타이밍을 잡으면 반드시 갈라진다). img.onload(_r0)가 먼저 등록돼
-      //   있으므로 여기서 추가하는 리스너는 그 뒤에 실행되어 _showMapViewport() 의 리셋 다음에 맞춘다.
-      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) {
-        const img = document.getElementById("map-image");
-        // 빠른 연속 전환 가드 — load 이벤트가 늦게 도착했을 때 그 사이 다른 구역으로 바뀌었으면
-        // (this.currentDeck.id !== d.id) 낡은 crop 을 적용하지 않는다(loadDeckDrawing 의 _isCurrentLoad 와
-        // 같은 취지). currentDeck 이 아직 세팅 안 된 호출(직접 호출)은 통과시킨다(id 로 비교 — 다른 곳의
-        // 기존 관용구와 동일, 31_Projects.js:660 참조).
-        const doFit = () => {
+      // 🔴 [WO 20260929-fitrace2] 근본원인(실브라우저 호출스택 확정) — 맞춤 시점을 img.complete 로
+      //   판정했다. data: URL 도면은 img.complete 가 load 이벤트보다 **먼저** true 가 되므로, 여기서
+      //   즉시 fitZone 을 불렀지만 그 순간 #map-viewport 는 아직 hidden(0×0) → fitZone 내부 가드로
+      //   조용히 무시되고, 2ms 뒤 load 이벤트의 _r0→App._showMapViewport() 가 zoom=1/pan=0 으로
+      //   identity 를 썼다(prod 재현: matrix(1,0,0,1,0,0) + 클립만 적용). 이미지 준비가 아니라
+      //   "로더의 표시(리셋) 완료"가 진짜 전제조건이다 → App.whenDisplayed()(20_App.js, SoT)를 기다린다.
+      //   두 분기(crop 창 방식 / crop 없는 벡터복사)가 같은 신호를 공유한다 — 따로 타이밍을 잡으면 갈라진다.
+      //   🔴 parent_id 로 가르지 않는다(SoT) — crop 없음 = 복사본(페이지 전체 맞춤), crop 있음 = 구버전 창.
+      const wantFit = crop ? (typeof MapCtrl !== "undefined" && MapCtrl.fitZone)
+                           : (!!d && typeof MapCtrl !== "undefined" && MapCtrl.fit);
+      if (wantFit) {
+        const ready = (typeof App !== "undefined" && App.whenDisplayed) ? App.whenDisplayed() : Promise.resolve(true);
+        ready.then((shown) => {
+          if (!shown) return;   // 표시 전에 다른 로드가 시작됨 — 낡은 구역 맞춤 금지
+          // 빠른 연속 전환 가드 — 그 사이 다른 구역으로 바뀌었으면 낡은 crop 을 적용하지 않는다.
           if (this.currentDeck && d && this.currentDeck.id !== d.id) return;
-          if (MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
-        };
-        if (img && img.complete && img.naturalWidth) doFit();
-        else if (img && img.addEventListener) img.addEventListener("load", doFit, { once: true });
-      }
-      // 🔴 [WO 20260928-copy → WO 20260928-unify 갱신] 벡터 복사본(crop 없음)은 그 배포본의 페이지
-      //   자체가 이 구역/영역이다 → 열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가
-      //   이미지 load 때 zoom=1 로 되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에
-      //   불린다 + 한 프레임 뒤). 🔴 parent_id 로 가르지 않는다(SoT) — 구역(루트)도 영역과 같은 벡터복사
-      //   경로를 쓰게 되면서(createDeckFromLoadedDrawing) crop 없음이 곧 "복사본"이라는 사실이 계층과
-      //   무관해졌다. crop 이 있는 구버전 창 방식 구역/영역만 위 fitZone 분기로 남는다.
-      else if (!crop && d && typeof MapCtrl !== "undefined" && MapCtrl.fit) {
-        const img = document.getElementById("map-image");
-        const go = () => { const f = () => MapCtrl.fit(); if (typeof requestAnimationFrame === "function") requestAnimationFrame(f); else f(); };
-        if (img && img.complete && img.naturalWidth) go();
-        else if (img && img.addEventListener) img.addEventListener("load", go, { once: true });
+          if (crop) MapCtrl.fitZone(crop, 0.14, 640);
+          else MapCtrl.fit();
+        });
       }
     },
 
