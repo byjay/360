@@ -606,6 +606,4 @@ select option,
   .btn-pano-ctrl { padding: 10px !important; }
   .btn-pano-ctrl svg { width: 23px; height: 23px; }
   #pano-controls { gap: 4px; }
-  /* 상단바 간결 — 모드 텍스트/구분점 숨김(색 점·로고로 충분) */
-  #mode-label, .topbar-sep { display: none; }
 }

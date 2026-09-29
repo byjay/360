@@ -193,9 +193,6 @@
   <header id="topbar" class="topbar">
     <button id="btn-back" class="btn-icon" title="홈으로" aria-label="홈으로"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
     <div id="brand-logo-top" class="brand-logo brand-logo-top" title="" aria-hidden="true"></div>
-    <div id="topbar-dot" class="topbar-dot"></div>
-    <span id="mode-label" class="mode-label">편집모드</span>
-    <span class="topbar-sep">·</span>
     <span id="file-name-label" class="file-name-label">도면 없음</span>
 
     <!-- [WO 20260929] 편집화면 3모드 세그먼트 — 보기/체크보드/사진등록. State.regMode(20_App.js) SoT. -->
@@ -203,10 +200,19 @@
       <button id="btn-regmode-view" class="regmode-btn" type="button" title="보기 — 생성·편집 없음, 핀 클릭 시 보기">보기</button>
       <button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="체크보드 — 도면 클릭 시 번호 핀만 생성">체크보드</button>
       <button id="btn-regmode-photo" class="regmode-btn" type="button" title="사진 등록 — 핀 생성 즉시 사진 파일창">사진 등록</button>
+      <!-- [WO 20260929 topbar-cleanup] 체크보드/사진등록 모드 전용 인라인 시작번호.
+           표시는 CSS 형제선택자(#btn-regmode-checkboard.active ~, #btn-regmode-photo.active ~)로만
+           결정 — 20_App.js가 이미 토글하는 .active 클래스를 읽기만 한다(새 JS 훅 없음).
+           SoT: App._setCheckboardStart()(20_App.js, 24_Settings.js에서 호출) — 값 자체는 여기서 만들지 않는다. -->
+      <span id="regmode-start-wrap" class="regmode-start-wrap">
+        <label for="input-regmode-start" class="regmode-start-label">시작 #</label>
+        <input id="input-regmode-start" class="regmode-start-input" type="number" min="1" inputmode="numeric" title="체크보드/사진등록 다음 번호 시작값 — 세팅 패널과 동기화" disabled />
+      </span>
     </div>
 
-    <!-- 수동 저장 버튼 (자동저장 OFF — 마스터 요청) -->
-    <button id="btn-save" class="btn-save hidden" type="button" title="작업 내용을 서버에 저장"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장</button>
+    <!-- 수동 저장 버튼 (자동저장 OFF — 마스터 요청). 라벨/색상/disabled는 20_App.js _updateSaveBtn()
+         SoT(그대로 유지, 미변경) — 여기서는 상태변화를 스크린리더가 읽도록 aria-live만 보강. -->
+    <button id="btn-save" class="btn-save hidden" type="button" aria-live="polite" title="저장 — 미저장 변경이 있으면 버튼에 '저장 *'로 표시됩니다. 클릭 시 서버에 저장"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 저장</button>
     <span id="autosave-indicator" class="autosave-indicator hidden" title="저장 상태">
       <span class="autosave-dot"></span>
       <span id="autosave-text" class="autosave-text">저장됨</span>

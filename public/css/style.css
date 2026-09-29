@@ -530,17 +530,6 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: color .15s, background .15s;
 }
 .btn-icon:hover { color: var(--text); background: rgba(43,40,32,0.102); }
-.topbar-dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--gold); box-shadow: 0 0 6px var(--gold);
-  flex-shrink: 0;
-}
-.mode-label {
-  /* [마스터 요청] 상단 타이틀 2배 확대 + 진하게(가시성) */
-  font-size: 20px; letter-spacing: 3px; color: var(--gold);
-  font-weight: 800;
-}
-.topbar-sep { color: var(--border2); }
 .file-name-label {
   /* [마스터 요청] 도면명 2배 확대 + 본문색(진하게)으로 가시성 확보 */
   color: var(--text); font-size: 18px; font-weight: 700;
@@ -3488,9 +3477,31 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   border: 1px solid rgba(0,0,0,.14); background: #f8fafc; color: #334155; white-space: nowrap;
 }
 .regmode-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+/* [WO 20260929 topbar-cleanup] 체크보드/사진등록 모드 전용 인라인 시작번호 — 표시는 20_App.js가
+   이미 토글하는 .active 클래스를 형제선택자로 읽기만 한다(새 JS 훅 없음). 값 SoT는
+   App._setCheckboardStart()(24_Settings.js 에서 호출), 여기는 표기만. */
+.regmode-start-wrap { display: none; align-items: center; gap: 6px; margin-left: 6px; padding-left: 8px; border-left: 1px solid rgba(0,0,0,.14); flex-shrink: 0; }
+.regmode-start-label { font-size: 11px; font-weight: 600; color: var(--text2); white-space: nowrap; }
+.regmode-start-input { width: 52px; padding: 4px 6px; font-size: 13px; border-radius: 6px; border: 1px solid rgba(0,0,0,.18); background: #fff; color: #0f172a; text-align: center; }
+.regmode-start-input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
+#btn-regmode-checkboard.active ~ #regmode-start-wrap,
+#btn-regmode-photo.active ~ #regmode-start-wrap { display: flex; }
 @media (max-width: 760px) {
   .regmode-seg { gap: 6px; }
   .regmode-btn { min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 13px; }
+  .regmode-start-input { min-width: 56px; min-height: 44px; font-size: 15px; }
+  .regmode-start-label { font-size: 12px; }
+  /* 375px 폭에서 세그먼트 3버튼+시작번호를 한 줄에 다 넣을 공간이 없다 — 요구사항대로
+     시작번호를 topbar 바로 아래 두 번째 줄로 뺀다. position:fixed 는 .topbar의
+     overflow-x:auto 가로스크롤/overflow-y:hidden 클리핑(아래 미디어쿼리) 밖에서 그려지므로
+     잘리지 않는다. top 값은 .topbar 고정 높이(68px, 이 파일 .topbar 규칙)와 일치. */
+  #btn-regmode-checkboard.active ~ #regmode-start-wrap,
+  #btn-regmode-photo.active ~ #regmode-start-wrap {
+    position: fixed; left: 0; right: 0; top: 68px;
+    justify-content: center; margin-left: 0; border-left: none;
+    background: var(--bg2); padding: 6px 16px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    z-index: 139;
+  }
   /* [WO 20260929-mobile-overflow] 실측(375×812): 뒤에 오는 브랜드 로고(brand-logo-top,
      ~150px)·점·모드라벨 등이 앞자리를 차지해 3모드 세그먼트의 "사진 등록" 버튼이 화면 밖으로
      완전히 밀려 아예 안 보였다(가로 스크롤로만 도달 — 요구사항은 스크롤 없이 화면 안).
@@ -3519,8 +3530,6 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 @media (max-width: 760px) {
   .topbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .topbar::-webkit-scrollbar { display: none; }            /* 가로 스크롤바 숨김(넘쳐도 깔끔) */
-  .mode-label { display: none; }                            /* 모드는 .topbar-dot 색점으로 표시 */
-  .topbar-sep { display: none; }
   .file-name-label { display: none; }                      /* 파일명은 미니맵/제목으로 식별 */
   #autosave-text, #sync-text { display: none; }            /* 상태는 점(dot)만, 텍스트 숨김 */
   .btn-save span, .btn-allpins span,
@@ -4686,9 +4695,6 @@ button { font-family: var(--font-ui); }
   box-shadow:0 3px 10px rgba(47,109,181,.3);
 }
 .btn-checkboard-toggle svg{ flex-shrink:0; }
-
-/* 체크보드 모드일 때 상단 모드 표시 강조(파랑) */
-body.mode-checkboard .mode-label{ color:var(--blue,#2f6db5)!important; }
 
 /* [체크보드 핀 색상구분] 체크보드 모드로 찍은 핀은 일반 핀(초록=사진없음/빨강=사진있음)과
    시각적으로 구분되도록 블루 계열로 표시(색상은 JS 11_UI.js renderPinsOnMap의 SVG 그라디언트에서 적용). */
