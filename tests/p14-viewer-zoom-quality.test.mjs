@@ -123,14 +123,17 @@ async function suiteBuildMeta(label, mk) {
 async function suiteThresholdOnce(label, mk) {
   console.log("\n[" + label + "]");
   {
-    // C: 임계 이하(확대 안 함) → 원본을 받지 않는다
+    // C: 임계 이하(스냅샷이 화면 픽셀×DPR 을 감당) → 원본을 받지 않는다
+    // [WO 20260929-lossless] 판정이 device px(cssPx×zoom×dpr > snapPx×1) 로 바뀌었다 — 종전 zoom=1.0 은
+    //   스냅샷 1000px 을 CSS 1500px 로 늘린 상태(밀도 0.67 = 실제로 흐림)라 새 기준에선 받아야 맞다.
+    //   의도("스냅샷으로 충분하면 다운로드 0")는 그대로, 입력만 충분한 배율(0.6 → 900 ≤ 1000)로 옮긴다.
     const { State, App, env } = mk();
     State.fileType = "pdf";
     State.sourceMeta = { v: 1, pdf_url: "/api/r2/object/assets/x.pdf", pages: [{ w: 1000, h: 700, pw: 1000, ph: 700 }] };
     State.sourcePdfUrl = State.sourceMeta.pdf_url;
     State.pdfPage = 1;
-    const r = await App.maybeLoadSourcePdf(1.0);
-    ok(r === false && env.fetchCalls.length === 0, `C 임계 이하(zoom=1.0) → 원본 다운로드 0건 (fetch=${env.fetchCalls.length})`);
+    const r = await App.maybeLoadSourcePdf(0.6);
+    ok(r === false && env.fetchCalls.length === 0, `C 임계 이하(zoom=0.6) → 원본 다운로드 0건 (fetch=${env.fetchCalls.length})`);
   }
   {
     // D: 임계 초과 → 1회만 받는다(재호출해도 재다운로드 없음)
@@ -139,7 +142,7 @@ async function suiteThresholdOnce(label, mk) {
     State.sourceMeta = { v: 1, pdf_url: "/api/r2/object/assets/x.pdf", pages: [{ w: 1000, h: 700, pw: 1000, ph: 700 }] };
     State.sourcePdfUrl = State.sourceMeta.pdf_url;
     State.pdfPage = 1;
-    const r1 = await App.maybeLoadSourcePdf(3.0); // cssPx(1500)*3 > 1000*1.5 → 임계 초과
+    const r1 = await App.maybeLoadSourcePdf(3.0); // cssPx(1500)*3*dpr(1) > 1000*1 → 임계 초과
     ok(r1 === true, "D 임계 초과(zoom=3.0) → 첫 호출 성공(원본 확보)");
     const dlCount1 = env.fetchCalls.filter(c => c.url === State.sourcePdfUrl).length;
     ok(dlCount1 === 1, `D 원본 다운로드 정확히 1회 (${dlCount1})`);
@@ -216,7 +219,7 @@ function suiteGuard(label, mk) {
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션M2] needsSourceRerender 를 항상 true 로 되돌림 → C 가 실패해야 함");
-  const needle = "return (cssPx * zoom) > (snapPx * gain);";
+  const needle = "return (cssPx * zoom * dpr) > (snapPx * gain);";
   const mutated = pdfSrc.replace(needle, "return true;");
   if (mutated === pdfSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
@@ -226,7 +229,7 @@ function suiteGuard(label, mk) {
     State.sourceMeta = { v: 1, pdf_url: "/api/r2/object/assets/x.pdf", pages: [{ w: 1000, h: 700, pw: 1000, ph: 700 }] };
     State.sourcePdfUrl = State.sourceMeta.pdf_url;
     State.pdfPage = 1;
-    const r = await App.maybeLoadSourcePdf(1.0); // 확대 안 했는데도
+    const r = await App.maybeLoadSourcePdf(0.6); // 스냅샷이 충분한데도
     ok(!(r === false && env.fetchCalls.length === 0),
       `뮤테이션 적용 시 임계 이하에서도 다운로드가 발생함(테스트 실효성 증명) → r=${r}, fetch=${env.fetchCalls.length}`);
   }

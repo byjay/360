@@ -217,10 +217,15 @@ function makeFlushDraftsSandbox(patchRes) {
   // [WO 20260928-pinloss] _flushDirtyDrafts 가 충돌 규칙 단일 출처(_draftVsServer)를 호출하게 됐다 —
   //   하네스에도 **실 소스**를 그대로 싣는다(스텁 아님). 이 블록의 assertion 은 한 줄도 바꾸지 않았다.
   const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer) {");
+  // [WO 20260929-lossless] _flushDirtyDrafts 가 원본 PDF(_draftSource)·R2 페이지 업로드(_uploadPagesToR2)를
+  //   거치게 됐다 — 같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
+  const srcBlocks = ["async _draftSource(d) {", "_isPdfBytes(ab) {", "async _uploadSourcePdf(ab) {", "_sourceMetaJson(url, pages) {", "async _uploadPagesToR2(pagesData) {"]
+    .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +
     "  _mergeById(a, b) { return (a || []).concat(b || []); },\n" +
     "  " + ruleBlock + ",\n" +
+    srcBlocks +
     "  _markDeckUnsaved() {},\n" +
     "  _draftKey() { return 'noproj::nodeck'; },\n" +
     "  _setSaveIndicator() {},\n" +

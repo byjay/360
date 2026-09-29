@@ -124,8 +124,12 @@
        받아버린다. 배포 스냅샷은 CSS 1:1(.map-image 자연 크기)로 보도록 만들어진 것이므로
        판정 기준은 device px 가 아니라 CSS px 이고, 확실히 부족할 때(1.5배)만 받는다.
        → 1:1 스냅샷 기준 zoom > 1.5 에서 발동. 구역 확대(MapCtrl.fitZone 4~8배)는 항상 발동.
-       원본을 확보한 뒤의 실제 렌더 목표 배율은 종전대로 zoom×dpr 이다(planRerender). */
-    SOURCE_GAIN: 1.5,
+       원본을 확보한 뒤의 실제 렌더 목표 배율은 종전대로 zoom×dpr 이다(planRerender).
+       🔴 [WO 20260929-lossless · 마스터 확정 "스냅샷은 미리보기, 표시 정본은 원본 PDF"] 위 1.5·CSS px 기준은
+       "화면 픽셀×DPR 보다 스냅샷 픽셀이 적은" 구간(DPR2 에서 1:1~1.5배)을 흐린 채 방치했다(실측 밀도 0.50).
+       → 판정을 device px(cssPx×zoom×dpr) 로 바꾸고 임계를 1(=부족해지는 순간)로 둔다. 전체 맞춤(fit) 화면은
+       스냅샷(긴 변 4096px)이 여전히 충분해 다운로드 0 — 확대해서 실제로 부족해질 때만 받는다. */
+    SOURCE_GAIN: 1,
 
     /** 마지막 snapshotAllPages 가 실제로 저장한 페이지 픽셀 크기
      *  [{ w, h, pw, ph }] — w/h = 스냅샷 비트맵 px, pw/ph = PDF 페이지 포인트.
@@ -198,15 +202,17 @@
      *  snapPx : 배포본에 기록된(또는 <img>.naturalWidth 로 실측한) 스냅샷 가로 픽셀
      *  cssPx  : 화면 1배(zoom=1)에서 그 스냅샷이 차지하는 CSS 가로 픽셀
      *  zoom   : 현재 CSS 확대 배율
+     *  dpr    : 화면 픽셀 밀도(렌더러와 같은 상한 2 — residentDpr) · 미지정이면 1
      *  크기를 모르면(0) 받지 않는다 — 불필요한 다운로드 0 이 기본값이다. */
     needsSourceRerender(o) {
       const opt = o || {};
       const snapPx = Number(opt.snapPx) || 0;
       const cssPx  = Number(opt.cssPx)  || 0;
       const zoom   = Number(opt.zoom)   || 0;
+      const dpr    = Math.max(1, Math.min(2, Number(opt.dpr) || 1));
       if (!(snapPx > 0) || !(cssPx > 0) || !(zoom > 0)) return false;
       const gain = Number(opt.gain) || this.SOURCE_GAIN;
-      return (cssPx * zoom) > (snapPx * gain);
+      return (cssPx * zoom * dpr) > (snapPx * gain);
     },
 
     /** [P14] 크롭 오버레이를 얹을 "바탕" 요소 — 전면 PDF 캔버스(편집) 또는 배포 스냅샷 <img>(뷰어).
@@ -246,6 +252,9 @@
       // 🔴 상한에 걸려 해상도가 안 오르는데 재렌더하면 "화질 그대로 + 대형 PDF 재렌더" 순수 손해다.
       //    실제로 오를 때(capped 기준)만 다시 그린다.
       if (capped > cur * gain) return { target: target, capped: capped, worth: true, reason: "sharpen" };
+      // 🔴 [WO 20260929-lossless] 지금 캔버스가 목표(화면 픽셀×DPR)에 **못 미치고** 올릴 여지가 있으면 여유율과
+      //   무관하게 다시 그린다 — 종전엔 목표의 87~100% 구간(예: 1.5배 초기렌더 뒤 1.6배 확대)이 흐린 채 남았다.
+      if (cur < target && capped > cur) return { target: target, capped: capped, worth: true, reason: "sharpen" };
       // 크게 축소한 뒤 남은 과잉 해상도 캔버스는 메모리만 먹는다 → 회수(히스테리시스로 진동 방지).
       if (cur > 0 && capped < cur / (opt.shrink || this.SHRINK_RATIO)) {
         return { target: target, capped: capped, worth: true, reason: "shrink" };
@@ -348,20 +357,29 @@
             pageW: baseVp.width, pageH: baseVp.height,
             pxCap: this.effectivePxCap(this._env(), 1), maxSide: this.MAX_SIDE_HARD
           });
+          // 🔴 [WO 20260929-lossless] 크롭(보이는 영역만) 목표는 **실제 화면 DPR** 로 잡는다. residentDpr 는 "페이지 전체를
+          //   한 장에" 담기 위한 감산(GA 7143×2384pt → 1.53)이라 크롭에 쓰면 DPR2 화면에서 밀도 0.77 로 굳었다(실측).
+          //   크롭 면적은 뷰포트로 묶이므로 이 감산이 필요 없다(메모리 상한은 renderCrop 의 effectivePxCap(,2)가 지킨다).
+          const rawDpr = Math.max(1, Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2));
+          const cropTarget = (st.baseCssScale || 1) * Math.max(1, st.lastZoom || 1) * rawDpr;
           // [WO 20260917] 구역(deck) 크롭이 고정돼 있으면 전체 페이지 임계와 무관하게
           //   항상 그 영역만 렌더 대상으로 삼는다 — 같은 픽셀 예산을 그 영역에 집중시켜
           //   A1/A0 가 첫 렌더부터 상한에 닿아 확대해도 선명해지지 않던 문제를 해소한다.
-          if (st.deckCrop) { await this.renderCrop(page, canvas, plan.target, rot); return; }
+          if (st.deckCrop) { await this.renderCrop(page, canvas, cropTarget, rot); return; }
           // [P14] 바탕이 배포 스냅샷 <img> 면 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표 기준).
           //   → 스냅샷보다 선명해질 때만 보이는 영역을 크롭 오버레이로 얹는다.
+          //   🔴 [WO 20260929-lossless] 임계 = 스냅샷 밀도 그 자체(×1). RERENDER_GAIN(1.15) 을 곱하면 목표의
+          //   87~100% 구간이 스냅샷으로 남아 "화면 픽셀×DPR 이상" 을 못 지킨다. 오버레이는 보이는 영역만
+          //   그리므로 비용이 뷰포트 크기로 묶인다(전면 재래스터와 달리 여유율이 필요 없다).
           if (st.overlayOnly) {
-            if (plan.target > (st.renderScale || 0) * this.RERENDER_GAIN) await this.renderCrop(page, canvas, plan.target, rot);
+            if (cropTarget > (st.renderScale || 0)) await this.renderCrop(page, canvas, cropTarget, rot);
             else this._clearCrop();
             return;
           }
           // 전면 캔버스가 목표에 못 미치면(상한에 막힘) → 보이는 영역만 고해상도로 얹는다.
-          if (plan.target > plan.capped * this.RERENDER_GAIN) {
-            await this.renderCrop(page, canvas, plan.target, rot);
+          //   (종전 임계 ×RERENDER_GAIN 은 목표의 87~100% 를 흐린 전면으로 남겼다 → 못 미치면 곧바로 크롭)
+          if (cropTarget > plan.capped) {
+            await this.renderCrop(page, canvas, cropTarget, rot);
             return;
           }
           this._clearCrop(); // 전면 캔버스만으로 충분한 배율 → 크롭 오버레이는 불필요
@@ -398,6 +416,34 @@
         ? MapCtrl.visibleDrawingRect() : null;
     },
 
+    /** 예산이 모자랄 때 보이는 영역에 붙이는 여백(뷰포트 폭 대비 비율). 평면 뷰는 역변환이 정확하므로
+     *  팬 직후 가장자리가 비치지 않을 만큼만 남긴다(기본 MapCtrl.visibleDrawingRect 여백 = 25%). */
+    TIGHT_PAD: 0.04,
+    /** 보이는 도면 영역(0~1). pad=null → MapCtrl.visibleDrawingRect() 그대로(종전).
+     *  pad 지정 + 평면 뷰(ISO 아님)면 applyTransform 모델(translate·scale, 원점 좌상단)의 정확한 역변환으로 계산한다
+     *  — 격자 표본(96칸)은 확대가 커지면(>~×50) 표본이 뷰포트에 안 잡혀 "전면"으로 폴백해 버린다.
+     *  ISO(3D)는 역변환이 불가 → 종전 표본 함수. */
+    _visibleRect(pad) {
+      if (typeof MapCtrl === "undefined" || !MapCtrl.visibleDrawingRect) return null;
+      if (pad == null || State.isoView || !MapCtrl.viewport || !MapCtrl.transform) return MapCtrl.visibleDrawingRect();
+      const cw = MapCtrl.transform.offsetWidth, ch = MapCtrl.transform.offsetHeight;
+      const vw = MapCtrl.viewport.clientWidth, vh = MapCtrl.viewport.clientHeight;
+      const z = State.zoom;
+      if (!(cw > 0 && ch > 0 && vw > 0 && vh > 0 && z > 0)) return null;
+      const mx = pad * vw, my = pad * vh;
+      const x0 = (-State.pan.x - mx) / (z * cw), y0 = (-State.pan.y - my) / (z * ch);
+      const x1 = (vw - State.pan.x + mx) / (z * cw), y1 = (vh - State.pan.y + my) / (z * ch);
+      return this.intersectRect({ x: 0, y: 0, w: 1, h: 1 }, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    },
+
+    /** 두 비율 사각형(0~1 {x,y,w,h})의 교집합 — 겹침이 없거나 입력이 없으면 null. 순수 함수. */
+    intersectRect(a, b) {
+      if (!a || !b) return null;
+      const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
+      const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
+      return (x1 > x0 && y1 > y0) ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+    },
+
     /** [화질 · 구조적 한계 우회] 지금 보이는 도면 영역만 목표 배율로 다시 그려 전면 캔버스 위에 얹는다.
      *  전면 캔버스 한 장은 페이지 전체를 담아야 해서 한 변 8192px·면적 상한에 막힌다
      *  (A1 기준 최대 배율 ≈3.44 → dpr2 화면에서 선명한 줌은 ≈1.7배까지). 구역 확대는 4~8배다.
@@ -406,18 +452,35 @@
      *  → 핀 % 좌표 정합이 그대로 유지된다. */
     async renderCrop(page, baseCanvas, scale, rot) {
       const st = this._renderState;
-      const rect = this._cropRenderRect();
+      let rect = this._cropRenderRect();
       if (!rect || (rect.w >= 1 && rect.h >= 1)) { this._clearCrop(); return; } // 전면이 다 보이면 크롭 이득 없음
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
-      const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
-      const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
       // [회귀수정 2026-09-28] renderCrop() 은 정의상 "전면(base) 캔버스 위에 겹쳐 그린다"
       // (함수 상단 주석) — 이 함수가 실행되는 순간 base 는 이미 DOM 에 존재하고 이 크롭
       // 오버레이가 그 위에 추가로 상주한다 → 상주 캔버스는 항상 2개(고정 상수가 아니라
       // 이 함수의 실행 전제 자체가 2다).
-      const rs = this.clampScale(scale, w0, h0, this.effectivePxCap(this._env(), 2), this.MAX_SIDE_HARD);
+      const cap = this.effectivePxCap(this._env(), 2);
+      // 🔴 [WO 20260929-lossless] 목표 배율에 못 미치면(상한에 막힘) 그릴 영역을 단계적으로 좁힌다 —
+      //   같은 픽셀 예산을 "지금 화면에 보이는 부분"에 집중해 화면 픽셀×DPR 이상을 지킨다.
+      //   실측(수정 전): GA 60% 폭 구역 1600% 밀도 0.06 · 여백 25% 붙은 보이는 영역 DPR2 밀도 0.77.
+      //   ① 구역 크롭 전체 → ② 크롭 ∩ 보이는 영역(여백 포함) → ③ 크롭 ∩ 보이는 영역(여백 최소).
+      //   (_cropRenderRect 계약 = 크롭 그대로는 유지: 맞춤 배율처럼 예산이 충분하면 종전대로 한 장으로 그린다.)
+      const fits = (r) => this.clampScale(scale, r.w * baseVp.width, r.h * baseVp.height, cap, this.MAX_SIDE_HARD) >= scale;
+      if (!fits(rect)) {
+        const base = st.deckCrop || { x: 0, y: 0, w: 1, h: 1 };
+        for (const pad of (st.deckCrop ? [null, this.TIGHT_PAD] : [this.TIGHT_PAD])) {
+          const v = this.intersectRect(base, this._visibleRect(pad));
+          if (v) rect = v;
+          if (fits(rect)) break;
+        }
+      }
+      const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
+      const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
+      const rs = this.clampScale(scale, w0, h0, cap, this.MAX_SIDE_HARD);
       // 전면 캔버스보다 선명하지 않으면 얹을 이유가 없다(메모리만 먹는다).
-      if (rs <= (st.renderScale || 0) * this.RERENDER_GAIN) { this._clearCrop(); return; }
+      //   🔴 [WO 20260929-lossless] 여유율(×1.15) 없이 ×1 — 요청측(requestZoomRerender)은 전면이 목표에 못 미칠 때만
+      //   이 함수를 부른다. 여기서 1.15 를 또 요구하면 목표의 87~100% 구간이 흐린 전면 캔버스로 남았다.
+      if (rs <= (st.renderScale || 0)) { this._clearCrop(); return; }
       const cv = this._ensureCrop(baseCanvas);
       if (!cv) return;
       const cssW = baseVp.width * st.baseCssScale, cssH = baseVp.height * st.baseCssScale;

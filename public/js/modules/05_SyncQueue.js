@@ -28,9 +28,12 @@
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 3);   // v2: drafts / v3: authlocal 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 4);   // v2: drafts / v3: authlocal / v4: sources(원본 도면 바이트)
         req.onupgradeneeded = () => {
           const db = req.result;
+          if (!db.objectStoreNames.contains(this.SRC_STORE)) {
+            db.createObjectStore(this.SRC_STORE, { keyPath: "key" });   // 저장 전 원본 PDF(오프라인·서버실패 보존)
+          }
           if (!db.objectStoreNames.contains(this.STORE)) {
             db.createObjectStore(this.STORE, { keyPath: "opId" });
           }
@@ -41,8 +44,16 @@
             db.createObjectStore(this.AUTH_STORE, { keyPath: "key" });  // 오프라인 재인증 검증자
           }
         };
-        req.onsuccess = () => res(req.result);
+        req.onsuccess = () => {
+          const db = req.result;
+          // 다른 탭(새 버전)이 업그레이드하려 하면 이 연결을 닫아 막지 않는다 — 다음 호출이 새로 연다.
+          db.onversionchange = () => { try { db.close(); } catch (e) {} if (this._db === db) this._db = null; };
+          res(db);
+        };
         req.onerror = () => rej(req.error || new Error("indexedDB open failed"));
+        // v3 를 연 채 떠 있는 구버전 탭이 업그레이드를 막으면 영원히 대기한다 → 이번 호출은 localStorage
+        // 폴백으로 진행(null)하고, 막힘이 풀려 열리면 onsuccess 가 이후 호출용으로 캐시하지 않는다(다음 호출이 재시도).
+        req.onblocked = () => res(null);
       }).catch(() => null);
       return this._db;
     },
@@ -108,6 +119,38 @@
       const keys = [];
       try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
       return keys;
+    },
+
+    /* ═══ [WO 20260929-lossless] 원본 도면 바이트(PDF) 보관 ═══
+       draft 는 화면 스냅샷(이미지)만 담는다 — 새로고침·재진입 뒤 저장하면 원본 PDF 없이 배포본이 만들어져
+       확대 시 깨졌다(prod dep_muksj6py: base64 JPEG + source_meta null). 원본은 서버에 올라가기 전까지
+       여기(IndexedDB)에 둔다. 🔴 localStorage 폴백 없음 — 수 MB 바이너리는 담을 수 없다(없으면 false 를 정직하게 반환). */
+    SRC_STORE: "sources",
+    async _srcTx(mode, fn) {
+      const db = await this._open();
+      if (!db || !db.objectStoreNames.contains(this.SRC_STORE)) return null;
+      try {
+        return await new Promise((res) => {
+          const tx = db.transaction(this.SRC_STORE, mode);
+          const out = fn(tx.objectStore(this.SRC_STORE));
+          tx.oncomplete = () => res(out && "result" in out ? out.result : true);
+          tx.onerror = () => res(null); tx.onabort = () => res(null);
+        });
+      } catch (e) { return null; }
+    },
+    async saveSource(key, rec) {
+      return !!(await this._srcTx("readwrite", (s) => { s.put(Object.assign({ key: key, savedAt: Date.now() }, rec)); }));
+    },
+    async loadSource(key) {
+      const r = await this._srcTx("readonly", (s) => s.get(key));
+      return (r && typeof r === "object") ? r : null;
+    },
+    /** 어떤 draft 도 가리키지 않는 원본을 지운다(keep = 살려 둘 key 집합). */
+    async pruneSources(keep) {
+      const keys = (await this._srcTx("readonly", (s) => s.getAllKeys())) || [];
+      const dead = (Array.isArray(keys) ? keys : []).filter((k) => !keep.has(k));
+      if (dead.length) await this._srcTx("readwrite", (s) => { dead.forEach((k) => s.delete(k)); });
+      return dead.length;
     },
 
     /* ═══ [P40] 오프라인 재인증 검증자 보관 ═══
