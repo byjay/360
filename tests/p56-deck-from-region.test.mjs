@@ -161,6 +161,12 @@ function makeDom() {
   ["deck-source-modal", "dsm-backdrop", "dsm-btn-region", "dsm-btn-upload", "dsm-region-reason", "dsm-sub", "dsm-cancel"].forEach((id) => { reg[id] = makeEl(); });
   reg["deck-source-modal"].classList.add("hidden");
   reg["dsm-region-reason"].classList.add("hidden");
+  // [WO 20260929-fitrace] #map-image — 이 스위트의 시나리오(이미 로드된 도면 위에서 드래그로
+  // 영역을 뽑는다)에선 이미지가 이미 로드·표시된 상태다(§_applyDeckCropView 의 img.complete
+  // 체크가 통과해 종전처럼 fitZone 이 즉시 불린다). 로드 레이스 자체는 p81 이 검증.
+  reg["map-image"] = makeEl();
+  reg["map-image"].complete = true; reg["map-image"].naturalWidth = 100;
+  reg["map-image"].addEventListener = () => {};
   return reg;
 }
 

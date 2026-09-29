@@ -155,7 +155,10 @@ function makeSelectSandbox(src) {
   const calls = { loadDeckDrawing: [], gotoPage: [], fitZone: [], bodyClass: [] };
   const sandbox = {
     console,
-    document: { body: { classList: { toggle: (c, v) => calls.bodyClass.push([c, !!v]) } } },
+    // [WO 20260929-fitrace] #map-image — 이 스위트는 선택(selectDeck) 흐름을 검사하고, App.loadDeckDrawing
+    // 은 아래에서 스텁(호출 기록만)이라 실제 이미지 로드가 없다 → 이미 로드된 것으로 흉내낸다(complete=true).
+    // 로드 레이스(이미지가 아직 안 끝났을 때 fitZone 을 지연시키는 동작) 자체는 p81 이 별도로 검증.
+    document: { body: { classList: { toggle: (c, v) => calls.bodyClass.push([c, !!v]) } }, getElementById: (id) => (id === "map-image" ? { complete: true, naturalWidth: 100, addEventListener() {} } : null) },
     Auth: { headers: () => ({}) },
     Prompt: { toast: () => {} },
     State: { mode: "designer" },
