@@ -5,12 +5,16 @@
      → 데이터 동기화는 클라이언트의 IndexedDB 큐(SyncQueue)가 책임진다.
    · 전략: 셸은 stale-while-revalidate (오프라인에서도 즉시 로드).
 ════════════════════════════════════════════ */
-const CACHE = 'wm-shell-v17';   // [AC-2] 미디어(R2 객체) 캐시를 별도(MEDIA_CACHE)로 분리 → 구버전(v16)에
+const CACHE = 'wm-shell-v18';   // [AC-2] 미디어(R2 객체) 캐시를 별도(MEDIA_CACHE)로 분리 → 구버전(v16)에
                                  //   섞여있던 대용량 360사진/도면을 activate 시 통째로 정리하기 위해 버전 상승
+                                 // [P89] v18: index.html 자산 참조에 ?v=<해시> 캐시버스팅 도입(빌드 stamp 단계) →
+                                 //   구 캐시(v17, 무쿼리 키)를 activate 시 통째로 정리해 이후 오프라인 매칭 혼선을 방지.
 const SHELL = [
   './',
   'index.html',
   'css/style.css',
+  'css/seastar-family-tokens.css', // [P89] 패밀리룩 헬퍼 — 빠져 있어 오프라인 1회차엔 미적용이었음(정리)
+  'css/seastar-3d-skin.css',       // [P89] 3D 스킨 오버레이 — 위와 동일 사유로 프리캐시 목록에 추가
   'js/main.js',
   'manifest.webmanifest',
   'vendor/pdf.worker.min.js',                 // ★ 오프라인 PDF 로드 핵심 — 로컬 워커(1MB) 반드시 캐시
@@ -217,7 +221,10 @@ self.addEventListener('fetch', (e) => {
         }
         return res;
       }).catch(() =>
-        caches.open(CACHE).then((c) => c.match(req)).then((cached) => cached || caches.match('index.html'))
+        // [P89] ignoreSearch:true — 빌드가 매번 ?v=<해시>를 바꿔 박으므로(캐시버스팅),
+        //   정확한 쿼리로 매칭하면 오프라인일 때 "방금 그 버전"만 찾다가 못 찾을 수 있다.
+        //   같은 pathname의 캐시된 셸(직전에 성공한 어떤 버전이든)을 찾아 앱이 뜨는 것이 우선.
+        caches.open(CACHE).then((c) => c.match(req, { ignoreSearch: true })).then((cached) => cached || caches.match('index.html'))
       )
     );
     return;

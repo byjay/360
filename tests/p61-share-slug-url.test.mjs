@@ -499,7 +499,9 @@ console.log("\n[⑨ 정적 자원이 새 경로에서 깨지지 않는다]");
     rel.push(u);
   }
   ok(rel.length === 0, "⑨a index.html 의 상대경로 src/href 0건 (실제 " + rel.length + "건" + (rel.length ? ": " + rel.join(", ") : "") + ")");
-  ok(html.includes('href="/css/style.css"') && html.includes('src="/js/main.js"'), "⑨b 핵심 자산이 절대경로");
+  // [P89] 빌드 stamp 단계가 캐시버스팅 쿼리(?v=<해시>)를 붙인다 — 절대경로 자체는 그대로, 쿼리만 허용.
+  ok(/href="\/css\/style\.css(\?v=[a-f0-9]+)?"/.test(html) && /src="\/js\/main\.js(\?v=[a-f0-9]+)?"/.test(html),
+    "⑨b 핵심 자산이 절대경로(캐시버스팅 쿼리 허용)");
   ok(/navigator\.serviceWorker\.register\('\/sw\.js'\)/.test(html), "⑨c SW 등록도 절대경로(스코프가 /srview/ 로 좁아지지 않는다)");
   ok(rd("index.html") === html, "⑨d 루트 미러(index.html) 동기화됨");
   // /srview/ 아래로 새는 요청이 발생하면 워커가 HTML 을 JS 자리에 돌려준다(치명) — 그 경로를 실제로 확인

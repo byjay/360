@@ -72,7 +72,8 @@ function localStylesheetsInLoadOrder() {
   while ((mm = re.exec(html))) {
     const href = mm[1];
     if (/^https?:/.test(href)) continue; // CDN 폰트/아이콘 제외 — 로컬 캐스케이드만 다룬다
-    out.push("public/" + href.replace(/^\.?\/?/, ""));
+    // [P89] 빌드 stamp 단계가 ?v=<해시> 캐시버스팅 쿼리를 붙인다 — 실제 파일 경로엔 없으므로 제거.
+    out.push("public/" + href.replace(/^\.?\/?/, "").replace(/\?.*$/, ""));
   }
   return out;
 }
