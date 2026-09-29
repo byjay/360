@@ -121,7 +121,8 @@ async function measureAll(browser, cssSrc, vw, vh) {
   // 체크보드 모드 진입 시뮬레이션(20_App.js._syncRegModeButtons() 와 동일하게 .active 부여만)
   const rects = await page.evaluate(() => {
     document.getElementById("btn-regmode-checkboard").classList.add("active");
-    const ids = ["btn-back", "btn-regmode-view", "btn-regmode-checkboard", "btn-regmode-photo", "input-regmode-start", "btn-settings"];
+    // [WO 20260929 2모드 전환] btn-regmode-view는 세그먼트에서 제거됐다(디자이너 UI 도달 불가) — 검사 대상에서도 제외.
+    const ids = ["btn-back", "btn-regmode-checkboard", "btn-regmode-photo", "input-regmode-start", "btn-settings"];
     return ids.map((id) => {
       const el = document.getElementById(id);
       if (!el) return { id, missing: true };
@@ -186,8 +187,12 @@ await withBrowser(async (browser) => {
   const mutated = cssStyle.replace(needle, "");
   const m = await measureAll(browser, mutated, 375, 812);
   console.log("  [뮤테이션 실측 375x812] " + JSON.stringify(m.rects));
-  const startRect = m.rects.find((r) => r.id === "input-regmode-start");
-  ok(!(startRect && !startRect.missing && startRect.left >= 0 && startRect.right <= 375), "뮤테이션 적용 시 인라인 시작번호가 375px 뷰포트를 벗어나거나 다른 버튼과 겹쳐 ⑤가 깨짐");
+  // [WO 20260929 addendum] [보기] 세그먼트 버튼 제거(3→2)로 폭 여유가 생겨, 이 CSS 규칙을 지워도
+  // input-regmode-start "만"은 우연히 뷰포트 안에 남을 수 있다(뮤테이션 무력화 오탐 방지) — 그 대신
+  // 뒤로 밀린 #btn-settings 가 뷰포트를 벗어나며 클릭 불가해진다. 특정 한 요소가 아니라
+  // "전부 뷰포트 안 + 전부 클릭 가능"(Part B ⑤와 동일 기준)으로 전체 판정해야 실제 붕괴를 잡는다.
+  const allFit = m.rects.every((r) => !r.missing && r.left >= 0 && r.right <= 375 && r.clickable);
+  ok(!allFit, "뮤테이션 적용 시 일부 요소가 375px 뷰포트를 벗어나거나 클릭 불가해짐(⑤가 깨짐) → " + JSON.stringify(m.rects.map((r) => ({ id: r.id, right: r.right, clickable: r.clickable }))));
 });
 
 /* ══════════════════════════════════════════════════════════
@@ -309,11 +314,11 @@ function makeEnv(settingsSrcToUse) {
 
 console.log("\n[뮤테이션ⓐ] 인라인 apply 의 this._renderCheckboardStart() 제거 → 모달 쪽 동기화 실패해야 함");
 {
-  const needle = `          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value);
+  const needle = `          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value, series);
           this._renderCheckboardStart();`;
   if (!settingsSrc.includes(needle)) { console.log("  FAIL 뮤테이션ⓐ 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const mutated = settingsSrc.replace(needle, `          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value);`);
+    const mutated = settingsSrc.replace(needle, `          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value, series);`);
     const { App, registry } = makeEnv(mutated);
     registry["input-regmode-start"].value = "99";
     registry["input-regmode-start"].blur();

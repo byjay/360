@@ -68,33 +68,35 @@ function loadPB(pbSource, seriesSource, extraState = {}) {
     { id: "C1", page: 1, label: "1", checkboard: true },
     { id: "C2", page: 1, label: "2", checkboard: true }
   ];
-  const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true });
+  // [WO 20260929 addendum] _defaultRange() 판정축이 State.checkboard(불리언, CHECKER/360 공통
+  // 플래그)에서 State.regMode(문자열, 계열을 실제로 구분)로 바뀌었다 — regMode 도 함께 넘긴다.
+  const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
   PB.open();
-  ok(PB._range.series === "checkboard", "① 체크보드 모드(State.checkboard=true) → open() 이 checkboard 계열로 열림, 실제 " + PB._range.series);
+  ok(PB._range.series === "checkboard", "① 체크보드 모드(State.regMode='checkboard') → open() 이 checkboard 계열로 열림, 실제 " + PB._range.series);
 
   const pinsContent = [
     { id: "A1", page: 1, label: "A", imageId: "x" },
     { id: "A2", page: 1, label: "B", imageId: "y" }
   ];
-  const { PB: PB2 } = loadPB(pbSrc, seriesSrc, { pins: pinsContent, pdfPage: 1, checkboard: false });
+  const { PB: PB2 } = loadPB(pbSrc, seriesSrc, { pins: pinsContent, pdfPage: 1, checkboard: false, regMode: "view" });
   PB2.open();
-  ok(PB2._range.series === "content", "② 등록 모드(State.checkboard=false) → open() 이 content 계열로 열림(회귀), 실제 " + PB2._range.series);
+  ok(PB2._range.series === "content", "② 등록 모드(State.regMode='view') → open() 이 content 계열로 열림(회귀), 실제 " + PB2._range.series);
 }
 
 /* ══ ③ _defaultRange() 에 series 하드코딩이 없다(+ 뮤테이션ⓐ) ══════════════ */
 {
   ok(!/_defaultRange\(\) \{\s*const list = this\._pinList\(State\.pins, State\.pdfPage \|\| 1, "content"\)/.test(pbSrc),
     "③ _defaultRange() 소스에 series=\"content\" 무조건 고정 패턴이 없다");
-  ok(/_defaultRange\(\) \{\s*const series = \(typeof State/.test(pbSrc),
-    "③ _defaultRange() 가 State.checkboard 를 참조해 series 를 계산한다");
+  ok(/_defaultRange\(\) \{\s*\/\/[\s\S]{0,400}?const series = \(typeof State/.test(pbSrc),
+    "③ _defaultRange() 가 State.regMode 를 참조해 series 를 계산한다");
 
   console.log("\n[뮤테이션ⓐ] _defaultRange() 의 series 계산을 다시 \"content\" 로 고정하면 ①이 실패해야 함");
-  const needleA = 'const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";';
+  const needleA = 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";';
   const mutatedA = pbSrc.replace(needleA, 'const series = "content";');
   if (mutatedA === pbSrc) { console.log("  FAIL 뮤테이션ⓐ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const pinsCb = [{ id: "C1", page: 1, label: "1", checkboard: true }];
-    const { PB: PBm } = loadPB(mutatedA, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true });
+    const { PB: PBm } = loadPB(mutatedA, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
     PBm.open();
     ok(PBm._range.series !== "checkboard", "뮤테이션ⓐ 적용 시 체크보드 모드에서도 content 로 고정됨(①이 깨짐, 하드코딩 재현) → " + PBm._range.series);
   }
@@ -310,28 +312,30 @@ function makePinSeriesSandbox(initialStore) {
   return sandbox.__PS;
 }
 {
+  // [WO 20260929 2모드 전환] 기본값 = checkboard(CHECKER). 구 "designer"(=[보기]) 기본은
+  // 세그먼트 제거와 함께 폐기됐다(구 WO 20260918 정정을 대체).
   const PSFresh = makePinSeriesSandbox({});
-  ok(PSFresh.preferredMode() === "designer", "⑩ 저장된 선택이 없으면 기본값 = designer(등록모드)");
+  ok(PSFresh.preferredMode() === "checkboard", "⑩ 저장된 선택이 없으면 기본값 = checkboard(CHECKER)");
 
   const PSSaved = makePinSeriesSandbox({ wm_pin_default_mode: "checkboard" });
   ok(PSSaved.preferredMode() === "checkboard", "⑨ 저장된 선택(checkboard)이 있으면 기본값보다 우선함");
 
-  console.log("\n[뮤테이션ⓔ] DEFAULT_MODE 를 다시 checkboard 로 되돌리면 ⑩이 실패해야 함");
-  const needleE = 'DEFAULT_MODE: "designer",';
-  const mutatedE = seriesSrc.replace(needleE, 'DEFAULT_MODE: "checkboard",');
+  console.log("\n[뮤테이션ⓔ] DEFAULT_MODE 를 다시 designer(구 [보기])로 되돌리면 ⑩이 실패해야 함");
+  const needleE = 'DEFAULT_MODE: "checkboard",';
+  const mutatedE = seriesSrc.replace(needleE, 'DEFAULT_MODE: "designer",');
   if (mutatedE === seriesSrc) { console.log("  FAIL 뮤테이션ⓔ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const sandboxM = { localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, console, JSON, Object, Array, Math, Number, String, Date };
     vm.createContext(sandboxM);
     vm.runInContext(mutatedE + "\n;globalThis.__PS = PinSeries;", sandboxM);
-    ok(sandboxM.__PS.preferredMode() !== "designer", "뮤테이션ⓔ 적용 시 기본값이 checkboard 로 되돌아감(⑩이 깨짐) → " + sandboxM.__PS.preferredMode());
+    ok(sandboxM.__PS.preferredMode() !== "checkboard", "뮤테이션ⓔ 적용 시 기본값이 designer 로 되돌아감(⑩이 깨짐) → " + sandboxM.__PS.preferredMode());
   }
 
-  // ⑪ 체크보드로 전환해도(State.checkboard=true) PhotoBatch.open() 이 여전히 checkboard 계열로 열림(요구1 회귀)
+  // ⑪ CHECKER 로 전환해도(State.regMode='checkboard') PhotoBatch.open() 이 여전히 checkboard 계열로 열림(요구1 회귀)
   const pinsCb = [{ id: "C1", page: 1, label: "1", checkboard: true }];
-  const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true });
+  const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
   PB.open();
-  ok(PB._range.series === "checkboard", "⑪ 기본모드가 등록모드로 바뀌어도, 체크보드로 전환하면 사진 일괄매칭이 checkboard 계열로 열림, 실제 " + PB._range.series);
+  ok(PB._range.series === "checkboard", "⑪ 기본모드가 CHECKER 가 아니어도, CHECKER 로 전환하면 사진 일괄매칭이 checkboard 계열로 열림, 실제 " + PB._range.series);
 }
 
 console.log(failed === 0 ? "\n[ALL PASS]" : "\n[" + failed + " FAILED]");

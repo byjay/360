@@ -253,7 +253,7 @@ suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSr
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션B] 대역 영속화 제거(저장 안 함) → ④가 실패해야 함");
-  const needle = 'try { localStorage.setItem(this.BAND_KEY_PREFIX + author, String(n)); } catch (e) {}';
+  const needle = 'try { localStorage.setItem(this._bandPrefix(series) + author, String(n)); } catch (e) {}';
   const mutated = seriesSrc.replace(needle, '/* [뮤테이션] 영속화 제거 */');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
@@ -272,8 +272,8 @@ suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSr
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션C] 사용자별 저장 키를 단일 키로 축소(author 무시) → ⑤가 실패해야 함");
-  const needle = "this.BAND_KEY_PREFIX + author";
-  const mutated = seriesSrc.split(needle).join("this.BAND_KEY_PREFIX");
+  const needle = "this._bandPrefix(series) + author";
+  const mutated = seriesSrc.split(needle).join("this._bandPrefix(series)");
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ctx = makeCtx(mutated, appSrc);

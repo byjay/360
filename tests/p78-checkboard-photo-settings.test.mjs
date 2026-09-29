@@ -279,8 +279,8 @@ function makeSettingsEnv(hasDrawing) {
   ok(renumberCalls.length === 1, "전체 번호 일괄 변경 클릭 → 기존 App._renumberCheckboard() 정본 그대로 호출됨");
 
   console.log("\n[뮤테이션③] [적용] 버튼이 입력값을 무시하도록 바꾸면 — 실패해야 함");
-  const needle = "const n = App._setCheckboardStart(State.pdfPage || 1, input.value);";
-  const mutated = settingsSrc.replace(needle, "const n = App._setCheckboardStart(State.pdfPage || 1, 1);");
+  const needle = "const n = App._setCheckboardStart(State.pdfPage || 1, input.value, series);";
+  const mutated = settingsSrc.replace(needle, "const n = App._setCheckboardStart(State.pdfPage || 1, 1, series);");
   if (mutated === settingsSrc) { console.log("  FAIL 뮤테이션③ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { Settings: SettingsM, App: AppM, registry: regM } = (() => {

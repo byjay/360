@@ -118,7 +118,7 @@
       if (_ml) {
         _ml.innerHTML = _modeIcon;
         _ml.style.color = accentVar;
-        _ml.title = isCheckboard ? "체크보드 모드" : isPhoto ? "사진 등록 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
+        _ml.title = isCheckboard ? "CHECKER 모드" : isPhoto ? "360 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
         _ml.style.display = "inline-flex"; _ml.style.alignItems = "center";
       }
 
@@ -135,7 +135,7 @@
         const cbEnter = UI.$("btn-checkboard-enter");
         const cbEnterLbl = UI.$("btn-checkboard-enter-label");
         if (cbEnter) cbEnter.classList.toggle("active", isCheckboard);
-        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드 시작";
+        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "CHECKER 모드 사용 중" : "CHECKER 모드 시작";
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
         //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
@@ -214,7 +214,7 @@
       const cbBtn = UI.$("btn-checkboard-enter");
       if (cbBtn) cbBtn.classList.toggle("active", isCheckboard);
       const cbLabel = UI.$("btn-checkboard-enter-label");
-      if (cbLabel) cbLabel.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드";
+      if (cbLabel) cbLabel.textContent = isCheckboard ? "CHECKER 모드 사용 중" : "CHECKER 모드 시작";
       const placeBtn = UI.$("btn-place");
       if (placeBtn) placeBtn.textContent = isPhoto ? "+ 번호 핀 + 사진" : isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
       const placeHint = UI.$("place-hint");
@@ -552,16 +552,16 @@
       // 포인트 배치 모드 토글
       UI.$("btn-place").addEventListener("click", () => this._togglePlacing());
 
-      // 체크보드 모드 토글 (보기 ↔ 체크보드) — 두 버튼 공용 핸들러. [WO 20260929] 신규 SoT(_setRegMode)로 귀결.
-      const toggleCheckboard = () => {
-        this._setRegMode(State.regMode === "checkboard" ? "view" : "checkboard");
-      };
+      // [WO 20260929 2모드 전환] CHECKER 진입 — 두 버튼 공용 핸들러. 과거엔 이미 체크보드일 때
+      // "view"(보기)로 되돌리는 토글이었으나, [보기] 세그먼트 제거로 그 경로는 디자이너 UI에서
+      // 도달 불가해야 한다(WO 원문). 이제 이 버튼은 CHECKER 진입 전용 — 이미 체크보드면 무동작.
+      const enterCheckboard = () => { this._setRegMode("checkboard"); };
       const cbBtn = UI.$("btn-checkboard-toggle");
-      if (cbBtn) cbBtn.addEventListener("click", toggleCheckboard);
+      if (cbBtn) cbBtn.addEventListener("click", enterCheckboard);
       const cbEnter = UI.$("btn-checkboard-enter");
-      if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
-      // [WO 20260929] 편집화면 3모드 세그먼트(보기/체크보드/사진등록) — 신규 진입점, 같은 SoT로 귀결.
-      ["view", "checkboard", "photo"].forEach((m) => {
+      if (cbEnter) cbEnter.addEventListener("click", enterCheckboard);
+      // [WO 20260929 2모드 전환] 편집화면 2모드 세그먼트(CHECKER/360) — 신규 진입점, 같은 SoT로 귀결.
+      ["checkboard", "photo"].forEach((m) => {
         const b = UI.$("btn-regmode-" + m);
         if (b) b.addEventListener("click", () => this._setRegMode(m));
       });
@@ -698,7 +698,10 @@
       });
     },
 
-    /** [WO 20260929] 편집화면 3모드 SoT — 보기(view)/체크보드(checkboard)/사진등록(photo).
+    /** [WO 20260929 2모드 전환] 편집화면 SoT — CHECKER(checkboard)/360(photo) 2모드.
+     *  🔴 "view"(구 [보기])는 세그먼트·모든 UI 진입점에서 제거됐다 — 디자이너 UI로는
+     *  도달 불가해야 한다(WO 원문). State.regMode 내부 값으로는 여전히 남아 있을 수 있어
+     *  이 함수는 방어적으로 "view"도 받아들이지만, 어떤 버튼도 더 이상 "view"를 호출하지 않는다.
      *  🔴 기존 진입점(btn-checkboard-enter/btn-checkboard-toggle·포인트 추가 버튼들)도
      *  모두 이 함수로 귀결된다 — 상태를 여러 곳에서 따로 세팅하면 반드시 갈라진다
      *  (전역 CLAUDE.md §10 SoT). openApp(keepDrawing:true) 재사용 — 도면 재로드 없음
@@ -719,10 +722,10 @@
       }
     },
 
-    /** 3모드 세그먼트 버튼(#btn-regmode-view/checkboard/photo) 활성 표시 동기화.
+    /** 2모드 세그먼트 버튼(#btn-regmode-checkboard/photo) 활성 표시 동기화.
      *  렌더 지점 하나(§10 SoT) — openApp()·_setRegMode() 어디서 전환되든 여기만 부른다. */
     _syncRegModeButtons() {
-      ["view", "checkboard", "photo"].forEach((m) => {
+      ["checkboard", "photo"].forEach((m) => {
         const b = UI.$("btn-regmode-" + m);
         if (!b) return;
         const active = State.regMode === m;
@@ -737,7 +740,7 @@
       //   여기 한 곳만 막으면 어느 버튼으로 들어와도 view 모드에서 생성이 불가능하다.
       if (!State.placing && State.regMode === "view") {
         if (typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — 체크보드/사진 등록 모드로 전환하세요");
+          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — CHECKER/360 모드로 전환하세요");
         }
         return;
       }
@@ -1418,33 +1421,56 @@
 
     /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
      *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
-    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1).
+    /** [WO 20260929 addendum, 지휘자 정정] 🔴 시작번호 저장 SoT — State.checkboardStart 형식을
+     *  계열별 중첩({checkboard:{page:n}, content:{page:n}})으로 바꾼다(마스터: "세팅도 각 모드에서
+     *  가능하게 해" — CHECKER 시작번호와 360 시작번호는 서로 다른 값이어야 한다).
+     *  마이그레이션 없이: 서버 컬럼(deployments.checkboard_start)은 그대로 JSON TEXT 라 스키마
+     *  변경이 없다 — 구버전 평면 형식({page:n, ...})은 로드 시 이 함수가 "전부 checkboard 계열"
+     *  로 해석해 감싼다(과거엔 번호핀이 전부 checkboard:true 였으므로 사실과 일치 — content(360)는
+     *  새로 시작, 기본 1). 네 군데 로드 지점(_loadLatestDeployment 등)이 전부 이 함수 하나만
+     *  거친다(§10 SoT — 각자 파싱하면 형식이 갈라진다). */
+    _normalizeCheckboardStart(raw) {
+      const o = (raw && typeof raw === "object") ? raw : {};
+      const hasSeriesShape = ("checkboard" in o) || ("content" in o);
+      const looksNested = hasSeriesShape && ["checkboard", "content"].every((k) => !(k in o) || (o[k] && typeof o[k] === "object"));
+      if (looksNested) {
+        return {
+          checkboard: (o.checkboard && typeof o.checkboard === "object") ? o.checkboard : {},
+          content: (o.content && typeof o.content === "object") ? o.content : {}
+        };
+      }
+      return { checkboard: o, content: {} }; // 구버전 평면 형식 → 전부 checkboard 계열로 승계
+    },
+    /** 현재 구역(페이지)의 시작 번호 (미설정 시 1). series 생략 시 "checkboard"(하위호환).
      *  🔴 [WO 20260917 멀티유저 ①·재설계] 마스터 확정: "시작번호 = 사용자별 번호 대역"
      *  (예: 사용자A=100, 사용자B=200 — 번호만 봐도 누가 찍었는지 알고, 충돌이 구조적으로 없다).
-     *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속)이 있으면 최우선이고,
-     *  없으면 기존 페이지별 값(State.checkboardStart, 구버전/비로그인 폴백)을 쓴다. */
-    _checkboardStart(page) {
+     *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속, 계열별 키)이 있으면
+     *  최우선이고, 없으면 계열별 페이지값(State.checkboardStart[series], 구버전/비로그인 폴백)을 쓴다. */
+    _checkboardStart(page, series) {
+      const ser = series === "content" ? "content" : "checkboard";
       const p = page || State.pdfPage || 1;
       const author = this._pinAuthor();
-      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author) : null;
+      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author, ser) : null;
       if (band != null) return band;
-      const v = State.checkboardStart && State.checkboardStart[p];
+      const bucket = (State.checkboardStart && State.checkboardStart[ser]) || {};
+      const v = bucket[p];
       const n = parseInt(v, 10);
       return (Number.isFinite(n) && n >= 1) ? n : 1;
     },
-    /** 시작 번호 설정. 로그인 사용자는 "내 대역"(사용자에게 귀속 — localStorage, 배포본
-     *  단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
+    /** 시작 번호 설정(계열별). 로그인 사용자는 "내 대역"(사용자+계열에 귀속 — localStorage,
+     *  배포본 단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
      *  비로그인/데모(author 없음)는 종전처럼 페이지별 값만 저장(하위호환). */
-    _setCheckboardStart(page, value) {
+    _setCheckboardStart(page, value, series) {
+      const ser = series === "content" ? "content" : "checkboard";
       const p = page || State.pdfPage || 1;
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
       const author = this._pinAuthor();
       if (author && typeof PinSeries !== "undefined" && PinSeries.setUserBandStart) {
-        PinSeries.setUserBandStart(author, n);
+        PinSeries.setUserBandStart(author, n, ser);
       }
-      State.checkboardStart = State.checkboardStart || {};
-      State.checkboardStart[p] = n;
+      State.checkboardStart = this._normalizeCheckboardStart(State.checkboardStart);
+      State.checkboardStart[ser][p] = n;
       this._autoSave && this._autoSave();
       return n;
     },
@@ -1453,24 +1479,29 @@
      *  duplicateCheckboardIds() 위 주석의 금지 규율과 충돌하지 않는다, 01b_PinSeries.js 참조).
      *  버튼 클릭 → 새 시작번호 입력(Prompt.ask, 새 UI 없음) → 미리보기/확인(confirm) →
      *  적용. 계산·검증은 PinSeries.renumberCheckboardRange() 정본에 전부 있고, 여기선
-     *  호출·확인·반영만 한다. */
-    async _renumberCheckboard() {
+     *  호출·확인·반영만 한다.
+     *  [WO 20260929 addendum, 지휘자 정정] series 생략 시 "checkboard"(하위호환, 기존
+     *  #btn-checkboard-renumber 무인자 호출 그대로 동작) — 마스터: "번호 일괄 변경도 현재
+     *  모드 핀만 대상"이라 24_Settings.js 가 현재 모드(State.regMode)를 넘겨 호출한다. */
+    async _renumberCheckboard(series) {
+      const ser = series === "content" ? "content" : "checkboard";
+      const seriesLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[ser]) || ser;
       const page = State.pdfPage || 1;
       const cur = PinSeries.numbers(State.pins, page);
-      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && p.checkboard);
-      if (!curTargets.length) { Prompt.toast && Prompt.toast("이 페이지에는 체크보드 핀이 없습니다"); return; }
+      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && PinSeries.seriesOf(p) === ser);
+      if (!curTargets.length) { Prompt.toast && Prompt.toast("이 페이지에는 " + seriesLabel + " 핀이 없습니다"); return; }
       let curMin = Infinity, curMax = -Infinity;
       curTargets.forEach((p) => { const info = cur.get(p.id); if (info) { curMin = Math.min(curMin, info.no); curMax = Math.max(curMax, info.no); } });
       const res = await Prompt.ask({
-        title: "번호 일괄 변경",
+        title: seriesLabel + " 번호 일괄 변경",
         sub: "현재 " + curTargets.length + "개(" + curMin + "~" + curMax + "번) — 새 시작 번호를 입력하세요",
         placeholder: "새 시작 번호", value: String(curMax + 1)
       });
       if (!res) return;
-      const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value);
+      const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value, null, ser);
       if (!result.ok) { Prompt.toast && Prompt.toast(result.reason || "변경할 수 없습니다"); return; }
       const first = result.changes[0].newLabel, last = result.changes[result.changes.length - 1].newLabel;
-      if (!await Prompt.confirm("번호 일괄 변경", "체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
+      if (!await Prompt.confirm(seriesLabel + " 번호 일괄 변경", seriesLabel + " 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
       const byId = new Map((State.pins || []).map((p) => [p.id, p]));
       result.changes.forEach((c) => {
         const pin = byId.get(c.id);
@@ -1498,22 +1529,28 @@
       return null;
     },
 
+    /** [WO 20260929 addendum, 지휘자 정정] 🔴 유일한 생성 지점 — CHECKER(checkboard)와 360(photo)
+     *  둘 다 여기서 만들어진다. 마스터: "번호체계도 다르게 해" — State.regMode 로 계열을 갈라
+     *  각 계열끼리만 채번한다(nextSeriesNo, §10 SoT). photo(360) 핀은 pin.checkboard 필드
+     *  자체를 생략한다(마스터: "기존 데이터: checkboard 플래그 없는 핀 = 360 계열로 간주" —
+     *  이 표현과 정확히 일치시킨다, 거짓 false 를 쓰지 않는다). */
     _placeCheckboardPin(pct) {
       const curPage = State.pdfPage || 1;
-      // 🔴 채번 정본 = PinSeries. 체크보드 계열은 콘텐츠 핀과 독립이므로
-      //   "페이지 내 전체 핀 수"가 아니라 "페이지 내 체크보드 핀 수"로 증가한다.
-      const start = this._checkboardStart(curPage);
+      const series = (State.regMode === "photo") ? "content" : "checkboard";
+      // 🔴 채번 정본 = PinSeries. 계열마다 독립으로 "페이지 내 그 계열 핀 수"로 증가한다.
+      const start = this._checkboardStart(curPage, series);
       const _auth0 = this._pinAuthor();
       // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
       //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
-      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start, _auth0);
-      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      const no = PinSeries.nextSeriesNo(State.pins, curPage, start, _auth0, series);
+      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no) };
+      if (series === "checkboard") pin.checkboard = true;
       if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       State.pins.push(pin);
-      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
+      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: series === "checkboard" });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks();
       UI.renderPinList();
@@ -1574,37 +1611,46 @@
       }
     },
 
-    /** 현재 페이지에서 방금 찍은 체크보드 계열 핀의 번호 범위(시작~마지막).
+    /** 현재 페이지에서 방금 찍은 계열(series)의 번호 범위(시작~마지막).
      *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백.
-     *  [마스터 요청 2026-09-03] series:"checkboard" 를 함께 반환해 PhotoBatch.open() 이
-     *  콘텐츠 계열과 혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수). */
-    _checkboardQuickRange(page) {
+     *  [마스터 요청 2026-09-03] series 를 함께 반환해 PhotoBatch.open() 이 다른 계열과
+     *  혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수).
+     *  [WO 20260929 addendum] series 생략 시 "checkboard"(하위호환) — 360(photo) 모드는
+     *  _updateCheckboardQuickStatus() 가 State.regMode 로 판정해 "content" 를 넘긴다. */
+    _checkboardQuickRange(page, series) {
+      const ser = series === "content" ? "content" : "checkboard";
       const pg = page || State.pdfPage || 1;
       const map = PinSeries.numbers(State.pins, pg);
       let start = null, end = null;
       (State.pins || []).forEach((p) => {
-        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        if (!p || (p.page || 1) !== pg || PinSeries.seriesOf(p) !== ser) return;
         const info = map.get(p.id);
         if (!info) return;
         if (start === null || info.no < start) start = info.no;
         if (end === null || info.no > end) end = info.no;
       });
-      const fallback = this._checkboardStart(pg);
-      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: "checkboard" };
+      const fallback = this._checkboardStart(pg, ser);
+      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: ser };
     },
 
     /** [마스터 요청 2026-09-03, WO 20260918 갱신] "지금 몇 번부터 / 몇 개 찍었는지"를 기존
      *  place-hint 문구에 반영한다. (구 "사진 폴더 연동" 퀵버튼 노출 토글은 그 버튼이 렌더
-     *  고아라 삭제되며 함께 제거 — #btn-photobatch 로 통합.) */
+     *  고아라 삭제되며 함께 제거 — #btn-photobatch 로 통합.)
+     *  [WO 20260929 addendum] State.regMode 로 계열을 판정해 CHECKER/360 각각의 시작번호·
+     *  개수·다음번호를 보여준다(마스터: "번호체계도 다르게 해"). */
     _updateCheckboardQuickStatus(page) {
       const pg = page || State.pdfPage || 1;
-      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard).length;
-      const range = this._checkboardQuickRange(pg);
+      const series = (State.regMode === "photo") ? "content" : "checkboard";
+      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
+      const range = this._checkboardQuickRange(pg, series);
       const hint = UI.$("place-hint");
+      const emptyHint = series === "content"
+        ? "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다"
+        : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ("시작 " + this._checkboardStart(pg) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
-          : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
+          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
+          : emptyHint;
       }
     },
 
@@ -4009,7 +4055,9 @@
         try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
-        try { State.checkboardStart = JSON.parse(dep.checkboard_start || "{}") || {}; } catch { State.checkboardStart = {}; }
+        // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식({checkboard,content})
+        //   으로 정규화(§10 SoT — 네 로드 지점이 각자 파싱하면 형식이 갈라진다).
+        try { State.checkboardStart = this._normalizeCheckboardStart(JSON.parse(dep.checkboard_start || "{}")); } catch { State.checkboardStart = this._normalizeCheckboardStart(null); }
         // 🔴 [WO 20260928-pinloss] 저장 안 한 로컬 작업분(dirty draft)이 있으면 서버본 위에 복원.
         //   렌더(_r0) 전에 끝내야 첫 화면부터 draft 핀이 보이고, 이후 저장/자동보관이 draft 를 빈 목록으로 덮지 않는다.
         this._applyDirtyDraft(draft, dkey, dep.version);
@@ -4080,7 +4128,7 @@
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
         // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
-        State.checkboardStart = (d.checkboardStart && typeof d.checkboardStart === "object") ? d.checkboardStart : {};
+        State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
         if (d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; }
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
@@ -4200,7 +4248,7 @@
       State.pins = m.pins;
       State.zones = m.zones;
       if (Array.isArray(d.annotations)) State.annotations = d.annotations;
-      if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = d.checkboardStart;
+      if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
       this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
       this._markDeckUnsaved(this._deckIdOfKey(key), true);
       return true;
@@ -4910,8 +4958,9 @@
         try { State.annotations = JSON.parse(latest.annotations || "[]"); }
         catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
-        try { State.checkboardStart = JSON.parse(latest.checkboard_start || "{}") || {}; }
-        catch { State.checkboardStart = {}; }
+        // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식 정규화(§10 SoT).
+        try { State.checkboardStart = this._normalizeCheckboardStart(JSON.parse(latest.checkboard_start || "{}")); }
+        catch { State.checkboardStart = this._normalizeCheckboardStart(null); }
         // 🔴 [WO 20260928-pinloss] 형제 로더(loadDeckDrawing)와 같은 공유 지점 — 저장 안 한 작업분 복원
         if (draft && latest.id === wantId) this._applyDirtyDraft(draft, draftKey, latest.version);
 

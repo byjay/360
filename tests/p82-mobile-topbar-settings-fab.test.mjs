@@ -24,7 +24,7 @@
  *   - @media(max-width:640px),(pointer:coarse) 안 .pin-grid-reopen-label { display:none; } (아이콘 전용 FAB)
  *
  * 검사(실 브라우저, puppeteer, public/index.html 실 마크업 + CSS 3파일 실 캐스케이드):
- *  ① 360×740 / 375×812 / 414×896 각 폭에서 #btn-back·.regmode-btn×3·#btn-settings 전부
+ *  ① 360×740 / 375×812 / 414×896 각 폭에서 #btn-back·.regmode-btn×2(CHECKER/360, WO 20260929 2모드 전환)·#btn-settings 전부
  *     뷰포트 안(0 ≤ left, right ≤ vw) + elementFromPoint(중심)이 자기 자신(클릭 가능) + h ≥ 44
  *  ② 같은 3폭에서 #pin-grid-reopen 이 뷰포트 안(right ≤ vw, bottom ≤ vh) + 라벨 숨김(잘림 없음)
  *  ③ 데스크톱 1440×900 회귀 없음 — #btn-settings 높이 44px 미만이어도 OK(데스크톱 요구 아님)지만
@@ -123,7 +123,8 @@ async function measure(browser, cssSrc, vw, vh) {
   await page.setViewport({ width: vw, height: vh, deviceScaleFactor: 2 });
   await page.goto("http://127.0.0.1:" + port + "/", { waitUntil: "load" });
   const m = await page.evaluate(() => {
-    const ids = ["btn-back", "btn-regmode-view", "btn-regmode-checkboard", "btn-regmode-photo", "btn-settings"];
+    // [WO 20260929 2모드 전환] btn-regmode-view는 세그먼트에서 제거됐다(디자이너 UI 도달 불가) — 검사 대상에서도 제외.
+    const ids = ["btn-back", "btn-regmode-checkboard", "btn-regmode-photo", "btn-settings"];
     const btns = ids.map((id) => {
       const el = document.getElementById(id);
       if (!el) return { id, missing: true };

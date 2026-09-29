@@ -156,10 +156,11 @@ function makePinSeriesSandbox(initialStore) {
   return { PS: sandbox.__PS, store };
 }
 {
-  // [WO 20260918 정정] 마스터가 "체크보드 기본" 지시를 되돌려 "등록모드가 기본"으로 확정.
+  // [WO 20260929 2모드 전환, 지휘자 정정] "모드는 360과 CHECKER" — [보기](구 "designer" 값)
+  // 세그먼트가 제거되며 기본값도 CHECKER(checkboard)로 바뀌었다(구 WO 20260918 정정을 대체).
   const { PS } = makePinSeriesSandbox({}); // 새 사용자(저장된 선호 없음)
-  ok(PS.preferredMode() === "designer", "③ 저장된 선호 없을 때 기본값 = designer(등록모드), 실제 " + PS.preferredMode());
-  ok(PS.DEFAULT_MODE === "designer", "③ DEFAULT_MODE 리터럴 = designer(SoT)");
+  ok(PS.preferredMode() === "checkboard", "③ 저장된 선호 없을 때 기본값 = checkboard(CHECKER), 실제 " + PS.preferredMode());
+  ok(PS.DEFAULT_MODE === "checkboard", "③ DEFAULT_MODE 리터럴 = checkboard(SoT)");
 
   // 사용자가 checkboard 로 전환하면 그 선택이 유지되는지(기본값보다 우선)
   PS.setPreferredMode("checkboard");

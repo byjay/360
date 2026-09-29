@@ -178,13 +178,17 @@ function suiteSameNumbers(label, sSrc, rSrc) {
  * ④ 필터를 켜도 번호가 재계산되지 않는다 (숨김은 표시만)
  * ⑤ 필터가 도면·미니맵 양쪽에 동일 적용
  * ──────────────────────────────────────────────────────────── */
+/* [WO 20260929 addendum, 지휘자 정정] "그냥 체크보드랑 360모드랑 2개 해" — 필터 축이 kindOf
+ * (3종: content/empty/checkboard)에서 seriesOf(2종: checkboard/content)로 바뀌었다. e1(empty
+ * 부류)은 체크보드가 아니므로 이제 "content(360)" 계열 필터에 포함되어 함께 보인다(kind=empty
+ * 만 따로 숨기는 3번째 칩은 없다 — 마스터: "내가 시킨 것만 하고"). */
 function suiteFilter(label, sSrc, rSrc) {
   console.log("\n[" + label + "]");
   const pins = FIXTURE();
-  const filter = { content: true, empty: false, checkboard: false }; // 콘텐츠만 보기
+  const filter = { checkboard: false, content: true }; // 360(content) 계열만 보기
   const ui = runUI(sSrc, uiSrc, { pins, filter });
   const shown = Object.keys(ui.nums).sort();
-  ok(shown.join(",") === "c1,c2", `도면 표시 핀 = [${shown.join(",")}] (기대 c1,c2)`);
+  ok(shown.join(",") === "c1,c2,e1", `도면 표시 핀 = [${shown.join(",")}] (기대 c1,c2,e1 — checkboard 아닌 전부)`);
   // ④ 필터 전과 같은 번호(1, 3) — 1,2 로 다시 매겨지면 안 된다
   ok(ui.nums.c1 === "1" && ui.nums.c2 === "3",
     `필터 후 번호 c1=${ui.nums.c1}, c2=${ui.nums.c2} (기대 1, 3 — 재채번 금지)`);
@@ -192,21 +196,21 @@ function suiteFilter(label, sSrc, rSrc) {
   // ⑤ 미니맵에도 같은 필터 적용 + 같은 번호
   const rd2 = runRadar(sSrc, rSrc, { pins, filter, currentPin: pins[0] });
   const shownR = Object.keys(rd2.nums).sort();
-  ok(shownR.join(",") === "c1,c2", `미니맵 표시 점 = [${shownR.join(",")}] (기대 c1,c2 — 도면과 동일)`);
+  ok(shownR.join(",") === "c1,c2,e1", `미니맵 표시 점 = [${shownR.join(",")}] (기대 c1,c2,e1 — 도면과 동일)`);
   ok(rd2.nums.c1 === "1" && rd2.nums.c2 === "3",
     `미니맵 필터 후 번호 c1=${rd2.nums.c1}, c2=${rd2.nums.c2} (기대 1, 3)`);
 
   // 체크보드만 보기 → 체크보드 번호(1, 77, 3) 유지
-  const ui2 = runUI(sSrc, uiSrc, { pins, filter: { content: false, empty: false, checkboard: true } });
+  const ui2 = runUI(sSrc, uiSrc, { pins, filter: { checkboard: true, content: false } });
   ok(Object.keys(ui2.nums).sort().join(",") === "b1,b2,b3", `체크보드만 보기 = [${Object.keys(ui2.nums).sort().join(",")}]`);
   ok(ui2.nums.b1 === "1" && ui2.nums.b2 === "77" && ui2.nums.b3 === "3",
     `체크보드만 보기 번호 = ${ui2.nums.b1}/${ui2.nums.b2}/${ui2.nums.b3} (기대 1/77/3)`);
 
-  // 칩 렌더: 부류별 개수 표시
+  // 칩 렌더: CHECKER/360 2칩뿐 — '전체' 칩 없음(마스터: "그냥 체크보드랑 360모드랑 2개 해")
   const bar = ui.registry["pin-filter-bar"];
-  ok(/data-kind="all"/.test(bar.innerHTML), "필터 칩 바에 '전체' 칩이 렌더됨");
-  ok(/data-kind="content"[\s\S]*?zpager-cnt">2</.test(bar.innerHTML), "콘텐츠 칩 개수 = 2");
-  ok(/data-kind="checkboard"[\s\S]*?zpager-cnt">3</.test(bar.innerHTML), "체크보드 칩 개수 = 3");
+  ok(!/data-series="all"/.test(bar.innerHTML) && !/data-kind="all"/.test(bar.innerHTML), "필터 칩 바에 '전체' 칩이 없음(2칩만)");
+  ok(/data-series="content"[\s\S]*?zpager-cnt">3</.test(bar.innerHTML), "360 칩 개수 = 3(c1,c2,e1)");
+  ok(/data-series="checkboard"[\s\S]*?zpager-cnt">3</.test(bar.innerHTML), "CHECKER 칩 개수 = 3(b1,b2,b3)");
 }
 
 /* ────────────────────────────────────────────────────────────

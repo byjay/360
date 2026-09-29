@@ -116,7 +116,10 @@ function runSession(sSrc, uSrc, pins, clicks, localStorageSeed) {
     const html = bar ? bar._html : "";
     const chipCounts = {};
     const chipActive = {};
-    const re = /data-kind="([a-z]+)"[^>]*aria-pressed="(true|false)"[^>]*>[\s\S]*?<span class="zpager-cnt">(\d+)<\/span>/g;
+    // [WO 20260929 addendum] 필터 칩 속성이 data-kind(3종+아이콘 그룹+"전체")에서
+    // data-series(CHECKER/360 2종뿐, "전체" 칩 없음)로 바뀌었다(마스터: "그냥 체크보드랑
+    // 360모드랑 2개 해").
+    const re = /data-series="([a-z]+)"[^>]*aria-pressed="(true|false)"[^>]*>[\s\S]*?<span class="zpager-cnt">(\d+)<\/span>/g;
     let m;
     while ((m = re.exec(html))) { chipCounts[m[1]] = Number(m[3]); chipActive[m[1]] = m[2] === "true"; }
     return {
@@ -152,8 +155,9 @@ function suiteInitialAllVisible(label, sSrc) {
   console.log("\n[" + label + "]");
   const { snapshots } = runSession(sSrc, uiSrc, FIXTURE_ALL_CB(), []);
   ok(snapshots[0].layerChildren === 5, `① 초기 진입 시 #pins-layer 자식 5개(전부 표시) → 실측 ${snapshots[0].layerChildren}`);
-  ok(snapshots[0].chipActive.all === true, "① '전체' 칩이 초기부터 active(aria-pressed=true)");
-  ok(snapshots[0].chipActive.checkboard === true, "① '체크보드' 칩이 초기부터 active(aria-pressed=true)");
+  // [WO 20260929 addendum] '전체' 칩은 제거됐다(CHECKER/360 2칩뿐) — 대신 CHECKER 칩 자체가
+  // 초기부터 active 인지로 "전부 표시" 초기상태를 검증한다.
+  ok(snapshots[0].chipActive.checkboard === true, "① 'CHECKER' 칩이 초기부터 active(aria-pressed=true)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -171,14 +175,16 @@ function suiteCheckboardOnMatches(label, sSrc) {
 }
 
 /* ────────────────────────────────────────────────────────────
- * ③ "전체" 칩 클릭 → 전 핀 표시
+ * ③ [WO 20260929 addendum] '전체' 칩 자체는 제거됐지만(마스터: "그냥 체크보드랑 360모드랑
+ *    2개 해"), showAll() API(내부에서 여전히 참조 — 예: 새 프로젝트 진입 시 초기화)는 유지된다.
+ *    runSession() 의 클릭 시퀀스 "all" 은 칩이 아니라 PS.showAll() 을 직접 호출한다.
  * ──────────────────────────────────────────────────────────── */
 function suiteAllChip(label, sSrc) {
   console.log("\n[" + label + "]");
   const { snapshots } = runSession(sSrc, uiSrc, FIXTURE_MIXED(), ["content", "all"]);
   const afterOff = snapshots[1], afterAll = snapshots[2];
   ok(afterOff.layerChildren < 5, `③ 사전조건: content 끄면 5 미만 → ${afterOff.layerChildren}`);
-  ok(afterAll.layerChildren === 5, `③ '전체' 클릭 후 5개 전부 표시 → ${afterAll.layerChildren}`);
+  ok(afterAll.layerChildren === 5, `③ showAll() 호출 후 5개 전부 표시 → ${afterAll.layerChildren}`);
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -186,10 +192,11 @@ function suiteAllChip(label, sSrc) {
  * ──────────────────────────────────────────────────────────── */
 function suiteCountsMatchDisplay(label, sSrc) {
   console.log("\n[" + label + "]");
+  // [WO 20260929 addendum] "empty" 는 더 이상 필터 축이 아니다(kindOf 3종 → seriesOf 2종) —
+  // toggle("empty") 는 SERIES 에 없는 키라 무시(no-op)된다. 남은 조합은 checkboard/content 2축뿐.
   const combos = [
-    [], ["content"], ["empty"], ["checkboard"],
-    ["content", "empty"], ["content", "checkboard"], ["empty", "checkboard"],
-    ["content", "empty", "checkboard"], ["all"]
+    [], ["content"], ["checkboard"],
+    ["content", "checkboard"], ["all"]
   ];
   let allMatch = true;
   combos.forEach((clicks) => {
@@ -206,14 +213,15 @@ function suiteCountsMatchDisplay(label, sSrc) {
 }
 
 /* ────────────────────────────────────────────────────────────
- * ⑤ 개수 계산(counts)과 표시 판정(isVisible)이 같은 kindOf() 정본을 쓴다(SoT)
+ * ⑤ [WO 20260929 addendum] 필터 바 개수 계산(seriesCounts)과 표시 판정(isVisible)이 같은
+ *    seriesOf() 정본을 쓴다(SoT) — kindOf()(3종, 색상/marker 전용)와는 이제 분리된 축이다.
  * ──────────────────────────────────────────────────────────── */
 function suiteSameSourceOfTruth(label, sSrc) {
   console.log("\n[" + label + "]");
-  ok(/counts\(pins, page\)[\s\S]{0,200}c\[this\.kindOf\(p\)\]\+\+/.test(sSrc),
-    "⑤ counts() 가 kindOf() 를 직접 호출해 집계(정본 공용)");
-  ok(/isVisible\(pin\)\s*\{\s*return\s*!!this\.filter\(\)\[this\.kindOf\(pin\)\]/.test(sSrc),
-    "⑤ isVisible() 도 같은 kindOf() 를 직접 호출해 판정(정본 공용, 카운트와 분리된 별도 소스 없음)");
+  ok(/seriesCounts\(pins, page\)[\s\S]{0,200}c\[this\.seriesOf\(p\)\]\+\+/.test(sSrc),
+    "⑤ seriesCounts() 가 seriesOf() 를 직접 호출해 집계(정본 공용)");
+  ok(/isVisible\(pin\)\s*\{\s*return\s*!!this\.filter\(\)\[this\.seriesOf\(pin\)\]/.test(sSrc),
+    "⑤ isVisible() 도 같은 seriesOf() 를 직접 호출해 판정(정본 공용, 카운트와 분리된 별도 소스 없음)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -252,9 +260,9 @@ suiteNoGhostLeak("🔴 전역 유령 localStorage 미반영 (정상 소스)", se
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션ⓐ] filter() 를 localStorage 복원 버전으로 되돌림 → 유령값 테스트가 실패해야 함");
-  const needle = 'filter() {\n      if (!this._filter) this._filter = { content: true, empty: true, checkboard: true };\n      return this._filter;\n    },';
+  const needle = 'filter() {\n      if (!this._filter) this._filter = { checkboard: true, content: true };\n      return this._filter;\n    },';
   const mutated = seriesSrc.replace(needle,
-    'filter() {\n      if (!this._filter) {\n        this._filter = { content: true, empty: true, checkboard: true };\n        try {\n          const raw = localStorage.getItem(this.FILTER_KEY);\n          if (raw) { const v = JSON.parse(raw); this.KINDS.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; }); }\n        } catch (e) {}\n      }\n      return this._filter;\n    },');
+    'filter() {\n      if (!this._filter) {\n        this._filter = { checkboard: true, content: true };\n        try {\n          const raw = localStorage.getItem(this.FILTER_KEY);\n          if (raw) { const v = JSON.parse(raw); this.SERIES.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; }); }\n        } catch (e) {}\n      }\n      return this._filter;\n    },');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ghostSeed = { "wm-pin-filter": JSON.stringify({ content: true, empty: true, checkboard: false }) };
@@ -265,35 +273,36 @@ suiteNoGhostLeak("🔴 전역 유령 localStorage 미반영 (정상 소스)", se
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 ⓑ: kindOf() 가 checkboard 를 항상 "content"로 오판 → ②④가 실패해야 한다
+ * 뮤테이션 ⓑ [WO 20260929 addendum] 필터 판정축이 kindOf(3종)에서 seriesOf(2종)로 바뀌었다 —
+ * seriesOf() 가 checkboard 를 항상 "content"로 오판하게 만들면 ②④가 실패해야 한다.
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션ⓑ] kindOf() 가 checkboard 를 오판 → ②④가 실패해야 함");
-  const needle = 'kindOf(pin) {\n      if (!pin) return "empty";\n      if (pin.checkboard) return "checkboard";\n      return this.hasContent(pin) ? "content" : "empty";\n    },';
-  const mutated = seriesSrc.replace(needle,
-    'kindOf(pin) {\n      if (!pin) return "empty";\n      return this.hasContent(pin) ? "content" : "empty";\n    },');
+  console.log("\n[뮤테이션ⓑ] seriesOf() 가 checkboard 를 오판 → ②④가 실패해야 함");
+  const needle = 'seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },';
+  const mutated = seriesSrc.replace(needle, 'seriesOf(pin) { return "content"; },');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { snapshots } = runSession(mutated, uiSrc, FIXTURE_ALL_CB(), ["checkboard", "checkboard"]);
     const off = snapshots[1];
-    // checkboard 가 더는 존재하지 않는 kind 로 오판되어 renderChips 에 체크보드 칩 자체가 사라짐
+    // checkboard 가 더는 존재하지 않는 계열로 오판되어 renderChips 에 CHECKER 칩 자체가 사라짐
     ok(off.chipCounts.checkboard === undefined || off.layerChildren !== 0,
-      `뮤테이션 적용 시 체크보드 칩/판정 붕괴(②실효성 증명) → chipCounts=${JSON.stringify(off.chipCounts)}, layer=${off.layerChildren}`);
+      `뮤테이션 적용 시 CHECKER 칩/판정 붕괴(②실효성 증명) → chipCounts=${JSON.stringify(off.chipCounts)}, layer=${off.layerChildren}`);
   }
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 ⓒ: isVisible() 이 counts() 와 다른 판정(pin.checkboard 직접 참조)을 쓰게 분리 → ⑤가 실패해야 한다
+ * 뮤테이션 ⓒ: isVisible() 이 seriesCounts() 와 다른 판정(pin.checkboard 직접 참조)을 쓰게
+ * 분리 → ⑤가 실패해야 한다.
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션ⓒ] isVisible() 을 counts() 와 다른 소스로 분리 → ⑤가 실패해야 함");
-  const needle = 'isVisible(pin) { return !!this.filter()[this.kindOf(pin)] && this.isIconVisible(pin); },';
+  console.log("\n[뮤테이션ⓒ] isVisible() 을 seriesCounts() 와 다른 소스로 분리 → ⑤가 실패해야 함");
+  const needle = 'isVisible(pin) { return !!this.filter()[this.seriesOf(pin)] && this.isIconVisible(pin); },';
   const mutated = seriesSrc.replace(needle,
     'isVisible(pin) { const k = pin && pin.checkboard ? "checkboard" : "content"; return !!this.filter()[k] && this.isIconVisible(pin); },');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    ok(!/isVisible\(pin\)\s*\{\s*return\s*!!this\.filter\(\)\[this\.kindOf\(pin\)\]/.test(mutated),
-      "뮤테이션 적용 시 isVisible() 이 더는 kindOf() 를 직접 쓰지 않음(⑤ 실효성 증명)");
+    ok(!/isVisible\(pin\)\s*\{\s*return\s*!!this\.filter\(\)\[this\.seriesOf\(pin\)\]/.test(mutated),
+      "뮤테이션 적용 시 isVisible() 이 더는 seriesOf() 를 직접 쓰지 않음(⑤ 실효성 증명)");
   }
 }
 

@@ -153,7 +153,8 @@ function makeFullEnv(pins) {
 {
   const { App, State } = makeLightEnv();
   State.checkboard = true;
-  State.checkboardStart = { 1: 5 }; // 시작번호 5
+  // [WO 20260929 addendum] State.checkboardStart 형식이 계열별 중첩으로 바뀌었다(App._normalizeCheckboardStart).
+  State.checkboardStart = { checkboard: { 1: 5 } }; // 시작번호 5
   App._placeCheckboardPin({ x: 10, y: 10 });
   App._placeCheckboardPin({ x: 20, y: 20 });
   App._placeCheckboardPin({ x: 30, y: 30 });
@@ -182,7 +183,7 @@ function makeFullEnv(pins) {
   if (mutated === appSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { document } = makeDoc();
-    const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: JSON.parse(JSON.stringify(State.pins)), checkboardStart: { 1: 5 } };
+    const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: JSON.parse(JSON.stringify(State.pins)), checkboardStart: { checkboard: { 1: 5 } } };
     const UIm = { $: (id) => document.getElementById(id), hide() {}, text() {}, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
     const sandboxM = { console, document, window: { addEventListener() {} }, State: StateM, UI: UIm, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate() };
     vm.createContext(sandboxM);
@@ -198,7 +199,9 @@ function makeFullEnv(pins) {
  *  35_PhotoBatch.js _defaultRange() 가 State.checkboard 를 참조해 series 를 자동 선택하는 것이다. */
 {
   const { document, registry } = makeDoc();
-  const State = { checkboard: false, mode: "designer", pdfPage: 1, pins: [], checkboardStart: {}, activePin: null };
+  // [WO 20260929 addendum] State.checkboard(불리언)만으로는 계열을 못 가른다 — 35_PhotoBatch.js
+  // _defaultRange() 가 이제 State.regMode 를 본다(§10 SoT, 20_App.js _placeCheckboardPin 과 동일).
+  const State = { checkboard: false, regMode: "checkboard", mode: "designer", pdfPage: 1, pins: [], checkboardStart: {}, activePin: null };
   const UI = {
     $: (id) => document.getElementById(id),
     hide(id) { const e = document.getElementById(id); if (e) e.classList.add("hidden"); },
@@ -217,7 +220,7 @@ function makeFullEnv(pins) {
   PB.init();
   App._bindSidebar();
   State.checkboard = true;
-  State.checkboardStart = { 1: 10 };
+  State.checkboardStart = { checkboard: { 1: 10 } };
   App._placeCheckboardPin({ x: 1, y: 1 });
   App._placeCheckboardPin({ x: 2, y: 2 });
   registry["btn-photobatch"].click(); // 단독 진입(범위 인자 없음) — _defaultRange() 가 현재 모드를 봐야 함
@@ -225,12 +228,12 @@ function makeFullEnv(pins) {
     "④ 체크보드 모드에서 #btn-photobatch 클릭 → PhotoBatch 가 방금 찍은 체크보드 범위(10~11)로 열림 → " + JSON.stringify(PB._range));
 
   console.log("\n[뮤테이션④] _defaultRange() 가 다시 series=\"content\" 로 고정되면 실패해야 함");
-  const needle = 'const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";';
+  const needle = 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";';
   const mutated = pbSrc.replace(needle, 'const series = "content";');
   if (mutated === pbSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { document: docM, registry: regM } = makeDoc();
-    const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: [], checkboardStart: { 1: 10 } };
+    const StateM = { checkboard: true, regMode: "checkboard", mode: "designer", pdfPage: 1, pins: [], checkboardStart: { checkboard: { 1: 10 } } };
     const UIm = { $: (id) => docM.getElementById(id), hide() {}, text() {}, val(id) { const e = docM.getElementById(id); return e ? e.value : ""; }, clearVal(id) { const e = docM.getElementById(id); if (e) e.value = ""; }, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
     const sandboxM = { console, document: docM, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State: StateM, UI: UIm, Prompt: { toast() {} }, requestAnimationFrame: (cb) => cb(), JSON, Array, Map, Set, Date: makeSeqDate() };
     vm.createContext(sandboxM);

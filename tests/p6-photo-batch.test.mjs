@@ -292,7 +292,8 @@ async function testCheckboardE2E() {
 
   ok(PB._range.start === 1 && PB._range.end === 3 && PB._range.series === "checkboard",
     "⑧a open()이 체크보드 range 를 그대로 반영 → " + JSON.stringify(PB._range));
-  ok(registry["photobatch-title"].textContent.indexOf("체크보드") !== -1,
+  // [WO 20260929 2모드 전환] PinSeries.LABELS.checkboard 표기 = "CHECKER"(구 "체크보드").
+  ok(registry["photobatch-title"].textContent.indexOf("CHECKER") !== -1,
     "⑧b 대상 계열이 화면(제목)에 명시됨(조용히 아무거나 고르지 않음) → " + registry["photobatch-title"].textContent);
 
   // 사진 3장이 폴더에서 선택됐다고 가정(정렬은 ①~③ 에서 이미 검증했으므로 여기선 결과 행만 구성)
@@ -307,7 +308,7 @@ async function testCheckboardE2E() {
     "⑧c 진입→오픈→매칭까지 실제 N건(0 아님) → matches=" + matches.length);
 
   PB._renderTable();
-  ok(registry["photobatch-count"].textContent.indexOf("3건 매칭 예정") !== -1 && registry["photobatch-count"].textContent.indexOf("체크보드") !== -1,
+  ok(registry["photobatch-count"].textContent.indexOf("3건 매칭 예정") !== -1 && registry["photobatch-count"].textContent.indexOf("CHECKER") !== -1,
     "⑧d 표 렌더 결과에도 매칭 건수·계열이 반영됨 → " + registry["photobatch-count"].textContent);
 }
 

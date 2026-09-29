@@ -58,7 +58,7 @@
     currentDeploymentId: null,   // 현재 로드된 배포본 id (노트/협업 연결용)
     noteSummary: {},             // { pin_id: {total,open,progress,done} } 도면 뱃지용
     pinColor:    null,           // 핀 기본 색상(설정에서 변경) — null이면 PinPrefs 기본(green)
-    checkboardStart: {},         // { [page]: 시작번호 } 구역(페이지)별 체크보드 시작 번호
+    checkboardStart: {},         // [WO 20260929 addendum] { checkboard:{page:n}, content:{page:n} } 계열별·구역(페이지)별 시작 번호 — SoT 정규화는 App._normalizeCheckboardStart()(20_App.js)
     zoneView:    null,           // 구역 페이지(crop-view) 진입 중인 zone id — null이면 전체 도면
 
     reset() {

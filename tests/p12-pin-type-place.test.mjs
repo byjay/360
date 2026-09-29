@@ -263,10 +263,13 @@ console.log("\n[뮤테이션④] 미니맵(07_Radar)이 종류 필터를 건너�
 }
 
 /* ══════════════════════════════════════════════════════════════
- * ⑥ kind 칩과 종류 칩이 함께(AND) 동작한다
+ * ⑥ [WO 20260929 addendum, 지휘자 정정] 계열(seriesOf: CHECKER/360) 필터 × 종류(아이콘) 필터가
+ * 함수 레벨에서는 여전히 AND 로 동작하지만("핀 아이콘 기능 자체는 유지"), UI 필터 바는 마스터
+ * 지시로 CHECKER/360 2칩만 남고 kind(3종) 칩·아이콘 필터 칩 그룹은 제거됐다
+ * ("그냥 체크보드랑 360모드랑 2개 해 ... 내가 시킨 것만 하고").
  * ══════════════════════════════════════════════════════════════ */
 {
-  console.log("\n[⑥ kind × 종류 필터 공존]");
+  console.log("\n[⑥ CHECKER/360 계열 필터 × 종류(아이콘) 필터 AND 동작 — 아이콘 필터 칩 UI는 제거]");
   const pins = FIXTURE_ICON();
   const { document, registry } = makeDoc();
   const State = { pins, pdfPage: 1, mode: "viewer", activePin: null, zoneView: null, zones: [] };
@@ -275,24 +278,24 @@ console.log("\n[뮤테이션④] 미니맵(07_Radar)이 종류 필터를 건너�
   vm.createContext(sandbox);
   vm.runInContext(iconsSrc + "\n" + seriesSrc + "\n" + uiSrc + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
   const PS = sandbox.__PS;
-  // kind: empty 숨김(체크박스 미체크) — cam2(empty)가 빠진다
-  PS._filter = { content: true, empty: false, checkboard: true };
-  // icon: number 만 숨김 — n1(content/number)이 빠진다. warn1(checkboard/warning)은 통과.
+  // 계열: checkboard 숨김 — warn1(checkboard)이 빠진다. n2(empty 부류)는 이제 content 계열이라 남는다.
+  PS._filter = { checkboard: false, content: true };
+  // icon: number 만 숨김 — n1(content/number)·n2(content/number 기본값)가 빠진다.
   PS.toggleIconFilter("number", Object.keys(PS.iconCounts(pins, 1)));
   sandbox.__UI.renderPinsOnMap();
   const markers = registry["pins-layer"]._children;
   const shown = markers.map(m => m.dataset.id).sort();
-  // 기대: n1(kind ok/icon 숨김→제외), n2(kind 숨김→제외), cam1(kind ok/icon ok→표시),
-  //       cam2(kind 숨김→제외), warn1(kind ok/icon ok→표시)
-  ok(shown.join(",") === "cam1,warn1",
-    "⑥ kind(미배치 숨김) × 종류(number 숨김) AND 적용 → 표시 = [" + shown.join(",") + "] (기대 cam1,warn1)");
+  // 기대: n1(계열ok/icon 숨김→제외), n2(계열ok/icon 숨김→제외), cam1(계열ok/icon ok→표시),
+  //       cam2(계열ok/icon ok→표시), warn1(계열 숨김→제외)
+  ok(shown.join(",") === "cam1,cam2",
+    "⑥ 계열(체크보드 숨김) × 종류(number 숨김) AND 적용 → 표시 = [" + shown.join(",") + "] (기대 cam1,cam2)");
 
-  // 칩 바에 두 축 모두 렌더되는지(전체/콘텐츠/미배치/체크보드 + 아이콘 전체/번호/360카메라/경고)
+  // 칩 바에는 이제 CHECKER/360 계열 칩 2종만 — 아이콘 필터 칩 그룹은 렌더되지 않는다.
   const bar = registry["pin-filter-bar"];
-  ok(/data-kind="content"/.test(bar.innerHTML) && /data-kind="empty"/.test(bar.innerHTML) && /data-kind="checkboard"/.test(bar.innerHTML),
-    "⑥ kind 칩 3종이 여전히 렌더됨(제거되지 않음)");
-  ok(/data-icon="camera360"/.test(bar.innerHTML) && /data-icon="warning"/.test(bar.innerHTML) && /data-icon="number"/.test(bar.innerHTML),
-    "⑥ 종류(아이콘) 칩이 실제 존재하는 3종(number/camera360/warning) 모두 렌더됨");
+  ok(/data-series="content"/.test(bar.innerHTML) && /data-series="checkboard"/.test(bar.innerHTML),
+    "⑥ CHECKER/360 계열 칩 2종만 렌더됨");
+  ok(!/data-icon=/.test(bar.innerHTML),
+    "⑥ [WO 20260929 addendum] 아이콘 종류 필터 칩은 더 이상 렌더되지 않음(UI 제거 — 기능(PS.toggleIconFilter)은 API로 유지)");
 }
 
 console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));

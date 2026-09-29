@@ -1,20 +1,24 @@
 /**
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p79-regmode-3way.test.mjs)
  *
- * 발주서(WO 20260929, 마스터 원문 + 지휘자 정정):
- *  "체크보드는 핀만 생성하는거고 뷰모드와 체크보드모드로 구현해 … 사진 등록 모드는
- *   핀을 생성하는 순간 바로 사진을 등록하게 하라는 거지. 체크 보드는 그냥 다른 거
- *   아무 반응 없이 그냥 클릭하는 곳에서 번호만 있는 핀만 생성이 되게 해라고. 핀을
- *   클릭했을 때 번호 수정이나 뭔가 등록은 가능하게 해줘."
+ * [WO 20260929 2모드 전환] 마스터 원문: "모드는 360과 CHECKER" / "배포하고 모드
+ *  360 CHECKER로 바꿔". [보기](view) 세그먼트 버튼을 제거하고 CHECKER(checkboard)·
+ *  360(photo) 2모드만 디자이너 UI에서 선택 가능하게 한다. 기본 진입 모드 = CHECKER.
+ *  regMode 내부 값 "view"는 여전히 존재할 수 있으나(방어적 가드) 어떤 UI 버튼도
+ *  더 이상 그 값으로 전환을 호출하지 않는다 — 기존 저장값(구 "designer")은
+ *  진입 시 checkboard 로 정규화한다.
  *
- * 정본 동작표:
- *   | 동작        | 체크보드                         | 사진 등록                          |
+ * 원 발주서(WO 20260929 최초, 지휘자 정정) 동작표 — 이하 그대로 유지:
+ *   | 동작        | 체크보드(CHECKER)                | 사진 등록(360)                    |
  *   | 빈 곳 클릭   | 번호 핀만(폼·팝업·파일창·확인창 없음) | 핀 생성 즉시 파일창(동기), 취소해도 핀 유지 |
  *   | 기존 핀 클릭 | 패널(PinActionPop) 열림(번호수정 가능) | 패널 열림(파일창 아님)              |
- *   보기(view) 모드는 생성 없음 — 배치 진입 자체가 막힌다.
  *
- * 실제 모듈 소스(20_App.js / 11_UI.js / 01b_PinSeries.js)를 그대로 vm 에 평가해 검사한다
- * (목 구현 아님). 뮤테이션 3건 — 되돌리면 반드시 실패한다.
+ * 섹션 A/B/C: 20_App.js·11_UI.js의 regMode 분기 로직(내부적으로 "view" 값도 여전히
+ *   유효하게 처리해야 함 — 방어적 가드 회귀 방지). 섹션 D~G: 2모드 전환 자체
+ *   ([보기] 버튼 DOM 제거·기본모드 CHECKER·저장값 정규화·뷰어 권한 가드·표기 통일).
+ *
+ * 실제 모듈 소스(20_App.js / 11_UI.js / 01b_PinSeries.js / index.html)를 그대로 vm 에
+ * 평가하거나 정적 검사한다(목 구현 아님). 뮤테이션 5건 — 되돌리면 반드시 실패한다.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -26,6 +30,7 @@ const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "
 const appSrc = rd("public/js/modules/20_App.js");
 const uiSrc = rd("public/js/modules/11_UI.js");
 const seriesSrc = rd("public/js/modules/01b_PinSeries.js");
+const htmlSrc = rd("public/index.html");
 
 let failed = 0;
 const ok = (cond, label) => {
@@ -275,6 +280,120 @@ console.log("\n[C3] 사진등록·보기 모드에서는 체크보드 핀도 기
   const markers = runRender("photo", [{ id: "p1", x: 5, y: 5, page: 1, label: "3", checkboard: true }]);
   const html = markers[0]._html;
   ok(/pgbody/.test(html), "photo 모드에서는 체크보드 핀도 기존 장식 그대로");
+}
+
+/* ══════════════════════════════════════════════════════════════
+   섹션 D — index.html: [보기] 세그먼트 버튼 완전 제거 + CHECKER/360 표기
+   ══════════════════════════════════════════════════════════════ */
+console.log("\n[D1] index.html — [보기] 세그먼트 버튼 DOM에 없음, CHECKER/360 라벨");
+{
+  ok(!/id="btn-regmode-view"/.test(htmlSrc), "btn-regmode-view 요소 없음");
+  ok(/<button id="btn-regmode-checkboard"[^>]*>CHECKER<\/button>/.test(htmlSrc), "체크보드 버튼 라벨=CHECKER");
+  ok(/<button id="btn-regmode-photo"[^>]*>360<\/button>/.test(htmlSrc), "사진등록 버튼 라벨=360");
+}
+
+console.log("\n[뮤테이션C] [보기] 버튼을 세그먼트에 되살리면 — D1이 실패해야 함");
+{
+  const needle = '<button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="CHECKER — 도면 클릭 시 번호 핀만 생성">CHECKER</button>';
+  if (!htmlSrc.includes(needle)) { console.log("  FAIL 뮤테이션C 대상 못 찾음(소스 변경?)"); failed++; }
+  else {
+    const mutated = htmlSrc.replace(needle,
+      '<button id="btn-regmode-view" class="regmode-btn" type="button">보기</button>\n      ' + needle);
+    const stillPasses = !/id="btn-regmode-view"/.test(mutated);
+    ok(stillPasses === false, "뮤테이션 적용 시 btn-regmode-view 가 되살아나 D1 무결성이 깨짐을 증명");
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   섹션 E — 01b_PinSeries.js: 기본 진입 모드 = CHECKER, 구 저장값 정규화
+   ══════════════════════════════════════════════════════════════ */
+function makeSeriesSandbox(src, storedValue) {
+  const store = {};
+  if (storedValue !== undefined) store["wm_pin_default_mode"] = storedValue;
+  const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+  const sandbox = { console, localStorage, JSON };
+  vm.createContext(sandbox);
+  vm.runInContext(src + "\n;globalThis.__PinSeries = PinSeries;", sandbox);
+  return sandbox.__PinSeries;
+}
+
+console.log("\n[E1] PinSeries.preferredMode() — 저장값 없음 → 기본값 CHECKER");
+{
+  const PS = makeSeriesSandbox(seriesSrc, undefined);
+  ok(PS.preferredMode() === "checkboard", "기본 진입 모드 = checkboard(CHECKER) → " + PS.preferredMode());
+}
+
+console.log("\n[E2] PinSeries.preferredMode() — 구 저장값 'designer'(구 [보기]) → checkboard 로 정규화");
+{
+  const PS = makeSeriesSandbox(seriesSrc, "designer");
+  ok(PS.preferredMode() === "checkboard", "정규화됨 → " + PS.preferredMode());
+}
+
+console.log("\n[뮤테이션D] DEFAULT_MODE 를 'view' 로 되돌리면 — E1이 실패해야 함");
+{
+  const needle = 'DEFAULT_MODE: "checkboard",';
+  if (!seriesSrc.includes(needle)) { console.log("  FAIL 뮤테이션D 대상 못 찾음(소스 변경?)"); failed++; }
+  else {
+    const mutated = seriesSrc.replace(needle, 'DEFAULT_MODE: "view",');
+    const PSm = makeSeriesSandbox(mutated, undefined);
+    ok(PSm.preferredMode() !== "checkboard", "뮤테이션 적용 시 기본값이 'view' 로 샘(E1이 깨짐을 증명) → " + PSm.preferredMode());
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   섹션 F — 20_App.js: _setRegMode 뷰어 권한 가드(생성 모드 전환 불가) 회귀 방지
+   ══════════════════════════════════════════════════════════════ */
+/** _setRegMode 만 좁게 검사하는 경량 샌드박스 — openApp()은 스파이로 대체해 부작용(document.body 등
+ *  전체 렌더 체인)을 실행하지 않는다. 가드 자체(뷰어 진입 차단)만 정밀 검사. */
+function makeRegModeGuardSandbox(src, initialMode) {
+  const { document } = makeDoc();
+  const State = { placing: false, checkboard: false, regMode: "view", mode: initialMode, pdfPage: 1, pins: [] };
+  const openAppCalls = [];
+  const sandbox = { console, document, window: { addEventListener() {} }, State, UI: { $: () => null }, Prompt: { toast() {} }, MapCtrl: { viewportToPercent: () => ({ x: 1, y: 1 }) }, JSON, Array, Map, Set, Date, setTimeout };
+  vm.createContext(sandbox);
+  vm.runInContext(seriesSrc + "\n" + src + "\n;globalThis.__App = App;", sandbox);
+  const App = sandbox.__App;
+  App.openApp = (...a) => { openAppCalls.push(a); };
+  App._togglePlacing = () => {};
+  return { App, State, openAppCalls };
+}
+
+console.log("\n[F1] _setRegMode — State.mode !== 'designer'(뷰어) 이면 openApp 호출 없이 무시");
+{
+  const { App, State, openAppCalls } = makeRegModeGuardSandbox(appSrc, "viewer");
+  App._setRegMode("checkboard");
+  ok(openAppCalls.length === 0, "뷰어에서 _setRegMode 호출 시 openApp 미호출 → " + openAppCalls.length + "회");
+  ok(State.regMode === "view", "regMode 도 불변 → " + State.regMode);
+}
+
+console.log("\n[뮤테이션E] 뷰어 가드를 지우면 — F1이 실패해야 함");
+{
+  const needle = 'if (State.mode !== "designer") return; // 편집 화면 전용(뷰어 앱에는 세그먼트가 없음)';
+  if (!appSrc.includes(needle)) { console.log("  FAIL 뮤테이션E 대상 못 찾음(소스 변경?)"); failed++; }
+  else {
+    const mutated = appSrc.replace(needle, "// guard removed");
+    const { App, openAppCalls } = makeRegModeGuardSandbox(mutated, "viewer");
+    App._setRegMode("checkboard");
+    ok(openAppCalls.length > 0, "뮤테이션 적용 시 뷰어에서도 openApp 이 호출됨(F1이 깨짐을 증명) → " + openAppCalls.length + "회");
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   섹션 G — 사용자 노출 문자열 표기 통일: "체크보드"→CHECKER, "사진 등록"→360
+   (데이터 개념어 "체크보드 핀"/"체크보드 계열"/placeholder 예시는 허용 목록 — 대상 아님)
+   ══════════════════════════════════════════════════════════════ */
+console.log("\n[G1] 세그먼트/설정 블록/필터칩/도움말 — 구 모드 명칭 잔존 0");
+{
+  ok(!/<span class="checkboard-menu-title">체크보드<\/span>/.test(htmlSrc), "메뉴 타이틀 '체크보드' 문자열 없음(CHECKER로 교체됨)");
+  ok(/<span class="checkboard-menu-title">CHECKER<\/span>/.test(htmlSrc), "메뉴 타이틀 = CHECKER");
+  ok(/<label[^>]*for="settings-checkboard-start"[^>]*>CHECKER 시작 번호<\/label>/.test(htmlSrc), "설정 블록 제목 라벨(정적 기본값) = CHECKER 시작 번호");
+  ok(!/<label[^>]*>체크보드 시작 번호<\/label>/.test(htmlSrc), "구 표기 라벨 '체크보드 시작 번호' 없음(주석 언급은 허용)");
+  ok(/checkboard: "CHECKER"/.test(seriesSrc), "핀 필터 칩 라벨(PinSeries.LABELS.checkboard) = CHECKER");
+  ok(!appSrc.includes('"체크보드 모드"'), "20_App.js 문자열 리터럴 '체크보드 모드' 잔존 0");
+  ok(!appSrc.includes('"사진 등록 모드"'), "20_App.js 문자열 리터럴 '사진 등록 모드' 잔존 0");
+  const helpSrc = rd("public/js/modules/36_Help.js");
+  ok(helpSrc.includes('"CHECKER 모드 — 버튼 한 번으로'), "36_Help.js checkerboard 도움말 = CHECKER 모드");
+  ok(!helpSrc.includes('"체크보드 모드 — 버튼 한 번으로'), "36_Help.js 구 표기 없음");
 }
 
 console.log(failed ? `\n총 ${failed}건 실패` : "\n전부 통과");
