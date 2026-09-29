@@ -4877,7 +4877,13 @@
             // 🔴 [WO 20260928-pinloss] 그 사이 selectDeck 등 다른 로드가 시작됐으면 현재 구역을 빼앗지 않는다
             if (!this._isCurrentLoad(seq)) return;
             if (typeof Projects !== "undefined") Projects.decks = decks;
-            const deck = decks.find(d => d.deployment_id);
+            // [WO 20260929-tree1] 🔴 마스터: "프로젝트를 클릭하면 원본 전체 도면이 나오게" —
+            //   예전엔 decks 배열의 첫 deployment_id(서버 정렬 순서 — 영역/자식 구역도 섞임)를
+            //   그냥 집었다. 자식 "영역"(크롭)이 먼저 오면 프로젝트 재진입 시 잘린 화면이 뜬다.
+            //   공유 지점(§10 SoT) Projects.pickOriginalDeck 으로 루트 구역(parent_id NULL) 중
+            //   최신 1개만 고른다 — 사이드바 트리 프로젝트 노드 클릭(openOriginal)과 동일 규칙.
+            const deck = (typeof Projects !== "undefined" && Projects.pickOriginalDeck)
+              ? Projects.pickOriginalDeck(decks) : decks.find(d => d.deployment_id);
             if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck; }
             // 🔴 [WO 20260928-pinloss] 저장 안 한 작업분은 배포본 fetch **전에** 읽는다(형제 loadDeckDrawing 과 같은 이유)
             if (deck && State.mode === "designer") {

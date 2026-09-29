@@ -143,12 +143,15 @@ function fx() {
     { id: "d3",  name: "브릿지",     deployment_id: null,   parent_id: null }
   ];
   const selectDeckCalls = [];
+  const openOriginalCalls = [];
   const Projects = {
     decks, currentProject: { id: "prj1", name: "HHI-2411 LNG선" }, currentDeck: decks[0],
-    selectDeck: (d) => selectDeckCalls.push(d.id)
+    selectDeck: (d) => selectDeckCalls.push(d.id),
+    // [WO 20260929-tree1] 프로젝트 헤더 클릭 → 원본 전체 도면 열기(아래 ⑤ 참조)
+    openOriginal: () => openOriginalCalls.push(1)
   };
   return {
-    State, Projects, selectDeckCalls,
+    State, Projects, selectDeckCalls, openOriginalCalls,
     Zones: { _contains: () => true, focus() {} },
     App: { focusPin() {} }
   };
@@ -204,12 +207,14 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
     "③ 도면 미등록 구역('브릿지')은 title 에 출처 표기가 없고 기존 '도면없음' 태그를 유지한다(없는 이름 지어내지 않음)");
 
   // ⑤(부분) 접기/펼치기 · 시각 구분 — 3단 구조에서도 회귀 없음
+  // [WO 20260929-tree1] 🔴 변경: 프로젝트 헤더(라벨) 클릭은 더 이상 펼침/접힘 토글이 아니다 —
+  //   마스터: "상위 프로젝트를 클릭하면 원본 전체 도면이 나오게 해" → Projects.openOriginal() 을
+  //   호출하고 항상 펼친 채로 둔다(캐럿만 토글). 예전 "클릭=토글" 단정 대신 이 동작을 검사한다.
   const proj = pick(host, "tree-project")[0];
   ok(proj.classList.contains("open"), "⑤ 프로젝트 단 기본 펼침");
   proj._children[0].click();
-  ok(!proj.classList.contains("open"), "⑤ 프로젝트 헤더 클릭 → 접힘(.open 제거)");
-  proj._children[0].click();
-  ok(proj.classList.contains("open"), "⑤ 다시 클릭 → 펼침");
+  ok(proj.classList.contains("open"), "⑤ 프로젝트 헤더(라벨) 클릭 → 접히지 않는다(토글 아님, 원본 로드가 목적)");
+  ok(c.openOriginalCalls.length === 1, "⑤ 프로젝트 헤더 클릭 → Projects.openOriginal() 1회 호출(원본 전체 도면 로드)");
   const wasOpen = deckD1.classList.contains("open");
   deckD1._children[0].click(); // currentDeck 이므로 토글
   ok(wasOpen && !deckD1.classList.contains("open"), "⑤ 선택된 구역 헤더 클릭 → 접힘(선택 이동 아님)");
@@ -264,6 +269,23 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
     const deckD1 = pick(kidsOf(proj), "tree-deck").find((d) => /메인데크/.test(d._children[0].innerHTML));
     ok(deckD1._children[0].title.indexOf("A0_주갑판.pdf") === -1,
       "뮤테이션 적용 시 ③이 깨짐(head.title 에서 도면 출처 정보가 사라짐)");
+  }
+}
+
+/* ── 뮤테이션 ⓓ: 프로젝트 헤더 클릭을 구 토글 동작으로 되돌림 → 새 ⑤가 실패해야 한다 ── */
+{
+  console.log("\n[뮤테이션ⓓ] 프로젝트 헤더 클릭 = 원본 로드 대신 구 토글로 복원 → 새 ⑤가 실패해야 함");
+  const needle = `          pw.classList.add("open");
+          if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal();`;
+  const mut = uiSrc.replace(needle, `          pw.classList.toggle("open");`);
+  if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const c = fx();
+    const { host } = runTree(mut, c);
+    const proj = pick(host, "tree-project")[0];
+    proj._children[0].click();
+    ok(!proj.classList.contains("open") || c.openOriginalCalls.length === 0,
+      "뮤테이션 적용 시 새 ⑤가 깨짐(다시 토글만 되고 openOriginal 미호출)");
   }
 }
 

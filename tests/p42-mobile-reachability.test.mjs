@@ -98,14 +98,21 @@ const headMarginBottom = px(findDecl(css, "\\.sidebar-section-head", "margin-bot
 // .btn-mini 모바일 min-height (btn-upload/btn-place/btn-deploy 와 공유 규칙)
 const btnMiniMobileMinH = px(findDecl(mobileBlock, "\\.btn-upload,\\s*\\.btn-place,\\s*\\.btn-deploy,\\s*\\.btn-mini", "min-height"));
 
-// .project-current
-const pcPadV = shorthandPx(findDecl(css, "\\.project-current", "padding"), 0);
-const pcBorder = parseFloat(findDecl(css, "\\.project-current", "border"));
-const pcFontSize = px(findDecl(css, "\\.project-current", "font-size"));
-const projectCurrentH = pcPadV * 2 + pcBorder * 2 + pcFontSize * LINE_HEIGHT_RATIO;
+// [WO 20260929-tree1] 🔴 마스터: 별도 "프로젝트 박스" 제거 — #section-projects 는 이제
+//   시각 콘텐츠가 없다(.project-current display:none · #project-actions 는 트리로 이동 ·
+//   #decks-block 은 기존부터 display:none!important). .sidebar-section 클래스도 뗐으므로
+//   padding/border 도 없다 — 자연 높이는 0. 대신 새 형제(.tree-toolbar, "+ 프로젝트")가
+//   실제 높이를 차지하므로 아래에서 새로 계산해 items 에 반영한다(대체 — 삭제 아님).
+const spDisplay = findDecl(css, "#section-projects", "display", { last: true });
+const sectionProjectsHidden = /^none$/i.test(spDisplay);
+if (!sectionProjectsHidden) throw new Error("#section-projects 가 더 이상 display:none 이 아님 — 높이 재계산 필요");
+const sectionProjectsH = 0;
 
-// .project-actions margin-top
-const projectActionsMarginTop = px(findDecl(css, "\\.project-actions(?!\\.)", "margin-top"));
+// .tree-toolbar — "+ 프로젝트" 버튼 한 줄(박스 아님, 트리 바로 위)
+const ttPad = findDecl(css, "\\.tree-toolbar", "padding");
+const ttPadTop = shorthandPx(ttPad, 0);
+const ttPadBottom = shorthandPx(ttPad, 2);
+const treeToolbarH = ttPadTop + ttPadBottom + btnMiniMobileMinH;
 
 // #stb-toggle(.stb-toggle) 모바일 규칙 — padding/font-size/border/margin
 const stbToggleBlock760 = findMediaBlock(css, 760, ".stb-toggle{");
@@ -129,18 +136,6 @@ const sideTreeMaxH = resolveClamp(sideTreeMaxHRaw);
 // #section-export: btn-deploy + btn-export-json(.btn-upload) 모바일 min-height 44 공유
 const sectionExportH = sectionPadV * 2 + sectionBorderBottom + btnMiniMobileMinH * 2 + sectionGap;
 
-// #section-projects: padding + head + gap + project-current + gap + project-actions(margin-top+btn) + border
-const sectionHeadH = headMarginBottom + Math.max(pcFontSize /* 근사 */, btnMiniMobileMinH);
-const projectActionsH = projectActionsMarginTop + btnMiniMobileMinH;
-const sectionProjectsH =
-  sectionPadV * 2 +
-  sectionHeadH +
-  sectionGap +
-  projectCurrentH +
-  sectionGap +
-  projectActionsH +
-  sectionBorderBottom;
-
 // ══════════════════════════════════════════════════════════════
 // 2) 실제 브라우저 flexbox shrink 알고리즘 모사
 //    - flexShrink:0(현재 수정) → 아무도 안 눌림 → finalTotal = 자연 합계
@@ -148,7 +143,8 @@ const sectionProjectsH =
 //      deficit 을 흡수, 나머지(자연 높이가 곧 floor)는 절대 안 눌림
 // ══════════════════════════════════════════════════════════════
 const items = [
-  { name: "#section-projects", hyp: sectionProjectsH, floor: sectionProjectsH }, // overflow:visible → 자동 최소=자기자신
+  { name: "#section-projects", hyp: sectionProjectsH, floor: sectionProjectsH }, // [WO 20260929-tree1] 박스 제거 — 0
+  { name: ".tree-toolbar", hyp: treeToolbarH, floor: treeToolbarH }, // [WO 20260929-tree1] "+ 프로젝트" 슬림 바(신규)
   { name: "#stb-toggle", hyp: stbToggleFlowH, floor: stbToggleFlowH },
   { name: "#side-toolbar", hyp: sideToolbarOpenMaxH, floor: 0 }, // overflow-y:auto → 자동 최소=0
   { name: "#side-tree", hyp: sideTreeMaxH, floor: 0 }, // overflow-y:auto → 자동 최소=0

@@ -193,14 +193,18 @@
       if (!pin) return;
       this._pinId = pinId;
       this._applyLayoutOnce();
-      // 페이지 기준 번호 계산
+      // [WO 20260929-tree1] 🔴 번호 SoT = PinSeries.numbers/formatNo(01b_PinSeries.js) — 도면
+      //   마커·미니맵·트리와 같은 번호(CHECKER=숫자 / 360=P접두)를 쓴다. 예전엔 여기서만
+      //   samePage.indexOf 로 독자 채번해(계열 무시) 트리·마커와 다른 번호가 나왔다(§10 SoT).
       const page = pin.page || 1;
-      const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
-      const no = samePage.indexOf(pin) + 1;
+      const numMap = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
+      const meta = numMap.get(pin.id) || null;
+      const no = meta ? meta.no : 0;
+      const noLabel = meta ? PinSeries.formatNo(meta.no, meta.series) : "?";
       const hasContent = App.pinHasContent(pin);
       const $ = (id) => document.getElementById(id);
-      $("pap-no").textContent = "#" + (no > 0 ? no : "?");
-      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
+      $("pap-no").textContent = "#" + noLabel;
+      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + noLabel);
       const mediaTxt = hasContent ? "360° 미디어 있음" : "미디어 없음";
       const addrTxt = (pin.label && pin.label.trim()) ? pin.label : "위치명 없음";
       // 🔴 [2026-09-21 WO] 도면 마커 위성 배지 3종(이슈·중복·작성자) 제거 — 여기(단일 편집창)로 이관.
@@ -280,10 +284,12 @@
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       // 화면 갱신(번호/제목/메타 재계산) — 페이지 재조회 없이 open()의 표시 로직만 재사용
+      // [WO 20260929-tree1] 🔴 형제 호출부(§G-2-5) — open() 과 같은 SoT(PinSeries.numbers/formatNo)로 통일.
       const page = pin.page || 1;
-      const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
-      const no = samePage.indexOf(pin) + 1;
-      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
+      const numMap2 = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
+      const meta2 = numMap2.get(pin.id) || null;
+      const noLabel2 = meta2 ? PinSeries.formatNo(meta2.no, meta2.series) : "?";
+      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + noLabel2);
       const hint = $("pap-label-hint");
       if (hint) hint.textContent = "미저장 변경 — '저장하기'(포인트 편집 패널) 또는 자동저장 이벤트 발생 시 서버에 반영됩니다.";
       Prompt.toast && Prompt.toast("위치명/번호 반영됨 (미저장)");

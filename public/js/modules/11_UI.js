@@ -232,7 +232,78 @@
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
-      if (!decks.length) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+      /* [WO 20260929-tree1] 🔴 공유 지점 — 프로젝트 트리 노드(이름 + 다운로드/삭제 버튼 흡수)를
+       *  만드는 코드 한 벌. 구역이 0개라도(빈 프로젝트) 이 노드는 그대로 있어야 한다 — 예전엔
+       *  별도 박스(#section-projects)라 구역 수와 무관하게 항상 보였다. 흡수하면서 그 보장까지
+       *  깨면 안 된다(§10 SoT — 아래 두 호출부가 각자 만들면 반드시 갈라진다). */
+      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
+      const mountProjectNode = (rootCount) => {
+        const pw = document.createElement("div");
+        pw.className = "tree-project open";
+        const ph = document.createElement("button");
+        ph.className = "tree-node tree-node-project";
+        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span>'
+          + (rootCount != null ? '<span class="tree-cnt" title="구역 수">' + rootCount + '</span>' : "");
+        ph.addEventListener("click", (e) => {
+          if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { pw.classList.toggle("open"); return; }
+          pw.classList.add("open");
+          if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal();
+        });
+        pw.appendChild(ph);
+        /* [WO 20260929-tree1] 🔴 근본수정(2차, CDP 실측) — #project-actions(실 DOM)를 트리 안으로
+         *  "이동"시키면(appendChild) 다음 renderTree() 호출의 `host.innerHTML=""` 가 그 노드를
+         *  통째로 파괴한다(2번째 렌더부터 getElementById('project-actions') 가 null — 영구 소실,
+         *  재생성 불가). 트리는 매 렌더 새로 그려지는 1회성 DOM이라 안에 "살아있는 원본"을
+         *  두면 안 된다(이 함수의 다른 모든 노드도 매번 새로 만든다 — 같은 규칙을 따른다).
+         *  대신 대리 버튼을 매번 새로 만들어, 원래 자리(#section-projects, CSS로 항상 숨김)에
+         *  그대로 남은 진짜 버튼을 .click() 으로 호출한다 — 리스너 재구현 0(31_Projects.init()
+         *  이 원래 버튼에 붙인 로직 그대로 실행), 새 버튼 DOM만 매 렌더 재생성(다른 트리 노드와
+         *  동일 패턴). */
+        const actions = document.createElement("div");
+        actions.className = "tree-project-actions";
+        const proxyBtn = (label, targetId, extraCls) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn-mini" + (extraCls ? " " + extraCls : "");
+          b.textContent = label;
+          b.addEventListener("click", (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            const t = document.getElementById(targetId);
+            if (t) t.click();
+          });
+          return b;
+        };
+        actions.appendChild(proxyBtn("다운로드", "btn-download-project"));
+        actions.appendChild(proxyBtn("프로젝트 삭제", "btn-delete-project", "danger"));
+        pw.appendChild(actions);
+        host.appendChild(pw);
+        return pw;
+      };
+      if (!decks.length) {
+        if (!proj) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+        const pw = mountProjectNode(0);
+        /* [WO 20260929-tree1] 🔴 근본수정 — 31_Projects._renderSideTreeEmpty() 가 #side-tree.innerHTML
+         *  을 직접 덮어써 renderTree() 가 방금 여기 붙인 #project-actions(실 DOM, 리스너 보유)를
+         *  통째로 파괴하는 결함을 실측(CDP)으로 발견했다: appendChild 로 옮긴 노드가 다른 함수의
+         *  innerHTML 대입에 지워지면 영영 사라진다(getElementById 도 못 찾음 — 재생성 불가).
+         *  근본 원인은 "#side-tree 를 두 함수가 각자 그린다"였다(§10 SoT 위반) → 그 CTA 안내를
+         *  여기 한 곳으로 합친다. _renderSideTreeEmpty() 는 이제 이 함수로 위임만 한다(아래 정의). */
+        const empty = document.createElement("div");
+        empty.className = "side-tree-empty";
+        if (typeof State !== "undefined" && State.fileType) {
+          empty.innerHTML = '<p class="side-tree-empty-msg">도면이 등록됐습니다.<br>도면에서 <b>영역을 지정</b>해 구역을 만드세요.</p>'
+            + '<button type="button" class="side-tree-empty-cta" id="side-tree-make-deck-region">+ 영역 지정해 구역 만들기</button>';
+        } else {
+          empty.innerHTML = '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>도면을 등록한 뒤, 도면에서 <b>영역을 지정</b>하면 구역이 만들어집니다.</p>'
+            + '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>';
+        }
+        pw.appendChild(empty);
+        const rb = document.getElementById("side-tree-make-deck-region");
+        if (rb) rb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.extractRegionAsDeck) Projects.extractRegionAsDeck(); });
+        const cb = document.getElementById("side-tree-create-deck");
+        if (cb) cb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck(); });
+        return;
+      }
       const curPage = State.pdfPage || 1;
       const totalPages = State.mode === "viewer"
         ? (State.viewerPages ? State.viewerPages.length : 1)
@@ -393,19 +464,11 @@
 
       /* ── 1단: 프로젝트 — 2단(구역)을 바로 붙인다(도면 그룹핑 단 없음, 마스터 정정) ──── */
       let mount = host;
-      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
       if (proj) {
-        const pw = document.createElement("div");
-        pw.className = "tree-project open";
-        const ph = document.createElement("button");
-        ph.className = "tree-node tree-node-project";
-        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span><span class="tree-cnt" title="구역 수">' + rootDecks.length + '</span>';
-        ph.addEventListener("click", () => { pw.classList.toggle("open"); });
-        pw.appendChild(ph);
+        const pw = mountProjectNode(rootDecks.length);
         const pk = document.createElement("div");
         pk.className = "tree-children";
         pw.appendChild(pk);
-        host.appendChild(pw);
         mount = pk;
       }
       rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));

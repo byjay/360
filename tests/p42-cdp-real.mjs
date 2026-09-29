@@ -104,11 +104,17 @@ const setupJs = `
     var gate = document.getElementById('login-gate');
     if (gate) { gate.classList.remove('on'); gate.classList.add('hidden'); }
     var tree = document.getElementById('side-tree');
+    // [WO 20260929-tree1] 🔴 #btn-delete-project 자체는 이제 #section-projects 와 함께 항상
+    //   display:none(논리 앵커) — 실사용자는 트리 노드 안의 대리 버튼(.tree-project-actions)으로
+    //   삭제한다(11_UI.js mountProjectNode, .click() 위임). 모바일 도달성도 그 대리 버튼 기준으로
+    //   재현해야 실사용 경로를 검증한다(예전 목업은 옛 구조를 그대로 흉내내 거짓 PASS 위험).
     tree.innerHTML =
-      '<div class="tree-node tree-node-deck" style="width:100%"><span class="tree-label">MAIN DECK</span></div>' +
+      '<div class="tree-project open"><button class="tree-node tree-node-project" style="width:100%"><span class="tree-label">ARCTIC VOYAGER E2E</span></button>' +
+      '<div class="tree-project-actions"><button type="button" class="btn-mini">다운로드</button><button type="button" class="btn-mini danger">프로젝트 삭제</button></div>' +
+      '<div class="tree-children"><div class="tree-node tree-node-deck" style="width:100%"><span class="tree-label">MAIN DECK</span></div>' +
       '<div class="tree-children"><div class="tree-node tree-node-doc"><span class="tree-label">도면1.pdf</span></div>' +
       '<div class="tree-node tree-node-pin"><span class="tree-label">핀1</span></div>' +
-      '<div class="tree-node tree-node-pin"><span class="tree-label">핀2</span></div></div>';
+      '<div class="tree-node tree-node-pin"><span class="tree-label">핀2</span></div></div></div></div>';
     return 'ok';
   })();
 `;
@@ -120,7 +126,7 @@ const measureJs = `
     var maxScroll = Math.max(0, scrollH - clientH);
     var targets = {
       '+생성(프로젝트)': document.getElementById('btn-new-project'),
-      '프로젝트삭제': document.getElementById('btn-delete-project'),
+      '프로젝트삭제': document.querySelector('.tree-project-actions button.danger'), // [WO 20260929-tree1] 대리 버튼(실사용 경로)
       '도구토글': document.getElementById('stb-toggle'),
       '구역생성': document.querySelector('[data-deleg="btn-new-deck"]'),
       '도면등록': document.querySelector('[data-deleg="btn-upload-drawing"]'),

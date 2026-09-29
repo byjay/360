@@ -679,6 +679,51 @@
       }
     },
 
+    /** [WO 20260929-tree1] 🔴 공유 지점(SoT) — "이 프로젝트의 원본 전체 도면"이 어느 구역인지
+     *  판정하는 규칙 하나. 사이드바 트리(openOriginal, 아래)와 프로젝트 재진입/허브 카드 클릭
+     *  (20_App.js loadLatestDeployment)이 각자 고르면 반드시 갈라진다(§10 SoT). 규칙: 루트 구역
+     *  (parent_id NULL — "구역" 단, "영역" 아님) 중 가장 최근 생성분. 루트가 없으면 null(지어내지
+     *  않음 — 아직 도면만 등록되고 구역이 하나도 없는 구간은 이 함수로도 찾을 수 없다: deployments
+     *  테이블에 project_id 가 없어 client 에서 조회 불가 — RECON 2026-09-29, src/index.tsx 변경 필요). */
+    pickOriginalDeck(decks) {
+      const roots = (decks || []).filter((d) => d && d.deployment_id && d.parent_id == null);
+      if (!roots.length) return null;
+      const ts = (d) => { const v = d.created_at; const n = typeof v === "number" ? v : Date.parse(v); return Number.isFinite(n) ? n : 0; };
+      return roots.slice().sort((a, b) => ts(b) - ts(a))[0];
+    },
+
+    /** [WO 20260929-tree1] 🔴 마스터: "상위 프로젝트를 클릭하면 [원본 전체 도면이] 나오게 해".
+     *  🔴 정직한 한계(데이터 구조 확인 결과, RECON 2026-09-29): deployments 테이블엔 project_id 가
+     *  없다(테넌트 단위) — 구역(decks)에 연결된 배포본만 프로젝트 소속으로 알 수 있다. 벡터복사로
+     *  만든 구역(정착 PDF 있는 경우 다수)은 원본과 **다른** 새 배포본을 가리키므로 "구역이 하나도
+     *  안 생긴 채" 등록만 된 도면은 이 함수로도 못 찾는다(서버에 project_id 컬럼 추가가 필요 —
+     *  src/index.tsx 밖이라 이 발주 범위 아님, 지휘자 보고 대상).
+     *  이 함수가 실제로 하는 일: **가장 단순한 선택** — 프로젝트의 루트 구역(parent_id NULL, 2단 중
+     *  "구역") 가운데 가장 최근 생성분을 그 구역 **자신의 crop 을 무시하고** 전체 페이지로 연다.
+     *  루트 구역은 항상 생성 시점에 crop:null(벡터복사) 이거나 그 구역 자체가 원본이므로
+     *  이 선택이 "원본 전체 도면"에 가장 가깝다. 루트가 여럿이면(도면 여러 장 등록) 최신 1장을
+     *  열고, 나머지는 트리에 이미 목록으로 나열돼 있다(추가 UI 0). */
+    async openOriginal() {
+      const latest = this.pickOriginalDeck(this.decks);
+      if (!latest) { Prompt.toast && Prompt.toast("등록된 원본 도면이 없습니다 — '도면 등록'으로 먼저 올리세요"); return; }
+      const rootCount = (this.decks || []).filter((d) => d && d.deployment_id && d.parent_id == null).length;
+      this.currentDeck = latest;
+      this._renderDecks();
+      if (typeof App !== "undefined" && App.loadDeckDrawing) {
+        await App.loadDeckDrawing(latest.deployment_id);
+        if (latest.page && typeof App._gotoPage === "function") { try { await App._gotoPage(latest.page); } catch (e) {} }
+      }
+      // 🔴 원본 전체 — 이 구역의 crop 은 무시(항상 null) — selectDeck 과 달리 여기는 "전체" 보장이 목적.
+      // 🔴 [실측 발견] _applyDeckCropView 는 "낡은 구역 맞춤 방지" 가드로 this.currentDeck.id 와
+      //   인자 d.id 를 비교한다(31_Projects.js _applyDeckCropView). {name,crop} 만 담은 새 객체를
+      //   넘기면 d.id 가 undefined 라 가드가 항상 참이 되어 MapCtrl.fit() 이 스킵되고 캔버스가
+      //   빈 화면으로 남는다(CDP 실측) — latest 를 얕은 복제해 id 를 보존한다.
+      const label = (this.currentProject && this.currentProject.name)
+        ? this.currentProject.name + (rootCount > 1 ? " · 원본" : "")
+        : latest.name;
+      this._applyDeckCropView(Object.assign({}, latest, { name: label, crop: null }));
+    },
+
     /** 🔴 [WO 20260928] "바운더리를 잘라서 별도의 페이지로 구성" (마스터 확정) —
      *  구역(crop 보유)을 **독립 페이지처럼** 화면에 적용한다: 크롭 렌더 대상 고정 + 그 영역으로 화면 맞춤.
      *  🔴 비파괴 — 원본 PDF/배포본은 그대로고, 이건 원본을 들여다보는 **창(view)** 이다(픽셀 재저장 0).
@@ -774,42 +819,14 @@
       if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
-    /** [결함수정] 구역 0개일 때 #side-tree 안에 직접 그리는 빈 상태 안내.
-     *  UI.renderTree()(11_UI.js — 다른 에이전트 작업 중이라 수정 금지)도 구역 0개면 같은
-     *  자리에 안내 텍스트만 그리지만 실제 생성 버튼이 없다. 여기서는 프로젝트가 선택된
-     *  경우에만(=진짜 "구역 0개") 실제 생성 버튼이 있는 안내를 그리고, 프로젝트 미선택
-     *  상태에서는 잘못된 안내를 띄우지 않도록 비워둔다.
-     *  ponytail: 이후 다른 코드가 UI.renderTree()를 독립 호출하면(16_Zones.js 등) 이 안내가
-     *  버튼 없는 텍스트로 되돌아갈 수 있다 — 실전에서는 구역이 0개일 때 존재할 수 없는
-     *  zone/pin 갱신 경로라 발생 가능성이 낮지만, 근본 해결은 11_UI.js 쪽 수정이 필요하다. */
+    /** [WO 20260929-tree1] 🔴 근본수정 — 예전엔 여기서 #side-tree.innerHTML 을 직접 덮어써
+     *  UI.renderTree() 가 방금 그 안에 옮겨 붙인 #project-actions(다운로드·삭제, 실 DOM)를
+     *  통째로 파괴했다(CDP 실측 — getElementById('project-actions') 가 null 이 됨, 영구 소실).
+     *  근본 원인은 "#side-tree 를 두 함수가 각자 그린다"였다(§10 SoT 위반) — CTA 안내
+     *  두 갈래(도면 있음/없음)를 UI.renderTree() 안으로 옮겼다(11_UI.js, mountProjectNode 옆).
+     *  이 함수는 이제 그 SoT 하나로 위임만 한다(호출부 0곳 변경 — _renderDecks() 그대로 호출). */
     _renderSideTreeEmpty() {
-      const host = document.getElementById("side-tree");
-      if (!host) return;
-      if (!this.currentProject) { host.innerHTML = ""; return; } // 프로젝트 미선택 — 안내 없음
-      // ── 🔴 [WO 20260928] "도면 있음 + 구역 0" 은 이제 **정상 상태**다(도면 등록이 구역을 만들지 않음).
-      //   이 상태에서 "구역이 없습니다 → 구역을 만들면 도면을 등록할 수 있습니다" 를 그대로 보여주면
-      //   이미 도면을 올린 사용자에게 **거짓 안내**가 된다(빈 화면과 같은 급의 조용한 실패).
-      //   → 분기해서 다음 행동(영역 지정)을 정확히 알린다. CTA 는 기존 경로(extractRegionAsDeck)로만 간다.
-      if (typeof State !== "undefined" && State.fileType) {
-        host.innerHTML =
-          '<div class="side-tree-empty">' +
-            '<p class="side-tree-empty-msg">도면이 등록됐습니다.<br>도면에서 <b>영역을 지정</b>해 구역을 만드세요.</p>' +
-            '<button type="button" class="side-tree-empty-cta" id="side-tree-make-deck-region">+ 영역 지정해 구역 만들기</button>' +
-          '</div>';
-        const rb = document.getElementById("side-tree-make-deck-region");
-        // extractRegionAsDeck() 이 "구역 0 + 도면 로드" 를 감지해 createDeckFromLoadedDrawing 으로 위임한다.
-        if (rb) rb.addEventListener("click", () => this.extractRegionAsDeck());
-        return;
-      }
-      host.innerHTML =
-        '<div class="side-tree-empty">' +
-          // [WO 20260928] 옛 문구("구역을 만들면 도면을 등록할 수 있습니다")는 이제 사실이 아니다 —
-          // 도면 등록은 구역을 전제하지 않는다. 실제 순서를 그대로 말한다.
-          '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>도면을 등록한 뒤, 도면에서 <b>영역을 지정</b>하면 구역이 만들어집니다.</p>' +
-          '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>' +
-        '</div>';
-      const btn = document.getElementById("side-tree-create-deck");
-      if (btn) btn.addEventListener("click", () => this.createDeck());
+      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
     /** [WO 20260928] 🔴 옛 '구역 선행 강제' 게이트의 **시각적 절반**이었다 — 구역이 0개면 업로드
