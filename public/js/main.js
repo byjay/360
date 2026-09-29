@@ -90,7 +90,7 @@
     currentDeploymentId: null,   // 현재 로드된 배포본 id (노트/협업 연결용)
     noteSummary: {},             // { pin_id: {total,open,progress,done} } 도면 뱃지용
     pinColor:    null,           // 핀 기본 색상(설정에서 변경) — null이면 PinPrefs 기본(green)
-    checkboardStart: {},         // { [page]: 시작번호 } 구역(페이지)별 체크보드 시작 번호
+    checkboardStart: {},         // [WO 20260929 addendum] { checkboard:{page:n}, content:{page:n} } 계열별·구역(페이지)별 시작 번호 — SoT 정규화는 App._normalizeCheckboardStart()(20_App.js)
     zoneView:    null,           // 구역 페이지(crop-view) 진입 중인 zone id — null이면 전체 도면
 
     reset() {
@@ -143,23 +143,30 @@
   ══════════════════════════════════════════ */
   const PinSeries = {
     KINDS: ["content", "empty", "checkboard"],
-    LABELS: { content: "콘텐츠", empty: "미배치", checkboard: "체크보드" },
+    LABELS: { content: "360", empty: "미배치", checkboard: "CHECKER" },
     FILTER_KEY: "wm-pin-filter",
+    /* [WO 20260929 addendum, 지휘자 정정] "체크보드랑 360모드랑 2개 해" — 핀 필터 바는 KINDS
+       (3종, 색상/marker용과 별개)이 아니라 이 2종(모드와 1:1)만 쓴다. seriesOf()가 이미
+       정확히 이 2값을 반환하므로 그대로 재사용(§10 SoT — 별도 분류를 새로 만들지 않는다). */
+    SERIES: ["checkboard", "content"],
 
-    /* [마스터 요청 2026-09-18, 정정] 프로젝트를 새로 열 때 배치 모드(designer/checkboard)의
-       기본값 = 등록모드(designer). 사용자가 명시 전환하면 그 선택을 기억해 다음에도
-       유지한다(SoT: 이 값 하나만 — App.openApp 호출부들은 전부 preferredMode()를
-       참조하고, 하드코딩된 "designer" 를 직접 쓰지 않는다).
+    /* [WO 20260929 2모드 전환, 지휘자 정정] 편집화면 진입 기본 모드 = CHECKER(checkboard).
+       구 3버튼(보기/체크보드/사진등록) 중 [보기]가 세그먼트에서 제거되며, 과거 이 값에
+       저장되던 "designer"(=구 [보기]/등록모드)는 더 이상 선택 가능한 목적지가 아니다 —
+       기존에 저장된 "designer" 값은 진입 시 "checkboard" 로 정규화한다(디자이너 UI에서
+       도달 불가능한 값을 SoT가 계속 반환하면 안 됨). SoT: 이 값 하나만 — App.openApp
+       호출부들은 전부 preferredMode()를 참조하고, 하드코딩된 값을 직접 쓰지 않는다.
        🔴 저장된 기존 핀의 checkboard/kind 해석은 이 값과 무관 — 이건 오직
-          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다.
-       (2026-09-18 11:23 커밋에서 체크보드로 바꿨다가, 같은 날 마스터가 등록모드로
-        되돌리라 정정 — 기본값만 뒤집고 SoT 구조·저장된 선택 우선순위는 그대로 유지.) */
+          "새 배치 시작 시 어느 모드로 열리는가"만 결정한다. */
     PREFERRED_MODE_KEY: "wm_pin_default_mode",
-    DEFAULT_MODE: "designer",
+    DEFAULT_MODE: "checkboard",
     preferredMode() {
       try {
         const v = localStorage.getItem(this.PREFERRED_MODE_KEY);
-        if (v === "designer" || v === "checkboard") return v;
+        // [WO 20260929] 구 "designer"(=[보기]) 저장값은 checkboard 로 정규화 — view 는
+        // 디자이너 UI에서 더 이상 도달 가능한 목적지가 아니다.
+        if (v === "checkboard") return v;
+        if (v === "designer") return "checkboard";
       } catch (e) {}
       return this.DEFAULT_MODE;
     },
@@ -210,6 +217,20 @@
       dashed: { dash: "6 3.4",   border: "dashed" }
     },
 
+    /** [WO 20260929 photo-time-match] 핀 생성시각 SoT(ms, Date.now() 기준) — 명시 필드
+     *  우선, 없으면 pin.id 가 Date.now() 로 채번된 숫자(20_App.js _placeCheckboardPin:1513,
+     *  _confirmPinInstant:2068 — 둘 다 id=Date.now() 만 있고 별도 createdAt 필드가 없다)라고
+     *  판단되면 그 값을 파생해 쓴다. 못 구하면 null(가짜 시각을 만들지 않는다 — §10 하드코딩 금지).
+     *  🔴 20_App.js 두 생성 지점은 다른 팀 점유라 여기서 명시 필드를 새로 심지 않는다 —
+     *  현재는 id 파생으로 커버되지만, id 채번 방식이 바뀌면 이 파생이 깨진다(후속 반영 필요 항목). */
+    createdAt(pin) {
+      if (!pin) return null;
+      if (Number.isFinite(pin.createdAt)) return pin.createdAt;
+      // Date.now() 는 1970-01-01 이후 ms — 2001-09-09 이후(1e12) 값이면 타임스탬프로 간주.
+      if (Number.isFinite(pin.id) && pin.id > 1e12) return pin.id;
+      return null;
+    },
+
     /** 핀에 콘텐츠(360/영상/첨부/노트/3D)가 있는가 — App.pinHasContent 가 정본 */
     hasContent(pin) {
       if (typeof App !== "undefined" && App.pinHasContent) { try { return !!App.pinHasContent(pin); } catch (e) {} }
@@ -225,6 +246,14 @@
 
     /** 채번 계열 (2종) */
     seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },
+
+    /** [WO 20260929 addendum] 🔴 표시 번호 포맷 정본 — CHECKER 계열은 숫자 그대로, 360 계열은
+     *  "P" 접두(마스터: "번호체계도 다르게 해"). 마커 머리(11_UI)·미니맵(07_Radar)·트리 행(11_UI)
+     *  등 번호를 보여주는 모든 곳이 이 함수 하나만 부른다 — 각자 접두를 붙이면 반드시 갈라진다
+     *  (전역 CLAUDE.md §10 SoT). 27_PinActionPop.js 패널 헤더는 현재 이 정본을 쓰지 않는 별도
+     *  버그(samePage.indexOf 자체 채번)가 있어 이관 대상이나, 그 파일은 다른 팀 점유라 이번 턴엔
+     *  손대지 않는다(지휘자 보고 대상). */
+    formatNo(no, series) { return series === "checkboard" ? String(no) : ("P" + no); },
 
     /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용)
      *  @param {string} kind   부류(content/empty/checkboard)
@@ -305,12 +334,20 @@
      *      전체-최댓값 기준이면 max(100,201)=201(상대 대역 침범, 버그) → author 필터 기준이면
      *      A 소유 핀 중 최댓값(101)+1 = 102(정상, 자기 대역 안에서만 증가).
      *  author 미지정(구버전 호출·비로그인)이면 종전처럼 페이지 전체 기준(하위호환). */
-    nextCheckboardNo(pins, page, start, author) {
+    nextCheckboardNo(pins, page, start, author) { return this.nextSeriesNo(pins, page, start, author, "checkboard"); },
+
+    /** [WO 20260929 addendum] 🔴 위 nextCheckboardNo() 를 2계열(checkboard/content=360)로 일반화.
+     *  마스터: "번호체계도 다르게 해" — 360(photo) 핀도 같은 페이지·같은 계열끼리만 최댓값+1
+     *  로 다음 번호를 계산한다(계열이 섞이면 서로 번호를 침범한다). 기본값 series="checkboard"
+     *  라 기존 nextCheckboardNo() 호출부·테스트는 전부 그대로 동작한다(하위호환, 시그니처 불변). */
+    nextSeriesNo(pins, page, start, author, series) {
       const pg = page || 1;
+      const ser = series === "content" ? "content" : "checkboard";
       const s = (Number.isFinite(start) && start >= 1) ? start : 1;
       let maxNo = 0;
       (pins || []).forEach(p => {
-        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        if (!p || (p.page || 1) !== pg) return;
+        if (this.seriesOf(p) !== ser) return;
         if (author != null && p.author !== author) return; // 대역 침범 방지: 내 핀만 본다
         const n = parseInt(p.label, 10);
         if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시
@@ -352,14 +389,19 @@
      *         지정하면 그 부분집합만 재채번하고, 대상 밖의 나머지 체크보드 핀과 번호가
      *         겹치면 거부한다(향후 "선택 재채번" 확장 대비 — 지금 UI 는 항상 전체를 넘긴다).
      *  @returns {{ok:boolean, changes:Array<{id,oldLabel,newLabel}>, reason?:string}} */
-    renumberCheckboardRange(pins, page, newStart, targetIds) {
+    /** [WO 20260929 addendum] series 기본값 "checkboard"(하위호환 — 기존 3/4-인자 호출부·테스트
+     *  전부 그대로 동작). "content"(360)를 넘기면 현재 모드(360) 핀만 대상으로 일괄 재채번한다
+     *  (마스터: "번호 일괄 변경도 현재 모드 핀만 대상"). */
+    renumberCheckboardRange(pins, page, newStart, targetIds, series) {
       const pg = page || 1;
+      const ser = series === "content" ? "content" : "checkboard";
       const s = parseInt(newStart, 10);
       if (!Number.isFinite(s) || s < 1) return { ok: false, changes: [], reason: "시작 번호를 올바르게 입력하세요(1 이상 숫자)" };
       const map = this.numbers(pins, pg);
       const wantIds = targetIds ? new Set(targetIds) : null;
-      const targets = (pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard && (!wantIds || wantIds.has(p.id)));
-      if (!targets.length) return { ok: false, changes: [], reason: "이 페이지에는 체크보드 핀이 없습니다" };
+      const matches = (p) => this.seriesOf(p) === ser;
+      const targets = (pins || []).filter((p) => p && (p.page || 1) === pg && matches(p) && (!wantIds || wantIds.has(p.id)));
+      if (!targets.length) return { ok: false, changes: [], reason: ser === "checkboard" ? "이 페이지에는 체크보드 핀이 없습니다" : "이 페이지에는 360 핀이 없습니다" };
       targets.sort((a, b) => {
         const ai = map.get(a.id), bi = map.get(b.id);
         return (ai ? ai.no : 0) - (bi ? bi.no : 0);
@@ -368,8 +410,8 @@
       const newLabelSet = new Set(changes.map((c) => c.newLabel));
       if (newLabelSet.size !== changes.length) return { ok: false, changes: [], reason: "변경 결과에 번호 중복이 발생합니다 — 적용하지 않았습니다" };
       const targetIdSet = new Set(targets.map((p) => p.id));
-      const collide = (pins || []).some((p) => p && (p.page || 1) === pg && p.checkboard && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label)));
-      if (collide) return { ok: false, changes: [], reason: "기존 다른 체크보드 핀과 번호가 겹칩니다 — 적용하지 않았습니다" };
+      const collide = (pins || []).some((p) => p && (p.page || 1) === pg && matches(p) && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label)));
+      if (collide) return { ok: false, changes: [], reason: "기존 다른 핀과 번호가 겹칩니다 — 적용하지 않았습니다" };
       return { ok: true, changes: changes };
     },
 
@@ -390,15 +432,18 @@
        숨김 = 표시만 감춘다. 저장 데이터·번호 계열은 필터와 무관하게 불변. */
     _filter: null,
 
-    /** 현재 필터 상태 { content, empty, checkboard } — 이 탭의 열람 세션 동안만 유지.
+    /** 현재 필터 상태 { checkboard, content } — 이 탭의 열람 세션 동안만 유지.
      *  🔴 [WO 20260921 근본수정] 예전엔 localStorage(wm-pin-filter, 전역 키)에 영구 저장했다 —
      *  프로젝트/배포본 구분이 없는 전역 키라, 한 프로젝트에서 "체크보드" 계열을 껐다 나가면
      *  그 값이 브라우저에 남아 완전히 다른(새) 프로젝트를 열 때도 조용히 적용되어, 그 프로젝트의
      *  핀이 전부(또는 한 계열이 전부) 안 보이는 유령 결함이 됐다(마스터 신고: "체크보드 모드일 때
      *  핀이 안 생긴다"). 새로 열 때마다 항상 전체 표시로 시작하는 게 안전하므로 영구저장을 끊는다
-     *  (이 값은 이제 페이지 스크립트가 살아있는 동안의 메모리 상태일 뿐 — 새로고침/새 프로젝트=항상 전체표시). */
+     *  (이 값은 이제 페이지 스크립트가 살아있는 동안의 메모리 상태일 뿐 — 새로고침/새 프로젝트=항상 전체표시).
+     *  [WO 20260929 addendum] 키가 KINDS(3종) → SERIES(2종: checkboard/content)로 바뀌었다 —
+     *  필터 바가 이제 모드(CHECKER/360)와 1:1인 2칩뿐이라 "미배치(empty)"는 별도 칩이 없다
+     *  (content 칩 하나가 kindOf 상 content+empty 를 모두 포함 — seriesOf 기준이므로 자연히 그렇다). */
     filter() {
-      if (!this._filter) this._filter = { content: true, empty: true, checkboard: true };
+      if (!this._filter) this._filter = { checkboard: true, content: true };
       return this._filter;
     },
 
@@ -454,23 +499,25 @@
     /** [WO 20260921] 더 이상 저장하지 않는다(위 iconFilter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
     _persistIcon() {},
 
-    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND) */
-    isVisible(pin) { return !!this.filter()[this.kindOf(pin)] && this.isIconVisible(pin); },
+    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND).
+     *  [WO 20260929 addendum] kindOf(3종) 대신 seriesOf(2종)로 필터 판정 — 필터 바 칩이
+     *  이제 CHECKER/360 2개뿐이라 필터 상태 키도 그 2종과 정확히 일치해야 한다. */
+    isVisible(pin) { return !!this.filter()[this.seriesOf(pin)] && this.isIconVisible(pin); },
 
-    isAll() { const f = this.filter(); return this.KINDS.every(k => f[k]); },
+    isAll() { const f = this.filter(); return this.SERIES.every(k => f[k]); },
 
-    toggle(kind) {
+    toggle(series) {
       const f = this.filter();
-      if (this.KINDS.indexOf(kind) < 0) return;
+      if (this.SERIES.indexOf(series) < 0) return;
       const next = Object.assign({}, f, {});
-      next[kind] = !f[kind];
+      next[series] = !f[series];
       // 마지막 하나를 끄는 건 전체 숨김 → 그 하나만 보기로 해석(단독 선택)
-      if (!this.KINDS.some(k => next[k])) { this.KINDS.forEach(k => next[k] = (k === kind)); }
-      this.KINDS.forEach(k => f[k] = next[k]);
+      if (!this.SERIES.some(k => next[k])) { this.SERIES.forEach(k => next[k] = (k === series)); }
+      this.SERIES.forEach(k => f[k] = next[k]);
       this._persist();
     },
 
-    showAll() { const f = this.filter(); this.KINDS.forEach(k => f[k] = true); this._persist(); },
+    showAll() { const f = this.filter(); this.SERIES.forEach(k => f[k] = true); this._persist(); },
 
     /** [WO 20260921] 더 이상 저장하지 않는다(위 filter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
     _persist() {},
@@ -503,19 +550,24 @@
      *  덮어써진다 — 사용자별 값은 그 사용자에게 붙어야 한다는 마스터 지시. 각 브라우저의
      *  localStorage 는 사용자별로 독립이므로 이 문제가 구조적으로 발생하지 않는다). */
     BAND_KEY_PREFIX: "wm-user-band:",
-    userBandStart(author) {
+    // [WO 20260929 addendum] 360(content) 계열 전용 대역 키 — CHECKER 대역과 절대 같은 키를
+    // 쓰면 안 된다(두 계열이 같은 시작번호를 공유하면 "번호체계 분리" 요구가 깨진다).
+    BAND_KEY_PREFIX_360: "wm-user-band-360:",
+    _bandPrefix(series) { return series === "content" ? this.BAND_KEY_PREFIX_360 : this.BAND_KEY_PREFIX; },
+    /** series 생략 시 종전대로 checkboard 대역(하위호환, 기존 1-인자 호출부 그대로 동작). */
+    userBandStart(author, series) {
       if (!author) return null;
       try {
-        const raw = localStorage.getItem(this.BAND_KEY_PREFIX + author);
+        const raw = localStorage.getItem(this._bandPrefix(series) + author);
         const n = parseInt(raw, 10);
         return (Number.isFinite(n) && n >= 1) ? n : null;
       } catch (e) { return null; }
     },
-    setUserBandStart(author, value) {
+    setUserBandStart(author, value, series) {
       if (!author) return null;
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
-      try { localStorage.setItem(this.BAND_KEY_PREFIX + author, String(n)); } catch (e) {}
+      try { localStorage.setItem(this._bandPrefix(series) + author, String(n)); } catch (e) {}
       return n;
     },
 
@@ -557,7 +609,8 @@
       return "empty";
     },
 
-    /** 페이지 내 부류별 핀 개수 (칩 배지용) */
+    /** 페이지 내 부류별 핀 개수 (kindOf 3종 기준 — 이 함수 자체는 필터 바에서 더 쓰지 않지만
+     *  하위호환을 위해 남겨둔다. 필터 바는 아래 seriesCounts()(2종)를 쓴다). */
     counts(pins, page) {
       const pg = page || 1;
       const c = { content: 0, empty: 0, checkboard: 0, all: 0 };
@@ -568,62 +621,50 @@
       return c;
     },
 
-    /* ── 필터 칩 UI (도면 좌상단) — 기존 구역페이저 칩 스타일(.zpager-tab) 재사용 ── */
+    /** [WO 20260929 addendum] 필터 바 칩 개수(2종: checkboard/content=360). */
+    seriesCounts(pins, page) {
+      const pg = page || 1;
+      const c = { checkboard: 0, content: 0, all: 0 };
+      (pins || []).forEach((p) => {
+        if (!p || (p.page || 1) !== pg) return;
+        c[this.seriesOf(p)]++; c.all++;
+      });
+      return c;
+    },
+
+    /* ── 필터 칩 UI (도면 좌상단) — 기존 구역페이저 칩 스타일(.zpager-tab) 재사용 ──
+       [WO 20260929 addendum, 지휘자 정정] 마스터 원문: "그냥 체크보드랑 360모드랑 2개 해 —
+       내가 시킨 것만 하고". 구 3종(콘텐츠/미배치/체크보드) kind 칩 + 별도 아이콘(종류) 필터
+       칩 그룹 + 중복 "전체" 칩을 전부 없애고, 모드와 1:1인 [CHECKER][360] 2칩만 남긴다.
+       두 칩은 독립 토글(기본 둘 다 on = 전부 보임) — 별도 "전체" 칩 불필요(SERIES.length===2
+       라 하나만 꺼도 나머지 하나가 곧 "그것만 보기"가 된다). 상태는 세션 메모리에만
+       (filter() 주석 참조 — 고스트 필터 재발 방지, 영구저장 금지 유지). */
     renderChips() {
       if (typeof document === "undefined") return;
       const host = document.getElementById("pin-filter-bar");
       if (!host) return;
       const page = (typeof State !== "undefined" && State.pdfPage) || 1;
       const pins = (typeof State !== "undefined" && State.pins) || [];
-      const c = this.counts(pins, page);
+      const c = this.seriesCounts(pins, page);
       if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
       host.classList.remove("hidden");
       const f = this.filter();
-      const chip = (kind, label, n, on) =>
-        '<button type="button" class="zpager-tab pinfilter-chip pf-' + kind + (on ? " active" : "") +
-        '" data-kind="' + kind + '" aria-pressed="' + (on ? "true" : "false") +
+      const chip = (series, label, n, on) =>
+        '<button type="button" class="zpager-tab pinfilter-chip pf-' + series + (on ? " active" : "") +
+        '" data-series="' + series + '" aria-pressed="' + (on ? "true" : "false") +
         '" title="' + label + ' 핀만 보기"><span class="pinfilter-dot"></span>' + label +
         '<span class="zpager-cnt">' + n + '</span></button>';
-      let html = chip("all", "전체", c.all, this.isAll());
-      this.KINDS.forEach(k => { if (c[k]) html += chip(k, this.LABELS[k], c[k], !!f[k]); });
-
-      // ── [마스터 요청 2026-09-03] 종류(아이콘) 필터 칩 — 계열 칩과 별도 축, 공존.
-      //   실제 페이지에 존재하는 종류만(0개 종류는 빈 화면만 준다) · 2종 이상일 때만(1종뿐이면
-      //   거를 게 없어 무의미한 칩이 된다 — YAGNI).
-      const ic = this.iconCounts(pins, page);
-      const presentIds = Object.keys(ic);
-      if (presentIds.length > 1 && typeof PinIcons !== "undefined") {
-        const iflt = this.iconFilter();
-        // 🔴 새 CSS 클래스 없이(.pinfilter-dot 은 9px 원+kind별 배경색 전제) — 인라인 스타일로
-        //   14px 사각 뱃지 안에 실제 아이콘 SVG 를 넣어 종류를 한눈에 구분(§CSS 미신설 보고 대상).
-        const dotStyle = 'style="width:14px;height:14px;border-radius:4px;box-shadow:none;' +
-          'background:rgba(255,255,255,.14);display:inline-flex;align-items:center;justify-content:center;color:inherit"';
-        const iconChip = (iconId, label, n, on) =>
-          '<button type="button" class="zpager-tab pinfilter-chip pf-icon-flt' + (on ? " active" : "") +
-          '" data-icon="' + iconId + '" aria-pressed="' + (on ? "true" : "false") +
-          '" title="' + label + ' 만 보기"><span class="pinfilter-dot" ' + dotStyle + ' aria-hidden="true">' +
-          (iconId === "all" ? "" : PinIcons.chipSvg(iconId, 11)) + '</span>' + label +
-          '<span class="zpager-cnt">' + n + '</span></button>';
-        html += iconChip("all", "전체", c.all, this.isIconAll(presentIds));
-        presentIds.forEach(id => { html += iconChip(id, PinIcons.def(id).name, ic[id], iflt[id] !== false); });
-      }
+      let html = "";
+      this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });
 
       host.innerHTML = html;
       if (!this._chipsBound) {
         this._chipsBound = true;
         host.addEventListener("click", (e) => {
-          const btn = e.target && e.target.closest ? e.target.closest("[data-kind],[data-icon]") : null;
+          const btn = e.target && e.target.closest ? e.target.closest("[data-series]") : null;
           if (!btn) return;
           e.stopPropagation();
-          if (btn.dataset.kind) {
-            const kind = btn.dataset.kind;
-            if (kind === "all") this.showAll(); else this.toggle(kind);
-          } else if (btn.dataset.icon) {
-            const page2 = (typeof State !== "undefined" && State.pdfPage) || 1;
-            const presentIds2 = Object.keys(this.iconCounts((typeof State !== "undefined" && State.pins) || [], page2));
-            const iconId = btn.dataset.icon;
-            if (iconId === "all") this.showAllIcons(); else this.toggleIconFilter(iconId, presentIds2);
-          }
+          this.toggle(btn.dataset.series);
           this.apply(); // UI.renderPinsOnMap()이 renderChips()도 함께 호출해 칩 active 상태를 갱신한다
         });
       }
@@ -8356,7 +8397,7 @@
       if (_ml) {
         _ml.innerHTML = _modeIcon;
         _ml.style.color = accentVar;
-        _ml.title = isCheckboard ? "체크보드 모드" : isPhoto ? "사진 등록 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
+        _ml.title = isCheckboard ? "CHECKER 모드" : isPhoto ? "360 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
         _ml.style.display = "inline-flex"; _ml.style.alignItems = "center";
       }
 
@@ -8373,7 +8414,7 @@
         const cbEnter = UI.$("btn-checkboard-enter");
         const cbEnterLbl = UI.$("btn-checkboard-enter-label");
         if (cbEnter) cbEnter.classList.toggle("active", isCheckboard);
-        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드 시작";
+        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "CHECKER 모드 사용 중" : "CHECKER 모드 시작";
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
         //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
@@ -8452,7 +8493,7 @@
       const cbBtn = UI.$("btn-checkboard-enter");
       if (cbBtn) cbBtn.classList.toggle("active", isCheckboard);
       const cbLabel = UI.$("btn-checkboard-enter-label");
-      if (cbLabel) cbLabel.textContent = isCheckboard ? "편집모드로 복귀" : "체크보드 모드";
+      if (cbLabel) cbLabel.textContent = isCheckboard ? "CHECKER 모드 사용 중" : "CHECKER 모드 시작";
       const placeBtn = UI.$("btn-place");
       if (placeBtn) placeBtn.textContent = isPhoto ? "+ 번호 핀 + 사진" : isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
       const placeHint = UI.$("place-hint");
@@ -8790,16 +8831,16 @@
       // 포인트 배치 모드 토글
       UI.$("btn-place").addEventListener("click", () => this._togglePlacing());
 
-      // 체크보드 모드 토글 (보기 ↔ 체크보드) — 두 버튼 공용 핸들러. [WO 20260929] 신규 SoT(_setRegMode)로 귀결.
-      const toggleCheckboard = () => {
-        this._setRegMode(State.regMode === "checkboard" ? "view" : "checkboard");
-      };
+      // [WO 20260929 2모드 전환] CHECKER 진입 — 두 버튼 공용 핸들러. 과거엔 이미 체크보드일 때
+      // "view"(보기)로 되돌리는 토글이었으나, [보기] 세그먼트 제거로 그 경로는 디자이너 UI에서
+      // 도달 불가해야 한다(WO 원문). 이제 이 버튼은 CHECKER 진입 전용 — 이미 체크보드면 무동작.
+      const enterCheckboard = () => { this._setRegMode("checkboard"); };
       const cbBtn = UI.$("btn-checkboard-toggle");
-      if (cbBtn) cbBtn.addEventListener("click", toggleCheckboard);
+      if (cbBtn) cbBtn.addEventListener("click", enterCheckboard);
       const cbEnter = UI.$("btn-checkboard-enter");
-      if (cbEnter) cbEnter.addEventListener("click", toggleCheckboard);
-      // [WO 20260929] 편집화면 3모드 세그먼트(보기/체크보드/사진등록) — 신규 진입점, 같은 SoT로 귀결.
-      ["view", "checkboard", "photo"].forEach((m) => {
+      if (cbEnter) cbEnter.addEventListener("click", enterCheckboard);
+      // [WO 20260929 2모드 전환] 편집화면 2모드 세그먼트(CHECKER/360) — 신규 진입점, 같은 SoT로 귀결.
+      ["checkboard", "photo"].forEach((m) => {
         const b = UI.$("btn-regmode-" + m);
         if (b) b.addEventListener("click", () => this._setRegMode(m));
       });
@@ -8936,7 +8977,10 @@
       });
     },
 
-    /** [WO 20260929] 편집화면 3모드 SoT — 보기(view)/체크보드(checkboard)/사진등록(photo).
+    /** [WO 20260929 2모드 전환] 편집화면 SoT — CHECKER(checkboard)/360(photo) 2모드.
+     *  🔴 "view"(구 [보기])는 세그먼트·모든 UI 진입점에서 제거됐다 — 디자이너 UI로는
+     *  도달 불가해야 한다(WO 원문). State.regMode 내부 값으로는 여전히 남아 있을 수 있어
+     *  이 함수는 방어적으로 "view"도 받아들이지만, 어떤 버튼도 더 이상 "view"를 호출하지 않는다.
      *  🔴 기존 진입점(btn-checkboard-enter/btn-checkboard-toggle·포인트 추가 버튼들)도
      *  모두 이 함수로 귀결된다 — 상태를 여러 곳에서 따로 세팅하면 반드시 갈라진다
      *  (전역 CLAUDE.md §10 SoT). openApp(keepDrawing:true) 재사용 — 도면 재로드 없음
@@ -8957,10 +9001,10 @@
       }
     },
 
-    /** 3모드 세그먼트 버튼(#btn-regmode-view/checkboard/photo) 활성 표시 동기화.
+    /** 2모드 세그먼트 버튼(#btn-regmode-checkboard/photo) 활성 표시 동기화.
      *  렌더 지점 하나(§10 SoT) — openApp()·_setRegMode() 어디서 전환되든 여기만 부른다. */
     _syncRegModeButtons() {
-      ["view", "checkboard", "photo"].forEach((m) => {
+      ["checkboard", "photo"].forEach((m) => {
         const b = UI.$("btn-regmode-" + m);
         if (!b) return;
         const active = State.regMode === m;
@@ -8975,7 +9019,7 @@
       //   여기 한 곳만 막으면 어느 버튼으로 들어와도 view 모드에서 생성이 불가능하다.
       if (!State.placing && State.regMode === "view") {
         if (typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — 체크보드/사진 등록 모드로 전환하세요");
+          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — CHECKER/360 모드로 전환하세요");
         }
         return;
       }
@@ -9656,33 +9700,56 @@
 
     /** 체크보드 모드: 클릭 즉시 번호 핀 생성(이름/사진 폼 없음).
      *  번호는 현재 페이지 내 순번(렌더 규칙과 동일)으로 자동 부여. */
-    /** 현재 구역(페이지)의 체크보드 시작 번호 (미설정 시 1).
+    /** [WO 20260929 addendum, 지휘자 정정] 🔴 시작번호 저장 SoT — State.checkboardStart 형식을
+     *  계열별 중첩({checkboard:{page:n}, content:{page:n}})으로 바꾼다(마스터: "세팅도 각 모드에서
+     *  가능하게 해" — CHECKER 시작번호와 360 시작번호는 서로 다른 값이어야 한다).
+     *  마이그레이션 없이: 서버 컬럼(deployments.checkboard_start)은 그대로 JSON TEXT 라 스키마
+     *  변경이 없다 — 구버전 평면 형식({page:n, ...})은 로드 시 이 함수가 "전부 checkboard 계열"
+     *  로 해석해 감싼다(과거엔 번호핀이 전부 checkboard:true 였으므로 사실과 일치 — content(360)는
+     *  새로 시작, 기본 1). 네 군데 로드 지점(_loadLatestDeployment 등)이 전부 이 함수 하나만
+     *  거친다(§10 SoT — 각자 파싱하면 형식이 갈라진다). */
+    _normalizeCheckboardStart(raw) {
+      const o = (raw && typeof raw === "object") ? raw : {};
+      const hasSeriesShape = ("checkboard" in o) || ("content" in o);
+      const looksNested = hasSeriesShape && ["checkboard", "content"].every((k) => !(k in o) || (o[k] && typeof o[k] === "object"));
+      if (looksNested) {
+        return {
+          checkboard: (o.checkboard && typeof o.checkboard === "object") ? o.checkboard : {},
+          content: (o.content && typeof o.content === "object") ? o.content : {}
+        };
+      }
+      return { checkboard: o, content: {} }; // 구버전 평면 형식 → 전부 checkboard 계열로 승계
+    },
+    /** 현재 구역(페이지)의 시작 번호 (미설정 시 1). series 생략 시 "checkboard"(하위호환).
      *  🔴 [WO 20260917 멀티유저 ①·재설계] 마스터 확정: "시작번호 = 사용자별 번호 대역"
      *  (예: 사용자A=100, 사용자B=200 — 번호만 봐도 누가 찍었는지 알고, 충돌이 구조적으로 없다).
-     *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속)이 있으면 최우선이고,
-     *  없으면 기존 페이지별 값(State.checkboardStart, 구버전/비로그인 폴백)을 쓴다. */
-    _checkboardStart(page) {
+     *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속, 계열별 키)이 있으면
+     *  최우선이고, 없으면 계열별 페이지값(State.checkboardStart[series], 구버전/비로그인 폴백)을 쓴다. */
+    _checkboardStart(page, series) {
+      const ser = series === "content" ? "content" : "checkboard";
       const p = page || State.pdfPage || 1;
       const author = this._pinAuthor();
-      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author) : null;
+      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author, ser) : null;
       if (band != null) return band;
-      const v = State.checkboardStart && State.checkboardStart[p];
+      const bucket = (State.checkboardStart && State.checkboardStart[ser]) || {};
+      const v = bucket[p];
       const n = parseInt(v, 10);
       return (Number.isFinite(n) && n >= 1) ? n : 1;
     },
-    /** 시작 번호 설정. 로그인 사용자는 "내 대역"(사용자에게 귀속 — localStorage, 배포본
-     *  단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
+    /** 시작 번호 설정(계열별). 로그인 사용자는 "내 대역"(사용자+계열에 귀속 — localStorage,
+     *  배포본 단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
      *  비로그인/데모(author 없음)는 종전처럼 페이지별 값만 저장(하위호환). */
-    _setCheckboardStart(page, value) {
+    _setCheckboardStart(page, value, series) {
+      const ser = series === "content" ? "content" : "checkboard";
       const p = page || State.pdfPage || 1;
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
       const author = this._pinAuthor();
       if (author && typeof PinSeries !== "undefined" && PinSeries.setUserBandStart) {
-        PinSeries.setUserBandStart(author, n);
+        PinSeries.setUserBandStart(author, n, ser);
       }
-      State.checkboardStart = State.checkboardStart || {};
-      State.checkboardStart[p] = n;
+      State.checkboardStart = this._normalizeCheckboardStart(State.checkboardStart);
+      State.checkboardStart[ser][p] = n;
       this._autoSave && this._autoSave();
       return n;
     },
@@ -9691,24 +9758,29 @@
      *  duplicateCheckboardIds() 위 주석의 금지 규율과 충돌하지 않는다, 01b_PinSeries.js 참조).
      *  버튼 클릭 → 새 시작번호 입력(Prompt.ask, 새 UI 없음) → 미리보기/확인(confirm) →
      *  적용. 계산·검증은 PinSeries.renumberCheckboardRange() 정본에 전부 있고, 여기선
-     *  호출·확인·반영만 한다. */
-    async _renumberCheckboard() {
+     *  호출·확인·반영만 한다.
+     *  [WO 20260929 addendum, 지휘자 정정] series 생략 시 "checkboard"(하위호환, 기존
+     *  #btn-checkboard-renumber 무인자 호출 그대로 동작) — 마스터: "번호 일괄 변경도 현재
+     *  모드 핀만 대상"이라 24_Settings.js 가 현재 모드(State.regMode)를 넘겨 호출한다. */
+    async _renumberCheckboard(series) {
+      const ser = series === "content" ? "content" : "checkboard";
+      const seriesLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[ser]) || ser;
       const page = State.pdfPage || 1;
       const cur = PinSeries.numbers(State.pins, page);
-      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && p.checkboard);
-      if (!curTargets.length) { Prompt.toast && Prompt.toast("이 페이지에는 체크보드 핀이 없습니다"); return; }
+      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && PinSeries.seriesOf(p) === ser);
+      if (!curTargets.length) { Prompt.toast && Prompt.toast("이 페이지에는 " + seriesLabel + " 핀이 없습니다"); return; }
       let curMin = Infinity, curMax = -Infinity;
       curTargets.forEach((p) => { const info = cur.get(p.id); if (info) { curMin = Math.min(curMin, info.no); curMax = Math.max(curMax, info.no); } });
       const res = await Prompt.ask({
-        title: "번호 일괄 변경",
+        title: seriesLabel + " 번호 일괄 변경",
         sub: "현재 " + curTargets.length + "개(" + curMin + "~" + curMax + "번) — 새 시작 번호를 입력하세요",
         placeholder: "새 시작 번호", value: String(curMax + 1)
       });
       if (!res) return;
-      const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value);
+      const result = PinSeries.renumberCheckboardRange(State.pins, page, res.value, null, ser);
       if (!result.ok) { Prompt.toast && Prompt.toast(result.reason || "변경할 수 없습니다"); return; }
       const first = result.changes[0].newLabel, last = result.changes[result.changes.length - 1].newLabel;
-      if (!await Prompt.confirm("번호 일괄 변경", "체크보드 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
+      if (!await Prompt.confirm(seriesLabel + " 번호 일괄 변경", seriesLabel + " 핀 " + result.changes.length + "개를 " + first + "~" + last + "번으로 변경합니다. 되돌리기 어렵습니다 — 계속할까요?")) return;
       const byId = new Map((State.pins || []).map((p) => [p.id, p]));
       result.changes.forEach((c) => {
         const pin = byId.get(c.id);
@@ -9736,22 +9808,28 @@
       return null;
     },
 
+    /** [WO 20260929 addendum, 지휘자 정정] 🔴 유일한 생성 지점 — CHECKER(checkboard)와 360(photo)
+     *  둘 다 여기서 만들어진다. 마스터: "번호체계도 다르게 해" — State.regMode 로 계열을 갈라
+     *  각 계열끼리만 채번한다(nextSeriesNo, §10 SoT). photo(360) 핀은 pin.checkboard 필드
+     *  자체를 생략한다(마스터: "기존 데이터: checkboard 플래그 없는 핀 = 360 계열로 간주" —
+     *  이 표현과 정확히 일치시킨다, 거짓 false 를 쓰지 않는다). */
     _placeCheckboardPin(pct) {
       const curPage = State.pdfPage || 1;
-      // 🔴 채번 정본 = PinSeries. 체크보드 계열은 콘텐츠 핀과 독립이므로
-      //   "페이지 내 전체 핀 수"가 아니라 "페이지 내 체크보드 핀 수"로 증가한다.
-      const start = this._checkboardStart(curPage);
+      const series = (State.regMode === "photo") ? "content" : "checkboard";
+      // 🔴 채번 정본 = PinSeries. 계열마다 독립으로 "페이지 내 그 계열 핀 수"로 증가한다.
+      const start = this._checkboardStart(curPage, series);
       const _auth0 = this._pinAuthor();
       // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
       //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
-      const no = PinSeries.nextCheckboardNo(State.pins, curPage, start, _auth0);
-      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no), checkboard: true };
+      const no = PinSeries.nextSeriesNo(State.pins, curPage, start, _auth0, series);
+      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no) };
+      if (series === "checkboard") pin.checkboard = true;
       if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       State.pins.push(pin);
-      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: true });
+      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: series === "checkboard" });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks();
       UI.renderPinList();
@@ -9812,37 +9890,46 @@
       }
     },
 
-    /** 현재 페이지에서 방금 찍은 체크보드 계열 핀의 번호 범위(시작~마지막).
+    /** 현재 페이지에서 방금 찍은 계열(series)의 번호 범위(시작~마지막).
      *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백.
-     *  [마스터 요청 2026-09-03] series:"checkboard" 를 함께 반환해 PhotoBatch.open() 이
-     *  콘텐츠 계열과 혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수). */
-    _checkboardQuickRange(page) {
+     *  [마스터 요청 2026-09-03] series 를 함께 반환해 PhotoBatch.open() 이 다른 계열과
+     *  혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수).
+     *  [WO 20260929 addendum] series 생략 시 "checkboard"(하위호환) — 360(photo) 모드는
+     *  _updateCheckboardQuickStatus() 가 State.regMode 로 판정해 "content" 를 넘긴다. */
+    _checkboardQuickRange(page, series) {
+      const ser = series === "content" ? "content" : "checkboard";
       const pg = page || State.pdfPage || 1;
       const map = PinSeries.numbers(State.pins, pg);
       let start = null, end = null;
       (State.pins || []).forEach((p) => {
-        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
+        if (!p || (p.page || 1) !== pg || PinSeries.seriesOf(p) !== ser) return;
         const info = map.get(p.id);
         if (!info) return;
         if (start === null || info.no < start) start = info.no;
         if (end === null || info.no > end) end = info.no;
       });
-      const fallback = this._checkboardStart(pg);
-      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: "checkboard" };
+      const fallback = this._checkboardStart(pg, ser);
+      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: ser };
     },
 
     /** [마스터 요청 2026-09-03, WO 20260918 갱신] "지금 몇 번부터 / 몇 개 찍었는지"를 기존
      *  place-hint 문구에 반영한다. (구 "사진 폴더 연동" 퀵버튼 노출 토글은 그 버튼이 렌더
-     *  고아라 삭제되며 함께 제거 — #btn-photobatch 로 통합.) */
+     *  고아라 삭제되며 함께 제거 — #btn-photobatch 로 통합.)
+     *  [WO 20260929 addendum] State.regMode 로 계열을 판정해 CHECKER/360 각각의 시작번호·
+     *  개수·다음번호를 보여준다(마스터: "번호체계도 다르게 해"). */
     _updateCheckboardQuickStatus(page) {
       const pg = page || State.pdfPage || 1;
-      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && p.checkboard).length;
-      const range = this._checkboardQuickRange(pg);
+      const series = (State.regMode === "photo") ? "content" : "checkboard";
+      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
+      const range = this._checkboardQuickRange(pg, series);
       const hint = UI.$("place-hint");
+      const emptyHint = series === "content"
+        ? "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다"
+        : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ("시작 " + this._checkboardStart(pg) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
-          : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
+          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
+          : emptyHint;
       }
     },
 
@@ -12247,7 +12334,9 @@
         try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
-        try { State.checkboardStart = JSON.parse(dep.checkboard_start || "{}") || {}; } catch { State.checkboardStart = {}; }
+        // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식({checkboard,content})
+        //   으로 정규화(§10 SoT — 네 로드 지점이 각자 파싱하면 형식이 갈라진다).
+        try { State.checkboardStart = this._normalizeCheckboardStart(JSON.parse(dep.checkboard_start || "{}")); } catch { State.checkboardStart = this._normalizeCheckboardStart(null); }
         // 🔴 [WO 20260928-pinloss] 저장 안 한 로컬 작업분(dirty draft)이 있으면 서버본 위에 복원.
         //   렌더(_r0) 전에 끝내야 첫 화면부터 draft 핀이 보이고, 이후 저장/자동보관이 draft 를 빈 목록으로 덮지 않는다.
         this._applyDirtyDraft(draft, dkey, dep.version);
@@ -12318,7 +12407,7 @@
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
         // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
-        State.checkboardStart = (d.checkboardStart && typeof d.checkboardStart === "object") ? d.checkboardStart : {};
+        State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
         if (d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; }
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
@@ -12438,7 +12527,7 @@
       State.pins = m.pins;
       State.zones = m.zones;
       if (Array.isArray(d.annotations)) State.annotations = d.annotations;
-      if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = d.checkboardStart;
+      if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
       this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
       this._markDeckUnsaved(this._deckIdOfKey(key), true);
       return true;
@@ -13148,8 +13237,9 @@
         try { State.annotations = JSON.parse(latest.annotations || "[]"); }
         catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
-        try { State.checkboardStart = JSON.parse(latest.checkboard_start || "{}") || {}; }
-        catch { State.checkboardStart = {}; }
+        // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식 정규화(§10 SoT).
+        try { State.checkboardStart = this._normalizeCheckboardStart(JSON.parse(latest.checkboard_start || "{}")); }
+        catch { State.checkboardStart = this._normalizeCheckboardStart(null); }
         // 🔴 [WO 20260928-pinloss] 형제 로더(loadDeckDrawing)와 같은 공유 지점 — 저장 안 한 작업분 복원
         if (draft && latest.id === wantId) this._applyDirtyDraft(draft, draftKey, latest.version);
 
@@ -14217,19 +14307,23 @@
       $("btn-open-codemap") && $("btn-open-codemap").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openCodemap(); });
       $("btn-open-firebase") && $("btn-open-firebase").addEventListener("click", () => { if (Auth.isSuper && typeof AdminPanels !== "undefined") AdminPanels.openFirebase(); });
       // [WO 20260928] 체크보드 시작 번호 — 정본 App._setCheckboardStart()/_renumberCheckboard() 재사용.
+      // [WO 20260929 addendum, 지휘자 정정] 마스터: "세팅도 각 모드에서 가능하게 해" — 인라인·모달
+      // 둘 다 App._checkboardStart()/_setCheckboardStart() 에 "현재 모드(State.regMode)의 계열"을
+      // 함께 넘긴다(_currentSeries() 한 곳에서만 판정 — §10 SoT).
       $("btn-settings-checkboard-apply") && $("btn-settings-checkboard-apply").addEventListener("click", () => {
         const input = $("settings-checkboard-start");
         if (!input || input.disabled) return;
-        const n = App._setCheckboardStart(State.pdfPage || 1, input.value);
+        const series = this._currentSeries();
+        const n = App._setCheckboardStart(State.pdfPage || 1, input.value, series);
         // [WO 20260929 topbar-cleanup] 세팅 모달 ↔ 상단바 인라인 입력 양방향 동기화 —
         // 값 자체는 App._setCheckboardStart()가 유일한 SoT, 여기선 두 표시를 함께 새로고침만 한다.
         this._renderCheckboardStart();
-        Prompt.toast && Prompt.toast("다음 번호부터 " + n + "번으로 시작합니다");
+        Prompt.toast && Prompt.toast((typeof PinSeries !== "undefined" ? PinSeries.LABELS[series] : series) + " 다음 번호부터 " + n + "번으로 시작합니다");
       });
       $("btn-settings-checkboard-renumber") && $("btn-settings-checkboard-renumber").addEventListener("click", () => {
         const btn = $("btn-settings-checkboard-renumber");
         if (btn && btn.disabled) return;
-        App._renumberCheckboard(); // 기존 Prompt.ask(시작번호 입력)+Prompt.confirm 흐름 그대로
+        App._renumberCheckboard(this._currentSeries()); // 기존 Prompt.ask(시작번호 입력)+Prompt.confirm 흐름 그대로
       });
       // [WO 20260929 topbar-cleanup] 상단바 인라인 시작번호(#input-regmode-start) — 세팅 모달과
       // 같은 SoT(App._setCheckboardStart())를 호출하고 렌더는 _renderCheckboardStart() 한 곳에서만.
@@ -14237,9 +14331,10 @@
       if (inlineStart) {
         const applyInline = () => {
           if (inlineStart.disabled || inlineStart.value === "") return;
-          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value);
+          const series = this._currentSeries();
+          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value, series);
           this._renderCheckboardStart();
-          Prompt.toast && Prompt.toast("다음 번호부터 " + n + "번으로 시작합니다");
+          Prompt.toast && Prompt.toast((typeof PinSeries !== "undefined" ? PinSeries.LABELS[series] : series) + " 다음 번호부터 " + n + "번으로 시작합니다");
         };
         inlineStart.addEventListener("blur", applyInline);
         inlineStart.addEventListener("keydown", (e) => {
@@ -14250,7 +14345,7 @@
       // 편승 — 20_App.js는 수정하지 않는다(다른 팀 점유). _bindTopbar()가 App.init() 초반(Settings.init()
       // 이전)에 먼저 실행되므로, 여기서 나중에 등록되는 이 리스너는 State.regMode가 이미 갱신된 뒤
       // 실행된다(등록 순서=실행 순서, addEventListener 다중 리스너 허용).
-      ["view", "checkboard", "photo"].forEach((m) => {
+      ["checkboard", "photo"].forEach((m) => {
         const b = $("btn-regmode-" + m);
         if (b) b.addEventListener("click", () => this._renderCheckboardStart());
       });
@@ -14276,11 +14371,20 @@
       ).join("");
     },
 
-    /** [WO 20260928] 설정 패널의 "체크보드 시작 번호" 항목 렌더 — 현재 구역(도면) 값을 채우고,
+    /** [WO 20260929 addendum] 현재 편집화면 모드(State.regMode)에 대응하는 채번 계열.
+     *  photo(360)면 "content", 그 외(checkboard 및 방어적 view 폴백)는 "checkboard".
+     *  판정 지점 하나(§10 SoT) — apply/renumber/inline/렌더가 전부 이 함수만 부른다. */
+    _currentSeries() {
+      return (typeof State !== "undefined" && State.regMode === "photo") ? "content" : "checkboard";
+    },
+
+    /** [WO 20260928] 설정 패널의 "OO 시작 번호" 항목 렌더 — 현재 구역(도면)·현재 모드 값을 채우고,
      *  도면이 로드 안 됐으면 비활성 + 이유를 표시한다(조용히 무시 금지).
      *  [WO 20260929 topbar-cleanup] 상단바 인라인 입력(#input-regmode-start)도 같은 값/비활성
      *  상태로 함께 렌더한다 — 렌더 지점 하나(SoT는 App._checkboardStart/_setCheckboardStart),
-     *  세팅 모달·상단바 인라인 두 표시가 항상 동일한 값을 보이게 한다(양방향 동기화). */
+     *  세팅 모달·상단바 인라인 두 표시가 항상 동일한 값을 보이게 한다(양방향 동기화).
+     *  [WO 20260929 addendum, 지휘자 정정] 마스터: "세팅도 각 모드에서 가능하게 해" — 라벨·값
+     *  모두 _currentSeries()(현재 모드)를 따라 CHECKER/360 로 갈린다. */
     _renderCheckboardStart() {
       const $ = (id) => document.getElementById(id);
       const input = $("settings-checkboard-start");
@@ -14288,6 +14392,10 @@
       const applyBtn = $("btn-settings-checkboard-apply");
       const renumberBtn = $("btn-settings-checkboard-renumber");
       const inline = $("input-regmode-start");
+      const label = $("settings-checkboard-start-label");
+      const series = this._currentSeries();
+      const seriesLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[series]) || series;
+      if (label) label.textContent = seriesLabel + " 시작 번호";
       const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
       if (input) input.disabled = !hasDrawing;
       if (applyBtn) applyBtn.disabled = !hasDrawing;
@@ -14299,7 +14407,7 @@
         if (hint) hint.textContent = "도면(구역)을 먼저 불러와야 시작 번호를 설정할 수 있습니다.";
         return;
       }
-      const n = (typeof App !== "undefined" && App._checkboardStart) ? String(App._checkboardStart(State.pdfPage || 1)) : "1";
+      const n = (typeof App !== "undefined" && App._checkboardStart) ? String(App._checkboardStart(State.pdfPage || 1, series)) : "1";
       if (input) input.value = n;
       if (inline) inline.value = n;
       if (hint) hint.textContent = "개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.";
@@ -15923,6 +16031,21 @@
       const hasPhoto = (typeof App !== "undefined" && App.pinHasMedia) ? App.pinHasMedia(pin) : !!(pin && (pin.imageId || pin.imageUrl || pin.videoUrl || pin.pendingOpId || pin.localPreview));
       if (previewBox) previewBox.classList.toggle("hidden", !hasPhoto);
       if (hasPhoto) this._resolvePhotoSrc(pin).then((src) => { if (img && src) img.src = src; });
+      // [지휘자 발주 보강 2026-09-29 §4-2] "영역/구역 · 시각 · 원본파일명" 한 줄 — index.html 수정
+      // 금지(다른 팀 점유)라 JS 로 요소를 만들어 붙인다(기존 "index.html 수정 금지" 관례 그대로,
+      // p87 등 최소 가짜DOM 에 appendChild 가 없을 수 있어 기능감지로 방어).
+      if (hasPhoto && typeof PhotoNaming !== "undefined" && previewBox && typeof previewBox.appendChild === "function") {
+        let metaEl = document.getElementById("pap-photo-meta");
+        if (!metaEl) {
+          metaEl = document.createElement("div");
+          metaEl.id = "pap-photo-meta";
+          if (metaEl.setAttribute) metaEl.setAttribute("style", "font-size:11px;color:#94a3b8;margin-top:2px;");
+          previewBox.appendChild(metaEl);
+        }
+        const desc = PhotoNaming.describe(pin);
+        metaEl.textContent = desc;
+        if (metaEl.classList && metaEl.classList.toggle) metaEl.classList.toggle("hidden", !desc);
+      }
       if (registerBox) {
         registerBox.classList.toggle("hidden", !canEdit);
         // index.html 수정 금지 — 안내 문구만 상태에 맞게 JS 로 갱신(첫 자식 = 고정 안내 div).
@@ -15980,9 +16103,17 @@
       if (statusEl) statusEl.textContent = "업로드 중…";
       try {
         const { dataURL, width, height } = await Cloud.resizeImage(file);
-        const imgName = (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
+        // [지휘자 발주 보강 2026-09-29 §3] 저장 이름 = 영역/구역이름_등록시각(PhotoNaming SoT,
+        // 35_PhotoBatch.js) — 없으면 기존처럼 핀 라벨 기반. typeof 가드는 로드순서 무관 재사용 관례.
+        const shotAt = Date.now();
+        const fullName = (typeof PhotoNaming !== "undefined")
+          ? PhotoNaming.name(pin, file.name, shotAt, new Set())
+          : (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
+        const imgName = fullName.replace(/\.[^.]+$/, "");
         const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
         pin.imageId = imageId; pin.imageName = imgName;
+        // [지휘자 발주 보강 §4] 표시용 메타(있는 것만 — 지어내지 않음).
+        pin.origName = file.name; pin.shotAt = shotAt; pin.shotSrc = "등록시각";
         if (wantsTheta) pin.is360 = true; // SoT: 20_App.js:2083 과 동일 필드(신규 필드 도입 금지)
         if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
         if (typeof App !== "undefined" && App._markDirty) App._markDirty();
@@ -17923,6 +18054,61 @@
     }
   }
 
+  /* ── [WO 20260929 photo-time-match] 오프라인 중 촬영한 360 사진 연결 안내 ──────────────
+     마스터: "THETA X야 … 제어할 필요 없이 그 와이파이에 연결되었을 때는 감지해서 같이 작동 연동해".
+     브라우저는 SSID 를 읽을 수 없다 — THETA 의 AP 에 붙는 순간은 곧 인터넷 단절이므로, 기존
+     online/offline 이벤트(§ updateNetBadge 가 이미 구독)를 그대로 "감지" 신호로 재사용한다.
+     그 오프라인 세션 중 핀이 1개 이상 생겼으면(PinSeries.createdAt SoT), 온라인 복귀 시
+     "연결하기" 배너로 PhotoBatch.openTimeMatch() 를 안내한다. 새 폴링/권한 요청 없음. */
+  let _offlineSessionStartAt = null;
+
+  function _onGoOffline() {
+    _offlineSessionStartAt = Date.now();
+  }
+  function _showReconnectBanner(pinCount) {
+    try {
+      const old = document.getElementById("wm-theta-reconnect");
+      if (old) old.remove();
+      const host = document.createElement("div");
+      host.id = "wm-theta-reconnect";
+      host.setAttribute("style",
+        "position:fixed;left:50%;bottom:86px;transform:translateX(-50%);z-index:9999;" +
+        "background:#1d4ed8;color:#fff;padding:10px 14px;border-radius:10px;" +
+        "box-shadow:0 6px 18px rgba(0,0,0,.35);display:flex;gap:10px;align-items:center;" +
+        "font-size:14px;max-width:92vw;");
+      const msg = document.createElement("span");
+      msg.textContent = "오프라인 중 핀 " + pinCount + "개 생성됨 — 촬영한 360 사진 연결하기";
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.textContent = "연결하기";
+      btn.setAttribute("style", "background:#fff;color:#1d4ed8;border:0;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer;");
+      btn.addEventListener("click", () => {
+        host.remove();
+        try { if (typeof PhotoBatch !== "undefined" && PhotoBatch.openTimeMatch) PhotoBatch.openTimeMatch(); } catch (e) {}
+      });
+      const close = document.createElement("button");
+      close.type = "button"; close.textContent = "×";
+      close.setAttribute("style", "background:transparent;color:#fff;border:0;font-size:16px;cursor:pointer;");
+      close.addEventListener("click", () => host.remove());
+      host.appendChild(msg); host.appendChild(btn); host.appendChild(close);
+      document.body.appendChild(host);
+      setTimeout(() => { if (host && host.parentNode) host.remove(); }, 20000);
+    } catch (e) {}
+  }
+  function _onGoOnline() {
+    updateNetBadge();
+    try {
+      if (_offlineSessionStartAt == null) return;
+      const since = _offlineSessionStartAt;
+      _offlineSessionStartAt = null;
+      const pins = (typeof State !== "undefined" && Array.isArray(State.pins)) ? State.pins : [];
+      const createdDuring = pins.filter((p) => {
+        const t = (typeof PinSeries !== "undefined" && PinSeries.createdAt) ? PinSeries.createdAt(p) : null;
+        return Number.isFinite(t) && t >= since;
+      });
+      if (createdDuring.length) _showReconnectBanner(createdDuring.length);
+    } catch (e) {}
+  }
+
   // 네트워크 이벤트 + 주기 갱신 연결 (DOM 준비 후 init 에서 한 번 더 호출)
   const Offline = {
     Bundle: OfflineBundle,
@@ -17934,8 +18120,8 @@
     curDepId: _curDepId,
     init() {
       try {
-        window.addEventListener("online", updateNetBadge);
-        window.addEventListener("offline", updateNetBadge);
+        window.addEventListener("online", _onGoOnline);
+        window.addEventListener("offline", () => { _onGoOffline(); updateNetBadge(); });
         if (typeof SyncQueue !== "undefined" && SyncQueue.onChange) SyncQueue.onChange(() => updateNetBadge());
         setInterval(updateNetBadge, 3000);
         updateNetBadge();
@@ -18260,6 +18446,82 @@
        App._markDirty() 로 "미저장" 표시만 남긴다.
      360 판별: App._detect360(file, cb) 재사용(자체 판별 로직 추가 금지).
   ══════════════════════════════════════════════════════════════ */
+  /* ══ [지휘자 발주 보강 2026-09-29 §3·§4] 신규 등록 사진 저장 이름 + 표시용 메타 SoT ══════════
+     마스터: "만약 영역이나 구역이 있다면 그 사진은 영역이름_시간으로 변경해서 등록해" /
+     "사진정보를 바로 알아볼 수 있게".
+     🔴 용어 주의 — 이 코드베이스엔 사각형 주석(State.zones, `Zones._contains`)도 "영역"으로
+     불리는 곳이 있어 이름이 겹친다. 여기서는 발주 원문의 "crop 안" 표현을 근거로 **deck 계층**
+     (Projects.currentDeck/decks, parent_id·crop)으로 해석했다 — [Uncertain] 100% 확정은 아니며,
+     오판정이면 scopeOf() 한 곳만 고치면 된다(SoT). 적용은 신규 등록에만(기존 이름 불변). */
+  const PhotoNaming = {
+    _ILLEGAL_RE: /[\\/:*?"<>|\x00-\x1F]/g,
+    sanitize(s) { return String(s == null ? "" : s).replace(this._ILLEGAL_RE, "-").trim(); },
+    _fmtTs(ms) {
+      if (!Number.isFinite(ms)) return null;
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, "0");
+      return "" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+    },
+    _fmtDisplay(ms) {
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+    },
+    /** 핀이 속한 영역(구역의 자식 deck, crop 안)/구역(부모 deck) 이름 — 트리와 동일 규칙
+     *  (겹치면 면적이 작은 쪽, 11_UI.js zoneOfPin 알고리즘을 deck.crop 에 적용). */
+    scopeOf(pin) {
+      try {
+        if (typeof Projects === "undefined" || !pin) return { area: null, zone: null };
+        const cur = Projects.currentDeck;
+        if (!cur) return { area: null, zone: null };
+        const decks = Array.isArray(Projects.decks) ? Projects.decks : [];
+        const isRegion = !!(cur.crop && cur.crop.w > 0 && cur.crop.h > 0);
+        if (isRegion) {
+          const parent = decks.find((d) => d.id === cur.parent_id);
+          return { area: cur.name || null, zone: parent ? (parent.name || null) : null };
+        }
+        const children = decks.filter((d) => d.parent_id === cur.id && d.crop && d.crop.w > 0 && d.crop.h > 0 && (d.page || 1) === (pin.page || 1));
+        let best = null, bestArea = Infinity;
+        children.forEach((d) => {
+          const c = d.crop;
+          const inside = pin.x >= c.x && pin.x <= c.x + c.w && pin.y >= c.y && pin.y <= c.y + c.h;
+          if (!inside) return;
+          const area = c.w * c.h;
+          if (area < bestArea) { bestArea = area; best = d; }
+        });
+        return { area: best ? (best.name || null) : null, zone: cur.name || null };
+      } catch (e) { return { area: null, zone: null }; }
+    },
+    /** 저장 이름(확장자 포함) — 영역 있으면 영역이름_시각, 없고 구역만 있으면 구역이름_시각,
+     *  둘 다 없으면 원본 파일명 유지. @param {Set<string>} [usedNames] 충돌 시 _2,_3… 접미사
+     *  (이 함수 호출부가 한 배치 동안 공유하는 Set 하나 — 서버 전체 네임스페이스 조회는 하지 않는다). */
+    name(pin, origName, shotAtMs, usedNames) {
+      origName = origName || "";
+      const extMatch = /\.[^.]+$/.exec(origName);
+      const ext = extMatch ? extMatch[0].toLowerCase() : "";
+      const scope = this.scopeOf(pin);
+      const label = scope.area || scope.zone;
+      if (!label) return origName || ("photo" + ext);
+      const ts = this._fmtTs(shotAtMs) || this._fmtTs(Date.now());
+      const base = this.sanitize(label) + "_" + ts;
+      const used = usedNames || new Set();
+      let candidate = base + ext, n = 2;
+      while (used.has(candidate)) { candidate = base + "_" + n + ext; n++; }
+      return candidate;
+    },
+    /** 표시용 한 줄 — "영역/구역명 · YYYY-MM-DD HH:MM:SS · 원본 파일명"(값 없는 항목은 생략). */
+    describe(pin) {
+      if (!pin) return "";
+      const parts = [];
+      const scope = this.scopeOf(pin);
+      const label = scope.area || scope.zone;
+      if (label) parts.push(label);
+      if (Number.isFinite(pin.shotAt)) parts.push(this._fmtDisplay(pin.shotAt));
+      if (pin.origName) parts.push("원본 " + pin.origName);
+      return parts.join(" · ");
+    }
+  };
+
   const PhotoBatch = {
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
     _range: { start: 1, end: 1, series: "content" },
@@ -18304,14 +18566,23 @@
       } catch (e) { return null; }
     },
 
-    /** TIFF 헤더부터 IFD0 + ExifIFD 를 훑어 촬영시각 태그를 찾는다 */
+    /** TIFF 헤더부터 IFD0 + ExifIFD 를 훑어 촬영시각 태그 + [WO 20260929 photo-time-match]
+     *  Make(0x010F)/Model(0x0110, 360 카메라 판별 보강신호) / OffsetTimeOriginal(0x9010,
+     *  카메라 자체 UTC 오프셋 — 있으면 시각을 정확한 절대시각으로 환산해 시계보정 정밀도를 높인다)
+     *  를 함께 읽는다. 반환 형태는 기존 {iso,tag} 를 그대로 포함해 하위호환(테스트①)을 지킨다. */
     _parseExifIfd(b, tiffStart, end) {
       if (tiffStart + 8 > end) return null;
       const le = this._asciiAt(b, tiffStart, 2) === "II";
       const u16 = (o) => b.getUint16(o, le);
       const u32 = (o) => b.getUint32(o, le);
       if (u16(tiffStart + 2) !== 42) return null;
-      let best = null;
+      let best = null, make = null, model = null, offsetOriginal = null;
+      const readAscii = (e, type, cnt) => {
+        if (type !== 2) return null;
+        const valOff = (cnt > 4) ? tiffStart + u32(e + 8) : e + 8;
+        if (valOff + cnt > end) return null;
+        return this._asciiAt(b, valOff, cnt).replace(/\0+$/, "");
+      };
       const walk = (ifdOff, depth) => {
         if (depth > 2 || (best && best.tag === "DateTimeOriginal")) return;
         const at = tiffStart + ifdOff;
@@ -18321,6 +18592,9 @@
           const e = at + 2 + k * 12;
           if (e + 12 > end) return;
           const tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
+          if (tag === 0x010F) make = readAscii(e, type, cnt);            // Make
+          if (tag === 0x0110) model = readAscii(e, type, cnt);           // Model
+          if (tag === 0x9010) offsetOriginal = readAscii(e, type, cnt);  // OffsetTimeOriginal
           const valOff = (type === 2 && cnt > 4) ? tiffStart + u32(e + 8) : e + 8;
           if (tag === 0x8769) { walk(u32(e + 8), depth + 1); continue; } // ExifIFD 포인터
           if ((tag === 0x9003 || tag === 0x9004 || tag === 0x0132) && type === 2 && valOff + 19 <= end) {
@@ -18328,26 +18602,51 @@
             const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(s);
             if (m) {
               const iso = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6];
-              if (tag === 0x9003) { best = { iso, tag: "DateTimeOriginal" }; return; }
+              if (tag === 0x9003) { best = { iso, tag: "DateTimeOriginal" }; continue; }
               if (!best) best = { iso, tag: tag === 0x9004 ? "DateTimeDigitized" : "DateTime" };
             }
           }
         }
       };
       walk(u32(tiffStart + 4), 0);
-      return best;
+      if (!best && !make && !model) return null;
+      return Object.assign({}, best, { make: make, model: model, offsetOriginal: offsetOriginal });
     },
 
-    /** 정렬 우선순위(EXIF→mtime→파일명)에 따라 sortKey/timeSource/timeLabel 을 부여하고
-     *  정렬한 "새" 배열을 반환한다(원본 불변). 큰 시간 간격(10분↑) 지점엔 bigGapBefore 를 단다.
-     *  순수 함수 — 테스트가 직접 호출한다. */
+    /** [지휘자 발주 보강 2026-09-29] THETA X 실기기 파일명 패턴 — 마스터 실측 스크린샷:
+     *  "R0013783_20260929155952.JPG"(경로 /내장 저장공간/Pictures/RICOH THETA, Android).
+     *  "R" + 일련번호 + "_" + YYYYMMDDHHMMSS(로컬시각) + 확장자. EXIF 가 없어도(또는 못 읽어도)
+     *  이 패턴만으로 촬영시각을 정확히 복원할 수 있다 — 파일명 자연정렬 폴백보다 우선한다. */
+    _THETA_NAME_RE: /^R\d+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(jpe?g)$/i,
+    _parseThetaFilenameDate(name) {
+      const m = this._THETA_NAME_RE.exec(String(name || ""));
+      if (!m) return null;
+      return { iso: m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6] };
+    },
+    /** 파일명만으로 THETA 촬영분임을 추정하는 보강 신호(360 최종 판정은 App._detect360 비율검사가
+     *  정본 — 이 신호는 근접 타이 브레이크용으로만 쓴다. 이름만으로 360 여부를 확정하지 않는다). */
+    _isThetaFilename(name) { return this._THETA_NAME_RE.test(String(name || "")); },
+
+    /** 정렬 우선순위(EXIF → 파일명 THETA 타임스탬프 → mtime → 파일명 자연정렬)에 따라
+     *  sortKey/timeSource/timeLabel 을 부여하고 정렬한 "새" 배열을 반환한다(원본 불변).
+     *  큰 시간 간격(10분↑) 지점엔 bigGapBefore 를 단다. 순수 함수 — 테스트가 직접 호출한다. */
     _sortRows(rows) {
       const withKey = (rows || []).map((r) => {
         let sortKey, timeSource, timeLabel;
+        const fnDate = this._parseThetaFilenameDate(r.name);
         if (r.exif && r.exif.iso) {
-          sortKey = Date.parse(r.exif.iso);
+          // [WO 20260929 photo-time-match] OffsetTimeOriginal(카메라 자체 UTC 오프셋)이 있으면
+          // 그걸 붙여 절대시각으로 정확히 환산한다(카메라·휴대폰이 다른 타임존이어도 정확).
+          // 없으면 기존과 동일하게 휴대폰(브라우저) 로컬 타임존으로 해석(Date.parse 기본 동작).
+          // 🔴 파일명·EXIF 가 다르면 EXIF 가 우선이다(EXIF=카메라가 기록한 진짜 촬영시각).
+          const off = r.exif.offsetOriginal;
+          sortKey = (off && /^[+-]\d{2}:\d{2}$/.test(off)) ? Date.parse(r.exif.iso + off) : Date.parse(r.exif.iso);
           timeSource = "EXIF " + r.exif.tag;
           timeLabel = r.exif.iso.replace("T", " ");
+        } else if (fnDate) {
+          sortKey = Date.parse(fnDate.iso);
+          timeSource = "파일명(THETA 타임스탬프)";
+          timeLabel = fnDate.iso.replace("T", " ");
         } else if (Number.isFinite(r.lastModified)) {
           sortKey = r.lastModified;
           timeSource = "파일 수정시각";
@@ -18410,6 +18709,109 @@
 
     _esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); },
 
+    /** [지휘자 발주 보강§3] PhotoNaming 충돌회피 시드 — 현재 페이지 핀들이 이미 쓰고 있는 저장
+     *  이름(확장자 없음, 기존 pin.imageName 관례). 전체 R2 네임스페이스 조회는 하지 않는다(범위 명시). */
+    _usedPhotoNames() {
+      const used = new Set();
+      ((typeof State !== "undefined" && State.pins) || []).forEach((p) => { if (p && p.imageName) used.add(p.imageName); });
+      return used;
+    },
+
+    /* ══ [WO 20260929 photo-time-match] 핀 생성시각 ↔ 360 사진 촬영시각 최근접 자동매칭 ══
+       마스터 요청: "포인트 생성 시간을 기록해 핸드폰에 할 때에는 그 시간에 들어오는 사진을
+       반드시 360도 사진을 찾아서 연동 가능하게 해 제일 근사한 시간에 저장된 360 그림을 찾아서
+       연동되게" / "THETA X야 … 와이파이에 연결되었을 때는 감지해서 같이 작동 연동해".
+       기존 _buildMatches(번호순×표시순서 1:1, 위치 기반)는 그대로 둔다(하위호환·기존 테스트 불변) —
+       이 블록은 완전히 새로운 "시각 최근접" 경로다. 순수 함수만 두고, DOM 연결은 아래 별도 섹션. */
+
+    /** THETA/RICOH 360 카메라 신호(EXIF Make/Model) — 최종 360 여부는 App._detect360(비율+폭)이
+     *  정본이다. 이 함수는 여러 후보가 동시에 근접할 때 THETA 촬영분을 우선하는 참고신호로만 쓴다. */
+    _isThetaSignal(make, model) {
+      const s = String(make || "") + " " + String(model || "");
+      return /ricoh/i.test(s) || /theta/i.test(s);
+    },
+
+    /** 핀 시각(ms) — PinSeries.createdAt() SoT 파생 재사용(자체 추정 금지). 구할 수 없으면 null. */
+    _pinTimeMs(pin) {
+      return (typeof PinSeries !== "undefined" && PinSeries.createdAt) ? PinSeries.createdAt(pin) : null;
+    },
+
+    /** 사진 시각(ms) = _sortRows 가 부여한 sortKey(EXIF/mtime) + 사용자 시계보정(분, ±).
+     *  파일명순 폴백(시간정보 없음, sortKey=NaN)은 시간매칭 대상에서 제외한다(조용히 추정 금지). */
+    _rowTimeMs(row, offsetMin) {
+      if (!row || !Number.isFinite(row.sortKey)) return null;
+      return row.sortKey + (Number(offsetMin) || 0) * 60000;
+    },
+
+    /** 최근접 1:1 그리디 할당(순수 함수). 모든 (핀,사진) 쌍 중 |Δt| 가 허용오차 이내인 것만
+     *  후보로 삼아 Δt 오름차순으로 확정한다 — "번호순×사진순" 위치 매칭과 달리 사진 한 장이
+     *  누락/추가돼도 이후 전부 밀리지 않는다(각 쌍이 실제 근접도로 독립 확정되므로). */
+    _nearestAssign(pinEntries, rowEntries, toleranceMs) {
+      const pairs = [];
+      (pinEntries || []).forEach((p, pi) => {
+        if (!Number.isFinite(p.t)) return;
+        (rowEntries || []).forEach((r, ri) => {
+          if (!Number.isFinite(r.t)) return;
+          const dt = Math.abs(p.t - r.t);
+          if (dt <= toleranceMs) pairs.push({ pi, ri, dt });
+        });
+      });
+      // [지휘자 발주 보강] Δt 가 같은 동률 쌍이면 THETA 파일명/EXIF 신호가 있는 사진을 우선한다
+      // (이름만으로 360 여부를 확정하지는 않는다 — 후보 자체는 여전히 row.is360===true 만 진입).
+      pairs.sort((a, b) => a.dt - b.dt
+        || ((rowEntries[b.ri].row.thetaSignal ? 1 : 0) - (rowEntries[a.ri].row.thetaSignal ? 1 : 0)));
+      const usedP = new Set(), usedR = new Set();
+      const matches = [];
+      pairs.forEach((pr) => {
+        if (usedP.has(pr.pi) || usedR.has(pr.ri)) return;
+        usedP.add(pr.pi); usedR.add(pr.ri);
+        matches.push({ pin: pinEntries[pr.pi].pin, no: pinEntries[pr.pi].no, row: rowEntries[pr.ri].row, dtMs: pr.dt });
+      });
+      matches.sort((a, b) => (a.row.__idx || 0) - (b.row.__idx || 0));
+      const unmatchedPins = (pinEntries || []).filter((_, pi) => !usedP.has(pi)).map((e) => ({ pin: e.pin, no: e.no }));
+      const unmatchedRows = (rowEntries || []).filter((_, ri) => !usedR.has(ri)).map((e) => e.row);
+      return { matches, unmatchedPins, unmatchedRows };
+    },
+
+    /** [핵심 API] 시각 최근접 자동매칭 — 대상 계열의 핀(기본: 아직 360 없는 핀, is360!==true) ×
+     *  360 판정된 사진(row.is360===true 만 후보 — 아닌 것은 excluded360 으로 남겨 "360 아님"을
+     *  화면에 명시하고 조용히 빠뜨리지 않는다)을 |Δt| 오름차순 그리디로 1:1 확정한다.
+     *  @param {{toleranceMs?:number, offsetMin?:number, includeExisting360?:boolean}} [opts] */
+    _buildTimeMatches(pinList, rows, opts) {
+      const o = opts || {};
+      const toleranceMs = Number.isFinite(o.toleranceMs) ? o.toleranceMs : 10 * 60 * 1000;
+      const offsetMin = Number(o.offsetMin) || 0;
+      const includeExisting = !!o.includeExisting360;
+
+      const skippedExisting = [];
+      const pinEntries = [];
+      (pinList || []).forEach((e) => {
+        if (!includeExisting && e.pin && e.pin.is360 === true) { skippedExisting.push(e); return; }
+        pinEntries.push({ pin: e.pin, no: e.no, t: this._pinTimeMs(e.pin) });
+      });
+      // [지휘자 발주 보강2 §2] 작업 시간대 창 — 대상 핀들의 생성시각 범위 밖 사진은(폴더 전체
+      // 선택 시 옛 사진 수백 장이 섞여도) 후보에서 빼고 개수만 표시한다(조용히 빠뜨리지 않되,
+      // 목록을 전부 그리지도 않음 — 설계 §2 "개수만 표시").
+      const validPinTimes = pinEntries.map((e) => e.t).filter((t) => Number.isFinite(t));
+      const winMin = validPinTimes.length ? Math.min(...validPinTimes) - toleranceMs : null;
+      const winMax = validPinTimes.length ? Math.max(...validPinTimes) + toleranceMs : null;
+
+      const excluded360 = [];
+      const outOfWindow = [];
+      const rowEntries = [];
+      (rows || []).forEach((row, idx) => {
+        row.__idx = idx;
+        if (row.excluded) return;
+        if (row.is360 !== true) { excluded360.push(row); return; }
+        const t = this._rowTimeMs(row, offsetMin);
+        if (winMin != null && Number.isFinite(t) && (t < winMin || t > winMax)) { outOfWindow.push(row); return; }
+        rowEntries.push({ row, t });
+      });
+
+      const { matches, unmatchedPins, unmatchedRows } = this._nearestAssign(pinEntries, rowEntries, toleranceMs);
+      return { matches, unmatchedPins, unmatchedRows, excluded360, skippedExisting, outOfWindow };
+    },
+
     /* ══ DOM 연결 ══════════════════════════════════════════════ */
 
     init() {
@@ -18455,7 +18857,11 @@
      *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
      *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";
+      // [WO 20260929 addendum, 지휘자 정정] State.checkboard(불리언, CHECKER/360 공통 "퀵툴" 플래그)
+      // 만으로는 두 계열을 구분 못 한다(마스터: "번호체계도 다르게 해" — 계열 분리). CHECKER
+      // 모드일 때만 checkboard 계열, 그 외(360/photo·일반 편집)는 전부 content(360) 계열 —
+      // State.regMode 로만 판정(20_App.js _placeCheckboardPin 과 동일 판정 로직, §10 SoT).
+      const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";
       const list = this._pinList(State.pins, State.pdfPage || 1, series);
       return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
@@ -18513,7 +18919,7 @@
       for (const f of imgFiles) {
         let exif = null;
         try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
-        rows.push({ file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0 });
+        rows.push({ file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0, thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name) });
       }
       this._rows = this._sortRows(rows);
       if (status) status.textContent = imgFiles.length + "장 · 시간순 정렬 완료";
@@ -18587,6 +18993,42 @@
       }
     },
 
+    /** [WO 20260929 photo-time-match] run()과 시간매칭 적용(_applyTimeMatch)이 공유하는
+     *  업로드 1건 단계(SoT — 두 곳에 복제하지 않는다, §10). 동작은 run()의 기존 인라인 로직과
+     *  100% 동일(온라인 직접 업로드 → 실패/오프라인이면 SyncQueue.enqueue 폴백, 오프라인 바이트는
+     *  그 안에서 IndexedDB "ops" 스토어에 영속돼 앱 재시작 후에도 남는다 — 05_SyncQueue.js:210-242).
+     *  @param {Set<string>} [usedNames] 이 배치가 공유하는 이름 충돌 회피 집합(PhotoNaming).
+     *  @returns {Promise<{status:'done'|'skip'|'fail', offline?:boolean, reason?:string}>} */
+    async _uploadOneRow(pin, row, overwrite, usedNames) {
+      if (!overwrite && PinSeries.hasContent(pin)) return { status: "skip" };
+      try {
+        const { dataURL, width, height } = await Cloud.resizeImage(row.file);
+        const shotAt = Number.isFinite(row.sortKey) ? row.sortKey : null;
+        const namesSet = usedNames || new Set();
+        // [지휘자 발주 보강§3] 저장 이름 = 영역/구역이름_시각(PhotoNaming SoT) — 없으면 원본 파일명.
+        const fullName = (typeof PhotoNaming !== "undefined") ? PhotoNaming.name(pin, row.name, shotAt, namesSet) : row.name;
+        namesSet.add(fullName);
+        const imgName = fullName.replace(/\.[^.]+$/, "");
+        let uploaded = false;
+        if (navigator.onLine) {
+          try { const imageId = await Cloud.uploadImage(imgName, dataURL, width, height); pin.imageId = imageId; Cloud._cache[imageId] = dataURL; uploaded = true; } catch (e) { uploaded = false; }
+        }
+        if (!uploaded) {
+          const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
+          if (opId) { pin.pendingOpId = opId; pin.pendingSync = true; Cloud._cache["op:" + opId] = dataURL; }
+          else throw new Error("저장공간 부족");
+        }
+        pin.imageName = imgName;
+        if (row.is360) pin.is360 = true;
+        // [지휘자 발주 보강§4] 표시용 메타 — 값 없는 건 세팅하지 않는다(있는 것만, 지어내지 않음).
+        pin.origName = row.name;
+        if (shotAt != null) { pin.shotAt = shotAt; pin.shotSrc = row.timeSource || null; }
+        return { status: "done", offline: !uploaded };
+      } catch (e) {
+        return { status: "fail", reason: (e && e.message) || String(e) };
+      }
+    },
+
     _setRowStatus(row, text) {
       const idx = this._rows.indexOf(row);
       if (idx < 0) return;
@@ -18620,30 +19062,16 @@
 
       let done = 0, fail = 0, skip = 0;
       const queue = matches.slice();
+      const usedNames = this._usedPhotoNames();
       const worker = async () => {
         while (queue.length) {
           const m = queue.shift();
           const { pin, row } = m;
-          if (!overwrite && PinSeries.hasContent(pin)) { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); this._updateProgress(matches.length, done + fail + skip); continue; }
-          try {
-            this._setRowStatus(row, "업로드 중...");
-            const { dataURL, width, height } = await Cloud.resizeImage(row.file);
-            const imgName = row.name.replace(/\.[^.]+$/, "");
-            let uploaded = false;
-            if (navigator.onLine) {
-              try { const imageId = await Cloud.uploadImage(imgName, dataURL, width, height); pin.imageId = imageId; Cloud._cache[imageId] = dataURL; uploaded = true; } catch (e) { uploaded = false; }
-            }
-            if (!uploaded) {
-              const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
-              if (opId) { pin.pendingOpId = opId; pin.pendingSync = true; Cloud._cache["op:" + opId] = dataURL; }
-              else throw new Error("저장공간 부족");
-            }
-            pin.imageName = imgName;
-            if (row.is360) pin.is360 = true;
-            done++; this._setRowStatus(row, uploaded ? "완료" : "오프라인 저장됨");
-          } catch (e) {
-            fail++; this._setRowStatus(row, "실패: " + (e.message || e));
-          }
+          this._setRowStatus(row, "업로드 중...");
+          const r = await this._uploadOneRow(pin, row, overwrite, usedNames);
+          if (r.status === "skip") { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); }
+          else if (r.status === "fail") { fail++; this._setRowStatus(row, "실패: " + r.reason); }
+          else { done++; this._setRowStatus(row, r.offline ? "오프라인 저장됨" : "완료"); }
           this._updateProgress(matches.length, done + fail + skip);
         }
       };
@@ -18655,6 +19083,199 @@
       try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
       if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} } // 자동저장 호출 금지 — 미저장 표시만
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
+    },
+
+    /* ══ [WO 20260929 photo-time-match] 시각 최근접 매칭 — DOM(미리보기→적용) ══════════
+       index.html 은 다른 팀 점유라 수정하지 않는다 — 모달/입력은 이 함수들이 JS로 생성한다
+       (기존 toast 호스트 생성 패턴 30_Prompt.js:21-27 과 동일 관례). 진입은 온라인 복귀 안내
+       배너(32_Offline.js _showReconnectBanner "연결하기")가 PhotoBatch.openTimeMatch()를 호출한다. */
+
+    /** 공개 진입점 — 파일선택 창을 띄운다(폴더 아님, 갤러리에서 여러 장 선택. capture 강제 금지 —
+     *  요구사항 §9). series 미지정 시 현재 배치모드(SoT: State.regMode, _defaultRange()와 동일 판정). */
+    openTimeMatch(range) {
+      if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
+      const series = (range && range.series) || ((typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content");
+      this._tm = { rows: [], series };
+      this._ensureTimeMatchModal();
+      // [지휘자 발주 보강] 브라우저는 폴더를 자동으로 못 찾는다(showDirectoryPicker 모바일 미지원)
+      // — 파일 선택창을 열기 직전에 어디서 고르면 되는지 한 줄로 안내한다(조용히 아무 폴더나 기대 금지).
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("RICOH THETA 폴더에서 전체 선택 — 최근 사진부터 자동으로 찾습니다");
+      const input = document.getElementById("photobatch-tm-files");
+      if (input) input.click();
+    },
+
+    /** [설계메모] 인터랙티브 요소(입력/버튼/목록 호스트)는 innerHTML 문자열이 아니라
+     *  document.createElement 로 만들어 바로 참조를 쥔다 — innerHTML 로 심으면 실제 브라우저에선
+     *  동작하지만 id 기반 재조회에 파싱 단계가 하나 더 끼어 테스트(vm+가짜DOM, jsdom 없음)가
+     *  구조를 못 읽는다. 정적 안내문 2줄만 innerHTML 을 쓴다(30_Prompt.js:21-27 과 동일 관례). */
+    _ensureTimeMatchModal() {
+      if (document.getElementById("photobatch-tm-modal")) return;
+      const input = document.createElement("input");
+      input.type = "file"; input.multiple = true; input.accept = "image/*";
+      input.id = "photobatch-tm-files";
+      input.style.display = "none";
+      input.addEventListener("change", (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        this._onTimeMatchFilesChosen(files);
+      });
+      document.body.appendChild(input);
+
+      const modal = document.createElement("div");
+      modal.id = "photobatch-tm-modal";
+      modal.className = "admin-gate-backdrop hidden";
+      modal.setAttribute("style", "position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;");
+      modal.addEventListener("click", (e) => { if (e.target === modal) this._closeTimeMatchModal(); });
+
+      const panel = document.createElement("div");
+      panel.className = "pb-tm-panel";
+      panel.setAttribute("style", "background:#fff;color:#111;max-width:640px;width:92vw;max-height:82vh;overflow:auto;border-radius:12px;padding:16px;");
+      panel.innerHTML =
+        '<h3 style="margin:0 0 8px;font-size:16px;">시각 최근접 360 사진 연결</h3>' +
+        '<div style="font-size:12px;color:#555;margin-bottom:6px;">RICOH THETA 폴더에서 전체 선택 — 최근 사진부터 자동으로 찾습니다(파일명 R…_YYYYMMDDHHMMSS 자동 인식)</div>';
+
+      const opts = document.createElement("div");
+      opts.setAttribute("style", "display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px;");
+      const tolLabel = document.createElement("label"); tolLabel.textContent = "허용오차(분) ";
+      const tolInput = document.createElement("input"); tolInput.type = "number"; tolInput.id = "photobatch-tm-tolerance"; tolInput.value = "10"; tolInput.min = "1"; tolInput.setAttribute("style", "width:56px;");
+      tolLabel.appendChild(tolInput);
+      const offLabel = document.createElement("label"); offLabel.textContent = "시계보정(분,±) ";
+      const offInput = document.createElement("input"); offInput.type = "number"; offInput.id = "photobatch-tm-offset"; offInput.value = "0"; offInput.setAttribute("style", "width:56px;");
+      offLabel.appendChild(offInput);
+      const owLabel = document.createElement("label");
+      const owInput = document.createElement("input"); owInput.type = "checkbox"; owInput.id = "photobatch-tm-overwrite";
+      owLabel.appendChild(owInput); owLabel.appendChild(document.createTextNode(" 이미 360 있는 핀도 포함"));
+      opts.appendChild(tolLabel); opts.appendChild(offLabel); opts.appendChild(owLabel);
+
+      const list = document.createElement("div");
+      list.id = "photobatch-tm-list";
+      list.setAttribute("style", "font-size:13px;");
+      list.textContent = "사진을 선택하세요";
+
+      const btnBar = document.createElement("div");
+      btnBar.setAttribute("style", "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;");
+      const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.id = "photobatch-tm-cancel"; cancelBtn.textContent = "취소";
+      const applyBtn = document.createElement("button"); applyBtn.type = "button"; applyBtn.id = "photobatch-tm-apply"; applyBtn.textContent = "적용";
+      btnBar.appendChild(cancelBtn); btnBar.appendChild(applyBtn);
+
+      panel.appendChild(opts); panel.appendChild(list); panel.appendChild(btnBar);
+      modal.appendChild(panel);
+      document.body.appendChild(modal);
+
+      cancelBtn.addEventListener("click", () => this._closeTimeMatchModal());
+      applyBtn.addEventListener("click", () => this._applyTimeMatch());
+      tolInput.addEventListener("input", () => this._recomputeTimeMatch());
+      offInput.addEventListener("input", () => this._recomputeTimeMatch());
+      owInput.addEventListener("change", () => this._recomputeTimeMatch());
+    },
+
+    /** [요구사항 §9] 모바일에서 다수 파일 선택 시 메인스레드 장시간 점유 방지 — EXIF 는 파일당
+     *  선두 256KB 만 읽고(기존 _onFilesChosen 과 동일 상수, 262144B), for..of + await 로 파일마다
+     *  한 번씩 이벤트 루프에 양보한다(전부 동기로 묶어 돌리지 않음 — 30장 기준 파일당 ~5~15ms 면
+     *  체감 버벅임 없음, 실측치는 보고서 참조). */
+    async _onTimeMatchFilesChosen(files) {
+      const IMG_RE = /\.(jpe?g|png|webp)$/i;
+      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
+      if (!imgFiles.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다"); return; }
+      // [지휘자 발주 보강2 §1] "가장 최근 파일부터 찾게 해" — EXIF 를 읽기 전에도 알 수 있는
+      // 값(파일명 THETA 타임스탬프 우선, 없으면 lastModified)으로 먼저 최신순 정렬한 뒤 처리한다.
+      const quickTime = (f) => {
+        const fn = this._parseThetaFilenameDate(f.name);
+        if (fn) return Date.parse(fn.iso);
+        return Number.isFinite(f.lastModified) ? f.lastModified : -Infinity;
+      };
+      const ordered = imgFiles.slice().sort((a, b) => quickTime(b) - quickTime(a));
+      const rows = [];
+      for (const f of ordered) {
+        let exif = null;
+        try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
+        rows.push({
+          file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0,
+          thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name)
+        });
+      }
+      this._tm.rows = this._sortRows(rows);
+      const modal = document.getElementById("photobatch-tm-modal");
+      if (modal) modal.classList.remove("hidden");
+      this._recomputeTimeMatch();
+      this._tm.rows.forEach((r) => {
+        if (typeof App === "undefined" || !App._detect360) return;
+        App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; this._recomputeTimeMatch(); });
+      });
+    },
+
+    _recomputeTimeMatch() {
+      if (!this._tm) return null;
+      const tolEl = document.getElementById("photobatch-tm-tolerance");
+      const offEl = document.getElementById("photobatch-tm-offset");
+      const owEl = document.getElementById("photobatch-tm-overwrite");
+      const toleranceMin = tolEl ? (parseFloat(tolEl.value) || 10) : 10;
+      const offsetMin = offEl ? (parseFloat(offEl.value) || 0) : 0;
+      const includeExisting360 = !!(owEl && owEl.checked);
+      const page = State.pdfPage || 1;
+      const pinList = this._pinList(State.pins, page, this._tm.series);
+      const result = this._buildTimeMatches(pinList, this._tm.rows, { toleranceMs: toleranceMin * 60000, offsetMin, includeExisting360 });
+      this._tm.result = result;
+      this._renderTimeMatchList(result);
+      return result;
+    },
+
+    _renderTimeMatchList(result) {
+      const host = document.getElementById("photobatch-tm-list");
+      if (!host) return;
+      const esc = (s) => this._esc(s);
+      let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+        + '<th style="text-align:left;">핀</th><th style="text-align:left;">파일</th><th>Δt</th><th>상태</th>'
+        + '</tr></thead><tbody>';
+      (result.matches || []).forEach((m) => {
+        // [지휘자 발주 보강§4-3] 미리보기도 "영역/구역 · 시각 · 원본파일명" 형식(SoT: PhotoNaming.scopeOf).
+        const scope = (typeof PhotoNaming !== "undefined") ? PhotoNaming.scopeOf(m.pin) : { area: null, zone: null };
+        const label = scope.area || scope.zone;
+        const descParts = [];
+        if (label) descParts.push(label);
+        if (m.row.timeLabel) descParts.push(m.row.timeLabel);
+        descParts.push("원본 " + m.row.name);
+        html += '<tr><td>#' + m.no + '</td><td>' + esc(descParts.join(" · ")) + '</td><td>' + Math.round(m.dtMs / 1000) + '초</td><td>연결</td></tr>';
+      });
+      (result.skippedExisting || []).forEach((e) => {
+        html += '<tr style="opacity:.6"><td>#' + e.no + '</td><td>-</td><td>-</td><td>기존 유지</td></tr>';
+      });
+      (result.unmatchedPins || []).forEach((e) => {
+        html += '<tr style="opacity:.6"><td>#' + e.no + '</td><td>-</td><td>-</td><td>미연결(사진 없음/오차초과)</td></tr>';
+      });
+      (result.unmatchedRows || []).forEach((r) => {
+        html += '<tr style="opacity:.6"><td>-</td><td>' + esc(r.name) + '</td><td>-</td><td>미연결(오차초과)</td></tr>';
+      });
+      (result.excluded360 || []).forEach((r) => {
+        html += '<tr style="opacity:.5;color:#b91c1c;"><td>-</td><td>' + esc(r.name) + '</td><td>-</td><td>360 아님</td></tr>';
+      });
+      html += '</tbody></table>';
+      host.innerHTML = html || "사진을 선택하세요";
+    },
+
+    /** 적용 = 기존 360 등록 경로(_uploadOneRow → resizeImage/uploadImage/SyncQueue.enqueue) 재사용. */
+    async _applyTimeMatch() {
+      if (!this._tm || !this._tm.result) return;
+      const overwriteEl = document.getElementById("photobatch-tm-overwrite");
+      const overwrite = !!(overwriteEl && overwriteEl.checked);
+      const matches = this._tm.result.matches || [];
+      if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("연결할 사진이 없습니다"); return; }
+      let done = 0, fail = 0, skip = 0;
+      const usedNames = this._usedPhotoNames();
+      for (const m of matches) {
+        const r = await this._uploadOneRow(m.pin, m.row, overwrite, usedNames);
+        if (r.status === "skip") skip++; else if (r.status === "fail") fail++; else done++;
+      }
+      try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+      try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
+      if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} }
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 사진 연결 완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
+      this._closeTimeMatchModal();
+    },
+
+    _closeTimeMatchModal() {
+      const modal = document.getElementById("photobatch-tm-modal");
+      if (modal) modal.classList.add("hidden");
     }
   };
 
@@ -18712,8 +19333,8 @@
       "photo-batch": "사진 폴더 일괄 매칭 — 핀을 순서대로 찍은 뒤 사진이 담긴 폴더를 선택하면, 촬영 시각 순서대로 핀 번호에 자동으로 1:1 매칭됩니다.",
       "deploy-viewer": "뷰어로 배포 — 지금까지 작업한 도면·핀·영역을 열람 전용 링크로 만들어 다른 사람과 공유합니다(공유받은 사람은 로그인 없이 볼 수 있습니다).",
       "orientation-fix": "방향 보정 — 360° 파노라마가 실제 도면 방향과 다르게 찍혔을 때, 회전시켜 도면 방향과 맞춥니다.",
-      "checkerboard": "체크보드 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다.",
-      "checkboard-renumber": "체크보드 번호 일괄 변경 — 누르면 새 시작 번호를 물어보고, 이 페이지의 체크보드 핀 전체를 현재 순서 그대로 그 번호부터 다시 매깁니다(예: 1~40번 → 시작번호 101 입력 시 101~140번). 사진·노트는 번호가 아니라 핀 자체에 연결돼 있어 번호가 바뀌어도 그대로 유지됩니다. 번호 하나만 고치려면 핀을 눌러 '위치명/번호' 칸에서 직접 바꾸세요(이미 쓰는 번호로는 바꿀 수 없습니다).",
+      "checkerboard": "CHECKER 모드 — 버튼 한 번으로 핀을 1번부터 순서대로 연속 배치하는 빠른 입력 모드입니다.",
+      "checkboard-renumber": "CHECKER 번호 일괄 변경 — 누르면 새 시작 번호를 물어보고, 이 페이지의 체크보드 핀 전체를 현재 순서 그대로 그 번호부터 다시 매깁니다(예: 1~40번 → 시작번호 101 입력 시 101~140번). 사진·노트는 번호가 아니라 핀 자체에 연결돼 있어 번호가 바뀌어도 그대로 유지됩니다. 번호 하나만 고치려면 핀을 눌러 '위치명/번호' 칸에서 직접 바꾸세요(이미 쓰는 번호로는 바꿀 수 없습니다).",
       "radar-zoom": "미니맵 도면 확대 — +/− 버튼, 두 손가락 핀치, 더블탭(더블클릭)으로 미니맵 안의 도면만 1~6배 확대/축소합니다. 패널 크기는 그대로 유지되고, 확대해도 현재 위치가 항상 중앙에 표시됩니다.",
       "offline-download": "오프라인 다운로드 — 이 프로젝트의 도면(PDF/이미지)과 배치된 핀, 그리고 핀에 연결된 360° 파노라마 사진을 전부 이 기기에 내려받습니다. 다운로드가 끝나면 인터넷이 끊긴 현장에서도 도면과 360° 사진을 그대로 열람하고 작업할 수 있고, 나중에 인터넷이 다시 연결되면 자동으로 서버와 동기화됩니다. 버튼에 '저장됨'이 표시되면 이미 내려받아 오프라인 사용 준비가 된 상태입니다.",
       "pin-mobile-photo-only": "모바일에서는 사진만 등록할 수 있습니다(화면이 좁아 사진 등록에 집중). 360° 사진·문서·노트·동영상·URL 첨부는 PC(데스크톱)에서 추가하세요. 이미 등록된 다른 종류의 첨부는 모바일에서도 그대로 보이고 열람됩니다.",
