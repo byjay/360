@@ -531,12 +531,19 @@
                    (머리 밖 별도 배지)을 없애라는 뜻이었는데 머리 안 번호까지 지워 회귀가 났다.
                    상태(등록 fill/tier 원판/링 dash)는 그대로 유지하고, 흰 원판(tierDisc) 위에
                    번호만 다시 그린다 — 원판이 항상 흰색이라 txtFill(진한 계열색)과 대비 ≥4.5:1 보장.
-                   3자리 이상(101~)은 원판을 넘치지 않게 폰트를 축소한다. 커스텀 아이콘을 고른
-                   핀만 예외적으로 그 아이콘을 그린다(번호 대신). -->
+                   3자리 이상(101~)은 원판을 넘치지 않게 폰트를 축소한다.
+                   [WO 20260929 재회귀 수정] 마스터: "번호가 왜 사라졌는지" — 커스텀 아이콘을
+                   고른 핀은 번호 텍스트 대신 아이콘만 그려서 여전히 번호가 안 보였다. 이제
+                   아이콘 유무와 무관하게 번호는 항상 그리고, 아이콘은 버리지 않고 머리 우상단
+                   모서리의 작은 보조 배지(중심은 머리 원 반경 12.4 위 45° 지점 — 표준 "아바타
+                   코너 배지" 위치)로 옮긴다. 배지 아이콘 색도 txtFill 재사용(원판과 동일하게
+                   대비 ≥4.5:1 이미 보장된 값이라 별도 실측 불필요 — ≥3:1 요구보다 넉넉함). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))
-                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")
+                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`
+                : ""}
               <!-- 머리 하이라이트(광택) -->
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>

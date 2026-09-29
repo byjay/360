@@ -605,9 +605,13 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션J] 숫자 <text> 제거(회귀 재현) → ⑥ 의 숫자 존재 검사가 실패해야 함");
-  const needle = '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}';
-  const mutated = uiSrc.replace(needle,
-    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15)) || ""}');
+  // [WO 20260929 갱신] 번호가 아이콘 유무와 무관하게 항상 그려지도록 바뀌어(마스터: "번호가
+  // 왜 사라졌는지") <text> 가 더는 `||` 폴백이 아니라 독립 라인이 됨 — needle 을 그 라인으로 교체.
+  // 🔴 이 <text> 라인은 체크보드 간소화 분기(497행대)와 일반 분기(543행대) 2곳에 동일 문자열로
+  // 존재한다 — replace()(1곳만 치환)를 쓰면 c1(일반 분기 렌더)이 여전히 번호를 갖는 거짓-패스가
+  // 난다. replaceAll 로 양쪽 다 제거해야 c1.text 가 실제로 null 이 된다.
+  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>';
+  const mutated = uiSrc.replaceAll(needle, "");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const fixture = FIXTURE();

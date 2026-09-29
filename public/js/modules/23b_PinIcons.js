@@ -25,14 +25,20 @@
     /** id → 정의(없으면 기본) */
     def(id) { return this.SET.find(s => s.id === id) || this.SET[0]; },
 
-    /** 핀 머리 안에 들어갈 아이콘 SVG 문자열(흰 원 중심 18,12 / 반경≈7.3 기준).
-     *  number 이면 null 반환(호출측에서 숫자 text 를 그린다). */
-    headMarkup(iconId, color, cy) {
+    /** 핀 머리 안(또는 임의 위치의 작은 배지 안)에 들어갈 아이콘 SVG 문자열.
+     *  number 이면 null 반환(호출측에서 숫자 text 를 그린다).
+     *  [WO 20260929] 번호가 항상 최우선으로 보여야 해서(마스터: "번호가 없잖아") 커스텀
+     *  아이콘은 더는 번호를 대체하지 않고 작은 보조 배지로 옮겨 그린다 — 그 배지용으로
+     *  중심 좌표(cx)와 크기(scale)를 선택적으로 받게 확장. 기존 호출부(cx/scale 생략,
+     *  머리 중앙 18,cy 기준 0.56배)는 전부 그대로 동작(하위호환). */
+    headMarkup(iconId, color, cy, cx, scale) {
       const d = this.def(iconId);
       if (!d.body) return null;
-      // 24x24 아이콘을 핀 머리 흰 원 안에 배치. cy = 머리 중심 y(기본 12, 360-ISO 마커는 15).
+      // 24x24 아이콘을 배치. cy = 중심 y(기본 12, 360-ISO 마커 머리는 15), cx = 중심 x(기본 18).
       const cyc = (typeof cy === 'number') ? cy : 12;
-      const s = 0.56, tx = 18 - 12 * s, ty = cyc - 12 * s;
+      const cxc = (typeof cx === 'number') ? cx : 18;
+      const s = (typeof scale === 'number') ? scale : 0.56;
+      const tx = cxc - 12 * s, ty = cyc - 12 * s;
       return `<g transform="translate(${tx} ${ty}) scale(${s})"
                  fill="none" stroke="${color || '#065f46'}" stroke-width="2.2"
                  stroke-linecap="round" stroke-linejoin="round">${d.body}</g>`;
