@@ -3497,7 +3497,21 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
      🔴 DOM 순서는 그대로 두고(다른 로직이 자식 순서에 의존하지 않음) flex order 로 "뒤로가기 +
      3모드 세그먼트"만 topbar 맨 앞으로 시각적으로 당긴다 — 덜 중요한 로고/저장상태 등은 뒤로 밀려
      가로 스크롤 영역으로 넘어가도 무방(기능 없음, 장식/상태 표시일 뿐). */
-  #btn-back, #regmode-seg { order: -1; }
+  /* [WO 20260929-settings-offscreen 재수정] #btn-settings(DOM 최후미, 원본 소스 line 280)까지
+     order:-1 3종에 포함해야 한다 — 세그먼트만 당기면 설정 버튼은 여전히 로고/저장상태/전체핀
+     묶음(order:0) 뒤에 남아 375px 뷰포트를 넘겨 가로 스크롤 없이는 도달 불가(실측 x=468, inView=false).
+     source order 상 btn-back(194) → regmode-seg(202) → btn-settings(280) 순이라 동일 order:-1
+     그룹 안에서도 시각 순서가 자연스럽게 유지된다(뒤로 → 3모드 → 설정). */
+  #btn-back, #regmode-seg, #btn-settings { order: -1; }
+  /* [WO 20260929-settings-offscreen] 전역(비-미디어) 규칙 .btn-settings{padding:6px 10px !important}
+     (style.css COMPACT OPERATIONS 섹션, 라인 ~3386)가 아이콘 전용 상태에서도 버튼을 44px 미만으로
+     짓눌러 터치 타깃 미달이었다. 뒤로가기(.btn-icon 6px 8px)도 동일. 모바일에서만 44x44 보장. */
+  #btn-back, #btn-settings { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 0 !important; }
+  /* [WO 20260929-settings-offscreen 360px보정] 360×740 실측에서 #btn-settings.right가 vw를 6px
+     초과했다 — 원인은 .btn-settings 전용(margin-left:8px, 라인 ~718 기본 규칙, 데스크톱 아이콘+텍스트
+     레이아웃 간격용)이 모바일 order:-1 압축 그룹에도 그대로 남아있던 것. 아이콘 전용 44px 박스는
+     좌측 gap(topbar gap:10px)만으로 충분히 분리되므로 중복 margin을 제거한다. */
+  #btn-settings { margin-left: 0; }
 }
 /* 모바일에선 상단 빠른도구 숨김 → 하단 nav 사용 */
 @media (max-width: 760px) { .topbar-quick { display: none; } .btn-settings span { display: none; } }
@@ -4147,7 +4161,13 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     top:auto; right:14px;
     bottom:calc(env(safe-area-inset-bottom, 0px) + 76px);
     width:46px; height:46px; border-radius:14px; z-index:59;
+    padding:0; justify-content:center;
   }
+  /* [WO 20260929-fab-label-overflow] 데스크톱 .pin-grid-reopen-label{white-space:nowrap}(line ~4090)이
+     이 46px 정사각 아이콘 FAB에도 그대로 상속돼 "포인트" 3글자가 좁은 박스를 넘쳐 "포인"까지만
+     보이고 잘렸다(뷰포트 밖이 아니라 버튼 자체 폭 부족). 이 breakpoint는 아이콘 전용 FAB이므로
+     라벨 텍스트를 숨긴다(title/aria-label로 접근성 유지, 시각 정보는 아이콘으로 충분). */
+  .pin-grid-reopen-label{ display:none; }
 }
 
 /* ── 드래그 앤 드롭 업로드 시각 피드백 ── */

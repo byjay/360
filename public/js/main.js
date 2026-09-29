@@ -16986,7 +16986,27 @@
       } catch (e) {}
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
-      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
+      // 🔴 [WO 20260929-fitrace] 근본원인 — loadDeckDrawing()이 반환(await 완료)돼도 <img id="map-image">
+      //   의 네트워크 로드는 아직 끝나지 않았을 수 있다(캐시 미스). 그 상태에서 fitZone()을 바로 부르면
+      //   #map-transform 이 아직 0×0(이미지 자연크기 미확정)이라 fitZone 내부 가드로 조용히 아무 일도
+      //   안 하고, 뒤늦게 이미지가 load 되면 loadDeckDrawing 의 onload(_r0→_showMapViewport)가
+      //   zoom=1/pan={0,0}로 되돌려 화면은 계속 잘리지 않은 원본 크기로 남는다(라이브 재현: matrix(1,0,0,1,0,0)).
+      //   아래 !crop 분기(WO 20260928-copy)가 이미 쓰던 "로드 완료 이벤트에 건다" 패턴을 그대로 재사용
+      //   (공유 지점 — 두 분기가 따로 타이밍을 잡으면 반드시 갈라진다). img.onload(_r0)가 먼저 등록돼
+      //   있으므로 여기서 추가하는 리스너는 그 뒤에 실행되어 _showMapViewport() 의 리셋 다음에 맞춘다.
+      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) {
+        const img = document.getElementById("map-image");
+        // 빠른 연속 전환 가드 — load 이벤트가 늦게 도착했을 때 그 사이 다른 구역으로 바뀌었으면
+        // (this.currentDeck.id !== d.id) 낡은 crop 을 적용하지 않는다(loadDeckDrawing 의 _isCurrentLoad 와
+        // 같은 취지). currentDeck 이 아직 세팅 안 된 호출(직접 호출)은 통과시킨다(id 로 비교 — 다른 곳의
+        // 기존 관용구와 동일, 31_Projects.js:660 참조).
+        const doFit = () => {
+          if (this.currentDeck && d && this.currentDeck.id !== d.id) return;
+          if (MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
+        };
+        if (img && img.complete && img.naturalWidth) doFit();
+        else if (img && img.addEventListener) img.addEventListener("load", doFit, { once: true });
+      }
       // 🔴 [WO 20260928-copy → WO 20260928-unify 갱신] 벡터 복사본(crop 없음)은 그 배포본의 페이지
       //   자체가 이 구역/영역이다 → 열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가
       //   이미지 load 때 zoom=1 로 되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에
