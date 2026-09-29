@@ -6,14 +6,22 @@
  *  건너뛰고 return 해버려(#decks-empty 는 CSS로 영구 숨김) #side-tree 가 갱신되지 않는
  *  "조용한 빈 상태"였다.
  *
+ * [WO 20260929-tree1] 🔴 근본수정 이후 — "구역 0" 안내의 실제 DOM(문구·버튼)은 이제
+ *  11_UI.js UI.renderTree() 가 그린다(31_Projects._renderSideTreeEmpty() 는 위임만 한다 —
+ *  예전엔 #side-tree.innerHTML 을 직접 덮어써 트리가 붙인 실 DOM을 다음 렌더에서 파괴하는
+ *  결함으로 이어졌다). 이 스위트는 원래 설계대로 31_Projects.js 만 올리므로(11_UI.js 미로드),
+ *  아래 항목은 "위임이 실제로 일어나는가"만 검사한다 — CTA 의 정확한 문구·배선은
+ *  real-source 스위트(p22/p62, 11_UI.js 를 그대로 vm 에 올림)가 담당한다.
+ *
  * 검증 항목:
- *  ① 구역 0개 + 프로젝트 선택됨 → #side-tree 안에 실제 안내(+생성 버튼)가 렌더된다.
+ *  ① 구역 0개 + 프로젝트 선택됨 → UI.renderTree() 위임 호출됨.
  *  ② 구역 1개 이상 → 기존 트리(#decks-list 행 + UI.renderTree 위임)가 그대로 렌더된다(회귀 없음).
- *  ③ 프로젝트 미선택 → 구역 0개 안내를 띄우지 않는다(#side-tree 비어 있음 — 잘못된 안내 금지).
- *  ④ 안내의 생성 버튼 클릭 → 기존 생성 경로(Projects.createDeck)를 호출한다(새 로직 아님).
+ *  ③ 프로젝트 미선택이어도 위임 자체는 일어난다(빈 트리 여부 판단은 11_UI.js 담당).
+ *  ④ [Uncertain] CTA 클릭→Projects.createDeck() 배선은 11_UI.js 안이라 이 스위트론 검증 불가 —
+ *     위임 대상 함수 존재만 확인(후속: p22/p62 에 전용 커버리지 추가 권고).
  *
  * 실제 모듈 소스(31_Projects.js)를 그대로 vm에 평가해 검사한다(목 구현 아님).
- * 뮤테이션 2건이 붙어 있어, 고친 코드를 되돌리면 해당 검사가 실패한다.
+ * 뮤테이션 1건(①)이 붙어 있어, 고친 코드를 되돌리면 해당 검사가 실패한다.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -127,15 +135,18 @@ function loadProjects(pSrc, { currentProject, decks }) {
 console.log("\n[정상 소스]");
 
 // ① 구역 0개 + 프로젝트 선택됨
+// [WO 20260929-tree1] 🔴 근본수정 — "구역 0" 안내의 실제 DOM(문구·생성 버튼)은 이제
+// 11_UI.js UI.renderTree() 가 그린다(예전엔 _renderSideTreeEmpty() 가 #side-tree.innerHTML
+// 을 직접 덮어써, 트리가 같은 자리에 붙인 실 DOM(#project-actions 등)을 다음 렌더에서 파괴하는
+// 결함으로 이어졌다 — 렌더 SoT 를 11_UI.js 하나로 합쳤다). 이 스위트는 11_UI.js 없이 31_Projects.js
+// 만 올리므로(파일 docstring 원칙), 여기서는 **위임이 실제로 일어나는지**만 검사한다. 실제 CTA
+// 문구/버튼 내용은 real-source 스위트(p22/p62, real 11_UI.js)가 이미 커버한다.
 {
-  const { Projects, registry } = loadProjects(projectsSrc, {
+  const { Projects, renderTreeCalls } = loadProjects(projectsSrc, {
     currentProject: { id: "p1", name: "테스트 프로젝트" }, decks: []
   });
   Projects._renderDecks();
-  const host = registry["side-tree"];
-  ok(/side-tree-empty/.test(host.innerHTML), "① 구역 0개+프로젝트 선택 → #side-tree 에 안내 렌더됨");
-  ok(/구역이 없습니다/.test(host.innerHTML), "① 안내 문구에 '구역이 없습니다' 포함");
-  ok(/id="side-tree-create-deck"/.test(host.innerHTML), "① 안내에 생성 버튼(id=side-tree-create-deck) 포함");
+  ok(renderTreeCalls.length === 1, `① 구역 0개+프로젝트 선택 → UI.renderTree() 위임 호출됨(실제 ${renderTreeCalls.length}회)`);
 }
 
 // ② 구역 1개 이상 → 기존 트리 렌더 경로(회귀 없음)
@@ -152,26 +163,24 @@ console.log("\n[정상 소스]");
   ok(renderTreeCalls.length === 1, `② UI.renderTree() 가 그대로 위임 호출됨 (호출 ${renderTreeCalls.length}회)`);
 }
 
-// ③ 프로젝트 미선택 → 구역 0개 안내를 띄우지 않음
+// ③ 프로젝트 미선택 — "안내를 띄울지 말지"는 이제 11_UI.js 의 판단(위 ① 주석 참조).
+// 31_Projects.js 쪽은 프로젝트 유무와 무관하게 위임만 한다(위임 자체가 이 파일의 계약).
+// 프로젝트 미선택 시 실제로 안내가 안 뜨는지는 real-source 스위트(p22 ⑤·p62)가 검증한다.
 {
-  const { Projects, registry } = loadProjects(projectsSrc, { currentProject: null, decks: [] });
+  const { Projects, renderTreeCalls } = loadProjects(projectsSrc, { currentProject: null, decks: [] });
   Projects._renderDecks();
-  const host = registry["side-tree"];
-  ok(host.innerHTML === "", `③ 프로젝트 미선택 → #side-tree 비어 있음 (실제 "${host.innerHTML}")`);
+  ok(renderTreeCalls.length === 1, `③ 프로젝트 미선택이어도 UI.renderTree() 위임은 일어난다(빈 트리 여부 판단은 11_UI.js 담당, 실제 ${renderTreeCalls.length}회)`);
 }
 
-// ④ 안내의 생성 버튼 → 기존 생성 경로(Projects.createDeck) 호출
+// ④ [WO 20260929-tree1] 🔴 CTA 버튼의 실제 DOM 배선(클릭→Projects.createDeck())은 이제
+// 11_UI.js 안에서 이뤄진다 — 이 스위트(31_Projects.js 단독)로는 검증 불가([Uncertain],
+// p64 와 동일한 후속 커버리지 필요 — 이 턴엔 실 CDP 스크린샷으로 육안 확인만 했다).
+// 여기서는 위임 대상 함수(Projects.createDeck)가 여전히 존재/호출 가능한지만 확인한다.
 {
-  const { Projects, registry } = loadProjects(projectsSrc, {
+  const { Projects } = loadProjects(projectsSrc, {
     currentProject: { id: "p1", name: "테스트 프로젝트" }, decks: []
   });
-  Projects._renderDecks();
-  let called = 0;
-  Projects.createDeck = () => { called++; };
-  const btn = registry["side-tree-create-deck"];
-  ok(!!btn, "④ 생성 버튼 엘리먼트가 실제로 registry 에 존재(고아 아님)");
-  if (btn) btn.click();
-  ok(called === 1, `④ 버튼 클릭 시 Projects.createDeck() 이 정확히 1회 호출됨 (실제 ${called})`);
+  ok(typeof Projects.createDeck === "function", "④ Projects.createDeck 함수가 여전히 존재(11_UI.js CTA 가 위임할 대상)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -191,30 +200,21 @@ console.log("\n[정상 소스]");
   const mutated = projectsSrc.replace(needle, `      if (!this.decks.length) { if (emptyEl) emptyEl.classList.add("hidden"); return; }`);
   if (mutated === projectsSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { Projects, document } = loadProjects(mutated, { currentProject: { id: "p1", name: "테스트" }, decks: [] });
+    const { Projects, renderTreeCalls } = loadProjects(mutated, { currentProject: { id: "p1", name: "테스트" }, decks: [] });
     Projects._renderDecks();
-    const host = document.getElementById("side-tree"); // 뮤테이션 상태에선 손대지 않아 빈 채로 남음
-    ok(!/side-tree-empty/.test(host.innerHTML || ""),
-      `뮤테이션 적용 시 ①이 깨짐(테스트 실효성 증명) → innerHTML="${host.innerHTML}"`);
+    ok(renderTreeCalls.length === 0,
+      `뮤테이션 적용 시 ①이 깨짐(테스트 실효성 증명 — UI.renderTree() 위임 자체가 빠짐) → 호출 ${renderTreeCalls.length}회`);
   }
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 B: 프로젝트 미선택에도 안내를 띄우면 ③이 실패해야 한다
+ * [WO 20260929-tree1] 🔴 뮤테이션 B 제거 — "프로젝트 미선택 시 안내를 띄우지 않는다" 가드는
+ * 근본수정으로 31_Projects._renderSideTreeEmpty() 에서 11_UI.js UI.renderTree() 의 `!proj`
+ * 분기로 옮겨갔다(위 ① 주석 참조). 이 스위트는 31_Projects.js 만 올리므로(파일 설계 원칙)
+ * 그 분기를 직접 뮤테이션할 수 없다 — real-source 스위트(p22/p62, 11_UI.js 를 그대로 vm 에
+ * 올림)가 정상 동작은 검증하지만, 그 분기 전용 뮤테이션은 아직 없다([Uncertain] 잔여 갭 —
+ * 후속 작업으로 p22/p62 에 `!proj` 분기 전용 뮤테이션 추가 권고).
  * ──────────────────────────────────────────────────────────── */
-{
-  console.log("\n[뮤테이션B] 프로젝트 미선택 가드 제거(항상 안내 렌더) → ③이 실패해야 함");
-  const needle = `      if (!this.currentProject) { host.innerHTML = ""; return; } // 프로젝트 미선택 — 안내 없음`;
-  const mutated = projectsSrc.replace(needle, `      // 가드 제거(뮤테이션)`);
-  if (mutated === projectsSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
-  else {
-    const { Projects, registry } = loadProjects(mutated, { currentProject: null, decks: [] });
-    Projects._renderDecks();
-    const host = registry["side-tree"];
-    ok(/side-tree-empty/.test(host.innerHTML || ""),
-      `뮤테이션 적용 시 ③이 깨짐(테스트 실효성 증명 — 프로젝트 미선택인데도 안내가 뜸) → innerHTML="${host.innerHTML}"`);
-  }
-}
 
 console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));
 process.exit(failed === 0 ? 0 : 1);

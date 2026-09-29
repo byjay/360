@@ -349,20 +349,16 @@ ok(c1.State.fileType === "image" && c1.State.fileName === "hull_A0.png", "② �
  * ══════════════════════════════════════════════════════════════════════ */
 console.log("\n[③ '도면 있음 + 구역 0' 상태 안내]");
 {
-  const host = c1.reg["side-tree"];
-  ok(host.innerHTML !== "", `③ #side-tree 가 비어 있지 않다(빈 화면 0) — len=${host.innerHTML.length}`);
-  ok(/side-tree-empty/.test(host.innerHTML), "③ 빈 상태 안내 블록이 렌더됨");
-  ok(/영역을 지정/.test(host.innerHTML), "③ 안내가 다음 행동('영역을 지정')을 정확히 지시");
-  ok(/도면이 등록됐습니다/.test(host.innerHTML), "③ 안내가 현재 상태('도면이 등록됐습니다')를 반영");
-  ok(!/구역을 만들면 도면을 등록할 수 있습니다/.test(host.innerHTML), "③ 옛 거짓 안내(구역→도면 순서) 사라짐");
-  ok(/id="side-tree-make-deck-region"/.test(host.innerHTML), "③ 안내에 실제 CTA 버튼 포함(고아 문구 아님)");
-  // CTA 가 실제 경로에 배선됐는지 — 클릭하면 extractRegionAsDeck() 이 불린다
-  let delegated = 0;
-  c1.P.extractRegionAsDeck = () => { delegated++; return null; };
-  const cta = c1.reg["side-tree-make-deck-region"];
-  ok(!!cta, "③ CTA 엘리먼트가 실제 DOM 에 존재");
-  if (cta) cta.click();
-  ok(delegated === 1, `③ CTA 클릭 → 기존 경로 extractRegionAsDeck() 1회 (실제 ${delegated})`);
+  // [WO 20260929-tree1] 🔴 근본수정 — "도면 있음 + 구역 0" CTA 안내의 실제 DOM 렌더링(문구·
+  //   버튼)은 이제 11_UI.js UI.renderTree() 가 맡는다(예전엔 31_Projects._renderSideTreeEmpty()
+  //   가 #side-tree.innerHTML 을 직접 덮어써 렌더 SoT 가 둘로 갈라져 있었다 — 트리가 그 위에
+  //   붙인 실 DOM(#project-actions 등)을 다음 렌더에서 파괴하는 결함으로 이어져 합쳤다).
+  //   이 스위트는 UI 를 "리프 스텁"으로 유지한다(파일 docstring 원칙 — DOM 렌더는 대체 대상).
+  //   그래서 여기서는 **위임이 실제로 일어나는지**(호출)만 검사하고, CTA 의 정확한 문구·버튼
+  //   내용은 11_UI.js 를 직접 로드하는 별도 커버리지가 필요하다([Uncertain] — 이 턴엔 실 CDP
+  //   스크린샷(.tmp/fix13/01-after-drawing-register.png)으로 육안 확인만 했다. 자동화 스위트로
+  //   승격은 후속 작업).
+  ok(c1.calls.renderTree > 0, `③ "도면 있음 + 구역 0" → UI.renderTree() 위임 호출됨(실제 ${c1.calls.renderTree}회) — CTA 렌더 SoT는 11_UI.js`);
   // 업로드 버튼 잠금(옛 게이트의 시각적 절반)이 해제됐는지
   const ub = c1.reg["btn-upload-drawing"];
   ok(!ub.classList.contains("upload-locked"), "③ 업로드 버튼 잠금 클래스 해제됨");
@@ -544,18 +540,20 @@ console.log("\n[뮤테이션ⓐ 도면 등록 시 구역 자동생성 복원 →
 /* ══════════════════════════════════════════════════════════════════════
  * 🔴 뮤테이션 ⓑ — "도면 있음" 안내 분기 제거 → ③ 실패해야 함
  * ══════════════════════════════════════════════════════════════════════ */
-console.log("\n[뮤테이션ⓑ '도면 있음 + 구역 0' 안내 분기 제거 → ③이 깨져야 함]");
+console.log("\n[뮤테이션ⓑ '도면 있음 + 구역 0' 안내 위임(UI.renderTree() 호출) 제거 → ③이 깨져야 함]");
 {
-  const anchor = '      if (typeof State !== "undefined" && State.fileType) {';
-  const mutP = projectsSrc.replace(anchor, "      if (false) {");
+  // [WO 20260929-tree1] 🔴 앵커 이동 — CTA 분기 자체는 이제 11_UI.js 안에 있다(이 스위트는
+  // UI 를 리프 스텁으로 유지하므로 그 안까지는 못 본다, 위 ③ 주석 참조). 여기서는 31_Projects.js
+  // 쪽 공유 지점(위임 호출)이 빠지면 "구역 0" 렌더링 경로 자체가 끊긴다는 것만 증명한다.
+  const anchor = '      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();\n    },\n\n    /** [WO 20260928] 🔴 옛';
+  const mutP = projectsSrc.replace(anchor, "      /* 위임 제거(뮤테이션) */\n    },\n\n    /** [WO 20260928] 🔴 옛");
   if (mutP === projectsSrc) { ok(false, "뮤테이션ⓑ 앵커 없음(소스 변경?)"); }
   else {
     const mdb = freshDb();
     const mc = makeClient(mdb, { projects: mutP });
     await registerDrawing(mc, "hull_A0.png");
-    const html = mc.reg["side-tree"].innerHTML || "";
-    ok(!/도면이 등록됐습니다/.test(html),
-      `ⓑ 무력화 시 '도면 있음' 안내가 사라지고 거짓 안내로 되돌아감 (html 일부: "${html.slice(0, 80)}")`);
+    ok(mc.calls.renderTree === 0,
+      `ⓑ 무력화 시 UI.renderTree() 위임이 끊겨 "구역 0" 안내 경로 자체가 실행되지 않는다(실제 ${mc.calls.renderTree}회)`);
   }
 }
 
