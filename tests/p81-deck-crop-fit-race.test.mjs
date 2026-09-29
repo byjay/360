@@ -1,198 +1,243 @@
 /**
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p81-deck-crop-fit-race.test.mjs)
  *
- * 대상: 마스터 라이브 재현 — 옛 창 방식(crop 있음) 구역/영역을 열면 클리핑은 정확한데
- *   줌/팬이 identity(matrix(1,0,0,1,0,0))로 남아 잘린 영역이 원래 크기로 좌하단에 작게 보인다.
- *   [화면 맞춤] 버튼을 누르면(MapCtrl._fitBoundary) 정상 작동 — 경계 로직 자체는 정상.
+ * 대상: 마스터 라이브 재현(prod dep_muksj6py_jybyrh2n, 영역 'ㅁㄴㅇ') — 옛 창 방식(crop 있음) 영역을 허브
+ *   트리에서 열면 클리핑은 정확한데 #map-transform 이 matrix(1,0,0,1,0,0) 으로 남는다.
  *
- * 근본원인(31_Projects.js:688 _applyDeckCropView): App.loadDeckDrawing() 은 <img id="map-image">
- *   의 src 만 설정하고 실제 네트워크 로드(load 이벤트)를 기다리지 않은 채 즉시 반환한다
- *   (imgEl.onload = _r0 는 나중에 비동기로 발화). selectDeck() 이 그 반환을 await 한 직후
- *   곧바로 MapCtrl.fitZone(crop,...) 을 불렀는데, 이 시점엔 #map-transform 이 아직 이미지
- *   자연크기를 모르는 0×0 이라 fitZone 내부 가드(!cw || !ch → return)가 조용히 아무 일도
- *   안 한다. 뒤늦게 이미지가 load 되면 loadDeckDrawing 의 onload(_r0→_showMapViewport)가
- *   zoom=1/pan={0,0}으로 되돌려 화면은 계속 identity 로 남는다.
+ * 🔴 교체 사유(WO 20260929-fitrace2): 직전 버전(9fdadd8)은 vm 스텁에서 img.complete 를 "이미지 준비"로
+ *   모델링했다. 실브라우저에선 그 모델이 틀렸다 — data: URL 도면은 img.complete 가 load 이벤트보다
+ *   **먼저** true 가 된다. 헤드리스 Chrome 호출스택(prod 데이터·계측 번들) 실측 순서:
+ *     2940ms _applyDeckCropView → img.complete=true → fitZone (vp=0x0 tr=0x0 → 내부 가드로 조용히 무시)
+ *     2942ms img load 이벤트 → loadDeckDrawing._r0 → App._showMapViewport → zoom=1/pan=0
+ *     2943ms MapCtrl.applyTransform (vp=0x0 → _enforceBoundary 도 무력) → identity 확정
+ *   즉 마지막으로 identity 를 쓴 것은 App._showMapViewport(20_App.js) 이고, 근본원인은 "맞춤 시점을
+ *   img.complete 로 판정" 한 것이다. 진짜 전제조건은 "로더의 표시(리셋) 완료" → App.whenDisplayed().
  *
- * 채택: 크롭 분기도 이미 존재하던 "복사본(crop 없음)" 분기의 "로드 완료 이벤트에 건다" 패턴
- *   (img.complete 체크 → 아니면 addEventListener('load', ...))을 그대로 재사용한다(공유 지점,
- *   §G-2-5 — 두 분기가 따로 타이밍을 잡으면 반드시 갈라진다). 추가로 빠른 연속 전환 가드
- *   (this.currentDeck === d) 를 둬 늦게 도착한 이전 구역의 fitZone 이 최신 구역을 덮지 않게 한다.
- *
- * selectDeck() 은 허브 진입(openProjectAtDeck)·사이드바 트리 선택(31_Projects.js:751)·
- *   새로고침 후 재진입(재클릭 — 이 SPA 는 App.init() 이 프로젝트/구역을 URL·localStorage 로
- *   복원하지 않고 항상 허브로 돌아간다, grep 확인: 20_App.js App.init/openApp 어디에도
- *   deck 자동복원 없음) 셋의 **공유 진입점**이다 — 여기 한 곳을 고치면 세 경로가 전부 고쳐진다.
- *   "새 벡터복사 구역"(crop:null) 경로는 이미 같은 패턴으로 구현돼 있었다(p74 suiteFitOnOpen 회귀 보호).
- *
- * 실제 31_Projects.js 소스를 그대로 vm 에 평가해 selectDeck()→_applyDeckCropView() 흐름을
- * 통합 검증한다(목 구현 아님, App/MapCtrl 의 I/O 경계만 기록하는 얇은 스텁).
- * 뮤테이션 2건 — 되돌리면 해당 검사가 실패한다.
+ * Part A — 실 Chrome(puppeteer) + 실제 public/js/modules 전체 번들 + 실제 index.html/CSS 3종.
+ *   API 만 로컬 목 서버(허브 프로젝트·구역·배포본). 도면은 prod 와 같은 data: URL.
+ *   허브 트리 클릭 / 사이드바 트리 클릭 × 옛 창 방식 영역 / 벡터복사 영역 → 3초 뒤 실제 transform 측정.
+ * Part B — vm: Projects._applyDeckCropView 의 소비 규약(표시 신호 대기·낡은 로드 폐기·빠른 전환 가드).
+ * 뮤테이션 — 번들/소스를 메모리에서만 되돌려 각 검사가 실패함을 증명(파일 미변경).
  */
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import http from "node:http";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { listenSafePort } from "./_lib/safe-listen.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PUB = path.join(ROOT, "public");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
 const projSrc = rd("public/js/modules/31_Projects.js");
 const appSrc = rd("public/js/modules/20_App.js");
 
 let failed = 0;
 const ok = (cond, label) => { console.log((cond ? "  PASS " : "  FAIL ") + label); if (!cond) failed++; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** selectDeck() 을 실제로 태우는 통합 하네스 — App.loadDeckDrawing 을 "src 만 걸고 즉시 반환"하는
- *  실제 동작대로 스텁한다(이미지 load 이벤트는 별도 triggerLoad() 로 수동 발화). */
+/* ══════════════════════════ Part A · 실 Chrome ══════════════════════════ */
+const MODS = fs.readFileSync(path.join(PUB, "js/modules/_manifest.txt"), "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+/** 실제 모듈을 assemble.py 와 같은 순서로 이어 붙이고, 측정용으로 내부 객체만 window 에 노출한다. */
+function buildBundle(mutate = (f, s) => s) {
+  let b = MODS.map((f) => mutate(f, fs.readFileSync(path.join(PUB, "js/modules", f), "utf8").replace(/\r\n/g, "\n"))).join("\n");
+  const cut = b.lastIndexOf("})();");
+  return b.slice(0, cut) + "\nwindow.__T = { MapCtrl, App, Projects, State };\n" + b.slice(cut);
+}
+// prod 재현 조건: 배포본 pages_data 가 data: URL(원본 PDF 없음). 저장소에 있는 실제 JPEG 를 도면으로 쓴다.
+const DRAWING = "data:image/jpeg;base64," + fs.readFileSync(path.join(PUB, "images/pano-sample.jpg")).toString("base64");
+const CROP = { x: 1.587, y: 64.375, w: 10.718, h: 31.602 };   // 라이브 재현 값(ㅁㄴㅇ)
+const DECKS = [
+  { id: "dkRoot", project_id: "prjT", name: "구역A", parent_id: null, deployment_id: "depRoot", crop: null, page: 1, deleted: 0 },
+  { id: "dkOld", project_id: "prjT", name: "ㅁㄴㅇ", parent_id: "dkRoot", deployment_id: "depOld", crop: CROP, page: 1, deleted: 0 },
+  { id: "dkVec", project_id: "prjT", name: "벡터영역", parent_id: "dkRoot", deployment_id: "depVec", crop: null, page: 1, deleted: 0 },
+];
+const CT = { ".html": "text/html", ".css": "text/css", ".js": "application/javascript", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/json" };
+async function serve(bundle) {
+  const json = (res, o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+  const server = http.createServer(async (req, res) => {
+    const u = decodeURIComponent(req.url.split("?")[0]);
+    if (u === "/sw.js") { res.writeHead(404); res.end(); return; }   // SW 캐시가 측정을 오염시키지 않게(§G-4④)
+    if (u === "/js/main.js") { res.writeHead(200, { "content-type": "application/javascript" }); res.end(bundle); return; }
+    if (u === "/api/auth/auto-entry") return json(res, { token: "tokT", kind: "designer" });
+    if (u === "/api/auth/me") return json(res, { authenticated: true, email: "auto@test.local", name: "auto", role: "designer", auto: true });
+    if (u === "/api/auth/config") return json(res, { google_client_id: "", demo_login: false });
+    if (u === "/api/tenant/resolve") return json(res, { matched: false });
+    if (u === "/api/projects") return json(res, { data: [{ id: "prjT", name: "tes", created_at: 1, published: false }] });
+    if (u === "/api/projects/prjT/decks") return json(res, { data: DECKS });
+    const m = u.match(/^\/tables\/deployments\/(.+)$/);
+    if (m && req.method === "GET") {
+      await sleep(150);   // 실 네트워크처럼 await 사이에 다른 작업이 끼어들 틈을 준다
+      return json(res, { id: m[1], title: m[1], file_name: m[1] + ".pdf", pages_data: JSON.stringify([DRAWING]), pins: "[]", zones: "[]", annotations: "[]", version: 1, source_meta: null });
+    }
+    if (u.startsWith("/api/") || u.startsWith("/tables/")) return json(res, { data: [], settings: {}, value: {} });
+    const f = path.join(PUB, u === "/" ? "index.html" : u);
+    if (!f.startsWith(PUB) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); res.end("nf"); return; }
+    res.writeHead(200, { "content-type": CT[path.extname(f)] || "application/octet-stream" }); res.end(fs.readFileSync(f));
+  });
+  await listenSafePort(server, "127.0.0.1");
+  return server;
+}
+let puppeteer = null;
+try { puppeteer = createRequire("file:///C:/Users/FREE/package.json")("puppeteer"); } catch (e) { puppeteer = null; }
+const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+let browser = null;
+if (puppeteer) {
+  browser = await puppeteer.launch({ headless: "new", ...(fs.existsSync(CHROME) ? { executablePath: CHROME } : {}), args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+}
+
+/** flow: { hub: deckId } | { hub: deckId, side: 트리 라벨 } → 3초 뒤 실측 */
+async function openAndMeasure(bundle, flow) {
+  const server = await serve(bundle);
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.goto("http://127.0.0.1:" + server.address().port + "/", { waitUntil: "load" });
+    const clickHub = async (id) => {
+      const sel = '[data-deck-id="' + id + '"]';
+      // 허브는 카드 트리를 비동기로 다시 그린다(구역 목록 fetch 후) — 좌표를 잡은 뒤 노드가 교체되면 클릭이
+      // 빗나간다. 클릭이 실제로 진입을 일으켰는지(App 로드 세대 증가)로 확인하고 빗나갔으면 다시 누른다.
+      for (let i = 0; i < 4; i++) {
+        await page.waitForSelector(sel, { timeout: 15000 });
+        await sleep(300);
+        const b = await page.$eval(sel, (el) => { el.scrollIntoView(); const r = el.getBoundingClientRect(); return { x: r.x + Math.min(20, r.width / 2), y: r.y + 8 }; });
+        await page.mouse.click(b.x, b.y);
+        try { await page.waitForFunction(() => window.__T.App._loadSeq > 0, { timeout: 2000 }); return; } catch (e) {}
+      }
+      throw new Error("허브 트리 클릭이 진입을 일으키지 못함: " + id);
+    };
+    await clickHub(flow.hub);
+    if (flow.side) {
+      await sleep(2500);
+      const pick = (n) => Array.from(document.querySelectorAll("#side-tree .tree-node-region,#side-tree .tree-node-deck")).find((e) => e.querySelector(".tree-label") && e.querySelector(".tree-label").textContent.trim() === n);
+      await page.waitForFunction((src, n) => !!(0, eval)(src)(n), { timeout: 15000 }, pick.toString(), flow.side);
+      const b = await page.evaluate((src, n) => { const el = (0, eval)(src)(n); el.scrollIntoView(); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, pick.toString(), flow.side);
+      await page.mouse.click(b.x, b.y);
+    }
+    await sleep(3000);
+    return await page.evaluate(() => {
+      const { MapCtrl, State, Projects } = window.__T;
+      const vw = MapCtrl.viewport.clientWidth, vh = MapCtrl.viewport.clientHeight;
+      const cw = MapCtrl.transform.offsetWidth, ch = MapCtrl.transform.offsetHeight;
+      const d = Projects.currentDeck;
+      const box = d && d.crop ? d.crop : { x: 0, y: 0, w: 100, h: 100 };
+      const sw = box.w / 100 * cw * State.zoom, sh = box.h / 100 * ch * State.zoom;
+      return { deck: d && d.name, transform: getComputedStyle(MapCtrl.transform).transform, zoom: State.zoom, vw, vh,
+        fitMin: Math.min(sw / vw, sh / vh), fitMax: Math.max(sw / vw, sh / vh), clip: getComputedStyle(MapCtrl.transform).clipPath };
+    });
+  } finally { await page.close(); server.close(); }
+}
+const fmt = (r) => `${r.deck} transform=${r.transform} zoom=${(r.zoom * 100).toFixed(0)}% 짧은변맞춤=${(r.fitMin * 100).toFixed(0)}% 긴변=${(r.fitMax * 100).toFixed(0)}% vp=${r.vw}x${r.vh}`;
+/** 옛 창 방식: 크롭 경계가 화면을 덮는다(짧은 쪽이 뷰포트를 꽉 채움 = _enforceBoundary cover). identity 아님. */
+const oldFitted = (r) => r.transform !== "matrix(1, 0, 0, 1, 0, 0)" && r.zoom > 1 && r.fitMin >= 0.95 && /inset/.test(r.clip);
+/** 벡터복사: 페이지 전체가 화면 안에(MapCtrl.fit pad 0.92) — 긴 쪽이 85~100%. */
+const vecFitted = (r) => r.fitMax >= 0.85 && r.fitMax <= 1.001 && r.zoom > 0;
+
+async function partA(label, bundle, only) {
+  console.log("\n[" + label + "]");
+  const res = {};
+  for (const [key, flow] of [["hubOld", { hub: "dkOld" }], ["hubVec", { hub: "dkVec" }], ["sideOld", { hub: "dkRoot", side: "ㅁㄴㅇ" }], ["sideVec", { hub: "dkRoot", side: "벡터영역" }]]) {
+    if (only && !only.includes(key)) continue;
+    const r = res[key] = await openAndMeasure(bundle, flow);
+    if (key.endsWith("Old")) ok(oldFitted(r), `${key} 옛 창 방식 영역 → 크롭이 화면을 덮는다(identity 아님) :: ${fmt(r)}`);
+    else ok(vecFitted(r), `${key} 벡터복사 영역 → 페이지 전체 맞춤 :: ${fmt(r)}`);
+  }
+  return res;
+}
+
+console.log("=== 회귀: 구역/영역 진입 시 크롭 맞춤 — 실 Chrome(prod 순서 재현: data: URL 도면) ===");
+if (!browser) { console.log("  FAIL puppeteer 를 로드할 수 없다 — 실 브라우저 검증 불가(증거 없는 PASS 금지)"); failed++; }
+else {
+  await partA("A. 정상 번들", buildBundle());
+}
+
+/* ══════════════════════════ Part B · vm 소비 규약 ══════════════════════════ */
 function makeHarness(src = projSrc) {
   const calls = { fitZone: [], fit: 0 };
-  const loadListeners = []; // { fn } — {once:true} 라 발화 후 제거
-  const imgState = { complete: false, naturalWidth: 0 };
-  const img = {
-    get complete() { return imgState.complete; },
-    get naturalWidth() { return imgState.naturalWidth; },
-    addEventListener: (t, f) => { if (t === "load") loadListeners.push(f); }
-  };
+  let pending = null;   // 현재 표시 대기(deferred)
   const sb = {
     console, JSON, Math, Promise, setTimeout,
-    document: { getElementById: (id) => (id === "map-image" ? img : null), body: { classList: { toggle() {} } } },
-    UI: { text() {} },
-    PDF: { setDeckCrop() {} },
-    MapCtrl: {
-      fitZone: (crop) => { calls.fitZone.push(crop); },
-      fit: () => { calls.fit++; }
-    },
-    Prompt: { toast() {} },
-    State: { mode: "designer" },
+    document: { getElementById: () => null, body: { classList: { toggle() {} } } },
+    UI: { text() {} }, PDF: { setDeckCrop() {} }, Prompt: { toast() {} }, State: { mode: "designer" },
+    MapCtrl: { fitZone: (c) => { calls.fitZone.push(c); }, fit: () => { calls.fit++; } },
   };
   sb.App = {
-    // 실제 loadDeckDrawing 의 관찰된 동작: src 설정 + onload 등록만 하고 이미지 로드를 기다리지 않고 반환.
-    loadDeckDrawing: async (depId) => { imgState._depId = depId; return; },
+    // 실제 20_App 과 같은 계약: 새 로드는 이전 대기를 false 로 해제(_beginLoad) + 새 대기를 건다(_armDisplay).
+    loadDeckDrawing: async () => { if (pending) pending.res(false); let res; const p = new Promise((r) => { res = r; }); pending = { p, res }; },
+    whenDisplayed: () => (pending ? pending.p : Promise.resolve(true)),
     _gotoPage: async () => {},
   };
   sb.window = sb; sb.globalThis = sb;
   vm.createContext(sb);
   vm.runInContext(src + "\n;globalThis.__J = Projects;", sb);
-  const J = sb.__J;
-  J._renderDecks = () => {};
-  return {
-    J, calls,
-    /** 이미지가 네트워크에서 실제로 로드 완료됐다고 통지(등록된 모든 load 리스너 발화 후 비움) */
-    fireImageLoad() {
-      imgState.complete = true; imgState.naturalWidth = 100;
-      const ls = loadListeners.splice(0);
-      ls.forEach((f) => f());
-    },
-    /** 이미 캐시돼 있던 상황(동기 complete=true)을 흉내 */
-    setCached() { imgState.complete = true; imgState.naturalWidth = 100; }
-  };
+  sb.__J._renderDecks = () => {};
+  return { J: sb.__J, calls, display: async (v = true) => { const d = pending; pending = null; if (d) d.res(v); await sleep(0); },
+    /** 같은 구역인 채로 다른 로더(예: loadLatestDeployment)가 시작됨 = _beginLoad 가 대기를 false 로 해제 */
+    supersede: async () => { if (pending) pending.res(false); let res; const p = new Promise((r) => { res = r; }); pending = { p, res }; await sleep(0); } };
 }
-
-const CROP_A = { x: 1.587, y: 64.375, w: 10.718, h: 31.602 }; // 마스터 라이브 재현 값(ㅁㄴㅇ)
 const CROP_B = { x: 50, y: 50, w: 10, h: 10 };
-
-/* ══════════════════════════════════════════════════════════════════
- * 1. 네트워크 로드(캐시 미스) — fitZone 은 load 이벤트 뒤에만 불린다
- * ══════════════════════════════════════════════════════════════════ */
-async function suite1(label, src) {
-  console.log("\n[" + label + " · ① 네트워크 로드 — 로드 완료 전 fitZone 0회]");
-  const h = makeHarness(src);
-  const deck = { id: "dck_mukvctz3_kk0jinti", name: "ㅁㄴㅇ", deployment_id: "dep1", crop: CROP_A };
-  await h.J.selectDeck(deck);
-  ok(h.calls.fitZone.length === 0, `selectDeck() 반환 직후(await 완료) fitZone 0회 — 이미지 아직 0×0 (${h.calls.fitZone.length})`);
-  h.fireImageLoad();
-  ok(h.calls.fitZone.length === 1 && h.calls.fitZone[0].w === CROP_A.w, `이미지 load 이벤트 뒤 fitZone 1회, crop.w=${h.calls.fitZone[0] && h.calls.fitZone[0].w} = ${CROP_A.w}`);
+async function partB(label, src) {
+  console.log("\n[" + label + "]");
+  let h = makeHarness(src);
+  await h.J.selectDeck({ id: "a", name: "ㅁㄴㅇ", deployment_id: "dep1", crop: CROP });
+  await sleep(0);
+  ok(h.calls.fitZone.length === 0, `표시(_showMapViewport) 전 fitZone 0회 (${h.calls.fitZone.length})`);
+  await h.display(true);
+  ok(h.calls.fitZone.length === 1 && h.calls.fitZone[0].w === CROP.w, `표시 완료 뒤 fitZone 1회, crop.w=${h.calls.fitZone[0] && h.calls.fitZone[0].w}`);
+  h = makeHarness(src);
+  await h.J.selectDeck({ id: "a", deployment_id: "depA", crop: CROP });
+  await h.J.selectDeck({ id: "b", deployment_id: "depB", crop: CROP_B });   // A 표시 전에 B 로 전환
+  await h.display(true);
+  ok(h.calls.fitZone.length === 1 && h.calls.fitZone[0].w === CROP_B.w, `빠른 전환 — 낡은 A 폐기, B(w=${CROP_B.w})만 적용: ${h.calls.fitZone.length}회`);
+  h = makeHarness(src);
+  await h.J.selectDeck({ id: "a", deployment_id: "depA", crop: CROP });
+  await h.supersede();   // currentDeck 는 여전히 a — 그러나 표시 전에 다른 로드가 시작됨
+  ok(h.calls.fitZone.length === 0, `표시 전 다른 로드 시작(settle false) → 숨은 뷰포트에 맞춤 0회 (${h.calls.fitZone.length})`);
+  h = makeHarness(src);
+  h.J.currentDeck = { id: "other" };
+  h.J._applyDeckCropView({ id: "a", crop: CROP });   // 이미 다른 구역이 현재 — 늦은 맞춤 금지
+  await sleep(0);
+  ok(h.calls.fitZone.length === 0, `currentDeck 가 다른 구역이면 맞춤 0회 (${h.calls.fitZone.length})`);
 }
+await partB("B. 소비 규약(vm)", projSrc);
 
-/* ══════════════════════════════════════════════════════════════════
- * 2. 캐시 히트 — 종전처럼 곧바로 적용(회귀 0)
- * ══════════════════════════════════════════════════════════════════ */
-async function suite2(label, src) {
-  console.log("\n[" + label + " · ② 캐시 히트 — 즉시 적용]");
-  const h = makeHarness(src);
-  h.setCached();
-  const deck = { id: "d2", deployment_id: "dep2", crop: CROP_A };
-  await h.J.selectDeck(deck);
-  ok(h.calls.fitZone.length === 1, `캐시된 이미지 — selectDeck() 안에서 곧바로 fitZone 1회(${h.calls.fitZone.length})`);
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * 3. 빠른 연속 전환 — 늦게 도착한 이전 구역의 fitZone 이 최신 구역을 덮지 않는다
- * ══════════════════════════════════════════════════════════════════ */
-async function suite3(label, src) {
-  console.log("\n[" + label + " · ③ 빠른 연속 전환 가드]");
-  const h = makeHarness(src);
-  const deckA = { id: "a", deployment_id: "depA", crop: CROP_A };
-  const deckB = { id: "b", deployment_id: "depB", crop: CROP_B };
-  await h.J.selectDeck(deckA);   // A 의 load 리스너 등록(아직 미발화)
-  await h.J.selectDeck(deckB);   // 사용자가 A 로드가 끝나기 전에 B 로 전환 — B 의 load 리스너도 등록
-  h.fireImageLoad();             // 같은 img 엘리먼트 — 등록된 리스너(A,B) 전부 발화
-  ok(h.calls.fitZone.length === 1 && h.calls.fitZone[0].w === CROP_B.w,
-    `늦게 도착한 A 는 스킵, 최신 B(w=${CROP_B.w})만 적용 — 총 ${h.calls.fitZone.length}회, 적용된 crop.w=${h.calls.fitZone[0] && h.calls.fitZone[0].w}`);
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * 4. 모드 전환(keepDrawing) 경로는 selectDeck/_applyDeckCropView 를 아예 타지 않는다
- *   (구조 확인 — 20_App.js 를 손대지 않았으므로 정적 검사로 불변 확인)
- * ══════════════════════════════════════════════════════════════════ */
-function suite4(label, src) {
-  console.log("\n[" + label + " · ④ 모드 전환은 별도 경로(줌 유지, 재적용 없음)]");
-  const m = src.match(/if \(opts\.keepDrawing && State\.fileType\) \{[\s\S]*?return;\s*\n\s*\}[\s\S]*?this\.loadLatestDeployment/);
-  ok(!!m && !/_applyDeckCropView|selectDeck/.test(m[0]), "openApp: keepDrawing 조기 반환 블록에 _applyDeckCropView/selectDeck 호출 없음(줌 유지)");
-}
-
-console.log("=== 회귀: 구역/영역 진입 시 크롭 맞춤(fitZone) 레이스 — 라이브 재현(ㅁㄴㅇ, matrix identity) ===");
-await suite1("정상", projSrc);
-await suite2("정상", projSrc);
-await suite3("정상", projSrc);
-suite4("정상", appSrc);
-
-/* ══════════════════════════════════════════════════════════════════
- * 뮤테이션 2건 — 되돌리면 각각 실패해야 한다(파일은 미변경, in-memory 뮤테이션)
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[뮤테이션 M1] 로드-완료 가드 제거(옛 즉시호출로 복귀) → ①실패해야 함");
+console.log("\n[C. 모드 전환(keepDrawing)은 별도 경로 — 줌 유지, 재적용 없음]");
 {
-  const needle = `      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) {
-        const img = document.getElementById("map-image");
-        // 빠른 연속 전환 가드 — load 이벤트가 늦게 도착했을 때 그 사이 다른 구역으로 바뀌었으면
-        // (this.currentDeck.id !== d.id) 낡은 crop 을 적용하지 않는다(loadDeckDrawing 의 _isCurrentLoad 와
-        // 같은 취지). currentDeck 이 아직 세팅 안 된 호출(직접 호출)은 통과시킨다(id 로 비교 — 다른 곳의
-        // 기존 관용구와 동일, 31_Projects.js:660 참조).
-        const doFit = () => {
-          if (this.currentDeck && d && this.currentDeck.id !== d.id) return;
-          if (MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
-        };
-        if (img && img.complete && img.naturalWidth) doFit();
-        else if (img && img.addEventListener) img.addEventListener("load", doFit, { once: true });
-      }`;
-  ok(projSrc.includes(needle), "M1 대상 존재(소스와 정확히 일치)");
-  const mut = projSrc.replace(needle, '      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);');
-  ok(mut !== projSrc, "M1 치환 적중");
+  const m = appSrc.match(/if \(opts\.keepDrawing && State\.fileType\) \{[\s\S]*?return;\s*\n\s*\}[\s\S]*?this\.loadLatestDeployment/);
+  ok(!!m && !/_applyDeckCropView|selectDeck|_showMapViewport/.test(m[0]), "openApp: keepDrawing 조기 반환 블록에 _applyDeckCropView/selectDeck/_showMapViewport 호출 없음");
+}
+
+/* ══════════════════════════ 뮤테이션(메모리에서만) ══════════════════════════ */
+async function mutate(label, needleFile, needle, repl, run) {
+  const src = needleFile === "31_Projects.js" ? projSrc : appSrc;
+  const hit = src.includes(needle);
+  ok(hit, label + " — 대상 존재");
+  if (!hit) return;
   const before = failed;
-  const h = makeHarness(mut);
-  const deck = { id: "dck_mukvctz3_kk0jinti", name: "ㅁㄴㅇ", deployment_id: "dep1", crop: CROP_A };
-  await h.J.selectDeck(deck);
-  const broke1 = h.calls.fitZone.length !== 0; // 옛 코드는 즉시 호출(이미지 미로드 상태에서도 불림)
-  ok(broke1, `① 실패 재현: 이미지 로드 전인데도 fitZone ${h.calls.fitZone.length}회 호출(대기 없이 즉시 실행)`);
+  const logs = []; const orig = console.log; console.log = (...a) => logs.push(a.join(" "));
+  try { await run((f, s) => (f === needleFile ? s.replace(needle, repl) : s)); } catch (e) { failed++; logs.push("  FAIL(throw) " + e.message); }
+  console.log = orig;
+  const caught = failed > before; failed = before;
+  ok(caught, label + (caught ? " → 실패함(실효성 증명): " + (logs.find((l) => /FAIL/.test(l)) || "").trim().slice(0, 150) : " → 🔴 잡지 못함"));
 }
-
-console.log("\n[뮤테이션 M2] 빠른 연속 전환 가드 제거 → ③실패해야 함");
-{
-  const needle = `        const doFit = () => {
-          if (this.currentDeck && d && this.currentDeck.id !== d.id) return;
-          if (MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
-        };`;
-  ok(projSrc.includes(needle), "M2 대상 존재");
-  const mut = projSrc.replace(needle, "        const doFit = () => { if (MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640); };");
-  ok(mut !== projSrc, "M2 치환 적중");
-  const h = makeHarness(mut);
-  const deckA = { id: "a", deployment_id: "depA", crop: CROP_A };
-  const deckB = { id: "b", deployment_id: "depB", crop: CROP_B };
-  await h.J.selectDeck(deckA);
-  await h.J.selectDeck(deckB);
-  h.fireImageLoad();
-  const broke3 = h.calls.fitZone.length !== 1; // 가드 없으면 A·B 둘 다 적용되어 2회
-  ok(broke3, `③ 실패 재현: 가드 없이 fitZone ${h.calls.fitZone.length}회(늦게 도착한 A 도 적용됨)`);
+console.log("\n[뮤테이션]");
+if (browser) {
+  // M1 = 근본원인 되돌리기: 표시 신호를 무시하고 즉시 맞춤(옛 img.complete 판정과 같은 타이밍) → prod 와 같은 identity
+  await mutate("M1 표시 신호 무시(App.whenDisplayed → 즉시)", "31_Projects.js", "App.whenDisplayed() : Promise.resolve(true);", "Promise.resolve(true) : Promise.resolve(true);",
+    (mut) => partA("M1", buildBundle(mut), ["hubOld"]));
+  // M2 = 신호 발신 제거: _showMapViewport 가 표시 완료를 알리지 않으면 맞춤이 영영 안 일어난다
+  await mutate("M2 _showMapViewport 의 settle 제거", "20_App.js", "      this._settleDisplay(true);\n", "",
+    (mut) => partA("M2", buildBundle(mut), ["hubOld"]));
+  // M3 = 로더의 arm 제거: 대기가 없으면 즉시 맞춤 → 숨은 뷰포트에서 무시됨
+  await mutate("M3 loadDeckDrawing 의 _armDisplay 제거", "20_App.js", "        this._armDisplay();   // [WO 20260929-fitrace2] _r0→_showMapViewport 가 settle\n", "",
+    (mut) => partA("M3", buildBundle(mut), ["hubOld"]));
 }
+await mutate("M4 빠른 전환 가드(currentDeck) 제거", "31_Projects.js", "          if (this.currentDeck && d && this.currentDeck.id !== d.id) return;\n", "",
+  async (mut) => { await partB("M4", mut("31_Projects.js", projSrc)); });
+await mutate("M5 낡은 로드(settle false) 폐기 제거", "31_Projects.js", "          if (!shown) return;", "",
+  async (mut) => { await partB("M5", mut("31_Projects.js", projSrc)); });
 
+if (browser) await browser.close();
 console.log("\n" + (failed ? `❌ FAIL: ${failed}건` : "✅ ALL PASS"));
 process.exit(failed ? 1 : 0);

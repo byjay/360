@@ -435,30 +435,39 @@ async function suitePromptChain(label, src) {
 /* ═════ 7. 복사본 영역을 열면 페이지 전체가 화면에 맞춰진다("크게") — 라이브 실측: 종전엔 100% 좌상단 ═════ */
 async function suiteFitOnOpen(label, src) {
   console.log("\n[" + label + "]");
-  const run = (deck, complete) => {
-    const calls = { fit: 0, fitZone: 0 }; let onLoad = null;
-    const img = { complete, naturalWidth: complete ? 100 : 0, addEventListener: (t, f) => { if (t === "load") onLoad = f; } };
+  // [WO 20260929-fitrace2] 맞춤 시점 = App.whenDisplayed()(로더의 _showMapViewport 완료) — img.complete 아님.
+  //   실브라우저 실측: data: URL 도면은 img.complete 가 load 이벤트보다 먼저 true 가 되어 옛 판정이 숨은
+  //   뷰포트(0×0)에서 맞춤을 날렸다. 실제 화면 수치 검증은 p81(헤드리스 Chrome)이 한다 — 여기는 소비 규약만.
+  //   pending: "none"(대기 중인 표시 없음) | "wait"(표시 대기 — settle 로 해제)
+  const run = async (deck, pending, settleWith = true) => {
+    const calls = { fit: 0, fitZone: 0 };
+    let settle = null;
+    const wait = pending === "wait" ? new Promise((r) => { settle = r; }) : null;
     const sb = { console, JSON, Math, Promise, setTimeout,
-      requestAnimationFrame: (f) => f(),
-      document: { getElementById: (id) => (id === "map-image" ? img : null), body: { classList: { toggle() {} } } },
+      document: { getElementById: () => null, body: { classList: { toggle() {} } } },
+      App: { whenDisplayed: () => wait || Promise.resolve(true) },
       PDF: { setDeckCrop() {} }, MapCtrl: { fit: () => calls.fit++, fitZone: () => calls.fitZone++ } };
     vm.createContext(sb);
     vm.runInContext(src + "\n;globalThis.__J = Projects;", sb);
     sb.__J._applyDeckCropView(deck);
+    const sync = calls.fit + calls.fitZone;
+    await new Promise((r) => setTimeout(r, 0));
     const beforeLoad = calls.fit;
-    if (onLoad) onLoad();
-    return { beforeLoad, ...calls };
+    if (settle) { settle(settleWith); await new Promise((r) => setTimeout(r, 0)); }
+    return { sync, beforeLoad, ...calls };
   };
-  const a = run({ id: "r", crop: null, parent_id: "root" }, false);
-  ok(a.beforeLoad === 0 && a.fit === 1, `복사본 영역 · 이미지 로드 전 → 로드 이벤트 뒤에 맞춤 1회 (전 ${a.beforeLoad} / 후 ${a.fit})`);
-  const b = run({ id: "r", crop: null, parent_id: "root" }, true);
-  ok(b.fit === 1, "복사본 영역 · 이미 로드됨 → 곧바로 맞춤 1회");
+  const a = await run({ id: "r", crop: null, parent_id: "root" }, "wait");
+  ok(a.beforeLoad === 0 && a.fit === 1, `복사본 영역 · 표시 전 → 표시(_showMapViewport) 뒤에 맞춤 1회 (전 ${a.beforeLoad} / 후 ${a.fit})`);
+  const b = await run({ id: "r", crop: null, parent_id: "root" }, "none");
+  ok(b.fit === 1, "복사본 영역 · 이미 표시됨 → 곧바로 맞춤 1회");
   // [WO 20260928-unify] 구역(루트)도 createDeckFromLoadedDrawing 이 같은 벡터복사 경로를 쓰게 되면서
   // crop:null 인 루트 구역도 열면 페이지 맞춤이 된다(parent_id 로 더 이상 가르지 않는다 — SoT).
-  const c = run({ id: "root", crop: null, parent_id: null }, true);
+  const c = await run({ id: "root", crop: null, parent_id: null }, "none");
   ok(c.fit === 1, "복사본 구역(루트, crop 없음) → 페이지 맞춤 1회(parent_id 무관)");
-  const d = run({ id: "w", crop: { x: 1, y: 1, w: 5, h: 5 }, parent_id: "root" }, true);
+  const d = await run({ id: "w", crop: { x: 1, y: 1, w: 5, h: 5 }, parent_id: "root" }, "none");
   ok(d.fit === 0 && d.fitZone === 1, "창 방식 영역(crop) → 종전 fitZone 경로");
+  const e = await run({ id: "r", crop: null, parent_id: "root" }, "wait", false);
+  ok(e.fit === 0, `표시 전에 다른 로드가 시작됨(settle false) → 낡은 맞춤 0회 (${e.fit})`);
 }
 
 /* ═════ 실행 ═════ */
@@ -536,9 +545,12 @@ console.log("\n[뮤테이션]");
 }
 
 {
-  const needle = "else if (!crop && d && typeof MapCtrl !== \"undefined\" && MapCtrl.fit) {";
+  const needle = ": (!!d && typeof MapCtrl !== \"undefined\" && MapCtrl.fit);";
   ok(projSrc.includes(needle), "M5 대상 존재");
-  await mutate("M5 복사본 영역/구역 열기 맞춤 제거", async () => { await suiteFitOnOpen("M5", projSrc.replace(needle, "else if (false) {")); });
+  await mutate("M5 복사본 영역/구역 열기 맞춤 제거", async () => { await suiteFitOnOpen("M5", projSrc.replace(needle, ": false;")); });
+  const needle7 = "App.whenDisplayed() : Promise.resolve(true);";
+  ok(projSrc.includes(needle7), "M7 대상 존재");
+  await mutate("M7 표시 완료 신호 무시(즉시 맞춤)", async () => { await suiteFitOnOpen("M7", projSrc.replace(needle7, "Promise.resolve(true) : Promise.resolve(true);")); });
 }
 
 console.log(failed ? `\n${failed} FAILED` : "\nALL PASS");

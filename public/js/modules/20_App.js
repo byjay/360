@@ -2036,6 +2036,8 @@
       //   프로젝트·구역 컨텍스트가 없는 그 상태로 저장하면 어느 구역에도 안 붙는 고아 배포본이 생겼다.
       //   → 실제 변경(새 도면 업로드)은 _afterDrawingLoaded() 가, 핀/영역 편집은 _autoSave() 가
       //     각각 dirty 를 세운다. 표시 함수는 상태를 바꾸지 않는다.
+      // 🔴 [WO 20260929-fitrace2] 리셋+표시 완료 — 이 뒤에야 뷰포트 크기가 실재한다(whenDisplayed 대기자 해제).
+      this._settleDisplay(true);
     },
 
     _readAsArrayBuffer(file) {
@@ -3811,6 +3813,7 @@
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
+        this._armDisplay();   // [WO 20260929-fitrace2] _r0→_showMapViewport 가 settle
         imgEl.onload = _r0;
         // [오프라인 도면연동] R2 URL 이미지가 오프라인(미캐시)으로 로드 실패하면
         //   로컬 draft(원본 dataURL)로 폴백하여 도면을 끊김없이 표시.
@@ -3874,6 +3877,7 @@
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
+        this._armDisplay();   // [WO 20260929-fitrace2] _r1→_showMapViewport 가 settle
         imgEl.onload = _r1;
         // [P52 결함수정] 형제 호출부(loadDeckDrawing)와 동일한 결함 — 로컬 draft 이미지가
         //   못 불러와지면(손상/미캐시) 종전엔 아무 렌더도 안 일어났다. 실패해도 핀·구역은 표시.
@@ -3908,8 +3912,28 @@
      *  await 사이에 다른 로드가 시작되면(허브 구역 클릭 = openApp 의 자동 로드 + selectDeck 동시 발화)
      *  늦게 도착한 쪽이 State.pins 를 엉뚱한 구역의 서버본으로 덮었다. 마지막에 시작한 로드만 State 를 쓴다. */
     _loadSeq: 0,
-    _beginLoad() { return ++this._loadSeq; },
+    _beginLoad() { this._settleDisplay(false); return ++this._loadSeq; },
     _isCurrentLoad(seq) { return seq === this._loadSeq; },
+
+    /** 🔴 [WO 20260929-fitrace2] "도면이 화면에 표시됐다" 신호(SoT) — 로더가 이미지를 걸 때 arm,
+     *  _showMapViewport()(zoom=1/pan=0 리셋 + 뷰포트 표시)가 끝나면 true 로 settle, 새 로드가 시작되면
+     *  (_beginLoad) 이전 대기를 false 로 settle 한다. 표시 후 줌을 잡아야 하는 호출부(구역 크롭 맞춤)는
+     *  img.complete 가 아니라 이 신호를 기다린다 — 실브라우저 실측: data: URL 도면은 img.complete 가
+     *  load 이벤트(_r0→_showMapViewport)보다 **먼저** true 가 되어, 숨은 뷰포트(0×0)에서 fitZone 이
+     *  조용히 무시되고 직후 _showMapViewport 가 identity 로 덮었다(prod dep_muksj6py 재현).
+     *  대기 중인 표시가 없으면 즉시 true(이미 화면에 있는 도면). */
+    _displayWait: null,
+    _displayResolve: null,
+    _armDisplay() {
+      if (this._displayResolve) return;   // 같은 로드의 폴백 경로(_restoreDraftLocal)는 기존 대기를 이어 쓴다
+      this._displayWait = new Promise((res) => { this._displayResolve = res; });
+    },
+    _settleDisplay(ok) {
+      const res = this._displayResolve;
+      this._displayResolve = null; this._displayWait = null;
+      if (res) res(!!ok);
+    },
+    whenDisplayed() { return this._displayWait || Promise.resolve(true); },
 
     /** 🔴 [WO 20260928-pinloss] 이 구역(key)의 **저장 안 한** 로컬 작업분(dirty draft)을 읽는다.
      *  다른 배포본을 기준으로 만든 draft(depId 불일치)는 이 서버본에 얹지 않는다(엉뚱한 도면에 핀 이식 금지). */
@@ -4591,6 +4615,7 @@
           if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
           if (typeof Notes !== "undefined") Notes.loadSummary();
         };
+        this._armDisplay();   // [WO 20260929-fitrace2] _r2→_showMapViewport 가 settle
         imgEl.onload = _r2;
         // [P52 결함수정] 🔴 근본원인 — 이 경로(프로젝트 재진입 시 최신 배포본 자동복원)엔
         //   onerror 핸들러가 아예 없었다. 도면 이미지가 R2 접근 실패(404/403/네트워크)로

@@ -697,38 +697,25 @@
       } catch (e) {}
       const crop = (d && d.crop) || null;
       if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
-      // 🔴 [WO 20260929-fitrace] 근본원인 — loadDeckDrawing()이 반환(await 완료)돼도 <img id="map-image">
-      //   의 네트워크 로드는 아직 끝나지 않았을 수 있다(캐시 미스). 그 상태에서 fitZone()을 바로 부르면
-      //   #map-transform 이 아직 0×0(이미지 자연크기 미확정)이라 fitZone 내부 가드로 조용히 아무 일도
-      //   안 하고, 뒤늦게 이미지가 load 되면 loadDeckDrawing 의 onload(_r0→_showMapViewport)가
-      //   zoom=1/pan={0,0}로 되돌려 화면은 계속 잘리지 않은 원본 크기로 남는다(라이브 재현: matrix(1,0,0,1,0,0)).
-      //   아래 !crop 분기(WO 20260928-copy)가 이미 쓰던 "로드 완료 이벤트에 건다" 패턴을 그대로 재사용
-      //   (공유 지점 — 두 분기가 따로 타이밍을 잡으면 반드시 갈라진다). img.onload(_r0)가 먼저 등록돼
-      //   있으므로 여기서 추가하는 리스너는 그 뒤에 실행되어 _showMapViewport() 의 리셋 다음에 맞춘다.
-      if (crop && typeof MapCtrl !== "undefined" && MapCtrl.fitZone) {
-        const img = document.getElementById("map-image");
-        // 빠른 연속 전환 가드 — load 이벤트가 늦게 도착했을 때 그 사이 다른 구역으로 바뀌었으면
-        // (this.currentDeck.id !== d.id) 낡은 crop 을 적용하지 않는다(loadDeckDrawing 의 _isCurrentLoad 와
-        // 같은 취지). currentDeck 이 아직 세팅 안 된 호출(직접 호출)은 통과시킨다(id 로 비교 — 다른 곳의
-        // 기존 관용구와 동일, 31_Projects.js:660 참조).
-        const doFit = () => {
+      // 🔴 [WO 20260929-fitrace2] 근본원인(실브라우저 호출스택 확정) — 맞춤 시점을 img.complete 로
+      //   판정했다. data: URL 도면은 img.complete 가 load 이벤트보다 **먼저** true 가 되므로, 여기서
+      //   즉시 fitZone 을 불렀지만 그 순간 #map-viewport 는 아직 hidden(0×0) → fitZone 내부 가드로
+      //   조용히 무시되고, 2ms 뒤 load 이벤트의 _r0→App._showMapViewport() 가 zoom=1/pan=0 으로
+      //   identity 를 썼다(prod 재현: matrix(1,0,0,1,0,0) + 클립만 적용). 이미지 준비가 아니라
+      //   "로더의 표시(리셋) 완료"가 진짜 전제조건이다 → App.whenDisplayed()(20_App.js, SoT)를 기다린다.
+      //   두 분기(crop 창 방식 / crop 없는 벡터복사)가 같은 신호를 공유한다 — 따로 타이밍을 잡으면 갈라진다.
+      //   🔴 parent_id 로 가르지 않는다(SoT) — crop 없음 = 복사본(페이지 전체 맞춤), crop 있음 = 구버전 창.
+      const wantFit = crop ? (typeof MapCtrl !== "undefined" && MapCtrl.fitZone)
+                           : (!!d && typeof MapCtrl !== "undefined" && MapCtrl.fit);
+      if (wantFit) {
+        const ready = (typeof App !== "undefined" && App.whenDisplayed) ? App.whenDisplayed() : Promise.resolve(true);
+        ready.then((shown) => {
+          if (!shown) return;   // 표시 전에 다른 로드가 시작됨 — 낡은 구역 맞춤 금지
+          // 빠른 연속 전환 가드 — 그 사이 다른 구역으로 바뀌었으면 낡은 crop 을 적용하지 않는다.
           if (this.currentDeck && d && this.currentDeck.id !== d.id) return;
-          if (MapCtrl.fitZone) MapCtrl.fitZone(crop, 0.14, 640);
-        };
-        if (img && img.complete && img.naturalWidth) doFit();
-        else if (img && img.addEventListener) img.addEventListener("load", doFit, { once: true });
-      }
-      // 🔴 [WO 20260928-copy → WO 20260928-unify 갱신] 벡터 복사본(crop 없음)은 그 배포본의 페이지
-      //   자체가 이 구역/영역이다 → 열면 페이지 전체를 화면에 맞춘다("크게"). 도면 로드(_showMapViewport)가
-      //   이미지 load 때 zoom=1 로 되돌리므로 그 **뒤**에 맞춘다(load 리스너는 onload 속성 핸들러 다음에
-      //   불린다 + 한 프레임 뒤). 🔴 parent_id 로 가르지 않는다(SoT) — 구역(루트)도 영역과 같은 벡터복사
-      //   경로를 쓰게 되면서(createDeckFromLoadedDrawing) crop 없음이 곧 "복사본"이라는 사실이 계층과
-      //   무관해졌다. crop 이 있는 구버전 창 방식 구역/영역만 위 fitZone 분기로 남는다.
-      else if (!crop && d && typeof MapCtrl !== "undefined" && MapCtrl.fit) {
-        const img = document.getElementById("map-image");
-        const go = () => { const f = () => MapCtrl.fit(); if (typeof requestAnimationFrame === "function") requestAnimationFrame(f); else f(); };
-        if (img && img.complete && img.naturalWidth) go();
-        else if (img && img.addEventListener) img.addEventListener("load", go, { once: true });
+          if (crop) MapCtrl.fitZone(crop, 0.14, 640);
+          else MapCtrl.fit();
+        });
       }
     },
 
