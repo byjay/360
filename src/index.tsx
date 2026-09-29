@@ -1528,6 +1528,14 @@ function mapProject(r: any) {
 function stripShareKey<T extends Record<string, any>>(o: T): T {
   return { ...o, share_token: null, share_path: null }
 }
+/** [WO 20260929-parent-guard] 🔴 신뢰 경계 — parent_id 는 클라이언트가 보낸 값을 그대로 믿지 않는다.
+ *  같은 project_id 이고 deleted=0 인 살아있는 deck 인지 DB 로 확인한다. 아니면 false(400 유도).
+ *  조용히 null 로 바꾸지 않는다(§10 조용한 실패 금지) — 호출부가 명시적으로 400 을 반환한다.
+ *  POST(/api/projects/:id/decks)·PUT(/api/decks/:id) 가 공유하는 단일 지점(SoT). */
+async function isLiveDeckInProject(db: any, parentId: string, projectId: string): Promise<boolean> {
+  const row = await db.prepare('SELECT id FROM decks WHERE id = ? AND project_id = ? AND deleted = 0').bind(parentId, projectId).first()
+  return !!row
+}
 function mapDeck(r: any) {
   // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
   let crop: any = null
@@ -2632,6 +2640,11 @@ app.post('/api/projects/:id/decks', async (c) => {
   const crop = body.crop != null ? JSON.stringify(body.crop) : null
   // [WO 20260921] parent_id — 상위 구역 id. 미전송이면 NULL(=최상위 구역, 구버전과 동일).
   const parentId = body.parent_id != null && String(body.parent_id) !== '' ? String(body.parent_id) : null
+  // [WO 20260929-parent-guard] 🔴 신뢰 경계 — 같은 프로젝트의 살아있는 deck 이 아니면 400.
+  //   조용히 null 로 바꾸지 않는다(다른 프로젝트/삭제된 deck 을 가리키는 고아 생성을 서버에서 차단).
+  if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, pid))) {
+    return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
+  }
   await c.env.DB.prepare(
     `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
@@ -2659,6 +2672,10 @@ app.put('/api/decks/:id', async (c) => {
     ? (body.parent_id != null && String(body.parent_id) !== '' ? String(body.parent_id) : null)
     : (row.parent_id ?? null)
   if (parentId === id) return c.json({ error: 'parent_id cannot be self' }, 400)
+  // [WO 20260929-parent-guard] 🔴 같은 신뢰 경계 — PUT 도 같은 프로젝트의 살아있는 deck 만 부모로 허용.
+  if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, row.project_id))) {
+    return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
+  }
   await c.env.DB.prepare(
     'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, updated_at = ? WHERE id = ?'
   ).bind(name, level, dep, page, crop, parentId, Date.now(), id).run()

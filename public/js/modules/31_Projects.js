@@ -79,8 +79,26 @@
       }
     },
 
+    /** [WO 20260929-parent-guard] 🔴 SoT — 프로젝트를 바꾸는 **모든** 진입점(드롭다운 selectProject,
+     *  허브 카드 클릭 ProjectHub.openProject, 서브도메인 자동진입 99_footer.js)이 반드시 이 함수를
+     *  거쳐야 한다. `Projects.currentProject = p` 직접 대입 금지(형제 호출부 전수 확인 —
+     *  CLAUDE.md §G-2-5). 근본원인(재현 2026-09-29, 지휘자 실측 2건):
+     *   ① currentDeck 을 초기화하지 않으면 이전(삭제됐거나 다른) 프로젝트의 구역 참조가 새
+     *      프로젝트로 새어 들어가 extractRegionAsDeck(src=this.currentDeck)이 그 참조를 그대로
+     *      parent_id 로 써서 "다른 프로젝트의 deck 을 부모로 둔 고아 deck"을 만든다.
+     *   ② ProjectHub.openProject 는 `currentProject = p` 를 **동기로** 바꾼 뒤 deck 목록을
+     *      비동기로 새로 받아오는데(N4, 20_App.js), 그 사이(await) 창에서 _draftKey()(pid::did)가
+     *      아직 초기화 전인 stale currentDeck.id 를 그대로 써 "새 프로젝트 pid + 옛 프로젝트 deck id"
+     *      조합의 draft 키가 IndexedDB 에 영구 저장되고, 나중에 _flushDirtyDrafts 가 그 draft 의
+     *      depId(옛 프로젝트 배포본)로 PATCH 를 보낸다 — currentProject 대입과 **같은 동기 틱**에서
+     *      currentDeck 을 null 로 만들어야 이 경쟁 창을 없앤다. */
+    setCurrentProject(p) {
+      this.currentProject = p || null;
+      this.currentDeck = null;
+    },
+
     async selectProject(id) {
-      this.currentProject = this.list.find((p) => p.id === id) || null;
+      this.setCurrentProject(this.list.find((p) => p.id === id) || null);
       // [P40] 배지 컨텍스트 — 프로젝트 역할 표시(공유 지점: Auth.setProjectContext)
       if (typeof Auth !== "undefined" && Auth.setProjectContext) Auth.setProjectContext(this.currentProject);
       this._renderSelect();
@@ -686,7 +704,15 @@
      *  않음 — 아직 도면만 등록되고 구역이 하나도 없는 구간은 이 함수로도 찾을 수 없다: deployments
      *  테이블에 project_id 가 없어 client 에서 조회 불가 — RECON 2026-09-29, src/index.tsx 변경 필요). */
     pickOriginalDeck(decks) {
-      const roots = (decks || []).filter((d) => d && d.deployment_id && d.parent_id == null);
+      decks = decks || [];
+      // [WO 20260929-parent-guard] 🔴 SoT — 고아 판정(부모가 없거나 목록에 없음)은
+      // UI.groupDecksByParent(11_UI.js)와 공유한다. 예전엔 parent_id==null 만 루트로 쳐서,
+      // 오염 데이터(부모가 다른/삭제된 프로젝트의 deck)를 가리키는 deck 이 영원히 "원본 없음"으로
+      // 숨어버렸다(재현 2026-09-29: sunbo 프로젝트 floor 구역). groupDecksByParent 는 이미
+      // "부모가 이 decks 목록에 없으면 최상위로 승격"을 하므로 같은 함수를 재사용한다(로직 두 벌 금지).
+      const roots = (typeof UI !== "undefined" && UI.groupDecksByParent)
+        ? UI.groupDecksByParent(decks).roots.filter((d) => d && d.deployment_id)
+        : decks.filter((d) => d && d.deployment_id && d.parent_id == null);
       if (!roots.length) return null;
       const ts = (d) => { const v = d.created_at; const n = typeof v === "number" ? v : Date.parse(v); return Number.isFinite(n) ? n : 0; };
       return roots.slice().sort((a, b) => ts(b) - ts(a))[0];

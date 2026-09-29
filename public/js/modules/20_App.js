@@ -4303,6 +4303,11 @@
           if (!d || !d.pages || !d.pages.length) continue;
           const did = this._deckIdOfKey(k);
           const deck = did ? decks.find((x) => String(x.id) === String(did)) : null;
+          // [WO 20260929-parent-guard] 🔴 재현 2026-09-29(지휘자 실측) — 키에 프로젝트 접두는 맞지만
+          // (currentDeck 이 프로젝트 전환 중 새어 이 draft 자체가 잘못 생성됐을 수 있다) deck id 가
+          // 이 프로젝트의 살아있는 decks 에 없으면(다른/삭제된 프로젝트 deck) 복원하지 않고 버린다
+          // — 화면에 잘못된 deck 에 속한 작업분을 올리지 않는다(조용히 고르는 대신 후보에서 제외).
+          if (did && !deck) continue;
           const score = (deck ? 2 : 0) + (d.dirty ? 1 : 0);   // 실존 구역 > dirty 우선
           if (score > bestScore) { bestScore = score; best = k; bestDeck = deck || null; }
         }

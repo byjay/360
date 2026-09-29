@@ -684,7 +684,9 @@
     async openProject(p) {
       // 선택 프로젝트를 Projects 모듈과 공유 (작업화면 사이드바 동기화용)
       Projects.list = this.list;
-      Projects.currentProject = p;
+      // [WO 20260929-parent-guard] 🔴 SoT — Projects.setCurrentProject() 경유 필수(31_Projects.js
+      // 주석 참조). 직접 대입하면 currentDeck 이 이전 프로젝트를 가리킨 채 새어 나간다(재현 완료).
+      if (Projects.setCurrentProject) Projects.setCurrentProject(p); else Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
       // [P40] 우상단 배지를 "이 프로젝트에서의 내 역할"로 — 고정 '디자이너' 표기 제거

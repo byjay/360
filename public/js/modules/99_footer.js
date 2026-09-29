@@ -66,7 +66,11 @@
         try {
           const t = await fetch('/api/tenant/resolve').then(r => r.json());
           if (t && t.matched && t.project && t.project.id) {
-            if (typeof Projects !== 'undefined') Projects.currentProject = { id: t.project.id, name: t.project.name };
+            // [WO 20260929-parent-guard] SoT — Projects.setCurrentProject() 경유(31_Projects.js).
+            if (typeof Projects !== 'undefined') {
+              const tp = { id: t.project.id, name: t.project.name };
+              if (Projects.setCurrentProject) Projects.setCurrentProject(tp); else Projects.currentProject = tp;
+            }
             // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — 서브도메인 자동진입은 디자이너로 고정한다.
             // 원복(뷰어 자동진입 부활) 시 아래 줄로 교체: App.openApp((typeof Auth !== 'undefined' && Auth.isDesigner) ? 'designer' : 'viewer', { project: { id: t.project.id, name: t.project.name } });
             App.openApp((typeof PinSeries !== 'undefined' ? PinSeries.preferredMode() : 'designer'), { project: { id: t.project.id, name: t.project.name } });
