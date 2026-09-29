@@ -981,8 +981,12 @@
        받아버린다. 배포 스냅샷은 CSS 1:1(.map-image 자연 크기)로 보도록 만들어진 것이므로
        판정 기준은 device px 가 아니라 CSS px 이고, 확실히 부족할 때(1.5배)만 받는다.
        → 1:1 스냅샷 기준 zoom > 1.5 에서 발동. 구역 확대(MapCtrl.fitZone 4~8배)는 항상 발동.
-       원본을 확보한 뒤의 실제 렌더 목표 배율은 종전대로 zoom×dpr 이다(planRerender). */
-    SOURCE_GAIN: 1.5,
+       원본을 확보한 뒤의 실제 렌더 목표 배율은 종전대로 zoom×dpr 이다(planRerender).
+       🔴 [WO 20260929-lossless · 마스터 확정 "스냅샷은 미리보기, 표시 정본은 원본 PDF"] 위 1.5·CSS px 기준은
+       "화면 픽셀×DPR 보다 스냅샷 픽셀이 적은" 구간(DPR2 에서 1:1~1.5배)을 흐린 채 방치했다(실측 밀도 0.50).
+       → 판정을 device px(cssPx×zoom×dpr) 로 바꾸고 임계를 1(=부족해지는 순간)로 둔다. 전체 맞춤(fit) 화면은
+       스냅샷(긴 변 4096px)이 여전히 충분해 다운로드 0 — 확대해서 실제로 부족해질 때만 받는다. */
+    SOURCE_GAIN: 1,
 
     /** 마지막 snapshotAllPages 가 실제로 저장한 페이지 픽셀 크기
      *  [{ w, h, pw, ph }] — w/h = 스냅샷 비트맵 px, pw/ph = PDF 페이지 포인트.
@@ -1055,15 +1059,17 @@
      *  snapPx : 배포본에 기록된(또는 <img>.naturalWidth 로 실측한) 스냅샷 가로 픽셀
      *  cssPx  : 화면 1배(zoom=1)에서 그 스냅샷이 차지하는 CSS 가로 픽셀
      *  zoom   : 현재 CSS 확대 배율
+     *  dpr    : 화면 픽셀 밀도(렌더러와 같은 상한 2 — residentDpr) · 미지정이면 1
      *  크기를 모르면(0) 받지 않는다 — 불필요한 다운로드 0 이 기본값이다. */
     needsSourceRerender(o) {
       const opt = o || {};
       const snapPx = Number(opt.snapPx) || 0;
       const cssPx  = Number(opt.cssPx)  || 0;
       const zoom   = Number(opt.zoom)   || 0;
+      const dpr    = Math.max(1, Math.min(2, Number(opt.dpr) || 1));
       if (!(snapPx > 0) || !(cssPx > 0) || !(zoom > 0)) return false;
       const gain = Number(opt.gain) || this.SOURCE_GAIN;
-      return (cssPx * zoom) > (snapPx * gain);
+      return (cssPx * zoom * dpr) > (snapPx * gain);
     },
 
     /** [P14] 크롭 오버레이를 얹을 "바탕" 요소 — 전면 PDF 캔버스(편집) 또는 배포 스냅샷 <img>(뷰어).
@@ -1103,6 +1109,9 @@
       // 🔴 상한에 걸려 해상도가 안 오르는데 재렌더하면 "화질 그대로 + 대형 PDF 재렌더" 순수 손해다.
       //    실제로 오를 때(capped 기준)만 다시 그린다.
       if (capped > cur * gain) return { target: target, capped: capped, worth: true, reason: "sharpen" };
+      // 🔴 [WO 20260929-lossless] 지금 캔버스가 목표(화면 픽셀×DPR)에 **못 미치고** 올릴 여지가 있으면 여유율과
+      //   무관하게 다시 그린다 — 종전엔 목표의 87~100% 구간(예: 1.5배 초기렌더 뒤 1.6배 확대)이 흐린 채 남았다.
+      if (cur < target && capped > cur) return { target: target, capped: capped, worth: true, reason: "sharpen" };
       // 크게 축소한 뒤 남은 과잉 해상도 캔버스는 메모리만 먹는다 → 회수(히스테리시스로 진동 방지).
       if (cur > 0 && capped < cur / (opt.shrink || this.SHRINK_RATIO)) {
         return { target: target, capped: capped, worth: true, reason: "shrink" };
@@ -1205,20 +1214,29 @@
             pageW: baseVp.width, pageH: baseVp.height,
             pxCap: this.effectivePxCap(this._env(), 1), maxSide: this.MAX_SIDE_HARD
           });
+          // 🔴 [WO 20260929-lossless] 크롭(보이는 영역만) 목표는 **실제 화면 DPR** 로 잡는다. residentDpr 는 "페이지 전체를
+          //   한 장에" 담기 위한 감산(GA 7143×2384pt → 1.53)이라 크롭에 쓰면 DPR2 화면에서 밀도 0.77 로 굳었다(실측).
+          //   크롭 면적은 뷰포트로 묶이므로 이 감산이 필요 없다(메모리 상한은 renderCrop 의 effectivePxCap(,2)가 지킨다).
+          const rawDpr = Math.max(1, Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2));
+          const cropTarget = (st.baseCssScale || 1) * Math.max(1, st.lastZoom || 1) * rawDpr;
           // [WO 20260917] 구역(deck) 크롭이 고정돼 있으면 전체 페이지 임계와 무관하게
           //   항상 그 영역만 렌더 대상으로 삼는다 — 같은 픽셀 예산을 그 영역에 집중시켜
           //   A1/A0 가 첫 렌더부터 상한에 닿아 확대해도 선명해지지 않던 문제를 해소한다.
-          if (st.deckCrop) { await this.renderCrop(page, canvas, plan.target, rot); return; }
+          if (st.deckCrop) { await this.renderCrop(page, canvas, cropTarget, rot); return; }
           // [P14] 바탕이 배포 스냅샷 <img> 면 전면 캔버스를 다시 그릴 수 없다(레이아웃·핀 좌표 기준).
           //   → 스냅샷보다 선명해질 때만 보이는 영역을 크롭 오버레이로 얹는다.
+          //   🔴 [WO 20260929-lossless] 임계 = 스냅샷 밀도 그 자체(×1). RERENDER_GAIN(1.15) 을 곱하면 목표의
+          //   87~100% 구간이 스냅샷으로 남아 "화면 픽셀×DPR 이상" 을 못 지킨다. 오버레이는 보이는 영역만
+          //   그리므로 비용이 뷰포트 크기로 묶인다(전면 재래스터와 달리 여유율이 필요 없다).
           if (st.overlayOnly) {
-            if (plan.target > (st.renderScale || 0) * this.RERENDER_GAIN) await this.renderCrop(page, canvas, plan.target, rot);
+            if (cropTarget > (st.renderScale || 0)) await this.renderCrop(page, canvas, cropTarget, rot);
             else this._clearCrop();
             return;
           }
           // 전면 캔버스가 목표에 못 미치면(상한에 막힘) → 보이는 영역만 고해상도로 얹는다.
-          if (plan.target > plan.capped * this.RERENDER_GAIN) {
-            await this.renderCrop(page, canvas, plan.target, rot);
+          //   (종전 임계 ×RERENDER_GAIN 은 목표의 87~100% 를 흐린 전면으로 남겼다 → 못 미치면 곧바로 크롭)
+          if (cropTarget > plan.capped) {
+            await this.renderCrop(page, canvas, cropTarget, rot);
             return;
           }
           this._clearCrop(); // 전면 캔버스만으로 충분한 배율 → 크롭 오버레이는 불필요
@@ -1255,6 +1273,34 @@
         ? MapCtrl.visibleDrawingRect() : null;
     },
 
+    /** 예산이 모자랄 때 보이는 영역에 붙이는 여백(뷰포트 폭 대비 비율). 평면 뷰는 역변환이 정확하므로
+     *  팬 직후 가장자리가 비치지 않을 만큼만 남긴다(기본 MapCtrl.visibleDrawingRect 여백 = 25%). */
+    TIGHT_PAD: 0.04,
+    /** 보이는 도면 영역(0~1). pad=null → MapCtrl.visibleDrawingRect() 그대로(종전).
+     *  pad 지정 + 평면 뷰(ISO 아님)면 applyTransform 모델(translate·scale, 원점 좌상단)의 정확한 역변환으로 계산한다
+     *  — 격자 표본(96칸)은 확대가 커지면(>~×50) 표본이 뷰포트에 안 잡혀 "전면"으로 폴백해 버린다.
+     *  ISO(3D)는 역변환이 불가 → 종전 표본 함수. */
+    _visibleRect(pad) {
+      if (typeof MapCtrl === "undefined" || !MapCtrl.visibleDrawingRect) return null;
+      if (pad == null || State.isoView || !MapCtrl.viewport || !MapCtrl.transform) return MapCtrl.visibleDrawingRect();
+      const cw = MapCtrl.transform.offsetWidth, ch = MapCtrl.transform.offsetHeight;
+      const vw = MapCtrl.viewport.clientWidth, vh = MapCtrl.viewport.clientHeight;
+      const z = State.zoom;
+      if (!(cw > 0 && ch > 0 && vw > 0 && vh > 0 && z > 0)) return null;
+      const mx = pad * vw, my = pad * vh;
+      const x0 = (-State.pan.x - mx) / (z * cw), y0 = (-State.pan.y - my) / (z * ch);
+      const x1 = (vw - State.pan.x + mx) / (z * cw), y1 = (vh - State.pan.y + my) / (z * ch);
+      return this.intersectRect({ x: 0, y: 0, w: 1, h: 1 }, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    },
+
+    /** 두 비율 사각형(0~1 {x,y,w,h})의 교집합 — 겹침이 없거나 입력이 없으면 null. 순수 함수. */
+    intersectRect(a, b) {
+      if (!a || !b) return null;
+      const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
+      const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
+      return (x1 > x0 && y1 > y0) ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+    },
+
     /** [화질 · 구조적 한계 우회] 지금 보이는 도면 영역만 목표 배율로 다시 그려 전면 캔버스 위에 얹는다.
      *  전면 캔버스 한 장은 페이지 전체를 담아야 해서 한 변 8192px·면적 상한에 막힌다
      *  (A1 기준 최대 배율 ≈3.44 → dpr2 화면에서 선명한 줌은 ≈1.7배까지). 구역 확대는 4~8배다.
@@ -1263,18 +1309,35 @@
      *  → 핀 % 좌표 정합이 그대로 유지된다. */
     async renderCrop(page, baseCanvas, scale, rot) {
       const st = this._renderState;
-      const rect = this._cropRenderRect();
+      let rect = this._cropRenderRect();
       if (!rect || (rect.w >= 1 && rect.h >= 1)) { this._clearCrop(); return; } // 전면이 다 보이면 크롭 이득 없음
       const baseVp = page.getViewport({ scale: 1, rotation: rot });
-      const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
-      const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
       // [회귀수정 2026-09-28] renderCrop() 은 정의상 "전면(base) 캔버스 위에 겹쳐 그린다"
       // (함수 상단 주석) — 이 함수가 실행되는 순간 base 는 이미 DOM 에 존재하고 이 크롭
       // 오버레이가 그 위에 추가로 상주한다 → 상주 캔버스는 항상 2개(고정 상수가 아니라
       // 이 함수의 실행 전제 자체가 2다).
-      const rs = this.clampScale(scale, w0, h0, this.effectivePxCap(this._env(), 2), this.MAX_SIDE_HARD);
+      const cap = this.effectivePxCap(this._env(), 2);
+      // 🔴 [WO 20260929-lossless] 목표 배율에 못 미치면(상한에 막힘) 그릴 영역을 단계적으로 좁힌다 —
+      //   같은 픽셀 예산을 "지금 화면에 보이는 부분"에 집중해 화면 픽셀×DPR 이상을 지킨다.
+      //   실측(수정 전): GA 60% 폭 구역 1600% 밀도 0.06 · 여백 25% 붙은 보이는 영역 DPR2 밀도 0.77.
+      //   ① 구역 크롭 전체 → ② 크롭 ∩ 보이는 영역(여백 포함) → ③ 크롭 ∩ 보이는 영역(여백 최소).
+      //   (_cropRenderRect 계약 = 크롭 그대로는 유지: 맞춤 배율처럼 예산이 충분하면 종전대로 한 장으로 그린다.)
+      const fits = (r) => this.clampScale(scale, r.w * baseVp.width, r.h * baseVp.height, cap, this.MAX_SIDE_HARD) >= scale;
+      if (!fits(rect)) {
+        const base = st.deckCrop || { x: 0, y: 0, w: 1, h: 1 };
+        for (const pad of (st.deckCrop ? [null, this.TIGHT_PAD] : [this.TIGHT_PAD])) {
+          const v = this.intersectRect(base, this._visibleRect(pad));
+          if (v) rect = v;
+          if (fits(rect)) break;
+        }
+      }
+      const x0 = rect.x * baseVp.width,  y0 = rect.y * baseVp.height;
+      const w0 = rect.w * baseVp.width,  h0 = rect.h * baseVp.height;
+      const rs = this.clampScale(scale, w0, h0, cap, this.MAX_SIDE_HARD);
       // 전면 캔버스보다 선명하지 않으면 얹을 이유가 없다(메모리만 먹는다).
-      if (rs <= (st.renderScale || 0) * this.RERENDER_GAIN) { this._clearCrop(); return; }
+      //   🔴 [WO 20260929-lossless] 여유율(×1.15) 없이 ×1 — 요청측(requestZoomRerender)은 전면이 목표에 못 미칠 때만
+      //   이 함수를 부른다. 여기서 1.15 를 또 요구하면 목표의 87~100% 구간이 흐린 전면 캔버스로 남았다.
+      if (rs <= (st.renderScale || 0)) { this._clearCrop(); return; }
       const cv = this._ensureCrop(baseCanvas);
       if (!cv) return;
       const cssW = baseVp.width * st.baseCssScale, cssH = baseVp.height * st.baseCssScale;
@@ -1779,9 +1842,12 @@
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 3);   // v2: drafts / v3: authlocal 스토어 추가
+        const req = indexedDB.open(this.DB_NAME, 4);   // v2: drafts / v3: authlocal / v4: sources(원본 도면 바이트)
         req.onupgradeneeded = () => {
           const db = req.result;
+          if (!db.objectStoreNames.contains(this.SRC_STORE)) {
+            db.createObjectStore(this.SRC_STORE, { keyPath: "key" });   // 저장 전 원본 PDF(오프라인·서버실패 보존)
+          }
           if (!db.objectStoreNames.contains(this.STORE)) {
             db.createObjectStore(this.STORE, { keyPath: "opId" });
           }
@@ -1792,8 +1858,16 @@
             db.createObjectStore(this.AUTH_STORE, { keyPath: "key" });  // 오프라인 재인증 검증자
           }
         };
-        req.onsuccess = () => res(req.result);
+        req.onsuccess = () => {
+          const db = req.result;
+          // 다른 탭(새 버전)이 업그레이드하려 하면 이 연결을 닫아 막지 않는다 — 다음 호출이 새로 연다.
+          db.onversionchange = () => { try { db.close(); } catch (e) {} if (this._db === db) this._db = null; };
+          res(db);
+        };
         req.onerror = () => rej(req.error || new Error("indexedDB open failed"));
+        // v3 를 연 채 떠 있는 구버전 탭이 업그레이드를 막으면 영원히 대기한다 → 이번 호출은 localStorage
+        // 폴백으로 진행(null)하고, 막힘이 풀려 열리면 onsuccess 가 이후 호출용으로 캐시하지 않는다(다음 호출이 재시도).
+        req.onblocked = () => res(null);
       }).catch(() => null);
       return this._db;
     },
@@ -1859,6 +1933,38 @@
       const keys = [];
       try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("wm_draft_")) keys.push(k.slice(9)); } } catch (e) {}
       return keys;
+    },
+
+    /* ═══ [WO 20260929-lossless] 원본 도면 바이트(PDF) 보관 ═══
+       draft 는 화면 스냅샷(이미지)만 담는다 — 새로고침·재진입 뒤 저장하면 원본 PDF 없이 배포본이 만들어져
+       확대 시 깨졌다(prod dep_muksj6py: base64 JPEG + source_meta null). 원본은 서버에 올라가기 전까지
+       여기(IndexedDB)에 둔다. 🔴 localStorage 폴백 없음 — 수 MB 바이너리는 담을 수 없다(없으면 false 를 정직하게 반환). */
+    SRC_STORE: "sources",
+    async _srcTx(mode, fn) {
+      const db = await this._open();
+      if (!db || !db.objectStoreNames.contains(this.SRC_STORE)) return null;
+      try {
+        return await new Promise((res) => {
+          const tx = db.transaction(this.SRC_STORE, mode);
+          const out = fn(tx.objectStore(this.SRC_STORE));
+          tx.oncomplete = () => res(out && "result" in out ? out.result : true);
+          tx.onerror = () => res(null); tx.onabort = () => res(null);
+        });
+      } catch (e) { return null; }
+    },
+    async saveSource(key, rec) {
+      return !!(await this._srcTx("readwrite", (s) => { s.put(Object.assign({ key: key, savedAt: Date.now() }, rec)); }));
+    },
+    async loadSource(key) {
+      const r = await this._srcTx("readonly", (s) => s.get(key));
+      return (r && typeof r === "object") ? r : null;
+    },
+    /** 어떤 draft 도 가리키지 않는 원본을 지운다(keep = 살려 둘 key 집합). */
+    async pruneSources(keep) {
+      const keys = (await this._srcTx("readonly", (s) => s.getAllKeys())) || [];
+      const dead = (Array.isArray(keys) ? keys : []).filter((k) => !keep.has(k));
+      if (dead.length) await this._srcTx("readwrite", (s) => { dead.forEach((k) => s.delete(k)); });
+      return dead.length;
     },
 
     /* ═══ [P40] 오프라인 재인증 검증자 보관 ═══
@@ -8394,6 +8500,7 @@
     /* ── Topbar ── */
     _bindTopbar() {
       UI.$("btn-back").addEventListener("click", () => {
+        this._releasePdfDocs();
         State.reset();
         PanoViewer.close();
         // 첫 화면 = 프로젝트 허브로 복귀
@@ -10073,6 +10180,7 @@
       }
       const _isPdf = file.type === "application/pdf" || (file.name || "").toLowerCase().endsWith(".pdf");
       if (typeof Log !== "undefined") Log.push(_isPdf ? "pdf.register" : "drawing.upload", file.name, { type: file.type, size: file.size });
+      this._releasePdfDocs();
       State.reset();
       State.fileName = file.name;
       UI.text("file-name-label", file.name);
@@ -10113,6 +10221,9 @@
         }
       } else {
         State.fileType = "image";
+        // [WO 20260929-lossless] 원본 이미지 파일(Blob)을 그대로 쥔다 — 스냅샷은 이 바이트를 재압축 없이 싣는다.
+        //   (State.fileData = "지금 도면의 원본 바이트". PDF 는 ArrayBuffer, 이미지는 Blob — fileType 으로 구분)
+        State.fileData = file;
         State.imageUrl = URL.createObjectURL(file);
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-loading").classList.add("hidden");
@@ -10170,6 +10281,8 @@
       //     각각 dirty 를 세운다. 표시 함수는 상태를 바꾸지 않는다.
       // 🔴 [WO 20260929-fitrace2] 리셋+표시 완료 — 이 뒤에야 뷰포트 크기가 실재한다(whenDisplayed 대기자 해제).
       this._settleDisplay(true);
+      // [WO 20260929-lossless ⑤] 원본 없는 PDF 배포본이면 [원본 PDF 연결] — 로더가 autoSaveDepId 를 채운 뒤 판정
+      setTimeout(() => { try { this._syncSourceLinkBar(); } catch (e) {} }, 0);
     },
 
     _readAsArrayBuffer(file) {
@@ -11199,12 +11312,69 @@
       let url = State.sourcePdfUrl;
       if (!url) {
         url = await this._uploadSourcePdf(State.fileData);
-        if (!url) return null;
+        // 🔴 [WO 20260929-lossless] 종전엔 여기서 조용히 null → 원본 없는 배포본이 "저장 완료"로 만들어졌다
+        //   (확대하면 깨지는 도면이 영구 확정 = 데이터 유실). 원본 보관 실패 = 저장 실패로 올린다.
+        //   공유 지점 1곳: 신규(_createInitialSave)·교체(_replaceDeckDrawing)·갱신(_saveNow PATCH) 전부 여기를 탄다.
+        if (!url) throw this._sourceKeepFailed();
         State.sourcePdfUrl = url;
       }
       const pages = Array.isArray(dims) ? dims
         : (Array.isArray(PDF.lastSnapshotDims) ? PDF.lastSnapshotDims : []);
+      this._clearSourceKeepFail();
       return this._sourceMetaJson(url, pages);
+    },
+
+    /** 원본 PDF 보관 실패 — 조용한 실패 금지. 온라인이면 [재시도] 배너(닫을 때까지 유지), 오프라인이면
+     *  "이 기기에 보관 → 연결되면 자동 업로드" 안내(_flushDirtyDrafts 가 원본까지 올린다).
+     *  대비(실측 계산): #FDE8E8 on #5B1111 = 11.7:1 · 버튼 #111827 on #FCA5A5 = 9.3:1 (WCAG AAA)
+     *  @returns {Error} code="SOURCE_KEEP_FAILED" — 호출부가 throw 해 저장을 중단한다. */
+    _sourceKeepFailed() {
+      const err = new Error("원본 PDF 보관 실패");
+      err.code = "SOURCE_KEEP_FAILED";
+      this._lastSaveErr = err.code;
+      const offline = !navigator.onLine;
+      const msg = offline
+        ? "오프라인 — 원본 PDF 는 이 기기에 보관했습니다. 연결되면 원본과 함께 저장됩니다"
+        : "원본 PDF 보관 실패 — 저장을 중단했습니다(도면은 이 기기에 보관됨). 재시도하세요";
+      try { Prompt && Prompt.toast && Prompt.toast(msg, 6000); } catch (e) {}
+      if (offline) return err;
+      try {
+        let bar = document.getElementById("src-keep-fail");
+        if (!bar) {
+          bar = document.createElement("div");
+          bar.id = "src-keep-fail";
+          bar.setAttribute("role", "alert");
+          bar.style.cssText = "position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:10000;" +
+            "display:flex;gap:10px;align-items:center;max-width:calc(100vw - 24px);background:#5B1111;color:#FDE8E8;" +
+            "border:1px solid #F87171;border-radius:10px;padding:9px 12px;font-size:13px;font-weight:600;" +
+            "box-shadow:0 8px 24px rgba(0,0,0,.45);";
+          const t = document.createElement("span");
+          t.textContent = "원본 PDF 보관 실패 — 저장이 중단됐습니다. 도면은 이 기기에 보관됨";
+          const retry = document.createElement("button");
+          retry.type = "button"; retry.dataset.act = "retry"; retry.textContent = "재시도";
+          retry.style.cssText = "background:#FCA5A5;color:#111827;border:0;border-radius:7px;padding:6px 12px;font-weight:700;cursor:pointer;";
+          retry.addEventListener("click", () => { retry.disabled = true; Promise.resolve(this._retryAfterSourceFail()).finally(() => { retry.disabled = false; }); });
+          const close = document.createElement("button");
+          close.type = "button"; close.dataset.act = "close"; close.setAttribute("aria-label", "닫기"); close.textContent = "×";
+          close.style.cssText = "background:transparent;color:#FDE8E8;border:0;font-size:18px;line-height:1;cursor:pointer;padding:0 4px;";
+          close.addEventListener("click", () => this._clearSourceKeepFail());
+          bar.append(t, retry, close);
+          document.body.appendChild(bar);
+        }
+      } catch (e) {}
+      return err;
+    },
+    _clearSourceKeepFail() {
+      const b = document.getElementById("src-keep-fail");
+      if (b && b.parentNode) b.parentNode.removeChild(b);
+    },
+    /** [재시도] — 화면의 미저장 도면은 수동 저장 경로로, 다른 구역의 보류 draft 는 자동 업로드 경로로 다시 보낸다.
+     *  (실패하면 두 경로 모두 _sourceKeepFailed 로 배너를 다시 띄운다) */
+    async _retryAfterSourceFail() {
+      this._clearSourceKeepFail();
+      let ok = true;
+      if (State.mode === "designer" && State.fileType && (this._dirty || !State.autoSaveDepId)) ok = await this._saveNow();
+      if (ok) await this._flushDirtyDrafts();   // 같은 실패를 두 번 알리지 않는다
     },
 
     /** source_meta 직렬화 형식의 SoT — 도면 등록·영역 복사·원본 사후 등록이 같은 형식을 쓴다. */
@@ -11328,10 +11498,29 @@
       } catch (e) { return null; }
     },
 
+    /** [WO 20260929-lossless ⑥] 문서 교체 시 이전 PDF 문서 해제.
+     *  🔴 근본원인: State.reset()(01_State.js)은 pdfDoc/srcPdfDoc 참조만 null 로 끊고 destroy() 를 부르지 않았다 —
+     *  pdf.js 문서는 전용 워커·파싱 캐시(수십~수백 MB)를 붙들고 있어 도면을 바꿀 때마다 누적됐다.
+     *  State.reset() 을 부르는 20_App 의 모든 지점(업로드·구역 로드·draft 복원·허브 복귀)이 먼저 이것을 부른다. */
+    _destroyDoc(doc) {
+      if (!doc) return;
+      try {
+        const st = PDF._renderState;
+        if (st && st.pdfDoc === doc) { clearTimeout(st.pending); PDF._clearCrop(); st.pdfDoc = null; }
+      } catch (e) {}
+      try { if (doc.destroy) doc.destroy(); } catch (e) {}
+    },
+    _releasePdfDocs() {
+      const a = State.pdfDoc, b = State.srcPdfDoc;
+      this._destroyDoc(a);
+      if (b !== a) this._destroyDoc(b);
+    },
+
     /** 배포본 레코드의 source_meta 를 State 에 반영 (도면 로드 경로 공용).
      *  구버전 배포본(source_meta 없음)이면 전부 null -> 종전 동작 + 1회 안내. */
     _applySourceMeta(dep) {
       State.sourceMeta = null; State.sourcePdfUrl = null;
+      this._destroyDoc(State.srcPdfDoc);   // [WO 20260929-lossless ⑥] 버리는 원본 문서의 워커·메모리 회수
       State.srcPdfDoc = null; State.srcNoticed = false; State.srcFailed = false;
       try {
         const m = JSON.parse((dep && dep.source_meta) || "null");
@@ -11355,9 +11544,93 @@
       if (State.srcNoticed) return;
       State.srcNoticed = true;
       try {
-        Prompt && Prompt.toast && Prompt.toast(
-          "이 도면은 원본 없이 배포된 구버전이라 더 확대해도 선명해지지 않습니다 — 편집모드에서 다시 저장하면 원본이 함께 보관됩니다", 4600);
+        // 종전 문구("편집모드에서 다시 저장하면 원본이 함께 보관")는 사실이 아니었다 — 배포본을 열면 원본 바이트가
+        //   없으므로 다시 저장해도 원본은 생기지 않는다. 실제로 원본을 붙이는 길(원본 PDF 연결)을 안내한다.
+        //   (문구 분기는 "연결할 권한이 있는가"만 본다 — 로더가 배포본 id 를 채우기 전에 불릴 수 있다)
+        Prompt && Prompt.toast && Prompt.toast((State.mode === "designer" && (typeof Auth === "undefined" || !!Auth.isDesigner))
+          ? "이 도면은 원본 PDF 없이 저장돼 더 확대해도 선명해지지 않습니다 — 상단 [원본 PDF 연결] 로 원본을 붙이면 선명해집니다"
+          : "이 도면은 원본 PDF 없이 배포돼 더 확대해도 선명해지지 않습니다 — 설계자에게 원본 PDF 연결을 요청하세요", 5200);
       } catch (e) {}
+    },
+
+    /* ── [WO 20260929-lossless ⑤] [원본 PDF 연결] — 원본 없는 배포본에 원본을 붙여 즉시 벡터 재렌더 ──
+       prod 29건 중 24건이 원본 없음(지휘자 실측). 다시 등록하지 않고 원본 파일만 골라 붙인다.
+       🔴 새 저장 경로 0: 업로드·PATCH 는 _attachSourcePdf(source_meta 한 칸만 — 핀·구역·주석 보존) 재사용.
+       배포본에 붙으므로 이 배포본을 쓰는 모든 구역·영역(창 방식 crop)이 다음 열람부터 원본으로 확대된다.
+       UI 는 전용 CSS 없이 JS 인라인(index.html/CSS 미변경) · 대비(실측 계산): #0B1F33 on #FDE68A = 13.4:1 / 버튼 #FFFFFF on #1D4ED8 = 6.7:1 */
+    _canLinkSource() {
+      return State.mode === "designer" && (typeof Auth === "undefined" || !!Auth.isDesigner)
+        && State.fileType === "image" && Array.isArray(State.viewerPages) && State.viewerPages.length > 0
+        && !!State.autoSaveDepId && !State.sourcePdfUrl && !State.srcPdfDoc
+        && /\.pdf$/i.test(String(State.fileName || ""));   // PNG/JPG 도면은 원본 PDF 라는 게 없다
+    },
+    /** 표시 완료(_showMapViewport)마다 조건을 다시 본다 — 조건이 사라지면(원본 연결·다른 도면·뷰어) 제거. */
+    _syncSourceLinkBar() {
+      const vp = UI.$("map-viewport");
+      let bar = document.getElementById("src-link-bar");
+      if (!this._canLinkSource() || !vp) { if (bar && bar.parentNode) bar.parentNode.removeChild(bar); return; }
+      if (bar && bar.dataset.dep === String(State.autoSaveDepId)) return;
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.id = "src-link-bar";
+        bar.setAttribute("role", "status");
+        bar.style.cssText = "position:absolute;left:50%;top:58px;transform:translateX(-50%);z-index:30;display:flex;" +
+          "gap:10px;align-items:center;max-width:calc(100% - 24px);background:#FDE68A;color:#0B1F33;border:1px solid #B45309;" +
+          "border-radius:10px;padding:7px 8px 7px 12px;font-size:12.5px;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,.35);";
+        const t = document.createElement("span");
+        t.textContent = "원본 PDF 없이 저장된 도면 — 확대하면 깨집니다";
+        const b = document.createElement("button");
+        b.type = "button"; b.dataset.act = "link"; b.textContent = "원본 PDF 연결 — 확대 시 선명";
+        b.style.cssText = "background:#1D4ED8;color:#FFFFFF;border:0;border-radius:7px;padding:6px 11px;font-weight:700;cursor:pointer;white-space:nowrap;";
+        b.addEventListener("click", () => { b.disabled = true; Promise.resolve(this._linkSourcePdf()).finally(() => { b.disabled = false; }); });
+        bar.append(t, b);
+        vp.appendChild(bar);
+      }
+      bar.dataset.dep = String(State.autoSaveDepId);
+    },
+    /** 원본 PDF 선택 → 같은 도면인지 검사(페이지 수·가로세로비) → 연결 → 그 자리에서 원본으로 재렌더. */
+    async _linkSourcePdf() {
+      const depId = State.autoSaveDepId;
+      if (!this._canLinkSource()) return false;
+      const f = await this._pickPdfFile();
+      if (!f) return false;
+      let ab = null;
+      try { ab = await this._readAsArrayBuffer(f); } catch (e) { ab = null; }
+      if (!ab || !this._isPdfBytes(ab)) { Prompt.toast && Prompt.toast("PDF 파일이 아닙니다 — 원본 PDF 를 고르세요"); return false; }
+      let doc = null;
+      try { doc = await PDF.load(ab); } catch (e) { doc = null; }
+      if (!doc) { Prompt.toast && Prompt.toast("PDF 를 열 수 없습니다 — 파일이 손상됐을 수 있습니다"); return false; }
+      const why = await this._sourceMismatch(doc);
+      if (why && !(await Prompt.confirm("원본 PDF 확인", why + " — 다른 파일이면 확대 화면이 어긋납니다. 그래도 연결할까요?"))) {
+        this._destroyDoc(doc); return false;
+      }
+      if (State.autoSaveDepId !== depId) { this._destroyDoc(doc); return false; }   // 고르는 사이 다른 도면으로 이동
+      this._srcProgress(-1);
+      let ok = false;
+      try { ok = await this._attachSourcePdf(depId, ab); } finally { this._srcProgress(null); }
+      if (!ok) {
+        this._destroyDoc(doc);
+        Prompt.toast && Prompt.toast("원본 PDF 연결 실패 — 네트워크를 확인하고 다시 시도하세요");
+        return false;
+      }
+      // _attachSourcePdf 가 source_meta 를 반영했다 → 이미 파싱한 문서를 그대로 원본으로 쓴다(재다운로드 0)
+      State.srcPdfDoc = doc;
+      await this._primeSourceRender();
+      this._syncSourceLinkBar();
+      try { MapCtrl.applyTransform(); } catch (e) {}
+      Prompt.toast && Prompt.toast("원본 PDF 연결됨 — 이제 확대해도 벡터로 선명하게 그립니다(이 도면을 쓰는 모든 구역·영역)");
+      return true;
+    },
+    /** 고른 PDF 가 화면 도면과 같은지 — 불일치 사유(문장) 또는 null. 스냅샷 쪽 기준 = 저장된 페이지 수 + 표시 이미지 비율. */
+    async _sourceMismatch(doc) {
+      try {
+        const pg = await doc.getPage(Math.max(1, Math.min(doc.numPages, State.pdfPage || 1)));
+        const vp = pg.getViewport({ scale: 1, rotation: (pg.rotate || 0) % 360 });
+        const img = UI.$("map-image");
+        const expect = { count: Array.isArray(State.viewerPages) ? State.viewerPages.length : 0 };
+        if (img && img.naturalWidth) { expect.w = img.naturalWidth; expect.h = img.naturalHeight; }
+        return PDF.regionSizeMismatch(expect, { count: doc.numPages, w: vp.width, h: vp.height }, 0.02);
+      } catch (e) { return null; }
     },
 
     /** 원본 다운로드 진행 표시(비차단 칩). pct=null 이면 제거. pct<0 이면 무한정 표시.
@@ -11420,7 +11693,9 @@
       const snapPx = (dim && dim.w) || img.naturalWidth;
       const cssPx  = img.clientWidth || img.naturalWidth;
       const z = (zoom != null) ? zoom : State.zoom;
-      if (!PDF.needsSourceRerender({ snapPx: snapPx, cssPx: cssPx, zoom: z })) return false;
+      // [WO 20260929-lossless] device px 기준(렌더러와 같은 dpr) — 화면 픽셀×DPR 보다 스냅샷이 모자라면 원본
+      const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+      if (!PDF.needsSourceRerender({ snapPx: snapPx, cssPx: cssPx, zoom: z, dpr: dpr })) return false;
       // 임계는 넘었는데 원본이 없다(구버전 배포본) -> 종전 동작 + 사유 1회 안내
       if (!State.sourcePdfUrl) { this._noticeNoSource(); return false; }
       this._srcBusy = true;
@@ -11682,17 +11957,56 @@
       if (State.fileType === "pdf" && State.pdfDoc) {
         return await PDF.snapshotAllPages(State.pdfDoc, undefined, undefined, this._currentDeckCrop());
       } else if (State.fileType === "image") {
+        // 🔴 [WO 20260929-lossless] 종전: 화면 <img> 를 긴 변 2000px·JPEG 0.8 로 다시 그려 저장했다 →
+        //   ① PNG/JPG 원본 업로드가 매 저장마다 축소·재압축됐고 ② 배포본/복원 draft(이미 스냅샷)도 편집할 때마다
+        //   2000px JPEG 로 한 번 더 뭉개졌으며(prod dep_muksj6py = 2000×667) ③ 여러 페이지 도면은 1쪽만 남았다.
+        //   → 원본 바이트를 그대로 싣는다(재압축 0). 순서: 방금 올린 원본 파일 → 이미 저장된 페이지 전부.
+        if (State.fileData && typeof Blob !== "undefined" && State.fileData instanceof Blob) {
+          return [await this._blobToDataUrl(State.fileData)];
+        }
+        if (Array.isArray(State.viewerPages) && State.viewerPages.length) {
+          const out = [];
+          for (const p of State.viewerPages) {
+            if (typeof p !== "string" || p.indexOf("blob:") === 0) continue;
+            out.push(await this._pageAsDataUrl(p));
+          }
+          if (out.length) return out;
+        }
+        // 최후 폴백(원본 참조가 전혀 없는 화면): 자연 크기 그대로 무손실 PNG — 축소·JPEG 금지
         const imgEl = UI.$("map-image");
         if (!imgEl || !imgEl.naturalWidth) return [];
         const off = document.createElement("canvas");
-        const maxDim = 2000;
-        const ratio = Math.min(1, maxDim / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
-        off.width  = Math.round(imgEl.naturalWidth * ratio);
-        off.height = Math.round(imgEl.naturalHeight * ratio);
-        off.getContext("2d").drawImage(imgEl, 0, 0, off.width, off.height);
-        return [off.toDataURL("image/jpeg", 0.8)];
+        off.width = imgEl.naturalWidth; off.height = imgEl.naturalHeight;
+        off.getContext("2d").drawImage(imgEl, 0, 0);
+        return [off.toDataURL("image/png")];
       }
       return [];
+    },
+
+    _blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error || new Error("read failed"));
+        r.readAsDataURL(blob);
+      });
+    },
+    /** 저장된 페이지(dataURL 또는 R2 URL) → 원본 바이트 그대로의 dataURL. draft 는 오프라인 표시용이라
+     *  URL 이 아니라 바이트를 담아야 한다(미캐시 R2 URL 은 오프라인에서 안 뜬다). 한 번 받은 것은 재사용.
+     *  못 받으면 URL 그대로 — 재압축으로 대체하지 않는다(_uploadPagesToR2 는 URL 을 재업로드하지 않는다). */
+    _pageDataCache: null,
+    async _pageAsDataUrl(p) {
+      if (/^data:/i.test(p)) return p;
+      this._pageDataCache = this._pageDataCache || new Map();
+      if (this._pageDataCache.has(p)) return this._pageDataCache.get(p);
+      try {
+        const r = await fetch(Auth.r2 ? Auth.r2(p) : p, { headers: Auth.headers ? Auth.headers() : {} });
+        if (!r.ok) return p;
+        const d = await this._blobToDataUrl(await r.blob());
+        if (this._pageDataCache.size > 8) this._pageDataCache.clear();
+        this._pageDataCache.set(p, d);
+        return d;
+      } catch (e) { return p; }
     },
 
     _setSaveIndicator(stateStr) {
@@ -11745,7 +12059,8 @@
           State.autoSaveDepId = null;
           if (deck) this._pendingDeckLink = { deckId: deck.id, deck };  // 저장 시 생성+연결
         }
-        await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지)
+        await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지) — 원본 PDF 도 함께(_draftSrcFields)
+        this._pruneDraftSources();                                 // 이전 도면의 원본 중 더는 안 쓰는 것 정리(비차단)
         // 🔴 [WO 20260928] deck 이 null(구역 0개)일 때도 반드시 다시 그려야 한다 —
         //   #side-tree 의 빈 상태 안내가 "도면 없음" → "도면 있음 + 구역 0" 분기로 갈아타는 지점이다.
         //   (여기서 건너뛰면 도면을 올렸는데 사이드바가 옛 안내에 머물러 다음 행동을 알 수 없다)
@@ -11917,6 +12232,7 @@
         if (!Array.isArray(pages) || pages.length === 0) pages = dep.drawing_data ? [dep.drawing_data] : [];
         if (!pages.length) { await this._restoreDraftLocal(); return; }
 
+        this._releasePdfDocs();
         State.reset();
         State.fileType = "image";       // 스냅샷은 이미지(dataURL)로 보관됨
         this._applySourceMeta(dep);     // [P14] 원본 PDF 위치/실측 픽셀(구버전이면 전부 null)
@@ -11984,7 +12300,14 @@
         const dkey = key || this._draftKey();
         const d = await SyncQueue.loadDraft(dkey);
         if (!d || !d.pages || !d.pages.length) return false;
+        // 🔴 [WO 20260929-lossless] draft 에 원본 PDF 가 딸려 있으면 스냅샷(이미지)이 아니라 **원본 PDF 로** 복원한다.
+        //   종전엔 항상 이미지로 복원(fileData 소실) → 이후 저장이 원본 없이 나가고 스냅샷은 재압축됐다(prod 재현).
+        //   await 는 State.reset() 전에 끝낸다(리셋~표시 사이 비동기 틈 0 — 종전 흐름과 같은 구조).
+        const srcAb = await this._draftSource(d);
+        let srcDoc = null;
+        if (srcAb) { try { srcDoc = await PDF.load(srcAb); } catch (e) { srcDoc = null; } }
 
+        this._releasePdfDocs();
         State.reset();
         State.fileType    = "image";          // draft 스냅샷은 dataURL 이미지
         this._applySourceMeta(null);          // [P14] 로컬 draft 에는 원본 PDF 가 없다(명시적 초기화)
@@ -12010,6 +12333,19 @@
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
         };
         this._armDisplay();   // [WO 20260929-fitrace2] _r1→_showMapViewport 가 settle
+        if (srcDoc) {
+          // 원본 PDF 복원 — _loadDrawing 의 PDF 표시 경로와 같은 순서(래스터 → 뷰포트 표시)
+          State.fileType = "pdf";
+          State.fileData = srcAb;
+          State.viewerPages = null;
+          if (this._srcKeys) this._srcKeys.set(srcAb, { key: d.srcKey, saved: Promise.resolve(true), dims: Array.isArray(d.srcDims) ? d.srcDims : null });
+          if (d.srcUrl) State.sourcePdfUrl = d.srcUrl;   // 이미 R2 에 올라간 원본이면 재업로드하지 않는다
+          State.pdfDoc = srcDoc; State.pdfPages = srcDoc.numPages; State.pdfPage = 1;
+          imgEl.classList.add("hidden");
+          UI.$("pdf-canvas").classList.remove("hidden");
+          try { await this._renderPdfPage(); } catch (e) {}
+          _r1();
+        } else {
         imgEl.onload = _r1;
         // [P52 결함수정] 형제 호출부(loadDeckDrawing)와 동일한 결함 — 로컬 draft 이미지가
         //   못 불러와지면(손상/미캐시) 종전엔 아무 렌더도 안 일어났다. 실패해도 핀·구역은 표시.
@@ -12020,6 +12356,7 @@
         imgEl.src = Auth.r2(d.pages[0]);
         imgEl.classList.remove("hidden");
         if (imgEl.complete && imgEl.naturalWidth) _r1();
+        }
         if (d.dirty) {
           this._setSaveIndicator(navigator.onLine ? "saving" : "offline");
           // [B4] 미저장(서버 미반영) 상태를 사용자에게 명확히 — 저장버튼 강조 + 구역 '미저장' 배지
@@ -12188,6 +12525,20 @@
           //   연결할 구역이 없어 고아 배포본이 된다 → 신규 생성은 건너뛰고 로컬 draft 는 그대로 보존한다.
           //   (기존 배포본 갱신(PATCH)은 연결이 이미 있으므로 그대로 진행)
           if (!d.depId && !this._deckIdOfKey(key)) continue;
+          // 🔴 [WO 20260929-lossless] 이 경로가 prod dep_muksj6py 를 만들었다: draft 스냅샷을 base64 그대로 D1 에,
+          //   원본 PDF 는 빼고 보냈다(source_meta null). 수동 저장(_createInitialSave)과 같은 규칙으로 맞춘다 —
+          //   ① 페이지는 R2(실패 시 base64 폴백 = 종전) ② draft 에 원본이 있으면 원본을 먼저 R2 에 올리고
+          //   source_meta 를 싣는다. 원본 업로드가 실패하면 **보내지 않는다**(dirty 유지 → 다음 기회 재시도).
+          const srcAb = await this._draftSource(d);
+          if (srcAb) {
+            let url = d.srcUrl || null;
+            if (!url) url = await this._uploadSourcePdf(srcAb);
+            if (!url) { this._sourceKeepFailed(); continue; }
+            if (!d.srcUrl) { d.srcUrl = url; try { await SyncQueue.saveDraft(key, d); } catch (e) {} }
+            body.source_meta = this._sourceMetaJson(url, Array.isArray(d.srcDims) ? d.srcDims : []);
+          }
+          const r2pages = await this._uploadPagesToR2(d.pages);
+          if (Array.isArray(r2pages) && r2pages.length) { body.drawing_data = r2pages[0]; body.pages_data = JSON.stringify(r2pages); }
           let res;
           // [발견/수정] srvPins/srvZones 는 아래 if(d.depId) 블록 밖(3449줄)에서도 참조되는데
           //   기존엔 블록 스코프(let)로만 선언돼 매 PATCH 성공마다 ReferenceError → 바깥 catch 가
@@ -12256,6 +12607,9 @@
           await SyncQueue.saveDraft(key, d);
           if (key === this._draftKey() && d.depId) {
             State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId;
+            // 화면의 원본이 방금 올린 그 원본이면 URL 재사용(다음 저장에서 재업로드 0)
+            const ent = (State.fileType === "pdf" && State.fileData && this._srcKeys) ? this._srcKeys.get(State.fileData) : null;
+            if (d.srcUrl && ent && ent.key === d.srcKey) State.sourcePdfUrl = d.srcUrl;
             if (rec && rec.version != null) State.depVersion = Number(rec.version); // 버전 동기화
             this._setSaveIndicator("saved");
           }
@@ -12290,6 +12644,7 @@
           baseVer:     (State.autoSaveDepId && State.depVersion != null) ? Number(State.depVersion) : null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
+        Object.assign(payload, await this._draftSrcFields());   // [WO 20260929-lossless] 원본 PDF 연결고리
         const dkey = this._draftKey();
         await SyncQueue.saveDraft(dkey, payload);
         // [B4] 서버 미반영(로컬 전용) 구역 표시 — 저장을 눌렀는지 사용자가 알 수 있게
@@ -12361,6 +12716,62 @@
       }
     },
 
+    /* ── [WO 20260929-lossless] draft ↔ 원본 PDF 연결 ─────────────────────────────
+       🔴 근본원인(prod dep_muksj6py 재현): draft 에는 화면 스냅샷만 있고 원본 PDF 가 없었다.
+         도면 등록 → (저장 전) 새로고침/재진입 → _restoreDraftLocal 이 fileType="image"·fileData=null 로 복원 →
+         ① 자동 업로드(_flushDirtyDrafts)가 base64 스냅샷 + source_meta 없이 배포본을 만들고
+         ② 이후 편집마다 _snapshotPages() 가 그 스냅샷을 2000px JPEG 0.8 로 재압축해 덮어썼다(prod = 2000×667 JPEG, version 1).
+       → 원본 바이트를 IndexedDB(SyncQueue.sources)에 1회 보관하고 draft 에는 그 key 만 싣는다.
+         key 는 State.fileData(원본 ArrayBuffer) 객체 동일성으로 묶는다 — 도면이 바뀌면(State.reset) 자동으로 끊긴다. */
+    _srcKeys: (typeof WeakMap !== "undefined") ? new WeakMap() : null,
+    /** @returns {Promise<{srcKey?:string, srcDims?:Array}>} 원본 PDF 가 있을 때만 필드를 채운다. */
+    async _draftSrcFields() {
+      const ab = State.fileData;
+      if (State.fileType !== "pdf" || !ab || !this._srcKeys || typeof SyncQueue === "undefined" || !SyncQueue.saveSource) return {};
+      let ent = this._srcKeys.get(ab);
+      if (!ent) {
+        const key = "src_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+        ent = { key: key, saved: SyncQueue.saveSource(key, { bytes: ab, name: State.fileName || "", type: "application/pdf" }) };
+        this._srcKeys.set(ab, ent);
+      }
+      const saved = await ent.saved;
+      if (!saved) return {};   // IndexedDB 불가(사생활 모드 등) — 연결고리를 거짓으로 남기지 않는다
+      const dims = Array.isArray(PDF.lastSnapshotDims) ? PDF.lastSnapshotDims : null;
+      if (dims && dims.length) ent.dims = dims;   // 마지막 실측 스냅샷 픽셀(source_meta.pages)
+      return { srcKey: ent.key, srcDims: ent.dims || [], srcUrl: State.sourcePdfUrl || null };
+    },
+    /** draft 의 원본 PDF 바이트(없으면 null) */
+    async _draftSource(d) {
+      if (!d || !d.srcKey || typeof SyncQueue === "undefined" || !SyncQueue.loadSource) return null;
+      const r = await SyncQueue.loadSource(d.srcKey);
+      const ab = r && r.bytes;
+      return (ab && this._isPdfBytes(ab)) ? ab : null;
+    },
+    /** 원본 바이트가 PDF 인가(파일 헤더 "%PDF-" — 선두 1KB 안, 명세상 앞에 쓰레기 바이트 허용) */
+    _isPdfBytes(ab) {
+      try {
+        const u = new Uint8Array(ab, 0, Math.min(1024, ab.byteLength || 0));
+        for (let i = 0; i + 4 < u.length; i++) {
+          if (u[i] === 0x25 && u[i + 1] === 0x50 && u[i + 2] === 0x44 && u[i + 3] === 0x46 && u[i + 4] === 0x2D) return true;
+        }
+      } catch (e) {}
+      return false;
+    },
+    /** 사용하지 않는 원본 정리 — 어떤 draft 도 가리키지 않는 source 삭제(저장소 누적 방지). */
+    async _pruneDraftSources() {
+      try {
+        if (typeof SyncQueue === "undefined" || !SyncQueue.pruneSources) return;
+        const keep = new Set();
+        for (const k of (await SyncQueue.allDraftKeys()) || []) {
+          const d = await SyncQueue.loadDraft(k);
+          if (d && d.srcKey) keep.add(d.srcKey);
+        }
+        const cur = State.fileData && this._srcKeys && this._srcKeys.get(State.fileData);
+        if (cur) keep.add(cur.key);
+        await SyncQueue.pruneSources(keep);
+      } catch (e) {}
+    },
+
     /** 서버 저장 성공분의 로컬 draft dirty=false 로 표시(여전히 로컬 백업 유지) */
     async _markDraftClean(pages) {
       try {
@@ -12371,6 +12782,7 @@
           pins: State.pins || [], zones: State.zones || [], annotations: State.annotations || [],
           depId: State.autoSaveDepId || null, dirty: false
         };
+        Object.assign(payload, await this._draftSrcFields());   // clean draft 도 원본 연결고리 유지(서버 실패 폴백 복원용)
         if (payload.pages && payload.pages.length) await SyncQueue.saveDraft(this._draftKey(), payload);
       } catch (e) {}
     },
@@ -12394,6 +12806,7 @@
       opts = opts || {};
       if (this.autoSaving) return false;
       this.autoSaving = true;
+      this._lastSaveErr = null;   // 이번 저장의 실패 사유(원본 보관 실패는 _sourceKeepFailed 가 이미 명시 표시)
       try {
         // [P0-2] 신규 배포본을 만들려는데 프로젝트/구역 컨텍스트가 없으면 중단.
         //   그대로 POST 하면 어느 구역에도 연결되지 않는 '고아 배포본'이 생기고(동일 도면 중복 생성),
@@ -12414,7 +12827,9 @@
             // [결함수정 2026-09-18] 모바일은 #autosave-text 가 CSS로 숨겨져(style.css) 인디케이터만으론
             // 실패가 안 보인다 — 토스트로 반드시 알린다(기존 토스트 경로 재사용, 새 배지 없음).
             this._setSaveIndicator(navigator.onLine ? "error" : "offline");
-            try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 도면 저장에 실패했습니다. 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+            if (this._lastSaveErr !== "SOURCE_KEEP_FAILED") {   // 원본 보관 실패 안내를 일반 문구로 덮지 않는다
+              try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 도면 저장에 실패했습니다. 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+            }
             return false;
           }
           // 도면 업로드로 대기 중이던 구역 연결 마무리
@@ -12457,7 +12872,9 @@
         return true;
       } catch (e) {
         this._setSaveIndicator(navigator.onLine ? "error" : "offline");
-        try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e) {}
+        if (!(e && e.code === "SOURCE_KEEP_FAILED")) {
+          try { Prompt.toast && Prompt.toast(navigator.onLine ? "저장 실패 — 다시 시도해 주세요" : "오프라인 — 로컬 보관됨(연결 후 저장)"); } catch (e2) {}
+        }
         return false;
       } finally {
         this.autoSaving = false;
@@ -15264,15 +15681,8 @@
         if (m) m.classList.add("edit-unlocked");
         Prompt.toast && Prompt.toast("'" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
       });
-      // [WO 20260921] 🔴 이중 편집창 제거 — B(#section-pin-form) 를 더 이상 열지 않는다.
-      //   A 안에서 이미 위치명·사진·문서·노트를 전부 편집할 수 있으므로, 라벨 입력에
-      //   포커스만 이동시켜 "여기서 바로 수정하라"는 신호만 준다(새 창 0).
-      $("pap-edit") && $("pap-edit").addEventListener("click", () => {
-        const pin = this._pin(); if (!pin) return;
-        const input = $("pap-label-input");
-        if (input && !input.readOnly) { input.focus(); input.select(); }
-        Prompt.toast && Prompt.toast("아래에서 위치명·사진·노트를 바로 수정하세요");
-      });
+      // [WO 20260929] 🔴 "수정 / 사진 추가" 버튼 제거(중복 정리) — 하던 일(라벨 입력 포커스 안내)은
+      //   등록 탭이 대신하므로 기능 유실 없음(라벨 입력은 항상 보임 → 바로 클릭 가능).
       $("pap-del") && $("pap-del").addEventListener("click", async () => {
         const pin = this._pin(); if (!pin) return;
         if (await App.deletePin(pin.id)) this.close();
@@ -15339,20 +15749,22 @@
       return (grid && typeof grid.querySelectorAll === "function") ? Array.from(grid.querySelectorAll(".pap-reg-btn")) : [];
     },
 
-    /** 모바일(≤720px)에서는 '사진'만 노출 — 마스터 기존 지시(B#pf-tools 와 동일 규칙, CSS 미의존). */
+    /** 모바일(≤720px)에서는 '사진'·'노트'만 노출 — 마스터 기존 지시(B#pf-tools 규칙) +
+     *  [WO 20260929] 노트를 이 탭으로 통합하며 기능 유실 방지(모바일도 노트는 계속 쓸 수 있어야 함). */
     _applyRegVisibility() {
       const grid = document.getElementById("pap-reg-tools");
       if (!grid) return;
       const mobile = !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches);
       this._regBtns(grid).forEach((btn) => {
-        btn.classList.toggle("hidden", mobile && btn.dataset.reg !== "photo");
+        const reg = btn.dataset.reg;
+        btn.classList.toggle("hidden", mobile && reg !== "photo" && reg !== "note");
       });
       const hint = document.getElementById("pap-reg-mobile-hint");
       if (hint) hint.classList.toggle("hidden", !mobile);
     },
 
-    /** 등록 종류 선택 — 사진/URL/360 은 기존 단일 위젯 재사용(중복 위젯 생성 금지),
-     *  노트는 이미 상단에 있는 위젯으로 포커스만 이동, 문서만 신규 위젯 표시. */
+    /** 등록 종류 선택 — 사진/360/동영상/URL 은 기존 단일 위젯(pap-photo-area) 재사용(중복 위젯 생성 금지),
+     *  문서·노트는 각각 전용 패널을 이 탭 안에서 보이고 나머지는 숨긴다(중복 노출 0). */
     _selectRegCategory(cat) {
       this._regCat = cat;
       const grid = document.getElementById("pap-reg-tools");
@@ -15365,11 +15777,17 @@
       });
       const $ = (id) => document.getElementById(id);
       const title = $("pap-reg-title");
+      const photoArea = $("pap-photo-area");
       const docBox = $("pap-doc-register");
-      if (docBox) docBox.classList.toggle("hidden", cat !== "doc");
-      if (title) title.textContent = (cat === "doc") ? "문서" : "사진";
-      if (cat === "note") {
-        const top = $("pap-top"); if (top) top.scrollTop = 0;
+      const notesPanel = $("pap-notes-panel");
+      const isDoc = cat === "doc", isNote = cat === "note";
+      if (photoArea) photoArea.classList.toggle("hidden", isDoc || isNote);
+      if (docBox) docBox.classList.toggle("hidden", !isDoc);
+      if (notesPanel) notesPanel.classList.toggle("hidden", !isNote);
+      const found = PAP_REG_CATS.find((c) => c.id === cat);
+      if (title) title.textContent = found ? found.label : "사진";
+      const bottom = $("pap-bottom"); if (bottom) bottom.scrollTop = 0;
+      if (isNote) {
         const noteInput = $("pap-notes-input"); if (noteInput) noteInput.focus();
         return;
       }
@@ -18562,26 +18980,48 @@
 
   /* ══════════════════════════════════════════
      INSTALL — 모바일 "홈 화면에 설치" 유도 (PWA)
-     · Android/Chrome: beforeinstallprompt 를 보관해 두었다가 사용자가 버튼을 누를 때 실행.
-     · iOS(Safari): beforeinstallprompt 자체가 없다 → 공유→"홈 화면에 추가" 안내 문구로 대체.
-     · 이미 설치된 상태(display-mode: standalone)면 절대 띄우지 않는다.
+     [WO 20260929] 🔴 SoT 단일화 — public/index.html 안에 있던 중복 IIFE(#pwa-install-btn 을
+     따로 만들고 beforeinstallprompt 를 별도로 캡처하던 코드)를 제거하고 여기 하나로 합쳤다.
+     · 모바일(터치·좁은 폭)은 첫 화면(로그인 전 포함)에 배너를 즉시 띄운다. 데스크톱은 조용히
+       "앱 설치" 버튼만 상시 노출(미설치 시).
+     · Android/Chrome: beforeinstallprompt 가 도착하는 순간(늦게 와도) 배너/버튼을 그 순간 활성화.
+       도착 전에는 버튼을 비활성 + "설치 준비 중" 문구로 상태를 보여준다(조용한 무반응 금지).
+     · iOS(Safari): beforeinstallprompt 자체가 없다 → 공유→"홈 화면에 추가" 인라인 SVG 안내로 대체.
+     · 닫기 = 7일 스누즈(영구 아님). standalone(이미 설치)이면 절대 띄우지 않는다.
      · 배너는 하단 도크(.mobile-dock) 위로 띄운다 — 작업 화면을 가리지 않는다(CSS --mdock-h SoT).
+
+     [WO 20260929-회귀수정] 🔴 지휘자 CDP 실측(p42-cdp-real.mjs, 실 Chrome+실 CSS+재조립된 main.js) —
+     편집 화면(#screen-app.active, 사이드바·도크·지도 조작)에 들어간 뒤에도 이 배너가 그대로 떠 있어
+     사이드바 도구 행(사각영역/원형영역/다각영역 등, y≈686)을 덮어 클릭이 막혔다(hitTag: "B"/배너 DIV).
+     근본원인: isMobile() 만 보고 "어느 화면이 떠 있는지"는 전혀 확인하지 않았다.
+     조치: #screen-app 이 active 인 동안은 배너·상시버튼을 완전히 숨긴다(허브/로그인 화면에서만 노출).
+     화면 전환은 App 코드가 #screen-app 의 class 를 바꾸는 것으로 이뤄지므로(20_App.js, 이 파일은
+     수정 금지 대상) MutationObserver 로 그 class 변화를 그대로 관찰한다(App.js 에 훅을 추가하지 않음).
   ══════════════════════════════════════════ */
   const Install = {
-    DISMISS_KEY: "wm_install_dismissed",
+    /** 🔴 SoT: 값 = 스누즈 만료 시각(ms, Date.now() 기준). 없거나 지났으면 다시 노출(영구 금지). */
+    DISMISS_KEY: "wm_install_snooze_until",
+    SNOOZE_MS: 7 * 24 * 60 * 60 * 1000, // 7일
     _deferred: null,
+    _booted: false,
 
     init() {
       try {
         window.addEventListener("beforeinstallprompt", (e) => {
-          e.preventDefault();          // 브라우저 기본 미니바 차단 → 우리 배너로 시점 제어
+          e.preventDefault();          // 브라우저 기본 미니바 차단 → 우리 배너/버튼으로 시점 제어
           this._deferred = e;
+          this._onDeferredReady();     // 이미 열려 있는 배너가 있으면 그 순간 활성화
         });
-        window.addEventListener("appinstalled", () => { this._deferred = null; this.hide(); });
+        window.addEventListener("appinstalled", () => {
+          this._deferred = null;
+          this.hide();
+          this._hideButton();
+        });
       } catch (e) {}
       const $ = (id) => document.getElementById(id);
       $("pwa-install-accept") && $("pwa-install-accept").addEventListener("click", () => this.accept());
       $("pwa-install-close") && $("pwa-install-close").addEventListener("click", () => this.dismiss());
+      this._boot();
     },
 
     /** 이미 앱으로 설치돼 실행 중인가 */
@@ -18600,30 +19040,151 @@
       return nav.platform === "MacIntel" && Number(nav.maxTouchPoints || 0) > 1;
     },
 
+    /** 모바일(터치 또는 좁은 폭) — 배너를 첫 화면에 바로 띄울지 판정(데스크톱은 버튼만). */
+    isMobile() {
+      try {
+        if (!window.matchMedia) return false;
+        return window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(max-width: 760px)").matches;
+      } catch (e) { return false; }
+    },
+
+    /** [WO 20260929-회귀수정] 편집 화면(사이드바·도크·지도 조작) 활성 여부 — 이 화면에서는
+     *  조작요소가 화면 대부분을 차지하므로(375px 폭에서도 사이드바 clientWidth≈366) 배너/버튼이
+     *  "빈 곳에만" 놓일 자리를 보장할 수 없다 → 이 화면에서는 아예 숨긴다(겹침 0 을 구조적으로 보장).
+     *  #screen-app 은 App 이 화면 전환 시 class 로만 표시하는 기존 SoT(00_header.js .screen/.active) —
+     *  새 상태값을 만들지 않고 그 class 를 그대로 읽기만 한다. */
+    isEditorScreenActive() {
+      try {
+        const app = document.getElementById("screen-app");
+        return !!(app && app.classList && app.classList.contains("active"));
+      } catch (e) { return false; }
+    },
+
+    /** 7일 스누즈 — 영구 저장 금지(닫아도 일주일 뒤 다시 노출). */
     _dismissed() {
-      try { return localStorage.getItem(this.DISMISS_KEY) === "1"; } catch (e) { return false; }
+      try {
+        const until = Number(localStorage.getItem(this.DISMISS_KEY) || 0);
+        return Date.now() < until;
+      } catch (e) { return false; }
     },
 
-    /** 설치 안내를 띄워야 하는가 — 설치됨/거절함/설치수단 없음 이면 false */
-    _shouldPrompt() {
-      if (this.isStandalone()) return false;     // 🔴 이미 설치 → 안내 금지
-      if (this._dismissed()) return false;
-      return !!this._deferred || this.isIOS();   // 안드로이드=프롬프트 보유 / iOS=수동 안내
+    /** 첫 화면 부팅 — 로그인 여부와 무관하게 한 번 실행. 모바일이면 즉시 배너, 아니면 버튼만. */
+    _boot() {
+      if (this._booted) return;
+      this._booted = true;
+      if (this.isStandalone()) return;
+      this._ensureButton();
+      this._watchScreen();
+      this._applyScreenVisibility();
     },
 
-    /** 로그인 직후 호출. 조건을 만족할 때만 배너를 띄운다. 반환: 띄웠는지 여부 */
-    maybePrompt() {
-      if (!this._shouldPrompt()) return false;
+    /** [WO 20260929-회귀수정] #screen-app 의 class 변화(허브↔편집화면 전환)를 관찰해 그때마다
+     *  배너/버튼 노출 상태를 재계산한다 — 20_App.js 는 건드리지 않고(수정 금지 파일) 결과만 구독. */
+    _watchScreen() {
+      try {
+        const app = document.getElementById("screen-app");
+        if (!app || typeof MutationObserver === "undefined") return;
+        if (this._screenObserver) return; // 중복 관찰 방지
+        this._screenObserver = new MutationObserver(() => this._applyScreenVisibility());
+        this._screenObserver.observe(app, { attributes: true, attributeFilter: ["class"] });
+      } catch (e) {}
+    },
+
+    /** 화면 상태에 따라 배너/상시버튼 노출을 단일 지점에서 재계산(SoT) — 편집 화면에서는
+     *  둘 다 완전히 숨겨 겹침을 구조적으로 0 으로 만든다(부분 배치·칩 축소보다 안전). */
+    _applyScreenVisibility() {
+      if (this.isStandalone()) { this._hideButton(); this.hide(); return; }
+      const editing = this.isEditorScreenActive();
+      const btn = document.getElementById("pwa-install-btn");
+      if (btn) btn.style.display = editing ? "none" : "inline-flex";
+      if (editing) {
+        this.hide();
+      } else if (this.isMobile() && !this._dismissed()) {
+        this.showBanner();
+      }
+    },
+
+    /** 상시 노출되는 "앱 설치" 원형 버튼 — 렌더 지점 1곳(SoT). */
+    _ensureButton() {
+      let b = document.getElementById("pwa-install-btn");
+      if (!b) {
+        b = document.createElement("button");
+        b.id = "pwa-install-btn";
+        b.type = "button";
+        b.setAttribute("aria-label", "앱 설치");
+        b.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>앱 설치</span>';
+        b.style.cssText = "position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:10000;display:inline-flex;align-items:center;gap:8px;"
+          + "padding:10px 16px;border:none;border-radius:999px;cursor:pointer;font:600 14px/1 var(--sea-font-ui,system-ui,sans-serif);"
+          + "color:#fff;background:#1b75bb;box-shadow:0 8px 24px rgba(43,40,32,.18),0 2px 8px rgba(43,40,32,.12);"
+          + "transition:transform .15s ease,filter .15s ease;touch-action:manipulation;";
+        b.onmouseenter = () => { b.style.filter = "brightness(1.08)"; b.style.transform = "translateY(-1px)"; };
+        b.onmouseleave = () => { b.style.filter = ""; b.style.transform = ""; };
+        b.addEventListener("click", () => this._onButtonClick());
+        document.body.appendChild(b);
+      }
+      b.classList.remove("hidden");
+      b.style.display = "inline-flex";
+      return b;
+    },
+
+    _hideButton() {
+      const b = document.getElementById("pwa-install-btn");
+      if (b) b.style.display = "none";
+    },
+
+    /** 상시 버튼 클릭 — 조용한 무반응 금지: 상황별로 항상 반응을 준다. */
+    _onButtonClick() {
+      if (this.isEditorScreenActive()) return; // 방어적 가드(버튼 자체가 이 화면에서 숨겨져 있음)
+      if (this._deferred) { this.accept(); return; }
+      if (this.isIOS() || this.isMobile()) { this.showBanner(true); return; } // 직접 클릭은 스누즈 무시
+      if (window.Prompt && Prompt.toast) Prompt.toast('브라우저 메뉴 → "홈 화면에 추가/설치"를 이용하세요.', 4000);
+    },
+
+    /** 배너 노출 — 첫 화면(로그인 전)에서도 호출 가능. force=true 면 7일 스누즈를 무시(버튼 직접 클릭).
+     *  🔴 편집 화면(#screen-app.active)에서는 force 여부와 무관하게 절대 띄우지 않는다(겹침 0 보장). */
+    showBanner(force) {
+      if (this.isStandalone()) return false;
+      if (this.isEditorScreenActive()) return false;
+      if (!force && this._dismissed()) return false;
       const b = document.getElementById("pwa-install-banner");
       if (!b) return false;
-      const ios = document.getElementById("pwa-install-ios");
-      const btn = document.getElementById("pwa-install-accept");
-      const isIos = this.isIOS() && !this._deferred;
-      if (ios) ios.classList.toggle("hidden", !isIos);
-      if (btn) btn.classList.toggle("hidden", isIos);
+      const $ = (id) => document.getElementById(id);
+      const ios = $("pwa-install-ios");
+      const btn = $("pwa-install-accept");
+      const sub = $("pwa-install-sub");
+      const isIosNow = this.isIOS();
+      if (ios) ios.classList.toggle("hidden", !isIosNow);
+      if (btn) {
+        btn.classList.toggle("hidden", isIosNow);
+        if (!isIosNow) {
+          const ready = !!this._deferred;
+          btn.disabled = !ready;
+          btn.textContent = ready ? "설치" : "설치 준비 중";
+        }
+      }
+      if (sub) {
+        sub.classList.toggle("hidden", isIosNow);
+        if (!isIosNow) {
+          sub.textContent = this._deferred
+            ? "앱처럼 열리고 오프라인에서도 작업할 수 있습니다."
+            : "브라우저가 설치를 준비하는 중입니다 — 준비되면 자동으로 활성화돼요.";
+        }
+      }
       b.classList.remove("hidden");
       requestAnimationFrame(() => b.classList.add("on"));
       return true;
+    },
+
+    /** beforeinstallprompt 가 늦게 도착했을 때 — 이미 열려 있는 배너를 그 순간 활성화(재노출 아님).
+     *  편집 화면이면 애초에 배너가 열려있지 않으므로(showBanner 가드) 자연히 아무 일도 안 한다. */
+    _onDeferredReady() {
+      const b = document.getElementById("pwa-install-banner");
+      if (b && !b.classList.contains("hidden")) this.showBanner(true);
+    },
+
+    /** 로그인 직후 등 기존 호출부 호환용 — 이미 첫 화면에서 떴으면 중복 표시 없이 그대로 둔다. */
+    maybePrompt() {
+      return this.showBanner();
     },
 
     hide() {
@@ -18633,8 +19194,9 @@
       setTimeout(() => b.classList.add("hidden"), 200);
     },
 
+    /** 닫기 = 7일 스누즈(영구 금지). */
     dismiss() {
-      try { localStorage.setItem(this.DISMISS_KEY, "1"); } catch (e) {}
+      try { localStorage.setItem(this.DISMISS_KEY, String(Date.now() + this.SNOOZE_MS)); } catch (e) {}
       this.hide();
     },
 
