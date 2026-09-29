@@ -23,6 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -198,6 +199,24 @@ ok(/<rect[^>]*width="14"[^>]*height="8"/.test(indexHtml) && /pwa-install-ios/.te
 console.log("\n[⑥ SoT 단일 — index.html 중복 제거]");
 ok(!/addEventListener\(['"]beforeinstallprompt['"]/.test(indexHtml), "⑥ index.html 에 beforeinstallprompt 리스너 없음(38_Install.js 1곳뿐)");
 ok(!/getElementById\(['"]pwa-install-btn['"]\)/.test(indexHtml), "⑥ index.html 에 #pwa-install-btn 생성/조회 로직 없음");
+
+/* ══════════ ⑦ [WO 20260929-회귀수정] 편집 화면 겹침 0 — 실 브라우저(CDP) ══════════
+ * 지휘자 CDP 실측(HEAD a9063f6)에서 발견된 회귀: 편집 화면(#screen-app.active, 사이드바·도크·
+ * 지도 조작) 진입 후에도 배너가 그대로 떠 사이드바 도구 행을 덮었다(hitTag "B"). 실 Chrome +
+ * 실 CSS 3종 + 그 자리에서 조립한 최신 모듈 번들로 사이드바 조작요소 elementFromPoint 를
+ * 실측해 겹침 면적 0 을 증명한다(정적 파싱이 아님 — Chrome 미설치 시 SKIP=PASS, p42 와 동일 관례). */
+console.log("\n[⑦ 편집 화면 겹침 0 — 실 브라우저(CDP) 실측]");
+function runTest(fileName) {
+  try {
+    execFileSync(process.execPath, [path.join(ROOT, "tests", fileName)], { stdio: "pipe" });
+    return { ok: true, out: "" };
+  } catch (e) {
+    return { ok: false, out: ((e.stdout || "").toString() + (e.stderr || "").toString()) };
+  }
+}
+const cdpReal2 = runTest("p86-cdp-real.mjs");
+ok(cdpReal2.ok, "⑦ CDP 실측 — 편집 화면에서 배너/버튼이 사이드바 조작요소와 겹치지 않음(Chrome 미설치 시 SKIP=PASS)"
+  + (cdpReal2.ok ? "" : ` :: out=${cdpReal2.out.slice(-1200)}`));
 
 /* ══════════ 뮤테이션 1 — _onDeferredReady 호출 제거 → ②가 실패해야 함 ══════════ */
 console.log("\n[뮤테이션 1] beforeinstallprompt 리스너의 _onDeferredReady() 호출 제거 → ②붕괴 확인");
