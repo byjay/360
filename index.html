@@ -1293,61 +1293,18 @@
     });
   }
 
-  /* ═══ PWA 설치(Add to Home Screen) — beforeinstallprompt 캡처 + 설치 버튼 ═══
-     · 설치 가능 시 우하단에 "앱 설치" 버튼 노출 → 클릭 시 네이티브 설치 프롬프트
-     · 이미 설치(standalone)거나 설치 완료되면 버튼 숨김 */
-  (function () {
-    var deferredPrompt = null;
-    var isStandalone = window.matchMedia('(display-mode: standalone)').matches
-      || window.navigator.standalone === true
-      || (new URLSearchParams(location.search)).get('source') === 'pwa';
-
-    function makeBtn() {
-      if (document.getElementById('pwa-install-btn')) return document.getElementById('pwa-install-btn');
-      var b = document.createElement('button');
-      b.id = 'pwa-install-btn';
-      b.type = 'button';
-      b.setAttribute('aria-label', '앱 설치');
-      b.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>앱 설치</span>';
-      b.style.cssText = 'position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:10000;display:none;align-items:center;gap:8px;'
-        + 'padding:10px 16px;border:none;border-radius:999px;cursor:pointer;font:600 14px/1 var(--sea-font-ui,system-ui,sans-serif);'
-        + 'color:#fff;background:#1b75bb;box-shadow:0 8px 24px rgba(43,40,32,.18),0 2px 8px rgba(43,40,32,.12);'
-        + 'transition:transform .15s ease,filter .15s ease;touch-action:manipulation;';
-      b.onmouseenter = function () { b.style.filter = 'brightness(1.08)'; b.style.transform = 'translateY(-1px)'; };
-      b.onmouseleave = function () { b.style.filter = ''; b.style.transform = ''; };
-      b.addEventListener('click', function () {
-        if (!deferredPrompt) {
-          try { if (window.Prompt && Prompt.toast) Prompt.toast('브라우저 메뉴 → "홈 화면에 추가"를 이용하세요.', 4000); } catch(e) {}
-          return;
-        }
-        deferredPrompt.prompt();
-        deferredPrompt.userChoice.then(function () { deferredPrompt = null; b.style.display = 'none'; });
-      });
-      document.body.appendChild(b);
-      return b;
-    }
-
-    if (!isStandalone) {
-      window.addEventListener('beforeinstallprompt', function (e) {
-        e.preventDefault();
-        deferredPrompt = e;
-        var b = makeBtn();
-        b.style.display = 'inline-flex';
-      });
-    }
-    window.addEventListener('appinstalled', function () {
-      deferredPrompt = null;
-      var b = document.getElementById('pwa-install-btn');
-      if (b) b.style.display = 'none';
-      try { if (window.Prompt && Prompt.toast) Prompt.toast('앱이 설치되었습니다. 홈 화면에서 실행하세요.', 3000); } catch (e) {}
-    });
-  })();
+  /* [WO 20260929] 🔴 SoT 단일화 — 여기 있던 PWA 설치 버튼/beforeinstallprompt 중복 로직 제거.
+     public/js/modules/38_Install.js 가 유일한 설치 로직(버튼 생성·배너·iOS 안내·7일 스누즈)이다.
+     (이전: 이 인라인 IIFE 와 38_Install.js 가 각각 별도로 #pwa-install-btn 을 만들고 beforeinstallprompt 를
+     따로 캡처해 동일 이벤트를 두 곳이 처리 — 배너/버튼 상태가 서로 어긋날 수 있었다.) */
 </script>
 <!-- ═══ 전역 오버레이 모달 (화면 전환과 무관하게 동작) ═══ -->
 
-  <!-- ═══ 핀 작업 전용 팝업 (디자이너: 핀 선택 시 — 이동/수정/사진추가/삭제) ═══ -->
-  <!-- [마스터 2026-09-17] 핀 클릭 통합 패널 — 화면 오른쪽 고정, 상(정보)/하(사진) 2분할.
-       레이아웃은 지시서 정본(상단=정보+번호수정+노트 / 하단=사진 미리보기 또는 등록)에 따라
+  <!-- ═══ 핀 작업 전용 팝업 (디자이너: 핀 선택 시 — 이동/삭제/등록) ═══ -->
+  <!-- [마스터 2026-09-17, 개정 2026-09-29] 핀 클릭 통합 패널 — 화면 오른쪽 고정.
+       [WO 20260929] "메뉴 상단과 하단 중복" 정리 — 상단(정보+3버튼[360 보기/위치 이동/삭제]+번호수정)
+       / 하단(등록 탭 6개: 사진·360·문서·노트·동영상·URL, 노트도 이 탭 1곳으로 통합)로 재정렬.
+       빈 공간 방지를 위해 상/하 50:50 강제 분할을 없애고 상단은 내용만큼, 하단이 남는 높이를 채운다.
        PinActionPop.open()이 인라인 스타일로 배치한다(style.css 는 타 에이전트 점유 중 — 신규 클래스 금지). -->
   <div id="pin-action-pop" class="pin-action-pop hidden" role="dialog" aria-modal="true" aria-labelledby="pap-title">
     <div class="pin-action-backdrop"></div>
@@ -1362,17 +1319,16 @@
       <div id="pap-split" style="display:flex;flex-direction:column;flex:1;min-height:0;">
 
         <!-- ═══ 상단: 정보 (메타 + 메뉴 + 등록정보/번호수정 + 노트) ═══ -->
-        <div id="pap-top" style="flex:1 1 50%;min-height:0;overflow-y:auto;padding-bottom:12px;border-bottom:1px solid rgba(0,0,0,.08);">
+        <div id="pap-top" style="flex:0 0 auto;min-height:0;padding-bottom:12px;border-bottom:1px solid rgba(0,0,0,.08);">
           <div id="pap-meta" class="pap-meta">위치명 없음 · 미디어 없음</div>
+          <!-- [WO 20260929] 🔴 중복 제거 — "수정/사진 추가" 버튼 삭제(하던 일=라벨 입력 포커스만이라
+               기능 유실 없음, 아래 등록 탭이 사진/문서/노트 등록을 전담). 3버튼 한 줄(정본 레이아웃). -->
           <div class="pap-actions">
             <button id="pap-view" class="pap-btn pap-view" type="button">
               <i class="fa-solid fa-panorama"></i><span>360° 보기</span>
             </button>
             <button id="pap-move" class="pap-btn pap-move" type="button">
               <i class="fa-solid fa-up-down-left-right"></i><span>위치 이동</span>
-            </button>
-            <button id="pap-edit" class="pap-btn pap-edit" type="button">
-              <i class="fa-solid fa-pen"></i><span>수정 / 사진 추가</span>
             </button>
             <button id="pap-del" class="pap-btn pap-del" type="button">
               <i class="fa-solid fa-trash"></i><span>삭제</span>
@@ -1388,42 +1344,35 @@
             </div>
             <div id="pap-label-hint" style="font-size:11px;color:#94a3b8;margin-top:4px;"></div>
           </div>
-
-          <!-- 노트(이슈) — 13_Notes.js 재사용(같은 /api/notes 데이터·상태값) -->
-          <div id="pap-notes-mini" style="margin-top:14px;">
-            <div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">노트</div>
-            <div id="pap-notes-list" style="max-height:140px;overflow-y:auto;font-size:12px;"></div>
-            <div id="pap-notes-form-row" style="display:flex;gap:6px;margin-top:6px;">
-              <input id="pap-notes-input" type="text" maxlength="4000" placeholder="이슈/메모 입력" autocomplete="off" style="flex:1;padding:7px 9px;border:1px solid rgba(0,0,0,.14);border-radius:8px;font-size:12px;color:#0f172a;" />
-              <button id="pap-notes-submit" type="button" class="pap-btn" style="padding:7px 10px;">등록</button>
-            </div>
-          </div>
         </div>
 
-        <!-- ═══ 하단: 사진 (미리보기 또는 등록 메뉴) ═══ -->
-        <div id="pap-bottom" style="flex:1 1 50%;min-height:0;overflow-y:auto;padding-top:12px;">
+        <!-- ═══ 하단: 등록(사진/360/문서/노트/동영상/URL) — 탭 1곳으로 통합, 빈 공간 없이 남는 높이를 채운다 ═══ -->
+        <div id="pap-bottom" style="flex:1 1 auto;min-height:0;overflow-y:auto;padding-top:12px;">
           <!-- [WO 20260921] 🔴 등록 종류 선택 — B(#section-pin-form)의 pf-tools 를 A 안으로 흡수(단일 창).
                사진/URL 은 기존 pap-photo-* 를 그대로 재사용(중복 위젯 금지), 문서만 신규 등록 UI.
-               모바일(≤720px)에서는 사진만 노출(마스터 기존 지시, JS 로 판정 — CSS 는 타 팀 점유). -->
+               [WO 20260929] 노트도 여기 탭 1곳으로 통합(상단 노트 섹션 제거, 중복 표시 제거).
+               모바일(≤720px)에서는 사진·노트만 노출(마스터 기존 지시 유지 + 노트는 기능 유실 방지로 추가). -->
           <div id="pap-reg-tools" class="pap-reg-tools" role="group" aria-label="등록 종류" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;"></div>
-          <div id="pap-reg-mobile-hint" class="hidden" style="font-size:11px;color:#94a3b8;margin:-4px 0 10px;">모바일에서는 사진만 등록할 수 있어요. 360·문서·노트·동영상·URL은 PC에서 추가하세요.</div>
+          <div id="pap-reg-mobile-hint" class="hidden" style="font-size:11px;color:#94a3b8;margin:-4px 0 10px;">모바일에서는 사진·노트만 등록할 수 있어요. 360·문서·동영상·URL은 PC에서 추가하세요.</div>
 
           <div id="pap-reg-title" style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">사진</div>
 
-          <div id="pap-photo-preview" class="hidden">
-            <img id="pap-photo-img" alt="360 미리보기" style="width:100%;border-radius:10px;display:block;cursor:pointer;" />
-            <div style="font-size:11px;color:#94a3b8;margin-top:4px;">클릭하면 전체화면으로 열립니다</div>
-          </div>
-
-          <div id="pap-photo-register" class="hidden">
-            <div style="font-size:12px;color:#64748b;margin-bottom:8px;">등록된 사진이 없습니다. 파일을 선택하거나 경로를 입력하세요.</div>
-            <input id="pap-photo-file" type="file" accept="image/*" style="font-size:12px;margin-bottom:8px;display:block;" />
-            <div style="display:flex;gap:6px;">
-              <input id="pap-photo-url" type="url" placeholder="https://... (.jpg 등)" autocomplete="off" style="flex:1;padding:8px 10px;border:1px solid rgba(0,0,0,.14);border-radius:8px;font-size:12px;color:#0f172a;" />
-              <button id="pap-photo-url-add" type="button" class="pap-btn" style="padding:8px 12px;">경로로 등록</button>
+          <div id="pap-photo-area">
+            <div id="pap-photo-preview" class="hidden">
+              <img id="pap-photo-img" alt="360 미리보기" style="width:100%;border-radius:10px;display:block;cursor:pointer;" />
+              <div style="font-size:11px;color:#94a3b8;margin-top:4px;">클릭하면 전체화면으로 열립니다</div>
             </div>
-            <div id="pap-photo-err" class="hidden" style="font-size:11px;color:#dc2626;margin-top:6px;"></div>
-            <div id="pap-photo-status" style="font-size:11px;color:#64748b;margin-top:6px;"></div>
+
+            <div id="pap-photo-register" class="hidden">
+              <div style="font-size:12px;color:#64748b;margin-bottom:8px;">등록된 사진이 없습니다. 파일을 선택하거나 경로를 입력하세요.</div>
+              <input id="pap-photo-file" type="file" accept="image/*" style="font-size:12px;margin-bottom:8px;display:block;" />
+              <div style="display:flex;gap:6px;">
+                <input id="pap-photo-url" type="url" placeholder="https://... (.jpg 등)" autocomplete="off" style="flex:1;padding:8px 10px;border:1px solid rgba(0,0,0,.14);border-radius:8px;font-size:12px;color:#0f172a;" />
+                <button id="pap-photo-url-add" type="button" class="pap-btn" style="padding:8px 12px;">경로로 등록</button>
+              </div>
+              <div id="pap-photo-err" class="hidden" style="font-size:11px;color:#dc2626;margin-top:6px;"></div>
+              <div id="pap-photo-status" style="font-size:11px;color:#64748b;margin-top:6px;"></div>
+            </div>
           </div>
 
           <!-- [WO 20260921] 문서 등록 — B 의 btn-pin-doc 대체(Cloud.uploadDoc 재사용, pin.attachments 에 직접 추가) -->
@@ -1432,6 +1381,15 @@
             <input id="pap-doc-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style="font-size:12px;margin-bottom:8px;display:block;" />
             <div id="pap-doc-list" style="font-size:12px;color:#334155;"></div>
             <div id="pap-doc-status" style="font-size:11px;color:#64748b;margin-top:6px;"></div>
+          </div>
+
+          <!-- [WO 20260929] 노트(이슈) — 상단 중복 섹션 제거 후 이 탭으로 통합. 13_Notes.js 재사용(같은 /api/notes). -->
+          <div id="pap-notes-panel" class="hidden">
+            <div id="pap-notes-list" style="max-height:220px;overflow-y:auto;font-size:12px;"></div>
+            <div id="pap-notes-form-row" style="display:flex;gap:6px;margin-top:6px;">
+              <input id="pap-notes-input" type="text" maxlength="4000" placeholder="이슈/메모 입력" autocomplete="off" style="flex:1;padding:7px 9px;border:1px solid rgba(0,0,0,.14);border-radius:8px;font-size:12px;color:#0f172a;" />
+              <button id="pap-notes-submit" type="button" class="pap-btn" style="padding:7px 10px;">등록</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2123,7 +2081,7 @@
   <div id="pwa-install-banner" class="pwa-install-banner hidden" role="region" aria-label="홈 화면에 설치">
     <div class="pwa-install-text">
       <b>홈 화면에 설치</b>
-      <span id="pwa-install-ios" class="pwa-install-ios hidden">공유 <span aria-hidden="true">⬆︎</span> → “홈 화면에 추가”를 누르세요.</span>
+      <span id="pwa-install-ios" class="pwa-install-ios hidden"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:3px;"><path d="M12 16V4"/><path d="M8 8l4-4 4 4"/><rect x="5" y="12" width="14" height="8" rx="2"/></svg>공유 버튼을 누른 뒤 “홈 화면에 추가”를 선택하세요.</span>
       <span class="pwa-install-sub">앱처럼 열리고 오프라인에서도 작업할 수 있습니다.</span>
     </div>
     <button id="pwa-install-accept" class="admin-gate-btn primary pwa-install-btn" type="button">설치</button>

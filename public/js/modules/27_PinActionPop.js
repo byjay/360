@@ -58,15 +58,8 @@
         if (m) m.classList.add("edit-unlocked");
         Prompt.toast && Prompt.toast("'" + (pin.label || ("#" + (pin.page||1))) + "' 이동 잠금 해제 — 도면에서 핀을 드래그하세요");
       });
-      // [WO 20260921] 🔴 이중 편집창 제거 — B(#section-pin-form) 를 더 이상 열지 않는다.
-      //   A 안에서 이미 위치명·사진·문서·노트를 전부 편집할 수 있으므로, 라벨 입력에
-      //   포커스만 이동시켜 "여기서 바로 수정하라"는 신호만 준다(새 창 0).
-      $("pap-edit") && $("pap-edit").addEventListener("click", () => {
-        const pin = this._pin(); if (!pin) return;
-        const input = $("pap-label-input");
-        if (input && !input.readOnly) { input.focus(); input.select(); }
-        Prompt.toast && Prompt.toast("아래에서 위치명·사진·노트를 바로 수정하세요");
-      });
+      // [WO 20260929] 🔴 "수정 / 사진 추가" 버튼 제거(중복 정리) — 하던 일(라벨 입력 포커스 안내)은
+      //   등록 탭이 대신하므로 기능 유실 없음(라벨 입력은 항상 보임 → 바로 클릭 가능).
       $("pap-del") && $("pap-del").addEventListener("click", async () => {
         const pin = this._pin(); if (!pin) return;
         if (await App.deletePin(pin.id)) this.close();
@@ -133,20 +126,22 @@
       return (grid && typeof grid.querySelectorAll === "function") ? Array.from(grid.querySelectorAll(".pap-reg-btn")) : [];
     },
 
-    /** 모바일(≤720px)에서는 '사진'만 노출 — 마스터 기존 지시(B#pf-tools 와 동일 규칙, CSS 미의존). */
+    /** 모바일(≤720px)에서는 '사진'·'노트'만 노출 — 마스터 기존 지시(B#pf-tools 규칙) +
+     *  [WO 20260929] 노트를 이 탭으로 통합하며 기능 유실 방지(모바일도 노트는 계속 쓸 수 있어야 함). */
     _applyRegVisibility() {
       const grid = document.getElementById("pap-reg-tools");
       if (!grid) return;
       const mobile = !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches);
       this._regBtns(grid).forEach((btn) => {
-        btn.classList.toggle("hidden", mobile && btn.dataset.reg !== "photo");
+        const reg = btn.dataset.reg;
+        btn.classList.toggle("hidden", mobile && reg !== "photo" && reg !== "note");
       });
       const hint = document.getElementById("pap-reg-mobile-hint");
       if (hint) hint.classList.toggle("hidden", !mobile);
     },
 
-    /** 등록 종류 선택 — 사진/URL/360 은 기존 단일 위젯 재사용(중복 위젯 생성 금지),
-     *  노트는 이미 상단에 있는 위젯으로 포커스만 이동, 문서만 신규 위젯 표시. */
+    /** 등록 종류 선택 — 사진/360/동영상/URL 은 기존 단일 위젯(pap-photo-area) 재사용(중복 위젯 생성 금지),
+     *  문서·노트는 각각 전용 패널을 이 탭 안에서 보이고 나머지는 숨긴다(중복 노출 0). */
     _selectRegCategory(cat) {
       this._regCat = cat;
       const grid = document.getElementById("pap-reg-tools");
@@ -159,11 +154,17 @@
       });
       const $ = (id) => document.getElementById(id);
       const title = $("pap-reg-title");
+      const photoArea = $("pap-photo-area");
       const docBox = $("pap-doc-register");
-      if (docBox) docBox.classList.toggle("hidden", cat !== "doc");
-      if (title) title.textContent = (cat === "doc") ? "문서" : "사진";
-      if (cat === "note") {
-        const top = $("pap-top"); if (top) top.scrollTop = 0;
+      const notesPanel = $("pap-notes-panel");
+      const isDoc = cat === "doc", isNote = cat === "note";
+      if (photoArea) photoArea.classList.toggle("hidden", isDoc || isNote);
+      if (docBox) docBox.classList.toggle("hidden", !isDoc);
+      if (notesPanel) notesPanel.classList.toggle("hidden", !isNote);
+      const found = PAP_REG_CATS.find((c) => c.id === cat);
+      if (title) title.textContent = found ? found.label : "사진";
+      const bottom = $("pap-bottom"); if (bottom) bottom.scrollTop = 0;
+      if (isNote) {
         const noteInput = $("pap-notes-input"); if (noteInput) noteInput.focus();
         return;
       }
