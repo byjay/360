@@ -133,17 +133,31 @@
     _applyRegVisibility() {
       const grid = document.getElementById("pap-reg-tools");
       if (!grid) return;
-      const mobile = !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches);
+      const mobile = this._isMobile();
       this._regBtns(grid).forEach((btn) => {
         const reg = btn.dataset.reg;
         btn.classList.toggle("hidden", mobile && reg !== "photo" && reg !== "theta" && reg !== "note");
       });
+      this._updateRegHint();
+    },
+
+    _isMobile() { return !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches); },
+
+    /** [지휘자 발주 2026-09-29 항목1] 🔴 등록 종류별 안내 — 예전엔 '360' 선택 시 Prompt.toast 로
+     *  안내했는데, 모바일 좁은 화면에서 그 토스트가 등록 UI(파일선택/경로입력) 위를 덮어 조작이
+     *  막혔다(지휘자 실측). 토스트 대신 이 탭 안 인라인 한 줄(기존 모바일 전용 안내 요소 재사용)로
+     *  바꿔 등록 UI를 절대 가리지 않게 한다. 우선순위: 카테고리 전용 안내(360/동영상) > 모바일
+     *  일반 안내 > 없음(빈 문자열이면 숨김 — 조용한 빈 줄 대신 요소 자체를 감춘다). */
+    _updateRegHint() {
       const hint = document.getElementById("pap-reg-mobile-hint");
-      if (hint) {
-        // index.html 은 타 팀 점유(수정 금지) — 안내 문구는 여기(JS)에서 SoT 로 덮어쓴다.
-        hint.textContent = "모바일에서는 360·사진·노트만 등록할 수 있어요. 문서·동영상·URL은 PC에서 추가하세요.";
-        hint.classList.toggle("hidden", !mobile);
-      }
+      if (!hint) return;
+      const cat = this._regCat;
+      let text = "";
+      if (cat === "theta") text = "RICOH THETA 360 사진도 '사진'과 동일하게 등록됩니다(파일 선택 또는 경로).";
+      else if (cat === "video") text = "동영상은 경로(URL, .mp4/.webm/.mov)로 등록하세요.";
+      else if (this._isMobile()) text = "모바일에서는 360·사진·노트만 등록할 수 있어요. 문서·동영상·URL은 PC에서 추가하세요.";
+      hint.textContent = text;
+      hint.classList.toggle("hidden", !text);
     },
 
     /** 등록 종류 선택 — 사진/360/동영상/URL 은 기존 단일 위젯(pap-photo-area) 재사용(중복 위젯 생성 금지),
@@ -174,8 +188,8 @@
         const noteInput = $("pap-notes-input"); if (noteInput) noteInput.focus();
         return;
       }
-      if (cat === "theta" && Prompt.toast) Prompt.toast("RICOH THETA 360 사진도 '사진'과 동일하게 등록됩니다(파일 선택 또는 경로)");
-      if (cat === "video" && Prompt.toast) Prompt.toast("동영상은 경로(URL, .mp4/.webm/.mov)로 등록하세요");
+      // [지휘자 발주 2026-09-29 항목1] 🔴 토스트가 등록 UI를 덮던 문제 — 인라인 안내로 대체(_updateRegHint).
+      this._updateRegHint();
       if (cat === "url" || cat === "video") { const u = $("pap-photo-url"); if (u) u.focus(); }
     },
     _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
@@ -204,7 +218,7 @@
       const hasContent = App.pinHasContent(pin);
       const $ = (id) => document.getElementById(id);
       $("pap-no").textContent = "#" + noLabel;
-      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + noLabel);
+      $("pap-title").textContent = this._titleFor(pin, noLabel);
       const mediaTxt = hasContent ? "360° 미디어 있음" : "미디어 없음";
       const addrTxt = (pin.label && pin.label.trim()) ? pin.label : "위치명 없음";
       // 🔴 [2026-09-21 WO] 도면 마커 위성 배지 3종(이슈·중복·작성자) 제거 — 여기(단일 편집창)로 이관.
@@ -253,12 +267,27 @@
       this._renderRegTools();
       this._renderDocList(pin);
 
+      // [지휘자 발주 2026-09-29 항목2] 🔴 좌하단 도움말(?) 토글(36_Help.js, position:fixed
+      // left:16/bottom:16)이 이 패널(모바일 92vw, 화면 오른쪽 정렬)의 왼쪽 가장자리와
+      // 겹쳐 등록 버튼을 가렸다(지휘자 실측). 패널이 열려 있는 동안만 숨긴다(d59726b 와 동일
+      // 관례 — 편집 화면에서 겹치는 상시 플로팅 버튼은 그 화면이 떠 있는 동안 숨김).
+      if (typeof Help !== "undefined" && Help.setVisible) Help.setVisible(false);
       el.classList.remove("hidden");
     },
     close() {
       const el = document.getElementById("pin-action-pop");
       if (el) el.classList.add("hidden");
       this._pinId = null;
+      if (typeof Help !== "undefined" && Help.setVisible) Help.setVisible(true);
+    },
+    /** [지휘자 발주 2026-09-29 항목4] 제목 = 위치명. 번호(pap-no 배지)와 같은 문자열이면
+     *  중복 표시("#2  2")가 되므로 제목을 비운다(배지가 이미 번호를 보여주므로 정보 유실 없음).
+     *  형제 호출부(open()/_saveLabel()) 모두 이 한 곳만 쓴다(§10 SoT). */
+    _titleFor(pin, noLabel) {
+      const raw = (pin && pin.label && pin.label.trim()) ? pin.label.trim() : "";
+      if (!raw) return "포인트 " + noLabel;
+      if (raw === noLabel) return "";
+      return raw;
     },
 
     /** ── 등록정보/번호 저장 — 자동저장 OFF: pin.label 만 갱신하고 미저장 표시만 남긴다 ──
@@ -289,7 +318,7 @@
       const numMap2 = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
       const meta2 = numMap2.get(pin.id) || null;
       const noLabel2 = meta2 ? PinSeries.formatNo(meta2.no, meta2.series) : "?";
-      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + noLabel2);
+      $("pap-title").textContent = this._titleFor(pin, noLabel2);
       const hint = $("pap-label-hint");
       if (hint) hint.textContent = "미저장 변경 — '저장하기'(포인트 편집 패널) 또는 자동저장 이벤트 발생 시 서버에 반영됩니다.";
       Prompt.toast && Prompt.toast("위치명/번호 반영됨 (미저장)");

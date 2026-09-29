@@ -298,9 +298,13 @@ console.log("\n[뮤테이션] 4건 — 각 되돌리면 실패해야 한다");
   ok(!(nDup === 1), "ⓑ 등록종류 중복 배치 → ④(n===1) 가 실패해야 정상");
 
   // ⓒ 모바일 필터 제거 → ⑤ 실패
+  // [지휘자 발주 2026-09-29 항목1 후속수정] 🔴 형제 테스트 보정(§G-2-5) — _applyRegVisibility()의
+  // 인라인 판정식이 _isMobile() 헬퍼로 리팩터되며(27_PinActionPop.js, 토스트→인라인 안내 작업의
+  // 부산물) 이 뮤테이션 타깃 문자열이 사라져 "문자열이 실제로 바뀜" 단계에서 항상 FAIL 했다
+  // (뮤테이션이 적용되지 않아 오탐으로 통과하던 것을 방치하지 않고 새 위치로 갱신 — §G-4⑧).
   const mutC = paSrc.replace(
-    /const mobile = !!\(window\.matchMedia && window\.matchMedia\(PAP_MOBILE_MQ\)\.matches\);/,
-    "const mobile = false; /* [뮤테이션] 모바일 필터 무력화 */"
+    /_isMobile\(\) \{ return !!\(window\.matchMedia && window\.matchMedia\(PAP_MOBILE_MQ\)\.matches\); \},/,
+    "_isMobile() { return false; /* [뮤테이션] 모바일 필터 무력화 */ },"
   );
   ok(mutC !== paSrc, "ⓒ mutation 적용됨(문자열이 실제로 바뀜)");
   const mobileBtnsMut = regState(mutC, true);

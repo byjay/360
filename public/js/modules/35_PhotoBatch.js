@@ -94,7 +94,13 @@
       while (used.has(candidate)) { candidate = base + "_" + n + ext; n++; }
       return candidate;
     },
-    /** 표시용 한 줄 — "영역/구역명 · YYYY-MM-DD HH:MM:SS · 원본 파일명"(값 없는 항목은 생략). */
+    /** 표시용 한 줄 — "영역/구역명 · YYYY-MM-DD HH:MM:SS · 원본 파일명"(값 없는 항목은 생략).
+     *  [지휘자 발주 2026-09-29 항목3] 🔴 shotAt/origName 은 이 WO 이후 신규 등록에만 채워지는
+     *  필드라, 그 전에 이미 사진이 등록된 핀은 둘 다 없어 영역/구역명 한 단어만 보여 "사진 정보를
+     *  바로 알아볼 수 있게"라는 요구를 충족 못 했다(지휘자 실측: "floor"만 표시). shotAt/origName이
+     *  둘 다 없을 때는 등록 시 이미 저장된 pin.imageName(PhotoNaming.name 의 결과, 20_App.js/
+     *  27_PinActionPop.js/35_PhotoBatch.js 저장 경로 공통 필드)을 대신 보여준다 — 새 필드를
+     *  만들지 않고 기존 값을 재사용(§10 SoT, 조용한 실패 금지). */
     describe(pin) {
       if (!pin) return "";
       const parts = [];
@@ -103,6 +109,7 @@
       if (label) parts.push(label);
       if (Number.isFinite(pin.shotAt)) parts.push(this._fmtDisplay(pin.shotAt));
       if (pin.origName) parts.push("원본 " + pin.origName);
+      if (!Number.isFinite(pin.shotAt) && !pin.origName && pin.imageName) parts.push(pin.imageName);
       return parts.join(" · ");
     }
   };

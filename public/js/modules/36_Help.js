@@ -114,6 +114,15 @@
 
     toggle() { this.active ? this.disable() : this.enable(); },
 
+    /** [지휘자 발주 2026-09-29 항목2] 🔴 다른 화면의 플로팅 패널(예: 27_PinActionPop.js 핀 패널)이
+     *  이 좌하단 토글과 겹칠 때 호출해 숨긴다/되돌린다(38_Install.js isEditorScreenActive 와 동일
+     *  관례 — 겹치는 상시 UI 는 그 화면이 떠 있는 동안만 숨긴다). display 속성만 건드려 다른
+     *  스타일(_toggleStyle 로 이미 적용된 색상/위치 등)은 그대로 유지한다. */
+    setVisible(visible) {
+      if (!this._toggleBtn) return;
+      this._toggleBtn.style.display = visible ? "flex" : "none";
+    },
+
     /** 도움말 모드 ON — data-help 요소마다 눈에 보이는 "?" 배지를 붙인다. */
     enable() {
       this.active = true;

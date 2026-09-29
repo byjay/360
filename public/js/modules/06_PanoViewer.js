@@ -7,6 +7,16 @@
 
     init(canvas) { this.canvas = canvas; },
 
+    /** [지휘자 발주 2026-09-29 항목6] 뷰어 제목에 사진 저장명(영역/구역_시각 등, PhotoNaming.describe
+     *  가 정본 — 35_PhotoBatch.js, 27_PinActionPop.js 사진 캡션과 동일 SoT)을 덧붙인다.
+     *  PhotoNaming 미로드/정보 없음이면 빈 문자열 → 기존 제목 그대로(요구사항 "없으면 기존 동작 유지"). */
+    _savedNameSuffix() {
+      const pin = this._currentPin;
+      if (!pin || typeof PhotoNaming === "undefined" || !PhotoNaming.describe) return "";
+      const desc = PhotoNaming.describe(pin);
+      return desc ? " · " + desc : "";
+    },
+
     /** 확장자/MIME으로 360° 영상 여부 판단 후 적절한 로더 호출 */
     loadMedia(src, locationName, isVideo) {
       if (typeof Log !== "undefined") Log.push("pano.open", null, { name: locationName || "" });
@@ -36,7 +46,7 @@
       const $ = id => document.getElementById(id);
       this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
 
-      $("pano-location-name").textContent = "360° — " + locationName;
+      $("pano-location-name").textContent = "360° — " + locationName + this._savedNameSuffix();
       $("pano-loading").classList.remove("hidden");
       $("pano-error").classList.add("hidden");
       $("pano-canvas").classList.add("hidden");
@@ -98,7 +108,7 @@
       const $ = id => document.getElementById(id);
       this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
 
-      $("pano-location-name").textContent = "360° ▶ " + locationName;
+      $("pano-location-name").textContent = "360° ▶ " + locationName + this._savedNameSuffix();
       $("pano-loading").classList.remove("hidden");
       $("pano-error").classList.add("hidden");
       $("pano-canvas").classList.add("hidden");
