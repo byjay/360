@@ -31,6 +31,82 @@
        App._markDirty() 로 "미저장" 표시만 남긴다.
      360 판별: App._detect360(file, cb) 재사용(자체 판별 로직 추가 금지).
   ══════════════════════════════════════════════════════════════ */
+  /* ══ [지휘자 발주 보강 2026-09-29 §3·§4] 신규 등록 사진 저장 이름 + 표시용 메타 SoT ══════════
+     마스터: "만약 영역이나 구역이 있다면 그 사진은 영역이름_시간으로 변경해서 등록해" /
+     "사진정보를 바로 알아볼 수 있게".
+     🔴 용어 주의 — 이 코드베이스엔 사각형 주석(State.zones, `Zones._contains`)도 "영역"으로
+     불리는 곳이 있어 이름이 겹친다. 여기서는 발주 원문의 "crop 안" 표현을 근거로 **deck 계층**
+     (Projects.currentDeck/decks, parent_id·crop)으로 해석했다 — [Uncertain] 100% 확정은 아니며,
+     오판정이면 scopeOf() 한 곳만 고치면 된다(SoT). 적용은 신규 등록에만(기존 이름 불변). */
+  const PhotoNaming = {
+    _ILLEGAL_RE: /[\\/:*?"<>|\x00-\x1F]/g,
+    sanitize(s) { return String(s == null ? "" : s).replace(this._ILLEGAL_RE, "-").trim(); },
+    _fmtTs(ms) {
+      if (!Number.isFinite(ms)) return null;
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, "0");
+      return "" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+    },
+    _fmtDisplay(ms) {
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+    },
+    /** 핀이 속한 영역(구역의 자식 deck, crop 안)/구역(부모 deck) 이름 — 트리와 동일 규칙
+     *  (겹치면 면적이 작은 쪽, 11_UI.js zoneOfPin 알고리즘을 deck.crop 에 적용). */
+    scopeOf(pin) {
+      try {
+        if (typeof Projects === "undefined" || !pin) return { area: null, zone: null };
+        const cur = Projects.currentDeck;
+        if (!cur) return { area: null, zone: null };
+        const decks = Array.isArray(Projects.decks) ? Projects.decks : [];
+        const isRegion = !!(cur.crop && cur.crop.w > 0 && cur.crop.h > 0);
+        if (isRegion) {
+          const parent = decks.find((d) => d.id === cur.parent_id);
+          return { area: cur.name || null, zone: parent ? (parent.name || null) : null };
+        }
+        const children = decks.filter((d) => d.parent_id === cur.id && d.crop && d.crop.w > 0 && d.crop.h > 0 && (d.page || 1) === (pin.page || 1));
+        let best = null, bestArea = Infinity;
+        children.forEach((d) => {
+          const c = d.crop;
+          const inside = pin.x >= c.x && pin.x <= c.x + c.w && pin.y >= c.y && pin.y <= c.y + c.h;
+          if (!inside) return;
+          const area = c.w * c.h;
+          if (area < bestArea) { bestArea = area; best = d; }
+        });
+        return { area: best ? (best.name || null) : null, zone: cur.name || null };
+      } catch (e) { return { area: null, zone: null }; }
+    },
+    /** 저장 이름(확장자 포함) — 영역 있으면 영역이름_시각, 없고 구역만 있으면 구역이름_시각,
+     *  둘 다 없으면 원본 파일명 유지. @param {Set<string>} [usedNames] 충돌 시 _2,_3… 접미사
+     *  (이 함수 호출부가 한 배치 동안 공유하는 Set 하나 — 서버 전체 네임스페이스 조회는 하지 않는다). */
+    name(pin, origName, shotAtMs, usedNames) {
+      origName = origName || "";
+      const extMatch = /\.[^.]+$/.exec(origName);
+      const ext = extMatch ? extMatch[0].toLowerCase() : "";
+      const scope = this.scopeOf(pin);
+      const label = scope.area || scope.zone;
+      if (!label) return origName || ("photo" + ext);
+      const ts = this._fmtTs(shotAtMs) || this._fmtTs(Date.now());
+      const base = this.sanitize(label) + "_" + ts;
+      const used = usedNames || new Set();
+      let candidate = base + ext, n = 2;
+      while (used.has(candidate)) { candidate = base + "_" + n + ext; n++; }
+      return candidate;
+    },
+    /** 표시용 한 줄 — "영역/구역명 · YYYY-MM-DD HH:MM:SS · 원본 파일명"(값 없는 항목은 생략). */
+    describe(pin) {
+      if (!pin) return "";
+      const parts = [];
+      const scope = this.scopeOf(pin);
+      const label = scope.area || scope.zone;
+      if (label) parts.push(label);
+      if (Number.isFinite(pin.shotAt)) parts.push(this._fmtDisplay(pin.shotAt));
+      if (pin.origName) parts.push("원본 " + pin.origName);
+      return parts.join(" · ");
+    }
+  };
+
   const PhotoBatch = {
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
     _range: { start: 1, end: 1, series: "content" },
@@ -75,14 +151,23 @@
       } catch (e) { return null; }
     },
 
-    /** TIFF 헤더부터 IFD0 + ExifIFD 를 훑어 촬영시각 태그를 찾는다 */
+    /** TIFF 헤더부터 IFD0 + ExifIFD 를 훑어 촬영시각 태그 + [WO 20260929 photo-time-match]
+     *  Make(0x010F)/Model(0x0110, 360 카메라 판별 보강신호) / OffsetTimeOriginal(0x9010,
+     *  카메라 자체 UTC 오프셋 — 있으면 시각을 정확한 절대시각으로 환산해 시계보정 정밀도를 높인다)
+     *  를 함께 읽는다. 반환 형태는 기존 {iso,tag} 를 그대로 포함해 하위호환(테스트①)을 지킨다. */
     _parseExifIfd(b, tiffStart, end) {
       if (tiffStart + 8 > end) return null;
       const le = this._asciiAt(b, tiffStart, 2) === "II";
       const u16 = (o) => b.getUint16(o, le);
       const u32 = (o) => b.getUint32(o, le);
       if (u16(tiffStart + 2) !== 42) return null;
-      let best = null;
+      let best = null, make = null, model = null, offsetOriginal = null;
+      const readAscii = (e, type, cnt) => {
+        if (type !== 2) return null;
+        const valOff = (cnt > 4) ? tiffStart + u32(e + 8) : e + 8;
+        if (valOff + cnt > end) return null;
+        return this._asciiAt(b, valOff, cnt).replace(/\0+$/, "");
+      };
       const walk = (ifdOff, depth) => {
         if (depth > 2 || (best && best.tag === "DateTimeOriginal")) return;
         const at = tiffStart + ifdOff;
@@ -92,6 +177,9 @@
           const e = at + 2 + k * 12;
           if (e + 12 > end) return;
           const tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
+          if (tag === 0x010F) make = readAscii(e, type, cnt);            // Make
+          if (tag === 0x0110) model = readAscii(e, type, cnt);           // Model
+          if (tag === 0x9010) offsetOriginal = readAscii(e, type, cnt);  // OffsetTimeOriginal
           const valOff = (type === 2 && cnt > 4) ? tiffStart + u32(e + 8) : e + 8;
           if (tag === 0x8769) { walk(u32(e + 8), depth + 1); continue; } // ExifIFD 포인터
           if ((tag === 0x9003 || tag === 0x9004 || tag === 0x0132) && type === 2 && valOff + 19 <= end) {
@@ -99,26 +187,51 @@
             const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(s);
             if (m) {
               const iso = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6];
-              if (tag === 0x9003) { best = { iso, tag: "DateTimeOriginal" }; return; }
+              if (tag === 0x9003) { best = { iso, tag: "DateTimeOriginal" }; continue; }
               if (!best) best = { iso, tag: tag === 0x9004 ? "DateTimeDigitized" : "DateTime" };
             }
           }
         }
       };
       walk(u32(tiffStart + 4), 0);
-      return best;
+      if (!best && !make && !model) return null;
+      return Object.assign({}, best, { make: make, model: model, offsetOriginal: offsetOriginal });
     },
 
-    /** 정렬 우선순위(EXIF→mtime→파일명)에 따라 sortKey/timeSource/timeLabel 을 부여하고
-     *  정렬한 "새" 배열을 반환한다(원본 불변). 큰 시간 간격(10분↑) 지점엔 bigGapBefore 를 단다.
-     *  순수 함수 — 테스트가 직접 호출한다. */
+    /** [지휘자 발주 보강 2026-09-29] THETA X 실기기 파일명 패턴 — 마스터 실측 스크린샷:
+     *  "R0013783_20260929155952.JPG"(경로 /내장 저장공간/Pictures/RICOH THETA, Android).
+     *  "R" + 일련번호 + "_" + YYYYMMDDHHMMSS(로컬시각) + 확장자. EXIF 가 없어도(또는 못 읽어도)
+     *  이 패턴만으로 촬영시각을 정확히 복원할 수 있다 — 파일명 자연정렬 폴백보다 우선한다. */
+    _THETA_NAME_RE: /^R\d+_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(jpe?g)$/i,
+    _parseThetaFilenameDate(name) {
+      const m = this._THETA_NAME_RE.exec(String(name || ""));
+      if (!m) return null;
+      return { iso: m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6] };
+    },
+    /** 파일명만으로 THETA 촬영분임을 추정하는 보강 신호(360 최종 판정은 App._detect360 비율검사가
+     *  정본 — 이 신호는 근접 타이 브레이크용으로만 쓴다. 이름만으로 360 여부를 확정하지 않는다). */
+    _isThetaFilename(name) { return this._THETA_NAME_RE.test(String(name || "")); },
+
+    /** 정렬 우선순위(EXIF → 파일명 THETA 타임스탬프 → mtime → 파일명 자연정렬)에 따라
+     *  sortKey/timeSource/timeLabel 을 부여하고 정렬한 "새" 배열을 반환한다(원본 불변).
+     *  큰 시간 간격(10분↑) 지점엔 bigGapBefore 를 단다. 순수 함수 — 테스트가 직접 호출한다. */
     _sortRows(rows) {
       const withKey = (rows || []).map((r) => {
         let sortKey, timeSource, timeLabel;
+        const fnDate = this._parseThetaFilenameDate(r.name);
         if (r.exif && r.exif.iso) {
-          sortKey = Date.parse(r.exif.iso);
+          // [WO 20260929 photo-time-match] OffsetTimeOriginal(카메라 자체 UTC 오프셋)이 있으면
+          // 그걸 붙여 절대시각으로 정확히 환산한다(카메라·휴대폰이 다른 타임존이어도 정확).
+          // 없으면 기존과 동일하게 휴대폰(브라우저) 로컬 타임존으로 해석(Date.parse 기본 동작).
+          // 🔴 파일명·EXIF 가 다르면 EXIF 가 우선이다(EXIF=카메라가 기록한 진짜 촬영시각).
+          const off = r.exif.offsetOriginal;
+          sortKey = (off && /^[+-]\d{2}:\d{2}$/.test(off)) ? Date.parse(r.exif.iso + off) : Date.parse(r.exif.iso);
           timeSource = "EXIF " + r.exif.tag;
           timeLabel = r.exif.iso.replace("T", " ");
+        } else if (fnDate) {
+          sortKey = Date.parse(fnDate.iso);
+          timeSource = "파일명(THETA 타임스탬프)";
+          timeLabel = fnDate.iso.replace("T", " ");
         } else if (Number.isFinite(r.lastModified)) {
           sortKey = r.lastModified;
           timeSource = "파일 수정시각";
@@ -181,6 +294,109 @@
 
     _esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); },
 
+    /** [지휘자 발주 보강§3] PhotoNaming 충돌회피 시드 — 현재 페이지 핀들이 이미 쓰고 있는 저장
+     *  이름(확장자 없음, 기존 pin.imageName 관례). 전체 R2 네임스페이스 조회는 하지 않는다(범위 명시). */
+    _usedPhotoNames() {
+      const used = new Set();
+      ((typeof State !== "undefined" && State.pins) || []).forEach((p) => { if (p && p.imageName) used.add(p.imageName); });
+      return used;
+    },
+
+    /* ══ [WO 20260929 photo-time-match] 핀 생성시각 ↔ 360 사진 촬영시각 최근접 자동매칭 ══
+       마스터 요청: "포인트 생성 시간을 기록해 핸드폰에 할 때에는 그 시간에 들어오는 사진을
+       반드시 360도 사진을 찾아서 연동 가능하게 해 제일 근사한 시간에 저장된 360 그림을 찾아서
+       연동되게" / "THETA X야 … 와이파이에 연결되었을 때는 감지해서 같이 작동 연동해".
+       기존 _buildMatches(번호순×표시순서 1:1, 위치 기반)는 그대로 둔다(하위호환·기존 테스트 불변) —
+       이 블록은 완전히 새로운 "시각 최근접" 경로다. 순수 함수만 두고, DOM 연결은 아래 별도 섹션. */
+
+    /** THETA/RICOH 360 카메라 신호(EXIF Make/Model) — 최종 360 여부는 App._detect360(비율+폭)이
+     *  정본이다. 이 함수는 여러 후보가 동시에 근접할 때 THETA 촬영분을 우선하는 참고신호로만 쓴다. */
+    _isThetaSignal(make, model) {
+      const s = String(make || "") + " " + String(model || "");
+      return /ricoh/i.test(s) || /theta/i.test(s);
+    },
+
+    /** 핀 시각(ms) — PinSeries.createdAt() SoT 파생 재사용(자체 추정 금지). 구할 수 없으면 null. */
+    _pinTimeMs(pin) {
+      return (typeof PinSeries !== "undefined" && PinSeries.createdAt) ? PinSeries.createdAt(pin) : null;
+    },
+
+    /** 사진 시각(ms) = _sortRows 가 부여한 sortKey(EXIF/mtime) + 사용자 시계보정(분, ±).
+     *  파일명순 폴백(시간정보 없음, sortKey=NaN)은 시간매칭 대상에서 제외한다(조용히 추정 금지). */
+    _rowTimeMs(row, offsetMin) {
+      if (!row || !Number.isFinite(row.sortKey)) return null;
+      return row.sortKey + (Number(offsetMin) || 0) * 60000;
+    },
+
+    /** 최근접 1:1 그리디 할당(순수 함수). 모든 (핀,사진) 쌍 중 |Δt| 가 허용오차 이내인 것만
+     *  후보로 삼아 Δt 오름차순으로 확정한다 — "번호순×사진순" 위치 매칭과 달리 사진 한 장이
+     *  누락/추가돼도 이후 전부 밀리지 않는다(각 쌍이 실제 근접도로 독립 확정되므로). */
+    _nearestAssign(pinEntries, rowEntries, toleranceMs) {
+      const pairs = [];
+      (pinEntries || []).forEach((p, pi) => {
+        if (!Number.isFinite(p.t)) return;
+        (rowEntries || []).forEach((r, ri) => {
+          if (!Number.isFinite(r.t)) return;
+          const dt = Math.abs(p.t - r.t);
+          if (dt <= toleranceMs) pairs.push({ pi, ri, dt });
+        });
+      });
+      // [지휘자 발주 보강] Δt 가 같은 동률 쌍이면 THETA 파일명/EXIF 신호가 있는 사진을 우선한다
+      // (이름만으로 360 여부를 확정하지는 않는다 — 후보 자체는 여전히 row.is360===true 만 진입).
+      pairs.sort((a, b) => a.dt - b.dt
+        || ((rowEntries[b.ri].row.thetaSignal ? 1 : 0) - (rowEntries[a.ri].row.thetaSignal ? 1 : 0)));
+      const usedP = new Set(), usedR = new Set();
+      const matches = [];
+      pairs.forEach((pr) => {
+        if (usedP.has(pr.pi) || usedR.has(pr.ri)) return;
+        usedP.add(pr.pi); usedR.add(pr.ri);
+        matches.push({ pin: pinEntries[pr.pi].pin, no: pinEntries[pr.pi].no, row: rowEntries[pr.ri].row, dtMs: pr.dt });
+      });
+      matches.sort((a, b) => (a.row.__idx || 0) - (b.row.__idx || 0));
+      const unmatchedPins = (pinEntries || []).filter((_, pi) => !usedP.has(pi)).map((e) => ({ pin: e.pin, no: e.no }));
+      const unmatchedRows = (rowEntries || []).filter((_, ri) => !usedR.has(ri)).map((e) => e.row);
+      return { matches, unmatchedPins, unmatchedRows };
+    },
+
+    /** [핵심 API] 시각 최근접 자동매칭 — 대상 계열의 핀(기본: 아직 360 없는 핀, is360!==true) ×
+     *  360 판정된 사진(row.is360===true 만 후보 — 아닌 것은 excluded360 으로 남겨 "360 아님"을
+     *  화면에 명시하고 조용히 빠뜨리지 않는다)을 |Δt| 오름차순 그리디로 1:1 확정한다.
+     *  @param {{toleranceMs?:number, offsetMin?:number, includeExisting360?:boolean}} [opts] */
+    _buildTimeMatches(pinList, rows, opts) {
+      const o = opts || {};
+      const toleranceMs = Number.isFinite(o.toleranceMs) ? o.toleranceMs : 10 * 60 * 1000;
+      const offsetMin = Number(o.offsetMin) || 0;
+      const includeExisting = !!o.includeExisting360;
+
+      const skippedExisting = [];
+      const pinEntries = [];
+      (pinList || []).forEach((e) => {
+        if (!includeExisting && e.pin && e.pin.is360 === true) { skippedExisting.push(e); return; }
+        pinEntries.push({ pin: e.pin, no: e.no, t: this._pinTimeMs(e.pin) });
+      });
+      // [지휘자 발주 보강2 §2] 작업 시간대 창 — 대상 핀들의 생성시각 범위 밖 사진은(폴더 전체
+      // 선택 시 옛 사진 수백 장이 섞여도) 후보에서 빼고 개수만 표시한다(조용히 빠뜨리지 않되,
+      // 목록을 전부 그리지도 않음 — 설계 §2 "개수만 표시").
+      const validPinTimes = pinEntries.map((e) => e.t).filter((t) => Number.isFinite(t));
+      const winMin = validPinTimes.length ? Math.min(...validPinTimes) - toleranceMs : null;
+      const winMax = validPinTimes.length ? Math.max(...validPinTimes) + toleranceMs : null;
+
+      const excluded360 = [];
+      const outOfWindow = [];
+      const rowEntries = [];
+      (rows || []).forEach((row, idx) => {
+        row.__idx = idx;
+        if (row.excluded) return;
+        if (row.is360 !== true) { excluded360.push(row); return; }
+        const t = this._rowTimeMs(row, offsetMin);
+        if (winMin != null && Number.isFinite(t) && (t < winMin || t > winMax)) { outOfWindow.push(row); return; }
+        rowEntries.push({ row, t });
+      });
+
+      const { matches, unmatchedPins, unmatchedRows } = this._nearestAssign(pinEntries, rowEntries, toleranceMs);
+      return { matches, unmatchedPins, unmatchedRows, excluded360, skippedExisting, outOfWindow };
+    },
+
     /* ══ DOM 연결 ══════════════════════════════════════════════ */
 
     init() {
@@ -226,7 +442,11 @@
      *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
      *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      const series = (typeof State !== "undefined" && State.checkboard) ? "checkboard" : "content";
+      // [WO 20260929 addendum, 지휘자 정정] State.checkboard(불리언, CHECKER/360 공통 "퀵툴" 플래그)
+      // 만으로는 두 계열을 구분 못 한다(마스터: "번호체계도 다르게 해" — 계열 분리). CHECKER
+      // 모드일 때만 checkboard 계열, 그 외(360/photo·일반 편집)는 전부 content(360) 계열 —
+      // State.regMode 로만 판정(20_App.js _placeCheckboardPin 과 동일 판정 로직, §10 SoT).
+      const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";
       const list = this._pinList(State.pins, State.pdfPage || 1, series);
       return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
@@ -284,7 +504,7 @@
       for (const f of imgFiles) {
         let exif = null;
         try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
-        rows.push({ file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0 });
+        rows.push({ file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0, thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name) });
       }
       this._rows = this._sortRows(rows);
       if (status) status.textContent = imgFiles.length + "장 · 시간순 정렬 완료";
@@ -358,6 +578,42 @@
       }
     },
 
+    /** [WO 20260929 photo-time-match] run()과 시간매칭 적용(_applyTimeMatch)이 공유하는
+     *  업로드 1건 단계(SoT — 두 곳에 복제하지 않는다, §10). 동작은 run()의 기존 인라인 로직과
+     *  100% 동일(온라인 직접 업로드 → 실패/오프라인이면 SyncQueue.enqueue 폴백, 오프라인 바이트는
+     *  그 안에서 IndexedDB "ops" 스토어에 영속돼 앱 재시작 후에도 남는다 — 05_SyncQueue.js:210-242).
+     *  @param {Set<string>} [usedNames] 이 배치가 공유하는 이름 충돌 회피 집합(PhotoNaming).
+     *  @returns {Promise<{status:'done'|'skip'|'fail', offline?:boolean, reason?:string}>} */
+    async _uploadOneRow(pin, row, overwrite, usedNames) {
+      if (!overwrite && PinSeries.hasContent(pin)) return { status: "skip" };
+      try {
+        const { dataURL, width, height } = await Cloud.resizeImage(row.file);
+        const shotAt = Number.isFinite(row.sortKey) ? row.sortKey : null;
+        const namesSet = usedNames || new Set();
+        // [지휘자 발주 보강§3] 저장 이름 = 영역/구역이름_시각(PhotoNaming SoT) — 없으면 원본 파일명.
+        const fullName = (typeof PhotoNaming !== "undefined") ? PhotoNaming.name(pin, row.name, shotAt, namesSet) : row.name;
+        namesSet.add(fullName);
+        const imgName = fullName.replace(/\.[^.]+$/, "");
+        let uploaded = false;
+        if (navigator.onLine) {
+          try { const imageId = await Cloud.uploadImage(imgName, dataURL, width, height); pin.imageId = imageId; Cloud._cache[imageId] = dataURL; uploaded = true; } catch (e) { uploaded = false; }
+        }
+        if (!uploaded) {
+          const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
+          if (opId) { pin.pendingOpId = opId; pin.pendingSync = true; Cloud._cache["op:" + opId] = dataURL; }
+          else throw new Error("저장공간 부족");
+        }
+        pin.imageName = imgName;
+        if (row.is360) pin.is360 = true;
+        // [지휘자 발주 보강§4] 표시용 메타 — 값 없는 건 세팅하지 않는다(있는 것만, 지어내지 않음).
+        pin.origName = row.name;
+        if (shotAt != null) { pin.shotAt = shotAt; pin.shotSrc = row.timeSource || null; }
+        return { status: "done", offline: !uploaded };
+      } catch (e) {
+        return { status: "fail", reason: (e && e.message) || String(e) };
+      }
+    },
+
     _setRowStatus(row, text) {
       const idx = this._rows.indexOf(row);
       if (idx < 0) return;
@@ -391,30 +647,16 @@
 
       let done = 0, fail = 0, skip = 0;
       const queue = matches.slice();
+      const usedNames = this._usedPhotoNames();
       const worker = async () => {
         while (queue.length) {
           const m = queue.shift();
           const { pin, row } = m;
-          if (!overwrite && PinSeries.hasContent(pin)) { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); this._updateProgress(matches.length, done + fail + skip); continue; }
-          try {
-            this._setRowStatus(row, "업로드 중...");
-            const { dataURL, width, height } = await Cloud.resizeImage(row.file);
-            const imgName = row.name.replace(/\.[^.]+$/, "");
-            let uploaded = false;
-            if (navigator.onLine) {
-              try { const imageId = await Cloud.uploadImage(imgName, dataURL, width, height); pin.imageId = imageId; Cloud._cache[imageId] = dataURL; uploaded = true; } catch (e) { uploaded = false; }
-            }
-            if (!uploaded) {
-              const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
-              if (opId) { pin.pendingOpId = opId; pin.pendingSync = true; Cloud._cache["op:" + opId] = dataURL; }
-              else throw new Error("저장공간 부족");
-            }
-            pin.imageName = imgName;
-            if (row.is360) pin.is360 = true;
-            done++; this._setRowStatus(row, uploaded ? "완료" : "오프라인 저장됨");
-          } catch (e) {
-            fail++; this._setRowStatus(row, "실패: " + (e.message || e));
-          }
+          this._setRowStatus(row, "업로드 중...");
+          const r = await this._uploadOneRow(pin, row, overwrite, usedNames);
+          if (r.status === "skip") { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); }
+          else if (r.status === "fail") { fail++; this._setRowStatus(row, "실패: " + r.reason); }
+          else { done++; this._setRowStatus(row, r.offline ? "오프라인 저장됨" : "완료"); }
           this._updateProgress(matches.length, done + fail + skip);
         }
       };
@@ -426,5 +668,198 @@
       try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
       if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} } // 자동저장 호출 금지 — 미저장 표시만
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
+    },
+
+    /* ══ [WO 20260929 photo-time-match] 시각 최근접 매칭 — DOM(미리보기→적용) ══════════
+       index.html 은 다른 팀 점유라 수정하지 않는다 — 모달/입력은 이 함수들이 JS로 생성한다
+       (기존 toast 호스트 생성 패턴 30_Prompt.js:21-27 과 동일 관례). 진입은 온라인 복귀 안내
+       배너(32_Offline.js _showReconnectBanner "연결하기")가 PhotoBatch.openTimeMatch()를 호출한다. */
+
+    /** 공개 진입점 — 파일선택 창을 띄운다(폴더 아님, 갤러리에서 여러 장 선택. capture 강제 금지 —
+     *  요구사항 §9). series 미지정 시 현재 배치모드(SoT: State.regMode, _defaultRange()와 동일 판정). */
+    openTimeMatch(range) {
+      if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
+      const series = (range && range.series) || ((typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content");
+      this._tm = { rows: [], series };
+      this._ensureTimeMatchModal();
+      // [지휘자 발주 보강] 브라우저는 폴더를 자동으로 못 찾는다(showDirectoryPicker 모바일 미지원)
+      // — 파일 선택창을 열기 직전에 어디서 고르면 되는지 한 줄로 안내한다(조용히 아무 폴더나 기대 금지).
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("RICOH THETA 폴더에서 전체 선택 — 최근 사진부터 자동으로 찾습니다");
+      const input = document.getElementById("photobatch-tm-files");
+      if (input) input.click();
+    },
+
+    /** [설계메모] 인터랙티브 요소(입력/버튼/목록 호스트)는 innerHTML 문자열이 아니라
+     *  document.createElement 로 만들어 바로 참조를 쥔다 — innerHTML 로 심으면 실제 브라우저에선
+     *  동작하지만 id 기반 재조회에 파싱 단계가 하나 더 끼어 테스트(vm+가짜DOM, jsdom 없음)가
+     *  구조를 못 읽는다. 정적 안내문 2줄만 innerHTML 을 쓴다(30_Prompt.js:21-27 과 동일 관례). */
+    _ensureTimeMatchModal() {
+      if (document.getElementById("photobatch-tm-modal")) return;
+      const input = document.createElement("input");
+      input.type = "file"; input.multiple = true; input.accept = "image/*";
+      input.id = "photobatch-tm-files";
+      input.style.display = "none";
+      input.addEventListener("change", (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        this._onTimeMatchFilesChosen(files);
+      });
+      document.body.appendChild(input);
+
+      const modal = document.createElement("div");
+      modal.id = "photobatch-tm-modal";
+      modal.className = "admin-gate-backdrop hidden";
+      modal.setAttribute("style", "position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;");
+      modal.addEventListener("click", (e) => { if (e.target === modal) this._closeTimeMatchModal(); });
+
+      const panel = document.createElement("div");
+      panel.className = "pb-tm-panel";
+      panel.setAttribute("style", "background:#fff;color:#111;max-width:640px;width:92vw;max-height:82vh;overflow:auto;border-radius:12px;padding:16px;");
+      panel.innerHTML =
+        '<h3 style="margin:0 0 8px;font-size:16px;">시각 최근접 360 사진 연결</h3>' +
+        '<div style="font-size:12px;color:#555;margin-bottom:6px;">RICOH THETA 폴더에서 전체 선택 — 최근 사진부터 자동으로 찾습니다(파일명 R…_YYYYMMDDHHMMSS 자동 인식)</div>';
+
+      const opts = document.createElement("div");
+      opts.setAttribute("style", "display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px;");
+      const tolLabel = document.createElement("label"); tolLabel.textContent = "허용오차(분) ";
+      const tolInput = document.createElement("input"); tolInput.type = "number"; tolInput.id = "photobatch-tm-tolerance"; tolInput.value = "10"; tolInput.min = "1"; tolInput.setAttribute("style", "width:56px;");
+      tolLabel.appendChild(tolInput);
+      const offLabel = document.createElement("label"); offLabel.textContent = "시계보정(분,±) ";
+      const offInput = document.createElement("input"); offInput.type = "number"; offInput.id = "photobatch-tm-offset"; offInput.value = "0"; offInput.setAttribute("style", "width:56px;");
+      offLabel.appendChild(offInput);
+      const owLabel = document.createElement("label");
+      const owInput = document.createElement("input"); owInput.type = "checkbox"; owInput.id = "photobatch-tm-overwrite";
+      owLabel.appendChild(owInput); owLabel.appendChild(document.createTextNode(" 이미 360 있는 핀도 포함"));
+      opts.appendChild(tolLabel); opts.appendChild(offLabel); opts.appendChild(owLabel);
+
+      const list = document.createElement("div");
+      list.id = "photobatch-tm-list";
+      list.setAttribute("style", "font-size:13px;");
+      list.textContent = "사진을 선택하세요";
+
+      const btnBar = document.createElement("div");
+      btnBar.setAttribute("style", "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;");
+      const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.id = "photobatch-tm-cancel"; cancelBtn.textContent = "취소";
+      const applyBtn = document.createElement("button"); applyBtn.type = "button"; applyBtn.id = "photobatch-tm-apply"; applyBtn.textContent = "적용";
+      btnBar.appendChild(cancelBtn); btnBar.appendChild(applyBtn);
+
+      panel.appendChild(opts); panel.appendChild(list); panel.appendChild(btnBar);
+      modal.appendChild(panel);
+      document.body.appendChild(modal);
+
+      cancelBtn.addEventListener("click", () => this._closeTimeMatchModal());
+      applyBtn.addEventListener("click", () => this._applyTimeMatch());
+      tolInput.addEventListener("input", () => this._recomputeTimeMatch());
+      offInput.addEventListener("input", () => this._recomputeTimeMatch());
+      owInput.addEventListener("change", () => this._recomputeTimeMatch());
+    },
+
+    /** [요구사항 §9] 모바일에서 다수 파일 선택 시 메인스레드 장시간 점유 방지 — EXIF 는 파일당
+     *  선두 256KB 만 읽고(기존 _onFilesChosen 과 동일 상수, 262144B), for..of + await 로 파일마다
+     *  한 번씩 이벤트 루프에 양보한다(전부 동기로 묶어 돌리지 않음 — 30장 기준 파일당 ~5~15ms 면
+     *  체감 버벅임 없음, 실측치는 보고서 참조). */
+    async _onTimeMatchFilesChosen(files) {
+      const IMG_RE = /\.(jpe?g|png|webp)$/i;
+      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
+      if (!imgFiles.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다"); return; }
+      // [지휘자 발주 보강2 §1] "가장 최근 파일부터 찾게 해" — EXIF 를 읽기 전에도 알 수 있는
+      // 값(파일명 THETA 타임스탬프 우선, 없으면 lastModified)으로 먼저 최신순 정렬한 뒤 처리한다.
+      const quickTime = (f) => {
+        const fn = this._parseThetaFilenameDate(f.name);
+        if (fn) return Date.parse(fn.iso);
+        return Number.isFinite(f.lastModified) ? f.lastModified : -Infinity;
+      };
+      const ordered = imgFiles.slice().sort((a, b) => quickTime(b) - quickTime(a));
+      const rows = [];
+      for (const f of ordered) {
+        let exif = null;
+        try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
+        rows.push({
+          file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0,
+          thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name)
+        });
+      }
+      this._tm.rows = this._sortRows(rows);
+      const modal = document.getElementById("photobatch-tm-modal");
+      if (modal) modal.classList.remove("hidden");
+      this._recomputeTimeMatch();
+      this._tm.rows.forEach((r) => {
+        if (typeof App === "undefined" || !App._detect360) return;
+        App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; this._recomputeTimeMatch(); });
+      });
+    },
+
+    _recomputeTimeMatch() {
+      if (!this._tm) return null;
+      const tolEl = document.getElementById("photobatch-tm-tolerance");
+      const offEl = document.getElementById("photobatch-tm-offset");
+      const owEl = document.getElementById("photobatch-tm-overwrite");
+      const toleranceMin = tolEl ? (parseFloat(tolEl.value) || 10) : 10;
+      const offsetMin = offEl ? (parseFloat(offEl.value) || 0) : 0;
+      const includeExisting360 = !!(owEl && owEl.checked);
+      const page = State.pdfPage || 1;
+      const pinList = this._pinList(State.pins, page, this._tm.series);
+      const result = this._buildTimeMatches(pinList, this._tm.rows, { toleranceMs: toleranceMin * 60000, offsetMin, includeExisting360 });
+      this._tm.result = result;
+      this._renderTimeMatchList(result);
+      return result;
+    },
+
+    _renderTimeMatchList(result) {
+      const host = document.getElementById("photobatch-tm-list");
+      if (!host) return;
+      const esc = (s) => this._esc(s);
+      let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+        + '<th style="text-align:left;">핀</th><th style="text-align:left;">파일</th><th>Δt</th><th>상태</th>'
+        + '</tr></thead><tbody>';
+      (result.matches || []).forEach((m) => {
+        // [지휘자 발주 보강§4-3] 미리보기도 "영역/구역 · 시각 · 원본파일명" 형식(SoT: PhotoNaming.scopeOf).
+        const scope = (typeof PhotoNaming !== "undefined") ? PhotoNaming.scopeOf(m.pin) : { area: null, zone: null };
+        const label = scope.area || scope.zone;
+        const descParts = [];
+        if (label) descParts.push(label);
+        if (m.row.timeLabel) descParts.push(m.row.timeLabel);
+        descParts.push("원본 " + m.row.name);
+        html += '<tr><td>#' + m.no + '</td><td>' + esc(descParts.join(" · ")) + '</td><td>' + Math.round(m.dtMs / 1000) + '초</td><td>연결</td></tr>';
+      });
+      (result.skippedExisting || []).forEach((e) => {
+        html += '<tr style="opacity:.6"><td>#' + e.no + '</td><td>-</td><td>-</td><td>기존 유지</td></tr>';
+      });
+      (result.unmatchedPins || []).forEach((e) => {
+        html += '<tr style="opacity:.6"><td>#' + e.no + '</td><td>-</td><td>-</td><td>미연결(사진 없음/오차초과)</td></tr>';
+      });
+      (result.unmatchedRows || []).forEach((r) => {
+        html += '<tr style="opacity:.6"><td>-</td><td>' + esc(r.name) + '</td><td>-</td><td>미연결(오차초과)</td></tr>';
+      });
+      (result.excluded360 || []).forEach((r) => {
+        html += '<tr style="opacity:.5;color:#b91c1c;"><td>-</td><td>' + esc(r.name) + '</td><td>-</td><td>360 아님</td></tr>';
+      });
+      html += '</tbody></table>';
+      host.innerHTML = html || "사진을 선택하세요";
+    },
+
+    /** 적용 = 기존 360 등록 경로(_uploadOneRow → resizeImage/uploadImage/SyncQueue.enqueue) 재사용. */
+    async _applyTimeMatch() {
+      if (!this._tm || !this._tm.result) return;
+      const overwriteEl = document.getElementById("photobatch-tm-overwrite");
+      const overwrite = !!(overwriteEl && overwriteEl.checked);
+      const matches = this._tm.result.matches || [];
+      if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("연결할 사진이 없습니다"); return; }
+      let done = 0, fail = 0, skip = 0;
+      const usedNames = this._usedPhotoNames();
+      for (const m of matches) {
+        const r = await this._uploadOneRow(m.pin, m.row, overwrite, usedNames);
+        if (r.status === "skip") skip++; else if (r.status === "fail") fail++; else done++;
+      }
+      try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+      try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
+      if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} }
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 사진 연결 완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
+      this._closeTimeMatchModal();
+    },
+
+    _closeTimeMatchModal() {
+      const modal = document.getElementById("photobatch-tm-modal");
+      if (modal) modal.classList.add("hidden");
     }
   };

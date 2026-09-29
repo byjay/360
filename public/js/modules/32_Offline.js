@@ -278,6 +278,61 @@
     }
   }
 
+  /* ── [WO 20260929 photo-time-match] 오프라인 중 촬영한 360 사진 연결 안내 ──────────────
+     마스터: "THETA X야 … 제어할 필요 없이 그 와이파이에 연결되었을 때는 감지해서 같이 작동 연동해".
+     브라우저는 SSID 를 읽을 수 없다 — THETA 의 AP 에 붙는 순간은 곧 인터넷 단절이므로, 기존
+     online/offline 이벤트(§ updateNetBadge 가 이미 구독)를 그대로 "감지" 신호로 재사용한다.
+     그 오프라인 세션 중 핀이 1개 이상 생겼으면(PinSeries.createdAt SoT), 온라인 복귀 시
+     "연결하기" 배너로 PhotoBatch.openTimeMatch() 를 안내한다. 새 폴링/권한 요청 없음. */
+  let _offlineSessionStartAt = null;
+
+  function _onGoOffline() {
+    _offlineSessionStartAt = Date.now();
+  }
+  function _showReconnectBanner(pinCount) {
+    try {
+      const old = document.getElementById("wm-theta-reconnect");
+      if (old) old.remove();
+      const host = document.createElement("div");
+      host.id = "wm-theta-reconnect";
+      host.setAttribute("style",
+        "position:fixed;left:50%;bottom:86px;transform:translateX(-50%);z-index:9999;" +
+        "background:#1d4ed8;color:#fff;padding:10px 14px;border-radius:10px;" +
+        "box-shadow:0 6px 18px rgba(0,0,0,.35);display:flex;gap:10px;align-items:center;" +
+        "font-size:14px;max-width:92vw;");
+      const msg = document.createElement("span");
+      msg.textContent = "오프라인 중 핀 " + pinCount + "개 생성됨 — 촬영한 360 사진 연결하기";
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.textContent = "연결하기";
+      btn.setAttribute("style", "background:#fff;color:#1d4ed8;border:0;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer;");
+      btn.addEventListener("click", () => {
+        host.remove();
+        try { if (typeof PhotoBatch !== "undefined" && PhotoBatch.openTimeMatch) PhotoBatch.openTimeMatch(); } catch (e) {}
+      });
+      const close = document.createElement("button");
+      close.type = "button"; close.textContent = "×";
+      close.setAttribute("style", "background:transparent;color:#fff;border:0;font-size:16px;cursor:pointer;");
+      close.addEventListener("click", () => host.remove());
+      host.appendChild(msg); host.appendChild(btn); host.appendChild(close);
+      document.body.appendChild(host);
+      setTimeout(() => { if (host && host.parentNode) host.remove(); }, 20000);
+    } catch (e) {}
+  }
+  function _onGoOnline() {
+    updateNetBadge();
+    try {
+      if (_offlineSessionStartAt == null) return;
+      const since = _offlineSessionStartAt;
+      _offlineSessionStartAt = null;
+      const pins = (typeof State !== "undefined" && Array.isArray(State.pins)) ? State.pins : [];
+      const createdDuring = pins.filter((p) => {
+        const t = (typeof PinSeries !== "undefined" && PinSeries.createdAt) ? PinSeries.createdAt(p) : null;
+        return Number.isFinite(t) && t >= since;
+      });
+      if (createdDuring.length) _showReconnectBanner(createdDuring.length);
+    } catch (e) {}
+  }
+
   // 네트워크 이벤트 + 주기 갱신 연결 (DOM 준비 후 init 에서 한 번 더 호출)
   const Offline = {
     Bundle: OfflineBundle,
@@ -289,8 +344,8 @@
     curDepId: _curDepId,
     init() {
       try {
-        window.addEventListener("online", updateNetBadge);
-        window.addEventListener("offline", updateNetBadge);
+        window.addEventListener("online", _onGoOnline);
+        window.addEventListener("offline", () => { _onGoOffline(); updateNetBadge(); });
         if (typeof SyncQueue !== "undefined" && SyncQueue.onChange) SyncQueue.onChange(() => updateNetBadge());
         setInterval(updateNetBadge, 3000);
         updateNetBadge();

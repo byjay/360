@@ -300,6 +300,21 @@
       const hasPhoto = (typeof App !== "undefined" && App.pinHasMedia) ? App.pinHasMedia(pin) : !!(pin && (pin.imageId || pin.imageUrl || pin.videoUrl || pin.pendingOpId || pin.localPreview));
       if (previewBox) previewBox.classList.toggle("hidden", !hasPhoto);
       if (hasPhoto) this._resolvePhotoSrc(pin).then((src) => { if (img && src) img.src = src; });
+      // [지휘자 발주 보강 2026-09-29 §4-2] "영역/구역 · 시각 · 원본파일명" 한 줄 — index.html 수정
+      // 금지(다른 팀 점유)라 JS 로 요소를 만들어 붙인다(기존 "index.html 수정 금지" 관례 그대로,
+      // p87 등 최소 가짜DOM 에 appendChild 가 없을 수 있어 기능감지로 방어).
+      if (hasPhoto && typeof PhotoNaming !== "undefined" && previewBox && typeof previewBox.appendChild === "function") {
+        let metaEl = document.getElementById("pap-photo-meta");
+        if (!metaEl) {
+          metaEl = document.createElement("div");
+          metaEl.id = "pap-photo-meta";
+          if (metaEl.setAttribute) metaEl.setAttribute("style", "font-size:11px;color:#94a3b8;margin-top:2px;");
+          previewBox.appendChild(metaEl);
+        }
+        const desc = PhotoNaming.describe(pin);
+        metaEl.textContent = desc;
+        if (metaEl.classList && metaEl.classList.toggle) metaEl.classList.toggle("hidden", !desc);
+      }
       if (registerBox) {
         registerBox.classList.toggle("hidden", !canEdit);
         // index.html 수정 금지 — 안내 문구만 상태에 맞게 JS 로 갱신(첫 자식 = 고정 안내 div).
@@ -357,9 +372,17 @@
       if (statusEl) statusEl.textContent = "업로드 중…";
       try {
         const { dataURL, width, height } = await Cloud.resizeImage(file);
-        const imgName = (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
+        // [지휘자 발주 보강 2026-09-29 §3] 저장 이름 = 영역/구역이름_등록시각(PhotoNaming SoT,
+        // 35_PhotoBatch.js) — 없으면 기존처럼 핀 라벨 기반. typeof 가드는 로드순서 무관 재사용 관례.
+        const shotAt = Date.now();
+        const fullName = (typeof PhotoNaming !== "undefined")
+          ? PhotoNaming.name(pin, file.name, shotAt, new Set())
+          : (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
+        const imgName = fullName.replace(/\.[^.]+$/, "");
         const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
         pin.imageId = imageId; pin.imageName = imgName;
+        // [지휘자 발주 보강 §4] 표시용 메타(있는 것만 — 지어내지 않음).
+        pin.origName = file.name; pin.shotAt = shotAt; pin.shotSrc = "등록시각";
         if (wantsTheta) pin.is360 = true; // SoT: 20_App.js:2083 과 동일 필드(신규 필드 도입 금지)
         if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
         if (typeof App !== "undefined" && App._markDirty) App._markDirty();
