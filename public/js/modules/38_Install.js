@@ -121,7 +121,7 @@
       const $ = (id) => document.getElementById(id);
       const ios = $("pwa-install-ios");
       const btn = $("pwa-install-accept");
-      const sub = b.querySelector(".pwa-install-sub");
+      const sub = $("pwa-install-sub");
       const isIosNow = this.isIOS();
       if (ios) ios.classList.toggle("hidden", !isIosNow);
       if (btn) {

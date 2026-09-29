@@ -471,7 +471,9 @@ function makeInstallSandbox({ standalone, ua, platform, maxTouchPoints }) {
   const { Install, reg } = makeInstallSandbox({ standalone: true, ua: "Mozilla/5.0 (iPhone)", platform: "iPhone", maxTouchPoints: 5 });
   Install._deferred = { prompt() {}, userChoice: Promise.resolve({ outcome: "accepted" }) };
   ok(Install.isStandalone() === true, "⑨ standalone 감지");
-  ok(Install._shouldPrompt() === false, "🔴⑨ 이미 설치된 상태 → 안내 안 띄움");
+  // [WO 20260929] _shouldPrompt() 는 38_Install.js 리팩터(첫 화면 즉시노출+7일스누즈)로
+  // showBanner()에 흡수됐다(내부 판정 로직은 그대로: standalone 이면 항상 false). 동일 계약 재검증.
+  ok(Install.showBanner() === false, "🔴⑨ 이미 설치된 상태 → 안내 안 띄움(showBanner()===false)");
   ok(Install.maybePrompt() === false, "🔴⑨ maybePrompt() === false");
   ok(reg["pwa-install-banner"].classList.contains("hidden"), "🔴⑨ 배너가 숨김 그대로");
 }

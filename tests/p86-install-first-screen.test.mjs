@@ -59,18 +59,13 @@ function makeEl(id, opts) {
   Object.defineProperty(el, "textContent", { get() { return el._text; }, set(v) { el._text = v == null ? "" : String(v); } });
   return el;
 }
-/** banner 전용 — querySelector(".pwa-install-sub") 가 참조할 자식 하나를 붙인다(무한 재귀 방지 위해 makeEl 밖에서 생성). */
-function attachSub(el) {
-  el._sub = makeEl(null, { classes: [] });
-  el.querySelector = (sel) => (sel === ".pwa-install-sub" ? el._sub : null);
-  return el;
-}
 
 /** env: { standalone, ios, mobileWide(=isMobile() true/false), ua, nowMs } */
 function loadInstall(env) {
   env = env || {};
   const registry = {
-    "pwa-install-banner": attachSub(makeEl("pwa-install-banner", { classes: ["hidden"] })),
+    "pwa-install-banner": makeEl("pwa-install-banner", { classes: ["hidden"] }),
+    "pwa-install-sub": makeEl("pwa-install-sub"),
     "pwa-install-accept": makeEl("pwa-install-accept"),
     "pwa-install-close": makeEl("pwa-install-close"),
     "pwa-install-ios": makeEl("pwa-install-ios", { classes: ["hidden"] })
@@ -138,7 +133,8 @@ console.log("\n[③ 닫기 = 7일 스누즈]");
   const DAY = 24 * 60 * 60 * 1000;
   const t0 = 1_700_000_000_000;
   const registry = {
-    "pwa-install-banner": attachSub(makeEl("pwa-install-banner", { classes: ["hidden"] })),
+    "pwa-install-banner": makeEl("pwa-install-banner", { classes: ["hidden"] }),
+    "pwa-install-sub": makeEl("pwa-install-sub"),
     "pwa-install-accept": makeEl("pwa-install-accept"),
     "pwa-install-close": makeEl("pwa-install-close"),
     "pwa-install-ios": makeEl("pwa-install-ios", { classes: ["hidden"] })
@@ -211,7 +207,8 @@ console.log("\n[뮤테이션 1] beforeinstallprompt 리스너의 _onDeferredRead
   if (mutated === installSrc) { console.log("  FAIL 뮤테이션1 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const registry = {
-      "pwa-install-banner": attachSub(makeEl("pwa-install-banner", { classes: ["hidden"] })),
+      "pwa-install-banner": makeEl("pwa-install-banner", { classes: ["hidden"] }),
+    "pwa-install-sub": makeEl("pwa-install-sub"),
       "pwa-install-accept": makeEl("pwa-install-accept"),
       "pwa-install-close": makeEl("pwa-install-close"),
       "pwa-install-ios": makeEl("pwa-install-ios", { classes: ["hidden"] })
@@ -247,7 +244,8 @@ console.log("\n[뮤테이션 2] _dismissed() 를 영구 스누즈로 되돌림 �
     const DAY = 24 * 60 * 60 * 1000;
     const t0 = 1_700_000_000_000;
     const registry = {
-      "pwa-install-banner": attachSub(makeEl("pwa-install-banner", { classes: ["hidden"] })),
+      "pwa-install-banner": makeEl("pwa-install-banner", { classes: ["hidden"] }),
+    "pwa-install-sub": makeEl("pwa-install-sub"),
       "pwa-install-accept": makeEl("pwa-install-accept"),
       "pwa-install-close": makeEl("pwa-install-close"),
       "pwa-install-ios": makeEl("pwa-install-ios", { classes: ["hidden"] })

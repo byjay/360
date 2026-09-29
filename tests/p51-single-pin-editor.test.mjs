@@ -157,15 +157,16 @@ const indexHtml = rd("public/index.html");
 const uiSrc = rd("public/js/modules/11_UI.js");
 const inspectorSrc = rd("public/js/modules/17_Inspector.js");
 
-/* ══════════════════════ ① pap-edit 클릭 → B 안 열림 ══════════════════════ */
-console.log("\n[①] '수정/사진 추가' 클릭 → #section-pin-form 안 열림(App.editPin 미호출)");
+/* ══════════════════════ ① A 를 여는 동작이 B(App.editPin)를 절대 호출하지 않는다 ══════════════════════ */
+// [WO 20260929] 🔴 "수정/사진 추가"(#pap-edit) 버튼 자체를 제거했다(하던 일=라벨 포커스뿐이라 유실 없음).
+//   그 버튼을 클릭하는 낡은 재현 대신, A 를 여는 것 자체가 여전히 B 를 열지 않는지 검증(불변식은 동일).
+console.log("\n[①] PinActionPop(A) open() → #section-pin-form 안 열림(App.editPin 미호출)");
 function check1(src) {
   const { PinActionPop, getElementById, App, State } = load(src, notesSrc);
   const pin = makePin({});
   State.pins = [pin];
   getElementById("section-pin-form").classList.add("hidden"); // 실제 index.html 초기 상태(hidden) 재현
   PinActionPop.open(pin.id);
-  getElementById("pap-edit").dispatch("click");
   return { editCalled: App._editPinCalled, sectionHidden: getElementById("section-pin-form").classList.contains("hidden"), popHidden: getElementById("pin-action-pop").classList.contains("hidden") };
 }
 {
@@ -239,7 +240,11 @@ function regState(src, mobile) {
   const mobileBtns = regState(paSrc, true);
   ok(mobileBtns.length === 6, "등록 종류 버튼 총 6개 렌더됨(정의는 6종)");
   const visibleMobile = mobileBtns.filter((b) => !b.hidden);
-  ok(visibleMobile.length === 1 && visibleMobile[0].reg === "photo", "모바일에서 노출된 건 '사진' 1개뿐 (visible=" + JSON.stringify(visibleMobile) + ")");
+  // [WO 20260929] 상단 노트 섹션을 이 탭으로 통합하며 모바일 노트 작성 기능이 사라지지 않도록
+  // '노트'도 모바일 노출 화이트리스트에 추가했다(의도된 변경 — 기능 유실 방지, CLAUDE.md §G-4④).
+  const visibleRegs = visibleMobile.map((b) => b.reg).sort();
+  ok(visibleRegs.length === 2 && visibleRegs[0] === "note" && visibleRegs[1] === "photo",
+    "모바일에서 노출된 건 '사진'+'노트' 2개뿐(노트는 기능 유실 방지로 의도적 포함) (visible=" + JSON.stringify(visibleMobile) + ")");
 
   const desktopBtns = regState(paSrc, false);
   const visibleDesktop = desktopBtns.filter((b) => !b.hidden);
@@ -271,10 +276,11 @@ console.log("\n[⑧] 375×812 겹침 회귀 — p34/p41/p42/p46 그대로 통과
 /* ══════════════════════ 뮤테이션 4건 ══════════════════════ */
 console.log("\n[뮤테이션] 4건 — 각 되돌리면 실패해야 한다");
 {
-  // ⓐ B 호출 복원 → ① 실패
+  // ⓐ B 호출 복원 → ① 실패 — [WO 20260929] #pap-edit 버튼 자체가 사라졌으므로, A 를 여는
+  //   진입점(open())에 App.editPin 호출을 주입해 "A 가 절대 B 를 열지 않는다" 불변식을 재현한다.
   const mutA = paSrc.replace(
-    /const input = \$\("pap-label-input"\);\s*\n\s*if \(input && !input\.readOnly\) \{ input\.focus\(\); input\.select\(\); \}\s*\n\s*Prompt\.toast && Prompt\.toast\("아래에서 위치명·사진·노트를 바로 수정하세요"\);/,
-    'State.pinEditUnlocked = pin.id; this.close(); App.editPin(pin.id);'
+    'open(pinId) {\n      const el = document.getElementById("pin-action-pop");',
+    'open(pinId) {\n      if (typeof App !== "undefined" && App.editPin) App.editPin(pinId);\n      const el = document.getElementById("pin-action-pop");'
   );
   ok(mutA !== paSrc, "ⓐ mutation 적용됨(문자열이 실제로 바뀜)");
   const r = check1(mutA);
@@ -297,8 +303,9 @@ console.log("\n[뮤테이션] 4건 — 각 되돌리면 실패해야 한다");
   ok(mutC !== paSrc, "ⓒ mutation 적용됨(문자열이 실제로 바뀜)");
   const mobileBtnsMut = regState(mutC, true);
   const visibleMobileMut = mobileBtnsMut.filter((b) => !b.hidden);
-  ok(!(visibleMobileMut.length === 1 && visibleMobileMut[0].reg === "photo"),
-    "ⓒ 모바일 필터 제거 → ⑤(사진만 노출)이 실패해야 정상 (실제 visible=" + JSON.stringify(visibleMobileMut) + ")");
+  const visibleMobileMutRegs = visibleMobileMut.map((b) => b.reg).sort();
+  ok(!(visibleMobileMutRegs.length === 2 && visibleMobileMutRegs[0] === "note" && visibleMobileMutRegs[1] === "photo"),
+    "ⓒ 모바일 필터 제거 → ⑤(사진+노트만 노출)이 실패해야 정상 (실제 visible=" + JSON.stringify(visibleMobileMut) + ")");
 
   // ⓓ 사진 등록 경로 제거 → ② 실패
   const mutD = paSrc.replace(
