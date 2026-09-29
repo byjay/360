@@ -126,18 +126,24 @@
       return (grid && typeof grid.querySelectorAll === "function") ? Array.from(grid.querySelectorAll(".pap-reg-btn")) : [];
     },
 
-    /** 모바일(≤720px)에서는 '사진'·'노트'만 노출 — 마스터 기존 지시(B#pf-tools 규칙) +
-     *  [WO 20260929] 노트를 이 탭으로 통합하며 기능 유실 방지(모바일도 노트는 계속 쓸 수 있어야 함). */
+    /** 모바일(≤720px)에서는 '사진'·'360'·'노트'만 노출 — 마스터 기존 지시(B#pf-tools 규칙) +
+     *  [WO 20260929] 노트를 이 탭으로 통합하며 기능 유실 방지(모바일도 노트는 계속 쓸 수 있어야 함) +
+     *  [WO 20260929-2] 🔴 THETA 360 현장 등록이 휴대폰 핵심 동선이라 '360'도 노출(마스터 재지시:
+     *  "휴대폰에서도 360 사진 등록되게"). 문서·동영상·URL 은 계속 숨김(근거: 데스크톱 전용 파일 규모/입력). */
     _applyRegVisibility() {
       const grid = document.getElementById("pap-reg-tools");
       if (!grid) return;
       const mobile = !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches);
       this._regBtns(grid).forEach((btn) => {
         const reg = btn.dataset.reg;
-        btn.classList.toggle("hidden", mobile && reg !== "photo" && reg !== "note");
+        btn.classList.toggle("hidden", mobile && reg !== "photo" && reg !== "theta" && reg !== "note");
       });
       const hint = document.getElementById("pap-reg-mobile-hint");
-      if (hint) hint.classList.toggle("hidden", !mobile);
+      if (hint) {
+        // index.html 은 타 팀 점유(수정 금지) — 안내 문구는 여기(JS)에서 SoT 로 덮어쓴다.
+        hint.textContent = "모바일에서는 360·사진·노트만 등록할 수 있어요. 문서·동영상·URL은 PC에서 추가하세요.";
+        hint.classList.toggle("hidden", !mobile);
+      }
     },
 
     /** 등록 종류 선택 — 사진/360/동영상/URL 은 기존 단일 위젯(pap-photo-area) 재사용(중복 위젯 생성 금지),
@@ -283,20 +289,26 @@
       Prompt.toast && Prompt.toast("위치명/번호 반영됨 (미저장)");
     },
 
-    /** ── 사진 섹션: 있으면 미리보기, 없으면 등록 UI(뷰어는 등록 UI 숨김) ── */
+    /** ── 사진 섹션: 있으면 미리보기 + (편집가능이면) 추가등록 칸도 계속 노출, 없으면 등록 UI만.
+     *  [WO 20260929-2] 🔴 "사진이 이미 있어도 추가 가능" — 모바일 360/사진 재등록 동선을 위해
+     *  registerBox 를 hasPhoto 로 숨기지 않는다(canEdit 로만 결정). 뷰어(canEdit=false)는 계속 숨김. */
     _renderPhoto(pin, canEdit) {
       const $ = (id) => document.getElementById(id);
       const previewBox = $("pap-photo-preview");
       const registerBox = $("pap-photo-register");
       const img = $("pap-photo-img");
       const hasPhoto = (typeof App !== "undefined" && App.pinHasMedia) ? App.pinHasMedia(pin) : !!(pin && (pin.imageId || pin.imageUrl || pin.videoUrl || pin.pendingOpId || pin.localPreview));
-      if (hasPhoto) {
-        if (previewBox) previewBox.classList.remove("hidden");
-        if (registerBox) registerBox.classList.add("hidden");
-        this._resolvePhotoSrc(pin).then((src) => { if (img && src) img.src = src; });
-      } else {
-        if (previewBox) previewBox.classList.add("hidden");
-        if (registerBox) registerBox.classList.toggle("hidden", !canEdit);
+      if (previewBox) previewBox.classList.toggle("hidden", !hasPhoto);
+      if (hasPhoto) this._resolvePhotoSrc(pin).then((src) => { if (img && src) img.src = src; });
+      if (registerBox) {
+        registerBox.classList.toggle("hidden", !canEdit);
+        // index.html 수정 금지 — 안내 문구만 상태에 맞게 JS 로 갱신(첫 자식 = 고정 안내 div).
+        const desc = registerBox.firstElementChild;
+        if (desc) desc.textContent = hasPhoto
+          ? "새 파일을 선택하면 기존 사진/360을 교체합니다."
+          : "등록된 사진이 없습니다. 파일을 선택하거나 경로를 입력하세요.";
+      }
+      if (!hasPhoto) {
         const errEl = $("pap-photo-err"); if (errEl) errEl.classList.add("hidden");
         const statusEl = $("pap-photo-status"); if (statusEl) statusEl.textContent = "";
         const urlInput = $("pap-photo-url"); if (urlInput) urlInput.value = "";
@@ -317,23 +329,42 @@
       return null;
     },
 
-    /** ── 사진 등록: 파일 선택 — 기존 저장 경로(Cloud.resizeImage/uploadImage, imageId/imageName) 재사용 ── */
+    /** ── 사진/360 등록: 파일 선택 — 기존 저장 경로(Cloud.resizeImage/uploadImage, imageId/imageName)
+     *  재사용(신규 업로드 로직 금지, WO 20260929-2). '360' 탭 선택 시에만 등장방형 비율을 강제 검사한다
+     *  — 판정 로직은 App._detect360(20_App.js) 을 그대로 재사용(SoT, 임계값 중복 금지). ── */
     async _registerPhotoFile(file) {
       const pin = this._pin(); if (!pin || !this._canEdit()) return;
       const $ = (id) => document.getElementById(id);
       const errEl = $("pap-photo-err"), statusEl = $("pap-photo-status");
       if (errEl) errEl.classList.add("hidden");
       if (!file) { if (errEl) { errEl.textContent = "파일을 선택하세요."; errEl.classList.remove("hidden"); } return; }
+      const wantsTheta = this._regCat === "theta";
+      if (wantsTheta) {
+        if (statusEl) statusEl.textContent = "360 비율 확인 중…";
+        const is360 = await new Promise((resolve) => {
+          if (typeof App !== "undefined" && App._detect360) App._detect360(file, (ok) => resolve(ok));
+          else resolve(false);
+        });
+        if (!is360) {
+          if (statusEl) statusEl.textContent = "";
+          if (errEl) {
+            errEl.textContent = "360 사진이 아닙니다(가로:세로 ≈ 2:1 등장방형만 인식). 일반 사진은 '사진' 탭에서 등록하세요.";
+            errEl.classList.remove("hidden");
+          }
+          return; // 조용한 실패 금지 — 이유를 보여주고 중단, 업로드하지 않는다
+        }
+      }
       if (statusEl) statusEl.textContent = "업로드 중…";
       try {
         const { dataURL, width, height } = await Cloud.resizeImage(file);
         const imgName = (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
         const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
         pin.imageId = imageId; pin.imageName = imgName;
+        if (wantsTheta) pin.is360 = true; // SoT: 20_App.js:2083 과 동일 필드(신규 필드 도입 금지)
         if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
         if (typeof App !== "undefined" && App._markDirty) App._markDirty();
         if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
-        if (statusEl) statusEl.textContent = "사진 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";
+        if (statusEl) statusEl.textContent = (wantsTheta ? "360° 사진 등록됨" : "사진 등록됨") + " (미저장 — 저장 버튼으로 서버에 반영하세요)";
         this._renderPhoto(pin, true);
       } catch (e) {
         if (errEl) { errEl.textContent = "업로드 실패: " + (e.message || e); errEl.classList.remove("hidden"); }

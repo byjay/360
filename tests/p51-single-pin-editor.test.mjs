@@ -242,9 +242,11 @@ function regState(src, mobile) {
   const visibleMobile = mobileBtns.filter((b) => !b.hidden);
   // [WO 20260929] 상단 노트 섹션을 이 탭으로 통합하며 모바일 노트 작성 기능이 사라지지 않도록
   // '노트'도 모바일 노출 화이트리스트에 추가했다(의도된 변경 — 기능 유실 방지, CLAUDE.md §G-4④).
+  // [WO 20260929-2] 🔴 마스터 재지시("휴대폰에서도 360 사진 등록되게") — THETA 360 현장 등록이
+  // 휴대폰 핵심 동선이라 '360'도 화이트리스트에 추가(의도된 변경).
   const visibleRegs = visibleMobile.map((b) => b.reg).sort();
-  ok(visibleRegs.length === 2 && visibleRegs[0] === "note" && visibleRegs[1] === "photo",
-    "모바일에서 노출된 건 '사진'+'노트' 2개뿐(노트는 기능 유실 방지로 의도적 포함) (visible=" + JSON.stringify(visibleMobile) + ")");
+  ok(visibleRegs.length === 3 && visibleRegs[0] === "note" && visibleRegs[1] === "photo" && visibleRegs[2] === "theta",
+    "모바일에서 노출된 건 '사진'+'360'+'노트' 3개뿐(360·노트는 기능 유실 방지로 의도적 포함) (visible=" + JSON.stringify(visibleMobile) + ")");
 
   const desktopBtns = regState(paSrc, false);
   const visibleDesktop = desktopBtns.filter((b) => !b.hidden);
@@ -304,8 +306,8 @@ console.log("\n[뮤테이션] 4건 — 각 되돌리면 실패해야 한다");
   const mobileBtnsMut = regState(mutC, true);
   const visibleMobileMut = mobileBtnsMut.filter((b) => !b.hidden);
   const visibleMobileMutRegs = visibleMobileMut.map((b) => b.reg).sort();
-  ok(!(visibleMobileMutRegs.length === 2 && visibleMobileMutRegs[0] === "note" && visibleMobileMutRegs[1] === "photo"),
-    "ⓒ 모바일 필터 제거 → ⑤(사진+노트만 노출)이 실패해야 정상 (실제 visible=" + JSON.stringify(visibleMobileMut) + ")");
+  ok(!(visibleMobileMutRegs.length === 3 && visibleMobileMutRegs[0] === "note" && visibleMobileMutRegs[1] === "photo" && visibleMobileMutRegs[2] === "theta"),
+    "ⓒ 모바일 필터 제거 → ⑤(사진+360+노트만 노출)이 실패해야 정상 (실제 visible=" + JSON.stringify(visibleMobileMut) + ")");
 
   // ⓓ 사진 등록 경로 제거 → ② 실패
   const mutD = paSrc.replace(

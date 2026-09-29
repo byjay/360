@@ -66,6 +66,8 @@ function makeSandbox() {
     pinHasContent(p) { return !!(p && (p.imageId || p.imageUrl || p.videoUrl || p.note)); },
     pinHasMedia(p) { return !!(p && (p.imageId || p.imageUrl || p.videoUrl || p.pendingOpId || p.localPreview)); },
     openPano(pin) { App._openPanoCalled = pin; },
+    // [WO 20260929-2] 20_App.js:_detect360 재사용 지점 — 테스트에선 파일명에 "360"이 있으면 통과로 취급.
+    _detect360(file, cb) { cb(!!(file && /360/i.test(file.name || ""))); },
     editPin() {}, deletePin() {}, focusPin() {},
     setActivePin() {},
     _dirty: false,
@@ -121,7 +123,8 @@ function run(paSrc, notesSrc, indexHtml) {
     State.pins = [pin];
     PinActionPop.open(pin.id);
     ok(!getElementById("pap-photo-preview").classList.contains("hidden"), "미리보기 영역 표시됨");
-    ok(getElementById("pap-photo-register").classList.contains("hidden"), "등록 UI는 숨겨짐");
+    // [WO 20260929-2] 🔴 사진이 있어도 추가 등록 칸은 계속 보임(canEdit 로만 결정, hasPhoto 로 숨기지 않음)
+    ok(!getElementById("pap-photo-register").classList.contains("hidden"), "사진 있어도 등록 UI(추가용)는 계속 보임");
   }
 
   /* [2] 사진 없는 핀 클릭 → 등록 UI 표시(빈칸 아님) */
