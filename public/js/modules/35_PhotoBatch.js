@@ -115,6 +115,14 @@
   };
 
   const PhotoBatch = {
+    /** 🔴 [WO 20261001-offline · p102 A2] 사진 연결 결과(pendingOpId·imageName)를 **로컬 draft 에도** 남기고 미저장 표시.
+     *  종전엔 _markDirty() 만 불러 draft 에 pendingOpId 가 없었다 → 오프라인 새로고침 뒤 핀이 사진을 잃고,
+     *  큐는 업로드 성공으로 비워져 사진이 고아가 됐다. _saveDraftLocal 은 **로컬 전용**(서버 저장 0) —
+     *  자동저장 OFF 정책(서버 반영은 '저장' 버튼)은 그대로다. 세 연결 경로(run·시각매칭 적용·자동연결)의 공유 지점. */
+    _markUnsaved() {
+      try { App._markDirty && App._markDirty(); } catch (e) {}
+      try { if (App._saveDraftLocal) { const p = App._saveDraftLocal(); if (p && p.catch) p.catch(() => {}); } } catch (e) {}
+    },
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
     _range: { start: 1, end: 1, series: "content" },
     _busy: false,
@@ -676,7 +684,7 @@
       if (runBtn) runBtn.disabled = false;
       try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
       try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
-      if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} } // 자동저장 호출 금지 — 미저장 표시만
+      if (done) this._markUnsaved(); // 서버 자동저장 금지 — 미저장 표시 + 로컬 draft 보존만
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
     },
 
@@ -865,7 +873,7 @@
       }
       try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
       try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
-      if (done) { try { App._markDirty && App._markDirty(); } catch (e) {} }
+      if (done) this._markUnsaved();
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 사진 연결 완료 " + done + " · 건너뜀 " + skip + " · 실패 " + fail);
       this._closeTimeMatchModal();
     },
@@ -988,7 +996,7 @@
         this._autoRows = (this._autoRows || []).filter((x) => x !== m.row);
         try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
         try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
-        try { App._markDirty && App._markDirty(); } catch (e) {}
+        this._markUnsaved();
         if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         if (typeof Prompt !== "undefined" && Prompt.toast)
           Prompt.toast("360 사진 자동 연결됨" + (r.offline ? "(오프라인 저장됨)" : "") + " · Δ" + Math.round(m.dtMs / 1000) + "초");

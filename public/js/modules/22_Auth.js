@@ -618,11 +618,19 @@
      *  근본원인: WP3 B5 가 /tables/deployments* 에 프로젝트 스코프 403(deploymentWriteDenied)을
      *  새로 추가하자, 기존 "401/403 = 토큰 만료" 판정이 정상 권한거부를 오인해 불필요한
      *  재로그인 창을 띄웠다(프로젝트 비멤버 designer의 오프라인 배포본 저장 시).
-     *  반환: 'expired'(진짜 재로그인 필요) | 'denied'(이 프로젝트 권한 없음) | 'conflict'(409, 삭제된 프로젝트) | null */
+     *  반환: 'expired'(진짜 재로그인 필요) | 'denied'(이 프로젝트 권한 없음) | 'conflict'(409, 삭제된 프로젝트)
+     *        | 'stale'(409, 낙관적 잠금 버전 경합 — 최신본 병합 후 재시도하면 된다) | null
+     *  🔴 [WO 20261001-offline · p102 A4] 409 는 두 가지다: deploymentWriteDenied 의 '프로젝트 삭제'(영구)와
+     *     updateDeployment 의 base_version 불일치 'conflict'(일시). 종전엔 둘 다 'conflict' 로 봐서, 복귀 업로드의
+     *     GET→PATCH 사이에 남이 저장하기만 해도 draft 가 writeDenied(영구 보류)+"프로젝트가 삭제되어" 토스트가 됐다. */
     async classifyWriteFailure(res) {
       if (!res) return null;
       if (res.status === 401) return "expired";
-      if (res.status === 409) return "conflict";
+      if (res.status === 409) {
+        let msg409 = "";
+        try { const j = await res.clone().json(); msg409 = String((j && j.error) || ""); } catch (e) {}
+        return msg409.indexOf("project deleted") >= 0 ? "conflict" : "stale";
+      }
       if (res.status === 403) {
         let msg = "";
         try { const j = await res.clone().json(); msg = String((j && j.error) || ""); } catch (e) {}

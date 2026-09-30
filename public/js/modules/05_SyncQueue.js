@@ -408,7 +408,8 @@
       try {
         const r = await this.flush();
         // map 이 있으면(0건이어도) 핀의 pendingOpId → 서버 imageId/docId 치환
-        if (r && r.map && typeof App !== "undefined" && App._onSyncDone) App._onSyncDone(r);
+        // 🔴 [p102 A2] await — 보관 draft 의 pendingOpId→imageId 치환이 아래 draft 업로드보다 먼저 끝나야 한다
+        if (r && r.map && typeof App !== "undefined" && App._onSyncDone) await App._onSyncDone(r);
         // 오프라인 중 저장된 도면 draft 를 서버에 반영(낙관적 잠금 base_version 포함)
         if (typeof App !== "undefined" && App._flushDirtyDrafts) {
           try { await App._flushDirtyDrafts(); } catch (e) {}

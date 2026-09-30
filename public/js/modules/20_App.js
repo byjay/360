@@ -2421,8 +2421,38 @@
       UI.show("section-next-point");
     },
 
-    /** 동기화 완료 콜백 — 큐 op id → 서버 imageId/docId 로 치환 후 화면 갱신 */
-    _onSyncDone(result) {
+    /** 🔴 [WO 20261001-offline · p102 A2] op id → 서버 id 치환을 **로컬에 보관된 draft 전부**에도 적용한다.
+     *  근본원인: 치환이 화면(State.pins)에만 됐다 — ① 열려 있지 않은 도면(새로고침 후 허브 등)의 draft 는
+     *  pendingOpId 그대로 남고, 큐는 업로드 성공으로 비워져 매핑이 영영 사라졌다(사진 고아).
+     *  ② 열린 도면도 바로 뒤 _flushDirtyDrafts 가 치환 전 draft 를 올려 서버 핀에 imageId 가 빠졌다.
+     *  바뀐 draft 는 dirty=true — 서버에 아직 죽은 pendingOpId 만 있을 수 있으므로 다음 업로드 대상이다. */
+    async _applySyncMapToDrafts(map) {
+      if (!map || !Object.keys(map).length || typeof SyncQueue === "undefined" || !SyncQueue.allDraftKeys) return 0;
+      let n = 0, keys = [];
+      try { keys = (await SyncQueue.allDraftKeys()) || []; } catch (e) { return 0; }
+      for (const k of keys) {
+        let d = null;
+        try { d = await SyncQueue.loadDraft(k); } catch (e) { continue; }
+        if (!d || !Array.isArray(d.pins)) continue;
+        let changed = false;
+        d.pins.forEach((pin) => {
+          if (!pin) return;
+          if (pin.pendingOpId && map[pin.pendingOpId]) { pin.imageId = map[pin.pendingOpId]; delete pin.pendingOpId; changed = true; }
+          (pin.attachments || []).forEach((att) => {
+            if (att && att.pendingOpId && map[att.pendingOpId]) { att.docId = map[att.pendingOpId]; delete att.pendingOpId; delete att.pendingSync; changed = true; }
+          });
+          if (pin.pendingSync && !pin.pendingOpId && !(pin.attachments || []).some((a) => a && a.pendingOpId)) { delete pin.pendingSync; changed = true; }
+        });
+        if (!changed) continue;
+        d.dirty = true;
+        try { await SyncQueue.saveDraft(k, d); n++; } catch (e) {}
+      }
+      return n;
+    },
+
+    /** 동기화 완료 콜백 — 큐 op id → 서버 imageId/docId 로 치환 후 화면 갱신.
+     *  보관 draft 치환(_applySyncMapToDrafts)까지 끝나야 resolve — 호출부는 draft 업로드 **전에** await 한다. */
+    async _onSyncDone(result) {
       const map = (result && result.map) || {};
       let changed = false;
       State.pins.forEach(pin => {
@@ -2449,6 +2479,8 @@
           delete pin.pendingSync; changed = true;
         }
       });
+      // 보관 draft 치환을 화면 draft 재보관(_autoSave)보다 **먼저** — 늦게 끝난 쪽이 최신 화면 상태를 덮지 않게
+      try { await this._applySyncMapToDrafts(map); } catch (e) {}
       if (changed) {
         try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
         // [버그수정] imageId/docId 스왑을 서버·로컬에 영속화 — 안 하면 탭 닫을 때 서버엔 죽은 pendingOpId만 남아 사진 영구손실
@@ -2537,7 +2569,7 @@
       let uploaded = 0;
       try {
         const r = await SyncQueue.flush();
-        if (r && r.map) this._onSyncDone(r);
+        if (r && r.map) await this._onSyncDone(r);   // [p102 A2] draft 치환 완료 후 draft 업로드
         if (r && typeof r.uploaded === "number") uploaded += r.uploaded;
         if (this._flushDirtyDrafts) { try { await this._flushDirtyDrafts(); } catch (e) {} }
         if (this._flushOpLogs) { try { await this._flushOpLogs(); } catch (e) {} }
@@ -4558,25 +4590,34 @@
             // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
             //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
             //   서버 핀/구역과 오프라인 작업분을 병합하여 양쪽 모두 보존.
-            try {
-              const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
-              if (cur.ok) {
-                const cj = await cur.json();
-                baseVer = (cj.version != null ? Number(cj.version) : 0);
-                try { srvPins = JSON.parse(cj.pins || "[]"); } catch (e) {}
-                try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
+            // 🔴 [WO 20261001-offline · p102 A4] GET 과 PATCH 사이에 남이 저장하면 409(버전 경합, 'stale').
+            //   최신본을 다시 읽어 같은 규칙으로 병합 후 재시도한다(최대 3회) — 경합은 권한/삭제가 아니다.
+            for (let attempt = 0; attempt < 3; attempt++) {
+              baseVer = 0; srvPins = null; srvZones = null;
+              body.pins = JSON.stringify(d.pins || []); body.zones = JSON.stringify(d.zones || []);
+              try {
+                const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
+                if (cur.ok) {
+                  const cj = await cur.json();
+                  baseVer = (cj.version != null ? Number(cj.version) : 0);
+                  try { srvPins = JSON.parse(cj.pins || "[]"); } catch (e) {}
+                  try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
+                }
+              } catch (e) {}
+              // 🔴 [WO 20260928-pinloss] 충돌 규칙은 화면 복원과 같은 단일 출처(_draftVsServer)
+              if (srvPins || srvZones) {
+                const m = this._draftVsServer(d, srvPins, srvZones, baseVer);
+                if (srvPins) body.pins = JSON.stringify(m.pins);
+                if (srvZones) body.zones = JSON.stringify(m.zones);
               }
-            } catch (e) {}
-            // 🔴 [WO 20260928-pinloss] 충돌 규칙은 화면 복원과 같은 단일 출처(_draftVsServer)
-            if (srvPins || srvZones) {
-              const m = this._draftVsServer(d, srvPins, srvZones, baseVer);
-              if (srvPins) body.pins = JSON.stringify(m.pins);
-              if (srvZones) body.zones = JSON.stringify(m.zones);
+              body.base_version = baseVer;
+              res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
+                method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
+              });
+              const stale = res.status === 409 && typeof Auth !== "undefined" && Auth.classifyWriteFailure
+                && (await Auth.classifyWriteFailure(res)) === "stale";
+              if (!stale) break;
             }
-            body.base_version = baseVer;
-            res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
-              method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
-            });
           } else {
             res = await fetch("/tables/deployments", {
               method: "POST", headers: Auth.headers(), body: JSON.stringify(body)
@@ -4957,7 +4998,7 @@
         }
         btn.disabled = true; btn.textContent = "임시 저장 핀 업로드 중...";
         const r = await SyncQueue.flush();
-        this._onSyncDone(r);
+        await this._onSyncDone(r);
         if (State.pins.some(p => p.pendingOpId || (p.attachments || []).some(a => a.pendingOpId))) {
           alert("일부 핀 업로드에 실패했습니다. 네트워크를 확인하고 다시 시도해 주세요.");
           btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg> 뷰어로 배포';
