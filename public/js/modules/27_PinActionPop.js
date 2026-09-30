@@ -354,7 +354,9 @@
         if (!metaEl) {
           metaEl = document.createElement("div");
           metaEl.id = "pap-photo-meta";
-          if (metaEl.setAttribute) metaEl.setAttribute("style", "font-size:11px;color:#94a3b8;margin-top:2px;");
+          // [p100 정정, 2026-09-30] #94a3b8 는 흰 카드 위 2.56:1(AA 미달, 헤드리스 Chrome 실측) —
+          // slate-500 #64748b 로 교체(공유 함수·형제 호출부 색상 값 CSS 동형, 실측 4.76:1).
+          if (metaEl.setAttribute) metaEl.setAttribute("style", "font-size:11px;color:#64748b;margin-top:2px;");
           previewBox.appendChild(metaEl);
         }
         const desc = PhotoNaming.describe(pin);

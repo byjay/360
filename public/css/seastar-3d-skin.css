@@ -35,7 +35,10 @@
   --m3d-raise:  0 1px 0 rgba(255,255,255,.13) inset, 0 -2px 2px rgba(0,0,0,.4) inset, 0 2px 3px rgba(0,0,0,.5), 0 7px 16px rgba(0,0,0,.4);
   --m3d-press:  inset 0 3px 8px rgba(0,0,0,.72), inset 0 1px 0 rgba(255,255,255,.04);
   --m3d-dark:   linear-gradient(180deg,#3c4047,#2c2f35 52%,#1b1d21);
-  --m3d-gold:   linear-gradient(180deg,#e7bd56,#c9962a 55%,#9c7320);
+  /* [p100 정정, 2026-09-30] 마지막 stop #9c7320 은 어두운 텍스트 #1a1208 과 4.31:1(AA 미달) —
+     그라디언트 stop 별 실측(헤드리스 Chrome, 최악 지점 기준)으로 처음 드러났다(배경-이미지 그라디언트는
+     backgroundColor 로 안 잡혀 종전 육안검수를 빠져나갔다). 살짝 밝힌 #a67d28 로 실측 4.87:1. */
+  --m3d-gold:   linear-gradient(180deg,#e7bd56,#c9962a 55%,#a67d28);
   --m3d-gold-sh:0 1px 0 rgba(255,255,255,.45) inset, 0 -3px 6px rgba(110,80,20,.5) inset, 0 2px 5px rgba(0,0,0,.5), 0 0 16px rgba(201,150,42,.4);
   --m3d-inset:  linear-gradient(180deg,#0d0f13,#181b20);
   --m3d-inset-sh: inset 0 3px 7px rgba(0,0,0,.68), inset 0 1px 0 rgba(255,255,255,.04);
@@ -74,7 +77,10 @@ body{ background:#0e1014 !important; color:var(--text) !important; }
 .btn-reload-deploy,.btn-import-json{
   background:var(--m3d-dark) !important;
   border:none !important;
-  color:var(--text2) !important;
+  /* [p100 정정, 2026-09-30] --text2(#9095a0) 는 --m3d-dark 그라디언트의 가장 밝은 stop(#3c4047)
+     위에서 3.47:1(AA 미달) — 그라디언트 stop 별 실측(최악 지점)으로 드러났다. hover 상태는 이미
+     var(--text) 로 바뀌는데(아래 :hover 규칙) base 상태만 처지고 있었다 — hover 와 같은 톤으로 통일. */
+  color:var(--text) !important;
   box-shadow:var(--m3d-raise) !important;
   transition:filter .1s ease, box-shadow .1s ease, transform .08s ease !important;
 }
@@ -180,9 +186,20 @@ body{ background:#0e1014 !important; color:var(--text) !important; }
 /* [WO 20260929-tree-label] 🔴 사이드바 트리 선택행(.tree-node.active) 대비 수정 —
    style.css 의 --gold-ink(#7e5d12)는 밝은 배경 전용 어두운 톤인데, 이 파일의 :root remap
    목록에 --gold-ink 가 없어(다른 20여 곳이 그 변수를 공유해 전역 remap은 블라스트 반경이 큼)
-   다크 런타임에서도 그대로 남아 "검정 위 검정"(2.07:1, AA 미달)이 됐다. --gold-ink 는 그대로
-   두고 이 선택자에만 이미 다크용으로 remap 된 --gold(#e0b14a)를 쓴다(실측 6.30:1). */
-.tree-node.active{ color:var(--gold) !important; }
+   다크 런타임에서도 그대로 남아 "검정 위 검정"(2.07:1, AA 미달)이 됐다.
+   [p100 정정, 2026-09-30] 🔴 당시 "다크용 --gold(#e0b14a)" 가정이 틀렸다 — public/index.html:57
+   window.WM_BRAND.accent="#1b75bb"(SEASTAR 로고 블루) 를 18_Brand.js 가 페이지 로드마다 무조건
+   --gold/--accent 에 주입한다(테넌트 무관, 폴백 아님). 그 결과 var(--gold) 는 이 앱에서 항상
+   블루이고, 합성 배경(#393326류) 위 2.58:1(AA 미달)로 다시 깨져 있었다(헤드리스 Chrome 실측,
+   tests/p100-contrast-audit.test.mjs). --gold 변수를 거치지 않는 고정 골드 리터럴로 못박는다
+   (실측 6.30:1 — 계산은 그대로 유효, var() 만 제거). */
+.tree-node.active{ color:#e0b14a !important; }
+
+/* [p100 정정, 2026-09-30] 🔴 --text3(다크 remap #6b7079)/--text4(#51565e) 가 앱 전역 근접-검정
+   배경(body #0e1014, 패널 --panel #1d2025 등) 위에서 2.58~3.28:1(AA 미달) — 광범위 재사용 토큰이라
+   전역 remap 은 블라스트 반경이 크므로(§공통 작업 규율 준수) 실측으로 확인된 3곳만 스코프
+   오버라이드(--text2, 실측 4.5:1+로 검증된 다크 톤 재사용, 새 색 도입 없음). */
+.tree-empty,.hub-card-date,.home-footer{ color:var(--text2) !important; }
 
 /* ════ 스크롤바 ════ */
 ::-webkit-scrollbar-thumb{ background:#3a3e45 !important; border:2px solid #15171b !important; }
