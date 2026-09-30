@@ -3753,6 +3753,11 @@
       // [P14] 원본 PDF 위치 + 실제 저장 픽셀. 있을 때만 실어 보낸다 —
       //   미전송 시 서버가 기존 값을 그대로 보존하므로(부분 갱신) 기존 배포본이 깨지지 않는다.
       if (sourceMeta) body.source_meta = sourceMeta;
+      // [WO 20260930-WP3] 소속 프로젝트 — 서버가 POST 시 기록해 프로젝트 단위 쓰기 권한의 기준으로 쓴다
+      //   (PATCH 에 실려도 서버는 무시 — 귀속은 생성 시 1회). o.projectId 로 명시(flush 의 draft 키 등) 가능.
+      const pid = (o.projectId !== undefined) ? o.projectId
+        : ((typeof Projects !== "undefined" && Projects.currentProject) ? Projects.currentProject.id : null);
+      if (pid) body.project_id = String(pid);
       return body;
     },
 
@@ -4188,6 +4193,12 @@
       const did = s.slice(i + 2);
       return (did && did !== "nodeck") ? did : "";
     },
+    /** [WO 20260930-WP3] draft 키(`pid::did`, _draftKey 형식)의 프로젝트 id — 없으면 "" (_deckIdOfKey 의 짝) */
+    _projectIdOfKey(key) {
+      const s = String(key || ""); const i = s.lastIndexOf("::");
+      const pid = i < 0 ? "" : s.slice(0, i);
+      return (pid && pid !== "noproj") ? pid : "";
+    },
 
     /** 🔴 [WO 20260928-pinloss] 도면 로드 세대 번호 — 서버본 로더(loadDeckDrawing/loadLatestDeployment)는
      *  await 사이에 다른 로드가 시작되면(허브 구역 클릭 = openApp 의 자동 로드 + selectDeck 동시 발화)
@@ -4318,7 +4329,21 @@
         if (!best) return false;
         if (bestDeck && typeof Projects !== "undefined") Projects.currentDeck = bestDeck;
         const ok = await this._restoreDraftLocal(best);
-        if (ok) { try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {} }
+        if (ok) {
+          try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {}
+          // 🔴 [WO 20260930-fitopen] 로컬 draft 복원(프로젝트 재진입, 서버 배포본 없음)도
+          //   화면 맞춤이 빠진 진입점이었다 — _restoreDraftLocal 은 다른 호출부(loadDeckDrawing
+          //   의 폴백)와 공유하므로 그쪽에서 직접 고치지 않고, whenDisplayed() 로 표시 정착을
+          //   기다린 뒤 여기서만 맞춘다(loadDeckDrawing 폴백은 selectDeck/openOriginal 이 이어서
+          //   _applyDeckCropView 로 다시 맞추므로 영향 없음).
+          try {
+            const shown = (typeof this.whenDisplayed === "function") ? await this.whenDisplayed() : true;
+            if (shown) {
+              try { if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(null); } catch (e) {}
+              try { if (typeof MapCtrl !== "undefined" && MapCtrl.fit) MapCtrl.fit(); } catch (e) {}
+            }
+          } catch (e) {}
+        }
         return ok;
       } catch (e) { return false; }
     },
@@ -4340,6 +4365,9 @@
             annotations: JSON.stringify(d.annotations || []),
             drawing_data: d.pages[0], pages_data: JSON.stringify(d.pages)
           };
+          // [WO 20260930-WP3] 소속 프로젝트 = 이 draft 의 키(현재 열린 프로젝트가 아닐 수 있다)
+          const keyPid = this._projectIdOfKey(key);
+          if (keyPid) body.project_id = keyPid;
           // [P0-2] 구역(deck)에 속하지 않는 draft(`noproj::nodeck`)로 '새' 배포본을 만들면
           //   연결할 구역이 없어 고아 배포본이 된다 → 신규 생성은 건너뛰고 로컬 draft 는 그대로 보존한다.
           //   (기존 배포본 갱신(PATCH)은 연결이 이미 있으므로 그대로 진행)
@@ -4519,6 +4547,10 @@
         const r2pages = await this._uploadPagesToR2(pages);
         const srcMeta = await this._buildSourceMeta(dims);     // [P14] 신규 배포본에 원본 PDF 보관
         const body = this._buildSavePayload(r2pages, srcMeta);
+        // [WO 20260930-WP3 · C3] 구역 밖(프로젝트 단위)에서 처음 등록한 도면 = 프로젝트 원본 후보.
+        //   서버는 그 프로젝트 원본이 비어 있을 때만 기록한다(first-wins). 구역 안 저장·구역 복사본은 원본 아님.
+        const asOriginal = !!body.project_id && !(typeof Projects !== "undefined" && Projects.currentDeck);
+        if (asOriginal) body.original = true;
         const res = await fetch("/tables/deployments", {
           method: "POST",
           headers: Auth.headers(),
@@ -4526,6 +4558,7 @@
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const rec = await res.json();
+        if (rec && rec.is_project_original && typeof Projects !== "undefined" && Projects.markOriginal) Projects.markOriginal(body.project_id, rec.id);
         State.autoSaveDepId = (rec && rec.id) ? rec.id : null;
         State.currentDeploymentId = State.autoSaveDepId;
         try { State.pinBaseIds = this._pinIds(JSON.parse(body.pins || "[]")); } catch (e) {}   // [WO 20260929-bulkdel] 새 서버 기준
@@ -4897,11 +4930,12 @@
             //   공유 지점(§10 SoT) Projects.pickOriginalDeck 으로 루트 구역(parent_id NULL) 중
             //   최신 1개만 고른다 — 사이드바 트리 프로젝트 노드 클릭(openOriginal)과 동일 규칙.
             const deck = (typeof Projects !== "undefined" && Projects.pickOriginalDeck)
-              ? Projects.pickOriginalDeck(decks) : decks.find(d => d.deployment_id);
-            if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck; }
+              ? Projects.pickOriginalDeck(decks, projectForDesigner) : decks.find(d => d.deployment_id);
+            // [WO 20260930-WP3 · C3] 구역 없는 원본(id 없음) = 프로젝트 단위 도면 → currentDeck 없음(_draftKey 의 nodeck 과 같은 규칙)
+            if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck.id ? deck : null; }
             // 🔴 [WO 20260928-pinloss] 저장 안 한 작업분은 배포본 fetch **전에** 읽는다(형제 loadDeckDrawing 과 같은 이유)
             if (deck && State.mode === "designer") {
-              draftKey = projectForDesigner.id + "::" + deck.id;
+              draftKey = projectForDesigner.id + "::" + (deck.id || "nodeck");
               draft = await this._readDirtyDraft(draftKey, wantId);
             }
           } catch (e) {}
@@ -4995,6 +5029,13 @@
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
           if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
           if (typeof Notes !== "undefined") Notes.loadSummary();
+          // 🔴 [WO 20260930-fitopen · 지휘자 실측] 허브 카드/프로젝트 재진입은 트리(selectDeck)·
+          //   openOriginal(31_Projects.js _applyDeckCropView)을 거치지 않는 유일한 진입점이라
+          //   화면 맞춤이 빠져 있었다 — zoom=1/pan=0(_showMapViewport)가 그대로 남아 도면
+          //   왼쪽 위 여백부터 보였다(재현: sunbo floor.pdf). 이 로드는 항상 "전체(크롭 없음)"
+          //   보기이므로 이전 세션의 구역 크롭이 남아 있으면 먼저 해제(PDF.setDeckCrop SoT)한다.
+          try { if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(null); } catch (e) {}
+          try { if (typeof MapCtrl !== "undefined" && MapCtrl.fit) MapCtrl.fit(); } catch (e) {}
         };
         this._armDisplay();   // [WO 20260929-fitrace2] _r2→_showMapViewport 가 settle
         imgEl.onload = _r2;
