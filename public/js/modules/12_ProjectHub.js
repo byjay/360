@@ -452,30 +452,36 @@
       if (!decks.length) {
         return '<div class="hub-card-tree"><p class="hub-tree-empty">구역 없음</p></div>';
       }
-      /* [WO 20260930-fixmode] 사이드바 트리와 같은 구조 — 프로젝트 → CHECKER / 360 → 구역 → 영역.
-         모드 대응표·소속 판정 SoT = PinSeries.DECK_MODES / deckInMode(NULL 구역은 양쪽, 유실 0). */
+      /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
+         구역·영역은 두 모드가 공유하는 한 벌만 렌더한다(중복 0). 모드 분리는 트리 맨 안쪽(더 이상
+         하위 영역이 없는 지점 — 영역, 또는 영역이 없는 구역)에 CHECKER/360 두 잎으로만 존재한다.
+         허브 카드는 실시간 핀 수를 모르므로(로드된 구역 아님) 개수 배지는 붙이지 않는다(§5 날조 금지).
+         SoT = PinSeries.DECK_MODES. */
+      const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
+      const leafModesHtml = (node) => {
+        if (!MODES.length) return "";
+        return '<ul class="hub-tree-leaf-modes">' + MODES.map((m) =>
+          '<li class="hub-tree-leaf-mode hub-tree-leaf-mode-' + esc(m.tag) + '" data-act="mode-open" data-deck-id="' + esc(node.id) + '" data-mode-reg="' + esc(m.regMode) + '" tabindex="0" role="button" title="' + esc(m.label) + ' 작업공간으로 열기(이 구역/영역)">'
+          + '<span class="hub-tree-mode-label">' + esc(m.label) + '</span></li>'
+        ).join("") + '</ul>';
+      };
       const decksHtml = (list) => {
         const { roots, childrenOf } = UI.groupDecksByParent(list);
         const regionsHtml = (deck) => {
           const kids = childrenOf.get(String(deck.id)) || [];
           if (!kids.length) return "";
           return '<ul class="hub-tree-regions">' + kids.map((r) =>
-            '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
+            '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + leafModesHtml(r) + '</li>'
           ).join("") + '</ul>';
         };
         if (!roots.length) return '<p class="hub-tree-empty">구역 없음</p>';
-        return '<ul class="hub-tree-decks">' + roots.map((d) =>
-          '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">' + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>'
-        ).join("") + '</ul>';
+        return '<ul class="hub-tree-decks">' + roots.map((d) => {
+          const hasRegions = (childrenOf.get(String(d.id)) || []).length > 0;
+          return '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">'
+            + UI.deckLabelHtml(d) + regionsHtml(d) + (hasRegions ? "" : leafModesHtml(d)) + '</li>';
+        }).join("") + '</ul>';
       };
-      const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || null;
-      // 모드 정본 미로드(단독 모듈 하네스) — 모드 단 없이 구역부터(종전 구조)
-      if (!MODES) return '<div class="hub-card-tree">' + decksHtml(decks) + '</div>';
-      return '<div class="hub-card-tree"><ul class="hub-tree-modes">' + MODES.map((m) =>
-        '<li class="hub-tree-mode" data-act="mode-open" data-mode-reg="' + esc(m.regMode) + '" tabindex="0" role="button" title="' + esc(m.label) + ' 작업공간으로 열기">'
-        + '<span class="hub-tree-mode-label">' + esc(m.label) + '</span>'
-        + decksHtml(decks.filter((d) => PinSeries.deckInMode(d, m.tag))) + '</li>'
-      ).join("") + '</ul></div>';
+      return '<div class="hub-card-tree">' + decksHtml(decks) + '</div>';
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */

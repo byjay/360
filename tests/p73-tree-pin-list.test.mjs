@@ -92,9 +92,11 @@ function makeUI(src, ctx) {
 const has = (el, cls) => new RegExp("(^| )" + cls + "( |$)").test(el.className || "");
 const kidsOf = (el) => (el._children || []).find((c) => has(c, "tree-children"));
 const pick = (el, cls) => (el._children || []).filter((c) => has(c, cls));
-/* [WO 20260930-fixmode] 트리에 모드 단(프로젝트 → CHECKER / 360 → 구역)이 생겼다. 픽스처 핀은 전부 CHECKER
-   계열이므로 CHECKER 모드 노드 아래의 구역을 본다(모드 단 자체의 검사는 p91). */
-const deckUnderChecker = (proj) => pick(kidsOf(pick(kidsOf(proj), "tree-mode-checker")[0]), "tree-deck")[0];
+/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 모드 가지(88e52ff)를 제거 — 구역은 프로젝트 바로
+   아래 한 벌(공유). 픽스처 핀은 전부 CHECKER 계열이므로 구역의 맨 안쪽 CHECKER 잎(.tree-mode-leaf-checker)
+   아래를 본다(모드 잎 자체의 검사는 p91). */
+const deckUnderChecker = (proj) => pick(kidsOf(proj), "tree-deck")[0];
+const checkerKidsOf = (deck) => kidsOf(pick(kidsOf(deck), "tree-mode-leaf-checker")[0]);
 
 /** 실 좌표 포함판정(16_Zones.js _contains 의 rect 분기와 동일 로직) */
 const ZonesReal = {
@@ -162,7 +164,7 @@ function runFx(src, fixture) {
   const host = registry["side-tree"];
   const proj = pick(host, "tree-project")[0];
   const deck = deckUnderChecker(proj);
-  const kids = kidsOf(deck);
+  const kids = checkerKidsOf(deck);
   const zoneNode = pick(kids, "tree-zone")[0];
   const zonePinIds = zoneNode ? pick(kidsOf(zoneNode), "tree-node-pin").map((n) => n.innerHTML) : [];
   const rootPinIds = pick(kids, "tree-node-pin").map((n) => n.innerHTML);
@@ -191,14 +193,16 @@ function runFx(src, fixture) {
   const host = registry["side-tree"];
   const proj = pick(host, "tree-project")[0];
   const deck = deckUnderChecker(proj);
-  const kids = kidsOf(deck);
+  const kids = checkerKidsOf(deck);
   const zoneNodes = pick(kids, "tree-zone");
   const bigZone = zoneNodes.find((z) => /큰영역/.test(z._children[0].innerHTML));
   const smallZone = zoneNodes.find((z) => /작은영역/.test(z._children[0].innerHTML));
-  const bigPins = pick(kidsOf(bigZone), "tree-node-pin");
+  // [WO 20260930-moderole] 🔴 핀이 0개인 영역은 이 모드 잎 아래에 아예 그려지지 않는다(빈 중복
+  // 방지, 11_UI.js "if (!zpins.length) return;") — 큰영역은 핀이 없으므로 zoneNodes 에 없는 게 정상.
+  const bigPins = bigZone ? pick(kidsOf(bigZone), "tree-node-pin") : [];
   const smallPins = pick(kidsOf(smallZone), "tree-node-pin");
   ok(smallPins.length === 1, `② 작은 영역에 핀 1개 배정(실제 ${smallPins.length}개)`);
-  ok(bigPins.length === 0, `② 큰 영역엔 중복 배정 없음(실제 ${bigPins.length}개)`);
+  ok(!bigZone && bigPins.length === 0, `② 큰 영역엔 중복 배정 없음(핀 0개라 영역 자체가 안 그려짐, 실제 ${bigPins.length}개)`);
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -222,7 +226,7 @@ function runFx(src, fixture) {
   const host = registry["side-tree"];
   const proj = pick(host, "tree-project")[0];
   const deck = deckUnderChecker(proj);
-  const rootPins = pick(kidsOf(deck), "tree-node-pin");
+  const rootPins = pick(checkerKidsOf(deck), "tree-node-pin");
   ok(rootPins.every((n) => /tree-pin-no">#\d+</.test(n.innerHTML)), "④ 모든 핀 행에 #번호 배지 존재");
 }
 

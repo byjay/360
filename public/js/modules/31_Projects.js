@@ -133,9 +133,13 @@
       try { if (typeof ProjectHub !== "undefined" && ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible(); } catch (e) {}
     },
 
-    /** [WO 20260930-fixmode] 구역 생성 body 에 모드 태그(decks.mode) — 규칙 SoT = PinSeries.withDeckMode. POST 3곳 공유. */
-    _withDeckMode(body, parentDeck) {
-      return (typeof PinSeries !== "undefined" && PinSeries.withDeckMode) ? PinSeries.withDeckMode(body, parentDeck) : body;
+    /** [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지 구조를 제거 — 구역·영역은
+     *  이제 두 모드가 공유하므로 새로 만드는 구역/영역에 decks.mode 태그를 붙이지 않는다(no-op).
+     *  decks.mode 컬럼(0029)은 비파괴로 남겨 두되 클라이언트는 더 이상 쓰지 않는다. 서버의 mode
+     *  검증·상속 400(src/index.tsx parseDeckMode/resolveDeckMode)은 body.mode 가 전송될 때만
+     *  동작하므로, 여기서 보내지 않으면 무해하다(확인 완료). POST 3곳 공유 지점(SoT) 그대로 유지. */
+    _withDeckMode(body, _parentDeck) {
+      return body;
     },
 
     /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */

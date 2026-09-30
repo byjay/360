@@ -290,6 +290,66 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ * Part A2 — [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를
+ *  뒤집는다: 구역·영역은 두 모드가 공유하는 한 벌만(중복 0), 모드 분리는 로드된 노드의 맨
+ *  안쪽 잎(.tree-mode-leaf-checker/.tree-mode-leaf-360)에서만 일어난다.
+ *  실 소스(01b_PinSeries.js + 11_UI.js)를 함께 vm 평가(목 아님).
+ * ══════════════════════════════════════════════════════════════════════ */
+console.log("\n[Part A2 · 모드 잎(CHECKER/360) — 구역·영역 중복 0, 계열별 핀 분리]");
+const seriesSrc = rd("public/js/modules/01b_PinSeries.js");
+function runTreeWithSeries(uiSource, ctx) {
+  const { document, registry } = makeDoc();
+  const sandbox = { console, document, JSON, Map, Set, ...ctx };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(seriesSrc + "\n" + uiSource + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
+  sandbox.__UI.renderTree();
+  return { host: registry["side-tree"], UI: sandbox.__UI };
+}
+function a2Checks(uiSource) {
+  const c = fx(); // 메인데크(d1, loaded) 핀 1개(checkboard 없음 = content/360 계열)
+  const { host } = runTreeWithSeries(uiSource, c);
+  const leaves = findAll(host, "tree-mode-leaf");
+  const tags = leaves.map((l) => l.dataset.mode);
+  const chk = leaves.find((l) => has(l, "tree-mode-leaf-checker"));
+  const p360 = leaves.find((l) => has(l, "tree-mode-leaf-360"));
+  return { leaves, tags, chk, p360 };
+}
+{
+  const { leaves, tags, chk, p360 } = a2Checks(uiSrc);
+  ok(leaves.length === 2 && tags.filter((t) => t === "checker").length === 1 && tags.filter((t) => t === "360").length === 1,
+    "A2① 로드된 구역(메인데크) 안에 CHECKER/360 잎이 정확히 1개씩(중복 0) — 실제 " + JSON.stringify(tags));
+  ok(!!chk && findAll(chk, "tree-node-pin").length === 0,
+    "A2② CHECKER 잎: content 계열 핀(pn1)은 나열되지 않는다(계열 분리)");
+  ok(!!p360 && findAll(p360, "tree-node-pin").length === 1,
+    "A2③ 360 잎: content 계열 핀(pn1) 1개가 나열된다(픽스처 zone z1 이 모든 좌표를 포함해 zone 그룹 안에 중첩됨)");
+}
+/* ── 뮤테이션 ⓔ: MODES.forEach 잎 렌더 제거 → A2①이 실패해야 한다 ─────────────── */
+{
+  console.log("\n[뮤테이션ⓔ] 모드 잎 렌더 제거 → A2①이 실패해야 함");
+  const needle = "MODES.forEach((m) => {";
+  const mut = uiSrc.replace(needle, "[].forEach((m) => {");
+  if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { leaves } = a2Checks(mut);
+    ok(leaves.length === 0, "뮤테이션 적용 시 A2①이 깨짐(모드 잎이 전혀 렌더되지 않음, 실제 " + leaves.length + "개)");
+  }
+}
+/* ── 뮤테이션 ⓕ: 88e52ff 모드 가지(구역 중복) 재도입 → ①(3단 구조)이 실패해야 한다 ────── */
+{
+  console.log("\n[뮤테이션ⓕ] 모드 가지 재도입(구역을 CHECKER/360 두 번 렌더) → ①이 실패해야 함");
+  const needle = "rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));";
+  const mut = uiSrc.replace(needle,
+    "[\"checker\",\"360\"].forEach((tag) => { var mw = document.createElement(\"div\"); mw.className = \"tree-mode\"; " +
+    "rootDecks.forEach((d) => mw.appendChild(deckNode(d, false))); mount.appendChild(mw); });");
+  if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { host } = runTreeWithSeries(mut, fx());
+    ok(path3(host) === null, "뮤테이션 적용 시 ①이 깨짐(구역이 .tree-mode 래퍼 아래로 들어가 프로젝트 직속이 아니게 됨 — 중복 렌더 재현)");
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  * Part B — 실제 워커(src/index.tsx) + 실제 D1(Miniflare SQLite) + 실제 마이그레이션
  *  (트리 UI 와 무관 — parent_id API 왕복·마이그레이션 비파괴 회귀. 3단 전환에 영향받지 않는다)
  * ══════════════════════════════════════════════════════════════════════ */
@@ -482,14 +542,9 @@ if (!puppeteer) {
       regions: t.querySelectorAll(".tree-node-region").length,
       decksTop: t.querySelectorAll(".tree-node-deck").length,
       docWrap: t.querySelectorAll(".tree-doc").length,
-      // [WO 20260930-fixmode] 프로젝트 → CHECKER / 360 모드 가지 → 구역 → 영역. mode NULL(레거시) 구역은
-      // 두 가지에 모두 보이므로(유실 0 설계) 3단 검사는 "모드 가지별"로 센다.
-      branches: Array.from(t.querySelectorAll(".tree-mode")).map((b) => {
-        const kids = b.querySelector(":scope > .tree-children");
-        return { mode: b.dataset.mode,
-          decks: kids ? kids.querySelectorAll(":scope > .tree-deck > .tree-node-deck").length : -1,
-          regions: kids ? kids.querySelectorAll(".tree-node-region").length : -1 };
-      })
+      // [WO 20260930-moderole] 🔴 마스터 2차 지시로 모드 가지(88e52ff)를 제거 — 구역·영역은 프로젝트
+      // 바로 아래 한 벌만 렌더한다(중복 0). 모드 분리는 각 잎(.tree-mode-leaf)에서만 일어난다.
+      modeLeafTags: Array.from(t.querySelectorAll(".tree-mode-leaf")).map((b) => b.dataset.mode)
     };
   };
   await page.evaluate(SETUP);
@@ -511,8 +566,11 @@ if (!puppeteer) {
   console.log("  [실측 375x812] #side-tree scrollHeight=" + m.scrollHeight + " clientHeight=" + m.clientHeight +
     " nodes=" + m.nodes + " maxScroll=" + m.maxScroll + " 마지막='" + m.lastLabel + "'");
   ok(m.docWrap === 0, "④ 실 브라우저에서 .tree-doc(도면 그룹핑 단) 컨테이너가 전혀 없다(3단 확정)");
-  ok(m.branches.length === 2 && m.branches.every((b) => b.decks === 3 && b.regions === 4) && m.decksTop === 6 && m.regions === 8,
-    "④ 실 브라우저에서 모드 가지(CHECKER/360)마다 3단이 렌더된다(가지별 구역=3·영역=4, 레거시 NULL 구역이라 양쪽 동일) — 실제 " + JSON.stringify(m.branches));
+  // [WO 20260930-moderole] 🔴 구역·영역은 모드 무관 한 벌만(중복 0) — 구역 3·영역 4(모드 가지 중복 없음).
+  ok(m.decksTop === 3 && m.regions === 4,
+    "④ 실 브라우저에서 구역·영역이 모드 가지로 중복 렌더되지 않는다(구역=3·영역=4) — 실제 decksTop=" + m.decksTop + " regions=" + m.regions);
+  ok(m.modeLeafTags.length === 2 && m.modeLeafTags.includes("checker") && m.modeLeafTags.includes("360"),
+    "④ 로드된 구역(메인데크)의 맨 안쪽에 CHECKER/360 잎 그룹이 존재한다 — 실제 " + JSON.stringify(m.modeLeafTags));
   ok(m.clientHeight >= 160, "④ #side-tree 가 0 으로 짓눌리지 않는다(clientHeight=" + m.clientHeight + " ≥ 160 = clamp 하한)");
   ok(m.scrollHeight > m.clientHeight,
     "④ scrollHeight(" + m.scrollHeight + ") > clientHeight(" + m.clientHeight + ") — 세로 스크롤이 실제로 생긴다");
