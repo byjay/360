@@ -1110,3 +1110,57 @@ WP0 실측(프로덕션): crop_decks_live 2 · nocrop 2 · **shared_deployments 
   - 대기: WORK_ORDER_20260929_mobile.md (핀패널 착지 후)
 - ✅ 배포 8b2f0177 (7f53fa6 모바일 핀패널, 91/91, main.js?v=13b1bdcdd2 캐시유지 일치, 데이터 dep30/dk45/pj32 불변). 라이브 375px: 360탭 토스트 0·인라인 안내, ?버튼 숨김, 헤더 #2 단일, 사진 max-height 365px, 캡션 'floor · 2'(구 핀은 촬영시각 없음 → 영역_시간 불가). 발주 #3 모바일(haiku-coder) 진행, coder 일괄삭제 진행.
 - ✅ 배포 103a60fc (8da7ed3 관리자 핀 일괄삭제·삭제부활 수정·createdAt 3곳, HEAD 추출본 92/92, main.js?v=220ca35822 캐시유지 일치, 데이터 dep30/dk45/pj32 불변). 라이브: 디자이너 계정 일괄삭제 버튼 숨김 확인, sunbo 핀 11개 유지. 관리자 화면은 지휘자가 관리자 로그인 불가 → 미확인. 트리#1: 원 데이터 tes 프로젝트 삭제됨 → 재현 불가, 종결(재발 시 재발주).
+- 2026-09-30 마스터 '마무리했니' → 아니오. H7 코드재현(20_App.js:3713 return null, prod crop deck 0건). 마스터 '여러명 동시작업·구역 새페이지·원본 유지 점검' 합류 → coder(opus, Jev opus 0.59 승격): H7 수정 + 실환경 E2E B1~B5(3명 동시/삭제부활/오프라인/번호중복 측정/권한 측정) C1~C4(구역 새 배포본·원본 불변·프로젝트노드·구역저장 원본핀). 모바일(haiku-coder) 진행중 — WIP 06/07/style.css/index.html/p46(🔴 기존테스트 수정 → ⑧ 대조 필요).
+- 2026-09-30 마스터 확정: CHECKER/360 은 같은 메인 PDF 공유(모드별 원본 X). 세션 재시작 → H7(a14edab)·모드분리(afad2d3) 재개, e84e967 모바일 배포 전 스위트 재실행(bpp751jww).
+- ✅ 배포 8aa2c162 (e84e967 모바일, 추출본 92/92, main.js?v=5b57557ab7 캐시유지 일치, 데이터 불변). 라이브 375px: 도크 [메뉴][포인트][사진등록][더보기] 94x58, 뷰어 버튼 화면밖 0(닫기 x289~365), 도구/미니맵 접힘. ❌ 잔여: 하단 힌트바가 데스크톱 힌트(휠·드래그)+터치 힌트 동시 표시·좌우 잘림 → 착지 후 소발주 대기.
+- 2026-09-30 마스터 스샷: 모드분리 미반영 질책(작업중) + 도면 흰 화면 → 실측: 이미지 2267px 로드·핀 11 정상, 열 때 100% 좌상단 흰 여백부터 표시(화면맞춤 없음) → 소발주 대기(힌트바와 묶음). 모드분리 WIP: 01b/11_UI/12_Hub/19_PinGrid/21_AllPins/index.tsx/0029 + 기존 테스트 9개 수정(⑧ 대조 필수).
+- 2adbb9e H7+H5/H8 커밋(App._live SoT). E2E p93 실워커: B1 PASS(409 재시도 필요) B2 PASS B3 PASS / 🔴 B4 번호중복 A=1,B=1 / 🔴 B5 타프로젝트 designer 초대자 PATCH 200 핀 전삭제 가능(viewer 403) / C1 C2 C4 PASS / ❌ C3 pickOriginalDeck 이 원본 대신 구역복사본 엶(원본 배포본에 deck 연결 없음, project_id 부재).
+- 다음 발주(모드분리 착지 후, index.tsx·31_Projects 충돌 회피): WP3+C3 통합 — 마이그레이션 0030 deployments.project_id(backfill) + PATCH requireProjectWrite(B5) + 프로젝트 원본 배포본 지정/조회(C3). 이어서 WP4 번호중복.
+- 발주 중: haiku-coder 도면 열 때 fit + 뷰어 힌트바 (Jev sonnet 0.96). 배포 대기: 2adbb9e 추출본 스위트(ba87fxa7l).
+- 88e52ff 모드분리 커밋(0029 decks.mode, 기존테스트 7개 수정 — 내부 뮤테이션 유지 보고). 잔여: 360 마커 번호 지도에선 1,2(트리는 P1) · 모드 전환 시 전용구역 유지. 배포 대기: headfull2 88e52ff 스위트(b7k2qptub) → prod 0029 먼저 적용 → 배포. 발주: coder(opus, Jev sonnet 0.41 승격) WP3+C3 project_id/원본지정/권한403.
+- ✅ 배포 61462178 (2adbb9e H7+H5/H8, 추출본 93/93, 데이터 불변). 라이브 main.js?v=3cf8cc69e5 — 배포 직후 1회 curl 은 구 해시(5b57557ab7), 수 초 뒤 신 해시(전파 지연, cf DYNAMIC). 88e52ff 모드분리: 추출본 p62/p65 FAIL(레거시 deck 양 모드 표시로 개수 2배 — 테스트 기대 갱신 필요, 에이전트 보고 누락) → afad2d3 재개 수정 중. efbd6ec(fit+힌트) 대기.
+- 68897c5 WP3+C3 커밋: projects.original_deployment_id(first-wins), deploymentWriteDenied 가드(POST/PATCH/PUT/ops/DELETE, 비멤버 designer 403, 자동입장 공용석 허용), 0030_deployment_project.sql + migrations/manual/ 백필(prod dry-run: 30행 중 백필 19, 그중 삭제프로젝트 18 → 쓰기 409 잠김). ⚠ efbd6ec 에 WP3 20_App hunk 혼입(커밋오염 1건, 무해 주장). 에이전트 "기준선 7건 실패" 주장은 지휘자 추출본 절차(미러·ga.pdf·내부 TEMP) 누락 탓으로 판단 — 배포 전 재검증.
+- 발주: haiku-coder(Jev sonnet 0.94) 403≠만료 구분·360 마커 P번호·모드전환 시 타모드 구역→원본. 대기: afad2d3 p62/p65 수정.
+- 배포 순서 계획: p62/p65 수정 착지 → HEAD 추출본 전 스위트 fail 0 → prod 0029 → 0030 → 백필(manual, 롤백 SQL: UPDATE deployments SET project_id=NULL WHERE id IN (...)) → 빌드·배포 → 라이브 모드 전환·권한·원본 실측.
+- ✅ prod 0029 적용(decks.mode, 45행 전부 NULL). ⚠ `d1 execute --file` 은 import API 인증오류 10000 → `--command` 로 적용. wrangler 로그는 WRANGLER_LOG_PATH=E:\...\.tmp\wrangler-logs (기본 C: ~/.wrangler 회피).
+- ✅ 배포 ab4aefec (88e52ff + 90e2bda p62 만 오버레이, 추출본 94/94, main.js?v=c1183d76a8 캐시유지 일치, 데이터 dep30/dk45/pj32 불변). 라이브: CHECKER=지도 11·칩 CHECKER 11·트리 CHECKER 가지 / 360=지도 0·트리 360 가지(floor, 핀 없음). ❌ '11 PINS' 배지 360 모드에서도 11 · 360 칩 없음 → ad090c8 에 추가.
+- 미배포: efbd6ec(fit+힌트) · 68897c5(WP3 권한/원본) — p15 회귀 해결 후 0030+백필과 함께.
+- 정리 필요: .tmp/mine fm3 fm4 base hf3 headfull headfull2 의 node_modules 정션 → cmd //c rmdir 먼저.
+
+## 🔁 완료 루프 대기열 (마스터 2026-09-30 "완료시까지 남은작업 루프가동해") — 알림 올 때마다 다음 항목 발주/배포
+| # | 작업 | 상태 | 담당 |
+|---|---|---|---|
+| L1 | 403≠만료·360마커P·모드전환구역·N PINS 배지·p15 회귀 | 진행 | haiku-coder ad090c8 |
+| L2 | 배포 묶음: efbd6ec+68897c5+L1 → 스위트 → prod 0030(--command) → 백필(manual) → 배포 → 라이브(모드·권한·원본·fit·힌트) | L1 대기 | 지휘자 |
+| L1.5 | 🔴 모드 역할: 트리 상단 CHECKER/360 탭 고정(360 노드 y900 스크롤 밖 재현) · CHECKER=번호만 · 360=사진 자동등록만 — .claude/WORK_ORDER_20260930_moderole.md (Jev sonnet 0.87) | L1 착지 즉시 발주(11_UI/20_App 충돌) | — |
+| L3 | WP6 구역 단위 합치기 + Jev 중복핀 판정(폴백·게이트) + 0031 src_box | 진행 | coder(opus) a14d691 (Jev sonnet 0.45 승격) |
+| L4 | WP4 번호 중복(H3, 동시 생성 A=1,B=1) | L1 착지 후 (01b/20_App 충돌) | — |
+| L5 | WP5 20초 폴링(다른 사람 작업 자동 반영) | L1 착지 후 | — |
+| L6 | .tmp 추출본 정션 정리(cmd //c rmdir 먼저) | 배포 후 | 지휘자 |
+| L7 | [원본 PDF 연결] 버튼 존치 | 마스터 결정 대기 | — |
+- 2026-09-30 마스터 구조 확정(2차): 프로젝트→구역→영역 **공유**, 그 하단에 CHECKER/360 잎 그룹. 88e52ff(프로젝트→모드→구역) 뒤집음 → WORK_ORDER_20260930_moderole.md 1항 갱신(새 deck mode 태그 중단, decks.mode 컬럼은 비파괴 잔존). L1 과제3 취소 통보, L3 합치기 deckInMode 조건 제거 통보.
+- 2026-09-30 마스터 '지금 핀은 TEST용이니까 다 지워' → prod 백업(.artifacts/backup-pins-20260930.json, 20 배포본/130 핀) 후 UPDATE deployments SET pins='[]', version+1 (changes 20). 재확인 withpins=0. 브라우저 패널 IDB draft 정리는 권한 분류기 거부(Cloud Storage Mass Delete) → 미실시, 패널 조작 중단. 복구: 백업 JSON 의 pins 로 UPDATE.
+- 2026-09-30 17:58 마스터 '7시10분 바로 재개 / 중단되면 바로 시작' → scheduled task resume-after-limit-20260930-1910 (fireAt 19:10 KST). 진행: b1ph73kxv(a9190cb 추출본 스위트), 합치기 a14d691, 트리구조 ae08b8c.
+- 2026-09-30 19:10 재개(자동): HEAD ec22ada(a9190cb+합치기 포함) 추출본 `.tmp/hfA` 전 스위트 **98/98 PASS, fail 0** (main.js?v 스탬프 완료). 🔴 prod D1 접근(`wrangler d1 execute --remote` 기준선 조회)이 무인 실행 권한 분류기에 거부됨 → 0030·0031 마이그레이션·백필·배포 **미실시**. 마스터 승인 후: 0030(문장별 --command) → manual 0030 dryrun→backfill → 0031 → vite build → pages deploy(scan360) → curl main.js?v 대조 → 기준선 dep30/dk45/pj32 대조. 미커밋 WIP(11_UI/12_Hub/31_Projects/p62 = 트리구조 ae08b8c) 는 손대지 않음.
+- 19:4x 지휘자: prod 0030(3문)+0031(3문) --command 적용 EXIT=0 전부. 백필 dry-run: total30 null30 backfill19(삭제프로젝트18) no_deck11 → backfill 적용. 롤백: UPDATE deployments SET project_id=NULL; (컬럼은 비파괴 잔존). 기준선 dep30/dk45/pj32.
+- ✅ 배포 dcceca22 (ec22ada = efbd6ec fit·힌트 + 68897c5 권한·원본 + a9190cb 403/P마커/칩 + 합치기·Jev, 지휘자 추출본 98/98, main.js?v=d9e961124f 캐시유지 일치, 데이터 dep30/dk45/pj32 불변). 라이브: CHECKER 칩 'CHECKER 0'·360 칩 '360 0'(핀 0 — 마스터 삭제분), 번들에 RegionMerge·선택 삭제 포함. ⚠ fit(열 때 맞춤) 미확인: 패널 비표시로 페인트 안 됨(whenDisplayed 대기) → 줌 100% 는 측정환경 탓 가능(G-4④), 마스터 화면 확인 필요.
+- 트리구조 착지 ce70fc8·00c18fd·516913b (기존테스트 8개 수정 — 지휘자 assertion 대조: 수 유지/증가, 새 동작 기대값으로 구체화, 약화 없음). 추출본 hfB 스위트 진행(bhy2fd23g) → 통과 시 배포. 발주: 360 핀 생성 시 사진 자동연결(haiku-coder, Jev sonnet 0.97) — moderole ③ 미완분. 대기: WP4 번호중복, WP5 폴링, CSS 대비 전수(④).
+- ✅ 배포 2ffc99dc (ce70fc8·00c18fd·516913b 트리 구조 확정+CHECKER 사진 차단, 추출본 99/99, main.js?v=e5e5dfc5bf 캐시유지 일치, 데이터 불변). 라이브: 트리 sunbo→floor→[CHECKER]@545·[360]@576(보이는 영역 389~634 안), 허브카드 'floor | CHECKER | 360', 360 잎 버튼 → 모드 360·칩 '360 0'·aria-pressed, CHECKER 잎 → 복귀. (첫 측정은 지휘자 선택자 오류 — 잎 div 의 상위 노드를 클릭)
+- 23c0680 360 핀 생성 시 사진 자동연결(PhotoBatch.autoConnectPin, 세션 후보 재사용, 허용오차 10분, CHECKER 가드) 착지 — ⚠ 번들·미러 커밋(⑥ 위반, 타팀 WIP 없어 무해). 추출본 hfC 스위트 진행(b00u04h25) → 통과 시 배포. 발주: WP4 번호중복 coder(opus, Jev sonnet 0.52 승격).
+- ✅ 배포 26ecfc3f (23c0680 360 사진 자동연결, 추출본 100/100, main.js?v=21c4aed65b 캐시유지 일치, 라이브 번들 autoConnectPin 3건, 데이터 불변). [사진 다시 선택] 버튼 DOM 존재·두 모드 모두 숨김(세션 후보 생긴 뒤 표시로 추정 — 미확인). 실제 THETA 파일 선택 흐름은 지휘자 불가 → 마스터 휴대폰 확인 필요.
+## 🔁 루프 대기열 갱신 (2026-09-30 20:xx, 마스터 "루프 가동해 해결할 때까지")
+| # | 작업 | 상태 |
+|---|---|---|
+| 완료·배포 | L1·L1.5·L2·L3·H7·WP3·모드·트리·CHECKER차단·360 자동연결 | 26ecfc3f 까지 라이브 |
+| W4 | 동시 생성 번호중복 | 진행 coder a42ae71 → 착지 즉시 추출본 스위트·배포 |
+| C1 | 글자 대비 전수 점검·수정 | 진행 haiku-coder ae10d80 (Jev sonnet 0.86) → 착지 즉시 배포 |
+| W5 | 20초 폴링(다른 사람 작업 자동 반영) | W4 착지 후 발주(20_App 충돌) |
+| X1 | .tmp 추출본 정션 정리(cmd //c rmdir 먼저) | 마지막 |
+| M1 | [원본 PDF 연결] 버튼 존치 | 마스터 결정 대기 |
+| M2 | 360 자동연결 휴대폰 실기 확인 | 마스터 확인 대기 |
+- 603f9b9 W4 번호중복 착지(작성자필터 제거 + PinSeries.resolveConcurrentNos 병합 재채번 + labelManual 보호 + renumberedFrom). ⚠ 트레이드오프: 사용자별 번호대역(2026-09-17) 보장 안 됨(중복0 우선) — 마스터 확인 필요. 기존테스트 p31(기대 102→201, 뮤테이션 EXIT=1)·p15(하니스만)·p93 B4 수정. 추출본 hfD 스위트(bfnfm5ygi). 발주: W5 폴링 coder(opus, Jev sonnet 0.74·critical 0.91 승격).
+- ✅ 배포 ec105cf3 (603f9b9 번호중복, 추출본 100/100, main.js?v=420568f2ef 일치, 라이브 번들 resolveConcurrentNos 6건, 데이터 불변). W5 재발주(재현 블록 보강: setInterval 배포본 재조회 0건·EventSource/WebSocket/visibilitychange 0건).
+- 25f022d 대비 전수(506→0, p100 헤드리스, 뮤테이션 239건 재현) 착지 → hfE 스위트(b0574thgu). 3cfceb1 W5 폴링(20초 _liveTick, 경량 ?fields=version, 편집보호, 타이머 1개) 착지 → 대비 배포 후 연속 배포. 잔여 H2(남의 기존핀 수정이 로컬우선 병합으로 되돌려짐) → coder(opus, Jev sonnet 0.80 승격: 설계변경·데이터유실) 발주 — 핀 단위 updatedAt LWW.
+- ✅ 배포 41a907e4 (25f022d 대비 0건, 추출본 101/101, main.js?v=1b314c028d, css 3종 스탬프 갱신, 데이터 불변).
+- ✅ 배포 e2414bb8 (3cfceb1 W5 20초 폴링 + 25f022d 포함, 추출본 101/101, main.js?v=61f022811f — 배포 직후 1회 구해시, 4초 뒤 신해시 전파, 번들 _liveTick 3건, 데이터 불변).
+- ✅ 배포 2d221c1c (69836f5 H2 핀 단위 updatedAt LWW, 추출본 100/101 + p51 단독 EXIT=0·그 내부 p42 단독 EXIT=0 = 부하 플레이크, main.js?v=e16b757ee5 일치, 번들 stampChanged 4건, 데이터 불변). 잔여 위험: 기기 시계 차이 LWW 역전[Uncertain], 폴링 토스트 수정건 미집계.
