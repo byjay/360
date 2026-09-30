@@ -1109,3 +1109,4 @@ WP0 실측(프로덕션): crop_decks_live 2 · nocrop 2 · **shared_deployments 
   - 진행중: 모바일 핀 패널(haiku-coder)
   - 대기: WORK_ORDER_20260929_mobile.md (핀패널 착지 후)
 - ✅ 배포 8b2f0177 (7f53fa6 모바일 핀패널, 91/91, main.js?v=13b1bdcdd2 캐시유지 일치, 데이터 dep30/dk45/pj32 불변). 라이브 375px: 360탭 토스트 0·인라인 안내, ?버튼 숨김, 헤더 #2 단일, 사진 max-height 365px, 캡션 'floor · 2'(구 핀은 촬영시각 없음 → 영역_시간 불가). 발주 #3 모바일(haiku-coder) 진행, coder 일괄삭제 진행.
+- ✅ 배포 103a60fc (8da7ed3 관리자 핀 일괄삭제·삭제부활 수정·createdAt 3곳, HEAD 추출본 92/92, main.js?v=220ca35822 캐시유지 일치, 데이터 dep30/dk45/pj32 불변). 라이브: 디자이너 계정 일괄삭제 버튼 숨김 확인, sunbo 핀 11개 유지. 관리자 화면은 지휘자가 관리자 로그인 불가 → 미확인. 트리#1: 원 데이터 tes 프로젝트 삭제됨 → 재현 불가, 종결(재발 시 재발주).
