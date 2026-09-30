@@ -119,6 +119,7 @@ function makeClient(k) {
     getElementById: (id) => (els[id] = els[id] || (id === "map-image" ? img() : anyEl())),
     querySelector: () => null, querySelectorAll: () => [], createElement: () => anyEl(),
     body: anyEl(), documentElement: anyEl(), addEventListener() {},
+    visibilityState: "visible", activeElement: null,   // [D4] 폴링 가드가 읽는 브라우저 상태(테스트가 바꿔 끼운다)
   };
   const drafts = {}, ls = {}, net = [];
   const nav = { onLine: true, userAgent: "node" };
@@ -528,6 +529,108 @@ console.log("\n[H5·H8] /ops 삭제 tombstone 이 남은 배포본 — 로드·�
   console.log("   측정: ops=" + ops.status + " 서버 원본=" + JSON.stringify(raw.map((p) => p.id + (p._deleted ? "(t)" : ""))) + " A State=" + JSON.stringify(aIds) + " 최종=" + JSON.stringify(fin.map((p) => p.id + (p._deleted ? "(t)" : ""))));
   ok(raw.some((p) => p._deleted) && !aIds.includes("8001") && A2.State.pins.every((p) => !p._deleted), "H8 로더가 tombstone 을 State.pins 에 넣지 않음");
   ok(!idsOf(fin).includes("8001"), "H5 서버 tombstone 이 있는 핀을 낡은 클라이언트가 병합으로 되살리지 못함");
+}
+
+/* ══════════ D4 — 다른 사람 변경 보기(경량 버전 폴링) · 설계서 H6/D4 ══════════ */
+console.log("\n[D4] 20초 폴링 틱 — A 의 추가·삭제가 B 화면에 새로고침 없이 반영되는가");
+{
+  const { depId, deck } = await seedDeployment([P(9001), P(9002, 60, 60)]);
+  const [A4, B4] = ["a", "b"].map(makeClient);
+  for (const c of [A4, B4]) await open(c, depId, deck);
+  const tb = toastLog(B4);
+  const tick = async (c) => (typeof c.App._liveTick === "function" ? await c.App._liveTick() : "no-tick");
+  const has = (c, id) => c.State.pins.some((p) => String(p.id) === String(id));
+  const reqs = (c, from) => c.net.slice(from);
+
+  // D4-a 추가 → 틱 1회 → 반영 + 경량 조회 사용 + 토스트 1회
+  const pa = await place(A4, 30, 30); await save(A4);
+  let n0 = B4.net.length;
+  const ra = await tick(B4);
+  const ua = reqs(B4, n0).map((n) => n.method + " " + n.url.replace(BASE, ""));
+  console.log("   측정(a): 틱=" + ra + " 요청=" + JSON.stringify(ua) + " 토스트=" + JSON.stringify(tb));
+  ok(has(B4, pa.id), "D4-a A 가 추가·저장한 핀이 B 틱 1회 후 B State.pins 에 있음");
+  ok(ua[0] === "GET /tables/deployments/" + depId + "?fields=version", "D4-a 첫 요청은 경량 버전 조회(?fields=version)");
+  ok(tb.filter((m) => /다른 사용자 변경 1건 반영/.test(m)).length === 1, "D4-a 토스트 1회(다른 사용자 변경 1건 반영)");
+  n0 = B4.net.length;
+  const rSame = await tick(B4);
+  const uSame = reqs(B4, n0);
+  ok(uSame.length === 1 && /fields=version/.test(uSame[0].url) && tb.length === 1, "D4-a 변경 없으면 버전 조회 1건만 · 토스트 추가 0 — " + rSame + " 요청=" + uSame.length);
+  const vl = await api("a", "GET", "/tables/deployments/" + depId + "?fields=version");
+  ok(vl.status === 200 && vl.j && JSON.stringify(Object.keys(vl.j).sort()) === '["deleted","id","version"]' && vl.j.version === (await getDep(depId)).version,
+    "D4-a 경량 응답 = {id,version,deleted} 만(본문 0) · 버전 일치 — " + JSON.stringify(vl.j));
+  const vx = await mf.dispatchFetch(BASE + "/tables/deployments/" + depId + "?fields=version");
+  ok(vx.status === 401, "D4-a 경량 조회도 기존 인증 가드 유지(무토큰 401) — " + vx.status);
+
+  // D4-b 삭제 → B 에서 사라지고 부활 0
+  A4.App._removePins([9001]); await save(A4);
+  const rb = await tick(B4);
+  const goneAfterTick = !has(B4, 9001);            // B 저장(409 병합) 전에 잰다 — 틱 자체의 반영만
+  const q = await place(B4, 70, 20); await save(B4);
+  const finB = idsOf(await srvPins(depId));
+  console.log("   측정(b): 틱=" + rb + " B State=" + JSON.stringify(idsOf(B4.State.pins)) + " 서버=" + JSON.stringify(finB));
+  ok(goneAfterTick, "D4-b A 가 지운 9001 이 B 틱 후(B 저장 전) B 화면에서 사라짐");
+  ok(!finB.includes("9001") && finB.includes(String(q.id)), "D4-b B 가 이어서 저장해도 9001 부활 0 · B 의 새 핀 보존");
+
+  // D4-c B 편집 중(포커스·드래그·이동대기·저장 중) → 반영 미룸, B 입력 보존 → 편집 끝나면 반영 + B 미저장분 보존
+  const bLocal = await place(B4, 45, 45);          // B 의 미저장 핀
+  bLocal.label = "B 입력중";
+  const pc = await place(A4, 15, 85); await save(A4);
+  const guards = [
+    ["포커스", () => { B4.sandbox.document.activeElement = { tagName: "INPUT" }; }, () => { B4.sandbox.document.activeElement = null; }],
+    ["드래그", () => { B4.State.movingPinId = bLocal.id; }, () => { B4.State.movingPinId = null; }],
+    ["이동대기", () => { B4.State.pinEditUnlocked = bLocal.id; }, () => { B4.State.pinEditUnlocked = null; }],
+    ["저장중", () => { B4.App.autoSaving = true; }, () => { B4.App.autoSaving = false; }],
+  ];
+  for (const [nm, on, off] of guards) {
+    on(); n0 = B4.net.length;
+    const r = await tick(B4);
+    const sent = B4.net.length - n0;
+    off();
+    ok(!has(B4, pc.id) && has(B4, bLocal.id) && bLocal.label === "B 입력중" && sent === 0,
+      "D4-c B " + nm + " 중 틱 → 반영 보류(요청 0) · B 입력 보존 — 틱=" + r + " 요청=" + sent);
+  }
+  const rc = await tick(B4);
+  const bl = B4.State.pins.find((p) => String(p.id) === String(bLocal.id));
+  ok(has(B4, pc.id) && !!bl && bl.label === "B 입력중", "D4-c 편집 끝난 뒤 틱 → A 의 새 핀 반영 + B 미저장 핀·입력 보존 — " + rc);
+  await save(B4);
+  const finC = idsOf(await srvPins(depId));
+  ok(finC.includes(String(pc.id)) && finC.includes(String(bLocal.id)), "D4-c B 저장 후 서버에 A·B 핀 모두");
+
+  // D4-d 숨김 탭 · 오프라인 → 요청 0
+  await place(A4, 88, 88); await save(A4);
+  B4.sandbox.document.visibilityState = "hidden"; n0 = B4.net.length;
+  const rh = await tick(B4);
+  ok(B4.net.length === n0, "D4-d 숨김 탭 틱 → 요청 0 — " + rh);
+  B4.sandbox.document.visibilityState = "visible";
+  B4.nav.onLine = false; n0 = B4.net.length;
+  const ro = await tick(B4);
+  ok(B4.net.length === n0, "D4-d 오프라인 틱 → 요청 0 — " + ro);
+  B4.nav.onLine = true;
+
+  // D4-e 타이머 수명 — 숨김이면 정지, 보이면 즉시 1회 확인 후 재개, 중복 타이머 0
+  const timers = new Set(); let seqT = 0;
+  B4.sandbox.setInterval = () => { const id = ++seqT; timers.add(id); return id; };
+  B4.sandbox.clearInterval = (id) => { timers.delete(id); };
+  B4.App._livePollStart && B4.App._livePollStart(); B4.App._livePollStart && B4.App._livePollStart();
+  const t1 = timers.size;
+  B4.sandbox.document.visibilityState = "hidden";
+  B4.App._onLiveVisibility && await B4.App._onLiveVisibility();
+  const t2 = timers.size;
+  B4.sandbox.document.visibilityState = "visible"; n0 = B4.net.length;
+  B4.App._onLiveVisibility && await B4.App._onLiveVisibility();
+  const t3 = timers.size, sentV = B4.net.length - n0;
+  console.log("   측정(e): 타이머 start×2=" + t1 + " 숨김=" + t2 + " 복귀=" + t3 + " 복귀 즉시 요청=" + sentV);
+  ok(t1 === 1 && t2 === 0 && t3 === 1 && sentV >= 1, "D4-e 타이머 1개만 · 숨김 정지 · 복귀 즉시 확인 후 재개");
+  B4.App._livePollStop && B4.App._livePollStop();
+
+  // D4-f 조회 도중 배포본 전환 → 늦게 온 응답 폐기(엉뚱한 도면에 병합 0)
+  const pf = await place(A4, 22, 66); await save(A4);
+  const pT = tick(B4);
+  const keepDep = B4.State.autoSaveDepId; B4.State.autoSaveDepId = "dep_other";
+  const rf = await pT;
+  const leaked = has(B4, pf.id);
+  B4.State.autoSaveDepId = keepDep;
+  ok(!leaked, "D4-f 조회 중 배포본 전환 → 결과 폐기(병합 0) — " + rf);
 }
 
 await mf.dispose();

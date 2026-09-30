@@ -63,6 +63,8 @@
         setTimeout(() => SyncQueue._onReconnect(), 1500);
         setTimeout(() => this._flushDeckLinkQueue(), 1800);
       }
+      // [설계서 D4] 다른 사용자 변경 자동 반영(20초 버전 폴링 — 보임·온라인·편집 화면일 때만)
+      this._livePollInit();
     },
 
     /* ── Home ── */
@@ -3734,6 +3736,90 @@
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
       try { if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); } } catch (e) {}
       return { pins: mergedPins, zones: mergedZones, version: State.depVersion };
+    },
+
+    /* ── [설계서 D4 · H6] 다른 사람 변경 보기 — 경량 버전 폴링 ─────────────────────────────
+       종전: 배포본 재조회는 수동 #btn-reload-deploy 뿐 → A 의 추가·삭제를 B 가 모른 채 같은 자리에 중복 배치.
+       편집 화면(designer + 배포본 열림) · 탭 보임 · 온라인일 때만 서버 버전(?fields=version)을 보고,
+       내 버전보다 크면 배포본을 받아 409 병합과 **같은 SoT(_mergeConflict → _mergePins)** 로 합친다
+       (내 미저장분 보존 · 남의 삭제 반영(tombstone/pinBaseIds) · 동시 번호 재채번). 도면은 다시 싣지 않는다.
+       타이머는 앱 전체에 1개(도면별 타이머 없음 → 전환 누수 0). 전환 중 늦게 온 응답은 depId·로드세대로 폐기. */
+    // 20초: 설계서 D4 산식 — 3인×8h×(3600/20)=4,320 req/일(CF Workers 무료 100k/일의 4.3%),
+    //   "1시간 방치 후 같은 자리 배치"를 막기에 충분히 짧고, 편집 흐름을 방해하지 않을 만큼 길다.
+    LIVE_POLL_MS: 20000,
+    _livePollTimer: null,
+    _livePollBusy: false,
+    _livePollActive() {
+      return document.visibilityState !== "hidden" && navigator.onLine !== false;
+    },
+    /** 지금 반영하면 사용자의 손을 끊는 순간 — 이 틱은 건너뛴다(다음 틱에 반영). */
+    _liveEditingNow() {
+      if (this.autoSaving) return true;                                        // 저장 중
+      if (State.movingPinId != null || State.pinEditUnlocked != null) return true; // 드래그·이동 대기
+      if (State.editingPinId != null) return true;                             // 핀 폼 편집 중
+      const a = document.activeElement;
+      if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/i.test(String(a.tagName || "")))) return true; // 패널 입력 포커스
+      return false;
+    },
+    _livePollStart() {
+      if (this._livePollTimer != null || !this._livePollActive()) return;
+      this._livePollTimer = setInterval(() => { this._liveTick(); }, this.LIVE_POLL_MS);
+    },
+    _livePollStop() {
+      if (this._livePollTimer == null) return;
+      clearInterval(this._livePollTimer);
+      this._livePollTimer = null;
+    },
+    /** visibilitychange · online · offline 공용 — 숨김/오프라인이면 정지, 다시 보이면 즉시 1회 확인 후 재개. */
+    async _onLiveVisibility() {
+      if (!this._livePollActive()) { this._livePollStop(); return; }
+      this._livePollStart();
+      await this._liveTick();
+    },
+    _livePollInit() {
+      if (this._livePollBound) return;
+      this._livePollBound = true;
+      const h = () => { this._onLiveVisibility(); };
+      document.addEventListener("visibilitychange", h);
+      window.addEventListener("online", h);
+      window.addEventListener("offline", h);
+      this._livePollStart();
+    },
+    /** 틱 1회. 반환(진단용): hidden|idle|busy|editing|same|stale|error|merged:N */
+    async _liveTick() {
+      if (!this._livePollActive()) { this._livePollStop(); return "hidden"; }
+      if (State.mode !== "designer" || !State.autoSaveDepId) return "idle";
+      if (this._livePollBusy) return "busy";
+      if (this._liveEditingNow()) return "editing";
+      const depId = State.autoSaveDepId, seq = this._loadSeq;
+      const url = "/tables/deployments/" + encodeURIComponent(depId);
+      const newer = (v) => v != null && Number(v) > Number(State.depVersion != null ? State.depVersion : 0);
+      this._livePollBusy = true;
+      try {
+        const r = await fetch(url + "?fields=version", { headers: Auth.headers() });
+        if (!r.ok) return "error";
+        const head = await r.json();
+        if (!head || head.deleted || !newer(head.version)) return "same";
+        const r2 = await fetch(url, { headers: Auth.headers() });
+        if (!r2.ok) return "error";
+        const dep = await r2.json();
+        // await 사이에 도면 전환·새 로드·저장·편집이 시작됐으면 이 응답은 버린다(다음 틱이 다시 본다)
+        if (State.autoSaveDepId !== depId || !this._isCurrentLoad(seq) || this._liveEditingNow()) return "stale";
+        if (!dep || dep.deleted || !newer(dep.version)) return "same";
+        const before = new Set(this._pinIds(State.pins));
+        this._mergeConflict(dep);
+        const after = new Set(this._pinIds(State.pins));
+        let n = 0;
+        after.forEach((k) => { if (!before.has(k)) n++; });
+        before.forEach((k) => { if (!after.has(k)) n++; });
+        // 스팸 방지: 틱당 최대 1회 · 실제로 보이는 변화(핀 추가/삭제)가 있을 때만
+        if (n && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("다른 사용자 변경 " + n + "건 반영");
+        return "merged:" + n;
+      } catch (e) {
+        return "error";
+      } finally {
+        this._livePollBusy = false;
+      }
     },
 
     /** 배포본 PATCH(낙관적 잠금) — 409면 1회 병합 후 재시도.

@@ -3040,7 +3040,12 @@ app.get('/tables/deployments/:id', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
   const id = c.req.param('id')
-  const row = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ?').bind(id).first()
+  // [설계서 D4 · 버전 폴링] ?fields=version → 편집 화면의 20초 폴링이 쓰는 경량 응답(pins 등 본문 없이 버전만).
+  //   권한 가드(로그인·테넌트)는 아래 그대로 공유한다 — 별도 라우트를 만들지 않는다.
+  const light = c.req.query('fields') === 'version'
+  const row = await c.env.DB.prepare(light
+    ? 'SELECT id, version, deleted, tenant_id FROM deployments WHERE id = ?'
+    : 'SELECT * FROM deployments WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
   // [PART 0 · Tenant 격리] 타 테넌트 자원 접근 차단(슈퍼/마이그레이션전 제외).
   //   tenant_id NULL 구행은 기본 테넌트로 간주(하위호환).
@@ -3051,6 +3056,10 @@ app.get('/tables/deployments/:id', async (c) => {
       const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
       if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
     }
+  }
+  if (light) {
+    const r = row as any
+    return c.json({ id: r.id, version: (r.version != null ? r.version : 0), deleted: !!r.deleted })
   }
   return c.json(mapDeployment(row))
 })
