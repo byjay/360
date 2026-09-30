@@ -481,7 +481,15 @@ if (!puppeteer) {
       lastLabel: (last ? last.textContent : "").trim(), lastReachable: last ? vis(last) : false,
       regions: t.querySelectorAll(".tree-node-region").length,
       decksTop: t.querySelectorAll(".tree-node-deck").length,
-      docWrap: t.querySelectorAll(".tree-doc").length
+      docWrap: t.querySelectorAll(".tree-doc").length,
+      // [WO 20260930-fixmode] 프로젝트 → CHECKER / 360 모드 가지 → 구역 → 영역. mode NULL(레거시) 구역은
+      // 두 가지에 모두 보이므로(유실 0 설계) 3단 검사는 "모드 가지별"로 센다.
+      branches: Array.from(t.querySelectorAll(".tree-mode")).map((b) => {
+        const kids = b.querySelector(":scope > .tree-children");
+        return { mode: b.dataset.mode,
+          decks: kids ? kids.querySelectorAll(":scope > .tree-deck > .tree-node-deck").length : -1,
+          regions: kids ? kids.querySelectorAll(".tree-node-region").length : -1 };
+      })
     };
   };
   await page.evaluate(SETUP);
@@ -503,7 +511,8 @@ if (!puppeteer) {
   console.log("  [실측 375x812] #side-tree scrollHeight=" + m.scrollHeight + " clientHeight=" + m.clientHeight +
     " nodes=" + m.nodes + " maxScroll=" + m.maxScroll + " 마지막='" + m.lastLabel + "'");
   ok(m.docWrap === 0, "④ 실 브라우저에서 .tree-doc(도면 그룹핑 단) 컨테이너가 전혀 없다(3단 확정)");
-  ok(m.decksTop === 3 && m.regions === 4, "④ 실 브라우저에서 3단이 렌더된다(구역 " + m.decksTop + "=3 · 영역 " + m.regions + "=4)");
+  ok(m.branches.length === 2 && m.branches.every((b) => b.decks === 3 && b.regions === 4) && m.decksTop === 6 && m.regions === 8,
+    "④ 실 브라우저에서 모드 가지(CHECKER/360)마다 3단이 렌더된다(가지별 구역=3·영역=4, 레거시 NULL 구역이라 양쪽 동일) — 실제 " + JSON.stringify(m.branches));
   ok(m.clientHeight >= 160, "④ #side-tree 가 0 으로 짓눌리지 않는다(clientHeight=" + m.clientHeight + " ≥ 160 = clamp 하한)");
   ok(m.scrollHeight > m.clientHeight,
     "④ scrollHeight(" + m.scrollHeight + ") > clientHeight(" + m.clientHeight + ") — 세로 스크롤이 실제로 생긴다");
