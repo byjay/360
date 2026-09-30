@@ -11,6 +11,32 @@
         const tb = document.getElementById("pano-radar-toggle");
         if (tb) { tb.addEventListener("click", (e) => { e.stopPropagation(); box.classList.toggle("collapsed"); }); this._toggleBound = true; }
       }
+      // [WO 20260929-mobile R3] 모바일 — 방향/확대(패널)/줌±(4버튼) 더보기 토글 (1회 바인딩).
+      // 데스크톱은 CSS(display:contents)가 그룹을 항상 펼친 상태로 유지하므로 토글 자체가 숨겨져 무해.
+      if (!this._moreBound) {
+        const mb = document.getElementById("pano-radar-more");
+        const grp = document.getElementById("pano-radar-more-group");
+        if (mb && grp) {
+          mb.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const open = grp.classList.toggle("open");
+            mb.classList.toggle("active", open);
+            mb.setAttribute("aria-expanded", open ? "true" : "false");
+          });
+          // [p2-radar-minimap 회귀수정] 테스트 목(document)은 getElementById만 제공하고
+          // document.addEventListener는 없다 — 실브라우저에서만 바깥탭 닫기를 배선한다.
+          if (typeof document.addEventListener === "function") {
+            document.addEventListener("click", (e) => {
+              if (!grp.classList.contains("open")) return;
+              if (grp.contains(e.target) || mb.contains(e.target)) return;
+              grp.classList.remove("open");
+              mb.classList.remove("active");
+              mb.setAttribute("aria-expanded", "false");
+            });
+          }
+          this._moreBound = true;
+        }
+      }
       // [마스터 요청] 미니맵 크게 보기 토글 (1회 바인딩) — 크기만 전환, 기존 로직 그대로
       // [마스터 요청 "기본적으로 확대한 크기로 반영해"] 저장된 선택이 없으면 기본값=확대(large).
       // localStorage("wm-radar-large")에 사용자 선택을 저장/복원 — 없으면 true(확대).

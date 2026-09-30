@@ -45,6 +45,25 @@ const ok = (cond, label) => {
 // (실 코드 그대로) await 만으로는 완료를 못 잡는다 — 매크로태스크 한 틱을 흘려보내 대기한다.
 const flush = () => new Promise((r) => setTimeout(r, 10));
 
+// [WO 20260929-mobile] div 중첩 균형 추출 — openMarker(예: '<div class="mdock-bar">')
+// 다음에 오는 자기 자신의 </div> 를 중첩 깊이로 정확히 찾는다. 기존 lazy 정규식
+// (/<\/div>\s*\n\s*<\/nav>/) 은 형제 블록이 추가되면 그 형제까지 삼켜버려(비고의)
+// R6 도크 재구성(메인바+#mdock-more-sheet 시트) 이후 chipCount 가 잘못 부풀었었다.
+function extractDivBlock(src, openMarker) {
+  const start = src.indexOf(openMarker);
+  if (start < 0) throw new Error("marker not found: " + openMarker);
+  let i = start + openMarker.length;
+  let depth = 1;
+  while (depth > 0) {
+    const nextOpen = src.indexOf("<div", i);
+    const nextClose = src.indexOf("</div>", i);
+    if (nextClose === -1) throw new Error("unbalanced div for " + openMarker);
+    if (nextOpen !== -1 && nextOpen < nextClose) { depth++; i = nextOpen + 4; }
+    else { depth--; i = nextClose + 6; }
+  }
+  return src.slice(start + openMarker.length, i - 6);
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * 헬퍼 — App._updateSyncBadge()/syncNow() 를 실제 소스로 로드
  * ══════════════════════════════════════════════════════════════════ */
@@ -186,11 +205,18 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
   const dockTotalH = mdockH + dockBorderTop;
   const mobileDockRect = { x: 0, y: VIEWPORT.h - dockTotalH, w: VIEWPORT.w, h: dockTotalH };
 
-  // 포함관계 증명 — #mdock-upload 는 .mdock-bar(⊆ .mobile-dock) 안의 평범한 flex 자식(.mdock-chip)이고,
-  // .mdock-fab 처럼 밖으로 튀어나오는 음수 margin 이 없다(구조 확인, 문자열이 아니라 실제 CSS 규칙 유무로 판정).
-  const barBlockMatch = indexHtml.match(/<div class="mdock-bar">([\s\S]*?)<\/div>\s*\n\s*<\/nav>/);
-  if (!barBlockMatch) throw new Error("index.html 의 .mdock-bar 블록을 찾지 못함(소스 변경?)");
-  ok(/id="mdock-upload"/.test(barBlockMatch[1]), "⑤a #mdock-upload 가 .mdock-bar(=.mobile-dock 하위) 안에 있다(포함관계)");
+  // [WO 20260929-mobile R6] #mdock-upload 는 더 이상 .mdock-bar 의 직계가 아니라
+  // #mdock-more-sheet(더보기 시트, ⊆ #mobile-dock)로 이관됐다(마스터: 메인 2개+더보기).
+  // 포함관계는 #mobile-dock nav 전체를 기준으로 증명 — 20_App.js 배선이 querySelectorAll로
+  // #mobile-dock 하위 전체를 찾으므로 이 포함관계가 실제 배선 유지의 필요조건이다.
+  // #mobile-dock 은 <nav>(div 아님) — extractDivBlock 은 div 전용이라 </nav> 를 직접 찾는다
+  // (이 nav 하위엔 중첩 <nav> 가 없어 첫 </nav> 가 곧 자기 자신의 닫는 태그다).
+  const navStart = indexHtml.indexOf('<nav id="mobile-dock" class="mobile-dock" aria-label="모바일 도구 도크">');
+  if (navStart < 0) throw new Error("#mobile-dock nav 를 찾지 못함(소스 변경?)");
+  const navBlock = indexHtml.slice(navStart, indexHtml.indexOf("</nav>", navStart));
+  ok(/id="mdock-upload"/.test(navBlock), "⑤a #mdock-upload 가 #mobile-dock(더보기 시트 경유) 안에 있다(포함관계)");
+  const moreSheetBlock = extractDivBlock(indexHtml, '<div id="mdock-more-sheet" class="mdock-more-sheet">');
+  ok(/id="mdock-upload"/.test(moreSheetBlock), "⑤a-2 #mdock-upload 가 #mdock-more-sheet 안에 있다(R6 이관 확인)");
   ok(!/#mdock-upload\s*\{[^}]*(position\s*:\s*(absolute|fixed)|margin-top\s*:\s*-)/.test(styleCss),
     "⑤b #mdock-upload 에 상위 박스를 벗어나는 절대배치/음수마진 규칙이 없다");
 
@@ -213,13 +239,20 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
   ok(overlapArea(mobileDockRect, helpToggleRect) === 0,
     "⑤d .mobile-dock ∩ [data-help-toggle] = 0 → helpRect=" + JSON.stringify(helpToggleRect));
 
-  console.log("  ⇒ #mdock-upload ⊆ .mobile-dock 이고 위 겹침이 전부 0 이므로 #mdock-upload 의 겹침도 0");
+  console.log("  ⇒ 상시 노출되는 .mdock-bar 는 위 겹침이 전부 0. #mdock-upload 는 기본 상태(#mdock-more-sheet 접힘, " +
+    "display:none)에선 렌더조차 안 되어 겹침 자체가 없고, 더보기를 펼친 순간엔 사이드바 시트와 같은 " +
+    "의도된 임시 오버레이(z-index:141)로 다른 UI 위에 뜨는 것이 정상 동작이다(모달과 동일 패턴).");
 }
 
-/* ══ ⑥ 터치타깃 ≥44×44 ══════════════════════════════════════════════════ */
+/* ══ ⑥ 터치타깃 ≥44×44 ══════════════════════════════════════════════════
+ * [WO 20260929-mobile R6] 도크가 2단으로 갈라졌다 — 상시 노출 메인바(.mdock-bar,
+ * 4칩: 메뉴/포인트/사진등록/더보기) + 탭해야 뜨는 더보기 시트(#mdock-more-sheet,
+ * 6칩: 보기/편집/페이지/주석/목록/업로드, 3열 그리드). 두 구역을 각자의 실제 레이아웃
+ * 공식으로 따로 측정한다(예전처럼 "10칩을 375px에 균등분배"로 뭉뚱그리면 실제 레이아웃과
+ * 어긋난다 — 메인바는 4칩/375px, 시트는 6칩/3열/(375-좌우여백)px). */
 {
-  const barBlockMatch = indexHtml.match(/<div class="mdock-bar">([\s\S]*?)<\/div>\s*\n\s*<\/nav>/);
-  const chipCount = (barBlockMatch[1].match(/class="mdock-chip[^"]*"/g) || []).length;
+  const barBlock = extractDivBlock(indexHtml, '<div class="mdock-bar">');
+  const chipCount = (barBlock.match(/class="mdock-chip[^"]*"/g) || []).length;
   ok(chipCount >= 1, "사전조건 — .mdock-bar 안 칩 개수 파싱됨 → " + chipCount);
   const mdockHForTarget = (() => {
     const blockRe = /\.mdock-bar\s*\{([^}]*)\}/gs;
@@ -233,12 +266,33 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
     return vars;
   })();
   const mdockHVal = /var\(--mdock-h\)/.test(mdockHForTarget) ? parseFloat(ROOT_VARS2["mdock-h"]) : parseFloat(mdockHForTarget);
-  const viewerChipCount = chipCount - (barBlockMatch[1].match(/designer-only/g) || []).length; // designer-only 칩은 뷰어에서 숨김
+  const viewerChipCount = chipCount - (barBlock.match(/designer-only/g) || []).length; // designer-only 칩은 뷰어에서 숨김
   const widthDesigner = 375 / chipCount;
   const widthViewer = 375 / Math.max(1, viewerChipCount);
   ok(mdockHVal >= 44, "⑥a .mdock-bar 높이(=칩 높이) ≥44px, 실제 " + mdockHVal);
-  ok(widthDesigner >= 44, "⑥b 설계자 모드 칩 " + chipCount + "개 균등폭 ≥44px, 실제 " + widthDesigner.toFixed(1));
-  ok(widthViewer >= 44, "⑥c 뷰어 모드 칩 " + viewerChipCount + "개 균등폭 ≥44px, 실제 " + widthViewer.toFixed(1));
+  ok(widthDesigner >= 44, "⑥b 메인 도크 칩 " + chipCount + "개 균등폭 ≥44px, 실제 " + widthDesigner.toFixed(1));
+  ok(widthViewer >= 44, "⑥c 뷰어 모드 메인 칩 " + viewerChipCount + "개 균등폭 ≥44px, 실제 " + widthViewer.toFixed(1));
+
+  // 더보기 시트 — grid-template-columns 열 수 + left/right 여백으로 열 폭을, .mdock-chip
+  // min-height 선언으로 칩 높이를 각각 CSS 원문에서 파싱(하드코딩 없음).
+  const sheetBlock = extractDivBlock(indexHtml, '<div id="mdock-more-sheet" class="mdock-more-sheet">');
+  const sheetChipCount = (sheetBlock.match(/class="mdock-chip[^"]*"/g) || []).length;
+  ok(sheetChipCount >= 1, "사전조건 — #mdock-more-sheet 안 칩 개수 파싱됨 → " + sheetChipCount);
+  // .mdock-more-sheet 규칙은 2군데(데스크톱 기본 display:none · 모바일 미디어쿼리 내부 실 레이아웃)
+  // — grid-template-columns 를 가진 쪽(모바일 실 레이아웃)을 찾는다.
+  const sheetRuleRe = /\.mdock-more-sheet\s*\{([^}]*)\}/g;
+  let sheetRuleBody = null, srm;
+  while ((srm = sheetRuleRe.exec(styleCss))) { if (/grid-template-columns/.test(srm[1])) { sheetRuleBody = srm[1]; break; } }
+  if (!sheetRuleBody) throw new Error(".mdock-more-sheet 의 모바일 레이아웃 규칙(grid-template-columns)을 찾지 못함");
+  const sheetCols = parseInt((sheetRuleBody.match(/grid-template-columns\s*:\s*repeat\((\d+)/) || [])[1] || "0", 10);
+  const sheetLeft = parseFloat((sheetRuleBody.match(/left\s*:\s*([\d.]+)px/) || [])[1] || "0");
+  const sheetRight = parseFloat((sheetRuleBody.match(/right\s*:\s*([\d.]+)px/) || [])[1] || "0");
+  ok(sheetCols >= 1, "사전조건 — #mdock-more-sheet 그리드 열 수 파싱됨 → " + sheetCols);
+  const widthSheetCol = (375 - sheetLeft - sheetRight) / sheetCols;
+  const sheetChipMinHRaw = (styleCss.match(/\.mdock-more-sheet\s+\.mdock-chip\s*\{([^}]*)\}/) || [])[1] || "";
+  const sheetChipMinH = parseFloat((sheetChipMinHRaw.match(/min-height\s*:\s*([\d.]+)px/) || [])[1] || "0");
+  ok(widthSheetCol >= 44, "⑥d 더보기 시트 칩(" + sheetCols + "열) 균등폭 ≥44px, 실제 " + widthSheetCol.toFixed(1));
+  ok(sheetChipMinH >= 44, "⑥e 더보기 시트 칩 높이(min-height) ≥44px, 실제 " + sheetChipMinH);
 }
 
 /* ══ ⑦ 프로젝트 안 다운로드 진입로 존재 ══════════════════════════════════ */

@@ -518,5 +518,93 @@
   };
 
   /* ══════════════════════════════════════════
+     [WO 20260929-mobile] 모바일(≤760px) 전용 더보기 토글 배선.
+     🔴 20_App.js(타 팀 점유)를 건드리지 않는다 — 새 독립 DOMContentLoaded 리스너로
+     기존 요소(id·data-* 불변)에 "펼침/접힘" 상태만 덧붙인다. 기존 버튼 클릭 배선은
+     20_App.js가 이미 id/class로 elementById/querySelectorAll 하므로 위치·펼침 상태와
+     무관하게 그대로 동작(재구현 0). 데스크톱(>760px)은 CSS가 이 토글들을 숨기므로 무해.
+     🔴 [p3/p23/p29 회귀수정] 이 파일은 테스트가 vm으로 전체를 그대로 평가하기도 한다
+     (document 전역 없이). typeof 가드 없이 최상위에서 document.addEventListener를 부르면
+     그 시점에 즉시 ReferenceError가 나 파일 평가 자체가 깨진다 — 실브라우저에서만 실행되게 가드.
+  ══════════════════════════════════════════ */
+  if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("DOMContentLoaded", () => {
+    // R1/R2 — 파노 헤더 "더보기"(꼭지점4+이슈)
+    const moreBtn = document.getElementById("btn-pano-more");
+    const morePanel = document.getElementById("pano-header-more");
+    if (moreBtn && morePanel) {
+      moreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = morePanel.classList.toggle("open");
+        moreBtn.classList.toggle("active", open);
+        moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+      document.addEventListener("click", (e) => {
+        if (!morePanel.classList.contains("open")) return;
+        if (morePanel.contains(e.target) || moreBtn.contains(e.target)) return;
+        morePanel.classList.remove("open");
+        moreBtn.classList.remove("active");
+        moreBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    // R4 — 파노 컨트롤 패드 접기/펼치기
+    const toolsBtn = document.getElementById("btn-pano-tools-toggle");
+    const toolsPanel = document.getElementById("pano-controls");
+    if (toolsBtn && toolsPanel) {
+      toolsBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = toolsPanel.classList.toggle("mobile-open");
+        toolsBtn.classList.toggle("active", open);
+        toolsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+    }
+    // 뷰어를 닫으면 다음 오픈 때 항상 접힌 상태로 시작(마스터: "기본 접힘")
+    const closeBtn = document.getElementById("btn-pano-close");
+    if (closeBtn && toolsPanel && toolsBtn) {
+      closeBtn.addEventListener("click", () => {
+        toolsPanel.classList.remove("mobile-open");
+        toolsBtn.classList.remove("active");
+        toolsBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    // R6 — 모바일 하단 도크 "더보기" 시트 + 사진 등록(기존 #btn-photobatch 위임, 재구현 0)
+    const dockMoreBtn = document.getElementById("mdock-more-toggle");
+    const dockMoreSheet = document.getElementById("mdock-more-sheet");
+    if (dockMoreBtn && dockMoreSheet) {
+      dockMoreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = dockMoreSheet.classList.toggle("open");
+        dockMoreBtn.classList.toggle("active", open);
+        dockMoreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+      // 시트 안의 버튼(보기/편집/페이지/주석/목록/업로드)을 누르면 그 동작은 기존 배선이
+      // 처리하고, 여기서는 시트만 닫아 화면을 가리지 않게 한다.
+      dockMoreSheet.addEventListener("click", (e) => {
+        if (!e.target.closest("button")) return;
+        dockMoreSheet.classList.remove("open");
+        dockMoreBtn.classList.remove("active");
+        dockMoreBtn.setAttribute("aria-expanded", "false");
+      });
+      document.addEventListener("click", (e) => {
+        if (!dockMoreSheet.classList.contains("open")) return;
+        if (dockMoreSheet.contains(e.target) || dockMoreBtn.contains(e.target)) return;
+        dockMoreSheet.classList.remove("open");
+        dockMoreBtn.classList.remove("active");
+        dockMoreBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+    const photoBtn = document.getElementById("mdock-photobatch");
+    if (photoBtn) {
+      photoBtn.addEventListener("click", () => {
+        const t = document.getElementById("btn-photobatch");
+        if (t) t.click();
+      });
+    }
+  });
+  }
+
+  /* ══════════════════════════════════════════
      RADAR — 파노라마 내 도면 미니맵 + 시야 부채꼴 (3DVista radar 참고)
   ══════════════════════════════════════════ */
