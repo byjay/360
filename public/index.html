@@ -540,6 +540,11 @@
       <div id="section-place" class="sidebar-section hidden">
         <button id="btn-place" class="btn-place" data-help="pin-place"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true" style="vertical-align:-2px;margin-right:5px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>위치 포인트 추가</button>
         <p id="place-hint" class="place-hint hidden">도면 위 원하는 위치를 클릭하세요</p>
+        <!-- [WO 20260930-autophoto] 360(photo) 모드 전용 — 핀 생성 시 시각 최근접 자동연결에
+             쓰는 세션 사진 목록을 초기화한다(35_PhotoBatch.js PhotoBatch.resetAutoSession).
+             기존 .btn-mini 재사용(신규 CSS 없음). 표시 여부는 App._updateCheckboardQuickStatus
+             SoT 한 곳에서만 토글. -->
+        <button id="btn-photo-reselect" type="button" class="btn-mini hidden" style="display:block;margin:6px auto 0;">📷 사진 다시 선택</button>
 
         <!-- [마스터: THETA R* 360 인입] 오프라인 THETA 360 사진을 가져와 도면에 위치 지정 등록 -->
         <button id="btn-theta-intake" class="btn-place btn-theta-intake" type="button"

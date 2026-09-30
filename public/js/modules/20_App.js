@@ -1663,14 +1663,21 @@
       const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
       const range = this._checkboardQuickRange(pg, series);
       const hint = UI.$("place-hint");
+      // [WO 20260930-autophoto] 남은 360 후보 사진 수를 함께 보여준다(PhotoBatch 세션 SoT).
+      const avail = (series === "content" && typeof PhotoBatch !== "undefined" && PhotoBatch._autoRowsRemaining) ? PhotoBatch._autoRowsRemaining() : 0;
       const emptyHint = series === "content"
-        ? "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다"
+        ? (avail
+            ? ("도면 위를 클릭하면 번호 핀과 함께 대기 중인 360 사진 " + avail + "장 중 가장 가까운 시각이 자동 연결됩니다")
+            : "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다")
         : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
+          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
           : emptyHint;
       }
+      // [WO 20260930-autophoto] "사진 다시 선택" 버튼 — 360 모드에서 대기 사진이 있을 때만 노출.
+      const reselect = UI.$("btn-photo-reselect");
+      if (reselect) reselect.classList.toggle("hidden", !(series === "content" && avail && State.checkboard));
     },
 
     _handlePlaceClick(e) {
@@ -1684,12 +1691,18 @@
         this._placeCheckboardPin(pct);
         return; // placing 유지(다음 클릭도 번호 핀). 종료는 '＋ 번호 핀 찍기' 토글로.
       }
-      // [WO 20260929 마스터 정정] 사진 등록 모드: 핀 생성 직후 즉시 사진 선택창(동기 호출,
-      //   모바일 user-activation 유지). 첨부되면 그 핀에 붙고, 취소해도 핀은 유지된다.
+      // [WO 20260930-autophoto] 360(photo) 모드: 핀 생성 직후 시각 최근접 자동 사진연결
+      //   (PhotoBatch.autoConnectPin, 기존 _buildTimeMatches/_uploadOneRow 재사용). 세션에
+      //   이미 고른 사진이 있으면 다시 묻지 않고 바로 매칭 — 없을 때만 다중 파일선택창을
+      //   연다(동기 호출, 모바일 user-activation 유지 — 기존 _openPinMediaPicker 관례).
+      //   첨부/미첨부 어느 쪽이든 핀은 유지된다(조용히 삭제 금지).
       if (State.regMode === "photo") {
         const pin = this._placeCheckboardPin(pct);
-        if (pin) this._openPinMediaPicker(pin);
-        return; // placing 유지 — 계속 클릭하면 다음 번호 핀 + 파일창.
+        if (pin) {
+          if (typeof PhotoBatch !== "undefined" && PhotoBatch.autoConnectPin) PhotoBatch.autoConnectPin(pin);
+          else this._openPinMediaPicker(pin); // PhotoBatch 미로드 시 기존 단일선택 폴백(조용한 실패 금지)
+        }
+        return; // placing 유지 — 계속 클릭하면 다음 번호 핀 + 자동매칭.
       }
 
       State.pending = pct;

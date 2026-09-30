@@ -422,6 +422,9 @@
 
       $("btn-photobatch-run") && $("btn-photobatch-run").addEventListener("click", () => this.run());
 
+      // [WO 20260930-autophoto] 360 자동연결 세션 초기화 버튼(index.html #btn-photo-reselect).
+      $("btn-photo-reselect") && $("btn-photo-reselect").addEventListener("click", () => this.resetAutoSession());
+
       const s = $("photobatch-start");
       if (s) s.addEventListener("change", () => { const v = parseInt(s.value, 10); if (Number.isFinite(v)) this._range.start = v; this._renderTable(); });
       const e2 = $("photobatch-end");
@@ -870,5 +873,127 @@
     _closeTimeMatchModal() {
       const modal = document.getElementById("photobatch-tm-modal");
       if (modal) modal.classList.add("hidden");
+    },
+
+    /* ══ [WO 20260930-autophoto] 360 핀 생성 즉시 자동 사진연결 ══════════════════
+       마스터: "360 모드는 사진이 자동 등록되는 로직, 여기만 필요해" / "포인트 생성
+       시간을 기록해 … 제일 근사한 시간에 저장된 360 그림을 찾아서 연동되게".
+       기존 시각매칭 정본(_buildTimeMatches/_sortRows/_uploadOneRow/PhotoNaming)만 재사용
+       — 새 매칭 알고리즘을 만들지 않는다(§10 SoT). _tm(수동 openTimeMatch)과는 완전히
+       분리된 세션 상태(_autoRows)를 둔다 — 서로 건드리지 않는다. */
+    _autoRows: [],          // 세션 동안 기억하는 후보 사진(선택된 배치 전체, 이미 연결된 건 매칭 성공 시 제거)
+    _pendingAutoPin: null,  // 파일선택창이 열려 있는 동안 기다리는 핀(선택 완료 후 매칭)
+
+    /** 세션 기억 초기화 — [사진 다시 선택] 버튼(index.html #btn-photo-reselect). */
+    resetAutoSession() {
+      this._autoRows = [];
+      this._pendingAutoPin = null;
+      if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("사진 목록을 비웠습니다 — 다음 360 핀을 찍으면 다시 선택합니다");
+    },
+
+    /** 남아있는(아직 연결 안 된) 360 후보 사진 수 — place-hint 안내문에만 쓴다(부작용 없음). */
+    _autoRowsRemaining() {
+      return (this._autoRows || []).filter((r) => !r.excluded && r.is360 === true).length;
+    },
+
+    _ensureAutoInput() {
+      if (document.getElementById("photobatch-auto-files")) return;
+      const input = document.createElement("input");
+      input.type = "file"; input.multiple = true; input.accept = "image/*";
+      input.id = "photobatch-auto-files";
+      input.style.display = "none";
+      input.addEventListener("change", (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        this._onAutoFilesChosen(files);
+      });
+      document.body.appendChild(input);
+    },
+
+    /** [핵심 API] 360(photo) 모드 핀 생성 직후 호출(_handlePlaceClick). CHECKER 계열은
+     *  대상이 아니다(00c18fd 차단 유지, SoT: PinSeries.seriesOf). 이미 세션에 후보 사진이
+     *  있으면 다시 고르지 않고 바로 매칭한다(마스터: "다음 포인트 생성 시간에는… 다시 물어보지
+     *  않는다" 취지). 없으면 다중 파일선택창을 연다(모바일 user-activation 유지 — 동기 호출,
+     *  기존 _openPinMediaPicker와 동일 관례). */
+    autoConnectPin(pin) {
+      if (!pin) return;
+      if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return;
+      if (this._autoRows && this._autoRows.length) { this._autoTryConnect(pin); return; }
+      this._pendingAutoPin = pin;
+      this._ensureAutoInput();
+      if (typeof Prompt !== "undefined" && Prompt.toast)
+        Prompt.toast("RICOH THETA 폴더(/내장 저장공간/Pictures/RICOH THETA)에서 360 사진을 선택하세요 — 최근 파일부터");
+      const input = document.getElementById("photobatch-auto-files");
+      if (input) input.click();
+    },
+
+    /** 선택된 파일들을 시각순 정렬 + 360 판정까지 마친 뒤 세션에 누적하고, 기다리던 핀이
+     *  있으면 매칭을 시도한다. 취소(파일 0개)하면 대기 핀은 그대로 번호만 가진 채 남는다
+     *  (조용히 삭제 금지, 기존 _openPinMediaPicker 관례와 동일). */
+    async _onAutoFilesChosen(files) {
+      const pin = this._pendingAutoPin;
+      this._pendingAutoPin = null;
+      const IMG_RE = /\.(jpe?g|png|webp)$/i;
+      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
+      if (!imgFiles.length) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다");
+        return;
+      }
+      // [지휘자 발주 보강2 §1] 가장 최근 파일부터 — openTimeMatch와 동일 관례(quickTime).
+      const quickTime = (f) => {
+        const fn = this._parseThetaFilenameDate(f.name);
+        if (fn) return Date.parse(fn.iso);
+        return Number.isFinite(f.lastModified) ? f.lastModified : -Infinity;
+      };
+      const ordered = imgFiles.slice().sort((a, b) => quickTime(b) - quickTime(a));
+      const rows = [];
+      for (const f of ordered) {
+        let exif = null;
+        try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
+        rows.push({
+          file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0,
+          thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name)
+        });
+      }
+      const sorted = this._sortRows(rows);
+      // 360 판정(App._detect360, 비동기)까지 기다린 뒤에야 후보로 쓴다 — 안 기다리면
+      // "허용오차 밖" 오판정이 날 수 있다(판정 전 is360===null 은 _buildTimeMatches가 제외함).
+      await Promise.all(sorted.map((r) => new Promise((resolve) => {
+        if (typeof App === "undefined" || !App._detect360) { resolve(); return; }
+        App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; resolve(); });
+      })));
+      this._autoRows = (this._autoRows || []).concat(sorted);
+      if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+      if (pin) await this._autoTryConnect(pin);
+    },
+
+    /** 대기 중인(혹은 방금 만든) 핀 1개 × 세션 후보 사진 전체를 _buildTimeMatches(정본)에
+     *  넘겨 최근접 1건만 취한다 — 새 매칭 로직 없음(§10 SoT 재사용). 매칭되면 그 사진을
+     *  세션 목록에서 제거해(다음 핀은 재사용 안 됨) 업로드(_uploadOneRow, 기존 경로)한다. */
+    async _autoTryConnect(pin) {
+      if (!pin) return;
+      const toleranceMs = 10 * 60 * 1000; // openTimeMatch 기본 허용오차(photobatch-tm-tolerance 기본값)와 동일 SoT 상수
+      const rows = (this._autoRows || []).filter((r) => !r.excluded);
+      const result = this._buildTimeMatches([{ pin, no: 0 }], rows, { toleranceMs });
+      const m = (result.matches || [])[0];
+      if (!m) {
+        const mins = Math.round(toleranceMs / 60000);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("±" + mins + "분 안에 촬영된 360 사진 없음 — [사진 선택]");
+        return;
+      }
+      const usedNames = this._usedPhotoNames();
+      const r = await this._uploadOneRow(pin, m.row, false, usedNames);
+      if (r.status === "done") {
+        this._autoRows = (this._autoRows || []).filter((x) => x !== m.row);
+        try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+        try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
+        try { App._markDirty && App._markDirty(); } catch (e) {}
+        if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+        if (typeof Prompt !== "undefined" && Prompt.toast)
+          Prompt.toast("360 사진 자동 연결됨" + (r.offline ? "(오프라인 저장됨)" : "") + " · Δ" + Math.round(m.dtMs / 1000) + "초");
+      } else if (r.status === "fail") {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 사진 연결 실패: " + r.reason);
+      }
     }
   };

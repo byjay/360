@@ -62,6 +62,9 @@
     annoTool:    "cursor",  // 현재 주석 도구
     annoColor:   "#ff3b30", // 현재 주석 색상
     zones:       [],        // {id,page,x,y,w,h,label,color,pinIds[],note} 영역(%) 줌무관
+    // [WO 20260929-bulkdel] 핀 삭제 부활 방지(20_App._mergePins) — 도면 단위, reset() 에서 초기화.
+    pinTombstones: {},      // { [String(pinId)]: 삭제시각ms } 이 도면에서 내가 지운 핀
+    pinBaseIds:   null,     // 내가 아는 서버 버전(depVersion)의 핀 id 목록(String[]) — null=모름
     placing:     false,
     drawingZone: false,     // 영역 그리기 모드
     isoView:     false,     // ISO 3D 아이소메트릭 뷰 (평면↔입체 회전)
@@ -102,7 +105,7 @@
       // [P14] 원본 PDF 지연 로드 상태 초기화 — 도면이 바뀌면 이전 원본은 거짓 화면이 된다.
       this.sourceMeta = null; this.sourcePdfUrl = null; this.srcPdfDoc = null;
       this.srcNoticed = false; this.srcFailed = false;
-      this.pins = []; this.zones = []; this.placing = false; this.drawingZone = false; this.pending = null;
+      this.pins = []; this.zones = []; this.pinTombstones = {}; this.pinBaseIds = null; this.placing = false; this.drawingZone = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
       this.pendingFls = null;
@@ -221,8 +224,8 @@
      *  우선, 없으면 pin.id 가 Date.now() 로 채번된 숫자(20_App.js _placeCheckboardPin:1513,
      *  _confirmPinInstant:2068 — 둘 다 id=Date.now() 만 있고 별도 createdAt 필드가 없다)라고
      *  판단되면 그 값을 파생해 쓴다. 못 구하면 null(가짜 시각을 만들지 않는다 — §10 하드코딩 금지).
-     *  🔴 20_App.js 두 생성 지점은 다른 팀 점유라 여기서 명시 필드를 새로 심지 않는다 —
-     *  현재는 id 파생으로 커버되지만, id 채번 방식이 바뀌면 이 파생이 깨진다(후속 반영 필요 항목). */
+     *  [WO 20260929-createdAt] 20_App.js 생성 지점 3곳(_placeCheckboardPin · _confirmPinInstant ·
+     *  폼 신규 np)이 이제 createdAt 을 명시 저장한다. id 파생은 그 이전에 만든 핀(필드 없음)용 폴백. */
     createdAt(pin) {
       if (!pin) return null;
       if (Number.isFinite(pin.createdAt)) return pin.createdAt;
@@ -246,6 +249,43 @@
 
     /** 채번 계열 (2종) */
     seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },
+
+    /* ══ 모드 = 작업공간 [WO 20260930-fixmode] ══════════════════════════════
+       마스터: "체커와 360을 완전히 다른 프로젝트처럼 구분 — 프로젝트 하위 최상단에 체커/360,
+       그 하위로 구역-영역". 🔴 이 표 하나가 모드(regMode) ↔ 핀 계열(series) ↔ 구역 태그(decks.mode)
+       ↔ 표시 이름의 유일한 대응표다. 지도 마커·미니맵·필터 칩·핀 목록·사이드바 트리·허브 카드 트리가
+       전부 아래 함수만 부른다(각자 판정하면 반드시 갈라진다 — §10 SoT).
+       decks.mode = NULL(마이그레이션 0029 이전 기존 구역)은 두 모드 모두에 보인다(유실 0). */
+    DECK_MODES: [
+      { tag: "checker", regMode: "checkboard", series: "checkboard", label: "CHECKER" },
+      { tag: "360",     regMode: "photo",      series: "content",    label: "360" }
+    ],
+    _modeBy(key, val) { return this.DECK_MODES.find((m) => m[key] === val) || null; },
+    /** 현재 활성 모드(편집화면 CHECKER/360). 뷰어·구 view 모드는 null(=분리 없음, 전부 표시). */
+    activeMode() {
+      if (typeof State === "undefined" || State.mode !== "designer") return null;
+      return this._modeBy("regMode", State.regMode);
+    },
+    /** 활성 모드의 핀 계열 — null 이면 모드 분리 없음 */
+    activeSeries() { const m = this.activeMode(); return m ? m.series : null; },
+    /** 새 구역·영역에 붙일 decks.mode 태그 — null 이면 태그 안 함(서버 NULL) */
+    deckModeTag() { const m = this.activeMode(); return m ? m.tag : null; },
+    /** 핀이 (지정 계열 또는) 활성 모드 작업공간에 속하는가 */
+    inMode(pin, series) {
+      const s = series !== undefined ? series : this.activeSeries();
+      return !s || this.seriesOf(pin) === s;
+    },
+    /** 활성 모드 작업공간의 핀만 */
+    modePins(pins) { return (pins || []).filter((p) => p && this.inMode(p)); },
+    /** 구역이 모드 tag 작업공간에 보이는가 — NULL(기존 구역)은 양쪽 모두(유실 0) */
+    deckInMode(deck, tag) { return !!deck && (deck.mode == null || deck.mode === "" || deck.mode === tag); },
+    /** 구역 생성 요청 body 에 활성 모드 태그를 붙인다(31_Projects.js POST 3곳 공유 지점).
+     *  영역은 부모 구역의 mode 를 상속 — 부모가 태그돼 있으면 그 값, NULL 이면 활성 모드. */
+    withDeckMode(body, parentDeck) {
+      const tag = (parentDeck && parentDeck.mode) || this.deckModeTag();
+      if (tag) body.mode = tag;
+      return body;
+    },
 
     /** [WO 20260929 addendum] 🔴 표시 번호 포맷 정본 — CHECKER 계열은 숫자 그대로, 360 계열은
      *  "P" 접두(마스터: "번호체계도 다르게 해"). 마커 머리(11_UI)·미니맵(07_Radar)·트리 행(11_UI)
@@ -443,6 +483,11 @@
      *  필터 바가 이제 모드(CHECKER/360)와 1:1인 2칩뿐이라 "미배치(empty)"는 별도 칩이 없다
      *  (content 칩 하나가 kindOf 상 content+empty 를 모두 포함 — seriesOf 기준이므로 자연히 그렇다). */
     filter() {
+      // [WO 20260930-fixmode] 🔴 모드 = 작업공간 — 활성 모드(CHECKER/360)가 있으면 표시 계열은 그 모드
+      // 하나로 고정된다(지도 마커·미니맵이 쓰는 isVisible() 이 이 값 하나만 본다 — 판정 지점 1곳).
+      // 세션 칩 상태(_filter)는 건드리지 않는다 — 뷰어(모드 없음)로 돌아가면 종전 칩 필터 그대로.
+      const act = this.activeSeries();
+      if (act) return { checkboard: act === "checkboard", content: act === "content" };
       if (!this._filter) this._filter = { checkboard: true, content: true };
       return this._filter;
     },
@@ -509,6 +554,7 @@
     toggle(series) {
       const f = this.filter();
       if (this.SERIES.indexOf(series) < 0) return;
+      if (this.activeSeries()) return; // [WO 20260930-fixmode] 모드 작업공간에선 칩 1개 = 표시 전용
       const next = Object.assign({}, f, {});
       next[series] = !f[series];
       // 마지막 하나를 끄는 건 전체 숨김 → 그 하나만 보기로 해석(단독 선택)
@@ -645,9 +691,13 @@
       if (!host) return;
       const page = (typeof State !== "undefined" && State.pdfPage) || 1;
       const pins = (typeof State !== "undefined" && State.pins) || [];
+      // [WO 20260930-badge] 🔴 카운트는 페이지 전체(두 계열) 기준으로 센다 — modePins()로 먼저
+      // 거르면 활성 모드가 아닌 계열은 항상 0으로 계산되고(칩 자체가 못 뜸), 활성 모드 핀이
+      // 0개면 c.all 도 0이 되어 칩바 전체가 숨어버린다(재현: 360 모드에서 콘텐츠 핀 0개일 때
+      // 칩 영역이 완전히 빈다 — 지휘자 라이브 보고). seriesCounts 는 항상 전체 기준으로 세고,
+      // 아래에서 활성 모드일 때만 자기 계열 칩 하나로 좁힌다.
       const c = this.seriesCounts(pins, page);
-      if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
-      host.classList.remove("hidden");
+      const active = this.activeSeries();   // 모드 작업공간 SoT — null 이면 분리 없음(뷰어/구 view)
       const f = this.filter();
       const chip = (series, label, n, on) =>
         '<button type="button" class="zpager-tab pinfilter-chip pf-' + series + (on ? " active" : "") +
@@ -655,7 +705,17 @@
         '" title="' + label + ' 핀만 보기"><span class="pinfilter-dot"></span>' + label +
         '<span class="zpager-cnt">' + n + '</span></button>';
       let html = "";
-      this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });
+      if (active) {
+        // 모드 작업공간(CHECKER/360 분리 화면) — 그 모드 자신의 칩만, 0개여도 대칭 표시한다
+        // (마스터 재현: CHECKER "CHECKER 11" 처럼 360 모드도 "360 0" 이 보여야 한다).
+        host.classList.remove("hidden");
+        html = chip(active, this.LABELS[active], c[active] || 0, !!f[active]);
+      } else {
+        // 모드 분리 없는 화면(뷰어/구 view) — 기존 2칩, 개수가 있는 계열만(회귀 없음).
+        if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
+        host.classList.remove("hidden");
+        this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });
+      }
 
       host.innerHTML = html;
       if (!this._chipsBound) {
@@ -2159,9 +2219,16 @@
             });
           } catch (e) { failed += batch.length; break; } // 네트워크 단절 → 다음 online 때 재시도
           if (!res.ok) {
-            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
-            //   큐는 그대로 보존(제거하지 않음) — 재로그인 후 자동 재시도.
-            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            // [WO 20260930-403] 401(만료)/403·409(권한없음·대상삭제) 를 공유 지점(Auth.classifyWriteFailure)
+            //   에서 판정 — /api/sync/batch 는 프로젝트 스코프 검사가 없어 실제로는 항상 'expired'로
+            //   분류되지만(§classifyWriteFailure), 세 호출부가 같은 판정을 쓰도록 통일한다(§G-2-5).
+            //   큐는 그대로 보존(제거하지 않음) — 재로그인/재허용 후 자동 재시도.
+            const kind = (typeof Auth !== "undefined" && Auth.classifyWriteFailure) ? await Auth.classifyWriteFailure(res) : null;
+            if (kind === "expired") {
+              if (typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            } else if (kind === "denied" || kind === "conflict") {
+              if (typeof Auth !== "undefined" && Auth.writeDenied) Auth.writeDenied(kind);
+            }
             failed += batch.length; break;
           }
           const data = await res.json();
@@ -2303,6 +2370,16 @@
 
     init(canvas) { this.canvas = canvas; },
 
+    /** [지휘자 발주 2026-09-29 항목6] 뷰어 제목에 사진 저장명(영역/구역_시각 등, PhotoNaming.describe
+     *  가 정본 — 35_PhotoBatch.js, 27_PinActionPop.js 사진 캡션과 동일 SoT)을 덧붙인다.
+     *  PhotoNaming 미로드/정보 없음이면 빈 문자열 → 기존 제목 그대로(요구사항 "없으면 기존 동작 유지"). */
+    _savedNameSuffix() {
+      const pin = this._currentPin;
+      if (!pin || typeof PhotoNaming === "undefined" || !PhotoNaming.describe) return "";
+      const desc = PhotoNaming.describe(pin);
+      return desc ? " · " + desc : "";
+    },
+
     /** 확장자/MIME으로 360° 영상 여부 판단 후 적절한 로더 호출 */
     loadMedia(src, locationName, isVideo) {
       if (typeof Log !== "undefined") Log.push("pano.open", null, { name: locationName || "" });
@@ -2332,7 +2409,7 @@
       const $ = id => document.getElementById(id);
       this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
 
-      $("pano-location-name").textContent = "360° — " + locationName;
+      $("pano-location-name").textContent = "360° — " + locationName + this._savedNameSuffix();
       $("pano-loading").classList.remove("hidden");
       $("pano-error").classList.add("hidden");
       $("pano-canvas").classList.add("hidden");
@@ -2394,7 +2471,7 @@
       const $ = id => document.getElementById(id);
       this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
 
-      $("pano-location-name").textContent = "360° ▶ " + locationName;
+      $("pano-location-name").textContent = "360° ▶ " + locationName + this._savedNameSuffix();
       $("pano-loading").classList.remove("hidden");
       $("pano-error").classList.add("hidden");
       $("pano-canvas").classList.add("hidden");
@@ -2804,6 +2881,94 @@
   };
 
   /* ══════════════════════════════════════════
+     [WO 20260929-mobile] 모바일(≤760px) 전용 더보기 토글 배선.
+     🔴 20_App.js(타 팀 점유)를 건드리지 않는다 — 새 독립 DOMContentLoaded 리스너로
+     기존 요소(id·data-* 불변)에 "펼침/접힘" 상태만 덧붙인다. 기존 버튼 클릭 배선은
+     20_App.js가 이미 id/class로 elementById/querySelectorAll 하므로 위치·펼침 상태와
+     무관하게 그대로 동작(재구현 0). 데스크톱(>760px)은 CSS가 이 토글들을 숨기므로 무해.
+     🔴 [p3/p23/p29 회귀수정] 이 파일은 테스트가 vm으로 전체를 그대로 평가하기도 한다
+     (document 전역 없이). typeof 가드 없이 최상위에서 document.addEventListener를 부르면
+     그 시점에 즉시 ReferenceError가 나 파일 평가 자체가 깨진다 — 실브라우저에서만 실행되게 가드.
+  ══════════════════════════════════════════ */
+  if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("DOMContentLoaded", () => {
+    // R1/R2 — 파노 헤더 "더보기"(꼭지점4+이슈)
+    const moreBtn = document.getElementById("btn-pano-more");
+    const morePanel = document.getElementById("pano-header-more");
+    if (moreBtn && morePanel) {
+      moreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = morePanel.classList.toggle("open");
+        moreBtn.classList.toggle("active", open);
+        moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+      document.addEventListener("click", (e) => {
+        if (!morePanel.classList.contains("open")) return;
+        if (morePanel.contains(e.target) || moreBtn.contains(e.target)) return;
+        morePanel.classList.remove("open");
+        moreBtn.classList.remove("active");
+        moreBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    // R4 — 파노 컨트롤 패드 접기/펼치기
+    const toolsBtn = document.getElementById("btn-pano-tools-toggle");
+    const toolsPanel = document.getElementById("pano-controls");
+    if (toolsBtn && toolsPanel) {
+      toolsBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = toolsPanel.classList.toggle("mobile-open");
+        toolsBtn.classList.toggle("active", open);
+        toolsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+    }
+    // 뷰어를 닫으면 다음 오픈 때 항상 접힌 상태로 시작(마스터: "기본 접힘")
+    const closeBtn = document.getElementById("btn-pano-close");
+    if (closeBtn && toolsPanel && toolsBtn) {
+      closeBtn.addEventListener("click", () => {
+        toolsPanel.classList.remove("mobile-open");
+        toolsBtn.classList.remove("active");
+        toolsBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    // R6 — 모바일 하단 도크 "더보기" 시트 + 사진 등록(기존 #btn-photobatch 위임, 재구현 0)
+    const dockMoreBtn = document.getElementById("mdock-more-toggle");
+    const dockMoreSheet = document.getElementById("mdock-more-sheet");
+    if (dockMoreBtn && dockMoreSheet) {
+      dockMoreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = dockMoreSheet.classList.toggle("open");
+        dockMoreBtn.classList.toggle("active", open);
+        dockMoreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+      // 시트 안의 버튼(보기/편집/페이지/주석/목록/업로드)을 누르면 그 동작은 기존 배선이
+      // 처리하고, 여기서는 시트만 닫아 화면을 가리지 않게 한다.
+      dockMoreSheet.addEventListener("click", (e) => {
+        if (!e.target.closest("button")) return;
+        dockMoreSheet.classList.remove("open");
+        dockMoreBtn.classList.remove("active");
+        dockMoreBtn.setAttribute("aria-expanded", "false");
+      });
+      document.addEventListener("click", (e) => {
+        if (!dockMoreSheet.classList.contains("open")) return;
+        if (dockMoreSheet.contains(e.target) || dockMoreBtn.contains(e.target)) return;
+        dockMoreSheet.classList.remove("open");
+        dockMoreBtn.classList.remove("active");
+        dockMoreBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+    const photoBtn = document.getElementById("mdock-photobatch");
+    if (photoBtn) {
+      photoBtn.addEventListener("click", () => {
+        const t = document.getElementById("btn-photobatch");
+        if (t) t.click();
+      });
+    }
+  });
+  }
+
+  /* ══════════════════════════════════════════
      RADAR — 파노라마 내 도면 미니맵 + 시야 부채꼴 (3DVista radar 참고)
   ══════════════════════════════════════════ */
   const Radar = {
@@ -2818,6 +2983,32 @@
       if (!this._toggleBound) {
         const tb = document.getElementById("pano-radar-toggle");
         if (tb) { tb.addEventListener("click", (e) => { e.stopPropagation(); box.classList.toggle("collapsed"); }); this._toggleBound = true; }
+      }
+      // [WO 20260929-mobile R3] 모바일 — 방향/확대(패널)/줌±(4버튼) 더보기 토글 (1회 바인딩).
+      // 데스크톱은 CSS(display:contents)가 그룹을 항상 펼친 상태로 유지하므로 토글 자체가 숨겨져 무해.
+      if (!this._moreBound) {
+        const mb = document.getElementById("pano-radar-more");
+        const grp = document.getElementById("pano-radar-more-group");
+        if (mb && grp) {
+          mb.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const open = grp.classList.toggle("open");
+            mb.classList.toggle("active", open);
+            mb.setAttribute("aria-expanded", open ? "true" : "false");
+          });
+          // [p2-radar-minimap 회귀수정] 테스트 목(document)은 getElementById만 제공하고
+          // document.addEventListener는 없다 — 실브라우저에서만 바깥탭 닫기를 배선한다.
+          if (typeof document.addEventListener === "function") {
+            document.addEventListener("click", (e) => {
+              if (!grp.classList.contains("open")) return;
+              if (grp.contains(e.target) || mb.contains(e.target)) return;
+              grp.classList.remove("open");
+              mb.classList.remove("active");
+              mb.setAttribute("aria-expanded", "false");
+            });
+          }
+          this._moreBound = true;
+        }
       }
       // [마스터 요청] 미니맵 크게 보기 토글 (1회 바인딩) — 크기만 전환, 기존 로직 그대로
       // [마스터 요청 "기본적으로 확대한 크기로 반영해"] 저장된 선택이 없으면 기본값=확대(large).
@@ -4904,25 +5095,93 @@
       c.classList.toggle("hidden", !n);
     },
 
+    /* ── [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 선택 상태 SoT(트리 핀 노드 · 핀 목록 패널 공유) ──
+       권한 판정 = App.canBulkDeletePins()(Auth.isAdmin 재사용). 삭제 = App.deletePins → 단건과 같은 _removePins. */
+    _pinSel: { on: false, ids: new Set() },
+    _pinBulkOk() { return typeof App !== "undefined" && !!App.canBulkDeletePins && App.canBulkDeletePins(); },
+    /** 렌더 직전 정리 — 권한이 없으면 선택 모드 해제, 이미 사라진 핀 id 는 선택에서 제거 */
+    _syncPinSel() {
+      const s = this._pinSel;
+      if (!this._pinBulkOk()) { s.on = false; s.ids.clear(); return s; }
+      const live = new Set((State.pins || []).map(p => String(p.id)));
+      Array.from(s.ids).forEach(k => { if (!live.has(k)) s.ids.delete(k); });
+      return s;
+    },
+    setPinSelectMode(on) {
+      this._pinSel.on = !!on && this._pinBulkOk();
+      this._pinSel.ids.clear();
+      this.renderPinList();
+    },
+    togglePinSelected(id) {
+      const k = String(id), ids = this._pinSel.ids;
+      if (ids.has(k)) ids.delete(k); else ids.add(k);
+      this.renderPinList();
+    },
+    /** 일괄삭제 버튼 묶음(공유 생성기) — opts.scopePins/scopeLabel 이 있으면 "범위 전체 삭제" 버튼도 만든다. */
+    _pinBulkButtons(opts) {
+      opts = opts || {};
+      const s = this._pinSel;
+      const out = [];
+      const mk = (label, cls, fn, title) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-mini" + (cls ? " " + cls : "");
+        b.textContent = label;
+        if (title) b.title = title;
+        b.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); fn(b); });
+        return b;
+      };
+      const finish = (n) => { if (n > 0) { s.on = false; s.ids.clear(); this.renderPinList(); } };
+      out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 한꺼번에 삭제(관리자)"));
+      if (s.on) {
+        const n = s.ids.size;
+        const del = mk("선택 삭제 " + n + "개", "danger pin-bulk-del", async () => {
+          finish(await App.deletePins(Array.from(s.ids)));
+        });
+        del.disabled = n === 0;
+        out.push(del);
+      }
+      const scope = Array.isArray(opts.scopePins) ? opts.scopePins : null;
+      if (scope && scope.length) {
+        out.push(mk((opts.scopeLabel || "이 구역") + " 핀 전체 삭제 (" + scope.length + ")", "danger pin-bulk-scope", async () => {
+          finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역" }));
+        }));
+      }
+      return out;
+    },
+
     renderPinList() {
       const list  = this.$("pin-list");
       const empty = this.$("pin-empty");
       const badge = this.$("pin-count-badge");
-      this._updatePinListCount(State.pins ? State.pins.length : 0);
+      // [WO 20260930-fixmode] 모드 = 작업공간 — 목록·카운트·"N PINS" 는 활성 모드 핀만(SoT: PinSeries.modePins).
+      const modePins = (typeof PinSeries !== "undefined" && PinSeries.modePins) ? PinSeries.modePins(State.pins) : (State.pins || []);
+      this._updatePinListCount(modePins.length);
       // [버그수정] 도면 미로드 화면(허브 등)에서 Notes.loadSummary→renderPinList 호출 시 요소 부재 → 가드
       if (!list) return;
       list.innerHTML = "";
+      const sel = this._syncPinSel();
+      const selecting = sel.on && this._pinBulkOk();
 
-      if (!State.pins || State.pins.length === 0) {
+      if (!modePins.length) {
         empty.classList.remove("hidden");
         badge.classList.add("hidden");
         this.hide("section-export");
         if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
         if (typeof PinGrid !== "undefined") PinGrid.render();
+        this.renderTree();   // [WO 20260929-bulkdel] 마지막 핀까지 지워도 트리가 옛 핀을 남기지 않게(종전 조기 return 이 건너뜀)
         return;
       }
+      // [WO 20260929-bulkdel] 관리자 일괄삭제 도구줄(목록 맨 위) — 비관리자에겐 DOM 자체를 만들지 않는다
+      const mountBulkBar = () => {
+        if (!this._pinBulkOk()) return;
+        const bar = document.createElement("div");
+        bar.className = "pin-bulk-bar";
+        this._pinBulkButtons().forEach(b => bar.appendChild(b));
+        list.insertBefore(bar, list.firstChild);
+      };
       empty.classList.add("hidden");
-      badge.textContent = State.pins.length + " PINS";
+      badge.textContent = modePins.length + " PINS";
       badge.classList.remove("hidden");
       if (State.mode === "designer") this.show("section-export");
 
@@ -4934,26 +5193,29 @@
       const curPage = State.pdfPage || 1;
       const isMulti = totalPages > 1;
       const visiblePins = isMulti
-        ? State.pins.filter(p => (p.page || 1) === curPage)
-        : State.pins;
+        ? modePins.filter(p => (p.page || 1) === curPage)
+        : modePins;
       // 🔴 [2026-09-17] 번호 중복 탐지 전용(표시만) — 자동 재채번 금지(마스터 명시).
       //   정본 = PinSeries.duplicateCheckboardIds (11_UI 도면 마커도 같은 함수를 쓴다).
       const dupPinIds = (typeof PinSeries !== "undefined") ? PinSeries.duplicateCheckboardIds(State.pins, curPage) : new Set();
 
       // 현재 페이지에 핀이 없으면 안내(다른 페이지에 핀이 있을 수 있음)
       if (isMulti && visiblePins.length === 0) {
-        const other = State.pins.length;
+        const other = modePins.length;
         empty.classList.remove("hidden");
         const et = empty.querySelector(".pin-empty-sub") || empty;
         list.innerHTML = `<p class="pin-empty-page">현재 페이지(P${curPage})에 등록된 포인트가 없습니다.${other ? ` 다른 페이지에 ${other}개의 포인트가 있습니다.` : ""}</p>`;
-        badge.textContent = State.pins.length + " PINS";
+        badge.textContent = modePins.length + " PINS";
         badge.classList.remove("hidden");
         if (State.mode === "designer") this.show("section-export");
         if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
         if (typeof PinGrid !== "undefined") PinGrid.render();
+        mountBulkBar();      // 트리에서 다른 페이지 핀을 골랐어도 [선택 삭제]는 여기서도 보인다
+        this.renderTree();   // [WO 20260929-bulkdel] 종전 조기 return 이 트리 갱신을 건너뛰었다
         return;
       }
 
+      mountBulkBar();
       visiblePins.forEach((pin, idx) => {
         const item = document.createElement("div");
         item.className = "pin-item" + (State.activePin === pin.id ? " active" : "");
@@ -4997,6 +5259,21 @@
             e.stopPropagation();
             App.deletePin(pin.id);
           });
+          // [WO 20260929-bulkdel] 선택 모드(관리자): 체크박스 + 행 클릭 = 선택 토글(이동/오픈 대신)
+          if (selecting) {
+            const picked = sel.ids.has(String(pin.id));
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.className = "pin-sel";
+            cb.checked = picked;
+            cb.setAttribute("aria-label", "'" + (pin.label || "포인트") + "' 선택");
+            cb.addEventListener("click", e => { e.stopPropagation(); this.togglePinSelected(pin.id); });
+            item.insertBefore(cb, item.firstChild);
+            item.classList.toggle("selected", picked);
+            item.addEventListener("click", () => this.togglePinSelected(pin.id));
+            list.appendChild(item);
+            return;
+          }
           // 디자이너 모드: 콘텐츠 있는 핀은 이동+오픈, 없는 핀은 CAD 인스펙터 상세 표시
           item.addEventListener("click", () => {
             if (App.pinHasContent(pin)) App.focusPin(pin, true);
@@ -5094,7 +5371,78 @@
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
-      if (!decks.length) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+      /* [WO 20260929-tree1] 🔴 공유 지점 — 프로젝트 트리 노드(이름 + 다운로드/삭제 버튼 흡수)를
+       *  만드는 코드 한 벌. 구역이 0개라도(빈 프로젝트) 이 노드는 그대로 있어야 한다 — 예전엔
+       *  별도 박스(#section-projects)라 구역 수와 무관하게 항상 보였다. 흡수하면서 그 보장까지
+       *  깨면 안 된다(§10 SoT — 아래 두 호출부가 각자 만들면 반드시 갈라진다). */
+      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
+      const mountProjectNode = (rootCount) => {
+        const pw = document.createElement("div");
+        pw.className = "tree-project open";
+        const ph = document.createElement("button");
+        ph.className = "tree-node tree-node-project";
+        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span>'
+          + (rootCount != null ? '<span class="tree-cnt" title="구역 수">' + rootCount + '</span>' : "");
+        ph.addEventListener("click", (e) => {
+          if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { pw.classList.toggle("open"); return; }
+          pw.classList.add("open");
+          if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal();
+        });
+        pw.appendChild(ph);
+        /* [WO 20260929-tree1] 🔴 근본수정(2차, CDP 실측) — #project-actions(실 DOM)를 트리 안으로
+         *  "이동"시키면(appendChild) 다음 renderTree() 호출의 `host.innerHTML=""` 가 그 노드를
+         *  통째로 파괴한다(2번째 렌더부터 getElementById('project-actions') 가 null — 영구 소실,
+         *  재생성 불가). 트리는 매 렌더 새로 그려지는 1회성 DOM이라 안에 "살아있는 원본"을
+         *  두면 안 된다(이 함수의 다른 모든 노드도 매번 새로 만든다 — 같은 규칙을 따른다).
+         *  대신 대리 버튼을 매번 새로 만들어, 원래 자리(#section-projects, CSS로 항상 숨김)에
+         *  그대로 남은 진짜 버튼을 .click() 으로 호출한다 — 리스너 재구현 0(31_Projects.init()
+         *  이 원래 버튼에 붙인 로직 그대로 실행), 새 버튼 DOM만 매 렌더 재생성(다른 트리 노드와
+         *  동일 패턴). */
+        const actions = document.createElement("div");
+        actions.className = "tree-project-actions";
+        const proxyBtn = (label, targetId, extraCls) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn-mini" + (extraCls ? " " + extraCls : "");
+          b.textContent = label;
+          b.addEventListener("click", (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            const t = document.getElementById(targetId);
+            if (t) t.click();
+          });
+          return b;
+        };
+        actions.appendChild(proxyBtn("다운로드", "btn-download-project"));
+        actions.appendChild(proxyBtn("프로젝트 삭제", "btn-delete-project", "danger"));
+        pw.appendChild(actions);
+        host.appendChild(pw);
+        return pw;
+      };
+      if (!decks.length) {
+        if (!proj) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+        const pw = mountProjectNode(0);
+        /* [WO 20260929-tree1] 🔴 근본수정 — 31_Projects._renderSideTreeEmpty() 가 #side-tree.innerHTML
+         *  을 직접 덮어써 renderTree() 가 방금 여기 붙인 #project-actions(실 DOM, 리스너 보유)를
+         *  통째로 파괴하는 결함을 실측(CDP)으로 발견했다: appendChild 로 옮긴 노드가 다른 함수의
+         *  innerHTML 대입에 지워지면 영영 사라진다(getElementById 도 못 찾음 — 재생성 불가).
+         *  근본 원인은 "#side-tree 를 두 함수가 각자 그린다"였다(§10 SoT 위반) → 그 CTA 안내를
+         *  여기 한 곳으로 합친다. _renderSideTreeEmpty() 는 이제 이 함수로 위임만 한다(아래 정의). */
+        const empty = document.createElement("div");
+        empty.className = "side-tree-empty";
+        if (typeof State !== "undefined" && State.fileType) {
+          empty.innerHTML = '<p class="side-tree-empty-msg">도면이 등록됐습니다.<br>도면에서 <b>영역을 지정</b>해 구역을 만드세요.</p>'
+            + '<button type="button" class="side-tree-empty-cta" id="side-tree-make-deck-region">+ 영역 지정해 구역 만들기</button>';
+        } else {
+          empty.innerHTML = '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>도면을 등록한 뒤, 도면에서 <b>영역을 지정</b>하면 구역이 만들어집니다.</p>'
+            + '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>';
+        }
+        pw.appendChild(empty);
+        const rb = document.getElementById("side-tree-make-deck-region");
+        if (rb) rb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.extractRegionAsDeck) Projects.extractRegionAsDeck(); });
+        const cb = document.getElementById("side-tree-create-deck");
+        if (cb) cb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck(); });
+        return;
+      }
       const curPage = State.pdfPage || 1;
       const totalPages = State.mode === "viewer"
         ? (State.viewerPages ? State.viewerPages.length : 1)
@@ -5117,16 +5465,29 @@
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
         const meta = numMap ? numMap.get(p.id) : null;
-        const noLabel = meta ? '<span class="tree-pin-no">#' + esc(String(meta.no)) + '</span>' : "";
+        // [WO 20260930-fixmode] 표시 번호 포맷 SoT = PinSeries.formatNo(CHECKER "1" / 360 "P1") — 핀 패널 헤더(27_PinActionPop)와 같은 표기.
+        const noTxt = meta ? ((PinSeries.formatNo ? PinSeries.formatNo(meta.no, meta.series) : String(meta.no))) : "";
+        const noLabel = meta ? '<span class="tree-pin-no">#' + esc(noTxt) + '</span>' : "";
         n.innerHTML = ICO.pin + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
+        // [WO 20260929-bulkdel] 선택 모드(관리자): 버튼 안에 input 을 둘 수 없어 aria-pressed + 표시 기호로 선택 상태를 나타낸다
+        if (selecting) {
+          const picked = pinSel.ids.has(String(p.id));
+          n.setAttribute("aria-pressed", picked ? "true" : "false");
+          n.classList.toggle("selected", picked);
+          n.insertAdjacentHTML("afterbegin", '<span class="tree-sel-box" aria-hidden="true">' + (picked ? "☑" : "☐") + '</span>');
+          n.addEventListener("click", () => this.togglePinSelected(p.id));
+          return n;
+        }
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
+      const pinSel = this._syncPinSel();
+      const selecting = pinSel.on && this._pinBulkOk();
 
       /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
-      const { roots: rootDecks, childrenOf } = this.groupDecksByParent(decks);
+      const { roots: rootDecks, childrenOf: allChildrenOf } = this.groupDecksByParent(decks);
       const docLabel = (depId) => {
         if (!depId) return "도면 미등록";
         const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
@@ -5144,10 +5505,15 @@
       };
 
       /* ── 구역/영역 노드(같은 생성기 — 깊이만 다르다) ───────────────── */
+      /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
+         "영역이나 구역 역시도 공유해야 돼. 프로젝트-구역-영역은 동시에 공유하고, 하단에 체크와 360을
+         별개로 구분하자는 거다". 구역·영역은 모드와 무관하게 한 벌만 렌더한다(중복 0). 모드 분리는
+         이 노드가 로드된(hasState) 지점의 맨 안쪽에 CHECKER N / 360 N 두 잎 그룹으로만 존재한다 —
+         핀 목록·번호대·일괄삭제 범위는 그 잎 그룹 안에서 계열별로 가른다(SoT: PinSeries.DECK_MODES). */
       const deckNode = (deck, isRegion) => {
         const isCur = !!(curDeck && String(curDeck.id) === String(deck.id));
         const loaded = hasState(deck);
-        const subDecks = childrenOf.get(String(deck.id)) || [];
+        const subDecks = allChildrenOf.get(String(deck.id)) || [];
         // [WO 20260928-tree-expand] 🔴 기본 펼침 — 사용자가 직접 닫은 적이 없으면 항상 open.
         const collapseKey = String(deck.id);
         const g = document.createElement("div");
@@ -5179,10 +5545,12 @@
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {
           if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { toggleOpen(); return; }
-          if (isCur) { toggleOpen(); }
-          else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
+          if (isCur) { toggleOpen(); return; }
+          if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
+        // [WO 20260930-merge] 지금 열린 구역/영역에만 — 다른 구역 포인트 가져오기(41_RegionMerge.js). 조건 미달이면 null.
+        if (loaded && typeof RegionMerge !== "undefined") { const rmB = RegionMerge.treeButton(deck, isCur); if (rmB) g.appendChild(rmB); }
 
         const kids = document.createElement("div");
         kids.className = "tree-children";
@@ -5217,36 +5585,89 @@
             });
             if (best) zoneOfPin.set(p.id, best);
           });
-          const pinsOfZone = new Map();
-          zones.forEach((z) => pinsOfZone.set(z.id, []));
-          const rootPins = [];
-          pins.forEach((p) => {
-            const z = zoneOfPin.get(p.id);
-            if (z && pinsOfZone.has(z.id)) pinsOfZone.get(z.id).push(p);
-            else rootPins.push(p);
-          });
-          zones.forEach((zone) => {
-            const zpage = zone.page || 1;
-            const isCurZonePage = zpage === curPage;
-            const zpins = (pinsOfZone.get(zone.id) || []).slice().sort(sortByNo);
-            const zn = document.createElement("div");
-            zn.className = "tree-zone open"; // [항목2] 기본 펼침
-            const zh = document.createElement("button");
-            // [항목3][항목5] 현재 페이지 영역 = .active 로 "구분"(숨기지 않음). 클릭 동작은 기존 그대로.
-            zh.className = "tree-node tree-node-zone" + (isCurZonePage ? " active" : "");
-            zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span>' + pageTag(zpage) + '<span class="tree-cnt" title="핀 수">' + zpins.length + '</span>';
-            zh.addEventListener("click", (e) => {
-              if (e.target.closest(".tree-caret")) { zn.classList.toggle("open"); return; }
-              if (typeof Zones !== "undefined" && Zones.focus) Zones.focus(zone.id);
+          // 공유 렌더러 — 주어진 핀 부분집합(scopePins)을 영역별로 묶어 target 아래에 그린다.
+          // 모드 잎 안(계열별)과, PinSeries 미로드 하네스의 전체-핀 폴백(아래) 둘 다 이 함수 하나로 그린다.
+          const renderScopedPins = (target, scopePins) => {
+            const pinsOfZone = new Map();
+            zones.forEach((z) => pinsOfZone.set(z.id, []));
+            const rootPins = [];
+            scopePins.forEach((p) => {
+              const z = zoneOfPin.get(p.id);
+              if (z && pinsOfZone.has(z.id)) pinsOfZone.get(z.id).push(p);
+              else rootPins.push(p);
             });
-            zn.appendChild(zh);
-            const zc = document.createElement("div");
-            zc.className = "tree-children";
-            zpins.forEach((p) => zc.appendChild(pinNode(p, numMap)));
-            zn.appendChild(zc);
-            kids.appendChild(zn);
-          });
-          rootPins.sort(sortByNo).forEach((p) => kids.appendChild(pinNode(p, numMap)));
+            zones.forEach((zone) => {
+              const zpins = (pinsOfZone.get(zone.id) || []).slice().sort(sortByNo);
+              if (!zpins.length) return; // 이 범위에 핀이 없는 영역은 그리지 않는다(빈 중복 방지)
+              const zpage = zone.page || 1;
+              const isCurZonePage = zpage === curPage;
+              const zn = document.createElement("div");
+              zn.className = "tree-zone open"; // [항목2] 기본 펼침
+              const zh = document.createElement("button");
+              // [항목3][항목5] 현재 페이지 영역 = .active 로 "구분"(숨기지 않음). 클릭 동작은 기존 그대로.
+              zh.className = "tree-node tree-node-zone" + (isCurZonePage ? " active" : "");
+              zh.innerHTML = C + '<span class="tree-dot" style="background:' + (zone.color || "#888") + '"></span><span class="tree-label">' + esc(zone.label || "영역") + '</span>' + pageTag(zpage) + '<span class="tree-cnt" title="핀 수">' + zpins.length + '</span>';
+              zh.addEventListener("click", (e) => {
+                if (e.target.closest(".tree-caret")) { zn.classList.toggle("open"); return; }
+                if (typeof Zones !== "undefined" && Zones.focus) Zones.focus(zone.id);
+              });
+              zn.appendChild(zh);
+              const zc = document.createElement("div");
+              zc.className = "tree-children";
+              zpins.forEach((p) => zc.appendChild(pinNode(p, numMap)));
+              zn.appendChild(zc);
+              target.appendChild(zn);
+            });
+            rootPins.sort(sortByNo).forEach((p) => target.appendChild(pinNode(p, numMap)));
+          };
+          // [WO 20260930-moderole] 🔴 잎 — 프로젝트→구역→영역(공유) 다음, 이 노드가 로드된 곳에서만
+          //   CHECKER N / 360 N 두 그룹을 그린다. 핀 목록·번호대·일괄삭제 범위는 그룹 안에서만
+          //   계열별로 가른다(SoT: PinSeries.DECK_MODES). 클릭 = App._setRegMode(상단 세그먼트와 동일).
+          const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
+          if (!MODES.length) {
+            // 모드 정본 미로드(단독 모듈 하네스) — 모드 잎 없이 전체 핀을 그대로(종전 구조, 회귀 없음).
+            renderScopedPins(kids, pins);
+          } else {
+            const actMode = (typeof PinSeries !== "undefined" && PinSeries.activeMode) ? PinSeries.activeMode() : null;
+            const leafOpen = this._treeModeLeafOpen || (this._treeModeLeafOpen = new Set());
+            MODES.forEach((m) => {
+              const modePinsHere = pins.filter((p) => p && PinSeries.inMode(p, m.series));
+              const isAct = !!(actMode && actMode.tag === m.tag);
+              const leafKey = collapseKey + ":" + m.tag;
+              const mw = document.createElement("div");
+              mw.className = "tree-mode-leaf tree-mode-leaf-" + m.tag + ((isAct || leafOpen.has(leafKey)) ? " open" : "");
+              mw.dataset.mode = m.tag;
+              const mh = document.createElement("button");
+              mh.type = "button";
+              mh.className = "tree-node tree-node-mode-leaf" + (isAct ? " active" : "");
+              mh.setAttribute("aria-pressed", String(isAct));
+              mh.title = m.label + " 작업공간" + (isAct ? " (현재 모드)" : " — 누르면 이 모드로 전환하고 이 구역/영역을 엽니다");
+              mh.innerHTML = C + '<span class="tree-label">' + esc(m.label) + '</span><span class="tree-cnt" title="핀 수">' + modePinsHere.length + '</span>';
+              mh.addEventListener("click", (e) => {
+                const onCaret = !!(e && e.target && e.target.closest && e.target.closest(".tree-caret"));
+                if (onCaret || isAct) {
+                  if (mw.classList.toggle("open")) leafOpen.add(leafKey); else leafOpen.delete(leafKey);
+                  return;
+                }
+                if (typeof App !== "undefined" && App._setRegMode) App._setRegMode(m.regMode);
+                mw.classList.add("open"); leafOpen.add(leafKey);
+              });
+              mw.appendChild(mh);
+              // [WO 20260929-bulkdel] 관리자 전용 — 범위 = 이 모드 그룹의 핀만(다른 모드 핀은 지우지 않는다).
+              if (this._pinBulkOk() && modePinsHere.length) {
+                const acts = document.createElement("div");
+                acts.className = "tree-project-actions tree-pin-bulk";
+                this._pinBulkButtons({ scopePins: modePinsHere.slice(), scopeLabel: (isRegion ? "이 영역" : "이 구역") + " " + m.label })
+                  .forEach(b => acts.appendChild(b));
+                mw.appendChild(acts);
+              }
+              const mk = document.createElement("div");
+              mk.className = "tree-children";
+              renderScopedPins(mk, modePinsHere);
+              mw.appendChild(mk);
+              kids.appendChild(mw);
+            });
+          }
           any = true;
         }
         if (any) g.appendChild(kids);
@@ -5255,21 +5676,16 @@
 
       /* ── 1단: 프로젝트 — 2단(구역)을 바로 붙인다(도면 그룹핑 단 없음, 마스터 정정) ──── */
       let mount = host;
-      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
       if (proj) {
-        const pw = document.createElement("div");
-        pw.className = "tree-project open";
-        const ph = document.createElement("button");
-        ph.className = "tree-node tree-node-project";
-        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span><span class="tree-cnt" title="구역 수">' + rootDecks.length + '</span>';
-        ph.addEventListener("click", () => { pw.classList.toggle("open"); });
-        pw.appendChild(ph);
+        const pw = mountProjectNode(rootDecks.length);
         const pk = document.createElement("div");
         pk.className = "tree-children";
         pw.appendChild(pk);
-        host.appendChild(pw);
         mount = pk;
       }
+      /* ── 2단: 구역(두 모드 공유) — [WO 20260930-moderole] 마스터 2차 지시로 모드 가지(88e52ff)를
+         제거하고 구역·영역을 프로젝트 바로 아래 한 벌만 렌더한다(중복 0). 모드 분리는 deckNode()
+         안의 잎(CHECKER N/360 N)에서만 일어난다. ─────────────────────────────────────── */
       rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));
     },
 
@@ -5317,6 +5733,9 @@
         marker.classList.add("pin-kind-" + meta.kind); // 색맹 대비: 색 외 식별 훅
         // ── 번호: 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번(PinSeries 정본) ──
         const dispNo = meta.no;
+        // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo(트리/핀패널과 동일:
+        //   CHECKER "1" / 360 "P1"). dataset.no 는 채번 원본값 그대로 유지(회귀테스트 p4/p12 가 숫자로 비교).
+        const dispLabel = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(meta.no, meta.series) : String(dispNo);
         marker.dataset.no = dispNo;
         marker.dataset.kind = meta.kind;
         marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
@@ -5362,7 +5781,7 @@
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="${headFill2}"/>
               <circle cx="18" cy="15" r="12.4" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
               <circle cx="18" cy="15" r="8.6" fill="#ffffff"/>
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
             </svg>
           </div>` : `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
@@ -5402,7 +5821,7 @@
                    대비 ≥4.5:1 이미 보장된 값이라 별도 실측 불필요 — ≥3:1 요구보다 넉넉함). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")
                 ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`
                 : ""}
@@ -6114,18 +6533,36 @@
       if (!decks.length) {
         return '<div class="hub-card-tree"><p class="hub-tree-empty">구역 없음</p></div>';
       }
-      const { roots, childrenOf } = UI.groupDecksByParent(decks);
-      const regionsHtml = (deck) => {
-        const kids = childrenOf.get(String(deck.id)) || [];
-        if (!kids.length) return "";
-        return '<ul class="hub-tree-regions">' + kids.map((r) =>
-          '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
+      /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
+         구역·영역은 두 모드가 공유하는 한 벌만 렌더한다(중복 0). 모드 분리는 트리 맨 안쪽(더 이상
+         하위 영역이 없는 지점 — 영역, 또는 영역이 없는 구역)에 CHECKER/360 두 잎으로만 존재한다.
+         허브 카드는 실시간 핀 수를 모르므로(로드된 구역 아님) 개수 배지는 붙이지 않는다(§5 날조 금지).
+         SoT = PinSeries.DECK_MODES. */
+      const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
+      const leafModesHtml = (node) => {
+        if (!MODES.length) return "";
+        return '<ul class="hub-tree-leaf-modes">' + MODES.map((m) =>
+          '<li class="hub-tree-leaf-mode hub-tree-leaf-mode-' + esc(m.tag) + '" data-act="mode-open" data-deck-id="' + esc(node.id) + '" data-mode-reg="' + esc(m.regMode) + '" tabindex="0" role="button" title="' + esc(m.label) + ' 작업공간으로 열기(이 구역/영역)">'
+          + '<span class="hub-tree-mode-label">' + esc(m.label) + '</span></li>'
         ).join("") + '</ul>';
       };
-      const rootsHtml = roots.map((d) =>
-        '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">' + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>'
-      ).join("");
-      return '<div class="hub-card-tree"><ul class="hub-tree-decks">' + rootsHtml + '</ul></div>';
+      const decksHtml = (list) => {
+        const { roots, childrenOf } = UI.groupDecksByParent(list);
+        const regionsHtml = (deck) => {
+          const kids = childrenOf.get(String(deck.id)) || [];
+          if (!kids.length) return "";
+          return '<ul class="hub-tree-regions">' + kids.map((r) =>
+            '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + leafModesHtml(r) + '</li>'
+          ).join("") + '</ul>';
+        };
+        if (!roots.length) return '<p class="hub-tree-empty">구역 없음</p>';
+        return '<ul class="hub-tree-decks">' + roots.map((d) => {
+          const hasRegions = (childrenOf.get(String(d.id)) || []).length > 0;
+          return '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">'
+            + UI.deckLabelHtml(d) + regionsHtml(d) + (hasRegions ? "" : leafModesHtml(d)) + '</li>';
+        }).join("") + '</ul>';
+      };
+      return '<div class="hub-card-tree">' + decksHtml(decks) + '</div>';
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
@@ -6309,15 +6746,17 @@
         const treeEl = card.querySelector(".hub-card-tree");
         if (treeEl) {
           const openDeckNode = (e) => {
-            const node = e.target.closest("[data-deck-id]");
+            const node = e.target.closest("[data-deck-id],[data-mode-reg]");
             if (!node) return;
             e.stopPropagation();
-            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"));
+            // [WO 20260930-fixmode] 어느 모드 가지 아래를 눌렀는지 = 진입 모드(구역은 NULL 이면 양쪽에 있으므로 가지로 판정).
+            const modeLi = node.closest("[data-mode-reg]");
+            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"), modeLi ? modeLi.getAttribute("data-mode-reg") : null);
           };
           treeEl.addEventListener("click", openDeckNode);
           treeEl.addEventListener("keydown", (e) => {
             if (e.key !== "Enter" && e.key !== " ") return;
-            if (!e.target.closest("[data-deck-id]")) return;
+            if (!e.target.closest("[data-deck-id],[data-mode-reg]")) return;
             e.preventDefault();
             openDeckNode(e);
           });
@@ -6346,7 +6785,9 @@
     async openProject(p) {
       // 선택 프로젝트를 Projects 모듈과 공유 (작업화면 사이드바 동기화용)
       Projects.list = this.list;
-      Projects.currentProject = p;
+      // [WO 20260929-parent-guard] 🔴 SoT — Projects.setCurrentProject() 경유 필수(31_Projects.js
+      // 주석 참조). 직접 대입하면 currentDeck 이 이전 프로젝트를 가리킨 채 새어 나간다(재현 완료).
+      if (Projects.setCurrentProject) Projects.setCurrentProject(p); else Projects.currentProject = p;
       State.currentProjectId = p.id;
       State.currentProjectName = p.name;
       // [P40] 우상단 배지를 "이 프로젝트에서의 내 역할"로 — 고정 '디자이너' 표기 제거
@@ -6371,10 +6812,13 @@
      *  (기존 "구역 열기" 정본, 31_Projects.js)을 그대로 호출한다.
      *  requireDesigner 게이트가 열려(로그인 대기) 편집모드 진입이 아직 안 끝났으면 여기서
      *  멈춘다 — 로그인 완료 후에는 기존 동작(최신 배포본 진입)으로 이어진다(회귀 없음). */
-    async openProjectAtDeck(p, deckId) {
+    async openProjectAtDeck(p, deckId, regMode) {
       await this.openProject(p);
       if (!Auth.isDesigner) return;
       try {
+        // [WO 20260930-fixmode] 모드 전환 SoT = App._setRegMode(상단 세그먼트·사이드바 트리와 같은 함수)
+        if (regMode && typeof App !== "undefined" && App._setRegMode && State.regMode !== regMode) App._setRegMode(regMode);
+        if (deckId == null) return;
         await Projects.loadDecks();
         const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
         if (deck && Projects.selectDeck) await Projects.selectDeck(deck);
@@ -8160,7 +8604,9 @@
         : State.pdfPages;
       const curPage = State.pdfPage || 1;
       const isMulti = totalPages > 1;
-      const base = isMulti ? State.pins.filter(p => (p.page || 1) === curPage) : State.pins.slice();
+      // [WO 20260930-fixmode] 모드 = 작업공간 — 활성 모드 핀만(SoT: PinSeries.modePins)
+      const all = (typeof PinSeries !== "undefined" && PinSeries.modePins) ? PinSeries.modePins(State.pins) : State.pins.slice();
+      const base = isMulti ? all.filter(p => (p.page || 1) === curPage) : all;
       return base.map((p, i) => ({ pin: p, no: i + 1 }));
     },
 
@@ -9011,6 +9457,23 @@
         b.classList.toggle("active", active);
         b.setAttribute && b.setAttribute("aria-pressed", String(active));
       });
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 번호만 매기는 기능" — 사진 등록 계열 도구(사진
+      // 폴더 일괄 매칭·THETA 360 인입·모바일 도크 사진등록)는 CHECKER 모드에서 숨긴다. 렌더 지점
+      // 하나(§10 SoT) — 모드 전환은 전부 openApp()/_setRegMode() 를 거쳐 이 함수를 부른다.
+      const isChecker = State.regMode === "checkboard";
+      ["btn-photobatch", "btn-theta-intake", "mdock-photobatch"].forEach((id) => {
+        const b = UI.$(id);
+        if (b) b.classList.toggle("hidden", isChecker);
+      });
+      // #btn-theta-intake 는 side-toolbar 컴팩트 칩(.stb-btn[data-deleg="btn-theta-intake"])의
+      // 위임 대상이다 — 대상만 숨기면 그 칩은 .click()으로 여전히 눌린다(delegate 는 hidden 을
+      // 안 본다). 칩 자체도 함께 숨긴다(index.html id 추가 없이 셀렉터로 — 타 화면 신규 id 회피).
+      try {
+        if (typeof document !== "undefined" && document.querySelector) {
+          const thetaChip = document.querySelector('[data-deleg="btn-theta-intake"]');
+          if (thetaChip && thetaChip.classList) thetaChip.classList.toggle("hidden", isChecker);
+        }
+      } catch (e) {}
     },
 
     _togglePlacing() {
@@ -9822,7 +10285,9 @@
       // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
       //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
       const no = PinSeries.nextSeriesNo(State.pins, curPage, start, _auth0, series);
-      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no) };
+      // [WO 20260929-createdAt] 생성시각 명시 저장(PinSeries.createdAt 이 우선 사용 — id 파생은 구버전 폴백)
+      const _now0 = Date.now();
+      const pin = { id: _now0, createdAt: _now0, x: pct.x, y: pct.y, page: curPage, label: String(no) };
       if (series === "checkboard") pin.checkboard = true;
       if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
@@ -9923,14 +10388,21 @@
       const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
       const range = this._checkboardQuickRange(pg, series);
       const hint = UI.$("place-hint");
+      // [WO 20260930-autophoto] 남은 360 후보 사진 수를 함께 보여준다(PhotoBatch 세션 SoT).
+      const avail = (series === "content" && typeof PhotoBatch !== "undefined" && PhotoBatch._autoRowsRemaining) ? PhotoBatch._autoRowsRemaining() : 0;
       const emptyHint = series === "content"
-        ? "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다"
+        ? (avail
+            ? ("도면 위를 클릭하면 번호 핀과 함께 대기 중인 360 사진 " + avail + "장 중 가장 가까운 시각이 자동 연결됩니다")
+            : "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다")
         : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)")
+          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
           : emptyHint;
       }
+      // [WO 20260930-autophoto] "사진 다시 선택" 버튼 — 360 모드에서 대기 사진이 있을 때만 노출.
+      const reselect = UI.$("btn-photo-reselect");
+      if (reselect) reselect.classList.toggle("hidden", !(series === "content" && avail && State.checkboard));
     },
 
     _handlePlaceClick(e) {
@@ -9944,12 +10416,18 @@
         this._placeCheckboardPin(pct);
         return; // placing 유지(다음 클릭도 번호 핀). 종료는 '＋ 번호 핀 찍기' 토글로.
       }
-      // [WO 20260929 마스터 정정] 사진 등록 모드: 핀 생성 직후 즉시 사진 선택창(동기 호출,
-      //   모바일 user-activation 유지). 첨부되면 그 핀에 붙고, 취소해도 핀은 유지된다.
+      // [WO 20260930-autophoto] 360(photo) 모드: 핀 생성 직후 시각 최근접 자동 사진연결
+      //   (PhotoBatch.autoConnectPin, 기존 _buildTimeMatches/_uploadOneRow 재사용). 세션에
+      //   이미 고른 사진이 있으면 다시 묻지 않고 바로 매칭 — 없을 때만 다중 파일선택창을
+      //   연다(동기 호출, 모바일 user-activation 유지 — 기존 _openPinMediaPicker 관례).
+      //   첨부/미첨부 어느 쪽이든 핀은 유지된다(조용히 삭제 금지).
       if (State.regMode === "photo") {
         const pin = this._placeCheckboardPin(pct);
-        if (pin) this._openPinMediaPicker(pin);
-        return; // placing 유지 — 계속 클릭하면 다음 번호 핀 + 파일창.
+        if (pin) {
+          if (typeof PhotoBatch !== "undefined" && PhotoBatch.autoConnectPin) PhotoBatch.autoConnectPin(pin);
+          else this._openPinMediaPicker(pin); // PhotoBatch 미로드 시 기존 단일선택 폴백(조용한 실패 금지)
+        }
+        return; // placing 유지 — 계속 클릭하면 다음 번호 핀 + 자동매칭.
       }
 
       State.pending = pct;
@@ -10387,8 +10865,9 @@
       const localPreview = URL.createObjectURL(file);
       _trackVideoBlob && _trackVideoBlob(localPreview); // blob 누수 추적(공용 추적기 재사용)
       const imgName = UI.val("input-pin-imgname").trim() || file.name.replace(/\.[^.]+$/, "");
+      const _now1 = Date.now();   // [WO 20260929-createdAt] 생성시각 명시 저장
       const pin = {
-        id: Date.now(),
+        id: _now1, createdAt: _now1,
         x: State.pending.x, y: State.pending.y,
         page: State.pdfPage, label,
         imageName: imgName,
@@ -10522,7 +11001,7 @@
       // 편집이면 기존 객체를 베이스로(기존 미디어 보존), 신규면 새 객체
       const pin = editing && existing
         ? existing // [WO 20260917 멀티유저 ②] 편집은 기존 pin.author 를 건드리지 않는다(편집자≠원작성자)
-        : (() => { const _auth2 = this._pinAuthor(); const np = { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
+        : (() => { const _auth2 = this._pinAuthor(); const _now2 = Date.now(); const np = { id: _now2, createdAt: _now2, x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
       pin.label = label;
       if (note) pin.note = note; else if (editing) delete pin.note;
       // [마스터 요청] 핀(호스팟)별 아이콘 캡처 — number(기본)면 속성 제거(하위호환)
@@ -11046,26 +11525,122 @@
       const removed = State.pins.find(p => p.id === id);
       if (!removed) return false;
       if (!await Prompt.confirm("포인트 삭제", `'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return false;
-      if (removed.videoUrl) _revokeVideoBlob(removed.videoUrl); // [B5] 삭제 시 즉시 해제
-      State.pins = State.pins.filter(p => p.id !== id);
-      if (State.activePin === id) State.activePin = null;
-      if (State.editingPinId === id) { State.editingPinId = null; this._closePinForm(); }
+      this._removePins([id]);
+      Prompt.toast("'" + removed.label + "' 삭제됨");
+      return true;
+    },
+
+    /** [WO 20260929-bulkdel] 관리자 핀 일괄삭제 권한 — 역할 판정은 기존 Auth.isAdmin(super|admin, 22_Auth.js) 재사용.
+     *  저장(_autoSave)이 디자이너 모드에서만 동작하므로 모드도 함께 본다. 열람전용 세션(Auth.readonly)은 제외. */
+    canBulkDeletePins() {
+      return State.mode === "designer" && typeof Auth !== "undefined" && !!Auth.isAdmin && !Auth.readonly;
+    },
+
+    /** [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 확인(Prompt.confirm, 개수 명시) 후 단건과 같은 _removePins 경로.
+     *  번호는 자동 재채번하지 않는다(기존 번호 리셋 기능이 따로 있다). 반환: 삭제된 개수. */
+    async deletePins(ids, opts) {
+      if (!this.canBulkDeletePins()) { Prompt.toast("관리자만 핀을 일괄 삭제할 수 있습니다"); return 0; }
+      const want = new Set((ids || []).map(String));
+      const targets = (State.pins || []).filter(p => want.has(String(p.id)));
+      if (!targets.length) return 0;
+      const scope = (opts && opts.scopeLabel) ? `${opts.scopeLabel}의 ` : "";
+      if (!await Prompt.confirm("포인트 일괄 삭제", `${scope}포인트 ${targets.length}개를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거되며, 번호는 자동으로 다시 매기지 않습니다)`)) return 0;
+      const removed = this._removePins(targets.map(p => p.id));
+      Prompt.toast(`포인트 ${removed.length}개 삭제됨`);
+      return removed.length;
+    },
+
+    /** 🔴 [WO 20260929-bulkdel] 핀 제거 공유 지점 — 단건(deletePin)·일괄(deletePins)이 같은 경로를 탄다.
+     *  tombstone 기록(병합 부활 방지, _mergePins) → State 제거 → 렌더 → 오프라인 OpLog → _autoSave(draft+dirty).
+     *  확인 대화상자는 호출부 몫. 반환: 실제 제거된 핀 배열. */
+    _removePins(ids) {
+      const want = new Set((ids || []).map(String));
+      const removed = (State.pins || []).filter(p => want.has(String(p.id)));
+      if (!removed.length) return [];
+      const tomb = this._pinTombstones();
+      const now = Date.now();
+      removed.forEach(p => {
+        tomb[String(p.id)] = now;
+        if (p.videoUrl) _revokeVideoBlob(p.videoUrl); // [B5] 삭제 시 즉시 해제
+      });
+      State.pins = State.pins.filter(p => !want.has(String(p.id)));
+      if (State.activePin != null && want.has(String(State.activePin))) State.activePin = null;
+      if (State.editingPinId != null && want.has(String(State.editingPinId))) { State.editingPinId = null; this._closePinForm(); }
       if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
       UI.renderPinList();
       UI.renderPinsOnMap();
-      Prompt.toast("'" + removed.label + "' 삭제됨");
-      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록(핀마다, 순서 보존) + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
-        OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+        removed.reduce((pr, p) => pr.then(() => OpLog.recordCurrent("pin", "delete", p.id)), Promise.resolve())
+          .then(() => persistLocalDeployment()).catch(() => {});
       }
       this._autoSave();
-      return true;
+      return removed;
+    },
+
+    /* ── [WO 20260929-bulkdel] 🔴 핀 삭제 부활 방지 — 병합의 단일 출처 ─────────────────────────
+       _mergeById(서버본, 내 로컬) 는 "서버에만 있는 항목 보존" 규칙이라 두 경로로 지운 핀을 되살렸다:
+         ① 내가 지운 핀: 서버가 더 새로우면(409 충돌 / draft 기준 버전 다름) 서버본의 그 핀이 복귀
+         ② 남이 지운 핀: 내 로컬에 남은 옛 핀이 서버본에 덮여 복귀(3-way 기준 = 내가 아는 서버 버전의 id)
+       규칙: 병합 결과에서 (a) 내 tombstone 에 있는 id, (b) 기준 id 목록엔 있었는데 지금 서버본엔 없는 id 를 뺀다.
+       (b) 는 기준(baseIds)을 모르면(null) 적용하지 않는다 — 추정으로 지우지 않는다(유실 0 쪽). 삭제 우선(delete-wins). */
+    _pinTombstones() {
+      if (!State.pinTombstones || typeof State.pinTombstones !== "object") State.pinTombstones = {};
+      return State.pinTombstones;
+    },
+    _pinIds(arr) {
+      return (Array.isArray(arr) ? arr : []).filter(p => p && p.id != null).map(p => String(p.id));
+    },
+    /** [WP1 · H8] tombstone({id,_deleted:true,ts} — 서버 /ops 가 남김) 을 뺀 "살아있는" 항목만 — 필터 SoT.
+     *  서버본을 State.pins/zones/annotations 에 올리는 모든 로더와 병합(_mergePins/_mergeConflict/_draftVsServer),
+     *  32_Offline 의 ops 반영이 이 함수 하나를 쓴다. 비배열은 그대로 돌려준다(호출부의 null 판정 보존). */
+    _live(arr) {
+      return Array.isArray(arr) ? arr.filter(o => !(o && o._deleted)) : arr;
+    },
+    /** draft 에 실어 둘 핀 병합 메타 — _saveDraftLocal / _markDraftClean 공유(SoT). */
+    _draftPinMeta() {
+      return {
+        deletedPins: Object.keys(this._pinTombstones()),
+        basePinIds:  Array.isArray(State.pinBaseIds) ? State.pinBaseIds.slice() : null
+      };
+    },
+    /** draft 의 tombstone 을 현재 도면 tombstone 에 합친다(복원 경로 공유). */
+    _adoptDraftTombstones(d) {
+      if (!d || !Array.isArray(d.deletedPins)) return;
+      const tomb = this._pinTombstones();
+      d.deletedPins.forEach(id => { if (id != null && !tomb[String(id)]) tomb[String(id)] = 1; });
+    },
+    _mergePins(srvPins, localPins, baseIds, tombIds) {
+      // [WP1 · H5] 서버본의 tombstone 은 "누군가 지운 핀" — 내 로컬의 같은 id 가 병합으로 되살리지 못하게 tomb 에 합친다.
+      const srvTomb = (Array.isArray(srvPins) ? srvPins : []).filter(p => p && p._deleted && p.id != null).map(p => String(p.id));
+      const merged = this._mergeById(this._live(srvPins), localPins);
+      const tomb = new Set((tombIds || []).map(String).concat(srvTomb));
+      // 서버본을 실제로 받지 못했으면(비배열) (b) 판정 불가 — 기준 핀 전부를 "남이 지웠다"로 오판하지 않는다.
+      const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? new Set(baseIds.map(String)) : null;
+      const srv = new Set(this._pinIds(srvPins));
+      return merged.filter(p => {
+        if (!p || p.id == null) return true;
+        const k = String(p.id);
+        if (tomb.has(k)) return false;                       // (a) 내가 지운 핀
+        if (base && base.has(k) && !srv.has(k)) return false; // (b) 남이 지운 핀
+        return true;
+      });
     },
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */
     editPin(id) {
       const pin = State.pins.find(p => p.id === id);
       if (pin == null) return;
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 이 구식 첨부 폼
+      // (.pf-tools: 사진/360/문서/동영상/URL, #section-pin-form)은 계열 게이트가 없다. CHECKER
+      // 계열 핀(SoT: PinSeries.seriesOf)은 이미 계열 게이트가 있는 PinActionPop(27_PinActionPop.js
+      // open() — #pap-bottom 등록 섹션 숨김)으로 위임해 사진 등록 경로를 원천 차단한다(유실 0 —
+      // 번호·위치명 수정은 PinActionPop 에도 있다).
+      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+      if (isChecker) {
+        if (typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(id);
+        return;
+      }
       // 다른 모드 정리
       if (State.placing) this._togglePlacing();
       State.editingPinId = id;
@@ -11854,10 +12429,12 @@
       let srvPins = [], srvZones = [];
       try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
       try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
-      const mergedPins  = this._mergeById(srvPins,  State.pins  || []);
-      const mergedZones = this._mergeById(srvZones, State.zones || []);
+      // [WO 20260929-bulkdel] 핀은 _mergePins(삭제 부활 방지) — 기준은 내가 알던 서버 버전, 병합 후엔 방금 받은 서버본
+      const mergedPins  = this._mergePins(srvPins, State.pins || [], State.pinBaseIds, Object.keys(this._pinTombstones()));
+      const mergedZones = this._mergeById(this._live(srvZones), State.zones || []);
       State.pins  = mergedPins;
       State.zones = mergedZones;
+      State.pinBaseIds = this._pinIds(srvPins);
       State.depVersion = (current.version != null ? Number(current.version) : State.depVersion);
       // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
@@ -11869,8 +12446,11 @@
      *  buildBody(): 호출 시점의 현재 State 로 payload 를 만드는 함수(병합 후 재생성용).
      *  반환: { ok, rec?, conflictMerged? } */
     async _patchDeployment(depId, buildBody) {
+      let sentPins = null;   // [WO 20260929-bulkdel] 성공 시 이 목록이 곧 서버의 새 기준(State.pinBaseIds)
       const send = async () => {
         const body = buildBody();
+        sentPins = null;
+        if (typeof body.pins === "string") { try { sentPins = JSON.parse(body.pins); } catch (e) { sentPins = null; } }
         body.base_version = (State.depVersion != null ? State.depVersion : 0);
         const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
           method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
@@ -11890,22 +12470,17 @@
       if (!res.ok) return { ok: false, status: res.status };
       let rec = null; try { rec = await res.json(); } catch (e) {}
       if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
+      if (Array.isArray(sentPins)) State.pinBaseIds = this._pinIds(sentPins);
       return { ok: true, rec };
     },
 
     _buildSavePayload(pagesData, sourceMeta) {
-      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀/영역/주석도 크롭 기준 %로
-      // 재배치해 실어 보낸다(라이브 State.pins/zones/annotations 자체는 페이지 기준 %로 그대로 —
-      // 이 배열들은 배포용 복사본). 크롭 밖 항목은 표시할 캔버스가 없으므로 배포본에서 제외한다
-      // (원본 State.pins/zones/annotations 는 불변).
-      const deckCrop = this._currentDeckCrop();
+      // 🔴 [WP1 · H7] 저장 = 항상 원본(페이지 기준 %) 좌표 그대로. 구역 crop 은 "보기 창"일 뿐 저장 좌표계가 아니다.
+      //   종전: 창(crop) 구역에서 저장하면 핀/영역/주석을 크롭 기준 %로 바꾸고 크롭 밖 항목을 빼서 보냈다 —
+      //   창 구역은 원본과 **같은 deployment_id** 라 그 PATCH 가 원본 행을 덮어 크롭 밖 핀을 영구 삭제했고,
+      //   재로드 시 crop 이 한 번 더 적용돼 좌표가 이중 변환됐다(역변환 호출부 0). 스냅샷도 전체 페이지(_snapshotPages).
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
-        if (deckCrop && (q.page || 1) === deckCrop.page && typeof MapCtrl !== "undefined" && MapCtrl.pageToDeckCropPct) {
-          const mapped = MapCtrl.pageToDeckCropPct(q.x, q.y, deckCrop.crop);
-          if (!mapped) return null; // 크롭 밖 — 배포본에서 제외
-          q.x = mapped.x; q.y = mapped.y;
-        }
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
         // [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
         //   서버/배포본에 저장하면 재접속 시 죽은 blob 으로 "이미지를 불러올 수 없습니다".
@@ -11915,12 +12490,10 @@
         if (typeof q.imageUrl === "string" && q.imageUrl.indexOf("blob:") === 0) delete q.imageUrl;
         delete q.uploading;
         return q;
-      }).filter(Boolean);
-      const deployableZones = (State.zones || []).map(z => this._mapZoneForCrop(z, deckCrop)).filter(Boolean);
-      const deployableAnnotations = (State.annotations || []).map(a => this._mapAnnoForCrop(a, deckCrop)).filter(Boolean);
+      });
       return this._deploymentBody({
         title: State.fileName || "도면", fileName: State.fileName || "",
-        pins: deployablePins, zones: deployableZones, annotations: deployableAnnotations,
+        pins: deployablePins, zones: State.zones || [], annotations: State.annotations || [],
         checkboardStart: State.checkboardStart
       }, pagesData, sourceMeta);
     },
@@ -11945,104 +12518,20 @@
       // [P14] 원본 PDF 위치 + 실제 저장 픽셀. 있을 때만 실어 보낸다 —
       //   미전송 시 서버가 기존 값을 그대로 보존하므로(부분 갱신) 기존 배포본이 깨지지 않는다.
       if (sourceMeta) body.source_meta = sourceMeta;
+      // [WO 20260930-WP3] 소속 프로젝트 — 서버가 POST 시 기록해 프로젝트 단위 쓰기 권한의 기준으로 쓴다
+      //   (PATCH 에 실려도 서버는 무시 — 귀속은 생성 시 1회). o.projectId 로 명시(flush 의 draft 키 등) 가능.
+      const pid = (o.projectId !== undefined) ? o.projectId
+        : ((typeof Projects !== "undefined" && Projects.currentProject) ? Projects.currentProject.id : null);
+      if (pid) body.project_id = String(pid);
       return body;
-    },
-
-    /** [WO 20260917] 현재 구역(deck)의 크롭 — { page(1-base), crop:{x,y,w,h}(%) } 또는 null.
-     *  crop 없는 구역(또는 구역 미선택)은 null → snapshotAllPages 는 종전대로 전체 페이지. */
-    _currentDeckCrop() {
-      const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
-      if (!cd || !cd.crop || !(cd.crop.w > 0) || !(cd.crop.h > 0)) return null;
-      return { page: cd.page || 1, crop: cd.crop };
-    },
-
-    /** [WO 20260917-crop-zone-anno] 영역(16_Zones.js 의 State.zones 항목) 배포용 좌표 재매핑.
-     *  핀과 동일하게 MapCtrl.pageToDeckCropPct(순수함수)만 재사용 — 새 변환 로직 없음.
-     *  rect: {x,y,w,h}, circle: {cx,cy,r}, poly: {points:[{x,y}...]} 모두 대응.
-     *  반환: 복사본(원본 z 불변) · crop 밖(어느 한 점이라도)이면 null(배포본 제외).
-     *  crop 없음/페이지 불일치면 그대로 복사본 반환(재매핑 없음, 종전 동작). */
-    _mapZoneForCrop(z, deckCrop) {
-      const zz = Object.assign({}, z);
-      if (!deckCrop || (zz.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
-        return zz;
-      }
-      const crop = deckCrop.crop;
-      const mapPt = (x, y) => MapCtrl.pageToDeckCropPct(x, y, crop);
-      if (zz.shape === "poly" && Array.isArray(zz.points)) {
-        const mapped = [];
-        for (const p of zz.points) {
-          const m = mapPt(p.x, p.y);
-          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
-          mapped.push({ x: m.x, y: m.y });
-        }
-        zz.points = mapped;
-        const xs = mapped.map(p => p.x), ys = mapped.map(p => p.y);
-        zz.x = Math.min(...xs); zz.y = Math.min(...ys);
-        zz.w = Math.max(...xs) - zz.x; zz.h = Math.max(...ys) - zz.y;
-        return zz;
-      }
-      if (zz.shape === "circle") {
-        const p1 = mapPt(zz.cx - zz.r, zz.cy - zz.r);
-        const p2 = mapPt(zz.cx + zz.r, zz.cy + zz.r);
-        if (!p1 || !p2) return null;
-        zz.cx = (p1.x + p2.x) / 2; zz.cy = (p1.y + p2.y) / 2;
-        zz.r  = ((p2.x - p1.x) + (p2.y - p1.y)) / 4;
-        zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
-        return zz;
-      }
-      // rect(기본) — 항상 바운딩 박스(x,y,w,h)를 보관하는 형식(16_Zones.js _commitZone)
-      const p1 = mapPt(zz.x, zz.y);
-      const p2 = mapPt(zz.x + zz.w, zz.y + zz.h);
-      if (!p1 || !p2) return null;
-      zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
-      return zz;
-    },
-
-    /** [WO 20260917-crop-zone-anno] PDF 주석(26_PdfAnno.js 의 State.annotations 항목) 배포용
-     *  좌표 재매핑. 주석 좌표는 permille(0~1000, 페이지 기준 %×10) 저장 형식이라 MapCtrl.
-     *  pageToDeckCropPct(%,0~100 입력)에 맞춰 /10 → 변환 → *10 로 왕복한다(새 변환 로직 아님).
-     *  type: text{x,y} · rect/highlight{x,y,w,h} · pen{pts:[{x,y}...]}.
-     *  반환: 복사본(원본 a 불변) · crop 밖이면 null(배포본 제외). crop 없음/페이지 불일치면
-     *  그대로 복사본 반환(재매핑 없음, 종전 동작). */
-    _mapAnnoForCrop(a, deckCrop) {
-      const aa = Object.assign({}, a);
-      if (!deckCrop || (aa.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
-        return aa;
-      }
-      const crop = deckCrop.crop;
-      const mapPt = (x, y) => {
-        const m = MapCtrl.pageToDeckCropPct(x / 10, y / 10, crop);
-        return m ? { x: m.x * 10, y: m.y * 10 } : null;
-      };
-      if (aa.type === "pen" && Array.isArray(aa.pts)) {
-        const mapped = [];
-        for (const p of aa.pts) {
-          const m = mapPt(p.x, p.y);
-          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
-          mapped.push({ x: m.x, y: m.y });
-        }
-        aa.pts = mapped;
-        return aa;
-      }
-      if (aa.type === "text") {
-        const m = mapPt(aa.x, aa.y);
-        if (!m) return null;
-        aa.x = m.x; aa.y = m.y;
-        return aa;
-      }
-      // rect / highlight — {x,y,w,h}
-      const p1 = mapPt(aa.x, aa.y);
-      const p2 = mapPt(aa.x + aa.w, aa.y + aa.h);
-      if (!p1 || !p2) return null;
-      aa.x = p1.x; aa.y = p1.y; aa.w = p2.x - p1.x; aa.h = p2.y - p1.y;
-      return aa;
     },
 
     async _snapshotPages() {
       // [P14] 이전 도면의 실측 픽셀이 남아 다음 저장에 잘못 붙지 않게 초기화(SoT 오염 방지)
       try { PDF.lastSnapshotDims = null; } catch (e) {}
       if (State.fileType === "pdf" && State.pdfDoc) {
-        return await PDF.snapshotAllPages(State.pdfDoc, undefined, undefined, this._currentDeckCrop());
+        // [WP1 · H7] 구역 crop 과 무관하게 항상 전체 페이지 — 창 구역은 원본과 같은 배포본 행을 공유한다.
+        return await PDF.snapshotAllPages(State.pdfDoc);
       } else if (State.fileType === "image") {
         // 🔴 [WO 20260929-lossless] 종전: 화면 <img> 를 긴 변 2000px·JPEG 0.8 로 다시 그려 저장했다 →
         //   ① PNG/JPG 원본 업로드가 매 저장마다 축소·재압축됐고 ② 배포본/복원 draft(이미 스냅샷)도 편집할 때마다
@@ -12329,9 +12818,10 @@
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
-        try { State.pins  = JSON.parse(dep.pins  || "[]"); } catch { State.pins = []; }
-        try { State.zones = JSON.parse(dep.zones || "[]"); } catch { State.zones = []; }
-        try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
+        try { State.pins  = this._live(JSON.parse(dep.pins  || "[]")); } catch { State.pins = []; }
+        State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 이 서버 버전이 병합 기준
+        try { State.zones = this._live(JSON.parse(dep.zones || "[]")); } catch { State.zones = []; }
+        try { State.annotations = this._live(JSON.parse(dep.annotations || "[]")); } catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식({checkboard,content})
@@ -12405,6 +12895,9 @@
         State.fileName    = d.fileName || "도면";
         State.pins        = Array.isArray(d.pins)  ? d.pins  : [];
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
+        // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
+        State.pinTombstones = {}; this._adoptDraftTombstones(d);
+        State.pinBaseIds = Array.isArray(d.basePinIds) ? d.basePinIds.map(String) : null;
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
         // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
         State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
@@ -12465,6 +12958,12 @@
       const did = s.slice(i + 2);
       return (did && did !== "nodeck") ? did : "";
     },
+    /** [WO 20260930-WP3] draft 키(`pid::did`, _draftKey 형식)의 프로젝트 id — 없으면 "" (_deckIdOfKey 의 짝) */
+    _projectIdOfKey(key) {
+      const s = String(key || ""); const i = s.lastIndexOf("::");
+      const pid = i < 0 ? "" : s.slice(0, i);
+      return (pid && pid !== "noproj") ? pid : "";
+    },
 
     /** 🔴 [WO 20260928-pinloss] 도면 로드 세대 번호 — 서버본 로더(loadDeckDrawing/loadLatestDeployment)는
      *  await 사이에 다른 로드가 시작되면(허브 구역 클릭 = openApp 의 자동 로드 + selectDeck 동시 발화)
@@ -12515,7 +13014,8 @@
       const dZones = Array.isArray(d && d.zones) ? d.zones : [];
       return same
         ? { pins: dPins, zones: dZones }
-        : { pins: this._mergeById(srvPins || [], dPins), zones: this._mergeById(srvZones || [], dZones) };
+        // [WO 20260929-bulkdel] 핀은 _mergePins — draft 의 tombstone(deletedPins)·기준 id(basePinIds)로 삭제 부활 차단
+        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(this._live(srvZones || []), dZones) };
     },
 
     /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
@@ -12526,6 +13026,7 @@
       const m = this._draftVsServer(d, State.pins, State.zones, srvVer);
       State.pins = m.pins;
       State.zones = m.zones;
+      this._adoptDraftTombstones(d);   // [WO 20260929-bulkdel] 저장 전 지운 핀 기록 유지(다음 409 병합에서도 부활 금지)
       if (Array.isArray(d.annotations)) State.annotations = d.annotations;
       if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
       this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
@@ -12582,13 +13083,32 @@
           if (!d || !d.pages || !d.pages.length) continue;
           const did = this._deckIdOfKey(k);
           const deck = did ? decks.find((x) => String(x.id) === String(did)) : null;
+          // [WO 20260929-parent-guard] 🔴 재현 2026-09-29(지휘자 실측) — 키에 프로젝트 접두는 맞지만
+          // (currentDeck 이 프로젝트 전환 중 새어 이 draft 자체가 잘못 생성됐을 수 있다) deck id 가
+          // 이 프로젝트의 살아있는 decks 에 없으면(다른/삭제된 프로젝트 deck) 복원하지 않고 버린다
+          // — 화면에 잘못된 deck 에 속한 작업분을 올리지 않는다(조용히 고르는 대신 후보에서 제외).
+          if (did && !deck) continue;
           const score = (deck ? 2 : 0) + (d.dirty ? 1 : 0);   // 실존 구역 > dirty 우선
           if (score > bestScore) { bestScore = score; best = k; bestDeck = deck || null; }
         }
         if (!best) return false;
         if (bestDeck && typeof Projects !== "undefined") Projects.currentDeck = bestDeck;
         const ok = await this._restoreDraftLocal(best);
-        if (ok) { try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {} }
+        if (ok) {
+          try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {}
+          // 🔴 [WO 20260930-fitopen] 로컬 draft 복원(프로젝트 재진입, 서버 배포본 없음)도
+          //   화면 맞춤이 빠진 진입점이었다 — _restoreDraftLocal 은 다른 호출부(loadDeckDrawing
+          //   의 폴백)와 공유하므로 그쪽에서 직접 고치지 않고, whenDisplayed() 로 표시 정착을
+          //   기다린 뒤 여기서만 맞춘다(loadDeckDrawing 폴백은 selectDeck/openOriginal 이 이어서
+          //   _applyDeckCropView 로 다시 맞추므로 영향 없음).
+          try {
+            const shown = (typeof this.whenDisplayed === "function") ? await this.whenDisplayed() : true;
+            if (shown) {
+              try { if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(null); } catch (e) {}
+              try { if (typeof MapCtrl !== "undefined" && MapCtrl.fit) MapCtrl.fit(); } catch (e) {}
+            }
+          } catch (e) {}
+        }
         return ok;
       } catch (e) { return false; }
     },
@@ -12603,6 +13123,9 @@
         let d;
         try { d = await SyncQueue.loadDraft(key); } catch (e) { continue; }
         if (!d || !d.dirty || !d.pages || !d.pages.length) continue;
+        // [WO 20260930-403] 이 draft 는 이전에 권한없음/대상삭제로 거부 확인됨 — 재시도 안 함(무한루프 방지).
+        //   draft 자체는 삭제하지 않고 그대로 보존(권한이 나중에 열리면 사용자가 다시 저장하면 된다).
+        if (d.writeDenied) continue;
         try {
           const body = {
             title: d.fileName || "도면", file_name: d.fileName || "",
@@ -12610,6 +13133,9 @@
             annotations: JSON.stringify(d.annotations || []),
             drawing_data: d.pages[0], pages_data: JSON.stringify(d.pages)
           };
+          // [WO 20260930-WP3] 소속 프로젝트 = 이 draft 의 키(현재 열린 프로젝트가 아닐 수 있다)
+          const keyPid = this._projectIdOfKey(key);
+          if (keyPid) body.project_id = keyPid;
           // [P0-2] 구역(deck)에 속하지 않는 draft(`noproj::nodeck`)로 '새' 배포본을 만들면
           //   연결할 구역이 없어 고아 배포본이 된다 → 신규 생성은 건너뛰고 로컬 draft 는 그대로 보존한다.
           //   (기존 배포본 갱신(PATCH)은 연결이 이미 있으므로 그대로 진행)
@@ -12663,10 +13189,18 @@
             });
           }
           if (!res.ok) {
-            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
-            //   그 외 실패는 종전처럼 조용히 재시도(dirty 유지). 큐/드래프트는 어떤 경우에도 보존.
-            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
-            continue;                              // 실패 → dirty 유지, 다음 기회에 재시도
+            // [WO 20260930-403] 401(진짜 만료) / 403·409(권한없음·대상삭제) 를 공유 지점(Auth.classifyWriteFailure)
+            //   에서 판정한다. 만료만 재로그인 게이트를 연다 — 권한없음/삭제는 토큰이 멀쩡하므로
+            //   draft 를 writeDenied 로 표시해 재시도를 멈추고(보존은 유지) 세션당 1회만 안내한다.
+            const kind = (typeof Auth !== "undefined" && Auth.classifyWriteFailure) ? await Auth.classifyWriteFailure(res) : null;
+            if (kind === "expired") {
+              if (typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            } else if (kind === "denied" || kind === "conflict") {
+              d.writeDenied = true;
+              try { await SyncQueue.saveDraft(key, d); } catch (e) {}
+              if (typeof Auth !== "undefined" && Auth.writeDenied) Auth.writeDenied(kind);
+            }
+            continue;                              // 실패 → dirty 유지, 다음 기회에 재시도(writeDenied 는 예외)
           }
           const rec = await res.json().catch(() => null);
           const wasNew = !d.depId;                // POST 로 '새' 배포본을 만든 경우
@@ -12692,6 +13226,7 @@
           this._markDeckUnsaved(this._deckIdOfKey(key), false);   // [B4] 서버 반영됨 → 배지 해제
           // 병합된 핀/구역을 draft 에도 반영(다음 동기화 기준 정합)
           if (srvPins)  { try { d.pins  = JSON.parse(body.pins  || "[]"); } catch (e) {} }
+          d.basePinIds = this._pinIds(Array.isArray(d.pins) ? d.pins : []);   // [WO 20260929-bulkdel] 서버 = 방금 보낸 핀 = 새 기준
           if (srvZones) { try { d.zones = JSON.parse(body.zones || "[]"); } catch (e) {} }
           await SyncQueue.saveDraft(key, d);
           if (key === this._draftKey() && d.depId) {
@@ -12700,6 +13235,7 @@
             const ent = (State.fileType === "pdf" && State.fileData && this._srcKeys) ? this._srcKeys.get(State.fileData) : null;
             if (d.srcUrl && ent && ent.key === d.srcKey) State.sourcePdfUrl = d.srcUrl;
             if (rec && rec.version != null) State.depVersion = Number(rec.version); // 버전 동기화
+            State.pinBaseIds = d.basePinIds.slice();   // [WO 20260929-bulkdel] 버전과 함께 병합 기준도 동기화
             this._setSaveIndicator("saved");
           }
         } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
@@ -12733,6 +13269,7 @@
           baseVer:     (State.autoSaveDepId && State.depVersion != null) ? Number(State.depVersion) : null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
+        Object.assign(payload, this._draftPinMeta());           // [WO 20260929-bulkdel] 삭제 부활 방지(_draftVsServer)
         Object.assign(payload, await this._draftSrcFields());   // [WO 20260929-lossless] 원본 PDF 연결고리
         const dkey = this._draftKey();
         await SyncQueue.saveDraft(dkey, payload);
@@ -12786,6 +13323,10 @@
         const r2pages = await this._uploadPagesToR2(pages);
         const srcMeta = await this._buildSourceMeta(dims);     // [P14] 신규 배포본에 원본 PDF 보관
         const body = this._buildSavePayload(r2pages, srcMeta);
+        // [WO 20260930-WP3 · C3] 구역 밖(프로젝트 단위)에서 처음 등록한 도면 = 프로젝트 원본 후보.
+        //   서버는 그 프로젝트 원본이 비어 있을 때만 기록한다(first-wins). 구역 안 저장·구역 복사본은 원본 아님.
+        const asOriginal = !!body.project_id && !(typeof Projects !== "undefined" && Projects.currentDeck);
+        if (asOriginal) body.original = true;
         const res = await fetch("/tables/deployments", {
           method: "POST",
           headers: Auth.headers(),
@@ -12793,8 +13334,10 @@
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const rec = await res.json();
+        if (rec && rec.is_project_original && typeof Projects !== "undefined" && Projects.markOriginal) Projects.markOriginal(body.project_id, rec.id);
         State.autoSaveDepId = (rec && rec.id) ? rec.id : null;
         State.currentDeploymentId = State.autoSaveDepId;
+        try { State.pinBaseIds = this._pinIds(JSON.parse(body.pins || "[]")); } catch (e) {}   // [WO 20260929-bulkdel] 새 서버 기준
         // 서버 저장 성공 → 로컬 draft 의 dirty 해제(스냅샷은 백업으로 유지)
         await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
@@ -12871,6 +13414,7 @@
           pins: State.pins || [], zones: State.zones || [], annotations: State.annotations || [],
           depId: State.autoSaveDepId || null, dirty: false
         };
+        Object.assign(payload, this._draftPinMeta());           // [WO 20260929-bulkdel] 복원 후 병합에도 삭제 기록 유지
         Object.assign(payload, await this._draftSrcFields());   // clean draft 도 원본 연결고리 유지(서버 실패 폴백 복원용)
         if (payload.pages && payload.pages.length) await SyncQueue.saveDraft(this._draftKey(), payload);
       } catch (e) {}
@@ -13156,11 +13700,18 @@
             // 🔴 [WO 20260928-pinloss] 그 사이 selectDeck 등 다른 로드가 시작됐으면 현재 구역을 빼앗지 않는다
             if (!this._isCurrentLoad(seq)) return;
             if (typeof Projects !== "undefined") Projects.decks = decks;
-            const deck = decks.find(d => d.deployment_id);
-            if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck; }
+            // [WO 20260929-tree1] 🔴 마스터: "프로젝트를 클릭하면 원본 전체 도면이 나오게" —
+            //   예전엔 decks 배열의 첫 deployment_id(서버 정렬 순서 — 영역/자식 구역도 섞임)를
+            //   그냥 집었다. 자식 "영역"(크롭)이 먼저 오면 프로젝트 재진입 시 잘린 화면이 뜬다.
+            //   공유 지점(§10 SoT) Projects.pickOriginalDeck 으로 루트 구역(parent_id NULL) 중
+            //   최신 1개만 고른다 — 사이드바 트리 프로젝트 노드 클릭(openOriginal)과 동일 규칙.
+            const deck = (typeof Projects !== "undefined" && Projects.pickOriginalDeck)
+              ? Projects.pickOriginalDeck(decks, projectForDesigner) : decks.find(d => d.deployment_id);
+            // [WO 20260930-WP3 · C3] 구역 없는 원본(id 없음) = 프로젝트 단위 도면 → currentDeck 없음(_draftKey 의 nodeck 과 같은 규칙)
+            if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck.id ? deck : null; }
             // 🔴 [WO 20260928-pinloss] 저장 안 한 작업분은 배포본 fetch **전에** 읽는다(형제 loadDeckDrawing 과 같은 이유)
             if (deck && State.mode === "designer") {
-              draftKey = projectForDesigner.id + "::" + deck.id;
+              draftKey = projectForDesigner.id + "::" + (deck.id || "nodeck");
               draft = await this._readDirtyDraft(draftKey, wantId);
             }
           } catch (e) {}
@@ -13230,11 +13781,12 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
 
-        try { State.pins = JSON.parse(latest.pins || "[]"); }
+        try { State.pins = this._live(JSON.parse(latest.pins || "[]")); }
         catch { State.pins = []; }
-        try { State.zones = JSON.parse(latest.zones || "[]"); }
+        State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 형제 로더와 같은 기준
+        try { State.zones = this._live(JSON.parse(latest.zones || "[]")); }
         catch { State.zones = []; }
-        try { State.annotations = JSON.parse(latest.annotations || "[]"); }
+        try { State.annotations = this._live(JSON.parse(latest.annotations || "[]")); }
         catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식 정규화(§10 SoT).
@@ -13253,6 +13805,13 @@
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
           if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
           if (typeof Notes !== "undefined") Notes.loadSummary();
+          // 🔴 [WO 20260930-fitopen · 지휘자 실측] 허브 카드/프로젝트 재진입은 트리(selectDeck)·
+          //   openOriginal(31_Projects.js _applyDeckCropView)을 거치지 않는 유일한 진입점이라
+          //   화면 맞춤이 빠져 있었다 — zoom=1/pan=0(_showMapViewport)가 그대로 남아 도면
+          //   왼쪽 위 여백부터 보였다(재현: sunbo floor.pdf). 이 로드는 항상 "전체(크롭 없음)"
+          //   보기이므로 이전 세션의 구역 크롭이 남아 있으면 먼저 해제(PDF.setDeckCrop SoT)한다.
+          try { if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(null); } catch (e) {}
+          try { if (typeof MapCtrl !== "undefined" && MapCtrl.fit) MapCtrl.fit(); } catch (e) {}
         };
         this._armDisplay();   // [WO 20260929-fitrace2] _r2→_showMapViewport 가 settle
         imgEl.onload = _r2;
@@ -13369,8 +13928,13 @@
       return { ico: I('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'), cls: "empty", txt: "콘텐츠 없음" };
     },
 
+    _modePins() {
+      return (typeof PinSeries !== "undefined" && PinSeries.modePins) ? PinSeries.modePins(State.pins) : (State.pins || []);
+    },
+
     _sorted() {
-      const arr = State.pins.map((p, i) => ({ pin: p, idx: i }));
+      // [WO 20260930-fixmode] 모드 = 작업공간 — 활성 모드 핀만(SoT: PinSeries.modePins)
+      const arr = this._modePins().map((p, i) => ({ pin: p, idx: i }));
       if (this.query) {
         arr.splice(0, arr.length, ...arr.filter((o) =>
           (o.pin.label || "").toLowerCase().includes(this.query)));
@@ -13388,7 +13952,7 @@
       const listEl = document.getElementById("allpins-list");
       const emptyEl = document.getElementById("allpins-empty");
       const countEl = document.getElementById("allpins-count");
-      if (countEl) countEl.textContent = State.pins.length;
+      if (countEl) countEl.textContent = this._modePins().length;
       const rows = this._sorted();
       listEl.innerHTML = "";
       if (!rows.length) { emptyEl.classList.remove("hidden"); return; }
@@ -14067,6 +14631,45 @@
       this._authExpiredNotified = true;
       try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("로그인이 만료돼 업로드하지 못했습니다 — 다시 로그인하면 자동으로 이어서 올립니다", 4000); } catch (e) {}
       try { this._openGate(); } catch (e) {}
+    },
+
+    /** [WO 20260930-403] 오프라인 업로드 실패(401/403/409) 판정의 단일 지점(§G-2-5).
+     *  App._flushDirtyDrafts(20_App.js), App._flushOpLogs(32_Offline.js), SyncQueue.flush(05_SyncQueue.js)
+     *  가 모두 이 함수로 분류한다 — 서버 에러 문구가 바뀌면 여기 한 곳만 고친다.
+     *  근본원인: WP3 B5 가 /tables/deployments* 에 프로젝트 스코프 403(deploymentWriteDenied)을
+     *  새로 추가하자, 기존 "401/403 = 토큰 만료" 판정이 정상 권한거부를 오인해 불필요한
+     *  재로그인 창을 띄웠다(프로젝트 비멤버 designer의 오프라인 배포본 저장 시).
+     *  반환: 'expired'(진짜 재로그인 필요) | 'denied'(이 프로젝트 권한 없음) | 'conflict'(409, 삭제된 프로젝트) | null */
+    async classifyWriteFailure(res) {
+      if (!res) return null;
+      if (res.status === 401) return "expired";
+      if (res.status === 409) return "conflict";
+      if (res.status === 403) {
+        let msg = "";
+        try { const j = await res.clone().json(); msg = String((j && j.error) || ""); } catch (e) {}
+        // deploymentWriteDenied(src/index.tsx)의 정확한 문구만 '권한없음'으로 분류.
+        // 그 외(예: requireDesigner 의 'forbidden — designer login required', 파싱 실패)는
+        // 종전처럼 '만료'로 본다 — 프로젝트 스코프가 없는 엔드포인트(/api/sync/batch 등)의 403은
+        // 항상 requireDesigner 발(發), 즉 진짜 로그인 필요이므로 이 기본값이 안전하다.
+        if (msg.indexOf("not a designer of this project") >= 0) return "denied";
+        if (msg === "forbidden") return "denied";
+        return "expired";
+      }
+      return null;
+    },
+
+    _writeDeniedNotified: false,  // 세션당 1회만 안내(재시도마다 토스트 반복 방지)
+
+    /** 오프라인 큐/드래프트가 권한없음(403) 또는 대상삭제(409)로 실패했을 때 호출하는 공유 지점.
+     *  authExpired()와 달리 재로그인 게이트를 열지 않는다 — 토큰은 멀쩡하고 이 항목만 권한이 없다.
+     *  데이터(큐/드래프트/op로그)는 그대로 보존하고, 호출부가 해당 항목의 재시도를 멈춰야 한다. */
+    writeDenied(kind) {
+      if (this._writeDeniedNotified) return;
+      this._writeDeniedNotified = true;
+      const msg = kind === "conflict"
+        ? "프로젝트가 삭제되어 일부 변경사항을 동기화하지 못했습니다 — 로컬에는 보존됩니다"
+        : "이 프로젝트에 쓰기 권한이 없어 일부 변경사항을 동기화하지 못했습니다";
+      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg, 4000); } catch (e) {}
     },
 
     /* ══════════════════════════════════════════════════════════════════
@@ -15864,17 +16467,31 @@
     _applyRegVisibility() {
       const grid = document.getElementById("pap-reg-tools");
       if (!grid) return;
-      const mobile = !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches);
+      const mobile = this._isMobile();
       this._regBtns(grid).forEach((btn) => {
         const reg = btn.dataset.reg;
         btn.classList.toggle("hidden", mobile && reg !== "photo" && reg !== "theta" && reg !== "note");
       });
+      this._updateRegHint();
+    },
+
+    _isMobile() { return !!(window.matchMedia && window.matchMedia(PAP_MOBILE_MQ).matches); },
+
+    /** [지휘자 발주 2026-09-29 항목1] 🔴 등록 종류별 안내 — 예전엔 '360' 선택 시 Prompt.toast 로
+     *  안내했는데, 모바일 좁은 화면에서 그 토스트가 등록 UI(파일선택/경로입력) 위를 덮어 조작이
+     *  막혔다(지휘자 실측). 토스트 대신 이 탭 안 인라인 한 줄(기존 모바일 전용 안내 요소 재사용)로
+     *  바꿔 등록 UI를 절대 가리지 않게 한다. 우선순위: 카테고리 전용 안내(360/동영상) > 모바일
+     *  일반 안내 > 없음(빈 문자열이면 숨김 — 조용한 빈 줄 대신 요소 자체를 감춘다). */
+    _updateRegHint() {
       const hint = document.getElementById("pap-reg-mobile-hint");
-      if (hint) {
-        // index.html 은 타 팀 점유(수정 금지) — 안내 문구는 여기(JS)에서 SoT 로 덮어쓴다.
-        hint.textContent = "모바일에서는 360·사진·노트만 등록할 수 있어요. 문서·동영상·URL은 PC에서 추가하세요.";
-        hint.classList.toggle("hidden", !mobile);
-      }
+      if (!hint) return;
+      const cat = this._regCat;
+      let text = "";
+      if (cat === "theta") text = "RICOH THETA 360 사진도 '사진'과 동일하게 등록됩니다(파일 선택 또는 경로).";
+      else if (cat === "video") text = "동영상은 경로(URL, .mp4/.webm/.mov)로 등록하세요.";
+      else if (this._isMobile()) text = "모바일에서는 360·사진·노트만 등록할 수 있어요. 문서·동영상·URL은 PC에서 추가하세요.";
+      hint.textContent = text;
+      hint.classList.toggle("hidden", !text);
     },
 
     /** 등록 종류 선택 — 사진/360/동영상/URL 은 기존 단일 위젯(pap-photo-area) 재사용(중복 위젯 생성 금지),
@@ -15905,8 +16522,8 @@
         const noteInput = $("pap-notes-input"); if (noteInput) noteInput.focus();
         return;
       }
-      if (cat === "theta" && Prompt.toast) Prompt.toast("RICOH THETA 360 사진도 '사진'과 동일하게 등록됩니다(파일 선택 또는 경로)");
-      if (cat === "video" && Prompt.toast) Prompt.toast("동영상은 경로(URL, .mp4/.webm/.mov)로 등록하세요");
+      // [지휘자 발주 2026-09-29 항목1] 🔴 토스트가 등록 UI를 덮던 문제 — 인라인 안내로 대체(_updateRegHint).
+      this._updateRegHint();
       if (cat === "url" || cat === "video") { const u = $("pap-photo-url"); if (u) u.focus(); }
     },
     _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
@@ -15924,14 +16541,18 @@
       if (!pin) return;
       this._pinId = pinId;
       this._applyLayoutOnce();
-      // 페이지 기준 번호 계산
+      // [WO 20260929-tree1] 🔴 번호 SoT = PinSeries.numbers/formatNo(01b_PinSeries.js) — 도면
+      //   마커·미니맵·트리와 같은 번호(CHECKER=숫자 / 360=P접두)를 쓴다. 예전엔 여기서만
+      //   samePage.indexOf 로 독자 채번해(계열 무시) 트리·마커와 다른 번호가 나왔다(§10 SoT).
       const page = pin.page || 1;
-      const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
-      const no = samePage.indexOf(pin) + 1;
+      const numMap = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
+      const meta = numMap.get(pin.id) || null;
+      const no = meta ? meta.no : 0;
+      const noLabel = meta ? PinSeries.formatNo(meta.no, meta.series) : "?";
       const hasContent = App.pinHasContent(pin);
       const $ = (id) => document.getElementById(id);
-      $("pap-no").textContent = "#" + (no > 0 ? no : "?");
-      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
+      $("pap-no").textContent = "#" + noLabel;
+      $("pap-title").textContent = this._titleFor(pin, noLabel);
       const mediaTxt = hasContent ? "360° 미디어 있음" : "미디어 없음";
       const addrTxt = (pin.label && pin.label.trim()) ? pin.label : "위치명 없음";
       // 🔴 [2026-09-21 WO] 도면 마커 위성 배지 3종(이슈·중복·작성자) 제거 — 여기(단일 편집창)로 이관.
@@ -15973,19 +16594,44 @@
       const labelHint = $("pap-label-hint");
       if (labelHint) labelHint.textContent = "";
 
-      this._renderPhoto(pin, canEdit);
-      this._loadNotes(pin, canEdit);
-      // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
-      this._regCat = "photo";
-      this._renderRegTools();
-      this._renderDocList(pin);
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 번호만 매기는 기능" / "체커는 사진을 등록하지
+      //   않을 거야" — CHECKER 계열 핀(SoT: PinSeries.seriesOf)은 등록 섹션(#pap-bottom: 등록
+      //   종류 그리드 + 사진/문서/노트 패널) 전체를 숨긴다. 번호·위치명 수정·이동·삭제(#pap-top)는
+      //   그대로 남는다. 기존에 이미 사진이 붙어 있던 CHECKER 핀도 데이터는 그대로 두고(유실 0),
+      //   #pap-view(이미 있는 읽기 버튼)로만 본다 — 새 등록 경로는 열지 않는다.
+      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+      const bottom = $("pap-bottom");
+      if (bottom) bottom.classList.toggle("hidden", isChecker);
+      if (!isChecker) {
+        this._renderPhoto(pin, canEdit);
+        this._loadNotes(pin, canEdit);
+        // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
+        this._regCat = "photo";
+        this._renderRegTools();
+        this._renderDocList(pin);
+      }
 
+      // [지휘자 발주 2026-09-29 항목2] 🔴 좌하단 도움말(?) 토글(36_Help.js, position:fixed
+      // left:16/bottom:16)이 이 패널(모바일 92vw, 화면 오른쪽 정렬)의 왼쪽 가장자리와
+      // 겹쳐 등록 버튼을 가렸다(지휘자 실측). 패널이 열려 있는 동안만 숨긴다(d59726b 와 동일
+      // 관례 — 편집 화면에서 겹치는 상시 플로팅 버튼은 그 화면이 떠 있는 동안 숨김).
+      if (typeof Help !== "undefined" && Help.setVisible) Help.setVisible(false);
       el.classList.remove("hidden");
     },
     close() {
       const el = document.getElementById("pin-action-pop");
       if (el) el.classList.add("hidden");
       this._pinId = null;
+      if (typeof Help !== "undefined" && Help.setVisible) Help.setVisible(true);
+    },
+    /** [지휘자 발주 2026-09-29 항목4] 제목 = 위치명. 번호(pap-no 배지)와 같은 문자열이면
+     *  중복 표시("#2  2")가 되므로 제목을 비운다(배지가 이미 번호를 보여주므로 정보 유실 없음).
+     *  형제 호출부(open()/_saveLabel()) 모두 이 한 곳만 쓴다(§10 SoT). */
+    _titleFor(pin, noLabel) {
+      const raw = (pin && pin.label && pin.label.trim()) ? pin.label.trim() : "";
+      if (!raw) return "포인트 " + noLabel;
+      if (raw === noLabel) return "";
+      return raw;
     },
 
     /** ── 등록정보/번호 저장 — 자동저장 OFF: pin.label 만 갱신하고 미저장 표시만 남긴다 ──
@@ -16011,10 +16657,12 @@
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       // 화면 갱신(번호/제목/메타 재계산) — 페이지 재조회 없이 open()의 표시 로직만 재사용
+      // [WO 20260929-tree1] 🔴 형제 호출부(§G-2-5) — open() 과 같은 SoT(PinSeries.numbers/formatNo)로 통일.
       const page = pin.page || 1;
-      const samePage = (State.pins || []).filter(p => (p.page || 1) === page);
-      const no = samePage.indexOf(pin) + 1;
-      $("pap-title").textContent = pin.label && pin.label.trim() ? pin.label : ("포인트 " + no);
+      const numMap2 = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
+      const meta2 = numMap2.get(pin.id) || null;
+      const noLabel2 = meta2 ? PinSeries.formatNo(meta2.no, meta2.series) : "?";
+      $("pap-title").textContent = this._titleFor(pin, noLabel2);
       const hint = $("pap-label-hint");
       if (hint) hint.textContent = "미저장 변경 — '저장하기'(포인트 편집 패널) 또는 자동저장 이벤트 발생 시 서버에 반영됩니다.";
       Prompt.toast && Prompt.toast("위치명/번호 반영됨 (미저장)");
@@ -17018,8 +17666,26 @@
       }
     },
 
+    /** [WO 20260929-parent-guard] 🔴 SoT — 프로젝트를 바꾸는 **모든** 진입점(드롭다운 selectProject,
+     *  허브 카드 클릭 ProjectHub.openProject, 서브도메인 자동진입 99_footer.js)이 반드시 이 함수를
+     *  거쳐야 한다. `Projects.currentProject = p` 직접 대입 금지(형제 호출부 전수 확인 —
+     *  CLAUDE.md §G-2-5). 근본원인(재현 2026-09-29, 지휘자 실측 2건):
+     *   ① currentDeck 을 초기화하지 않으면 이전(삭제됐거나 다른) 프로젝트의 구역 참조가 새
+     *      프로젝트로 새어 들어가 extractRegionAsDeck(src=this.currentDeck)이 그 참조를 그대로
+     *      parent_id 로 써서 "다른 프로젝트의 deck 을 부모로 둔 고아 deck"을 만든다.
+     *   ② ProjectHub.openProject 는 `currentProject = p` 를 **동기로** 바꾼 뒤 deck 목록을
+     *      비동기로 새로 받아오는데(N4, 20_App.js), 그 사이(await) 창에서 _draftKey()(pid::did)가
+     *      아직 초기화 전인 stale currentDeck.id 를 그대로 써 "새 프로젝트 pid + 옛 프로젝트 deck id"
+     *      조합의 draft 키가 IndexedDB 에 영구 저장되고, 나중에 _flushDirtyDrafts 가 그 draft 의
+     *      depId(옛 프로젝트 배포본)로 PATCH 를 보낸다 — currentProject 대입과 **같은 동기 틱**에서
+     *      currentDeck 을 null 로 만들어야 이 경쟁 창을 없앤다. */
+    setCurrentProject(p) {
+      this.currentProject = p || null;
+      this.currentDeck = null;
+    },
+
     async selectProject(id) {
-      this.currentProject = this.list.find((p) => p.id === id) || null;
+      this.setCurrentProject(this.list.find((p) => p.id === id) || null);
       // [P40] 배지 컨텍스트 — 프로젝트 역할 표시(공유 지점: Auth.setProjectContext)
       if (typeof Auth !== "undefined" && Auth.setProjectContext) Auth.setProjectContext(this.currentProject);
       this._renderSelect();
@@ -17052,6 +17718,15 @@
       //   전부 이 loadDecks() 를 거치므로 허브 카드 트리 갱신은 여기 한 곳에만 둔다(각 생성 함수마다
       //   중복 호출 금지). 허브 화면이 지금 안 보이면(screen-projects 비활성) 아무 일도 안 한다.
       try { if (typeof ProjectHub !== "undefined" && ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible(); } catch (e) {}
+    },
+
+    /** [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지 구조를 제거 — 구역·영역은
+     *  이제 두 모드가 공유하므로 새로 만드는 구역/영역에 decks.mode 태그를 붙이지 않는다(no-op).
+     *  decks.mode 컬럼(0029)은 비파괴로 남겨 두되 클라이언트는 더 이상 쓰지 않는다. 서버의 mode
+     *  검증·상속 400(src/index.tsx parseDeckMode/resolveDeckMode)은 body.mode 가 전송될 때만
+     *  동작하므로, 여기서 보내지 않으면 무해하다(확인 완료). POST 3곳 공유 지점(SoT) 그대로 유지. */
+    _withDeckMode(body, _parentDeck) {
+      return body;
     },
 
     /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */
@@ -17120,6 +17795,7 @@
         }
         const body = { name };
         if (opts.askDrawing !== false) body.page = page; // 자동생성 경로는 전송하지 않음 → 서버 NULL(구버전과 동일)
+        this._withDeckMode(body); // [WO 20260930-fixmode] 활성 모드 태그
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           body: JSON.stringify(body)
@@ -17302,8 +17978,8 @@
      *  좌표계(요구③): 드래그 좌표는 MapCtrl.viewportToPercent → **페이지 기준 %** 다.
      *   크롭은 화면 줌/팬(MapCtrl.fitZone)과 고해상도 렌더 대상(PDF.setDeckCrop)만 바꿀 뿐
      *   좌표 원점을 옮기지 않는다 → 영역 안에서 찍은 핀도 계속 페이지 기준 %로 저장된다.
-     *   배포본으로 내보낼 때만 App._mapZoneForCrop/_mapAnnoForCrop 과 **같은 규칙**
-     *   (MapCtrl.pageToDeckCropPct)으로 크롭 기준 %가 되고, MapCtrl.deckCropPctToPage 로 정확히 되돌아온다.
+     *   [WP1 · H7] 저장(=배포, 같은 행)도 페이지 기준 % 그대로다 — 크롭 기준 %로 바꿔 저장하던 경로는
+     *   원본 행의 크롭 밖 핀을 지워 제거했다(App._buildSavePayload). 크롭은 오직 보기 창이다.
      *  @param {object} [opts] { crop, name } — 테스트/자동화용 선주입(미지정 시 드래그·프롬프트로 물음)
      *  @returns {Promise<object|null>} 생성된 구역(deck) 또는 null(취소/실패)
      */
@@ -17356,9 +18032,12 @@
           // 복사본: 새 배포본(그 페이지 자체가 영역) · 창 방식: 원본과 같은 도면 + crop(원본 무변경).
           // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
           // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
-          body: JSON.stringify(plan.depId
-            ? { name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }
-            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
+          // [WO 20260930-fixmode] 영역 = 부모 구역의 mode 상속(부모 NULL 이면 활성 모드) — PinSeries.withDeckMode SoT.
+          body: JSON.stringify(this._withDeckMode(plan.depId
+            // [WO 20260930-merge] 복사본은 원본 상자(src_*) 기록 — 합치기 좌표 변환의 전제(_srcBoxFields)
+            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }, this._srcBoxFields(src, page, crop))
+            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id },
+            (src.parent_id && (this.decks || []).find((x) => String(x.id) === String(src.parent_id))) || src))
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
@@ -17451,6 +18130,23 @@
       if (noB && cancelLabel) noB.textContent = cancelLabel;
       try { return !!(await p); }
       finally { if (okB) okB.textContent = prev[0]; if (noB) noB.textContent = prev[1]; }
+    },
+
+    /** [WO 20260930-merge] 벡터 복사 구역의 "원본 상자" 기록(마이그레이션 0031) — 구역 합치기(41_RegionMerge)의 좌표 변환 전제.
+     *  복사본은 새 1페이지 배포본 + crop:null 이라 이 기록이 없으면 두 구역의 공통 좌표계를 알 수 없다.
+     *  · 원본 상자가 이미 기록된 복사본(src.src_crop)에서 다시 잘랐으면 **그 원본까지 합성**해 기준 배포본을 하나로 맞춘다
+     *    (구역→영역이 같은 src_dep_id 를 공유해야 영역↔형제 구역 사이 변환이 된다). 합성 = MapCtrl.deckCropPctToPage(새 수식 0).
+     *  · 그 외(원본 도면·창 구역·기록 없는 레거시 복사본)는 src 자신의 배포본 페이지 % 가 곧 기준이다.
+     *  순수 함수. crop 이 없으면 {}(기록 안 함 — 서버 NULL). */
+    _srcBoxFields(src, page, crop) {
+      if (!src || !src.deployment_id || !crop || !(crop.w > 0) || !(crop.h > 0)) return {};
+      const sc = src.src_crop;
+      if (src.src_dep_id && sc && sc.w > 0 && sc.h > 0 && typeof MapCtrl !== "undefined" && MapCtrl.deckCropPctToPage) {
+        const tl = MapCtrl.deckCropPctToPage(crop.x, crop.y, sc);
+        const br = MapCtrl.deckCropPctToPage(crop.x + crop.w, crop.y + crop.h, sc);
+        return { src_dep_id: String(src.src_dep_id), src_page: Number(src.src_page) || 1, src_crop: { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y } };
+      }
+      return { src_dep_id: String(src.deployment_id), src_page: Number(page) || 1, src_crop: { x: crop.x, y: crop.y, w: crop.w, h: crop.h } };
     },
 
     /** 영역(crop %) 안에 있는 그 페이지 핀 수 — 알림용 집계만(핀 배열은 읽기만 한다). 순수 함수. */
@@ -17548,9 +18244,10 @@
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           // 복사본: 새 배포본(그 페이지 자체가 구역) · 창 방식(원본 없는 구버전 도면): 로드된 도면 + crop.
-          body: JSON.stringify(plan.depId
-            ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }
-            : { name, page, crop, deployment_id: depId, parent_id: null })
+          body: JSON.stringify(this._withDeckMode(plan.depId   // [WO 20260930-fixmode] 활성 모드 태그
+            // [WO 20260930-merge] 복사본은 원본 상자(src_*) 기록 — 합치기 좌표 변환의 전제(_srcBoxFields)
+            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }, this._srcBoxFields({ deployment_id: depId }, page, crop))
+            : { name, page, crop, deployment_id: depId, parent_id: null }))
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "구역 생성 실패 — 권한을 확인하세요"); return null; }
@@ -17616,6 +18313,78 @@
       } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
         App.offerDeckDrawingLink(d);
       }
+    },
+
+    /** [WO 20260929-tree1] 🔴 공유 지점(SoT) — "이 프로젝트의 원본 전체 도면"이 어느 구역인지
+     *  판정하는 규칙 하나. 사이드바 트리(openOriginal, 아래)와 프로젝트 재진입/허브 카드 클릭
+     *  (20_App.js loadLatestDeployment)이 각자 고르면 반드시 갈라진다(§10 SoT). 규칙: 루트 구역
+     *  (parent_id NULL — "구역" 단, "영역" 아님) 중 가장 최근 생성분. 루트가 없으면 null(지어내지
+     *  않음 — 아직 도면만 등록되고 구역이 하나도 없는 구간은 이 함수로도 찾을 수 없다: deployments
+     *  테이블에 project_id 가 없어 client 에서 조회 불가 — RECON 2026-09-29, src/index.tsx 변경 필요). */
+    /** [WO 20260930-WP3 · C3] 서버가 원본으로 기록했다고 응답한 배포본을 로컬 프로젝트 객체에 반영
+     *  (App._createInitialSave 의 is_project_original 응답 → 재조회 없이 pickOriginalDeck 이 바로 쓴다). */
+    markOriginal(projectId, depId) {
+      if (!projectId || !depId) return;
+      for (const p of [this.currentProject].concat(this.list || [])) {
+        if (p && p.id === projectId && !p.original_deployment_id) p.original_deployment_id = depId;
+      }
+    },
+
+    pickOriginalDeck(decks, project) {
+      decks = decks || [];
+      // [WO 20260930-WP3 · C3] 🔴 1순위 = 서버 기록(projects.original_deployment_id — 처음 등록한 전체 도면).
+      //   종전 규칙(최신 루트 구역)은 구역 **복사본**을 골랐다(p93 C3 실측). 그 배포본을 가리키는 루트·전체(crop 없음)
+      //   구역이 있으면 그 구역, 없으면 구역 없는 원본 서술자(id:null — 호출부는 currentDeck=null 로 연다).
+      //   기록이 없는 레거시 프로젝트만 아래 종전 규칙으로 폴백한다(기존 데이터 호환).
+      const proj = project !== undefined ? project : this.currentProject;
+      const origId = proj && proj.original_deployment_id;
+      if (origId) {
+        const own = decks.find((d) => d && d.deployment_id === origId && d.parent_id == null && !d.crop);
+        return own || { id: null, deployment_id: origId, parent_id: null, crop: null, page: null, name: (proj && proj.name) || "원본", original: true };
+      }
+      // [WO 20260929-parent-guard] 🔴 SoT — 고아 판정(부모가 없거나 목록에 없음)은
+      // UI.groupDecksByParent(11_UI.js)와 공유한다. 예전엔 parent_id==null 만 루트로 쳐서,
+      // 오염 데이터(부모가 다른/삭제된 프로젝트의 deck)를 가리키는 deck 이 영원히 "원본 없음"으로
+      // 숨어버렸다(재현 2026-09-29: sunbo 프로젝트 floor 구역). groupDecksByParent 는 이미
+      // "부모가 이 decks 목록에 없으면 최상위로 승격"을 하므로 같은 함수를 재사용한다(로직 두 벌 금지).
+      const roots = (typeof UI !== "undefined" && UI.groupDecksByParent)
+        ? UI.groupDecksByParent(decks).roots.filter((d) => d && d.deployment_id)
+        : decks.filter((d) => d && d.deployment_id && d.parent_id == null);
+      if (!roots.length) return null;
+      const ts = (d) => { const v = d.created_at; const n = typeof v === "number" ? v : Date.parse(v); return Number.isFinite(n) ? n : 0; };
+      return roots.slice().sort((a, b) => ts(b) - ts(a))[0];
+    },
+
+    /** [WO 20260929-tree1] 🔴 마스터: "상위 프로젝트를 클릭하면 [원본 전체 도면이] 나오게 해".
+     *  🔴 정직한 한계(데이터 구조 확인 결과, RECON 2026-09-29): deployments 테이블엔 project_id 가
+     *  없다(테넌트 단위) — 구역(decks)에 연결된 배포본만 프로젝트 소속으로 알 수 있다. 벡터복사로
+     *  만든 구역(정착 PDF 있는 경우 다수)은 원본과 **다른** 새 배포본을 가리키므로 "구역이 하나도
+     *  안 생긴 채" 등록만 된 도면은 이 함수로도 못 찾는다(서버에 project_id 컬럼 추가가 필요 —
+     *  src/index.tsx 밖이라 이 발주 범위 아님, 지휘자 보고 대상).
+     *  이 함수가 실제로 하는 일: **가장 단순한 선택** — 프로젝트의 루트 구역(parent_id NULL, 2단 중
+     *  "구역") 가운데 가장 최근 생성분을 그 구역 **자신의 crop 을 무시하고** 전체 페이지로 연다.
+     *  루트 구역은 항상 생성 시점에 crop:null(벡터복사) 이거나 그 구역 자체가 원본이므로
+     *  이 선택이 "원본 전체 도면"에 가장 가깝다. 루트가 여럿이면(도면 여러 장 등록) 최신 1장을
+     *  열고, 나머지는 트리에 이미 목록으로 나열돼 있다(추가 UI 0). */
+    async openOriginal() {
+      const latest = this.pickOriginalDeck(this.decks);
+      if (!latest) { Prompt.toast && Prompt.toast("등록된 원본 도면이 없습니다 — '도면 등록'으로 먼저 올리세요"); return; }
+      const rootCount = (this.decks || []).filter((d) => d && d.deployment_id && d.parent_id == null).length;
+      this.currentDeck = latest.id ? latest : null;   // [WP3 · C3] 구역 없는 원본 = 프로젝트 단위(nodeck)
+      this._renderDecks();
+      if (typeof App !== "undefined" && App.loadDeckDrawing) {
+        await App.loadDeckDrawing(latest.deployment_id);
+        if (latest.page && typeof App._gotoPage === "function") { try { await App._gotoPage(latest.page); } catch (e) {} }
+      }
+      // 🔴 원본 전체 — 이 구역의 crop 은 무시(항상 null) — selectDeck 과 달리 여기는 "전체" 보장이 목적.
+      // 🔴 [실측 발견] _applyDeckCropView 는 "낡은 구역 맞춤 방지" 가드로 this.currentDeck.id 와
+      //   인자 d.id 를 비교한다(31_Projects.js _applyDeckCropView). {name,crop} 만 담은 새 객체를
+      //   넘기면 d.id 가 undefined 라 가드가 항상 참이 되어 MapCtrl.fit() 이 스킵되고 캔버스가
+      //   빈 화면으로 남는다(CDP 실측) — latest 를 얕은 복제해 id 를 보존한다.
+      const label = (this.currentProject && this.currentProject.name)
+        ? this.currentProject.name + (rootCount > 1 ? " · 원본" : "")
+        : latest.name;
+      this._applyDeckCropView(Object.assign({}, latest, { name: label, crop: null }));
     },
 
     /** 🔴 [WO 20260928] "바운더리를 잘라서 별도의 페이지로 구성" (마스터 확정) —
@@ -17713,42 +18482,14 @@
       if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
-    /** [결함수정] 구역 0개일 때 #side-tree 안에 직접 그리는 빈 상태 안내.
-     *  UI.renderTree()(11_UI.js — 다른 에이전트 작업 중이라 수정 금지)도 구역 0개면 같은
-     *  자리에 안내 텍스트만 그리지만 실제 생성 버튼이 없다. 여기서는 프로젝트가 선택된
-     *  경우에만(=진짜 "구역 0개") 실제 생성 버튼이 있는 안내를 그리고, 프로젝트 미선택
-     *  상태에서는 잘못된 안내를 띄우지 않도록 비워둔다.
-     *  ponytail: 이후 다른 코드가 UI.renderTree()를 독립 호출하면(16_Zones.js 등) 이 안내가
-     *  버튼 없는 텍스트로 되돌아갈 수 있다 — 실전에서는 구역이 0개일 때 존재할 수 없는
-     *  zone/pin 갱신 경로라 발생 가능성이 낮지만, 근본 해결은 11_UI.js 쪽 수정이 필요하다. */
+    /** [WO 20260929-tree1] 🔴 근본수정 — 예전엔 여기서 #side-tree.innerHTML 을 직접 덮어써
+     *  UI.renderTree() 가 방금 그 안에 옮겨 붙인 #project-actions(다운로드·삭제, 실 DOM)를
+     *  통째로 파괴했다(CDP 실측 — getElementById('project-actions') 가 null 이 됨, 영구 소실).
+     *  근본 원인은 "#side-tree 를 두 함수가 각자 그린다"였다(§10 SoT 위반) — CTA 안내
+     *  두 갈래(도면 있음/없음)를 UI.renderTree() 안으로 옮겼다(11_UI.js, mountProjectNode 옆).
+     *  이 함수는 이제 그 SoT 하나로 위임만 한다(호출부 0곳 변경 — _renderDecks() 그대로 호출). */
     _renderSideTreeEmpty() {
-      const host = document.getElementById("side-tree");
-      if (!host) return;
-      if (!this.currentProject) { host.innerHTML = ""; return; } // 프로젝트 미선택 — 안내 없음
-      // ── 🔴 [WO 20260928] "도면 있음 + 구역 0" 은 이제 **정상 상태**다(도면 등록이 구역을 만들지 않음).
-      //   이 상태에서 "구역이 없습니다 → 구역을 만들면 도면을 등록할 수 있습니다" 를 그대로 보여주면
-      //   이미 도면을 올린 사용자에게 **거짓 안내**가 된다(빈 화면과 같은 급의 조용한 실패).
-      //   → 분기해서 다음 행동(영역 지정)을 정확히 알린다. CTA 는 기존 경로(extractRegionAsDeck)로만 간다.
-      if (typeof State !== "undefined" && State.fileType) {
-        host.innerHTML =
-          '<div class="side-tree-empty">' +
-            '<p class="side-tree-empty-msg">도면이 등록됐습니다.<br>도면에서 <b>영역을 지정</b>해 구역을 만드세요.</p>' +
-            '<button type="button" class="side-tree-empty-cta" id="side-tree-make-deck-region">+ 영역 지정해 구역 만들기</button>' +
-          '</div>';
-        const rb = document.getElementById("side-tree-make-deck-region");
-        // extractRegionAsDeck() 이 "구역 0 + 도면 로드" 를 감지해 createDeckFromLoadedDrawing 으로 위임한다.
-        if (rb) rb.addEventListener("click", () => this.extractRegionAsDeck());
-        return;
-      }
-      host.innerHTML =
-        '<div class="side-tree-empty">' +
-          // [WO 20260928] 옛 문구("구역을 만들면 도면을 등록할 수 있습니다")는 이제 사실이 아니다 —
-          // 도면 등록은 구역을 전제하지 않는다. 실제 순서를 그대로 말한다.
-          '<p class="side-tree-empty-msg">이 프로젝트에 구역이 없습니다.<br>도면을 등록한 뒤, 도면에서 <b>영역을 지정</b>하면 구역이 만들어집니다.</p>' +
-          '<button type="button" class="side-tree-empty-cta" id="side-tree-create-deck">+ 구역 생성</button>' +
-        '</div>';
-      const btn = document.getElementById("side-tree-create-deck");
-      if (btn) btn.addEventListener("click", () => this.createDeck());
+      if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
     },
 
     /** [WO 20260928] 🔴 옛 '구역 선행 강제' 게이트의 **시각적 절반**이었다 — 구역이 0개면 업로드
@@ -17986,6 +18727,9 @@
     return null;
   }
 
+  // [WO 20260930-403] 권한없음/대상삭제로 거부된 depId — 세션 내 재시도 중단(op 로그는 보존, 무한재시도 금지)
+  const _deniedOpDeps = new Set();
+
   // App 에 op 플러시 메서드 부착 (_onReconnect 에서 호출)
   if (typeof App !== "undefined") {
     App._flushOpLogs = async function () {
@@ -17994,6 +18738,7 @@
       const opKeys = keys.filter((k) => String(k).startsWith("oplog:"));
       for (const k of opKeys) {
         const depId = String(k).slice("oplog:".length);
+        if (_deniedOpDeps.has(depId)) continue; // 이미 거부 확인됨(이 세션) — 재시도 안 함
         const ops = await OpLog.pending(depId);
         if (!ops.length) continue;
         try {
@@ -18013,7 +18758,7 @@
             // 현재 열려있는 도면이면 화면 갱신(tombstone 제외)
             if (_curDepId() === depId && j.current) {
               try {
-                const live = (arr) => (Array.isArray(arr) ? arr.filter((o) => !(o && o._deleted)) : arr);
+                const live = (arr) => App._live(arr);   // [WP1 · H8] tombstone 필터 SoT(20_App._live)
                 State.pins = live(JSON.parse(j.current.pins || "[]"));
                 State.zones = live(JSON.parse(j.current.zones || "[]"));
                 State.annotations = live(JSON.parse(j.current.annotations || "[]"));
@@ -18021,6 +18766,17 @@
                 if (typeof UI !== "undefined") { UI.renderPinList(); UI.renderPinsOnMap(); }
                 if (typeof Zones !== "undefined" && Zones.render) { Zones.render(); Zones.renderList && Zones.renderList(); }
               } catch (e) {}
+            }
+          } else if (res) {
+            // [WO 20260930-403] 401(만료)/403·409(권한없음·대상삭제) 를 공유 지점에서 판정.
+            //   기존엔 이 분기가 아예 없어 권한거부/삭제된 배포본의 op 로그가 재연결마다
+            //   조용히 무한 재시도됐다(만료 안내도 없었다).
+            const kind = (typeof Auth !== "undefined" && Auth.classifyWriteFailure) ? await Auth.classifyWriteFailure(res) : null;
+            if (kind === "expired") {
+              if (typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            } else if (kind === "denied" || kind === "conflict") {
+              _deniedOpDeps.add(depId);            // op 로그는 그대로 보존, 이 세션에서만 재시도 중단
+              if (typeof Auth !== "undefined" && Auth.writeDenied) Auth.writeDenied(kind);
             }
           }
         } catch (e) { /* 재단절 → 다음 online 때 op 유지하여 재시도 */ }
@@ -18101,9 +18857,13 @@
       const since = _offlineSessionStartAt;
       _offlineSessionStartAt = null;
       const pins = (typeof State !== "undefined" && Array.isArray(State.pins)) ? State.pins : [];
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 이 배너는 360 사진
+      // 연결을 안내하므로 대상도 360(content) 계열 핀만 센다(SoT: PinSeries.seriesOf). CHECKER
+      // 핀까지 포함해 세면 "N개 생성됨"이라 안내하고도 매칭 대상이 0건인 조용한 불일치가 난다.
       const createdDuring = pins.filter((p) => {
         const t = (typeof PinSeries !== "undefined" && PinSeries.createdAt) ? PinSeries.createdAt(p) : null;
-        return Number.isFinite(t) && t >= since;
+        if (!Number.isFinite(t) || t < since) return false;
+        return (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(p) !== "checkboard" : true;
       });
       if (createdDuring.length) _showReconnectBanner(createdDuring.length);
     } catch (e) {}
@@ -18509,7 +19269,13 @@
       while (used.has(candidate)) { candidate = base + "_" + n + ext; n++; }
       return candidate;
     },
-    /** 표시용 한 줄 — "영역/구역명 · YYYY-MM-DD HH:MM:SS · 원본 파일명"(값 없는 항목은 생략). */
+    /** 표시용 한 줄 — "영역/구역명 · YYYY-MM-DD HH:MM:SS · 원본 파일명"(값 없는 항목은 생략).
+     *  [지휘자 발주 2026-09-29 항목3] 🔴 shotAt/origName 은 이 WO 이후 신규 등록에만 채워지는
+     *  필드라, 그 전에 이미 사진이 등록된 핀은 둘 다 없어 영역/구역명 한 단어만 보여 "사진 정보를
+     *  바로 알아볼 수 있게"라는 요구를 충족 못 했다(지휘자 실측: "floor"만 표시). shotAt/origName이
+     *  둘 다 없을 때는 등록 시 이미 저장된 pin.imageName(PhotoNaming.name 의 결과, 20_App.js/
+     *  27_PinActionPop.js/35_PhotoBatch.js 저장 경로 공통 필드)을 대신 보여준다 — 새 필드를
+     *  만들지 않고 기존 값을 재사용(§10 SoT, 조용한 실패 금지). */
     describe(pin) {
       if (!pin) return "";
       const parts = [];
@@ -18518,6 +19284,7 @@
       if (label) parts.push(label);
       if (Number.isFinite(pin.shotAt)) parts.push(this._fmtDisplay(pin.shotAt));
       if (pin.origName) parts.push("원본 " + pin.origName);
+      if (!Number.isFinite(pin.shotAt) && !pin.origName && pin.imageName) parts.push(pin.imageName);
       return parts.join(" · ");
     }
   };
@@ -18830,6 +19597,9 @@
 
       $("btn-photobatch-run") && $("btn-photobatch-run").addEventListener("click", () => this.run());
 
+      // [WO 20260930-autophoto] 360 자동연결 세션 초기화 버튼(index.html #btn-photo-reselect).
+      $("btn-photo-reselect") && $("btn-photo-reselect").addEventListener("click", () => this.resetAutoSession());
+
       const s = $("photobatch-start");
       if (s) s.addEventListener("change", () => { const v = parseInt(s.value, 10); if (Number.isFinite(v)) this._range.start = v; this._renderTable(); });
       const e2 = $("photobatch-end");
@@ -18857,11 +19627,11 @@
      *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
      *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      // [WO 20260929 addendum, 지휘자 정정] State.checkboard(불리언, CHECKER/360 공통 "퀵툴" 플래그)
-      // 만으로는 두 계열을 구분 못 한다(마스터: "번호체계도 다르게 해" — 계열 분리). CHECKER
-      // 모드일 때만 checkboard 계열, 그 외(360/photo·일반 편집)는 전부 content(360) 계열 —
-      // State.regMode 로만 판정(20_App.js _placeCheckboardPin 과 동일 판정 로직, §10 SoT).
-      const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 사진 폴더 일괄
+      // 매칭의 대상은 항상 360(content) 계열만이다(CHECKER 계열은 절대 대상이 아니다, SoT:
+      // PinSeries.seriesOf). 예전엔 State.regMode 로 CHECKER 계열도 골랐으나(WO 20260929 addendum),
+      // 이제 CHECKER 핀은 사진을 등록하지 않으므로 그 분기를 제거한다(항상 content).
+      const series = "content";
       const list = this._pinList(State.pins, State.pdfPage || 1, series);
       return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
@@ -19094,7 +19864,9 @@
      *  요구사항 §9). series 미지정 시 현재 배치모드(SoT: State.regMode, _defaultRange()와 동일 판정). */
     openTimeMatch(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
-      const series = (range && range.series) || ((typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content");
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 시각 자동 매칭 대상도
+      // 항상 360(content) 계열만(_defaultRange() 와 동일 SoT, CHECKER 분기 제거).
+      const series = (range && range.series) || "content";
       this._tm = { rows: [], series };
       this._ensureTimeMatchModal();
       // [지휘자 발주 보강] 브라우저는 폴더를 자동으로 못 찾는다(showDirectoryPicker 모바일 미지원)
@@ -19276,6 +20048,128 @@
     _closeTimeMatchModal() {
       const modal = document.getElementById("photobatch-tm-modal");
       if (modal) modal.classList.add("hidden");
+    },
+
+    /* ══ [WO 20260930-autophoto] 360 핀 생성 즉시 자동 사진연결 ══════════════════
+       마스터: "360 모드는 사진이 자동 등록되는 로직, 여기만 필요해" / "포인트 생성
+       시간을 기록해 … 제일 근사한 시간에 저장된 360 그림을 찾아서 연동되게".
+       기존 시각매칭 정본(_buildTimeMatches/_sortRows/_uploadOneRow/PhotoNaming)만 재사용
+       — 새 매칭 알고리즘을 만들지 않는다(§10 SoT). _tm(수동 openTimeMatch)과는 완전히
+       분리된 세션 상태(_autoRows)를 둔다 — 서로 건드리지 않는다. */
+    _autoRows: [],          // 세션 동안 기억하는 후보 사진(선택된 배치 전체, 이미 연결된 건 매칭 성공 시 제거)
+    _pendingAutoPin: null,  // 파일선택창이 열려 있는 동안 기다리는 핀(선택 완료 후 매칭)
+
+    /** 세션 기억 초기화 — [사진 다시 선택] 버튼(index.html #btn-photo-reselect). */
+    resetAutoSession() {
+      this._autoRows = [];
+      this._pendingAutoPin = null;
+      if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("사진 목록을 비웠습니다 — 다음 360 핀을 찍으면 다시 선택합니다");
+    },
+
+    /** 남아있는(아직 연결 안 된) 360 후보 사진 수 — place-hint 안내문에만 쓴다(부작용 없음). */
+    _autoRowsRemaining() {
+      return (this._autoRows || []).filter((r) => !r.excluded && r.is360 === true).length;
+    },
+
+    _ensureAutoInput() {
+      if (document.getElementById("photobatch-auto-files")) return;
+      const input = document.createElement("input");
+      input.type = "file"; input.multiple = true; input.accept = "image/*";
+      input.id = "photobatch-auto-files";
+      input.style.display = "none";
+      input.addEventListener("change", (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        this._onAutoFilesChosen(files);
+      });
+      document.body.appendChild(input);
+    },
+
+    /** [핵심 API] 360(photo) 모드 핀 생성 직후 호출(_handlePlaceClick). CHECKER 계열은
+     *  대상이 아니다(00c18fd 차단 유지, SoT: PinSeries.seriesOf). 이미 세션에 후보 사진이
+     *  있으면 다시 고르지 않고 바로 매칭한다(마스터: "다음 포인트 생성 시간에는… 다시 물어보지
+     *  않는다" 취지). 없으면 다중 파일선택창을 연다(모바일 user-activation 유지 — 동기 호출,
+     *  기존 _openPinMediaPicker와 동일 관례). */
+    autoConnectPin(pin) {
+      if (!pin) return;
+      if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return;
+      if (this._autoRows && this._autoRows.length) { this._autoTryConnect(pin); return; }
+      this._pendingAutoPin = pin;
+      this._ensureAutoInput();
+      if (typeof Prompt !== "undefined" && Prompt.toast)
+        Prompt.toast("RICOH THETA 폴더(/내장 저장공간/Pictures/RICOH THETA)에서 360 사진을 선택하세요 — 최근 파일부터");
+      const input = document.getElementById("photobatch-auto-files");
+      if (input) input.click();
+    },
+
+    /** 선택된 파일들을 시각순 정렬 + 360 판정까지 마친 뒤 세션에 누적하고, 기다리던 핀이
+     *  있으면 매칭을 시도한다. 취소(파일 0개)하면 대기 핀은 그대로 번호만 가진 채 남는다
+     *  (조용히 삭제 금지, 기존 _openPinMediaPicker 관례와 동일). */
+    async _onAutoFilesChosen(files) {
+      const pin = this._pendingAutoPin;
+      this._pendingAutoPin = null;
+      const IMG_RE = /\.(jpe?g|png|webp)$/i;
+      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
+      if (!imgFiles.length) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다");
+        return;
+      }
+      // [지휘자 발주 보강2 §1] 가장 최근 파일부터 — openTimeMatch와 동일 관례(quickTime).
+      const quickTime = (f) => {
+        const fn = this._parseThetaFilenameDate(f.name);
+        if (fn) return Date.parse(fn.iso);
+        return Number.isFinite(f.lastModified) ? f.lastModified : -Infinity;
+      };
+      const ordered = imgFiles.slice().sort((a, b) => quickTime(b) - quickTime(a));
+      const rows = [];
+      for (const f of ordered) {
+        let exif = null;
+        try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
+        rows.push({
+          file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0,
+          thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name)
+        });
+      }
+      const sorted = this._sortRows(rows);
+      // 360 판정(App._detect360, 비동기)까지 기다린 뒤에야 후보로 쓴다 — 안 기다리면
+      // "허용오차 밖" 오판정이 날 수 있다(판정 전 is360===null 은 _buildTimeMatches가 제외함).
+      await Promise.all(sorted.map((r) => new Promise((resolve) => {
+        if (typeof App === "undefined" || !App._detect360) { resolve(); return; }
+        App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; resolve(); });
+      })));
+      this._autoRows = (this._autoRows || []).concat(sorted);
+      if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+      if (pin) await this._autoTryConnect(pin);
+    },
+
+    /** 대기 중인(혹은 방금 만든) 핀 1개 × 세션 후보 사진 전체를 _buildTimeMatches(정본)에
+     *  넘겨 최근접 1건만 취한다 — 새 매칭 로직 없음(§10 SoT 재사용). 매칭되면 그 사진을
+     *  세션 목록에서 제거해(다음 핀은 재사용 안 됨) 업로드(_uploadOneRow, 기존 경로)한다. */
+    async _autoTryConnect(pin) {
+      if (!pin) return;
+      const toleranceMs = 10 * 60 * 1000; // openTimeMatch 기본 허용오차(photobatch-tm-tolerance 기본값)와 동일 SoT 상수
+      const rows = (this._autoRows || []).filter((r) => !r.excluded);
+      const result = this._buildTimeMatches([{ pin, no: 0 }], rows, { toleranceMs });
+      const m = (result.matches || [])[0];
+      if (!m) {
+        const mins = Math.round(toleranceMs / 60000);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("±" + mins + "분 안에 촬영된 360 사진 없음 — [사진 선택]");
+        return;
+      }
+      const usedNames = this._usedPhotoNames();
+      const r = await this._uploadOneRow(pin, m.row, false, usedNames);
+      if (r.status === "done") {
+        this._autoRows = (this._autoRows || []).filter((x) => x !== m.row);
+        try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+        try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
+        try { App._markDirty && App._markDirty(); } catch (e) {}
+        if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+        if (typeof Prompt !== "undefined" && Prompt.toast)
+          Prompt.toast("360 사진 자동 연결됨" + (r.offline ? "(오프라인 저장됨)" : "") + " · Δ" + Math.round(m.dtMs / 1000) + "초");
+      } else if (r.status === "fail") {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 사진 연결 실패: " + r.reason);
+      }
     }
   };
 
@@ -19394,6 +20288,15 @@
     },
 
     toggle() { this.active ? this.disable() : this.enable(); },
+
+    /** [지휘자 발주 2026-09-29 항목2] 🔴 다른 화면의 플로팅 패널(예: 27_PinActionPop.js 핀 패널)이
+     *  이 좌하단 토글과 겹칠 때 호출해 숨긴다/되돌린다(38_Install.js isEditorScreenActive 와 동일
+     *  관례 — 겹치는 상시 UI 는 그 화면이 떠 있는 동안만 숨긴다). display 속성만 건드려 다른
+     *  스타일(_toggleStyle 로 이미 적용된 색상/위치 등)은 그대로 유지한다. */
+    setVisible(visible) {
+      if (!this._toggleBtn) return;
+      this._toggleBtn.style.display = visible ? "flex" : "none";
+    },
 
     /** 도움말 모드 ON — data-help 요소마다 눈에 보이는 "?" 배지를 붙인다. */
     enable() {
@@ -19865,6 +20768,524 @@
     }
   };
 
+  /* ══════════════════════════════════════════
+     REGION MERGE — [WO 20260930-merge] 구역 단위 포인트 합치기 (설계 .tmp/design-multiuser.md §6 D5)
+     마스터: "다른 사람이 한 포인트도 전체 복사해서 구역 단위로 합치는 기능도 구현해.
+             모든 기능은 가장 쉽고 심플하지만 강력하고 버그 없이."
+
+     동선: 트리의 "지금 열린 구역/영역" 행 → [다른 구역 포인트 가져오기] → 모달 1장
+           ① 가져올 구역(핀 수 · 좌표 변환 가능/불가 배지) ② 사진 O / 노트 X
+           ③ 미리보기 "N개 중 M개 · K개 범위 밖 · 번호 중복 J건 · 같은 위치 중복 의심 D건" ④ [가져오기]
+           → 토스트 [되돌리기] (배치 단위)
+
+     🔴 규칙(바꾸지 마라 — 테스트 p96 이 지킨다):
+       · 좌표: 새 수식 0. MapCtrl.deckCropPctToPage / pageToDeckCropPct 두 순수함수만 쓴다.
+         공통 좌표계 = 구역의 "기준 배포본 페이지 %"(boxOf). 벡터 복사 구역은 0031 src_* 기록이 있어야 변환된다.
+         범위 밖 핀은 가져오지 않고 개수만 사실대로 표시한다.
+       · 모드: 구역은 CHECKER/360 공유(모드로 구역을 거르지 않는다 — decks.mode 비의존).
+         **핀만** 활성 모드 계열(PinSeries.seriesOf == PinSeries.activeSeries())로 거른다.
+       · 번호: 원본 번호 유지(자동 재채번 없음). 중복은 PinSeries.duplicateCheckboardIds 로 **표시만**.
+       · 첨부: 360 사진은 imageId 참조 공유(R2 복제 0) · URL 문자열 복사 · 노트(pin_notes)는 기본 미복사.
+       · 멱등: 복사 핀에 srcDeckId·srcPinId·mergeBatchId. 같은 원본을 두 번 합치면 두 번째는 0건(증분).
+       · 되돌리기: mergeBatchId 핀 전부를 App._removePins(기존 삭제 경로 · tombstone) 로 지운다.
+       · Jev: "같은 위치 중복 핀" 판정에만. 표시·선택 해제 기본값에만 쓰고 삭제·확정엔 안 쓴다.
+         게이트 p≥0.90 사용 / 0.70~0.90 「추정」 / p<0.70·실패·키 없음·타임아웃 → 거리 규칙.
+     ══════════════════════════════════════════ */
+  const RegionMerge = {
+    /** 거리 규칙(폴백) — 대상 구역 화면 기준 % 거리가 이 값 미만이면 "같은 위치".
+     *  근거: 핀 마커(지름 약 28px)는 화면 맞춤 상태의 구역 폭(데스크톱 1200~1900px)에서 1.5~2.3% 를 차지한다.
+     *  중심 거리 1% 미만이면 두 마커가 절반 이상 겹쳐 사람 눈에도 한 점으로 보인다 — 보수적으로(과잉 "중복" 방지) 1% 로 둔다. */
+    SAME_PCT: 1.0,
+    /** Jev 질의 창 — 이 거리 안에 대상 핀이 있는 쌍만 Jev 에 묻는다(마커 1~2개 폭). 밖은 규칙으로 "다른 지점"(호출 0). */
+    NEAR_PCT: 3.0,
+    /** 확률 게이트(전역 CLAUDE.md §1-B · 스킬 §3). 표시용 판정이라 기본값을 그대로 쓴다. */
+    P_USE: 0.90,
+    P_EST: 0.70,
+    /** 한 요청 쌍 상한 — 서버 src/lib/jevDup.ts DUP_MAX_PAIRS 와 같은 값(초과분은 나눠 보낸다). */
+    JEV_CHUNK: 40,
+    /** "사진 함께" 옵션이 다루는 필드 — 끄면 이 필드를 싣지 않는다. */
+    PHOTO_KEYS: ["imageId", "imageUrl", "imageName", "is360", "isVideo", "videoUrl"],
+    /** 세션 전용·로컬 상태 필드 — 복사하지 않는다(다른 기기의 blob·업로드 진행 표시). */
+    DROP_KEYS: ["id", "localPreview", "pendingSync", "uploading", "_deleted", "srcDeckId", "srcPinId", "mergeBatchId"],
+
+    _last: null,       // 마지막 배치 { batchId, ids, noteIds, depId }
+    _ctx: null,        // 모달 상태
+
+    /* ══ 순수 함수 ══════════════════════════════════════════ */
+
+    /** 합치기용 구역 키 — 실제 구역은 id, 구역 행이 없는 원본 도면(pickOriginalDeck 의 id:null)은 "dep:<배포본>". */
+    deckKey(deck) { return deck && deck.id != null ? String(deck.id) : "dep:" + String((deck && deck.deployment_id) || ""); },
+
+    /** 구역이 차지하는 상자 = { dep(기준 배포본), page(기준 페이지|null=전 페이지), crop(기준 페이지 %|null), copy }.
+     *  · 벡터 복사 구역(0031 기록): 기준 = 원본 배포본의 src_page·src_crop. 자기 핀은 복사본 1페이지의 crop 기준 %.
+     *  · 창 구역·원본·기록 없는 레거시 복사본: 기준 = 자기 배포본(page·crop). 핀은 그 페이지 %(H7 이후 저장 형식). */
+    boxOf(deck) {
+      if (!deck) return null;
+      const sc = deck.src_crop;
+      if (deck.src_dep_id && sc && sc.w > 0 && sc.h > 0) {
+        return { dep: String(deck.src_dep_id), page: Number(deck.src_page) || 1, crop: sc, copy: true };
+      }
+      const c = deck.crop && deck.crop.w > 0 && deck.crop.h > 0 ? deck.crop : null;
+      return { dep: String(deck.deployment_id || ""), page: deck.page != null ? Number(deck.page) : null, crop: c, copy: false };
+    },
+
+    /** 두 구역 사이 좌표 변환 가능 = 같은 기준 배포본. 아니면 "좌표 그대로 얹기"만(기본 미선택). */
+    canTransform(srcDeck, dstDeck) {
+      const a = this.boxOf(srcDeck), b = this.boxOf(dstDeck);
+      return !!(a && b && a.dep && a.dep === b.dep);
+    },
+
+    /** 배포본의 핀 중 이 구역 화면에 보이는 핀인가(창 구역은 그 페이지·crop 안만). */
+    inDeck(box, p) {
+      if (!p || !box) return false;
+      if (box.copy) return true;
+      if (box.page != null && (p.page || 1) !== box.page) return false;
+      return !box.crop || MapCtrl.pageToDeckCropPct(p.x, p.y, box.crop) !== null;
+    },
+
+    /** 구역 핀(저장 좌표) → 기준 배포본 페이지 % */
+    toBase(box, p) {
+      if (box.copy) { const q = MapCtrl.deckCropPctToPage(p.x, p.y, box.crop); return { page: box.page, x: q.x, y: q.y }; }
+      return { page: p.page || 1, x: p.x, y: p.y };
+    },
+
+    /** 기준 페이지 % → 대상 구역 저장 좌표. 대상 범위 밖이면 null(가져오지 않는다). */
+    fromBase(box, b) {
+      if (box.page != null && b.page !== box.page) return null;
+      if (box.copy) {
+        const q = MapCtrl.pageToDeckCropPct(b.x, b.y, box.crop);
+        return q ? { page: 1, x: q.x, y: q.y } : null;
+      }
+      if (box.crop && MapCtrl.pageToDeckCropPct(b.x, b.y, box.crop) === null) return null;
+      return { page: b.page, x: b.x, y: b.y };
+    },
+
+    /** 구역 핀 → 그 구역 화면 기준 %(보이는 그대로). 거리 판정·"그대로 얹기"의 좌표계. */
+    toDisplay(box, p) {
+      if (box.copy || !box.crop) return { x: p.x, y: p.y };
+      return MapCtrl.pageToDeckCropPct(p.x, p.y, box.crop);
+    },
+
+    /** 화면 기준 % → 대상 구역 저장 좌표("좌표 그대로 얹기": 원본 화면에서 보이던 상대 위치 그대로). */
+    fromDisplay(box, d, page) {
+      if (box.copy) return { page: 1, x: d.x, y: d.y };
+      const pg = box.page != null ? box.page : (page || 1);
+      if (!box.crop) return { page: pg, x: d.x, y: d.y };
+      const q = MapCtrl.deckCropPctToPage(d.x, d.y, box.crop);
+      return { page: pg, x: q.x, y: q.y };
+    },
+
+    /** 합치기 계획(순수). srcPins = 원본 배포본 핀 전체(살아있는 것), dstPins = 대상 현재 핀.
+     *  @returns {{items:[{src,pos}], total, outside, already, otherMode}} */
+    plan({ srcDeck, dstDeck, srcPins, dstPins, raw, series }) {
+      const sb = this.boxOf(srcDeck), db = this.boxOf(dstDeck);
+      const srcKey = this.deckKey(srcDeck), dstKey = this.deckKey(dstDeck);
+      const have = new Set();
+      (dstPins || []).forEach((p) => { if (p && p.srcDeckId != null && p.srcPinId != null) have.add(String(p.srcDeckId) + "\u0000" + String(p.srcPinId)); });
+      const out = { items: [], total: 0, outside: 0, already: 0, otherMode: 0 };
+      (srcPins || []).forEach((p) => {
+        if (!p || p._deleted || !this.inDeck(sb, p)) return;
+        if (series && PinSeries.seriesOf(p) !== series) { out.otherMode++; return; }
+        out.total++;
+        // 🔴 멱등 — 이미 가져온 핀(같은 원본 구역·같은 원본 핀) · 대상에서 건너갔던 핀(되돌려 합치면 자기 복제)
+        if (have.has(srcKey + "\u0000" + String(p.id)) || (p.srcDeckId != null && String(p.srcDeckId) === dstKey)) { out.already++; return; }
+        let pos = null;
+        if (raw) { const d = this.toDisplay(sb, p); pos = d ? this.fromDisplay(db, d, p.page || 1) : null; }
+        else pos = this.fromBase(db, this.toBase(sb, p));
+        if (!pos) { out.outside++; return; }
+        out.items.push({ src: p, pos });
+      });
+      return out;
+    },
+
+    /** 복사 핀 생성(순수). id 는 문자열 "mg<batch>-<n>" — Date.now() 숫자 id 공간과 절대 겹치지 않는다(동시 작업자 충돌 0). */
+    buildPins(items, { srcDeck, photos, batchId, takenIds }) {
+      const taken = new Set(Array.from(takenIds || []).map(String));
+      const srcKey = this.deckKey(srcDeck);
+      let n = 0;
+      return (items || []).map((it) => {
+        const pin = {};
+        Object.keys(it.src).forEach((k) => { if (this.DROP_KEYS.indexOf(k) < 0) pin[k] = it.src[k]; });
+        if (!photos) this.PHOTO_KEYS.forEach((k) => { delete pin[k]; });
+        if (typeof pin.videoUrl === "string" && pin.videoUrl.indexOf("blob:") === 0) delete pin.videoUrl;   // 다른 기기의 로컬 blob
+        let id;
+        do { id = "mg" + batchId + "-" + (n++); } while (taken.has(id));
+        taken.add(id);
+        pin.id = id;
+        pin.x = it.pos.x; pin.y = it.pos.y; pin.page = it.pos.page;
+        const ca = PinSeries.createdAt(it.src);
+        if (ca != null) pin.createdAt = ca;              // 원본 생성시각 유지(사진-시각 매칭 SoT)
+        pin.srcDeckId = srcKey; pin.srcPinId = String(it.src.id); pin.mergeBatchId = batchId;
+        return pin;
+      });
+    },
+
+    /** 번호 중복(표시용) — 가져올 핀 중 대상과 번호가 겹치는 수. 정본 PinSeries.duplicateCheckboardIds 재사용. */
+    dupNumberCount(newPins, dstPins) {
+      const all = (dstPins || []).concat(newPins || []);
+      const mine = new Set((newPins || []).map((p) => String(p.id)));
+      const pages = new Set((newPins || []).map((p) => p.page || 1));
+      let n = 0;
+      pages.forEach((pg) => { PinSeries.duplicateCheckboardIds(all, pg).forEach((id) => { if (mine.has(String(id))) n++; }); });
+      return n;
+    },
+
+    _brief(p) { return { label: String(p.label == null ? "" : p.label), note: String(p.note || ""), photo: String(p.imageName || "") }; },
+
+    /** "같은 위치" 후보 쌍 — 새 핀마다 대상의 같은 계열·같은 페이지 핀 중 가장 가까운 것(화면 %)이 NEAR_PCT 안이면 1쌍. */
+    nearPairs(newPins, dstPins, dstDeck) {
+      const box = this.boxOf(dstDeck);
+      const pairs = [];
+      (newPins || []).forEach((np, i) => {
+        const a = this.toDisplay(box, np);
+        if (!a) return;
+        let best = null, bd = Infinity;
+        (dstPins || []).forEach((e) => {
+          if (!e || e._deleted || (e.page || 1) !== (np.page || 1) || PinSeries.seriesOf(e) !== PinSeries.seriesOf(np)) return;
+          const b = this.toDisplay(box, e);
+          if (!b) return;
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          if (d < bd) { bd = d; best = e; }
+        });
+        if (best && bd < this.NEAR_PCT) pairs.push({ i, distance_pct: bd, existingId: best.id, incoming: this._brief(np), existing: this._brief(best) });
+      });
+      return pairs;
+    },
+
+    /** 🔴 판정 게이트 SoT — probe = 서버 Jev 원시 결과 { ok, label, p } | { ok:false, error } | null.
+     *  p≥P_USE → Jev 그대로 · P_EST≤p<P_USE → Jev + 「추정」 · 그 외(낮은 p·실패·키 없음·타임아웃) → 거리 규칙.
+     *  🔴 확률을 버리고 라벨만 쓰지 않는다 — p 를 결과에 남긴다(감사). */
+    decideDup(pair, probe) {
+      if (probe && probe.ok && typeof probe.p === "number" && probe.p >= this.P_EST && (probe.label === "same" || probe.label === "different")) {
+        return { verdict: probe.label, p: probe.p, source: "jev", estimated: probe.p < this.P_USE };
+      }
+      return {
+        verdict: pair.distance_pct < this.SAME_PCT ? "same" : "different",
+        p: probe && probe.ok && typeof probe.p === "number" ? probe.p : null,
+        source: "rule", estimated: false,
+        reason: !probe ? "no-probe" : (probe.ok ? "low-p" : String(probe.error || "error"))
+      };
+    },
+
+    /* ══ I/O ══════════════════════════════════════════════════ */
+
+    /** 쌍 → 판정. 서버 /api/merge/dup-check(키는 서버 시크릿). 네트워크·서버 실패도 거리 규칙으로 판정(조용한 실패 금지 — reason 기록). */
+    async checkDups(pairs) {
+      const probes = new Map();
+      for (let s = 0; s < pairs.length; s += this.JEV_CHUNK) {
+        const chunk = pairs.slice(s, s + this.JEV_CHUNK);
+        let res = null;
+        try {
+          const r = await fetch("/api/merge/dup-check", {
+            method: "POST", headers: Auth.headers(),
+            body: JSON.stringify({ pairs: chunk.map((p) => ({ i: p.i, distance_pct: p.distance_pct, incoming: p.incoming, existing: p.existing })) })
+          });
+          res = r.ok ? await r.json() : { ok: false, error: "http-" + r.status };
+        } catch (e) { res = { ok: false, error: navigator.onLine ? "network" : "offline" }; }
+        chunk.forEach((p) => {
+          if (res && res.ok && Array.isArray(res.probes)) probes.set(p.i, res.probes.find((q) => q && q.i === p.i) || { ok: false, error: "missing" });
+          else probes.set(p.i, { ok: false, error: (res && res.error) || "error" });
+        });
+      }
+      return pairs.map((p) => Object.assign({ i: p.i, existingId: p.existingId, distance_pct: p.distance_pct }, this.decideDup(p, probes.get(p.i))));
+    },
+
+    /** 배포본의 살아있는 핀 — 서버본 tombstone 제외(App._live SoT). */
+    async fetchPins(depId) {
+      const r = await fetch("/tables/deployments/" + encodeURIComponent(depId), { headers: Auth.headers() });
+      if (!r.ok) throw new Error("http-" + r.status);
+      const d = await r.json();
+      let pins = [];
+      try { pins = JSON.parse((d && d.pins) || "[]"); } catch (e) { pins = []; }
+      return (typeof App !== "undefined" && App._live) ? App._live(pins) : pins.filter((p) => p && !p._deleted);
+    },
+
+    /** 대상(지금 열린 구역)이 합치기를 받을 수 있는가 — 설계자 편집 화면 + 로드된 배포본. */
+    canMergeInto(deck) {
+      return !!deck && typeof State !== "undefined" && State.mode === "designer"
+        && typeof Auth !== "undefined" && !!Auth.isDesigner && !Auth.readonly
+        && !!deck.deployment_id && String(State.currentDeploymentId || "") === String(deck.deployment_id);
+    },
+
+    /** 원본 후보 — 같은 프로젝트의 구역/영역(+ 구역 행 없는 원본 도면). 대상과 같은 배포본(=같은 핀을 이미 보는 창)은 제외.
+     *  🔴 모드로 구역을 거르지 않는다(구역은 CHECKER/360 공유 — 마스터 확정). */
+    candidates(dstDeck) {
+      const decks = ((typeof Projects !== "undefined" && Projects.decks) || []).slice();
+      const orig = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks) : null;
+      if (orig && orig.id == null && orig.deployment_id) decks.push(Object.assign({}, orig, { name: (orig.name || "원본") + " (전체 도면)" }));
+      return decks.filter((d) => d && d.deployment_id && this.deckKey(d) !== this.deckKey(dstDeck)
+        && String(d.deployment_id) !== String(dstDeck.deployment_id));
+    },
+
+    /** 미리보기 1회 계산(모달·테스트 공용). opts = { raw, photos }. */
+    async prepare(dstDeck, srcDeck, opts) {
+      opts = opts || {};
+      const series = PinSeries.activeSeries ? PinSeries.activeSeries() : null;
+      const srcPins = await this.fetchPins(srcDeck.deployment_id);
+      const dstPins = (State.pins || []).slice();
+      const plan = this.plan({ srcDeck, dstDeck, srcPins, dstPins, raw: !!opts.raw, series });
+      const batchId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const pins = this.buildPins(plan.items, { srcDeck, photos: opts.photos !== false, batchId, takenIds: dstPins.map((p) => p.id) });
+      const dupNos = this.dupNumberCount(pins, dstPins);
+      const pairs = this.nearPairs(pins, dstPins, dstDeck);
+      const dups = pairs.length ? await this.checkDups(pairs) : [];
+      // 선택 기본값 — "같은 위치" 판정 핀만 해제(가져오지 않음). 사용자가 다시 켤 수 있다(확정 판단은 사람).
+      const include = pins.map((_, i) => !dups.some((d) => d.i === i && d.verdict === "same"));
+      return { dstDeck, srcDeck, series, plan, pins, batchId, dupNos, dups, include, raw: !!opts.raw, photos: opts.photos !== false };
+    },
+
+    /** 적용 — 핀 추가 경로(20_App 신규 핀과 같은 순서): State.pins → 렌더 → 오프라인 OpLog → _autoSave(draft+dirty).
+     *  @returns {{batchId, ids}} */
+    apply(prep, include) {
+      include = include || prep.include;
+      const add = prep.pins.filter((_, i) => include[i]);
+      if (!add.length) return { batchId: prep.batchId, ids: [] };
+      State.pins = (State.pins || []).concat(add);
+      if (typeof Log !== "undefined" && Log.push) Log.push("pin.merge", prep.batchId, { from: this.deckKey(prep.srcDeck), n: add.length });
+      if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
+      if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); UI.renderPinsOnMap && UI.renderPinsOnMap(); }
+      if (typeof PinGrid !== "undefined" && PinGrid.render) { try { PinGrid.render(); } catch (e) {} }
+      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
+        add.reduce((pr, p) => pr.then(() => OpLog.recordCurrent("pin", "upsert", p.id, p)), Promise.resolve())
+          .then(() => (typeof persistLocalDeployment === "function" ? persistLocalDeployment() : null)).catch(() => {});
+      }
+      if (typeof App !== "undefined" && App._autoSave) App._autoSave();
+      const batch = { batchId: prep.batchId, ids: add.map((p) => p.id), noteIds: [], depId: State.currentDeploymentId };
+      this._last = batch;
+      return batch;
+    },
+
+    /** 되돌리기 — 그 배치의 핀 전부를 기존 삭제 경로(App._removePins: tombstone·OpLog·_autoSave)로. 복사한 노트도 지운다. */
+    async undo(batch) {
+      batch = batch || this._last;
+      if (!batch) return 0;
+      if (String(State.currentDeploymentId || "") !== String(batch.depId || "")) {
+        Prompt.toast && Prompt.toast("다른 구역이 열려 있어 되돌릴 수 없습니다 — 가져온 구역을 다시 열고 핀을 지우세요", 4200);
+        return 0;
+      }
+      const ids = (State.pins || []).filter((p) => p && p.mergeBatchId === batch.batchId).map((p) => p.id);
+      const removed = (typeof App !== "undefined" && App._removePins) ? App._removePins(ids) : [];
+      for (const nid of batch.noteIds || []) {
+        try { await fetch("/api/notes/" + encodeURIComponent(nid), { method: "DELETE", headers: Auth.headers() }); } catch (e) {}
+      }
+      if (this._last === batch) this._last = null;
+      return removed.length;
+    },
+
+    /** 노트(pin_notes) 복사 — 옵션. 🔴 핀이 서버에 저장된 뒤에만(안 그러면 없는 핀에 노트가 붙는다). 본문 앞에 출처 표기. */
+    async copyNotes(prep, batch) {
+      const srcDep = prep.srcDeck.deployment_id, dstDep = batch.depId;
+      const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(srcDep), { headers: Auth.headers() });
+      if (!r.ok) return { ok: false, n: 0 };
+      const list = ((await r.json()) || {}).data || [];
+      const byPin = new Map();
+      prep.pins.forEach((p) => { if (batch.ids.indexOf(p.id) >= 0) byPin.set(String(p.srcPinId), p); });
+      let n = 0;
+      for (const note of list) {
+        const pin = byPin.get(String(note.pin_id));
+        if (!pin) continue;
+        const body = ("[원본: " + (prep.srcDeck.name || "구역") + " #" + (pin.label == null ? "" : pin.label) + "] " + String(note.body || "")).slice(0, 4000);
+        const w = await fetch("/api/notes", { method: "POST", headers: Auth.headers(),
+          body: JSON.stringify({ deployment_id: dstDep, pin_id: pin.id, pin_label: pin.label || "", body, status: note.status, assignee: note.assignee || "" }) });
+        if (w.ok) { const j = await w.json(); if (j && j.id) { batch.noteIds.push(j.id); n++; } }
+      }
+      return { ok: true, n };
+    },
+
+    /* ══ UI ══════════════════════════════════════════════════ */
+
+    /** 트리 진입점 — 지금 열린(편집 가능) 구역/영역 행 아래에 버튼 1개. 조건 미달이면 null(렌더 안 함). */
+    treeButton(deck, isCur) {
+      if (!isCur || !this.canMergeInto(deck)) return null;
+      const wrap = document.createElement("div");
+      wrap.className = "tree-project-actions rm-tree-actions";
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn-mini rm-open-btn";
+      b.textContent = "다른 구역에서 가져오기";
+      b.title = "같은 프로젝트의 다른 구역/영역에 있는 포인트를 이 구역으로 복사합니다(되돌리기 가능)";
+      b.addEventListener("click", (e) => { e.stopPropagation(); this.open(deck); });
+      wrap.appendChild(b);
+      return wrap;
+    },
+
+    _el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; },
+
+    _ensureModal() {
+      let m = document.getElementById("rm-modal");
+      if (m) return m;
+      m = this._el("div", "admin-gate hidden");
+      m.id = "rm-modal"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true"); m.setAttribute("aria-labelledby", "rm-title");
+      m.innerHTML =
+        '<div class="admin-gate-backdrop"></div>' +
+        '<div class="admin-gate-card rm-card">' +
+        '<h2 id="rm-title" class="admin-gate-title">다른 구역의 포인트 가져오기</h2>' +
+        '<p id="rm-sub" class="admin-gate-sub"></p>' +
+        '<label class="rm-lbl" for="rm-src">① 가져올 구역</label>' +
+        '<select id="rm-src" class="admin-gate-input"></select>' +
+        '<p id="rm-badge" class="rm-badge"></p>' +
+        '<label id="rm-raw-row" class="rm-chk hidden"><input type="checkbox" id="rm-raw"> 좌표 그대로 얹기 (원본 화면에서 보이던 상대 위치 — 실제 위치와 다를 수 있음)</label>' +
+        '<div class="rm-opts"><span class="rm-lbl">② 함께 가져오기</span>' +
+        '<label class="rm-chk"><input type="checkbox" id="rm-photos" checked> 사진</label>' +
+        '<label class="rm-chk"><input type="checkbox" id="rm-notes"> 노트(대화)</label></div>' +
+        '<p class="rm-lbl">③ 미리보기</p>' +
+        '<p id="rm-preview" class="rm-preview" aria-live="polite"></p>' +
+        '<div id="rm-dups" class="rm-dups"></div>' +
+        '<div id="rm-err" class="admin-gate-error hidden"></div>' +
+        '<div class="admin-gate-actions">' +
+        '<button id="rm-cancel" class="admin-gate-btn ghost" type="button">취소</button>' +
+        '<button id="rm-ok" class="admin-gate-btn primary" type="button">가져오기</button></div></div>';
+      document.body.appendChild(m);
+      m.querySelector(".admin-gate-backdrop").addEventListener("click", () => this.close());
+      m.querySelector("#rm-cancel").addEventListener("click", () => this.close());
+      m.querySelector("#rm-ok").addEventListener("click", () => this._commit());
+      m.querySelector("#rm-src").addEventListener("change", () => this._refresh());
+      m.querySelector("#rm-raw").addEventListener("change", () => this._refresh());
+      m.querySelector("#rm-photos").addEventListener("change", () => this._refresh());
+      m.addEventListener("keydown", (e) => { if (e.key === "Escape") this.close(); });
+      return m;
+    },
+
+    close() {
+      const m = document.getElementById("rm-modal");
+      if (!m) return;
+      m.classList.remove("on");
+      setTimeout(() => m.classList.add("hidden"), 200);
+      this._ctx = null;
+    },
+
+    /** 모달 열기 — 후보 구역마다 핀 수(활성 모드 계열만)를 병렬로 센다. */
+    async open(dstDeck) {
+      if (!this.canMergeInto(dstDeck)) { Prompt.toast && Prompt.toast("지금 열린 구역에서만 가져올 수 있습니다(설계자 편집 화면)"); return; }
+      if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 다른 구역의 포인트를 불러올 수 없습니다 — 연결 후 다시 시도하세요"); return; }
+      const m = this._ensureModal();
+      const mode = PinSeries.activeMode ? PinSeries.activeMode() : null;
+      const cands = this.candidates(dstDeck);
+      this._ctx = { dstDeck, cands, counts: new Map(), prep: null, seq: 0 };
+      m.querySelector("#rm-sub").textContent = "대상: " + (dstDeck.name || "(이름 없음)") + (mode ? " · " + mode.label + " 포인트만" : "");
+      const sel = m.querySelector("#rm-src");
+      sel.innerHTML = "";
+      if (!cands.length) { sel.appendChild(this._el("option", null, "가져올 다른 구역이 없습니다")); sel.value = ""; }
+      else cands.forEach((d, i) => { const o = this._el("option", null, this._candLabel(d, dstDeck, null)); o.value = String(i); sel.appendChild(o); });
+      m.querySelector("#rm-raw").checked = false;
+      m.querySelector("#rm-photos").checked = true;
+      m.querySelector("#rm-notes").checked = false;
+      m.classList.remove("hidden");
+      requestAnimationFrame(() => m.classList.add("on"));
+      const ctx = this._ctx;
+      await Promise.all(cands.map(async (d, i) => {
+        try {
+          const pins = await this.fetchPins(d.deployment_id);
+          const box = this.boxOf(d), series = PinSeries.activeSeries ? PinSeries.activeSeries() : null;
+          ctx.counts.set(i, pins.filter((p) => this.inDeck(box, p) && (!series || PinSeries.seriesOf(p) === series)).length);
+        } catch (e) { ctx.counts.set(i, null); }
+        const o = sel.options[i];
+        if (o && this._ctx === ctx) o.textContent = this._candLabel(d, dstDeck, ctx.counts.get(i));
+      }));
+      if (this._ctx === ctx) await this._refresh();
+    },
+
+    _candLabel(d, dstDeck, count) {
+      const n = count === undefined || count === null ? (count === null ? "핀 수 확인 실패" : "…") : "핀 " + count + "개";
+      return (d.name || "(이름 없음)") + (d.parent_id ? " (영역)" : "") + " · " + n + " · " + (this.canTransform(d, dstDeck) ? "좌표 변환 가능" : "좌표 변환 불가");
+    },
+
+    async _refresh() {
+      const ctx = this._ctx, m = document.getElementById("rm-modal");
+      if (!ctx || !m) return;
+      const seq = ++ctx.seq;
+      const idx = Number(m.querySelector("#rm-src").value);
+      const src = ctx.cands[idx];
+      const okB = m.querySelector("#rm-ok"), pv = m.querySelector("#rm-preview"), dupsEl = m.querySelector("#rm-dups");
+      const badge = m.querySelector("#rm-badge"), rawRow = m.querySelector("#rm-raw-row"), err = m.querySelector("#rm-err");
+      err.classList.add("hidden"); dupsEl.innerHTML = ""; ctx.prep = null; okB.disabled = true;
+      if (!src) { pv.textContent = "가져올 구역이 없습니다."; badge.textContent = ""; rawRow.classList.add("hidden"); return; }
+      const can = this.canTransform(src, ctx.dstDeck);
+      badge.className = "rm-badge " + (can ? "ok" : "warn");
+      badge.textContent = can
+        ? "좌표 변환 가능 — 같은 원본 도면 기준으로 위치를 옮깁니다. 이 구역 범위 밖 핀은 가져오지 않습니다."
+        : "좌표 변환 불가 — 두 구역의 원본 위치 관계가 기록돼 있지 않습니다(이전 방식으로 만든 구역이거나 다른 도면).";
+      rawRow.classList.toggle("hidden", can);
+      const raw = !can && m.querySelector("#rm-raw").checked;
+      if (!can && !raw) { pv.textContent = "가져오려면 아래 \"좌표 그대로 얹기\"를 직접 선택하세요."; return; }
+      pv.textContent = "계산 중…";
+      let prep;
+      try { prep = await this.prepare(ctx.dstDeck, src, { raw, photos: m.querySelector("#rm-photos").checked }); }
+      catch (e) { if (seq === ctx.seq) { pv.textContent = ""; err.textContent = "원본 구역을 불러오지 못했습니다 — 네트워크를 확인하세요"; err.classList.remove("hidden"); } return; }
+      if (seq !== ctx.seq || this._ctx !== ctx) return;   // 그 사이 다른 선택 — 낡은 결과 버림
+      ctx.prep = prep;
+      this._renderPreview();
+    },
+
+    _renderPreview() {
+      const ctx = this._ctx, m = document.getElementById("rm-modal");
+      const prep = ctx && ctx.prep;
+      if (!prep) return;
+      const pl = prep.plan;
+      const sel = prep.include.filter(Boolean).length;
+      const same = prep.dups.filter((d) => d.verdict === "same");
+      const parts = ["핀 " + pl.total + "개 중 " + sel + "개 가져옴"];
+      if (pl.outside) parts.push(pl.outside + "개는 대상 범위 밖");
+      if (pl.already) parts.push(pl.already + "개는 이미 가져옴");
+      if (prep.dupNos) parts.push("번호 중복 " + prep.dupNos + "건");
+      if (same.length) parts.push("같은 위치 중복 의심 " + same.length + "건");
+      m.querySelector("#rm-preview").textContent = parts.join(" · ") + (pl.otherMode ? "  (다른 모드 핀 " + pl.otherMode + "개 제외)" : "");
+      const box = m.querySelector("#rm-dups");
+      box.innerHTML = "";
+      same.concat(prep.dups.filter((d) => d.verdict !== "same" && d.source === "jev" && d.estimated)).forEach((d) => {
+        const pin = prep.pins[d.i];
+        const row = this._el("label", "rm-chk rm-dup");
+        const cb = document.createElement("input");
+        cb.type = "checkbox"; cb.checked = !!prep.include[d.i];
+        cb.addEventListener("change", () => { prep.include[d.i] = cb.checked; this._renderPreview(); });
+        row.appendChild(cb);
+        const how = d.source === "jev" ? ("Jev p=" + d.p.toFixed(2) + (d.estimated ? " 「추정」" : "")) : ("거리 규칙" + (d.reason ? "(" + d.reason + ")" : ""));
+        row.appendChild(document.createTextNode(" #" + (pin.label == null ? "" : pin.label) + " — " + (d.verdict === "same" ? "같은 위치 의심" : "다른 지점") + " · " + d.distance_pct.toFixed(2) + "% · " + how));
+        box.appendChild(row);
+      });
+      const okB = m.querySelector("#rm-ok");
+      okB.disabled = sel === 0;
+      okB.textContent = sel ? "가져오기 (" + sel + ")" : "가져올 핀 없음";
+    },
+
+    async _commit() {
+      const ctx = this._ctx, m = document.getElementById("rm-modal");
+      const prep = ctx && ctx.prep;
+      if (!prep) return;
+      const withNotes = m.querySelector("#rm-notes").checked;
+      const batch = this.apply(prep);
+      this.close();
+      if (!batch.ids.length) return;
+      let noteMsg = "";
+      if (withNotes) {
+        // 노트는 서버에 있는 핀에만 붙인다 — 먼저 저장(기존 '저장' 버튼과 같은 경로)
+        const saved = (typeof App !== "undefined" && App._saveNow) ? await App._saveNow({ now: true }) : false;
+        if (saved) { try { const r = await this.copyNotes(prep, batch); noteMsg = " · 노트 " + r.n + "건 복사"; } catch (e) { noteMsg = " · 노트 복사 실패"; } }
+        else noteMsg = " · 저장 실패로 노트는 복사하지 않았습니다";
+      }
+      this._undoToast(batch.ids.length + "개 가져옴 — '" + (prep.srcDeck.name || "구역") + "'에서" + noteMsg + (withNotes ? "" : " · 저장을 눌러 반영"), batch);
+    },
+
+    /** 되돌리기 버튼이 달린 토스트 — Prompt.toast 호스트(#wm-toast-host)·스타일(.wm-toast) 재사용. 8초 유지. */
+    _undoToast(msg, batch) {
+      let host = document.getElementById("wm-toast-host");
+      if (!host) { host = this._el("div", "wm-toast-host"); host.id = "wm-toast-host"; document.body.appendChild(host); }
+      const t = this._el("div", "wm-toast rm-undo-toast");
+      t.appendChild(this._el("span", null, msg));
+      const b = this._el("button", "rm-undo-btn", "되돌리기");
+      b.type = "button";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        const n = await this.undo(batch);
+        t.remove();
+        if (n) Prompt.toast && Prompt.toast("가져오기를 되돌렸습니다(" + n + "개 제거) · 저장을 눌러 반영", 3600);
+      });
+      t.appendChild(b);
+      host.appendChild(t);
+      requestAnimationFrame(() => t.classList.add("on"));
+      setTimeout(() => { t.classList.remove("on"); setTimeout(() => t.remove(), 280); }, 8000);
+    }
+  };
+
   /* ── 진입 ── */
   document.addEventListener("DOMContentLoaded", async () => {
     // [버그①수정 2026-08-31] App.init()이 Auth.init()(데모 자동로그인)을 await하므로
@@ -19933,7 +21354,11 @@
         try {
           const t = await fetch('/api/tenant/resolve').then(r => r.json());
           if (t && t.matched && t.project && t.project.id) {
-            if (typeof Projects !== 'undefined') Projects.currentProject = { id: t.project.id, name: t.project.name };
+            // [WO 20260929-parent-guard] SoT — Projects.setCurrentProject() 경유(31_Projects.js).
+            if (typeof Projects !== 'undefined') {
+              const tp = { id: t.project.id, name: t.project.name };
+              if (Projects.setCurrentProject) Projects.setCurrentProject(tp); else Projects.currentProject = tp;
+            }
             // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — 서브도메인 자동진입은 디자이너로 고정한다.
             // 원복(뷰어 자동진입 부활) 시 아래 줄로 교체: App.openApp((typeof Auth !== 'undefined' && Auth.isDesigner) ? 'designer' : 'viewer', { project: { id: t.project.id, name: t.project.name } });
             App.openApp((typeof PinSeries !== 'undefined' ? PinSeries.preferredMode() : 'designer'), { project: { id: t.project.id, name: t.project.name } });
