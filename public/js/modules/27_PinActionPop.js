@@ -318,6 +318,7 @@
           return; // 저장하지 않는다 — 조용한 실패 금지(이유를 보여주고 중단)
         }
       }
+      if (pin.checkboard && String(pin.label) !== v) pin.labelManual = true; // [WO 20260930-numdup] 직접 고친 번호 — 동시 생성 재채번 제외
       pin.label = v;
       if (typeof App !== "undefined" && App._markDirty) App._markDirty();
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }

@@ -237,7 +237,9 @@ function makeFlushDraftsSandbox(patchRes) {
   //   같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
   const srcBlocks = ["async _draftSource(d) {", "_isPdfBytes(ab) {", "async _uploadSourcePdf(ab) {", "_sourceMetaJson(url, pages) {", "async _uploadPagesToR2(pagesData) {",
     // [WP1·H8] _mergePins/_draftVsServer 가 tombstone 필터 SoT(_live)를 쓰게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
-    "_pinIds(arr) {", "_live(arr) {", "_mergePins(srvPins, localPins, baseIds, tombIds) {"]
+    "_pinIds(arr) {", "_live(arr) {", "_mergePins(srvPins, localPins, baseIds, tombIds) {",
+    // [WO 20260930-numdup] _mergePins 가 동시 생성 번호 재채번(_renumberConcurrent)을 부르게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
+    "_renumberConcurrent(pins, baseIds, srvPins) {"]
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +

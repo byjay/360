@@ -98,8 +98,21 @@ function suiteBandCore(label, sSrc, aSrc) {
 
   ctx.Auth.user = { email: "a@seastar.test" };
   ctx.App._placeCheckboardPin({ x: 4, y: 4 });
-  ok(ctx.State.pins[3].label === "102",
-    `③ 대역 침범 없음: A(100,101)+B(200) 이후 A 가 찍으면 = ${ctx.State.pins[3].label} (기대 102, 201 이면 침범 버그)`);
+  // [WO 20260930-numdup] 🔴 의미 변경(지휘자 발주): 다음 번호 = 로드된 전원 핀 최댓값+1, 대역은 하한만.
+  //   종전 기대 102(author 필터 — 내 핀만 봄)는 남의 번호와 겹치는 결함(p93 B4 서버 라벨 ["1","1"])의 원인이었다.
+  //   대가로 대역 침범(201)을 허용한다 — 번호 유일성이 우선.
+  ok(ctx.State.pins[3].label === "201",
+    `③ 번호 유일: A(100,101)+B(200) 이후 A 가 찍으면 = ${ctx.State.pins[3].label} (기대 201 = 전원 최댓값+1, 기존 번호와 겹치지 않음)`);
+
+  // ③-b 대역 없이: A 가 1,2 → B 가 찍으면 3 (author 필터면 B 자기 핀 0개 → 1 = A 의 1 과 중복)
+  const c2 = makeCtx(sSrc, aSrc);
+  c2.Auth.user = { email: "a@seastar.test" };
+  c2.App._placeCheckboardPin({ x: 1, y: 1 });
+  c2.App._placeCheckboardPin({ x: 2, y: 2 });
+  c2.Auth.user = { email: "b@seastar.test" };
+  c2.App._placeCheckboardPin({ x: 3, y: 3 });
+  ok(c2.State.pins[2].label === "3",
+    `③-b 남의 핀(1,2) 로드 후 B 첫 핀 = ${c2.State.pins[2].label} (기대 3, 1 이면 중복 버그)`);
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -225,12 +238,12 @@ suiteUserColor("⑧⑨⑩ 사용자 색 + 미등록에서도 노출 + filled 축
 suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSrc);
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 A: nextCheckboardNo 의 author 필터 제거 → ③(대역 침범 방지) 실패해야 함
+ * 뮤테이션 A: [WO 20260930-numdup] nextSeriesNo 에 author 필터 복원 → ③·③-b 가 실패해야 함
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션A] 대역 분리(author 필터) 제거 → ③이 실패해야 함");
-  const needle = "        if (author != null && p.author !== author) return; // 대역 침범 방지: 내 핀만 본다\n";
-  const mutated = seriesSrc.replace(needle, "");
+  console.log("\n[뮤테이션A] author 필터(내 핀만 봄) 복원 → ③·③-b 가 실패해야 함");
+  const needle = "        if (this.seriesOf(p) !== ser) return;\n        const n = parseInt(p.label, 10);";
+  const mutated = seriesSrc.replace(needle, "        if (this.seriesOf(p) !== ser) return;\n        if (author != null && p.author !== author) return;\n        const n = parseInt(p.label, 10);");
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ctx = makeCtx(mutated, appSrc);
@@ -243,8 +256,16 @@ suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSr
     ctx.App._placeCheckboardPin({ x: 3, y: 3 });
     ctx.Auth.user = { email: "a@seastar.test" };
     ctx.App._placeCheckboardPin({ x: 4, y: 4 });
-    ok(ctx.State.pins[3].label === "201",
-      `뮤테이션 적용 시 A 의 다음 번호가 B 대역을 침범(테스트 실효성 증명) → ${ctx.State.pins[3].label} (기대 201, 정상이면 102)`);
+    ok(ctx.State.pins[3].label === "102",
+      `뮤테이션 적용 시 ③ 기대(201)와 달라짐(테스트 실효성 증명) → ${ctx.State.pins[3].label} (기대 102)`);
+    const c2 = makeCtx(mutated, appSrc);
+    c2.Auth.user = { email: "a@seastar.test" };
+    c2.App._placeCheckboardPin({ x: 1, y: 1 });
+    c2.App._placeCheckboardPin({ x: 2, y: 2 });
+    c2.Auth.user = { email: "b@seastar.test" };
+    c2.App._placeCheckboardPin({ x: 3, y: 3 });
+    ok(c2.State.pins[2].label === "1",
+      `뮤테이션 적용 시 ③-b 에서 A 의 1 과 중복(테스트 실효성 증명) → ${c2.State.pins[2].label} (기대 1)`);
   }
 }
 

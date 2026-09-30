@@ -12,10 +12,11 @@
  *     pdf.js 캔버스 렌더(PDF.load/snapshotAllPages → 자리표시 이미지 + pdf-lib 로 잰 실제 페이지 크기).
  *     벡터 복사(PDF.copyRegionToPdf)는 실 코드 + 실 pdf-lib.
  *
- * 판정은 "측정" 이다 — B4(H3)는 현행 결함을 **측정만** 한다([MEASURE], EXIT 제외).
+ * B4(H3 번호 중복)는 WO 20260930-numdup(전원 기준 채번 + 병합 재채번)으로 고쳐 EXIT 에 포함한다.
  *   B5(H4)·C3 는 WP3(0030 deployments.project_id · projects.original_deployment_id)로 고쳐 EXIT 에 포함한다.
- *   EXIT 는 A(H7)·B1·B2·B3·B5·C1·C2·C3·C4 로 정한다.
- * 뮤테이션: P93_APP_SRC=<변형 20_App.js> 로 주입(예: HEAD 의 크롭 변환 저장 → H7 FAIL → EXIT=1).
+ *   EXIT 는 A(H7)·B1·B2·B3·B4·B5·C1·C2·C3·C4 로 정한다.
+ * 뮤테이션: P93_APP_SRC=<변형 20_App.js> / P93_SERIES_SRC=<변형 01b_PinSeries.js> 로 주입
+ *   (예: HEAD 의 크롭 변환 저장 → H7 FAIL · author 필터 복원/재채번 제거 → B4 FAIL → EXIT=1).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -30,7 +31,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
 const SRC = {
   state: rd("public/js/modules/01_State.js"),
-  series: rd("public/js/modules/01b_PinSeries.js"),
+  series: process.env.P93_SERIES_SRC ? fs.readFileSync(process.env.P93_SERIES_SRC, "utf8").replace(/\r\n/g, "\n") : rd("public/js/modules/01b_PinSeries.js"),
   pdf: rd("public/js/modules/02_PDF.js"),
   map: rd("public/js/modules/10_MapCtrl.js"),
   app: process.env.P93_APP_SRC ? fs.readFileSync(process.env.P93_APP_SRC, "utf8").replace(/\r\n/g, "\n") : rd("public/js/modules/20_App.js"),
@@ -255,21 +256,100 @@ console.log("\n[B3] C 오프라인 작업(추가 2 · 삭제 1) 후 복귀 → _
   ok(dirtyLeft === 0, "B3 flush 후 dirty draft 0");
 }
 
-/* ══════════ B4 — 번호 중복(H3) 측정만 ══════════ */
-console.log("\n[B4] 두 사람이 대역 설정 없이 동시에 체크보드 핀 → 번호 (측정만, WP4)");
+/* ══════════ B4 — 번호 중복(H3) · WO 20260930-numdup 로 고쳐 EXIT 포함 ══════════ */
+console.log("\n[B4] 대역 설정 없이 동시에 체크보드 핀 → 번호 중복 0 (2명 · 로드 후 · 3명 · 오프라인 복귀 · 수동 번호 보존)");
+const dupLabels = (pins) => { const seen = new Set(), d = []; (pins || []).filter((p) => p && !p._deleted && p.checkboard).forEach((p) => { const k = (p.page || 1) + "|" + p.label; if (seen.has(k)) d.push(p.label); seen.add(k); }); return d; };
+const toastLog = (c) => { const t = []; c.sandbox.Prompt.toast = (m) => t.push(String(m)); return t; };
+const numdupToasts = (...logs) => logs.flat().filter((m) => /조정\(동시 생성\)/.test(m));
+const saveAll = async (cs) => { let r = await Promise.all(cs.map(save)); for (let round = 0; round < 3 && r.includes(false); round++) r = await Promise.all(cs.map((c, i) => (r[i] ? true : save(c)))); return r; };
 {
+  // B4-a 두 사람이 서로 보기 전에 동시 생성 → 409 병합에서 나중 핀 재채번
   const { depId, deck } = await seedDeployment([]);
   const [A, B] = ["a", "b"].map(makeClient);
   for (const c of [A, B]) await open(c, depId, deck);
-  const la = (await place(A, 10, 10)).label, lb = (await place(B, 20, 20)).label;
-  const r = await Promise.all([save(A), save(B)]);
-  for (const [i, c] of [A, B].entries()) if (!r[i]) await save(c);
+  const ta = toastLog(A), tb = toastLog(B);
+  const pa = await place(A, 10, 10), pb = await place(B, 20, 20);
+  const la = pa.label, lb = pb.label;
+  const r = await saveAll([A, B]);
+  const srv = await srvPins(depId);
+  const lab = new Map(srv.map((p) => [String(p.id), p.label]));
   const B2c = makeClient("b"); await open(B2c, depId, deck);
-  const lb2 = (await place(B2c, 30, 30)).label;   // A 의 1번을 로드한 뒤의 B 다음 번호
-  const labels = (await srvPins(depId)).map((p) => p.label);
-  console.log("   측정: A=" + la + " B=" + lb + " (재로드 후 B 다음=" + lb2 + ") 서버 라벨=" + JSON.stringify(labels));
-  measure(la !== lb, "B4 동시 신규 핀 번호 중복 없음 — A=" + la + " B=" + lb);
-  measure(lb2 !== la, "B4 남의 핀을 로드한 뒤 번호가 겹치지 않음 — A=" + la + " B 다음=" + lb2);
+  const lb2 = (await place(B2c, 30, 30)).label;
+  const nt = numdupToasts(ta, tb);
+  console.log("   측정: 생성 A=" + la + " B=" + lb + " 저장=" + JSON.stringify(r) + " → 서버 A=" + lab.get(String(pa.id)) + " B=" + lab.get(String(pb.id)) + " · 재로드 후 다음=" + lb2 + " · 토스트=" + JSON.stringify(nt));
+  ok(srv.length === 2 && dupLabels(srv).length === 0, "B4 2명 동시 생성 → 서버 번호 중복 0 — " + JSON.stringify(srv.map((p) => p.label)));
+  ok(lab.get(String(pa.id)) === "1" && lab.get(String(pb.id)) === "2", "B4 먼저 만든 A 가 1 유지 · 나중 B 가 2 로 재채번");
+  ok(lb2 === "3", "B4 재로드 후 다음 번호 = 전원 최댓값+1 = 3 — " + lb2);
+  ok(nt.length === 1 && nt[0].includes("1 → 2"), "B4 재채번 토스트 1회(번호 1 → 2) — " + JSON.stringify(nt));
+}
+{
+  // B4-b 남의 핀만 있는 도면을 로드한 뒤 내 첫 핀 — author 필터면 1(중복), 전원 기준이면 3
+  const mk = (id, lbl) => ({ id, x: 10, y: 10, page: 1, label: lbl, checkboard: true, author: USERS.a, createdAt: id });
+  const { depId, deck } = await seedDeployment([mk(1700000000001, "1"), mk(1700000000002, "2")]);
+  const B = makeClient("b"); await open(B, depId, deck);
+  const lb = (await place(B, 40, 40)).label;
+  await save(B);
+  const srv = await srvPins(depId);
+  console.log("   측정: A 의 1·2 로드 후 B 첫 핀=" + lb + " 서버=" + JSON.stringify(srv.map((p) => p.label)));
+  ok(lb === "3" && dupLabels(srv).length === 0, "B4 남의 핀(1·2)을 로드한 뒤 B 의 번호 = 3, 서버 중복 0 — " + lb);
+}
+{
+  // B4-c 3명 동시 → 전원 한 번 더(낡은 화면) 추가·저장 → 중복 0 · 이미 정해진 번호 흔들림 0
+  const { depId, deck } = await seedDeployment([]);
+  const cs = ["a", "b", "c"].map(makeClient);
+  for (const c of cs) await open(c, depId, deck);
+  const first = [];
+  for (const c of cs) first.push(String((await place(c, 10 + first.length * 20, 50)).id));
+  // 가장 나중에 만든 C 가 먼저 저장 → 뒤이어 병합하는 B·A 가 "남의(서버에 있는) 핀"을 재채번하게 된다
+  const r1 = [];
+  for (const c of [...cs].reverse()) r1.push(await save(c));
+  const s1 = await srvPins(depId);
+  const lab1 = JSON.stringify(first.map((id) => (s1.find((p) => String(p.id) === id) || {}).label));
+  for (const [i, c] of cs.entries()) { await place(c, 15 + i * 20, 70); await save(c); }
+  const s2 = await srvPins(depId);
+  const lab2 = JSON.stringify(first.map((id) => (s2.find((p) => String(p.id) === id) || {}).label));
+  console.log("   측정: 1차 저장=" + JSON.stringify(r1) + " 1차 번호=" + lab1 + " → 2차 후 같은 핀 번호=" + lab2 + " 서버 전체=" + JSON.stringify(s2.map((p) => p.label)));
+  ok(s1.length === 3 && dupLabels(s1).length === 0, "B4 3명 동시 생성 → 서버 중복 0 — " + JSON.stringify(s1.map((p) => p.label)));
+  ok(s2.length === 6 && dupLabels(s2).length === 0, "B4 낡은 화면 3명이 이어서 추가·저장 → 6개 · 중복 0 — " + JSON.stringify(s2.map((p) => p.label)));
+  ok(lab1 === lab2, "B4 이미 정해진 번호가 낡은 화면 병합으로 다시 바뀌지 않음(흔들림 0) — " + lab1 + " vs " + lab2);
+}
+{
+  // B4-d 오프라인 복귀 flush 병합
+  const { depId, deck } = await seedDeployment([]);
+  const [A, C] = ["a", "c"].map(makeClient);
+  for (const c of [A, C]) await open(c, depId, deck);
+  C.nav.onLine = false;
+  const c1 = await place(C, 11, 11), c2 = await place(C, 12, 12);
+  await C.App._saveDraftLocal();
+  const pa = await place(A, 70, 70);
+  await save(A);
+  C.nav.onLine = true;
+  await C.App._flushDirtyDrafts();
+  const srv = await srvPins(depId);
+  const lab = (p) => (srv.find((q) => String(q.id) === String(p.id)) || {}).label;
+  console.log("   측정: 오프라인 C=" + c1.label + "," + c2.label + " 온라인 A=" + pa.label + " → 서버 C=" + lab(c1) + "," + lab(c2) + " A=" + lab(pa));
+  ok(srv.length === 3 && dupLabels(srv).length === 0, "B4 오프라인 복귀 병합 → 3개 · 중복 0 — " + JSON.stringify(srv.map((p) => p.label)));
+  ok(lab(c1) === "1" && lab(c2) === "2" && lab(pa) === "3", "B4 먼저 만든 C 의 1·2 유지 · 나중 A 가 3 으로");
+}
+{
+  // B4-e 수동 번호 보존 — 수동 vs 자동이면 자동이 옮기고, 수동끼리는 그대로 두고 중복 표시
+  const { depId, deck } = await seedDeployment([]);
+  const [A, B] = ["a", "b"].map(makeClient);
+  for (const c of [A, B]) await open(c, depId, deck);
+  const manual = (p, v) => { p.label = v; p.labelManual = true; };   // 27_PinActionPop._saveLabel 이 하는 일
+  const a1 = await place(A, 10, 10); manual(a1, "5");
+  B.App._setCheckboardStart(1, 9);                                     // B 대역 9 → 자동 9
+  const b1 = await place(B, 20, 20), b1auto = b1.label;
+  const a2 = await place(A, 30, 30); manual(a2, "9");                  // 나중에 만든 수동 9
+  const b2 = await place(B, 40, 40); manual(b2, "5");                  // 수동 5 끼리 충돌
+  await saveAll([A, B]);
+  const srv = await srvPins(depId);
+  const lab = (p) => (srv.find((q) => String(q.id) === String(p.id)) || {}).label;
+  const dupIds = [...A.sandbox.__X.PinSeries.duplicateCheckboardIds(srv, 1)].map(String).sort();
+  console.log("   측정: b1 자동=" + b1auto +" → 서버 a1=" + lab(a1) + " a2=" + lab(a2) + " b1=" + lab(b1) + " b2=" + lab(b2) + " 중복표시=" + JSON.stringify(dupIds));
+  ok(lab(a1) === "5" && lab(a2) === "9" && lab(b2) === "5", "B4 수동 번호(5·9·5) 전부 보존");
+  ok(b1auto === "9" && lab(b1) !== "9" && lab(b1) !== "5", "B4 수동 9 와 겹친 자동 9(먼저 만들었어도) 는 재채번 — " + lab(b1));
+  ok(JSON.stringify(dupIds) === JSON.stringify([String(a1.id), String(b2.id)].sort()), "B4 수동끼리 겹친 5 는 재채번 없이 duplicateCheckboardIds 로 표시");
 }
 
 /* ══════════ B5 — 초대 권한(H4) · WP3: 배포본 project_id 기준 프로젝트 단위 쓰기 권한 ══════════ */

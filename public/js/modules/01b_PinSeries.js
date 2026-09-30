@@ -258,7 +258,13 @@
     /** [WO 20260929 addendum] 🔴 위 nextCheckboardNo() 를 2계열(checkboard/content=360)로 일반화.
      *  마스터: "번호체계도 다르게 해" — 360(photo) 핀도 같은 페이지·같은 계열끼리만 최댓값+1
      *  로 다음 번호를 계산한다(계열이 섞이면 서로 번호를 침범한다). 기본값 series="checkboard"
-     *  라 기존 nextCheckboardNo() 호출부·테스트는 전부 그대로 동작한다(하위호환, 시그니처 불변). */
+     *  라 기존 nextCheckboardNo() 호출부·테스트는 전부 그대로 동작한다(하위호환, 시그니처 불변).
+     *  🔴 [WO 20260930-numdup] author 인자는 **무시**한다(시그니처만 하위호환). 작성자별로 걸러
+     *  보면 남의 번호를 못 봐서, B 가 A 의 1·2 를 로드한 상태에서도 B 의 다음 번호가 A 와 겹쳤다
+     *  (p93 B4 실측: 서버 라벨 ["1","1"]). 이제 로드된 **전원 핀**의 최댓값+1 — 시작번호(사용자
+     *  대역 포함)는 하한으로만 쓴다. 대가: 대역 A=100 이 B 의 200 을 본 뒤엔 201 로 이어진다
+     *  (대역 침범 — 번호 유일성이 우선). 서로 보기 전에 동시에 만든 겹침은 저장 병합 때
+     *  resolveConcurrentNos() 가 재채번한다. */
     nextSeriesNo(pins, page, start, author, series) {
       const pg = page || 1;
       const ser = series === "content" ? "content" : "checkboard";
@@ -267,7 +273,6 @@
       (pins || []).forEach(p => {
         if (!p || (p.page || 1) !== pg) return;
         if (this.seriesOf(p) !== ser) return;
-        if (author != null && p.author !== author) return; // 대역 침범 방지: 내 핀만 본다
         const n = parseInt(p.label, 10);
         if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시
       });
@@ -290,6 +295,64 @@
       const dup = new Set();
       byLabel.forEach(ids => { if (ids.length > 1) ids.forEach(id => dup.add(id)); });
       return dup;
+    },
+
+    /** 🔴 [WO 20260930-numdup] 동시 생성 번호 충돌 재채번 정본 — 저장 병합(20_App._mergePins) 직후에만 부른다.
+     *  서로의 핀을 보기 전에 두 사람이 같은 번호를 만들면(각자 max+1) 409 병합 뒤 같은 페이지·CHECKER 계열에
+     *  같은 번호가 둘 생긴다. 그 묶음에서 **먼저 만든 핀**(createdAt, 같으면 id)만 번호를 지키고, 나중 핀은
+     *  페이지 최댓값+1 로 옮긴다 — 순서가 결정적이라 어느 클라이언트가 병합해도 같은 결과로 수렴한다.
+     *  · 사용자가 직접 고친 번호(pin.labelManual)는 절대 바꾸지 않는다 — 수동 핀이 있으면 그 핀이 번호를
+     *    지키고, 수동끼리 겹치면 그대로 둔다(duplicateCheckboardIds 가 표시).
+     *  · 기존 데이터 불변: 묶음이 전부 기준 핀(baseIds = 내가 알던 서버본)이거나 기준 핀이 둘 이상이면
+     *    이미 저장돼 있던 중복이라 건드리지 않는다(위 duplicateCheckboardIds 주석의 "자동 재채번 금지").
+     *    baseIds 를 모르면(null) 동시 생성 여부를 판정할 수 없으니 아무것도 바꾸지 않는다.
+     *  · 360 계열은 대상 아님 — 표시 번호가 label 이 아니라 페이지 내 순번(numbers())이라 화면상 겹칠 수 없다.
+     *  · 흔들림 방지: 재채번한 핀엔 renumberedFrom(옛 번호)을 남긴다. 낡은 화면(옛 번호를 든 클라이언트)이
+     *    병합하면 로컬 우선 규칙 때문에 옛 번호로 되돌린 뒤 또 다른 번호로 옮기게 되는데, srvPins 를 넘기면
+     *    "서버본이 내 옛 번호에서 옮겨 둔 핀"은 서버 번호를 먼저 채택한다(수동 번호 제외).
+     *  pins 의 label 을 직접 바꾸고, 바꾼 목록을 돌려준다. id 는 불변(사진·노트 연결 유지).
+     *  @returns {Array<{id, page:number, from:string, to:string}>} */
+    resolveConcurrentNos(pins, baseIds, srvPins) {
+      if (!Array.isArray(pins) || !baseIds) return [];
+      const srvById = new Map((Array.isArray(srvPins) ? srvPins : []).filter(s => s && !s._deleted && s.id != null).map(s => [String(s.id), s]));
+      pins.forEach(p => {
+        const s = p && srvById.get(String(p.id));
+        if (!s || s === p || p.labelManual || s.renumberedFrom == null) return;
+        if (String(s.renumberedFrom) === String(p.label)) { p.label = s.label; p.renumberedFrom = s.renumberedFrom; }
+      });
+      const base = new Set(Array.from(baseIds, String));
+      const at = (p) => { const t = this.createdAt(p); return Number.isFinite(t) ? t : Infinity; };
+      const byAge = (a, b) => (at(a) - at(b)) || (String(a.id) < String(b.id) ? -1 : (String(a.id) > String(b.id) ? 1 : 0));
+      const groups = new Map(), maxByPage = new Map();
+      pins.forEach(p => {
+        if (!p || p._deleted || this.seriesOf(p) !== "checkboard") return;
+        const lbl = String(p.label == null ? "" : p.label).trim();
+        if (!/^\d+$/.test(lbl)) return;
+        const pg = p.page || 1, n = parseInt(lbl, 10);
+        maxByPage.set(pg, Math.max(maxByPage.get(pg) || 0, n));
+        const k = pg + "|" + n;
+        if (!groups.has(k)) groups.set(k, { pg: pg, n: n, list: [] });
+        groups.get(k).list.push(p);
+      });
+      const changes = [];
+      Array.from(groups.values())
+        .filter(g => g.list.length > 1)
+        .sort((a, b) => (a.pg - b.pg) || (a.n - b.n))
+        .forEach(g => {
+          const inBase = g.list.filter(p => base.has(String(p.id))).length;
+          if (inBase === g.list.length || inBase > 1) return;   // 이미 저장돼 있던 중복 → 표시만
+          g.list.sort(byAge);
+          const keep = g.list.find(p => p.labelManual) || g.list[0];
+          g.list.forEach(p => {
+            if (p === keep || p.labelManual) return;
+            const to = (maxByPage.get(g.pg) || 0) + 1;
+            maxByPage.set(g.pg, to);
+            changes.push({ id: p.id, page: g.pg, from: String(p.label), to: String(to) });
+            p.renumberedFrom = String(p.label);
+            p.label = String(to);
+          });
+        });
+      return changes;
     },
 
     /** [WO 20260918] 🔴 "사용자가 버튼을 누르는" 일괄 재채번 정본 — duplicateCheckboardIds

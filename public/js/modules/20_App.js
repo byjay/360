@@ -1524,6 +1524,7 @@
         const pin = byId.get(c.id);
         if (!pin) return;
         pin.label = c.newLabel;
+        pin.labelManual = true;   // [WO 20260930-numdup] 사용자가 정한 번호 — 동시 생성 재채번(resolveConcurrentNos) 대상 아님
         // [WO 20260918] 🔴 id 는 절대 건드리지 않는다 — 사진/노트는 pin.id 로 연결되므로
         // 라벨(표시 번호)만 바뀌어도 연결 불변. 아래 로그는 그 사실을 재확인용으로 남긴다.
         if (typeof Log !== "undefined") Log.push("pin.renumber", pin.id, { oldLabel: c.oldLabel, newLabel: c.newLabel, page: page });
@@ -1557,8 +1558,8 @@
       // 🔴 채번 정본 = PinSeries. 계열마다 독립으로 "페이지 내 그 계열 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage, series);
       const _auth0 = this._pinAuthor();
-      // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
-      //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
+      // 🔴 [WO 20260930-numdup] 다음 번호 = 로드된 전원 핀 최댓값+1(시작번호는 하한) — author 인자는
+      //   nextSeriesNo 가 무시한다(작성자별로 보면 남의 번호와 겹쳤다, p93 B4).
       const no = PinSeries.nextSeriesNo(State.pins, curPage, start, _auth0, series);
       // [WO 20260929-createdAt] 생성시각 명시 저장(PinSeries.createdAt 이 우선 사용 — id 파생은 구버전 폴백)
       const _now0 = Date.now();
@@ -2893,13 +2894,31 @@
       // 서버본을 실제로 받지 못했으면(비배열) (b) 판정 불가 — 기준 핀 전부를 "남이 지웠다"로 오판하지 않는다.
       const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? new Set(baseIds.map(String)) : null;
       const srv = new Set(this._pinIds(srvPins));
-      return merged.filter(p => {
+      const out = merged.filter(p => {
         if (!p || p.id == null) return true;
         const k = String(p.id);
         if (tomb.has(k)) return false;                       // (a) 내가 지운 핀
         if (base && base.has(k) && !srv.has(k)) return false; // (b) 남이 지운 핀
         return true;
       });
+      // [WO 20260930-numdup] 🔴 병합 = 동시 생성 번호 충돌이 생기는 유일한 지점 — 409 재시도(_mergeConflict)와
+      //   오프라인 복귀(_draftVsServer: 화면 복원·flush) 둘 다 여기를 지나므로 한 번만 고친다(§G-2-5).
+      this._renumberConcurrent(out, base ? baseIds : null, srvPins);
+      return out;
+    },
+    /** 병합 결과의 동시 생성 번호 충돌을 재채번(정본 PinSeries.resolveConcurrentNos)하고 1회 알린다.
+     *  같은 변경을 화면 복원과 flush 가 두 번 계산해도 토스트는 한 번만(_numdupSeen). */
+    _renumberConcurrent(pins, baseIds, srvPins) {
+      if (typeof PinSeries === "undefined" || !PinSeries.resolveConcurrentNos) return [];
+      const changes = PinSeries.resolveConcurrentNos(pins, baseIds, srvPins);
+      if (!changes.length) return changes;
+      const seen = this._numdupSeen || (this._numdupSeen = new Set());
+      const fresh = changes.filter(c => { const k = c.id + ":" + c.from + ">" + c.to; if (seen.has(k)) return false; seen.add(k); return true; });
+      fresh.forEach(c => { if (typeof Log !== "undefined" && Log.push) Log.push("pin.renumber", c.id, { oldLabel: c.from, newLabel: c.to, page: c.page, reason: "concurrent" }); });
+      if (fresh.length && typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast("번호 " + fresh.map(c => c.from + " → " + c.to).join(", ") + " 조정(동시 생성)");
+      }
+      return changes;
     },
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */
