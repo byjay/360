@@ -30,6 +30,9 @@
     annoTool:    "cursor",  // 현재 주석 도구
     annoColor:   "#ff3b30", // 현재 주석 색상
     zones:       [],        // {id,page,x,y,w,h,label,color,pinIds[],note} 영역(%) 줌무관
+    // [WO 20260929-bulkdel] 핀 삭제 부활 방지(20_App._mergePins) — 도면 단위, reset() 에서 초기화.
+    pinTombstones: {},      // { [String(pinId)]: 삭제시각ms } 이 도면에서 내가 지운 핀
+    pinBaseIds:   null,     // 내가 아는 서버 버전(depVersion)의 핀 id 목록(String[]) — null=모름
     placing:     false,
     drawingZone: false,     // 영역 그리기 모드
     isoView:     false,     // ISO 3D 아이소메트릭 뷰 (평면↔입체 회전)
@@ -70,7 +73,7 @@
       // [P14] 원본 PDF 지연 로드 상태 초기화 — 도면이 바뀌면 이전 원본은 거짓 화면이 된다.
       this.sourceMeta = null; this.sourcePdfUrl = null; this.srcPdfDoc = null;
       this.srcNoticed = false; this.srcFailed = false;
-      this.pins = []; this.zones = []; this.placing = false; this.drawingZone = false; this.pending = null;
+      this.pins = []; this.zones = []; this.pinTombstones = {}; this.pinBaseIds = null; this.placing = false; this.drawingZone = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
       this.pendingFls = null;

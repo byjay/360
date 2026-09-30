@@ -103,8 +103,8 @@
      *  우선, 없으면 pin.id 가 Date.now() 로 채번된 숫자(20_App.js _placeCheckboardPin:1513,
      *  _confirmPinInstant:2068 — 둘 다 id=Date.now() 만 있고 별도 createdAt 필드가 없다)라고
      *  판단되면 그 값을 파생해 쓴다. 못 구하면 null(가짜 시각을 만들지 않는다 — §10 하드코딩 금지).
-     *  🔴 20_App.js 두 생성 지점은 다른 팀 점유라 여기서 명시 필드를 새로 심지 않는다 —
-     *  현재는 id 파생으로 커버되지만, id 채번 방식이 바뀌면 이 파생이 깨진다(후속 반영 필요 항목). */
+     *  [WO 20260929-createdAt] 20_App.js 생성 지점 3곳(_placeCheckboardPin · _confirmPinInstant ·
+     *  폼 신규 np)이 이제 createdAt 을 명시 저장한다. id 파생은 그 이전에 만든 핀(필드 없음)용 폴백. */
     createdAt(pin) {
       if (!pin) return null;
       if (Number.isFinite(pin.createdAt)) return pin.createdAt;

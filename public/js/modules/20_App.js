@@ -1543,7 +1543,9 @@
       // 🔴 [WO 20260917 멀티유저 ①·재설계] author 를 넘겨 "내 대역"만으로 다음 번호를 계산한다
       //   — 안 그러면 다른 사용자가 찍은 더 큰 번호(다른 대역)가 내 다음 번호에 섞여 침범한다.
       const no = PinSeries.nextSeriesNo(State.pins, curPage, start, _auth0, series);
-      const pin = { id: Date.now(), x: pct.x, y: pct.y, page: curPage, label: String(no) };
+      // [WO 20260929-createdAt] 생성시각 명시 저장(PinSeries.createdAt 이 우선 사용 — id 파생은 구버전 폴백)
+      const _now0 = Date.now();
+      const pin = { id: _now0, createdAt: _now0, x: pct.x, y: pct.y, page: curPage, label: String(no) };
       if (series === "checkboard") pin.checkboard = true;
       if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
@@ -2108,8 +2110,9 @@
       const localPreview = URL.createObjectURL(file);
       _trackVideoBlob && _trackVideoBlob(localPreview); // blob 누수 추적(공용 추적기 재사용)
       const imgName = UI.val("input-pin-imgname").trim() || file.name.replace(/\.[^.]+$/, "");
+      const _now1 = Date.now();   // [WO 20260929-createdAt] 생성시각 명시 저장
       const pin = {
-        id: Date.now(),
+        id: _now1, createdAt: _now1,
         x: State.pending.x, y: State.pending.y,
         page: State.pdfPage, label,
         imageName: imgName,
@@ -2243,7 +2246,7 @@
       // 편집이면 기존 객체를 베이스로(기존 미디어 보존), 신규면 새 객체
       const pin = editing && existing
         ? existing // [WO 20260917 멀티유저 ②] 편집은 기존 pin.author 를 건드리지 않는다(편집자≠원작성자)
-        : (() => { const _auth2 = this._pinAuthor(); const np = { id: Date.now(), x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
+        : (() => { const _auth2 = this._pinAuthor(); const _now2 = Date.now(); const np = { id: _now2, createdAt: _now2, x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
       pin.label = label;
       if (note) pin.note = note; else if (editing) delete pin.note;
       // [마스터 요청] 핀(호스팟)별 아이콘 캡처 — number(기본)면 속성 제거(하위호환)
@@ -2767,20 +2770,98 @@
       const removed = State.pins.find(p => p.id === id);
       if (!removed) return false;
       if (!await Prompt.confirm("포인트 삭제", `'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return false;
-      if (removed.videoUrl) _revokeVideoBlob(removed.videoUrl); // [B5] 삭제 시 즉시 해제
-      State.pins = State.pins.filter(p => p.id !== id);
-      if (State.activePin === id) State.activePin = null;
-      if (State.editingPinId === id) { State.editingPinId = null; this._closePinForm(); }
+      this._removePins([id]);
+      Prompt.toast("'" + removed.label + "' 삭제됨");
+      return true;
+    },
+
+    /** [WO 20260929-bulkdel] 관리자 핀 일괄삭제 권한 — 역할 판정은 기존 Auth.isAdmin(super|admin, 22_Auth.js) 재사용.
+     *  저장(_autoSave)이 디자이너 모드에서만 동작하므로 모드도 함께 본다. 열람전용 세션(Auth.readonly)은 제외. */
+    canBulkDeletePins() {
+      return State.mode === "designer" && typeof Auth !== "undefined" && !!Auth.isAdmin && !Auth.readonly;
+    },
+
+    /** [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 확인(Prompt.confirm, 개수 명시) 후 단건과 같은 _removePins 경로.
+     *  번호는 자동 재채번하지 않는다(기존 번호 리셋 기능이 따로 있다). 반환: 삭제된 개수. */
+    async deletePins(ids, opts) {
+      if (!this.canBulkDeletePins()) { Prompt.toast("관리자만 핀을 일괄 삭제할 수 있습니다"); return 0; }
+      const want = new Set((ids || []).map(String));
+      const targets = (State.pins || []).filter(p => want.has(String(p.id)));
+      if (!targets.length) return 0;
+      const scope = (opts && opts.scopeLabel) ? `${opts.scopeLabel}의 ` : "";
+      if (!await Prompt.confirm("포인트 일괄 삭제", `${scope}포인트 ${targets.length}개를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거되며, 번호는 자동으로 다시 매기지 않습니다)`)) return 0;
+      const removed = this._removePins(targets.map(p => p.id));
+      Prompt.toast(`포인트 ${removed.length}개 삭제됨`);
+      return removed.length;
+    },
+
+    /** 🔴 [WO 20260929-bulkdel] 핀 제거 공유 지점 — 단건(deletePin)·일괄(deletePins)이 같은 경로를 탄다.
+     *  tombstone 기록(병합 부활 방지, _mergePins) → State 제거 → 렌더 → 오프라인 OpLog → _autoSave(draft+dirty).
+     *  확인 대화상자는 호출부 몫. 반환: 실제 제거된 핀 배열. */
+    _removePins(ids) {
+      const want = new Set((ids || []).map(String));
+      const removed = (State.pins || []).filter(p => want.has(String(p.id)));
+      if (!removed.length) return [];
+      const tomb = this._pinTombstones();
+      const now = Date.now();
+      removed.forEach(p => {
+        tomb[String(p.id)] = now;
+        if (p.videoUrl) _revokeVideoBlob(p.videoUrl); // [B5] 삭제 시 즉시 해제
+      });
+      State.pins = State.pins.filter(p => !want.has(String(p.id)));
+      if (State.activePin != null && want.has(String(State.activePin))) State.activePin = null;
+      if (State.editingPinId != null && want.has(String(State.editingPinId))) { State.editingPinId = null; this._closePinForm(); }
       if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
       UI.renderPinList();
       UI.renderPinsOnMap();
-      Prompt.toast("'" + removed.label + "' 삭제됨");
-      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록(핀마다, 순서 보존) + 로컬 스냅샷
       if (!navigator.onLine && typeof OpLog !== "undefined") {
-        OpLog.recordCurrent("pin", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+        removed.reduce((pr, p) => pr.then(() => OpLog.recordCurrent("pin", "delete", p.id)), Promise.resolve())
+          .then(() => persistLocalDeployment()).catch(() => {});
       }
       this._autoSave();
-      return true;
+      return removed;
+    },
+
+    /* ── [WO 20260929-bulkdel] 🔴 핀 삭제 부활 방지 — 병합의 단일 출처 ─────────────────────────
+       _mergeById(서버본, 내 로컬) 는 "서버에만 있는 항목 보존" 규칙이라 두 경로로 지운 핀을 되살렸다:
+         ① 내가 지운 핀: 서버가 더 새로우면(409 충돌 / draft 기준 버전 다름) 서버본의 그 핀이 복귀
+         ② 남이 지운 핀: 내 로컬에 남은 옛 핀이 서버본에 덮여 복귀(3-way 기준 = 내가 아는 서버 버전의 id)
+       규칙: 병합 결과에서 (a) 내 tombstone 에 있는 id, (b) 기준 id 목록엔 있었는데 지금 서버본엔 없는 id 를 뺀다.
+       (b) 는 기준(baseIds)을 모르면(null) 적용하지 않는다 — 추정으로 지우지 않는다(유실 0 쪽). 삭제 우선(delete-wins). */
+    _pinTombstones() {
+      if (!State.pinTombstones || typeof State.pinTombstones !== "object") State.pinTombstones = {};
+      return State.pinTombstones;
+    },
+    _pinIds(arr) {
+      return (Array.isArray(arr) ? arr : []).filter(p => p && p.id != null).map(p => String(p.id));
+    },
+    /** draft 에 실어 둘 핀 병합 메타 — _saveDraftLocal / _markDraftClean 공유(SoT). */
+    _draftPinMeta() {
+      return {
+        deletedPins: Object.keys(this._pinTombstones()),
+        basePinIds:  Array.isArray(State.pinBaseIds) ? State.pinBaseIds.slice() : null
+      };
+    },
+    /** draft 의 tombstone 을 현재 도면 tombstone 에 합친다(복원 경로 공유). */
+    _adoptDraftTombstones(d) {
+      if (!d || !Array.isArray(d.deletedPins)) return;
+      const tomb = this._pinTombstones();
+      d.deletedPins.forEach(id => { if (id != null && !tomb[String(id)]) tomb[String(id)] = 1; });
+    },
+    _mergePins(srvPins, localPins, baseIds, tombIds) {
+      const merged = this._mergeById(srvPins, localPins);
+      const tomb = new Set((tombIds || []).map(String));
+      // 서버본을 실제로 받지 못했으면(비배열) (b) 판정 불가 — 기준 핀 전부를 "남이 지웠다"로 오판하지 않는다.
+      const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? new Set(baseIds.map(String)) : null;
+      const srv = new Set(this._pinIds(srvPins));
+      return merged.filter(p => {
+        if (!p || p.id == null) return true;
+        const k = String(p.id);
+        if (tomb.has(k)) return false;                       // (a) 내가 지운 핀
+        if (base && base.has(k) && !srv.has(k)) return false; // (b) 남이 지운 핀
+        return true;
+      });
     },
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */
@@ -3575,10 +3656,12 @@
       let srvPins = [], srvZones = [];
       try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
       try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
-      const mergedPins  = this._mergeById(srvPins,  State.pins  || []);
+      // [WO 20260929-bulkdel] 핀은 _mergePins(삭제 부활 방지) — 기준은 내가 알던 서버 버전, 병합 후엔 방금 받은 서버본
+      const mergedPins  = this._mergePins(srvPins, State.pins || [], State.pinBaseIds, Object.keys(this._pinTombstones()));
       const mergedZones = this._mergeById(srvZones, State.zones || []);
       State.pins  = mergedPins;
       State.zones = mergedZones;
+      State.pinBaseIds = this._pinIds(srvPins);
       State.depVersion = (current.version != null ? Number(current.version) : State.depVersion);
       // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
@@ -3590,8 +3673,11 @@
      *  buildBody(): 호출 시점의 현재 State 로 payload 를 만드는 함수(병합 후 재생성용).
      *  반환: { ok, rec?, conflictMerged? } */
     async _patchDeployment(depId, buildBody) {
+      let sentPins = null;   // [WO 20260929-bulkdel] 성공 시 이 목록이 곧 서버의 새 기준(State.pinBaseIds)
       const send = async () => {
         const body = buildBody();
+        sentPins = null;
+        if (typeof body.pins === "string") { try { sentPins = JSON.parse(body.pins); } catch (e) { sentPins = null; } }
         body.base_version = (State.depVersion != null ? State.depVersion : 0);
         const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
           method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
@@ -3611,6 +3697,7 @@
       if (!res.ok) return { ok: false, status: res.status };
       let rec = null; try { rec = await res.json(); } catch (e) {}
       if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
+      if (Array.isArray(sentPins)) State.pinBaseIds = this._pinIds(sentPins);
       return { ok: true, rec };
     },
 
@@ -4051,6 +4138,7 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
         try { State.pins  = JSON.parse(dep.pins  || "[]"); } catch { State.pins = []; }
+        State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 이 서버 버전이 병합 기준
         try { State.zones = JSON.parse(dep.zones || "[]"); } catch { State.zones = []; }
         try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
@@ -4126,6 +4214,9 @@
         State.fileName    = d.fileName || "도면";
         State.pins        = Array.isArray(d.pins)  ? d.pins  : [];
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
+        // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
+        State.pinTombstones = {}; this._adoptDraftTombstones(d);
+        State.pinBaseIds = Array.isArray(d.basePinIds) ? d.basePinIds.map(String) : null;
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
         // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
         State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
@@ -4236,7 +4327,8 @@
       const dZones = Array.isArray(d && d.zones) ? d.zones : [];
       return same
         ? { pins: dPins, zones: dZones }
-        : { pins: this._mergeById(srvPins || [], dPins), zones: this._mergeById(srvZones || [], dZones) };
+        // [WO 20260929-bulkdel] 핀은 _mergePins — draft 의 tombstone(deletedPins)·기준 id(basePinIds)로 삭제 부활 차단
+        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(srvZones || [], dZones) };
     },
 
     /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
@@ -4247,6 +4339,7 @@
       const m = this._draftVsServer(d, State.pins, State.zones, srvVer);
       State.pins = m.pins;
       State.zones = m.zones;
+      this._adoptDraftTombstones(d);   // [WO 20260929-bulkdel] 저장 전 지운 핀 기록 유지(다음 409 병합에서도 부활 금지)
       if (Array.isArray(d.annotations)) State.annotations = d.annotations;
       if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
       this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
@@ -4418,6 +4511,7 @@
           this._markDeckUnsaved(this._deckIdOfKey(key), false);   // [B4] 서버 반영됨 → 배지 해제
           // 병합된 핀/구역을 draft 에도 반영(다음 동기화 기준 정합)
           if (srvPins)  { try { d.pins  = JSON.parse(body.pins  || "[]"); } catch (e) {} }
+          d.basePinIds = this._pinIds(Array.isArray(d.pins) ? d.pins : []);   // [WO 20260929-bulkdel] 서버 = 방금 보낸 핀 = 새 기준
           if (srvZones) { try { d.zones = JSON.parse(body.zones || "[]"); } catch (e) {} }
           await SyncQueue.saveDraft(key, d);
           if (key === this._draftKey() && d.depId) {
@@ -4426,6 +4520,7 @@
             const ent = (State.fileType === "pdf" && State.fileData && this._srcKeys) ? this._srcKeys.get(State.fileData) : null;
             if (d.srcUrl && ent && ent.key === d.srcKey) State.sourcePdfUrl = d.srcUrl;
             if (rec && rec.version != null) State.depVersion = Number(rec.version); // 버전 동기화
+            State.pinBaseIds = d.basePinIds.slice();   // [WO 20260929-bulkdel] 버전과 함께 병합 기준도 동기화
             this._setSaveIndicator("saved");
           }
         } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
@@ -4459,6 +4554,7 @@
           baseVer:     (State.autoSaveDepId && State.depVersion != null) ? Number(State.depVersion) : null,
           dirty:       true                       // 서버 미반영분 표시 → online 시 업로드
         };
+        Object.assign(payload, this._draftPinMeta());           // [WO 20260929-bulkdel] 삭제 부활 방지(_draftVsServer)
         Object.assign(payload, await this._draftSrcFields());   // [WO 20260929-lossless] 원본 PDF 연결고리
         const dkey = this._draftKey();
         await SyncQueue.saveDraft(dkey, payload);
@@ -4521,6 +4617,7 @@
         const rec = await res.json();
         State.autoSaveDepId = (rec && rec.id) ? rec.id : null;
         State.currentDeploymentId = State.autoSaveDepId;
+        try { State.pinBaseIds = this._pinIds(JSON.parse(body.pins || "[]")); } catch (e) {}   // [WO 20260929-bulkdel] 새 서버 기준
         // 서버 저장 성공 → 로컬 draft 의 dirty 해제(스냅샷은 백업으로 유지)
         await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
@@ -4597,6 +4694,7 @@
           pins: State.pins || [], zones: State.zones || [], annotations: State.annotations || [],
           depId: State.autoSaveDepId || null, dirty: false
         };
+        Object.assign(payload, this._draftPinMeta());           // [WO 20260929-bulkdel] 복원 후 병합에도 삭제 기록 유지
         Object.assign(payload, await this._draftSrcFields());   // clean draft 도 원본 연결고리 유지(서버 실패 폴백 복원용)
         if (payload.pages && payload.pages.length) await SyncQueue.saveDraft(this._draftKey(), payload);
       } catch (e) {}
@@ -4964,6 +5062,7 @@
 
         try { State.pins = JSON.parse(latest.pins || "[]"); }
         catch { State.pins = []; }
+        State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 형제 로더와 같은 기준
         try { State.zones = JSON.parse(latest.zones || "[]"); }
         catch { State.zones = []; }
         try { State.annotations = JSON.parse(latest.annotations || "[]"); }

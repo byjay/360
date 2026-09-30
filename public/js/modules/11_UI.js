@@ -42,6 +42,61 @@
       c.classList.toggle("hidden", !n);
     },
 
+    /* ── [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 선택 상태 SoT(트리 핀 노드 · 핀 목록 패널 공유) ──
+       권한 판정 = App.canBulkDeletePins()(Auth.isAdmin 재사용). 삭제 = App.deletePins → 단건과 같은 _removePins. */
+    _pinSel: { on: false, ids: new Set() },
+    _pinBulkOk() { return typeof App !== "undefined" && !!App.canBulkDeletePins && App.canBulkDeletePins(); },
+    /** 렌더 직전 정리 — 권한이 없으면 선택 모드 해제, 이미 사라진 핀 id 는 선택에서 제거 */
+    _syncPinSel() {
+      const s = this._pinSel;
+      if (!this._pinBulkOk()) { s.on = false; s.ids.clear(); return s; }
+      const live = new Set((State.pins || []).map(p => String(p.id)));
+      Array.from(s.ids).forEach(k => { if (!live.has(k)) s.ids.delete(k); });
+      return s;
+    },
+    setPinSelectMode(on) {
+      this._pinSel.on = !!on && this._pinBulkOk();
+      this._pinSel.ids.clear();
+      this.renderPinList();
+    },
+    togglePinSelected(id) {
+      const k = String(id), ids = this._pinSel.ids;
+      if (ids.has(k)) ids.delete(k); else ids.add(k);
+      this.renderPinList();
+    },
+    /** 일괄삭제 버튼 묶음(공유 생성기) — opts.scopePins/scopeLabel 이 있으면 "범위 전체 삭제" 버튼도 만든다. */
+    _pinBulkButtons(opts) {
+      opts = opts || {};
+      const s = this._pinSel;
+      const out = [];
+      const mk = (label, cls, fn, title) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn-mini" + (cls ? " " + cls : "");
+        b.textContent = label;
+        if (title) b.title = title;
+        b.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); fn(b); });
+        return b;
+      };
+      const finish = (n) => { if (n > 0) { s.on = false; s.ids.clear(); this.renderPinList(); } };
+      out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 한꺼번에 삭제(관리자)"));
+      if (s.on) {
+        const n = s.ids.size;
+        const del = mk("선택 삭제 " + n + "개", "danger pin-bulk-del", async () => {
+          finish(await App.deletePins(Array.from(s.ids)));
+        });
+        del.disabled = n === 0;
+        out.push(del);
+      }
+      const scope = Array.isArray(opts.scopePins) ? opts.scopePins : null;
+      if (scope && scope.length) {
+        out.push(mk((opts.scopeLabel || "이 구역") + " 핀 전체 삭제 (" + scope.length + ")", "danger pin-bulk-scope", async () => {
+          finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역" }));
+        }));
+      }
+      return out;
+    },
+
     renderPinList() {
       const list  = this.$("pin-list");
       const empty = this.$("pin-empty");
@@ -50,6 +105,8 @@
       // [버그수정] 도면 미로드 화면(허브 등)에서 Notes.loadSummary→renderPinList 호출 시 요소 부재 → 가드
       if (!list) return;
       list.innerHTML = "";
+      const sel = this._syncPinSel();
+      const selecting = sel.on && this._pinBulkOk();
 
       if (!State.pins || State.pins.length === 0) {
         empty.classList.remove("hidden");
@@ -57,8 +114,17 @@
         this.hide("section-export");
         if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
         if (typeof PinGrid !== "undefined") PinGrid.render();
+        this.renderTree();   // [WO 20260929-bulkdel] 마지막 핀까지 지워도 트리가 옛 핀을 남기지 않게(종전 조기 return 이 건너뜀)
         return;
       }
+      // [WO 20260929-bulkdel] 관리자 일괄삭제 도구줄(목록 맨 위) — 비관리자에겐 DOM 자체를 만들지 않는다
+      const mountBulkBar = () => {
+        if (!this._pinBulkOk()) return;
+        const bar = document.createElement("div");
+        bar.className = "pin-bulk-bar";
+        this._pinBulkButtons().forEach(b => bar.appendChild(b));
+        list.insertBefore(bar, list.firstChild);
+      };
       empty.classList.add("hidden");
       badge.textContent = State.pins.length + " PINS";
       badge.classList.remove("hidden");
@@ -89,9 +155,12 @@
         if (State.mode === "designer") this.show("section-export");
         if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
         if (typeof PinGrid !== "undefined") PinGrid.render();
+        mountBulkBar();      // 트리에서 다른 페이지 핀을 골랐어도 [선택 삭제]는 여기서도 보인다
+        this.renderTree();   // [WO 20260929-bulkdel] 종전 조기 return 이 트리 갱신을 건너뛰었다
         return;
       }
 
+      mountBulkBar();
       visiblePins.forEach((pin, idx) => {
         const item = document.createElement("div");
         item.className = "pin-item" + (State.activePin === pin.id ? " active" : "");
@@ -135,6 +204,21 @@
             e.stopPropagation();
             App.deletePin(pin.id);
           });
+          // [WO 20260929-bulkdel] 선택 모드(관리자): 체크박스 + 행 클릭 = 선택 토글(이동/오픈 대신)
+          if (selecting) {
+            const picked = sel.ids.has(String(pin.id));
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.className = "pin-sel";
+            cb.checked = picked;
+            cb.setAttribute("aria-label", "'" + (pin.label || "포인트") + "' 선택");
+            cb.addEventListener("click", e => { e.stopPropagation(); this.togglePinSelected(pin.id); });
+            item.insertBefore(cb, item.firstChild);
+            item.classList.toggle("selected", picked);
+            item.addEventListener("click", () => this.togglePinSelected(pin.id));
+            list.appendChild(item);
+            return;
+          }
           // 디자이너 모드: 콘텐츠 있는 핀은 이동+오픈, 없는 핀은 CAD 인스펙터 상세 표시
           item.addEventListener("click", () => {
             if (App.pinHasContent(pin)) App.focusPin(pin, true);
@@ -329,9 +413,20 @@
         const noLabel = meta ? '<span class="tree-pin-no">#' + esc(String(meta.no)) + '</span>' : "";
         n.innerHTML = ICO.pin + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
+        // [WO 20260929-bulkdel] 선택 모드(관리자): 버튼 안에 input 을 둘 수 없어 aria-pressed + 표시 기호로 선택 상태를 나타낸다
+        if (selecting) {
+          const picked = pinSel.ids.has(String(p.id));
+          n.setAttribute("aria-pressed", picked ? "true" : "false");
+          n.classList.toggle("selected", picked);
+          n.insertAdjacentHTML("afterbegin", '<span class="tree-sel-box" aria-hidden="true">' + (picked ? "☑" : "☐") + '</span>');
+          n.addEventListener("click", () => this.togglePinSelected(p.id));
+          return n;
+        }
         n.addEventListener("click", () => { if (typeof App !== "undefined") { if (App.focusPin) App.focusPin(p, true); else if (App.onPinTap) App.onPinTap(p); } });
         return n;
       };
+      const pinSel = this._syncPinSel();
+      const selecting = pinSel.on && this._pinBulkOk();
 
       /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
@@ -392,6 +487,15 @@
           else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
+        // [WO 20260929-bulkdel] 관리자 전용 — 핀이 붙는(로드된) 노드에만: [선택]·[선택 삭제 N개]·[이 구역 핀 전체 삭제].
+        //   범위 = 이 노드 아래 나열되는 핀 전부(State.pins — 아래 loaded 블록과 같은 목록).
+        if (loaded && this._pinBulkOk() && (State.pins || []).length) {
+          const acts = document.createElement("div");
+          acts.className = "tree-project-actions tree-pin-bulk";
+          this._pinBulkButtons({ scopePins: State.pins.slice(), scopeLabel: isRegion ? "이 영역" : "이 구역" })
+            .forEach(b => acts.appendChild(b));
+          g.appendChild(acts);
+        }
 
         const kids = document.createElement("div");
         kids.className = "tree-children";

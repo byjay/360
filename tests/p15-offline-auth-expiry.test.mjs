@@ -219,7 +219,10 @@ function makeFlushDraftsSandbox(patchRes) {
   const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer) {");
   // [WO 20260929-lossless] _flushDirtyDrafts 가 원본 PDF(_draftSource)·R2 페이지 업로드(_uploadPagesToR2)를
   //   거치게 됐다 — 같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
-  const srcBlocks = ["async _draftSource(d) {", "_isPdfBytes(ab) {", "async _uploadSourcePdf(ab) {", "_sourceMetaJson(url, pages) {", "async _uploadPagesToR2(pagesData) {"]
+  // [WO 20260929-bulkdel] _draftVsServer 가 핀 병합 단일 출처(_mergePins)를, flush 가 _pinIds 를 쓰게 됐다 —
+  //   같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
+  const srcBlocks = ["async _draftSource(d) {", "_isPdfBytes(ab) {", "async _uploadSourcePdf(ab) {", "_sourceMetaJson(url, pages) {", "async _uploadPagesToR2(pagesData) {",
+    "_pinIds(arr) {", "_mergePins(srvPins, localPins, baseIds, tombIds) {"]
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +
