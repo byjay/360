@@ -285,7 +285,10 @@ function makeUIEnv({ admin }) {
   ok(!!bar() && bar()._children.some((b) => b.textContent === "선택"), "G 관리자: 핀 목록 맨 위 [선택]");
   const treeBulk = () => walk(u.registry["side-tree"]).find((e) => has(e, "tree-pin-bulk"));
   const scopeBtn = () => treeBulk() && treeBulk()._children.find((b) => has(b, "pin-bulk-scope"));
-  ok(!!scopeBtn() && /이 구역 핀 전체 삭제 \(3\)/.test(scopeBtn().textContent), "G 트리 구역 노드: [이 구역 핀 전체 삭제 (3)] — " + (scopeBtn() && scopeBtn().textContent));
+  // [WO 20260930-moderole] 🔴 일괄삭제 범위 버튼이 이제 모드 잎(CHECKER/360) 안에 있다 — 이
+  // 픽스처 핀(P())은 전부 360(content) 계열이라 "이 구역 360 핀 전체 삭제" 로 나온다(다른 모드
+  // 핀까지 지우지 않는다는 걸 라벨로 드러냄, 의도된 변경).
+  ok(!!scopeBtn() && /이 구역 360 핀 전체 삭제 \(3\)/.test(scopeBtn().textContent), "G 트리 구역 노드: [이 구역 360 핀 전체 삭제 (3)] — " + (scopeBtn() && scopeBtn().textContent));
 
   u.UI.setPinSelectMode(true);
   const items = walk(u.registry["pin-list"]).filter((e) => has(e, "pin-item"));
@@ -302,7 +305,7 @@ function makeUIEnv({ admin }) {
   ok(!u.UI._pinSel.on && u.UI._pinSel.ids.size === 0, "G 삭제 후 선택 모드 종료·선택 비움");
 
   await click(scopeBtn()); await tick();
-  ok(u.deleted[1] && u.deleted[1].ids.join(",") === "2" && u.deleted[1].opts && u.deleted[1].opts.scopeLabel === "이 구역", "G [이 구역 핀 전체 삭제] → 남은 핀 전부 + scopeLabel");
+  ok(u.deleted[1] && u.deleted[1].ids.join(",") === "2" && u.deleted[1].opts && u.deleted[1].opts.scopeLabel === "이 구역 360", "G [이 구역 360 핀 전체 삭제] → 남은 핀 전부 + scopeLabel");
   // 마지막 핀까지 지운 뒤 트리에 옛 핀이 남지 않는다(종전: renderPinList 조기 return 이 renderTree 를 건너뜀)
   ok(u.State.pins.length === 0 && walk(u.registry["side-tree"]).filter((e) => has(e, "tree-node-pin")).length === 0, "G 전부 삭제 → 트리 핀 노드 0개(즉시 갱신)");
 }

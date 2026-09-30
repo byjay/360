@@ -9,9 +9,9 @@
  *     꺼져있으면 #btn-checkboard-enter 로, 켜져있으면 #btn-place 로 위임한다
  *  ② 연속 클릭 시 번호가 1씩 증가한다(시작번호 반영, PinSeries.nextCheckboardNo 그대로 재사용)
  *  ③ 범위(시작~마지막)는 PinSeries 정본에서 파생한다(자체 채번 금지)
- *  ④ [WO 20260918 갱신] 구 전용 지름길(#btn-checkboard-photobatch) 은 렌더 고아라 제거됐다.
- *     대신 #btn-photobatch(단독 진입)가 State.checkboard 를 참조해 방금 찍은 체크보드
- *     범위로 자동으로 열린다(35_PhotoBatch.js _defaultRange, 하드코딩 제거).
+ *  ④ [WO 20260930-moderole 재정정] 마스터: "체커는 사진을 등록하지 않을 거야" — CHECKER 모드에서
+ *     찍은 핀은 PhotoBatch 대상이 아니다. #btn-photobatch(단독 진입)를 눌러도 항상 content(360)
+ *     계열로 열린다(35_PhotoBatch.js _defaultRange, CHECKER 분기 제거 — 구 기대 폐기).
  *  ⑤ 기존 진입 경로 2개(#btn-checkboard-enter 단독, #btn-photobatch 단독)와
  *     신규 버튼 1개(#btn-quickpoint)가 모두 바인딩된다
  *
@@ -193,14 +193,13 @@ function makeFullEnv(pins) {
   }
 }
 
-/* ══ ④ [WO 20260918 갱신] 체크보드 모드에서 #btn-photobatch(단독 진입, 사이드 툴바 "사진" 그룹)를
- *  눌러도 방금 찍은 체크보드 범위로 열린다 — 구 전용 지름길(#btn-checkboard-photobatch) 은
- *  렌더 고아라 제거됐고(style.css:4914 영구 hidden + 새 toolbar 위임 대상 없음), 대체 경로는
- *  35_PhotoBatch.js _defaultRange() 가 State.checkboard 를 참조해 series 를 자동 선택하는 것이다. */
+/* ══ ④ [WO 20260930-moderole 재정정] 마스터: "체커는 사진을 등록하지 않을 거야" — CHECKER
+ *  모드에서 방금 찍은 핀은 checkboard 계열이라 PhotoBatch 의 대상이 아니다. #btn-photobatch 는
+ *  이제 CHECKER 모드에서 화면에서도 숨겨지지만(20_App._syncRegModeButtons), 그 버튼을 직접
+ *  .click() 해도(방어적 확인) PhotoBatch 는 항상 content(360) 계열로 열리고, CHECKER 핀만 있는
+ *  상태이므로 대상 0건(기본 범위 1~1)이다 — 구 기대(checkboard 범위로 열림)는 폐기됐다. */
 {
   const { document, registry } = makeDoc();
-  // [WO 20260929 addendum] State.checkboard(불리언)만으로는 계열을 못 가른다 — 35_PhotoBatch.js
-  // _defaultRange() 가 이제 State.regMode 를 본다(§10 SoT, 20_App.js _placeCheckboardPin 과 동일).
   const State = { checkboard: false, regMode: "checkboard", mode: "designer", pdfPage: 1, pins: [], checkboardStart: {}, activePin: null };
   const UI = {
     $: (id) => document.getElementById(id),
@@ -223,13 +222,13 @@ function makeFullEnv(pins) {
   State.checkboardStart = { checkboard: { 1: 10 } };
   App._placeCheckboardPin({ x: 1, y: 1 });
   App._placeCheckboardPin({ x: 2, y: 2 });
-  registry["btn-photobatch"].click(); // 단독 진입(범위 인자 없음) — _defaultRange() 가 현재 모드를 봐야 함
-  ok(PB._range.series === "checkboard" && PB._range.start === 10 && PB._range.end === 11,
-    "④ 체크보드 모드에서 #btn-photobatch 클릭 → PhotoBatch 가 방금 찍은 체크보드 범위(10~11)로 열림 → " + JSON.stringify(PB._range));
+  registry["btn-photobatch"].click(); // 단독 진입(범위 인자 없음) — _defaultRange() 는 항상 content
+  ok(PB._range.series === "content" && PB._range.start === 1 && PB._range.end === 1,
+    "④ CHECKER 모드에서 #btn-photobatch 클릭 → 방금 찍은 CHECKER 핀은 대상 아님, content 계열 기본범위(1~1)로 열림 → " + JSON.stringify(PB._range));
 
-  console.log("\n[뮤테이션④] _defaultRange() 가 다시 series=\"content\" 로 고정되면 실패해야 함");
-  const needle = 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";';
-  const mutated = pbSrc.replace(needle, 'const series = "content";');
+  console.log("\n[뮤테이션④] _defaultRange() 가 CHECKER 모드일 때 checkboard 계열을 고르도록 되돌리면 실패해야 함");
+  const needle = 'const series = "content";';
+  const mutated = pbSrc.replace(needle, 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";');
   if (mutated === pbSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { document: docM, registry: regM } = makeDoc();
@@ -242,8 +241,8 @@ function makeFullEnv(pins) {
     sandboxM.__App._bindSidebar();
     sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
     regM["btn-photobatch"].click();
-    ok(sandboxM.__PB._range.series !== "checkboard",
-      `뮤테이션 적용 시 체크보드 모드에서도 content 로 고정돼 깨짐(테스트 실효성 증명) → ${sandboxM.__PB._range.series}`);
+    ok(sandboxM.__PB._range.series === "checkboard",
+      `뮤테이션 적용 시 CHECKER 모드에서 checkboard 계열로 다시 열려 깨짐(구 동작 재현, 테스트 실효성 증명) → ${sandboxM.__PB._range.series}`);
   }
 }
 

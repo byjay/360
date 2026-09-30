@@ -88,6 +88,11 @@ const kidsOf = (el) => (el && el._children || []).find((c) => has(c, "tree-child
 const pick = (el, cls) => (el && el._children || []).filter((c) => has(c, cls));
 const headOf = (el) => (el._children || []).find((c) => has(c, "tree-node"));
 const labelOf = (node) => { const m = /class="tree-label">([^<]*)</.exec(headOf(node)._html); return m ? m[1] : ""; };
+function findAll(el, cls, out) {
+  out = out || [];
+  (el && el._children || []).forEach((c) => { if (has(c, cls)) out.push(c); findAll(c, cls, out); });
+  return out;
+}
 
 /* ── 픽스처 ──
    구역: floor(mode NULL — 0029 이전 기존 구역, sunbo 역) · 체커구역(checker) + 그 영역 체커영역(checker) · 360구역(360)
@@ -128,7 +133,10 @@ function runUI(fx, srcs) {
     "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries; globalThis.__HUB = ProjectHub;", sandbox);
   return { UI: sandbox.__UI, PS: sandbox.__PS, HUB: sandbox.__HUB, registry };
 }
-/** 한 모드 상태를 전부 렌더하고 관측값을 뽑는다 */
+/** 한 모드 상태를 전부 렌더하고 관측값을 뽑는다.
+ *  [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 가지 구조를 뒤집는다 —
+ *  구역·영역은 두 모드가 공유하는 한 벌만 렌더(중복 0). 모드 분리는 로드된 구역(floor, 픽스처의
+ *  currentDeck)의 맨 안쪽 잎(.tree-mode-leaf-checker/.tree-mode-leaf-360)에서만 일어난다. */
 function observe(regMode, srcs, viewer) {
   const fx = fixture(regMode, viewer);
   const { UI, PS, HUB, registry } = runUI(fx, srcs || {});
@@ -138,24 +146,23 @@ function observe(regMode, srcs, viewer) {
   const chips = registry["pin-filter-bar"]._html;
   const badge = registry["pin-count-badge"]._text;
   const proj = pick(registry["side-tree"], "tree-project")[0];
-  const modes = pick(kidsOf(proj), "tree-mode");
-  const modeInfo = {};
-  modes.forEach((mw) => {
-    const tag = mw.dataset.mode;
-    const decks = pick(kidsOf(mw), "tree-deck");
-    const deckNames = decks.map(labelOf);
-    const byName = {};
-    decks.forEach((d) => {
-      const k = kidsOf(d);
-      byName[labelOf(d)] = {
-        pins: pick(k, "tree-node-pin").map((n) => (/tree-pin-no">([^<]*)</.exec(n._html) || [])[1]),
-        regions: pick(k, "tree-region").map(labelOf)
+  const decks = pick(kidsOf(proj), "tree-deck"); // 공유 — 모드 가지 없이 프로젝트 바로 아래 한 벌
+  const deckNames = decks.map(labelOf);
+  const floorDeck = decks.find((d) => labelOf(d) === "floor"); // 픽스처의 currentDeck(로드됨)
+  const leafInfo = {};
+  if (floorDeck) {
+    pick(kidsOf(floorDeck), "tree-mode-leaf").forEach((lw) => {
+      const tag = lw.dataset.mode;
+      leafInfo[tag] = {
+        head: headOf(lw), open: has(lw, "open"),
+        pins: findAll(lw, "tree-node-pin").map((n) => (/tree-pin-no">([^<]*)</.exec(n._html) || [])[1])
       };
     });
-    modeInfo[tag] = { head: headOf(mw), deckNames, byName, open: has(mw, "open") };
-  });
+  }
+  const chkDeck = decks.find((d) => labelOf(d) === "체커구역");
+  const regionsOfChk = chkDeck ? pick(kidsOf(chkDeck), "tree-region").map(labelOf) : [];
   const hubHtml = HUB._renderDeckTreeHtml.call(Object.assign(Object.create(HUB), { _deckTreeCache: { prj1: fx.Projects.decks } }), { id: "prj1" });
-  return { fx, PS, markers, chips, badge, modes: modes.map((m) => m.dataset.mode), modeInfo, hubHtml };
+  return { fx, PS, markers, chips, badge, deckNames, leafInfo, regionsOfChk, hubHtml };
 }
 
 /* ══════════════════ Part A — 모드 = 작업공간 (실 소스) ══════════════════ */
@@ -170,32 +177,35 @@ function checkA(label, srcs) {
     && /data-series="content"/.test(P.chips) && !/data-series="checkboard"/.test(P.chips) && /zpager-cnt">2</.test(P.chips),
     "A2 필터 칩·카운트: CHECKER 모드엔 [CHECKER 3]만, 360 모드엔 [360 2]만");
   push(C.badge === "3 PINS" && P.badge === "2 PINS", `A3 핀 목록 "N PINS": CHECKER='${C.badge}' · 360='${P.badge}'`);
-  push(C.modes.join(",") === "checker,360", `A4 트리: 프로젝트 바로 아래 모드 노드 2개(CHECKER, 360) → [${C.modes}]`);
-  const cc = C.modeInfo.checker || {}, c3 = C.modeInfo["360"] || {};
-  push(!!cc.head && has(cc.head, "active") && !has(c3.head, "active"), "A5 CHECKER 모드 → CHECKER 노드만 강조(.active)");
-  const pc = P.modeInfo.checker || {}, p3 = P.modeInfo["360"] || {};
-  push(!!p3.head && has(p3.head, "active") && !has(pc.head, "active"), "A5 360 모드 → 360 노드만 강조(.active)");
-  push(JSON.stringify(cc.deckNames) === JSON.stringify(["floor", "체커구역"]) && JSON.stringify(c3.deckNames) === JSON.stringify(["floor", "360구역"]),
-    `A6 구역 소속: CHECKER=[${cc.deckNames}] · 360=[${c3.deckNames}] (floor=NULL 은 양쪽)`);
-  push(cc.byName && cc.byName["체커구역"] && cc.byName["체커구역"].regions.join() === "체커영역", "A6 영역은 부모 구역 아래(CHECKER → 체커구역 → 체커영역)");
-  const fC = cc.byName && cc.byName.floor, f3 = c3.byName && c3.byName.floor;
-  push(!!fC && fC.pins.join() === "#1,#2,#3" && !!f3 && f3.pins.join() === "#P1,#P2",
-    `A7 NULL 구역(floor) 핀: CHECKER 트리=[${fC && fC.pins}] · 360 트리=[${f3 && f3.pins}] — 어느 쪽에서도 유실 없음`);
-  push(!!(C.modeInfo.checker || {}).open && !(C.modeInfo["360"] || {}).open, "A8 활성 모드 가지만 기본 펼침(비활성은 접힘, 캐럿으로 열 수 있음)");
-  // 모드 노드 클릭 = App._setRegMode (상단 세그먼트와 같은 SoT)
-  c3.head._handlers.click.forEach((fn) => fn({ target: { closest: () => null } }));
-  push(C.fx.calls.setRegMode.join() === "photo", `A9 CHECKER 모드에서 [360] 노드 클릭 → App._setRegMode('photo') → [${C.fx.calls.setRegMode}]`);
+  // [WO 20260930-moderole] 🔴 A4~A9 재작성 — 구역은 두 모드가 공유(중복 0), 모드 분리는 로드된
+  // 구역(floor)의 맨 안쪽 잎(CHECKER/360)에서만 일어난다(88e52ff 모드 가지 제거, 마스터 2차 지시).
+  push(C.deckNames.join() === "floor,체커구역,360구역" && P.deckNames.join() === C.deckNames.join(),
+    `A4 트리: 구역은 모드 무관 한 벌만(중복 0) — CHECKER 관찰=[${C.deckNames}] · 360 관찰=[${P.deckNames}] 동일`);
+  push(!!C.leafInfo.checker && has(C.leafInfo.checker.head, "active") && !has(C.leafInfo["360"].head, "active"),
+    "A5 CHECKER 모드 → floor 구역의 CHECKER 잎만 강조(.active)");
+  push(!!P.leafInfo["360"] && has(P.leafInfo["360"].head, "active") && !has(P.leafInfo.checker.head, "active"),
+    "A5 360 모드 → floor 구역의 360 잎만 강조(.active)");
+  push(C.regionsOfChk.join() === "체커영역" && P.regionsOfChk.join() === "체커영역",
+    `A6 영역은 부모 구역 아래(체커구역 → 체커영역) — 두 모드 관찰 모두 동일(공유), CHECKER=[${C.regionsOfChk}] · 360=[${P.regionsOfChk}]`);
+  push(C.leafInfo.checker.pins.join() === "#1,#2,#3" && C.leafInfo["360"].pins.join() === "#P1,#P2",
+    `A7 floor 구역(모드 무관 한 벌)의 CHECKER 잎=[${C.leafInfo.checker.pins}] · 360 잎=[${C.leafInfo["360"].pins}] — 계열별로 완전히 갈린다(유실 없음)`);
+  push(C.leafInfo.checker.open && !C.leafInfo["360"].open, "A8 CHECKER 모드 → floor 의 CHECKER 잎만 기본 펼침(360 잎은 접힘)");
+  push(!P.leafInfo.checker.open && P.leafInfo["360"].open, "A8 360 모드 → floor 의 360 잎만 기본 펼침");
+  // 잎 클릭 = App._setRegMode (상단 세그먼트와 같은 SoT)
+  C.leafInfo["360"].head._handlers.click.forEach((fn) => fn({ target: { closest: () => null } }));
+  push(C.fx.calls.setRegMode.join() === "photo", `A9 CHECKER 모드에서 floor 의 [360] 잎 클릭 → App._setRegMode('photo') → [${C.fx.calls.setRegMode}]`);
   // 뷰어(모드 없음)는 분리 없이 전부
   const V = observe("checkboard", srcs, true);
   push(V.markers === 5, `A10 뷰어(편집 모드 아님) → 분리 없음, 마커 5 (실제 ${V.markers})`);
-  // 허브 카드 트리도 같은 구조
+  // 허브 카드 트리도 같은 구조 — 구역 공유(중복 0) + 맨 안쪽 잎(CHECKER/360)
   const h = C.hubHtml;
-  const seg = (tag) => { const i = h.indexOf('data-mode-reg="' + tag + '"'); const j = h.indexOf("</li></ul></li>", i); return i < 0 ? "" : h.slice(i, j < 0 ? undefined : j); };
-  const hc = seg("checkboard"), h3 = seg("photo");
-  push(/hub-tree-modes/.test(h) && />CHECKER</.test(hc) && />360</.test(h3)
-    && /floor/.test(hc) && /체커구역/.test(hc) && /체커영역/.test(hc) && !/360구역/.test(hc)
-    && /floor/.test(h3) && /360구역/.test(h3) && !/체커구역/.test(h3),
-    "A11 허브 카드 트리: 프로젝트 → CHECKER(floor·체커구역>체커영역) / 360(floor·360구역)");
+  // [주의] "floor"·data-deck-id="dNull" 은 구역 행 자체뿐 아니라 그 맨 안쪽 잎(CHECKER/360,
+  // 같은 구역을 가리키는 게 정상)에도 나타난다. 중복 판정은 "구역 행"(class="hub-tree-deck")
+  // 자체의 등장 횟수로 한정한다(§ fixture dNull=floor).
+  const floorRowCount = (h.match(/class="hub-tree-deck" data-act="deck-open" data-deck-id="dNull"/g) || []).length;
+  push(/hub-tree-decks/.test(h) && /floor/.test(h) && /체커구역/.test(h) && /체커영역/.test(h) && /360구역/.test(h)
+    && floorRowCount === 1 && /hub-tree-leaf-modes/.test(h) && />CHECKER</.test(h) && />360</.test(h),
+    `A11 허브 카드 트리: 구역 공유(floor·체커구역>체커영역·360구역 한 벌, floor 행 ${floorRowCount}회=중복 0) + 맨 안쪽 잎(CHECKER/360)`);
   // 새 구역·영역 태그
   const PS = C.PS;
   const t1 = PS.withDeckMode({ name: "a" });
@@ -223,18 +233,18 @@ function mutation(name, srcs, mustFailPrefix) {
 console.log("\n[Part A 뮤테이션]");
 mutation("M1 filter() 모드 게이트 제거(구 동작: 모드 무관 전부 표시)",
   { series: mutate(seriesSrc, "      if (act) return { checkboard: act === \"checkboard\", content: act === \"content\" };\n", "", "M1") }, "A1");
-mutation("M2 deckInMode 가 모드 무시(모든 구역이 양쪽 트리)",
-  { series: mutate(seriesSrc, "deckInMode(deck, tag) { return !!deck && (deck.mode == null || deck.mode === \"\" || deck.mode === tag); },", "deckInMode(deck, tag) { return !!deck; },", "M2") }, "A6");
-mutation("M3 NULL 구역 양쪽 표시 제거(기존 구역 유실)",
-  { series: mutate(seriesSrc, "deckInMode(deck, tag) { return !!deck && (deck.mode == null || deck.mode === \"\" || deck.mode === tag); },", "deckInMode(deck, tag) { return !!deck && deck.mode === tag; },", "M3") }, "A7");
+/* [WO 20260930-moderole] 🔴 구 M2/M3 은 deckInMode()로 구역을 모드 가지에 배분하던 시절의
+ * 뮤테이션이다. 88e52ff 모드 가지를 제거하며 트리 렌더 경로가 deckInMode()를 더 이상 부르지
+ * 않으므로(구역 공유, 필터 없음) 그 결함을 트리에서 재현할 방법이 없다(폐기 — 대체 커버리지는
+ * tests/p62-tree-3level.test.mjs 뮤테이션 ⓕ, 구역 중복 렌더 재도입 → 그 테스트의 ①이 실패). */
 mutation("M4 modePins 가 전부 반환(핀 목록 분리 제거)",
   { series: mutate(seriesSrc, "modePins(pins) { return (pins || []).filter((p) => p && this.inMode(p)); },", "modePins(pins) { return (pins || []).slice(); },", "M4") }, "A3");
 mutation("M5 영역 부모 mode 상속 제거",
   { series: mutate(seriesSrc, "const tag = (parentDeck && parentDeck.mode) || this.deckModeTag();", "const tag = this.deckModeTag();", "M5") }, "A13");
-mutation("M6 트리 핀 나열을 모드 계열로 거르지 않음",
-  { ui: mutate(uiSrc, "modePinsHere.forEach((p) => {", "(State.pins || []).forEach((p) => {", "M6") }, "A7");
-mutation("M7 트리 모드 단 제거(구역을 프로젝트 직속으로 — 종전 구조)",
-  { ui: mutate(uiSrc, "const MODES = (typeof PinSeries !== \"undefined\" && PinSeries.DECK_MODES) || null;\n      if (!MODES) {", "const MODES = null;\n      if (!MODES) {", "M7") }, "A4");
+mutation("M6 트리 핀 나열을 모드 계열로 거르지 않음(모드 잎 안에서 전체 핀을 나열)",
+  { ui: mutate(uiSrc, "renderScopedPins(mk, modePinsHere);", "renderScopedPins(mk, pins);", "M6") }, "A7");
+mutation("M7 모드 잎(CHECKER/360) 렌더 제거 → 구역 로드돼도 계열 분리 없음",
+  { ui: mutate(uiSrc, "MODES.forEach((m) => {\n              const modePinsHere", "[].forEach((m) => {\n              const modePinsHere", "M7") }, "A7");
 
 /* ══════════════════ Part B — 서버 + 실 D1 ══════════════════ */
 console.log("\n[Part B · 실제 워커(src/index.tsx) + 실제 D1(Miniflare) — decks.mode]");
@@ -372,28 +382,33 @@ window.Auth = { isDesigner: true, headers() { return {}; } };
         let out = { r: 255, g: 255, b: 255 }; for (let i = stack.length - 1; i >= 0; i--) { const c = stack[i]; out = { r: c.r * c.a + out.r * (1 - c.a), g: c.g * c.a + out.g * (1 - c.a), b: c.b * c.a + out.b * (1 - c.a) }; } return out; };
       const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
       const ratio = (el) => { if (!el) return 0; const fg = parse(getComputedStyle(el).color), bg = bgOf(el); const a = lum(fg), b = lum(bg); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
-      const heads = [...document.querySelectorAll(".tree-node-mode")];
+      // [WO 20260930-moderole] 🔴 모드 가지(.tree-mode/.tree-node-mode)는 제거됐다 — 구역은
+      // 공유(모드 무관 항상 보임), 모드 분리는 로드된 구역(floor)의 맨 안쪽 잎(.tree-node-mode-leaf)에서만.
+      const heads = [...document.querySelectorAll(".tree-node-mode-leaf")];
       return {
         markers: document.querySelectorAll("#pins-layer .pin-marker").length,
         modeHeads: heads.map((h) => h.querySelector(".tree-label").textContent.trim() + (h.classList.contains("active") ? "*" : "")),
-        ratioActive: ratio(document.querySelector(".tree-node-mode.active")),
-        ratioIdle: ratio(document.querySelector(".tree-node-mode:not(.active)")),
+        ratioActive: ratio(document.querySelector(".tree-node-mode-leaf.active")),
+        ratioIdle: ratio(document.querySelector(".tree-node-mode-leaf:not(.active)")),
         ratioHub: ratio(document.querySelector(".hub-tree-mode-label")),
-        visibleDecksActive: [...document.querySelectorAll(".tree-mode.open > .tree-children > .tree-deck > .tree-node .tree-label")].filter((e) => e.offsetParent).map((e) => e.textContent)
+        // 구역은 공유 — 모드가 바뀌어도 트리에 보이는 구역 목록 자체는 그대로여야 한다(중복·숨김 없음).
+        visibleDecks: [...document.querySelectorAll("#side-tree .tree-deck > .tree-node .tree-label")].filter((e) => e.offsetParent).map((e) => e.textContent)
       };
     });
     await page.evaluate(() => window.__render());
     const before = await measure();
     await page.screenshot({ path: path.join(SHOT_DIR, "p91-before-checker.png"), fullPage: true });
-    // 트리의 [360] 모드 노드를 실제 클릭 → App._setRegMode('photo') → 재렌더
-    await page.evaluate(() => { const h = [...document.querySelectorAll(".tree-node-mode")].find((b) => /360/.test(b.textContent)); h.click(); });
+    // 트리의 [360] 모드 잎을 실제 클릭 → App._setRegMode('photo') → 재렌더
+    await page.evaluate(() => { const h = [...document.querySelectorAll(".tree-node-mode-leaf")].find((b) => /360/.test(b.textContent)); h.click(); });
     const after = await measure();
     await page.screenshot({ path: path.join(SHOT_DIR, "p91-after-360.png"), fullPage: true });
     ok(errs.length === 0, "C0 페이지 오류 없음 " + JSON.stringify(errs.slice(0, 2)));
     ok(before.markers === 3 && after.markers === 2, `C1 실 DOM 지도 마커: 전환 전 CHECKER ${before.markers} → 후 360 ${after.markers}`);
-    ok(before.modeHeads.join() === "CHECKER*,360" && after.modeHeads.join() === "CHECKER,360*", `C2 트리 모드 노드 강조 전 [${before.modeHeads}] → 후 [${after.modeHeads}]`);
-    ok(before.visibleDecksActive.join() === "floor,체커구역" && after.visibleDecksActive.join() === "floor,360구역",
-      `C3 보이는(펼친) 모드 가지의 구역: 전 [${before.visibleDecksActive}] → 후 [${after.visibleDecksActive}]`);
+    ok(before.modeHeads.join() === "CHECKER*,360" && after.modeHeads.join() === "CHECKER,360*", `C2 트리 모드 잎(floor 구역 맨 안쪽) 강조 전 [${before.modeHeads}] → 후 [${after.modeHeads}]`);
+    // [WO 20260930-moderole] 구역은 공유 — 모드가 바뀌어도(체커↔360) 트리에 보이는 구역 목록은
+    // 동일해야 한다(중복도 숨김도 없음). 전환 전후가 완전히 같은 목록인지로 "공유"를 실측한다.
+    ok(before.visibleDecks.join() === "floor,체커구역,360구역" && after.visibleDecks.join() === before.visibleDecks.join(),
+      `C3 구역 공유 — 모드 전환 전 [${before.visibleDecks}] → 후 [${after.visibleDecks}] (동일해야 정상)`);
     ok(before.ratioActive >= 4.5 && before.ratioIdle >= 4.5 && before.ratioHub >= 4.5,
       `C4 글자 대비(실 CSS 3파일 런타임) 활성 ${before.ratioActive.toFixed(2)} · 비활성 ${before.ratioIdle.toFixed(2)} · 허브 ${before.ratioHub.toFixed(2)} ≥ 4.5`);
     ok(fs.existsSync(path.join(SHOT_DIR, "p91-before-checker.png")) && fs.existsSync(path.join(SHOT_DIR, "p91-after-360.png")), "C5 스크린샷 저장 .tmp/fixmode/p91-{before-checker,after-360}.png");
