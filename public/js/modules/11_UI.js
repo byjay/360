@@ -532,56 +532,20 @@
             });
             if (best) zoneOfPin.set(p.id, best);
           });
-          // [WO 20260930-moderole] 🔴 잎 — 프로젝트→구역→영역(공유) 다음, 이 노드가 로드된 곳에서만
-          //   CHECKER N / 360 N 두 그룹을 그린다. 핀 목록·번호대·일괄삭제 범위는 그룹 안에서만
-          //   계열별로 가른다(SoT: PinSeries.DECK_MODES). 클릭 = App._setRegMode(상단 세그먼트와 동일).
-          const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
-          const actMode = (typeof PinSeries !== "undefined" && PinSeries.activeMode) ? PinSeries.activeMode() : null;
-          const leafOpen = this._treeModeLeafOpen || (this._treeModeLeafOpen = new Set());
-          MODES.forEach((m) => {
-            const modePinsHere = pins.filter((p) => p && PinSeries.inMode(p, m.series));
-            const isAct = !!(actMode && actMode.tag === m.tag);
-            const leafKey = collapseKey + ":" + m.tag;
-            const mw = document.createElement("div");
-            mw.className = "tree-mode-leaf tree-mode-leaf-" + m.tag + ((isAct || leafOpen.has(leafKey)) ? " open" : "");
-            mw.dataset.mode = m.tag;
-            const mh = document.createElement("button");
-            mh.type = "button";
-            mh.className = "tree-node tree-node-mode-leaf" + (isAct ? " active" : "");
-            mh.setAttribute("aria-pressed", String(isAct));
-            mh.title = m.label + " 작업공간" + (isAct ? " (현재 모드)" : " — 누르면 이 모드로 전환하고 이 구역/영역을 엽니다");
-            mh.innerHTML = C + '<span class="tree-label">' + esc(m.label) + '</span><span class="tree-cnt" title="핀 수">' + modePinsHere.length + '</span>';
-            mh.addEventListener("click", (e) => {
-              const onCaret = !!(e && e.target && e.target.closest && e.target.closest(".tree-caret"));
-              if (onCaret || isAct) {
-                if (mw.classList.toggle("open")) leafOpen.add(leafKey); else leafOpen.delete(leafKey);
-                return;
-              }
-              if (typeof App !== "undefined" && App._setRegMode) App._setRegMode(m.regMode);
-              mw.classList.add("open"); leafOpen.add(leafKey);
-            });
-            mw.appendChild(mh);
-            // [WO 20260929-bulkdel] 관리자 전용 — 범위 = 이 모드 그룹의 핀만(다른 모드 핀은 지우지 않는다).
-            if (this._pinBulkOk() && modePinsHere.length) {
-              const acts = document.createElement("div");
-              acts.className = "tree-project-actions tree-pin-bulk";
-              this._pinBulkButtons({ scopePins: modePinsHere.slice(), scopeLabel: (isRegion ? "이 영역" : "이 구역") + " " + m.label })
-                .forEach(b => acts.appendChild(b));
-              mw.appendChild(acts);
-            }
-            const mk = document.createElement("div");
-            mk.className = "tree-children";
+          // 공유 렌더러 — 주어진 핀 부분집합(scopePins)을 영역별로 묶어 target 아래에 그린다.
+          // 모드 잎 안(계열별)과, PinSeries 미로드 하네스의 전체-핀 폴백(아래) 둘 다 이 함수 하나로 그린다.
+          const renderScopedPins = (target, scopePins) => {
             const pinsOfZone = new Map();
             zones.forEach((z) => pinsOfZone.set(z.id, []));
             const rootPins = [];
-            modePinsHere.forEach((p) => {
+            scopePins.forEach((p) => {
               const z = zoneOfPin.get(p.id);
               if (z && pinsOfZone.has(z.id)) pinsOfZone.get(z.id).push(p);
               else rootPins.push(p);
             });
             zones.forEach((zone) => {
               const zpins = (pinsOfZone.get(zone.id) || []).slice().sort(sortByNo);
-              if (!zpins.length) return; // 이 모드 계열 핀이 없는 영역은 그리지 않는다(빈 중복 방지)
+              if (!zpins.length) return; // 이 범위에 핀이 없는 영역은 그리지 않는다(빈 중복 방지)
               const zpage = zone.page || 1;
               const isCurZonePage = zpage === curPage;
               const zn = document.createElement("div");
@@ -599,12 +563,58 @@
               zc.className = "tree-children";
               zpins.forEach((p) => zc.appendChild(pinNode(p, numMap)));
               zn.appendChild(zc);
-              mk.appendChild(zn);
+              target.appendChild(zn);
             });
-            rootPins.sort(sortByNo).forEach((p) => mk.appendChild(pinNode(p, numMap)));
-            mw.appendChild(mk);
-            kids.appendChild(mw);
-          });
+            rootPins.sort(sortByNo).forEach((p) => target.appendChild(pinNode(p, numMap)));
+          };
+          // [WO 20260930-moderole] 🔴 잎 — 프로젝트→구역→영역(공유) 다음, 이 노드가 로드된 곳에서만
+          //   CHECKER N / 360 N 두 그룹을 그린다. 핀 목록·번호대·일괄삭제 범위는 그룹 안에서만
+          //   계열별로 가른다(SoT: PinSeries.DECK_MODES). 클릭 = App._setRegMode(상단 세그먼트와 동일).
+          const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
+          if (!MODES.length) {
+            // 모드 정본 미로드(단독 모듈 하네스) — 모드 잎 없이 전체 핀을 그대로(종전 구조, 회귀 없음).
+            renderScopedPins(kids, pins);
+          } else {
+            const actMode = (typeof PinSeries !== "undefined" && PinSeries.activeMode) ? PinSeries.activeMode() : null;
+            const leafOpen = this._treeModeLeafOpen || (this._treeModeLeafOpen = new Set());
+            MODES.forEach((m) => {
+              const modePinsHere = pins.filter((p) => p && PinSeries.inMode(p, m.series));
+              const isAct = !!(actMode && actMode.tag === m.tag);
+              const leafKey = collapseKey + ":" + m.tag;
+              const mw = document.createElement("div");
+              mw.className = "tree-mode-leaf tree-mode-leaf-" + m.tag + ((isAct || leafOpen.has(leafKey)) ? " open" : "");
+              mw.dataset.mode = m.tag;
+              const mh = document.createElement("button");
+              mh.type = "button";
+              mh.className = "tree-node tree-node-mode-leaf" + (isAct ? " active" : "");
+              mh.setAttribute("aria-pressed", String(isAct));
+              mh.title = m.label + " 작업공간" + (isAct ? " (현재 모드)" : " — 누르면 이 모드로 전환하고 이 구역/영역을 엽니다");
+              mh.innerHTML = C + '<span class="tree-label">' + esc(m.label) + '</span><span class="tree-cnt" title="핀 수">' + modePinsHere.length + '</span>';
+              mh.addEventListener("click", (e) => {
+                const onCaret = !!(e && e.target && e.target.closest && e.target.closest(".tree-caret"));
+                if (onCaret || isAct) {
+                  if (mw.classList.toggle("open")) leafOpen.add(leafKey); else leafOpen.delete(leafKey);
+                  return;
+                }
+                if (typeof App !== "undefined" && App._setRegMode) App._setRegMode(m.regMode);
+                mw.classList.add("open"); leafOpen.add(leafKey);
+              });
+              mw.appendChild(mh);
+              // [WO 20260929-bulkdel] 관리자 전용 — 범위 = 이 모드 그룹의 핀만(다른 모드 핀은 지우지 않는다).
+              if (this._pinBulkOk() && modePinsHere.length) {
+                const acts = document.createElement("div");
+                acts.className = "tree-project-actions tree-pin-bulk";
+                this._pinBulkButtons({ scopePins: modePinsHere.slice(), scopeLabel: (isRegion ? "이 영역" : "이 구역") + " " + m.label })
+                  .forEach(b => acts.appendChild(b));
+                mw.appendChild(acts);
+              }
+              const mk = document.createElement("div");
+              mk.className = "tree-children";
+              renderScopedPins(mk, modePinsHere);
+              mw.appendChild(mk);
+              kids.appendChild(mw);
+            });
+          }
           any = true;
         }
         if (any) g.appendChild(kids);

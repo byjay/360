@@ -412,11 +412,12 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   font-size: 12px;
 }
 .hub-tree-decks, .hub-tree-regions { list-style: none; }
-/* [WO 20260930-fixmode] 허브 카드 트리 모드 단(CHECKER / 360) — 사이드바 트리와 같은 구조. 색 var(--text)(카드 배경 실측 p91). */
-.hub-tree-modes { list-style: none; }
-.hub-tree-mode { cursor: pointer; margin: 2px 0; }
+/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지(.hub-tree-modes/.hub-tree-mode)를
+   제거 — 구역·영역은 공유, 모드 분리는 구역/영역의 맨 안쪽 잎(CHECKER/360 두 항목)으로 이동했다.
+   라벨 색은 기존 검증된 var(--text) 그대로(카드 배경 실측 이력 위 §406~408 참조). */
+.hub-tree-leaf-modes { list-style: none; display: flex; gap: 6px; margin: 3px 0 2px 18px; }
+.hub-tree-leaf-mode { cursor: pointer; }
 .hub-tree-mode-label { display: inline-block; padding: 3px 6px; font-weight: 800; font-size: 11px; letter-spacing: .06em; color: var(--text); }
-.hub-tree-mode > .hub-tree-decks, .hub-tree-mode > .hub-tree-empty { margin-left: 12px; }
 .hub-tree-regions { margin: 2px 0 6px 16px; }
 .hub-tree-deck, .hub-tree-region {
   display: block; cursor: pointer; border-radius: var(--radius-sm);
@@ -5190,11 +5191,12 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-doc:not(.open) > .tree-children{display:none;}
 .tree-region:not(.open) > .tree-children{display:none;}
 .tree-children{padding-left:12px;border-left:1px solid var(--border2);margin-left:10px;}
-/* [WO 20260930-fixmode] 모드 단(프로젝트 → CHECKER / 360 → 구역) — 작업공간 헤더. 굵기·자간으로 구역과 구분.
-   색은 기존 var(--text)(다크 런타임 실측은 tests/p91-mode-workspace.test.mjs Part C), 활성 = 기존 .tree-node.active. */
-.tree-node-mode{font-weight:800;font-size:12.5px;letter-spacing:.05em;color:var(--text);}
-.tree-mode:not(.open) .tree-node-mode .tree-caret{transform:rotate(-90deg);}
-.tree-mode:not(.open) > .tree-children{display:none;}
+/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지(.tree-mode/.tree-node-mode)를
+   제거 — 구역·영역은 공유, 모드 분리는 로드된 노드의 맨 안쪽 잎(.tree-mode-leaf/.tree-node-mode-leaf)
+   으로 이동했다. 같은 검증된 색(var(--text), 다크 런타임 실측 이력 tests/p91)을 그대로 재사용. */
+.tree-node-mode-leaf{font-weight:800;font-size:12.5px;letter-spacing:.05em;color:var(--text);}
+.tree-mode-leaf:not(.open) .tree-node-mode-leaf .tree-caret{transform:rotate(-90deg);}
+.tree-mode-leaf:not(.open) > .tree-children{display:none;}
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
 .tree-cnt{min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--gold);color:#1a1206;font-size:9px;font-weight:700;flex:0 0 auto;}

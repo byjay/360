@@ -449,11 +449,11 @@
      *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
      *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      // [WO 20260929 addendum, 지휘자 정정] State.checkboard(불리언, CHECKER/360 공통 "퀵툴" 플래그)
-      // 만으로는 두 계열을 구분 못 한다(마스터: "번호체계도 다르게 해" — 계열 분리). CHECKER
-      // 모드일 때만 checkboard 계열, 그 외(360/photo·일반 편집)는 전부 content(360) 계열 —
-      // State.regMode 로만 판정(20_App.js _placeCheckboardPin 과 동일 판정 로직, §10 SoT).
-      const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 사진 폴더 일괄
+      // 매칭의 대상은 항상 360(content) 계열만이다(CHECKER 계열은 절대 대상이 아니다, SoT:
+      // PinSeries.seriesOf). 예전엔 State.regMode 로 CHECKER 계열도 골랐으나(WO 20260929 addendum),
+      // 이제 CHECKER 핀은 사진을 등록하지 않으므로 그 분기를 제거한다(항상 content).
+      const series = "content";
       const list = this._pinList(State.pins, State.pdfPage || 1, series);
       return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
@@ -686,7 +686,9 @@
      *  요구사항 §9). series 미지정 시 현재 배치모드(SoT: State.regMode, _defaultRange()와 동일 판정). */
     openTimeMatch(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
-      const series = (range && range.series) || ((typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content");
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 시각 자동 매칭 대상도
+      // 항상 360(content) 계열만(_defaultRange() 와 동일 SoT, CHECKER 분기 제거).
+      const series = (range && range.series) || "content";
       this._tm = { rows: [], series };
       this._ensureTimeMatchModal();
       // [지휘자 발주 보강] 브라우저는 폴더를 자동으로 못 찾는다(showDirectoryPicker 모바일 미지원)

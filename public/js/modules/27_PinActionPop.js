@@ -260,12 +260,22 @@
       const labelHint = $("pap-label-hint");
       if (labelHint) labelHint.textContent = "";
 
-      this._renderPhoto(pin, canEdit);
-      this._loadNotes(pin, canEdit);
-      // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
-      this._regCat = "photo";
-      this._renderRegTools();
-      this._renderDocList(pin);
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 번호만 매기는 기능" / "체커는 사진을 등록하지
+      //   않을 거야" — CHECKER 계열 핀(SoT: PinSeries.seriesOf)은 등록 섹션(#pap-bottom: 등록
+      //   종류 그리드 + 사진/문서/노트 패널) 전체를 숨긴다. 번호·위치명 수정·이동·삭제(#pap-top)는
+      //   그대로 남는다. 기존에 이미 사진이 붙어 있던 CHECKER 핀도 데이터는 그대로 두고(유실 0),
+      //   #pap-view(이미 있는 읽기 버튼)로만 본다 — 새 등록 경로는 열지 않는다.
+      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+      const bottom = $("pap-bottom");
+      if (bottom) bottom.classList.toggle("hidden", isChecker);
+      if (!isChecker) {
+        this._renderPhoto(pin, canEdit);
+        this._loadNotes(pin, canEdit);
+        // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
+        this._regCat = "photo";
+        this._renderRegTools();
+        this._renderDocList(pin);
+      }
 
       // [지휘자 발주 2026-09-29 항목2] 🔴 좌하단 도움말(?) 토글(36_Help.js, position:fixed
       // left:16/bottom:16)이 이 패널(모바일 92vw, 화면 오른쪽 정렬)의 왼쪽 가장자리와

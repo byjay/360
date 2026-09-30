@@ -732,6 +732,23 @@
         b.classList.toggle("active", active);
         b.setAttribute && b.setAttribute("aria-pressed", String(active));
       });
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 번호만 매기는 기능" — 사진 등록 계열 도구(사진
+      // 폴더 일괄 매칭·THETA 360 인입·모바일 도크 사진등록)는 CHECKER 모드에서 숨긴다. 렌더 지점
+      // 하나(§10 SoT) — 모드 전환은 전부 openApp()/_setRegMode() 를 거쳐 이 함수를 부른다.
+      const isChecker = State.regMode === "checkboard";
+      ["btn-photobatch", "btn-theta-intake", "mdock-photobatch"].forEach((id) => {
+        const b = UI.$(id);
+        if (b) b.classList.toggle("hidden", isChecker);
+      });
+      // #btn-theta-intake 는 side-toolbar 컴팩트 칩(.stb-btn[data-deleg="btn-theta-intake"])의
+      // 위임 대상이다 — 대상만 숨기면 그 칩은 .click()으로 여전히 눌린다(delegate 는 hidden 을
+      // 안 본다). 칩 자체도 함께 숨긴다(index.html id 추가 없이 셀렉터로 — 타 화면 신규 id 회피).
+      try {
+        if (typeof document !== "undefined" && document.querySelector) {
+          const thetaChip = document.querySelector('[data-deleg="btn-theta-intake"]');
+          if (thetaChip && thetaChip.classList) thetaChip.classList.toggle("hidden", isChecker);
+        }
+      } catch (e) {}
     },
 
     _togglePlacing() {
@@ -2876,6 +2893,16 @@
     editPin(id) {
       const pin = State.pins.find(p => p.id === id);
       if (pin == null) return;
+      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 이 구식 첨부 폼
+      // (.pf-tools: 사진/360/문서/동영상/URL, #section-pin-form)은 계열 게이트가 없다. CHECKER
+      // 계열 핀(SoT: PinSeries.seriesOf)은 이미 계열 게이트가 있는 PinActionPop(27_PinActionPop.js
+      // open() — #pap-bottom 등록 섹션 숨김)으로 위임해 사진 등록 경로를 원천 차단한다(유실 0 —
+      // 번호·위치명 수정은 PinActionPop 에도 있다).
+      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+      if (isChecker) {
+        if (typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(id);
+        return;
+      }
       // 다른 모드 정리
       if (State.placing) this._togglePlacing();
       State.editingPinId = id;

@@ -2,9 +2,11 @@
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p43-reachability-and-silent-failures.test.mjs)
  *
  * 발주서(WO 20260918) 3건 + 마스터 정정(기본모드 = 등록모드) 검증:
- *  ① 체크보드 모드에서 PhotoBatch.open() 이 체크보드 series 로 열린다
- *  ② 등록 모드에서는 종전대로 content series(회귀)
- *  ③ _defaultRange() 에 series 하드코딩이 없다(무조건 "content" 반환 코드가 없다)
+ *  ① [WO 20260930-moderole 재정정] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — CHECKER 모드
+ *     (State.regMode='checkboard')여도 PhotoBatch.open() 은 항상 content(360) 계열로 열린다
+ *     (예전엔 checkboard 계열로 열렸으나, 이제 CHECKER 핀은 사진 등록 대상 자체가 아니다).
+ *  ② 등록(360) 모드에서도 종전대로 content series(회귀 없음)
+ *  ③ _defaultRange() 가 State.regMode 를 참조하지 않고 항상 "content" 를 반환한다(CHECKER 분기 제거)
  *  ④ 대상 핀 0건이면 사용자에게 알린다(조용한 실패 0)
  *  ⑤ 숨겨진 죽은 버튼(#btn-checkboard-photobatch)이 남아있지 않다(렌더 고아 0)
  *  ⑥ _pickDrawingFile() 이 상한 타임아웃 후 반드시 resolve 한다(영구 교착 금지)
@@ -12,7 +14,8 @@
  *  ⑧ createProject/deleteProject/createDeck 오프라인 시 사용자 알림이 있다(조용한 실패 0)
  *  ⑨ 저장된 사용자 선택(PinSeries.setPreferredMode)이 있으면 기본값보다 우선한다
  *  ⑩ 기본값이 등록모드(designer)다 — 마스터가 같은 날 "체크보드 기본"을 되돌림
- *  ⑪ 체크보드 모드로 전환해도 사진 일괄매칭이 열린다(요구1 회귀, PhotoBatch open series 일치)
+ *  ⑪ [WO 20260930-moderole 재정정] CHECKER 모드로 전환해 PhotoBatch.open() 을 직접 호출해도
+ *     content 계열로 열린다(CHECKER 핀은 사진 등록 대상이 아니다, 방어적 확인)
  *
  * 실제 모듈 소스(01b_PinSeries.js/35_PhotoBatch.js/20_App.js/31_Projects.js/index.html)를
  * 그대로 vm 에 평가/검사한다(목 구현 아님). ①③④⑥⑧⑩ 에 뮤테이션 케이스가 붙는다.
@@ -62,17 +65,17 @@ function loadPB(pbSource, seriesSource, extraState = {}) {
   return { PB: sandbox.__PB, PS: sandbox.__PS, registry, toastCalls, State };
 }
 
-/* ══ ①② 현재 모드에 맞는 series 로 열린다 ══════════════════════════════ */
+/* ══ ①② [WO 20260930-moderole] CHECKER 모드여도 항상 content 계열로 열린다 ══════════════════ */
 {
   const pinsCb = [
     { id: "C1", page: 1, label: "1", checkboard: true },
     { id: "C2", page: 1, label: "2", checkboard: true }
   ];
-  // [WO 20260929 addendum] _defaultRange() 판정축이 State.checkboard(불리언, CHECKER/360 공통
-  // 플래그)에서 State.regMode(문자열, 계열을 실제로 구분)로 바뀌었다 — regMode 도 함께 넘긴다.
+  // CHECKER 모드(State.regMode='checkboard')여도 PhotoBatch 는 CHECKER 핀을 대상으로 삼지 않는다
+  // (마스터: "체커는 사진을 등록하지 않을 거야") — 항상 content 계열로 열린다.
   const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
   PB.open();
-  ok(PB._range.series === "checkboard", "① 체크보드 모드(State.regMode='checkboard') → open() 이 checkboard 계열로 열림, 실제 " + PB._range.series);
+  ok(PB._range.series === "content", "① CHECKER 모드(State.regMode='checkboard') → open() 이 content 계열로 열림(CHECKER는 사진 등록 대상 아님), 실제 " + PB._range.series);
 
   const pinsContent = [
     { id: "A1", page: 1, label: "A", imageId: "x" },
@@ -80,25 +83,25 @@ function loadPB(pbSource, seriesSource, extraState = {}) {
   ];
   const { PB: PB2 } = loadPB(pbSrc, seriesSrc, { pins: pinsContent, pdfPage: 1, checkboard: false, regMode: "view" });
   PB2.open();
-  ok(PB2._range.series === "content", "② 등록 모드(State.regMode='view') → open() 이 content 계열로 열림(회귀), 실제 " + PB2._range.series);
+  ok(PB2._range.series === "content", "② 등록(뷰어) 모드(State.regMode='view') → open() 이 content 계열로 열림(회귀 없음), 실제 " + PB2._range.series);
 }
 
-/* ══ ③ _defaultRange() 에 series 하드코딩이 없다(+ 뮤테이션ⓐ) ══════════════ */
+/* ══ ③ _defaultRange() 가 State.regMode 를 보지 않고 항상 content(+ 뮤테이션ⓐ) ══════════════ */
 {
-  ok(!/_defaultRange\(\) \{\s*const list = this\._pinList\(State\.pins, State\.pdfPage \|\| 1, "content"\)/.test(pbSrc),
-    "③ _defaultRange() 소스에 series=\"content\" 무조건 고정 패턴이 없다");
-  ok(/_defaultRange\(\) \{\s*\/\/[\s\S]{0,400}?const series = \(typeof State/.test(pbSrc),
-    "③ _defaultRange() 가 State.regMode 를 참조해 series 를 계산한다");
+  ok(/_defaultRange\(\) \{[\s\S]{0,400}?const series = "content";/.test(pbSrc),
+    "③ _defaultRange() 가 State.regMode 와 무관하게 series = \"content\" 로 고정돼 있다(CHECKER 분기 제거)");
+  ok(!/const series = \(typeof State !== "undefined" && State\.regMode === "checkboard"\) \? "checkboard" : "content";/.test(pbSrc),
+    "③ _defaultRange() 소스에 CHECKER 모드용 checkboard 계열 분기가 남아있지 않다");
 
-  console.log("\n[뮤테이션ⓐ] _defaultRange() 의 series 계산을 다시 \"content\" 로 고정하면 ①이 실패해야 함");
-  const needleA = 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";';
-  const mutatedA = pbSrc.replace(needleA, 'const series = "content";');
+  console.log("\n[뮤테이션ⓐ] _defaultRange() 를 다시 CHECKER 분기(구 동작)로 되돌리면 ①이 실패해야 함");
+  const needleA = 'const series = "content";';
+  const mutatedA = pbSrc.replace(needleA, 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";');
   if (mutatedA === pbSrc) { console.log("  FAIL 뮤테이션ⓐ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const pinsCb = [{ id: "C1", page: 1, label: "1", checkboard: true }];
     const { PB: PBm } = loadPB(mutatedA, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
     PBm.open();
-    ok(PBm._range.series !== "checkboard", "뮤테이션ⓐ 적용 시 체크보드 모드에서도 content 로 고정됨(①이 깨짐, 하드코딩 재현) → " + PBm._range.series);
+    ok(PBm._range.series !== "content", "뮤테이션ⓐ 적용 시 CHECKER 모드에서 checkboard 계열로 다시 열림(①이 깨짐, 구 동작 재현) → " + PBm._range.series);
   }
 }
 
@@ -331,11 +334,13 @@ function makePinSeriesSandbox(initialStore) {
     ok(sandboxM.__PS.preferredMode() !== "checkboard", "뮤테이션ⓔ 적용 시 기본값이 designer 로 되돌아감(⑩이 깨짐) → " + sandboxM.__PS.preferredMode());
   }
 
-  // ⑪ CHECKER 로 전환해도(State.regMode='checkboard') PhotoBatch.open() 이 여전히 checkboard 계열로 열림(요구1 회귀)
+  // [WO 20260930-moderole 재정정] ⑪ CHECKER 로 전환해도(State.regMode='checkboard') 방어적으로
+  // PhotoBatch.open() 을 직접 호출해도(버튼이 숨겨져 있어도 API 레벨 방어) content 계열로 열린다 —
+  // CHECKER 핀은 사진 등록 대상이 아니다(마스터: "체커는 사진을 등록하지 않을 거야").
   const pinsCb = [{ id: "C1", page: 1, label: "1", checkboard: true }];
   const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
   PB.open();
-  ok(PB._range.series === "checkboard", "⑪ 기본모드가 CHECKER 가 아니어도, CHECKER 로 전환하면 사진 일괄매칭이 checkboard 계열로 열림, 실제 " + PB._range.series);
+  ok(PB._range.series === "content", "⑪ CHECKER 모드에서 PhotoBatch.open() 을 직접 호출해도(방어적) content 계열로 열림 — CHECKER 는 대상 아님, 실제 " + PB._range.series);
 }
 
 console.log(failed === 0 ? "\n[ALL PASS]" : "\n[" + failed + " FAILED]");
