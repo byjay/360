@@ -443,7 +443,8 @@
           // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
           // [WO 20260930-fixmode] 영역 = 부모 구역의 mode 상속(부모 NULL 이면 활성 모드) — PinSeries.withDeckMode SoT.
           body: JSON.stringify(this._withDeckMode(plan.depId
-            ? { name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }
+            // [WO 20260930-merge] 복사본은 원본 상자(src_*) 기록 — 합치기 좌표 변환의 전제(_srcBoxFields)
+            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }, this._srcBoxFields(src, page, crop))
             : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id },
             (src.parent_id && (this.decks || []).find((x) => String(x.id) === String(src.parent_id))) || src))
         });
@@ -538,6 +539,23 @@
       if (noB && cancelLabel) noB.textContent = cancelLabel;
       try { return !!(await p); }
       finally { if (okB) okB.textContent = prev[0]; if (noB) noB.textContent = prev[1]; }
+    },
+
+    /** [WO 20260930-merge] 벡터 복사 구역의 "원본 상자" 기록(마이그레이션 0031) — 구역 합치기(41_RegionMerge)의 좌표 변환 전제.
+     *  복사본은 새 1페이지 배포본 + crop:null 이라 이 기록이 없으면 두 구역의 공통 좌표계를 알 수 없다.
+     *  · 원본 상자가 이미 기록된 복사본(src.src_crop)에서 다시 잘랐으면 **그 원본까지 합성**해 기준 배포본을 하나로 맞춘다
+     *    (구역→영역이 같은 src_dep_id 를 공유해야 영역↔형제 구역 사이 변환이 된다). 합성 = MapCtrl.deckCropPctToPage(새 수식 0).
+     *  · 그 외(원본 도면·창 구역·기록 없는 레거시 복사본)는 src 자신의 배포본 페이지 % 가 곧 기준이다.
+     *  순수 함수. crop 이 없으면 {}(기록 안 함 — 서버 NULL). */
+    _srcBoxFields(src, page, crop) {
+      if (!src || !src.deployment_id || !crop || !(crop.w > 0) || !(crop.h > 0)) return {};
+      const sc = src.src_crop;
+      if (src.src_dep_id && sc && sc.w > 0 && sc.h > 0 && typeof MapCtrl !== "undefined" && MapCtrl.deckCropPctToPage) {
+        const tl = MapCtrl.deckCropPctToPage(crop.x, crop.y, sc);
+        const br = MapCtrl.deckCropPctToPage(crop.x + crop.w, crop.y + crop.h, sc);
+        return { src_dep_id: String(src.src_dep_id), src_page: Number(src.src_page) || 1, src_crop: { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y } };
+      }
+      return { src_dep_id: String(src.deployment_id), src_page: Number(page) || 1, src_crop: { x: crop.x, y: crop.y, w: crop.w, h: crop.h } };
     },
 
     /** 영역(crop %) 안에 있는 그 페이지 핀 수 — 알림용 집계만(핀 배열은 읽기만 한다). 순수 함수. */
@@ -636,7 +654,8 @@
           method: "POST", headers: Auth.headers(),
           // 복사본: 새 배포본(그 페이지 자체가 구역) · 창 방식(원본 없는 구버전 도면): 로드된 도면 + crop.
           body: JSON.stringify(this._withDeckMode(plan.depId   // [WO 20260930-fixmode] 활성 모드 태그
-            ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }
+            // [WO 20260930-merge] 복사본은 원본 상자(src_*) 기록 — 합치기 좌표 변환의 전제(_srcBoxFields)
+            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }, this._srcBoxFields({ deployment_id: depId }, page, crop))
             : { name, page, crop, deployment_id: depId, parent_id: null }))
         });
         const d = await r.json();

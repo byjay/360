@@ -108,29 +108,24 @@ export async function decideCompanyGate(args: {
 /** 429/529 만 짧게 1회 백오프. 401 은 키 문제라 재시도하지 않는다(스킬 §6). */
 const RETRYABLE = new Set([429, 529])
 
+/** Jev 원시 결과 — 🔴 성공/실패를 예외가 아니라 값으로 구분한다(삼키는 catch 방지). */
+export type JevRaw = { ok: true; answers: Record<string, any> } | { ok: false; error: string }
+
 /**
- * Jev 실호출 어댑터. 🔴 키는 Cloudflare 시크릿 `OPENROUTER_API_KEY` 에서만 읽고
- * 값을 로그·응답·에러 메시지에 **절대** 담지 않는다(CLAUDE.md Non-Negotiable #4).
+ * [WO 20260930-merge] Jev 1회 호출 공유 지점(SoT) — 회사명 게이트·중복 핀 판정이 같은 경로를 탄다.
+ * 🔴 키는 Cloudflare 시크릿 `OPENROUTER_API_KEY` 에서만 읽고 값을 로그·응답·에러 메시지에 **절대** 담지 않는다
+ * (CLAUDE.md Non-Negotiable #4). 타임아웃 JEV_TIMEOUT_MS · 429/529 만 1회 백오프 · 401 재시도 금지.
  */
-export async function askJevSameCompany(
+export async function jevDecide(
   env: { OPENROUTER_API_KEY?: string } | undefined,
-  allowed: string,
-  input: string
-): Promise<JevProbe> {
+  state: unknown,
+  questions: Record<string, unknown>
+): Promise<JevRaw> {
   const key = env && env.OPENROUTER_API_KEY
   if (!key) return { ok: false, error: 'no-key' }
+  const body = JSON.stringify({ model: JEV_MODEL, state, questions })
 
-  // state 는 판정에 필요한 2줄만 — 입력 토큰이 그대로 비용이다(스킬 §5)
-  const body = JSON.stringify({
-    model: JEV_MODEL,
-    state: `등록된 정식 회사명: ${allowed.slice(0, 80)}\n열람자가 입력한 소속: ${input.slice(0, 80)}`,
-    questions: {
-      // 🔴 instructions 는 필수다 — 빠지면 400 invalid_union (실측 확인)
-      same_company: { type: 'noul', instructions: SAME_COMPANY_INSTRUCTIONS },
-    },
-  })
-
-  const once = async (): Promise<{ status: number; p?: number; text?: string }> => {
+  const once = async (): Promise<{ status: number; answers?: Record<string, any> }> => {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), JEV_TIMEOUT_MS)
     try {
@@ -140,11 +135,9 @@ export async function askJevSameCompany(
         body,
         signal: ac.signal,
       })
-      if (!r.ok) return { status: r.status, text: (await r.text().catch(() => '')).slice(0, 120) }
+      if (!r.ok) { await r.text().catch(() => ''); return { status: r.status } }
       const j: any = await r.json()
-      // 🔴 noul 은 boolean 이 아니라 0~1 실수다
-      const p = j && j.answers && j.answers.same_company ? j.answers.same_company.noul : undefined
-      return { status: 200, p: typeof p === 'number' ? p : undefined }
+      return { status: 200, answers: j && j.answers && typeof j.answers === 'object' ? j.answers : undefined }
     } finally {
       clearTimeout(timer)
     }
@@ -157,11 +150,34 @@ export async function askJevSameCompany(
       res = await once()
     }
     if (res.status !== 200) return { ok: false, error: 'http-' + res.status }
-    if (typeof res.p !== 'number') return { ok: false, error: 'no-answer' }
-    return { ok: true, p: res.p }
+    if (!res.answers) return { ok: false, error: 'no-answer' }
+    return { ok: true, answers: res.answers }
   } catch (e: any) {
     // AbortError(타임아웃) 포함. 🔴 키 값이 섞일 수 있는 원문을 그대로 싣지 않는다
     const name = (e && (e.name || e.constructor?.name)) || 'error'
     return { ok: false, error: name === 'AbortError' ? 'timeout' : 'network:' + String(name).slice(0, 40) }
   }
+}
+
+/**
+ * Jev 실호출 어댑터(회사명 게이트). 호출 자체는 jevDecide(공유 지점)가 한다.
+ */
+export async function askJevSameCompany(
+  env: { OPENROUTER_API_KEY?: string } | undefined,
+  allowed: string,
+  input: string
+): Promise<JevProbe> {
+  // state 는 판정에 필요한 2줄만 — 입력 토큰이 그대로 비용이다(스킬 §5)
+  const raw = await jevDecide(
+    env,
+    `등록된 정식 회사명: ${allowed.slice(0, 80)}
+열람자가 입력한 소속: ${input.slice(0, 80)}`,
+    // 🔴 instructions 는 필수다 — 빠지면 400 invalid_union (실측 확인)
+    { same_company: { type: 'noul', instructions: SAME_COMPANY_INSTRUCTIONS } }
+  )
+  if (!raw.ok) return raw
+  // 🔴 noul 은 boolean 이 아니라 0~1 실수다
+  const p = raw.answers.same_company ? raw.answers.same_company.noul : undefined
+  if (typeof p !== 'number') return { ok: false, error: 'no-answer' }
+  return { ok: true, p }
 }

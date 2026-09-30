@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment,
   randShareCode, normalizeShareCode, isShareCode } from './lib/util'
 import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
+import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
 
 type Bindings = {
   DB: D1Database
@@ -1559,6 +1560,25 @@ async function resolveDeckMode(db: any, parentId: string | null, sent: string | 
   }
   return { mode: sent !== undefined ? sent : fallback }
 }
+/** [WO 20260930-merge] 🔴 decks.src_dep_id/src_page/src_crop 신뢰 경계 — 벡터 복사 구역의 "원본 상자" 기록(0031).
+ *  셋은 한 묶음이다: 전부 미전송(undefined) = "지정 안 함", 전부 null = 지움, 그 외(일부만·형식 오류)는 { error } → 400.
+ *  src_crop 은 페이지 % 상자 {x,y,w,h}(유한수, w·h > 0). 조용히 NULL 로 바꾸지 않는다(§10 조용한 실패 금지).
+ *  POST(/api/projects/:id/decks)·PUT(/api/decks/:id) 가 공유하는 단일 지점(SoT). */
+function parseDeckSrcBox(body: any): { set?: { dep: string | null; page: number | null; crop: string | null }; error?: string } {
+  const keys = ['src_dep_id', 'src_page', 'src_crop']
+  const sent = keys.filter((k) => body && body[k] !== undefined)
+  if (!sent.length) return {}
+  if (sent.length !== keys.length) return { error: 'src_dep_id, src_page, src_crop must be sent together' }
+  if (body.src_dep_id === null && body.src_page === null && body.src_crop === null) return { set: { dep: null, page: null, crop: null } }
+  const dep = typeof body.src_dep_id === 'string' ? body.src_dep_id.trim() : ''
+  const page = Number(body.src_page)
+  const c = body.src_crop
+  const fin = (v: any) => typeof v === 'number' && Number.isFinite(v)
+  if (!dep) return { error: 'src_dep_id must be a non-empty string' }
+  if (!Number.isInteger(page) || page < 1) return { error: 'src_page must be a positive integer' }
+  if (!c || !fin(c.x) || !fin(c.y) || !fin(c.w) || !fin(c.h) || !(c.w > 0) || !(c.h > 0)) return { error: 'src_crop must be {x,y,w,h} with w,h > 0' }
+  return { set: { dep, page, crop: JSON.stringify({ x: c.x, y: c.y, w: c.w, h: c.h }) } }
+}
 function mapDeck(r: any) {
   // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
   let crop: any = null
@@ -1566,6 +1586,12 @@ function mapDeck(r: any) {
   // [WO 20260921] parent_id — NULL = 최상위 구역(도면 바로 아래), 값 있으면 그 구역 안의 영역.
   //   마이그레이션 0025 적용 전 행(컬럼 부재)은 undefined → null 로 정규화(구버전과 동일 취급).
   const out: any = { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, parent_id: r.parent_id ?? null, mode: r.mode ?? null, created_at: r.created_at, updated_at: r.updated_at }
+  // [WO 20260930-merge] 원본 상자(0031) — 적용 전 행(컬럼 부재)·레거시는 null(좌표 변환 불가를 클라가 정직하게 표시).
+  let srcCrop: any = null
+  if (r.src_crop) { try { srcCrop = JSON.parse(r.src_crop) } catch { srcCrop = null } }
+  out.src_dep_id = r.src_dep_id ?? null
+  out.src_page = r.src_page ?? null
+  out.src_crop = srcCrop
   // [WO 20260921] 도면(deployment) 이름 — 트리의 '도면' 단이 파일명을 보여줘야 한다.
   //   🔴 필드 '추가'만 한다(기존 필드 제거·개명 없음 → 기존 호출부 무해).
   //   JOIN 하지 않은 경로(POST/PUT 응답)에서는 키 자체를 넣지 않는다 — 없는 값을 날조하지 않는다.
@@ -2695,16 +2721,20 @@ app.post('/api/projects/:id/decks', async (c) => {
   const rm = await resolveDeckMode(c.env.DB, parentId, pm.mode, null)
   if (rm.error) return c.json({ error: rm.error }, 400)
   const mode = rm.mode
+  // [WO 20260930-merge] 원본 상자(벡터 복사 구역) — 미전송이면 NULL(레거시와 동일). 형식 오류 400.
+  const sb = parseDeckSrcBox(body)
+  if (sb.error) return c.json({ error: sb.error }, 400)
+  const src = sb.set || { dep: null, page: null, crop: null }
   // [WO 20260929-parent-guard] 🔴 신뢰 경계 — 같은 프로젝트의 살아있는 deck 이 아니면 400.
   //   조용히 null 로 바꾸지 않는다(다른 프로젝트/삭제된 deck 을 가리키는 고아 생성을 서버에서 차단).
   if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, pid))) {
     return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
   }
   await c.env.DB.prepare(
-    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, mode, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, parentId, mode, now, now).run()
-  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, mode, created_at: now, updated_at: now }))
+    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, mode, src_dep_id, src_page, src_crop, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, parentId, mode, src.dep, src.page, src.crop, now, now).run()
+  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop, created_at: now, updated_at: now }))
 })
 
 // 데크 수정 (디자이너) — 배포본 연결/이름/층번호
@@ -2737,10 +2767,31 @@ app.put('/api/decks/:id', async (c) => {
   const rm = await resolveDeckMode(c.env.DB, parentId, pm.mode, row.mode ?? null)
   if (rm.error) return c.json({ error: rm.error }, 400)
   const mode = rm.mode
+  // [WO 20260930-merge] 원본 상자 부분 수정 — 미전송이면 기존값 유지. 셋 묶음·형식 오류 400.
+  const sb = parseDeckSrcBox(body)
+  if (sb.error) return c.json({ error: sb.error }, 400)
+  const src = sb.set || { dep: row.src_dep_id ?? null, page: row.src_page ?? null, crop: row.src_crop ?? null }
   await c.env.DB.prepare(
-    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, mode = ?, updated_at = ? WHERE id = ?'
-  ).bind(name, level, dep, page, crop, parentId, mode, Date.now(), id).run()
-  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId, mode }))
+    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, mode = ?, src_dep_id = ?, src_page = ?, src_crop = ?, updated_at = ? WHERE id = ?'
+  ).bind(name, level, dep, page, crop, parentId, mode, src.dep, src.page, src.crop, Date.now(), id).run()
+  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop }))
+})
+
+// [WO 20260930-merge] 구역 합치기 미리보기 — "같은 위치 중복 핀" Jev 판정(원시 확률만). 디자이너 전용.
+//   🔴 키는 서버 시크릿(OPENROUTER_API_KEY)에서만 — 응답엔 확률·라벨·실패 사유만 싣는다.
+//   게이트·거리 규칙 폴백은 클라(41_RegionMerge.js RegionMerge.decideDup)가 한다. 실패도 200 + ok:false(값으로 구분).
+app.post('/api/merge/dup-check', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const sp = sanitizeDupPairs(body && body.pairs)
+  if (sp.error || !sp.pairs) return c.json({ error: sp.error || 'invalid pairs' }, 400)
+  const t0 = Date.now()
+  const res = await askJevDupPairs(c.env, sp.pairs)
+  // 감사(스킬 §7-5) — 내용 없이 건수·성공 여부·지연만
+  await logActivity(c, 'merge.dupcheck', { actor: user, targetType: 'merge', detail: { pairs: sp.pairs.length, ok: res.ok, error: res.ok ? null : res.error, ms: Date.now() - t0 } })
+  return c.json(res)
 })
 
 // 데크 삭제 (디자이너)

@@ -5345,3 +5345,24 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 }
 /* 초대 모달 — 초대받은 이메일 표기 */
 .inv-email{font:600 12px var(--font-mono); color:var(--text2);}
+
+/* [WO 20260930-merge] 구역 합치기 모달(41_RegionMerge.js) — .admin-gate 카드 재사용. 글자색은 카드(var(--text) on var(--panel),
+   seastar-family-tokens.css .admin-gate-card)를 상속한다 — 여기서 색을 새로 박지 않는다(테마 대비 SoT 유지). */
+.admin-gate-card.rm-card { width: min(540px, 94vw); text-align: left; max-height: 88vh; overflow-y: auto; }
+.rm-card .rm-lbl { display: block; margin: 12px 0 4px; font-size: 12px; font-weight: 700; color: inherit; }
+.rm-card select.admin-gate-input { width: 100%; }
+.rm-card .rm-badge { margin: 6px 0 0; padding: 6px 10px; font-size: 12px; line-height: 1.45; color: inherit; border-left: 3px solid var(--accent, #38bdf8); border-radius: 4px; background: rgba(127,127,127,.12); }
+.rm-card .rm-badge.warn { border-left-color: var(--red, #e0705e); }
+.rm-card .rm-badge:empty { display: none; }
+.rm-card .rm-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.rm-card .rm-opts .rm-lbl { width: 100%; }
+.rm-card .rm-chk { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; font-size: 12.5px; line-height: 1.4; color: inherit; cursor: pointer; }
+.rm-card .rm-chk.hidden { display: none; }
+.rm-card .rm-preview { margin: 0; font-size: 13px; font-weight: 700; line-height: 1.5; color: inherit; }
+.rm-card .rm-dups { margin-top: 4px; max-height: 160px; overflow-y: auto; }
+.rm-card .rm-dup { font-size: 12px; }
+.rm-card .admin-gate-btn:disabled { opacity: .55; cursor: not-allowed; }
+/* 되돌리기 토스트 — .wm-toast(어두운 고정 배경 #0d1425 계열 + #f4f6fb 글자) 위 버튼: 밝은 바탕 + 어두운 글자(대비 ≥ 15:1) */
+.wm-toast.rm-undo-toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; text-align: left; }
+.rm-undo-btn { flex: none; padding: 5px 12px; border: 0; border-radius: 6px; background: #f4f6fb; color: #0d1425; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.rm-undo-btn:disabled { opacity: .6; cursor: default; }

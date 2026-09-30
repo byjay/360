@@ -42,4 +42,5 @@
 36_Help.js
 37_Invite.js
 38_Install.js
+41_RegionMerge.js
 99_footer.js
