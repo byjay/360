@@ -170,8 +170,10 @@ function suiteAxesUnchanged(label, sSrc) {
   const ctx = makeCtx(sSrc, appSrc);
   const PS = ctx.PS;
   ok(PS.EMPTY_COLOR.text === "#991b1b", "미배치(empty) 색 정본 불변");
-  ok(PS.CHECKBOARD_COLOR.text === "#1e3a8a", "체크보드(등록) 색 정본 불변");
-  ok(PS.CHECKBOARD_EMPTY_COLOR.text === "#4338ca", "체크보드(미등록) 색 정본 불변");
+  // [WO 20260930-pinstyle] 지휘자 발주("핀 색이나 형태를 모드별로 구분") — CHECKER 색이 구 인디고
+  // 블루에서 주황/앰버 계열로 의도적으로 바뀌었다(01b_PinSeries.js 실측 주석 참조). 값만 새 SoT로 갱신.
+  ok(PS.CHECKBOARD_COLOR.text === "#431407", "체크보드(등록) 색 정본 불변");
+  ok(PS.CHECKBOARD_EMPTY_COLOR.text === "#9a3412", "체크보드(미등록) 색 정본 불변");
   ok(PS.patternOf("checkboard", true) === "dashed" && PS.patternOf("checkboard", false) === "dotted",
     "체크보드 형태 패턴(dashed/dotted) 불변");
   ok(PS.patternOf("content", true) === "solid" && PS.patternOf("empty", false) === "dotted",

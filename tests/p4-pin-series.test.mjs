@@ -247,8 +247,8 @@ suiteFilter("④⑤ 필터 (정상 소스)", seriesSrc, radarSrc);
   const hit1 = m !== radarSrc;
   const before = m;
   m = m.replace(
-    "const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p) };",
-    "radarIdx++; const meta = { no: radarIdx, kind: PinSeries.kindOf(p) };");
+    "const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p), series: PinSeries.seriesOf(p) };",
+    "radarIdx++; const meta = { no: radarIdx, kind: PinSeries.kindOf(p), series: PinSeries.seriesOf(p) };");
   const hit2 = m !== before;
   if (!hit1 || !hit2) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {

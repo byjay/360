@@ -314,7 +314,10 @@
         project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
         deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
         region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
-        pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
+        pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+        // [WO 20260930-pinstyle] CHECKER 핀 트리 아이콘 = 둥근사각 번호 배지(도면 마커와 같은 형태
+        // 언어). 360(티어드롭)과 실루엣부터 다르게 — 색맹 대비 1차 단서.
+        pinChecker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>'
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
@@ -409,13 +412,15 @@
       };
       const pinNode = (p, numMap) => {
         const n = document.createElement("button");
-        n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
+        const isCheckerPin = !!p.checkboard;
+        n.className = "tree-node tree-node-pin tree-node-pin-mode-" + (isCheckerPin ? "checker" : "360") + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
         const meta = numMap ? numMap.get(p.id) : null;
         // [WO 20260930-fixmode] 표시 번호 포맷 SoT = PinSeries.formatNo(CHECKER "1" / 360 "P1") — 핀 패널 헤더(27_PinActionPop)와 같은 표기.
         const noTxt = meta ? ((PinSeries.formatNo ? PinSeries.formatNo(meta.no, meta.series) : String(meta.no))) : "";
         const noLabel = meta ? '<span class="tree-pin-no">#' + esc(noTxt) + '</span>' : "";
-        n.innerHTML = ICO.pin + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
+        // [WO 20260930-pinstyle] 모드별 아이콘(형태 단서) — 판정 SoT = pin.checkboard(PinSeries.seriesOf 와 동일 기준).
+        n.innerHTML = (isCheckerPin ? ICO.pinChecker : ICO.pin) + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         // [WO 20260929-bulkdel] 선택 모드(관리자): 버튼 안에 input 을 둘 수 없어 aria-pressed + 표시 기호로 선택 상태를 나타낸다
         if (selecting) {
@@ -664,7 +669,7 @@
             marker.classList.add("zone-dim");
           }
         }
-        const meta = numMap.get(pin.id) || { no: pageIdx, kind: PinSeries.kindOf(pin) };
+        const meta = numMap.get(pin.id) || { no: pageIdx, kind: PinSeries.kindOf(pin), series: PinSeries.seriesOf(pin) };
         // 🔴 색·형태 정본 = PinSeries.markerStyle (미니맵 07_Radar 도 같은 함수를 쓴다).
         //    체크보드 핀은 kind 가 늘 "checkboard" 라 kind 만으로는 사진 유무를 알 수 없다
         //    → filled 축을 따로 받아 등록/미등록을 색·링 패턴으로 구분한다.
@@ -678,6 +683,12 @@
         if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
         marker.classList.add("pin-kind-" + meta.kind); // 색맹 대비: 색 외 식별 훅
+        // [WO 20260930-pinstyle] 🔴 모드별 형태·색 구분 SoT = PinSeries.seriesOf/meta.series.
+        //   CHECKER 는 아래 SVG 에서 둥근사각 배지 프레임을 추가로 그리고(형태), 색은 PinSeries
+        //   CHECKBOARD_COLOR/EMPTY_COLOR(주황 계열)로 이미 360(블루/그린 계열)과 갈린다.
+        //   미니맵(07_Radar)·트리(pinNode)·필터칩(pinfilter-chip)·허브카드 잎이 전부 이 판정을 따른다.
+        const isChecker = meta.series === "checkboard";
+        marker.classList.add(isChecker ? "pin-mode-checker" : "pin-mode-360");
         // ── 번호: 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번(PinSeries 정본) ──
         const dispNo = meta.no;
         // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo(트리/핀패널과 동일:
@@ -725,9 +736,11 @@
         marker.innerHTML = simplifiedCheckboard ? `
           <div class="pin-pin">
             <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
-              <path d="M14.2 22 L18 60 L21.8 22 Z" fill="${headFill2}"/>
-              <circle cx="18" cy="15" r="12.4" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
-              <circle cx="18" cy="15" r="8.6" fill="#ffffff"/>
+              <!-- [WO 20260930-pinstyle] CHECKER 간소화 배지 = 둥근 사각(rounded-square) — 360(원형
+                   메달리온)과 형태부터 다르게. 앵커(tip 18,60)는 원본과 동일(회귀 없음). -->
+              <path d="M15.3 27 L18 60 L20.7 27 Z" fill="${headFill2}"/>
+              <rect x="5.6" y="2.6" width="24.8" height="24.8" rx="6" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
+              <rect x="9.4" y="6.4" width="17.2" height="17.2" rx="3.4" fill="#ffffff"/>
               <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
             </svg>
           </div>` : `
@@ -751,6 +764,10 @@
               <ellipse cx="18" cy="60.5" rx="6.2" ry="2.3" fill="#000" opacity="0.22"/>
               <!-- 받침대 줄기: 머리에서 접지점(18,60)으로 수렴 -->
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
+              <!-- [WO 20260930-pinstyle] CHECKER 전용 배지 프레임(둥근 사각) — 원 머리 뒤에 깔아
+                   모서리가 보이게 해 360(원형 메달리온)과 실루엣이 다르게 보인다. 원의 등록/미등록
+                   fill 토글(테스트 p9 대상)은 그대로 유지 — 프레임은 장식용 배경일 뿐 원을 대체하지 않는다. -->
+              ${isChecker ? `<rect x="3.6" y="2" width="28.8" height="27" rx="7.5" fill="${_st.filled ? "#fff7ed" : "#ffffff"}" opacity="0.95" stroke="#1a1a1a" stroke-width="1.6" stroke-opacity="0.45"/>` : ""}
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->

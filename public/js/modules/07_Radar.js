@@ -102,13 +102,18 @@
         (State.pins || []).filter(p => (p.page || 1) === page).forEach(p => {
           // 표시 필터는 도면·미니맵에 동일 적용. 단, 지금 열람 중인 핀은 기준점이라 항상 표시.
           if (p.id !== pin.id && !PinSeries.isVisible(p)) return;
-          const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p) };
+          const meta = numMap.get(p.id) || { no: 0, kind: PinSeries.kindOf(p), series: PinSeries.seriesOf(p) };
           // 🔴 색·형태 정본 = PinSeries.markerStyle — 도면 마커(11_UI)와 동일 함수.
           //    체크보드 핀의 사진 등록 여부를 미니맵에도 똑같이 반영한다.
           //    (한쪽만 반영하면 사용자에게 거짓말이 된다)
           const _st = PinSeries.markerStyle(p);
+          // [WO 20260930-pinstyle] 🔴 모드별 형태 구분 SoT = PinSeries.seriesOf(meta.series) — 도면
+          //   마커(11_UI)와 같은 판정. CSS(.pano-radar-pin-mode-checker)가 둥근사각(badge)으로,
+          //   360 은 기본 원형(circle) 그대로 유지한다.
           const dot = document.createElement("div");
-          dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind + (p.id === pin.id ? " current" : "");
+          dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind
+            + " pano-radar-pin-mode-" + (meta.series === "checkboard" ? "checker" : "360")
+            + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
           dot.style.top  = p.y + "%";
           dot.title = p.label || "";

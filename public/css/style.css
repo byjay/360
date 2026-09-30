@@ -422,7 +422,15 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
    라벨 색은 기존 검증된 var(--text) 그대로(카드 배경 실측 이력 위 §406~408 참조). */
 .hub-tree-leaf-modes { list-style: none; display: flex; gap: 6px; margin: 3px 0 2px 18px; }
 .hub-tree-leaf-mode { cursor: pointer; }
-.hub-tree-mode-label { display: inline-block; padding: 3px 6px; font-weight: 800; font-size: 11px; letter-spacing: .06em; color: var(--text); }
+.hub-tree-mode-label { display: inline-flex; align-items: center; padding: 3px 6px; font-weight: 800; font-size: 11px; letter-spacing: .06em; color: var(--text); }
+/* [WO 20260930-pinstyle] 사이드바 트리 잎과 같은 형태·색 단서(도면 마커와 일관) — 작은 아이콘 수준. */
+.hub-tree-leaf-mode-checker .hub-tree-mode-label::before,
+.hub-tree-leaf-mode-360 .hub-tree-mode-label::before{
+  content:""; display:inline-block; width:8px; height:8px; margin-right:5px; flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25);
+}
+.hub-tree-leaf-mode-checker .hub-tree-mode-label::before{ border-radius:2px; background:#c2410c; }
+.hub-tree-leaf-mode-360 .hub-tree-mode-label::before{ border-radius:50%; background:#10b981; }
 .hub-tree-regions { margin: 2px 0 6px 16px; }
 .hub-tree-deck, .hub-tree-region {
   display: block; cursor: pointer; border-radius: var(--radius-sm);
@@ -4957,10 +4965,13 @@ button { font-family: var(--font-ui); }
 .pinfilter-chip.pf-all    .pinfilter-dot{ background:#9aa7b8; }
 .pinfilter-chip.pf-content .pinfilter-dot{ background:#10b981; }
 .pinfilter-chip.pf-empty  .pinfilter-dot{ background:#ef4444; border:1px dotted #fff; }
-.pinfilter-chip.pf-checkboard .pinfilter-dot{ background:#1d4ed8; border:1px dashed #fff; }
+/* [WO 20260930-pinstyle] CHECKER 색 = 주황/앰버 계열(PinSeries.CHECKBOARD_COLOR 와 동일 계열,
+   구 인디고 블루 폐기 — 360 은 그린/커스텀 팔레트 계열로 남아 색으로도 즉시 구분된다).
+   대비 실측(흰 글자 기준): dot #f97316(비텍스트 3:1 이상) · active bg #9a3412 = 7.31:1(4.5 초과). */
+.pinfilter-chip.pf-checkboard .pinfilter-dot{ background:#c2410c; border:1px dashed #fff; }
 .pinfilter-chip.pf-content.active{    background:#047857; border-color:#34d399; color:#fff; }
 .pinfilter-chip.pf-empty.active{      background:#b91c1c; border-color:#fca5a5; color:#fff; }
-.pinfilter-chip.pf-checkboard.active{ background:#1d4ed8; border-color:#93c5fd; color:#fff; }
+.pinfilter-chip.pf-checkboard.active{ background:#431407; border-color:#fed7aa; color:#fff; }
 @media (max-width:640px), (pointer:coarse){
   .pinfilter-bar{ top:auto; bottom:var(--pinfilter-bottom-mobile); left:8px; max-width:calc(100% - 16px); padding:5px 6px; gap:5px; }
   /* [결함3 2026-09-17] 토스트가 이 칩 바와 겹쳐 글자가 읽히지 않던 문제 — 칩 바 상단(bottom+height) 위로
@@ -4975,6 +4986,9 @@ button { font-family: var(--font-ui); }
    숫자 흰색 대비(needle 톤): 8.96~14.69:1 — 팔레트 6종 + 미배치/체크보드 전부 PASS */
 .pano-radar-pin-empty{ border-style:dotted; border-width:1.4px; }
 .pano-radar-pin-checkboard{ border-style:dashed; border-width:1.4px; }
+/* [WO 20260930-pinstyle] 모드별 형태 구분 — CHECKER 는 둥근사각(badge), 360 은 기본 원형(circle)
+   그대로. 도면 마커(pin-mode-checker 배지 프레임)와 같은 언어. */
+.pano-radar-pin-mode-checker{ border-radius:4px; }
 
 /* 구역 페이지 진입 시: 구역 밖 핀/구역 흐리게 (상세작업 집중) */
 body.zone-view-active .pin-marker.zone-dim{ opacity:.22; filter:grayscale(.5); pointer-events:none; }
@@ -5228,6 +5242,15 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-node-mode-leaf{font-weight:800;font-size:12.5px;letter-spacing:.05em;color:var(--text);}
 .tree-mode-leaf:not(.open) .tree-node-mode-leaf .tree-caret{transform:rotate(-90deg);}
 .tree-mode-leaf:not(.open) > .tree-children{display:none;}
+/* [WO 20260930-pinstyle] 잎 라벨 앞 작은 형태 단서 — 핀 마커(둥근사각/원형)·색(주황/그린)과
+   같은 언어. 색맹 대비: 모양(사각 vs 원)이 1차 단서, 색은 보조. */
+.tree-mode-leaf-checker .tree-node-mode-leaf::before,
+.tree-mode-leaf-360 .tree-node-mode-leaf::before{
+  content:""; display:inline-block; width:8px; height:8px; margin-right:5px; flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25);
+}
+.tree-mode-leaf-checker .tree-node-mode-leaf::before{ border-radius:2px; background:#c2410c; }
+.tree-mode-leaf-360 .tree-node-mode-leaf::before{ border-radius:50%; background:#10b981; }
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
 /* [p100 정정, 2026-09-30] bg=var(--gold)=브랜드 블루(index.html:57) — 어두운 글자(#1a1206)와
    3.8:1(AA 미달, 헤드리스 Chrome 실측). 흰 글자로 교체(실측 4.87:1 — .pano-radar-pin-no 와 같은

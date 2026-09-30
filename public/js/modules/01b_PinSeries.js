@@ -66,9 +66,15 @@
          checkboard #1e3a8a     : 10.49 : 1
        ⚠ 색만으로 구분하지 않는다(색맹 8%) — ring 패턴(solid/dotted/dashed)을 함께 준다. */
     EMPTY_COLOR: { head: "#ef4444", head2: "#b91c1c", needle: "#7f1d1d", text: "#991b1b" },
-    // 체크보드는 사용자 팔레트(PinPrefs)의 "블루"(#2f6db5)와 겹쳐 보이던 문제가 있었다.
-    // → 더 진하고 채도 높은 인디고로 분리해 콘텐츠 핀과 확실히 구분.
-    CHECKBOARD_COLOR: { head: "#1d4ed8", head2: "#1e3a8a", needle: "#172554", text: "#1e3a8a" },
+    /* [WO 20260930-pinstyle, 지휘자 발주] "핀 색이나 형태를 모드별로 구분" — CHECKER(체크보드)는
+       360(콘텐츠)의 블루/그린 계열과 확실히 갈리도록 주황/앰버 계열로 재색상화(구 인디고 블루 폐기).
+       도면 마커(11_UI)가 CHECKER 전용 둥근사각 배지 프레임도 함께 그려 형태도 같이 구분한다.
+       실측(WCAG 2.1, 흰 배경 기준 — .tmp/contrast_calc4.mjs, p9·p18 두 테스트의 요건을 함께 충족):
+         등록   head2 #431407 15.65:1 · needle #431407 15.65:1 · text #431407 15.65:1
+         미등록 head2 #ea580c 3.56:1  · needle #9a3412 7.31:1  · text #9a3412 7.31:1
+         등록↔미등록 needle 상호 분리도 2.14:1(p9 ≥1.8) · head 상호 분리도 3.83:1(p18 ≥3, WCAG 1.4.11)
+         · head2 상호 분리도 4.40:1(p18 ≥3) */
+    CHECKBOARD_COLOR: { head: "#c2410c", head2: "#431407", needle: "#431407", text: "#431407" },
     /* [마스터 2026-09-03] "사진이 등록된거와 아닌거 심볼색을 다르게해"
        체크보드 계열은 사진 유무와 무관하게 늘 같은 색이라, 일괄 매칭 직후
        무엇이 등록됐는지 화면으로 확인할 방법이 없었다(kindOf 가 checkboard 를
@@ -88,7 +94,9 @@
          "공"(머리) 색 대비를 우선했다 — head/head2 가 시각적으로 지배적인 부분).
        ⚠ 색만으로 구분하지 않는다 → patternOf() 형태 단서(실선/파선/점선) 병행 +
          모든 마커 공통 진한 외곽 링(stroke #1a1a1a)이 흰 도면 위 경계를 보강한다. */
-    CHECKBOARD_EMPTY_COLOR: { head: "#a5b4fc", head2: "#7881f6", needle: "#4f46e5", text: "#4338ca" },
+    // [WO 20260930-pinstyle] 위 CHECKBOARD_COLOR 와 같은 주황 계열(명도만 갈라 등록/미등록 구분,
+    // 구조는 불변 — 필터/판정 로직은 색상값과 무관하다). 실측 값은 위 CHECKBOARD_COLOR 주석 참조.
+    CHECKBOARD_EMPTY_COLOR: { head: "#fed7aa", head2: "#ea580c", needle: "#9a3412", text: "#9a3412" },
 
     /* 형태 단서 정본(색각 이상 8% 대비) — 도면 링 dasharray 와 미니맵 점 테두리가
        같은 이름 하나에서 파생된다. 두 곳에 따로 쓰면 반드시 갈라진다(§10 SoT).
