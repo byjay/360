@@ -381,8 +381,8 @@
      *  좌표계(요구③): 드래그 좌표는 MapCtrl.viewportToPercent → **페이지 기준 %** 다.
      *   크롭은 화면 줌/팬(MapCtrl.fitZone)과 고해상도 렌더 대상(PDF.setDeckCrop)만 바꿀 뿐
      *   좌표 원점을 옮기지 않는다 → 영역 안에서 찍은 핀도 계속 페이지 기준 %로 저장된다.
-     *   배포본으로 내보낼 때만 App._mapZoneForCrop/_mapAnnoForCrop 과 **같은 규칙**
-     *   (MapCtrl.pageToDeckCropPct)으로 크롭 기준 %가 되고, MapCtrl.deckCropPctToPage 로 정확히 되돌아온다.
+     *   [WP1 · H7] 저장(=배포, 같은 행)도 페이지 기준 % 그대로다 — 크롭 기준 %로 바꿔 저장하던 경로는
+     *   원본 행의 크롭 밖 핀을 지워 제거했다(App._buildSavePayload). 크롭은 오직 보기 창이다.
      *  @param {object} [opts] { crop, name } — 테스트/자동화용 선주입(미지정 시 드래그·프롬프트로 물음)
      *  @returns {Promise<object|null>} 생성된 구역(deck) 또는 null(취소/실패)
      */

@@ -222,7 +222,8 @@ function makeFlushDraftsSandbox(patchRes) {
   // [WO 20260929-bulkdel] _draftVsServer 가 핀 병합 단일 출처(_mergePins)를, flush 가 _pinIds 를 쓰게 됐다 —
   //   같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
   const srcBlocks = ["async _draftSource(d) {", "_isPdfBytes(ab) {", "async _uploadSourcePdf(ab) {", "_sourceMetaJson(url, pages) {", "async _uploadPagesToR2(pagesData) {",
-    "_pinIds(arr) {", "_mergePins(srvPins, localPins, baseIds, tombIds) {"]
+    // [WP1·H8] _mergePins/_draftVsServer 가 tombstone 필터 SoT(_live)를 쓰게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
+    "_pinIds(arr) {", "_live(arr) {", "_mergePins(srvPins, localPins, baseIds, tombIds) {"]
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +

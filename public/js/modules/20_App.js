@@ -2836,6 +2836,12 @@
     _pinIds(arr) {
       return (Array.isArray(arr) ? arr : []).filter(p => p && p.id != null).map(p => String(p.id));
     },
+    /** [WP1 · H8] tombstone({id,_deleted:true,ts} — 서버 /ops 가 남김) 을 뺀 "살아있는" 항목만 — 필터 SoT.
+     *  서버본을 State.pins/zones/annotations 에 올리는 모든 로더와 병합(_mergePins/_mergeConflict/_draftVsServer),
+     *  32_Offline 의 ops 반영이 이 함수 하나를 쓴다. 비배열은 그대로 돌려준다(호출부의 null 판정 보존). */
+    _live(arr) {
+      return Array.isArray(arr) ? arr.filter(o => !(o && o._deleted)) : arr;
+    },
     /** draft 에 실어 둘 핀 병합 메타 — _saveDraftLocal / _markDraftClean 공유(SoT). */
     _draftPinMeta() {
       return {
@@ -2850,8 +2856,10 @@
       d.deletedPins.forEach(id => { if (id != null && !tomb[String(id)]) tomb[String(id)] = 1; });
     },
     _mergePins(srvPins, localPins, baseIds, tombIds) {
-      const merged = this._mergeById(srvPins, localPins);
-      const tomb = new Set((tombIds || []).map(String));
+      // [WP1 · H5] 서버본의 tombstone 은 "누군가 지운 핀" — 내 로컬의 같은 id 가 병합으로 되살리지 못하게 tomb 에 합친다.
+      const srvTomb = (Array.isArray(srvPins) ? srvPins : []).filter(p => p && p._deleted && p.id != null).map(p => String(p.id));
+      const merged = this._mergeById(this._live(srvPins), localPins);
+      const tomb = new Set((tombIds || []).map(String).concat(srvTomb));
       // 서버본을 실제로 받지 못했으면(비배열) (b) 판정 불가 — 기준 핀 전부를 "남이 지웠다"로 오판하지 않는다.
       const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? new Set(baseIds.map(String)) : null;
       const srv = new Set(this._pinIds(srvPins));
@@ -3658,7 +3666,7 @@
       try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
       // [WO 20260929-bulkdel] 핀은 _mergePins(삭제 부활 방지) — 기준은 내가 알던 서버 버전, 병합 후엔 방금 받은 서버본
       const mergedPins  = this._mergePins(srvPins, State.pins || [], State.pinBaseIds, Object.keys(this._pinTombstones()));
-      const mergedZones = this._mergeById(srvZones, State.zones || []);
+      const mergedZones = this._mergeById(this._live(srvZones), State.zones || []);
       State.pins  = mergedPins;
       State.zones = mergedZones;
       State.pinBaseIds = this._pinIds(srvPins);
@@ -3702,18 +3710,12 @@
     },
 
     _buildSavePayload(pagesData, sourceMeta) {
-      // [WO 20260917] 스냅샷이 구역 크롭으로 잘렸으면 그 페이지의 핀/영역/주석도 크롭 기준 %로
-      // 재배치해 실어 보낸다(라이브 State.pins/zones/annotations 자체는 페이지 기준 %로 그대로 —
-      // 이 배열들은 배포용 복사본). 크롭 밖 항목은 표시할 캔버스가 없으므로 배포본에서 제외한다
-      // (원본 State.pins/zones/annotations 는 불변).
-      const deckCrop = this._currentDeckCrop();
+      // 🔴 [WP1 · H7] 저장 = 항상 원본(페이지 기준 %) 좌표 그대로. 구역 crop 은 "보기 창"일 뿐 저장 좌표계가 아니다.
+      //   종전: 창(crop) 구역에서 저장하면 핀/영역/주석을 크롭 기준 %로 바꾸고 크롭 밖 항목을 빼서 보냈다 —
+      //   창 구역은 원본과 **같은 deployment_id** 라 그 PATCH 가 원본 행을 덮어 크롭 밖 핀을 영구 삭제했고,
+      //   재로드 시 crop 이 한 번 더 적용돼 좌표가 이중 변환됐다(역변환 호출부 0). 스냅샷도 전체 페이지(_snapshotPages).
       const deployablePins = State.pins.map(p => {
         const q = Object.assign({}, p);
-        if (deckCrop && (q.page || 1) === deckCrop.page && typeof MapCtrl !== "undefined" && MapCtrl.pageToDeckCropPct) {
-          const mapped = MapCtrl.pageToDeckCropPct(q.x, q.y, deckCrop.crop);
-          if (!mapped) return null; // 크롭 밖 — 배포본에서 제외
-          q.x = mapped.x; q.y = mapped.y;
-        }
         if (q.videoUrl) { delete q.videoUrl; q.localOnly = true; }
         // [핵심 버그 수정] blob: 임시 미리보기 URL 은 그 세션에서만 유효 →
         //   서버/배포본에 저장하면 재접속 시 죽은 blob 으로 "이미지를 불러올 수 없습니다".
@@ -3723,12 +3725,10 @@
         if (typeof q.imageUrl === "string" && q.imageUrl.indexOf("blob:") === 0) delete q.imageUrl;
         delete q.uploading;
         return q;
-      }).filter(Boolean);
-      const deployableZones = (State.zones || []).map(z => this._mapZoneForCrop(z, deckCrop)).filter(Boolean);
-      const deployableAnnotations = (State.annotations || []).map(a => this._mapAnnoForCrop(a, deckCrop)).filter(Boolean);
+      });
       return this._deploymentBody({
         title: State.fileName || "도면", fileName: State.fileName || "",
-        pins: deployablePins, zones: deployableZones, annotations: deployableAnnotations,
+        pins: deployablePins, zones: State.zones || [], annotations: State.annotations || [],
         checkboardStart: State.checkboardStart
       }, pagesData, sourceMeta);
     },
@@ -3756,101 +3756,12 @@
       return body;
     },
 
-    /** [WO 20260917] 현재 구역(deck)의 크롭 — { page(1-base), crop:{x,y,w,h}(%) } 또는 null.
-     *  crop 없는 구역(또는 구역 미선택)은 null → snapshotAllPages 는 종전대로 전체 페이지. */
-    _currentDeckCrop() {
-      const cd = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
-      if (!cd || !cd.crop || !(cd.crop.w > 0) || !(cd.crop.h > 0)) return null;
-      return { page: cd.page || 1, crop: cd.crop };
-    },
-
-    /** [WO 20260917-crop-zone-anno] 영역(16_Zones.js 의 State.zones 항목) 배포용 좌표 재매핑.
-     *  핀과 동일하게 MapCtrl.pageToDeckCropPct(순수함수)만 재사용 — 새 변환 로직 없음.
-     *  rect: {x,y,w,h}, circle: {cx,cy,r}, poly: {points:[{x,y}...]} 모두 대응.
-     *  반환: 복사본(원본 z 불변) · crop 밖(어느 한 점이라도)이면 null(배포본 제외).
-     *  crop 없음/페이지 불일치면 그대로 복사본 반환(재매핑 없음, 종전 동작). */
-    _mapZoneForCrop(z, deckCrop) {
-      const zz = Object.assign({}, z);
-      if (!deckCrop || (zz.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
-        return zz;
-      }
-      const crop = deckCrop.crop;
-      const mapPt = (x, y) => MapCtrl.pageToDeckCropPct(x, y, crop);
-      if (zz.shape === "poly" && Array.isArray(zz.points)) {
-        const mapped = [];
-        for (const p of zz.points) {
-          const m = mapPt(p.x, p.y);
-          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
-          mapped.push({ x: m.x, y: m.y });
-        }
-        zz.points = mapped;
-        const xs = mapped.map(p => p.x), ys = mapped.map(p => p.y);
-        zz.x = Math.min(...xs); zz.y = Math.min(...ys);
-        zz.w = Math.max(...xs) - zz.x; zz.h = Math.max(...ys) - zz.y;
-        return zz;
-      }
-      if (zz.shape === "circle") {
-        const p1 = mapPt(zz.cx - zz.r, zz.cy - zz.r);
-        const p2 = mapPt(zz.cx + zz.r, zz.cy + zz.r);
-        if (!p1 || !p2) return null;
-        zz.cx = (p1.x + p2.x) / 2; zz.cy = (p1.y + p2.y) / 2;
-        zz.r  = ((p2.x - p1.x) + (p2.y - p1.y)) / 4;
-        zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
-        return zz;
-      }
-      // rect(기본) — 항상 바운딩 박스(x,y,w,h)를 보관하는 형식(16_Zones.js _commitZone)
-      const p1 = mapPt(zz.x, zz.y);
-      const p2 = mapPt(zz.x + zz.w, zz.y + zz.h);
-      if (!p1 || !p2) return null;
-      zz.x = p1.x; zz.y = p1.y; zz.w = p2.x - p1.x; zz.h = p2.y - p1.y;
-      return zz;
-    },
-
-    /** [WO 20260917-crop-zone-anno] PDF 주석(26_PdfAnno.js 의 State.annotations 항목) 배포용
-     *  좌표 재매핑. 주석 좌표는 permille(0~1000, 페이지 기준 %×10) 저장 형식이라 MapCtrl.
-     *  pageToDeckCropPct(%,0~100 입력)에 맞춰 /10 → 변환 → *10 로 왕복한다(새 변환 로직 아님).
-     *  type: text{x,y} · rect/highlight{x,y,w,h} · pen{pts:[{x,y}...]}.
-     *  반환: 복사본(원본 a 불변) · crop 밖이면 null(배포본 제외). crop 없음/페이지 불일치면
-     *  그대로 복사본 반환(재매핑 없음, 종전 동작). */
-    _mapAnnoForCrop(a, deckCrop) {
-      const aa = Object.assign({}, a);
-      if (!deckCrop || (aa.page || 1) !== deckCrop.page || typeof MapCtrl === "undefined" || !MapCtrl.pageToDeckCropPct) {
-        return aa;
-      }
-      const crop = deckCrop.crop;
-      const mapPt = (x, y) => {
-        const m = MapCtrl.pageToDeckCropPct(x / 10, y / 10, crop);
-        return m ? { x: m.x * 10, y: m.y * 10 } : null;
-      };
-      if (aa.type === "pen" && Array.isArray(aa.pts)) {
-        const mapped = [];
-        for (const p of aa.pts) {
-          const m = mapPt(p.x, p.y);
-          if (!m) return null; // 점 하나라도 크롭 밖 — 배포본에서 제외
-          mapped.push({ x: m.x, y: m.y });
-        }
-        aa.pts = mapped;
-        return aa;
-      }
-      if (aa.type === "text") {
-        const m = mapPt(aa.x, aa.y);
-        if (!m) return null;
-        aa.x = m.x; aa.y = m.y;
-        return aa;
-      }
-      // rect / highlight — {x,y,w,h}
-      const p1 = mapPt(aa.x, aa.y);
-      const p2 = mapPt(aa.x + aa.w, aa.y + aa.h);
-      if (!p1 || !p2) return null;
-      aa.x = p1.x; aa.y = p1.y; aa.w = p2.x - p1.x; aa.h = p2.y - p1.y;
-      return aa;
-    },
-
     async _snapshotPages() {
       // [P14] 이전 도면의 실측 픽셀이 남아 다음 저장에 잘못 붙지 않게 초기화(SoT 오염 방지)
       try { PDF.lastSnapshotDims = null; } catch (e) {}
       if (State.fileType === "pdf" && State.pdfDoc) {
-        return await PDF.snapshotAllPages(State.pdfDoc, undefined, undefined, this._currentDeckCrop());
+        // [WP1 · H7] 구역 crop 과 무관하게 항상 전체 페이지 — 창 구역은 원본과 같은 배포본 행을 공유한다.
+        return await PDF.snapshotAllPages(State.pdfDoc);
       } else if (State.fileType === "image") {
         // 🔴 [WO 20260929-lossless] 종전: 화면 <img> 를 긴 변 2000px·JPEG 0.8 로 다시 그려 저장했다 →
         //   ① PNG/JPG 원본 업로드가 매 저장마다 축소·재압축됐고 ② 배포본/복원 draft(이미 스냅샷)도 편집할 때마다
@@ -4137,10 +4048,10 @@
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
-        try { State.pins  = JSON.parse(dep.pins  || "[]"); } catch { State.pins = []; }
+        try { State.pins  = this._live(JSON.parse(dep.pins  || "[]")); } catch { State.pins = []; }
         State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 이 서버 버전이 병합 기준
-        try { State.zones = JSON.parse(dep.zones || "[]"); } catch { State.zones = []; }
-        try { State.annotations = JSON.parse(dep.annotations || "[]"); } catch { State.annotations = []; }
+        try { State.zones = this._live(JSON.parse(dep.zones || "[]")); } catch { State.zones = []; }
+        try { State.annotations = this._live(JSON.parse(dep.annotations || "[]")); } catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식({checkboard,content})
@@ -4328,7 +4239,7 @@
       return same
         ? { pins: dPins, zones: dZones }
         // [WO 20260929-bulkdel] 핀은 _mergePins — draft 의 tombstone(deletedPins)·기준 id(basePinIds)로 삭제 부활 차단
-        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(srvZones || [], dZones) };
+        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(this._live(srvZones || []), dZones) };
     },
 
     /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
@@ -5060,12 +4971,12 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
 
-        try { State.pins = JSON.parse(latest.pins || "[]"); }
+        try { State.pins = this._live(JSON.parse(latest.pins || "[]")); }
         catch { State.pins = []; }
         State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 형제 로더와 같은 기준
-        try { State.zones = JSON.parse(latest.zones || "[]"); }
+        try { State.zones = this._live(JSON.parse(latest.zones || "[]")); }
         catch { State.zones = []; }
-        try { State.annotations = JSON.parse(latest.annotations || "[]"); }
+        try { State.annotations = this._live(JSON.parse(latest.annotations || "[]")); }
         catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식 정규화(§10 SoT).

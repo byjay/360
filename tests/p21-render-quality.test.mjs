@@ -13,8 +13,8 @@
  * 건2(뷰어 스냅샷 크롭): PDF.snapshotAllPages 에 deckCrop 인자(4번째, 기본 null)를 추가해
  * 구역(deck)에 crop 이 있으면 그 페이지만 PDF.deckSnapshotRect 로 잘라 렌더하고(같은 픽셀
  * 예산을 크롭 영역에 집중), crop 없는 페이지는 종전대로 전체 페이지를 렌더한다(비파괴).
- * 20_App.js _snapshotPages/_buildSavePayload 가 그 크롭을 배선하고, 크롭된 페이지의 핀은
- * MapCtrl.pageToDeckCropPct(기존 순수함수, p20 커밋)로 좌표를 재배치해 배포본에 싣는다.
+ * [WP1·H7] 20_App.js 저장 경로는 이 크롭을 쓰지 않는다(창 구역 = 원본과 같은 행 → 원본 파괴였다).
+ * PDF.snapshotAllPages 의 deckCrop 인자 자체(모듈 기능)는 아래 test1~6 이 그대로 검증한다.
  *
  * 실제 모듈 소스(02_PDF.js/10_MapCtrl.js/20_App.js)를 그대로 vm 에 평가해 검사(목 구현 아님).
  * 뮤테이션 3건: 크롭 배선 제거→①실패 / NULL 폴백 제거→②실패 / will-change 해제 제거→⑨실패.
@@ -181,12 +181,13 @@ async function test6_dimsReflectCrop(PDF) {
  * ⑦ 배선 — 20_App.js 가 _currentDeckCrop/pageToDeckCropPct 를 실제로 사용
  * ══════════════════════════════════════════════════════════════════ */
 function test7_wiring() {
-  console.log("\n[test7] 배선: _snapshotPages 가 크롭을 전달하고, 핀 좌표가 재배치됨");
-  ok(/PDF\.snapshotAllPages\(State\.pdfDoc, undefined, undefined, this\._currentDeckCrop\(\)\)/.test(appSrc),
-    "_snapshotPages 가 PDF.snapshotAllPages 에 _currentDeckCrop() 을 4번째 인자로 전달");
-  ok(/MapCtrl\.pageToDeckCropPct\(q\.x, q\.y, deckCrop\.crop\)/.test(appSrc),
-    "_buildSavePayload 가 크롭 페이지 핀 좌표를 MapCtrl.pageToDeckCropPct 로 재매핑(새 함수 아님, 기존 재사용)");
-  ok(/if \(!mapped\) return null;/.test(appSrc), "크롭 밖 핀은 배포본에서 제외(null 필터)");
+  // [WP1·H7] 반전: 창(crop) 구역은 원본과 같은 배포본 행이라, 저장 스냅샷을 크롭하고 핀을 크롭 기준 %로 바꾸면
+  //   원본 행의 이미지가 잘리고 크롭 밖 핀이 지워졌다. 저장은 항상 전체 페이지·페이지 기준 %(행동 검증: p25 test5·p93).
+  console.log("\n[test7] 배선: 저장 스냅샷(_snapshotPages)은 구역 크롭을 전달하지 않고, 핀 좌표도 재배치하지 않음");
+  ok(/return await PDF\.snapshotAllPages\(State\.pdfDoc\);/.test(appSrc),
+    "_snapshotPages 는 PDF.snapshotAllPages(State.pdfDoc) — 구역 crop 인자 없음(전체 페이지)");
+  ok(!/pageToDeckCropPct/.test(appSrc), "_buildSavePayload 가 핀 좌표를 크롭 기준으로 재매핑하지 않음");
+  ok(!/if \(!mapped\) return null;/.test(appSrc), "크롭 밖 핀을 저장에서 제외하는 null 필터 없음");
 }
 
 /* ══════════════════════════════════════════════════════════════════

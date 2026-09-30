@@ -237,7 +237,7 @@
             // 현재 열려있는 도면이면 화면 갱신(tombstone 제외)
             if (_curDepId() === depId && j.current) {
               try {
-                const live = (arr) => (Array.isArray(arr) ? arr.filter((o) => !(o && o._deleted)) : arr);
+                const live = (arr) => App._live(arr);   // [WP1 · H8] tombstone 필터 SoT(20_App._live)
                 State.pins = live(JSON.parse(j.current.pins || "[]"));
                 State.zones = live(JSON.parse(j.current.zones || "[]"));
                 State.annotations = live(JSON.parse(j.current.annotations || "[]"));

@@ -13,8 +13,8 @@
  *                        픽셀을 복사하지 않는다 = 원본을 들여다보는 "창(view)".
  *   · 그 부분만 확대 : selectDeck → PDF.setDeckCrop + MapCtrl.fitZone (기존 경로)
  *   · 좌표           : 드래그/핀 모두 MapCtrl.viewportToPercent = **페이지 기준 %**.
- *                      배포본으로 나갈 때만 App._mapZoneForCrop(=MapCtrl.pageToDeckCropPct)로
- *                      크롭 기준 %가 되고 MapCtrl.deckCropPctToPage 로 되돌아온다.
+ *                      [WP1·H7] 저장(=배포, 같은 행)도 페이지 기준 % 그대로 — 크롭 기준 %로 바꿔 저장하던
+ *                      App._mapZoneForCrop 경로는 원본 행의 크롭 밖 항목을 지워 제거됐다(p25).
  *
  * 검증(목 금지 — 서버는 src/index.tsx 실 핸들러, 클라는 31_Projects.js 실 소스):
  *   ① 드래그 → 새 구역 생성, 같은 도면에서 반복 생성 가능
@@ -297,11 +297,10 @@ console.log("\n[③ 좌표 정합 — 영역 안 좌표 ↔ 원본(페이지) �
       extractBalanced(mapSrc, "pageToDeckCropPct(x, y, crop) {") + "," +
       extractBalanced(mapSrc, "deckCropPctToPage(x, y, crop) {") +
     "};\n" +
-    "const App = {" + extractBalanced(appSrc, "_mapZoneForCrop(z, deckCrop) {") + "};\n" +
-    "globalThis.__M = MapCtrl; globalThis.__A = App;", mapSand);
-  const M = mapSand.__M, A = mapSand.__A;
+    "globalThis.__M = MapCtrl;", mapSand);
+  const M = mapSand.__M;
 
-  ok(typeof M.pageToDeckCropPct === "function" && typeof M.deckCropPctToPage === "function" && typeof A._mapZoneForCrop === "function",
+  ok(typeof M.pageToDeckCropPct === "function" && typeof M.deckCropPctToPage === "function",
     "③ 사전조건 — 기존 변환 함수(새 로직 아님)를 실 소스에서 로드");
 
   // 3개 추출 영역 × 격자 점 — 영역 안에 찍은 핀이 원본 좌표로 정확히 돌아오는가
@@ -325,17 +324,11 @@ console.log("\n[③ 좌표 정합 — 영역 안 좌표 ↔ 원본(페이지) �
   ok(M.pageToDeckCropPct(VIEWS[0].crop.x - 0.1, VIEWS[0].crop.y, VIEWS[0].crop) === null,
     "③ 영역 밖 좌표는 null(배포본 제외) — 기존 규칙 그대로");
 
-  // 🔴 App._mapZoneForCrop(배포본 경로)과 같은 규칙인지 — rect 영역을 매핑 후 되돌려 일치 확인
-  const c = VIEWS[2].crop;
-  const zone = { id: "z1", page: 1, shape: "rect", x: c.x + 5, y: c.y + 5, w: 10, h: 8 };
-  const mapped = A._mapZoneForCrop(zone, { page: 1, crop: c });
-  const b1 = M.deckCropPctToPage(mapped.x, mapped.y, c);
-  const b2 = M.deckCropPctToPage(mapped.x + mapped.w, mapped.y + mapped.h, c);
-  const zErr = Math.max(Math.abs(b1.x - zone.x), Math.abs(b1.y - zone.y),
-                        Math.abs(b2.x - (zone.x + zone.w)), Math.abs(b2.y - (zone.y + zone.h)));
-  ok(zErr <= 1e-9, "③ App._mapZoneForCrop 과 동일 규칙 — 영역 왕복 오차 " + zErr.toExponential(2) + " %p");
-  ok(JSON.stringify(zone) === JSON.stringify({ id: "z1", page: 1, shape: "rect", x: c.x + 5, y: c.y + 5, w: 10, h: 8 }),
-    "③ 재매핑이 원본 zone 객체를 변형하지 않는다(복사본 반환)");
+  // 🔴 [WP1·H7] 창 구역은 원본과 같은 배포본 행 — 저장 경로가 크롭 변환을 쓰면 원본의 크롭 밖 항목이 지워진다.
+  //   (종전 이 자리의 "App._mapZoneForCrop 과 동일 규칙" 검사는 그 함수가 제거되어 대상이 사라졌다.
+  //    행동 검증은 p25 · 실 워커 E2E 는 p93) 여기서는 저장 모듈에 변환 호출이 되살아나지 않았는지 본다.
+  ok(!/pageToDeckCropPct|_mapZoneForCrop|_mapAnnoForCrop|_currentDeckCrop/.test(appSrc),
+    "③ 저장 경로(20_App.js)는 크롭 기준 변환을 쓰지 않는다 — 영역 안 좌표도 페이지 기준 % 그대로 저장");
 }
 
 /* ══════════════════════════════════════════════════════════════════════
