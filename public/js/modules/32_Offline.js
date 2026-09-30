@@ -242,7 +242,7 @@
             if (_curDepId() === depId && j.current) {
               try {
                 const live = (arr) => App._live(arr);   // [WP1 · H8] tombstone 필터 SoT(20_App._live)
-                State.pins = live(JSON.parse(j.current.pins || "[]"));
+                State.pins = App._pinsSeen(live(JSON.parse(j.current.pins || "[]")));   // [WO 20260930-lww] 수정 감지 기준
                 State.zones = live(JSON.parse(j.current.zones || "[]"));
                 State.annotations = live(JSON.parse(j.current.annotations || "[]"));
                 State.depVersion = Number(j.current.version) || 0;

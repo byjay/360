@@ -355,6 +355,46 @@
       return changes;
     },
 
+    /* ── [WO 20260930-lww] 🔴 핀 단위 수정 시각(pin.updatedAt, ms) — 병합(20_App._mergePins) LWW 기준 ──────────
+       핀을 바꾸는 경로는 8개 모듈 40곳이 넘고(라벨·좌표·사진·아이콘·첨부·방향…) 앞으로도 늘어난다. 경로마다 touch 를
+       박으면 하나만 빠져도 그 편집이 병합에서 서버본에 덮여 사라진다. 그래서 **관찰 지점에서 내용 변화를 감지**해
+       찍는다: 모든 편집 경로가 반드시 지나는 App._markDirty(_autoSave 도 경유)와 병합 직전(_mergeConflict)이 stampChanged 를
+       부르고, 서버본·draft 가 State 에 들어오는 지점은 baseline 으로 "이 내용이 기준" 을 기록한다(객체 단위 WeakMap —
+       새로 파싱된 객체는 기준이 없으니 옛 기록이 새 객체를 오염시키지 못한다). updatedAt 은 비교 대상에서 뺀다. */
+    _pinSig: new WeakMap(),
+    _sigOf(p) {
+      const q = Object.assign({}, p);
+      delete q.updatedAt;
+      try { return JSON.stringify(q); } catch (e) { return null; }
+    },
+    /** 핀 1개의 수정 시각을 지금으로 — 단조 증가(같은 ms 두 번이어도 뒤가 크다). */
+    touch(pin, now) {
+      if (!pin || typeof pin !== "object") return pin;
+      const t = Number.isFinite(now) ? now : Date.now();
+      pin.updatedAt = Math.max(t, (Number(pin.updatedAt) || 0) + 1);
+      return pin;
+    },
+    /** 서버본/draft 를 State 에 올린 직후·병합 직후 — 현재 내용을 기준으로 기록(찍지 않음). */
+    baseline(pins) {
+      (Array.isArray(pins) ? pins : []).forEach(p => { if (p && typeof p === "object") this._pinSig.set(p, this._sigOf(p)); });
+      return pins;
+    },
+    /** 기준 이후 내용이 바뀐 핀만 touch. 기준이 없는 객체(새로 만든 핀)는 기준만 기록. @returns 찍은 개수 */
+    stampChanged(pins, now) {
+      let n = 0;
+      (Array.isArray(pins) ? pins : []).forEach(p => {
+        if (!p || typeof p !== "object") return;
+        const s = this._sigOf(p), prev = this._pinSig.get(p);
+        if (prev !== undefined && prev !== s) { this.touch(p, now); n++; }
+        this._pinSig.set(p, s);
+      });
+      return n;
+    },
+    /** 같은 id 의 서버본 vs 로컬 — updatedAt 큰 쪽. 같거나 둘 다 없으면(레거시) 서버(결정론 · 남의 변경 유실 0). */
+    newer(srv, loc) {
+      return (Number(loc && loc.updatedAt) || 0) > (Number(srv && srv.updatedAt) || 0) ? loc : srv;
+    },
+
     /** [WO 20260918] 🔴 "사용자가 버튼을 누르는" 일괄 재채번 정본 — duplicateCheckboardIds
      *  위 주석의 금지 규율("자동 재채번 금지")과 충돌하지 않는다. 그건 코드가 스스로
      *  판단해 조용히 고치는 걸 막은 것이고, 이건 사용자가 명시적으로 버튼을 눌러 요청한

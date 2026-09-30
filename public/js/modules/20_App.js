@@ -541,7 +541,7 @@
           try {
             const data = JSON.parse(ev.target.result);
             if (Array.isArray(data.pins)) {
-              State.pins = data.pins;
+              State.pins = this._pinsSeen(data.pins);
               if (data.fileName) UI.text("file-name-label", data.fileName);
               UI.renderPinList();
               UI.renderPinsOnMap();
@@ -2891,7 +2891,10 @@
     _mergePins(srvPins, localPins, baseIds, tombIds) {
       // [WP1 · H5] 서버본의 tombstone 은 "누군가 지운 핀" — 내 로컬의 같은 id 가 병합으로 되살리지 못하게 tomb 에 합친다.
       const srvTomb = (Array.isArray(srvPins) ? srvPins : []).filter(p => p && p._deleted && p.id != null).map(p => String(p.id));
-      const merged = this._mergeById(this._live(srvPins), localPins);
+      // [WO 20260930-lww] 같은 id = 핀 단위 LWW(updatedAt 큰 쪽, 같거나 없으면 서버) — 종전 "로컬 통째 우선" 은
+      //   A 가 옮기거나 라벨을 바꾼 핀을 B 화면에 못 보이게 했고 B 저장이 A 의 수정을 되돌렸다(설계서 H2).
+      const newer = (typeof PinSeries !== "undefined" && PinSeries.newer) ? (s, l) => PinSeries.newer(s, l) : null;
+      const merged = this._mergeById(this._live(srvPins), localPins, newer);
       const tomb = new Set((tombIds || []).map(String).concat(srvTomb));
       // 서버본을 실제로 받지 못했으면(비배열) (b) 판정 불가 — 기준 핀 전부를 "남이 지웠다"로 오판하지 않는다.
       const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? new Set(baseIds.map(String)) : null;
@@ -2906,7 +2909,16 @@
       // [WO 20260930-numdup] 🔴 병합 = 동시 생성 번호 충돌이 생기는 유일한 지점 — 409 재시도(_mergeConflict)와
       //   오프라인 복귀(_draftVsServer: 화면 복원·flush) 둘 다 여기를 지나므로 한 번만 고친다(§G-2-5).
       this._renumberConcurrent(out, base ? baseIds : null, srvPins);
-      return out;
+      return this._pinsSeen(out);   // [WO 20260930-lww] 병합 결과(재채번 포함)가 새 기준 — 재채번은 수정으로 찍지 않는다
+    },
+    /** [WO 20260930-lww] 서버본·draft·병합 결과를 State 에 올릴 때 — 이 내용이 수정 감지 기준(PinSeries.baseline). */
+    _pinsSeen(arr) {
+      if (typeof PinSeries !== "undefined" && PinSeries.baseline) PinSeries.baseline(arr);
+      return arr;
+    },
+    /** [WO 20260930-lww] 편집 관찰 지점(_markDirty — _autoSave 도 경유 · 병합 직전 _mergeConflict) — 기준 이후 바뀐 핀에 updatedAt(PinSeries.stampChanged). */
+    _pinsStamp() {
+      if (typeof PinSeries !== "undefined" && PinSeries.stampChanged) PinSeries.stampChanged(State.pins);
     },
     /** 병합 결과의 동시 생성 번호 충돌을 재채번(정본 PinSeries.resolveConcurrentNos)하고 1회 알린다.
      *  같은 변경을 화면 복원과 flush 가 두 번 계산해도 토스트는 한 번만(_numdupSeen). */
@@ -3708,14 +3720,15 @@
        ════════════════════════════════════════════════════════════════ */
 
     /** id(또는 보조키) 기준 두 배열 병합 — 서버본 기준에 내 추가/수정분을 덮어쓰기 union */
-    _mergeById(serverArr, localArr) {
+    _mergeById(serverArr, localArr, pick) {
       const keyOf = (o) => (o && (o.id != null ? "id:" + o.id
         : (o.pin_id != null ? "pid:" + o.pin_id
         : (o.name != null && o.x != null ? "nx:" + o.name + ":" + o.x + ":" + o.y : null))));
       const map = new Map();
       (Array.isArray(serverArr) ? serverArr : []).forEach((o) => { const k = keyOf(o); if (k) map.set(k, o); else map.set("anon:" + map.size, o); });
       // 내 로컬 항목으로 덮어쓰기(=내가 최근 편집한 내용 우선) + 서버에만 있던 항목 보존
-      (Array.isArray(localArr) ? localArr : []).forEach((o) => { const k = keyOf(o); if (k) map.set(k, o); else map.set("anon:" + map.size + "L", o); });
+      //   pick(서버본, 로컬) 이 있으면 같은 키의 승자를 그 함수가 정한다(핀 = PinSeries.newer LWW, _mergePins).
+      (Array.isArray(localArr) ? localArr : []).forEach((o) => { const k = keyOf(o); if (k) map.set(k, (pick && map.has(k)) ? pick(map.get(k), o) : o); else map.set("anon:" + map.size + "L", o); });
       return Array.from(map.values());
     },
 
@@ -3725,6 +3738,7 @@
       let srvPins = [], srvZones = [];
       try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
       try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
+      this._pinsStamp();   // [WO 20260930-lww] 병합 직전 — _markDirty 를 아직 안 부른 편집(일괄 사진 등록 도중 등)도 로컬 수정으로 찍는다
       // [WO 20260929-bulkdel] 핀은 _mergePins(삭제 부활 방지) — 기준은 내가 알던 서버 버전, 병합 후엔 방금 받은 서버본
       const mergedPins  = this._mergePins(srvPins, State.pins || [], State.pinBaseIds, Object.keys(this._pinTombstones()));
       const mergedZones = this._mergeById(this._live(srvZones), State.zones || []);
@@ -4198,7 +4212,7 @@
         UI.text("file-name-label", State.fileName);
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
-        try { State.pins  = this._live(JSON.parse(dep.pins  || "[]")); } catch { State.pins = []; }
+        try { State.pins  = this._pinsSeen(this._live(JSON.parse(dep.pins  || "[]"))); } catch { State.pins = []; }
         State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 이 서버 버전이 병합 기준
         try { State.zones = this._live(JSON.parse(dep.zones || "[]")); } catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(dep.annotations || "[]")); } catch { State.annotations = []; }
@@ -4273,7 +4287,7 @@
         State.viewerPages = d.pages;
         State.pdfPage     = 1;
         State.fileName    = d.fileName || "도면";
-        State.pins        = Array.isArray(d.pins)  ? d.pins  : [];
+        State.pins        = this._pinsSeen(Array.isArray(d.pins)  ? d.pins  : []);
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
         State.pinTombstones = {}; this._adoptDraftTombstones(d);
@@ -4897,6 +4911,7 @@
     /** 미저장 변경 표시 — '저장' 버튼 활성화 */
     _markDirty() {
       if (State.mode !== "designer") return;
+      this._pinsStamp();   // [WO 20260930-lww] 모든 편집 경로의 공통 관문 — 바뀐 핀에 updatedAt
       this._dirty = true;
       this._updateSaveBtn();
     },
@@ -5161,7 +5176,7 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
 
-        try { State.pins = this._live(JSON.parse(latest.pins || "[]")); }
+        try { State.pins = this._pinsSeen(this._live(JSON.parse(latest.pins || "[]"))); }
         catch { State.pins = []; }
         State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 형제 로더와 같은 기준
         try { State.zones = this._live(JSON.parse(latest.zones || "[]")); }

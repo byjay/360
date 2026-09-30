@@ -633,6 +633,105 @@ console.log("\n[D4] 20초 폴링 틱 — A 의 추가·삭제가 B 화면에 새
   ok(!leaked, "D4-f 조회 중 배포본 전환 → 결과 폐기(병합 0) — " + rf);
 }
 
+/* ══════════ D5 — 기존 핀 수정 반영(핀 단위 LWW · pin.updatedAt) · 설계서 H2 ══════════
+   종전: 병합이 같은 id 를 통째로 로컬 우선 치환 → A 가 옮기거나 라벨을 바꾼 핀이 B 화면에 안 보이고,
+   B 가 나중에 저장하면 A 의 수정이 되돌아갔다. 편집 = UI 경로와 같은 모양(핀 객체 변경 → _autoSave/_markDirty). */
+console.log("\n[D5] 기존 핀 수정 — A 의 라벨·좌표 변경이 B 에 반영되고 B 저장이 되돌리지 않는가");
+{
+  const LEG = P(7003, 80, 20, { label: "레거시" });
+  const { depId, deck } = await seedDeployment([P(7001, 10, 10, { label: "X" }), P(7002, 20, 20, { label: "Y" }), LEG]);
+  const [A5, B5] = ["a", "b"].map(makeClient);
+  for (const c of [A5, B5]) await open(c, depId, deck);
+  const tick = (c) => c.App._liveTick();
+  const pinOf = (c, id) => c.State.pins.find((p) => String(p.id) === String(id));
+  const srvOf = async (id) => (await srvPins(depId)).find((p) => String(p.id) === String(id));
+  // UI 경로 모양: 드래그(11_UI) = 좌표 변경 → _autoSave · 라벨(27_PinActionPop) = 변경 → _markDirty
+  const editAuto = async (c, id, fields) => { await sleep(3); Object.assign(pinOf(c, id), fields); c.App._autoSave(); };
+  const editDirty = async (c, id, fields) => { await sleep(3); Object.assign(pinOf(c, id), fields); c.App._markDirty(); };
+
+  // D5-a A 가 X 라벨·좌표 변경·저장 → B 틱 → B 의 X = A 값 → B 가 다른 핀 추가·저장해도 서버 X = A 값
+  await editAuto(A5, 7001, { label: "A-수정", x: 11, y: 12 }); await save(A5);
+  const ra = await tick(B5);
+  const bx = pinOf(B5, 7001);
+  console.log("   측정(a): 틱=" + ra + " B 의 X=" + JSON.stringify({ label: bx && bx.label, x: bx && bx.x, y: bx && bx.y }));
+  ok(!!bx && bx.label === "A-수정" && bx.x === 11 && bx.y === 12, "D5-a A 가 바꾼 X 라벨·좌표가 B 틱 후 B 화면에 반영");
+  await place(B5, 33, 33); await save(B5);
+  const sa = await srvOf(7001);
+  ok(!!sa && sa.label === "A-수정" && sa.x === 11, "D5-a B 가 이어서 저장해도 서버 X = A 값(되돌림 0) — " + JSON.stringify(sa && { label: sa.label, x: sa.x }));
+
+  // D5-b 서로 다른 핀 동시 수정 → 둘 다 보존(B 는 미저장 상태에서 틱)
+  await editDirty(B5, 7002, { label: "B-Y" });                 // B 미저장
+  await editAuto(A5, 7001, { label: "A-X2" }); await save(A5);
+  const rb = await tick(B5);
+  ok(pinOf(B5, 7001).label === "A-X2" && pinOf(B5, 7002).label === "B-Y", "D5-b B 틱 후 A 의 X 반영 + B 미저장 Y 보존 — " + rb);
+  await save(B5);
+  const sbx = await srvOf(7001), sby = await srvOf(7002);
+  ok(sbx.label === "A-X2" && sby.label === "B-Y", "D5-b B 저장 후 서버 X=A · Y=B 둘 다 — " + sbx.label + "/" + sby.label);
+
+  // D5-c 같은 핀 동시 수정 → 나중 수정이 이김(저장 순서 무관)
+  //  c1: A 먼저 수정 · B 나중 수정 · A 먼저 저장 · B 저장(409 병합) → B
+  await editAuto(A5, 7001, { label: "A-c1" });
+  await editAuto(B5, 7001, { label: "B-c1" });
+  await save(A5); await save(B5);
+  const c1 = (await srvOf(7001)).label;
+  //  c2: B 먼저 수정 · A 나중 수정 · A 먼저 저장 · B 틱 → A 반영 · B 저장 → 서버 A 유지
+  await tick(A5);
+  await editDirty(B5, 7001, { label: "B-c2" });   // 라벨 경로(_markDirty) — 편집 시각이 찍혀야 A 가 이긴다
+  await editAuto(A5, 7001, { label: "A-c2" });
+  await save(A5); await tick(B5); const bc2 = pinOf(B5, 7001).label; await save(B5);
+  const c2 = (await srvOf(7001)).label;
+  console.log("   측정(c): c1 서버=" + c1 + " · c2 B틱후=" + bc2 + " 서버=" + c2);
+  ok(c1 === "B-c1", "D5-c1 같은 핀: 나중 수정(B)이 이김 — 서버=" + c1);
+  ok(bc2 === "A-c2" && c2 === "A-c2", "D5-c2 같은 핀: 나중 수정(A)이 이김 · B 저장이 되돌리지 않음 — B=" + bc2 + " 서버=" + c2);
+
+  // D5-d B 미저장 편집 중 A 가 같은 핀을 (B 보다 먼저) 수정·저장 → B 틱 → B 편집 보존 → B 저장 → 서버 B
+  await tick(A5); await tick(B5);
+  await editAuto(A5, 7001, { label: "A-d" }); await save(A5);
+  await editDirty(B5, 7001, { label: "B-d", x: 44 });
+  const rd4 = await tick(B5);
+  const bd = pinOf(B5, 7001);
+  ok(bd.label === "B-d" && bd.x === 44, "D5-d B 가 더 나중에 한 미저장 편집은 틱에도 보존 — " + rd4 + " " + bd.label);
+  await save(B5);
+  ok((await srvOf(7001)).label === "B-d", "D5-d B 저장 후 서버 X = B 편집");
+
+  // D5-e 삭제 부활 0 — B 가 Y 를 (미저장) 수정한 뒤 A 가 Y 삭제·저장 → B 틱·저장 후에도 Y 없음
+  await tick(A5);
+  await editDirty(B5, 7002, { label: "B-Y2" });
+  A5.App._removePins([7002]); await save(A5);
+  await tick(B5);
+  const goneB = !pinOf(B5, 7002);
+  await save(B5);
+  const finE = idsOf(await srvPins(depId));
+  ok(goneB && !finE.includes("7002"), "D5-e 수정 중이던 핀도 남의 삭제가 이김(부활 0) — B=" + goneB + " 서버=" + JSON.stringify(finE));
+
+  // D5-f 레거시(updatedAt 없음) — 구버전 클라이언트가 L 을 바꿔 저장(updatedAt 없이) → B 틱 → 서버 값
+  await tick(B5);
+  const dep = await getDep(depId);
+  const legacy = JSON.parse(dep.pins).map((p) => (String(p.id) === "7003" ? Object.assign({}, p, { label: "구버전-수정", x: 81 }) : p));
+  const lp = await api("a", "PATCH", "/tables/deployments/" + depId, { pins: JSON.stringify(legacy), base_version: dep.version });
+  const lsrv = legacy.find((p) => String(p.id) === "7003");
+  const rf = await tick(B5);
+  const bl = pinOf(B5, 7003);
+  console.log("   측정(f): PATCH=" + lp.status + " 서버 L.updatedAt=" + (lsrv && lsrv.updatedAt) + " 틱=" + rf + " B 의 L=" + (bl && bl.label));
+  ok(lp.status === 200 && !!bl && bl.label === "구버전-수정" && bl.x === 81, "D5-f 레거시 핀(updatedAt 없음) 변경 → B 에 서버 값 반영");
+  await save(B5);
+  ok((await srvOf(7003)).label === "구버전-수정", "D5-f B 저장 후에도 서버 L 유지");
+
+  // D5-g 막 연 화면에서 곧바로 편집(틱·병합 전) → A 가 다른 핀 저장 → 틱 → C 편집 보존(로더 기준 기록)
+  const C5 = makeClient("c"); await open(C5, depId, deck);
+  await editDirty(C5, 7003, { label: "C-L" });
+  await tick(A5); await editAuto(A5, 7001, { label: "A-g" }); await save(A5);
+  const rg = await tick(C5);
+  ok(pinOf(C5, 7003).label === "C-L" && pinOf(C5, 7001).label === "A-g", "D5-g 연 직후 편집도 로컬 수정으로 찍혀 보존 + A 반영 — " + rg + " " + pinOf(C5, 7003).label);
+
+  // D5-h _markDirty 전(일괄 사진 등록 도중 등) 편집 중 틱 → 병합 직전 관찰로 보존(대상 = updatedAt 없는 A 의 새 핀)
+  const ph = await place(A5, 55, 5); await save(A5); await tick(C5);
+  await sleep(3); pinOf(C5, ph.id).imageId = "img_c_batch";
+  await editAuto(A5, 7001, { label: "A-h" }); await save(A5);
+  const rh = await tick(C5);
+  ok(pinOf(C5, ph.id).imageId === "img_c_batch" && pinOf(C5, 7001).label === "A-h", "D5-h 관문 전 편집도 병합 직전 찍혀 보존 — " + rh);
+}
+
 await mf.dispose();
 try { fs.unlinkSync(workerOut); } catch {}
 console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));

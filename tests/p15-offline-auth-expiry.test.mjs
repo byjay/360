@@ -239,7 +239,9 @@ function makeFlushDraftsSandbox(patchRes) {
     // [WP1·H8] _mergePins/_draftVsServer 가 tombstone 필터 SoT(_live)를 쓰게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
     "_pinIds(arr) {", "_live(arr) {", "_mergePins(srvPins, localPins, baseIds, tombIds) {",
     // [WO 20260930-numdup] _mergePins 가 동시 생성 번호 재채번(_renumberConcurrent)을 부르게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
-    "_renumberConcurrent(pins, baseIds, srvPins) {"]
+    "_renumberConcurrent(pins, baseIds, srvPins) {",
+    // [WO 20260930-lww] _mergePins 가 병합 결과를 수정 감지 기준으로 기록(_pinsSeen)하게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
+    "_pinsSeen(arr) {"]
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +
