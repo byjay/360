@@ -304,9 +304,16 @@
             });
           } catch (e) { failed += batch.length; break; } // 네트워크 단절 → 다음 online 때 재시도
           if (!res.ok) {
-            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
-            //   큐는 그대로 보존(제거하지 않음) — 재로그인 후 자동 재시도.
-            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            // [WO 20260930-403] 401(만료)/403·409(권한없음·대상삭제) 를 공유 지점(Auth.classifyWriteFailure)
+            //   에서 판정 — /api/sync/batch 는 프로젝트 스코프 검사가 없어 실제로는 항상 'expired'로
+            //   분류되지만(§classifyWriteFailure), 세 호출부가 같은 판정을 쓰도록 통일한다(§G-2-5).
+            //   큐는 그대로 보존(제거하지 않음) — 재로그인/재허용 후 자동 재시도.
+            const kind = (typeof Auth !== "undefined" && Auth.classifyWriteFailure) ? await Auth.classifyWriteFailure(res) : null;
+            if (kind === "expired") {
+              if (typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            } else if (kind === "denied" || kind === "conflict") {
+              if (typeof Auth !== "undefined" && Auth.writeDenied) Auth.writeDenied(kind);
+            }
             failed += batch.length; break;
           }
           const data = await res.json();

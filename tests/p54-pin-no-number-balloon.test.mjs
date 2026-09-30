@@ -160,15 +160,17 @@ function suiteHeadHasNumberText(label, sSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
   const ui = runUI(sSrc, uiSrc, fixture).pins;
-  const expectNo = { photo1: "1", content1: "2", empty1: "3", cbPhoto: "1", cbEmpty: "2", iconPin: "4" };
-  Object.keys(expectNo).forEach((id) => {
+  // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo — content(360) 계열은 "P" 접두,
+  // checkboard(CHECKER) 계열은 숫자만(기존 그대로). dataset.no(raw)는 ⑥에서 별도로 검증한다.
+  const expectLabel = { photo1: "P1", content1: "P2", empty1: "P3", cbPhoto: "1", cbEmpty: "2", iconPin: "P4" };
+  Object.keys(expectLabel).forEach((id) => {
     ok(/<text\b/.test(ui[id].html), `① ${id}: 머리 SVG 에 <text> 요소 있음(번호)`);
-    const re = new RegExp(`>${expectNo[id]}</text>`);
-    ok(re.test(ui[id].html), `① ${id}: 번호 텍스트 값이 dataset.no(${expectNo[id]})와 일치`);
+    const re = new RegExp(`>${expectLabel[id]}</text>`);
+    ok(re.test(ui[id].html), `① ${id}: 번호 텍스트 표시 라벨이 PinSeries.formatNo(${expectLabel[id]})와 일치`);
   });
   // 🔴 9/29 핵심 수정: 커스텀 아이콘(icon="valve") 핀도 번호 <text> 가 있어야 한다(더는 번호 대체 아님)
-  ok(/<text\b/.test(ui.iconPin.html) && />4<\/text>/.test(ui.iconPin.html),
-    "① iconPin: 커스텀 아이콘 핀도 번호(4) <text> 존재 — 9/29 재회귀 수정 확인");
+  ok(/<text\b/.test(ui.iconPin.html) && />P4<\/text>/.test(ui.iconPin.html),
+    "① iconPin: 커스텀 아이콘 핀도 번호(P4) <text> 존재 — 9/29 재회귀 수정 확인");
   // 아이콘은 버리지 않고 보조 배지로 공존(원본 기능 보존)
   ok(ui.iconPin.hasBadge, "① iconPin: 아이콘은 pin-icon-badge 보조 배지로 이동해 공존");
   ok(!ui.photo1.hasBadge && !ui.content1.hasBadge,
@@ -186,7 +188,8 @@ function suiteNumberInsideHeadOnly(label, sSrc) {
   ["photo1", "content1", "empty1", "iconPin"].forEach((id) => {
     ok(!!ui[id].discTag, `② ${id}: pin-tier-disc 는 여전히 형태 단서로 존재(discTag=${ui[id].discTag})`);
     const afterDisc = ui[id].html.slice(ui[id].html.indexOf('class="pin-tier-disc"'));
-    ok(/>\d+<\/text>/.test(afterDisc), `② ${id}: 원판 뒤(같은 svg 안)에 번호 텍스트 있음`);
+    // [WO 20260930-marker-no] content 계열은 "P" 접두가 붙는다(PinSeries.formatNo) — 접두 유무 무관하게 숫자 텍스트가 있으면 통과.
+    ok(/>P?\d+<\/text>/.test(afterDisc), `② ${id}: 원판 뒤(같은 svg 안)에 번호 텍스트 있음`);
     // svg 밖(마커 최상위)에 별도 "숫자" 배지 div 는 없음(풍선=머리 밖 숫자 배지는 여전히 없음).
     // pin-icon-badge 는 svg 안의 circle(아이콘 보조 표시)이지 svg 밖 숫자 배지가 아니므로 무관.
     ok(!/<div[^>]*(pin-num-badge|number-badge|pin-badge)/.test(ui[id].html),
@@ -291,9 +294,9 @@ suiteRadarParity("⑧ 미니맵 정합 (정상 소스)", seriesSrc, radarSrc);
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션ⓐ] 아이콘 핀 번호를 폴백(||)으로 되돌림(9/29 재회귀 재현) → ①이 실패해야 함");
-  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>\n              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")\n                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`\n                : ""}';
+  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>\n              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")\n                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`\n                : ""}';
   const mutated = uiSrc.replace(needle,
-    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>`}');
+    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>`}');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const fixture = FIXTURE();

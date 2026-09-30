@@ -510,6 +510,8 @@
             .forEach(b => acts.appendChild(b));
           g.appendChild(acts);
         }
+        // [WO 20260930-merge] 지금 열린 구역/영역에만 — 다른 구역 포인트 가져오기(41_RegionMerge.js). 조건 미달이면 null.
+        if (loaded && typeof RegionMerge !== "undefined") { const rmB = RegionMerge.treeButton(deck, isCur); if (rmB) g.appendChild(rmB); }
 
         const kids = document.createElement("div");
         kids.className = "tree-children";
@@ -673,6 +675,9 @@
         marker.classList.add("pin-kind-" + meta.kind); // 색맹 대비: 색 외 식별 훅
         // ── 번호: 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번(PinSeries 정본) ──
         const dispNo = meta.no;
+        // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo(트리/핀패널과 동일:
+        //   CHECKER "1" / 360 "P1"). dataset.no 는 채번 원본값 그대로 유지(회귀테스트 p4/p12 가 숫자로 비교).
+        const dispLabel = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(meta.no, meta.series) : String(dispNo);
         marker.dataset.no = dispNo;
         marker.dataset.kind = meta.kind;
         marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
@@ -718,7 +723,7 @@
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="${headFill2}"/>
               <circle cx="18" cy="15" r="12.4" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
               <circle cx="18" cy="15" r="8.6" fill="#ffffff"/>
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
             </svg>
           </div>` : `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
@@ -758,7 +763,7 @@
                    대비 ≥4.5:1 이미 보장된 값이라 별도 실측 불필요 — ≥3:1 요구보다 넉넉함). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")
                 ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`
                 : ""}

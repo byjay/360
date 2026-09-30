@@ -261,5 +261,35 @@ suiteFilter("④⑤ 필터 (정상 소스)", seriesSrc, radarSrc);
   }
 }
 
+/* ────────────────────────────────────────────────────────────
+ * ⑥ [WO 20260930-marker-no] 지도 마커 표시 라벨 = PinSeries.formatNo SoT
+ *    (트리/핀패널과 같은 포맷: 360=P접두, CHECKER=숫자만). dataset.no 는 원본 숫자 그대로(위 ①③④⑤ 불변).
+ * ──────────────────────────────────────────────────────────── */
+console.log("\n[⑥ 지도 마커 표시 라벨 — 360=P접두 / CHECKER=숫자만 (정상 소스)]");
+{
+  const { markers } = runUI(seriesSrc, uiSrc, { pins: FIXTURE() });
+  const byId = {}; markers.forEach((m) => { byId[m.dataset.id] = m; });
+  ok(/>P1</.test(byId.c1.innerHTML), `콘텐츠(360) 계열 c1 마커 라벨 = P1 표시: ${/>P\d+</.exec(byId.c1.innerHTML)}`);
+  ok(/>P2</.test(byId.e1.innerHTML), `콘텐츠(360) 계열 e1 마커 라벨 = P2 표시`);
+  ok(/>P3</.test(byId.c2.innerHTML), `콘텐츠(360) 계열 c2 마커 라벨 = P3 표시`);
+  ok(/>1</.test(byId.b1.innerHTML) && !/>P1</.test(byId.b1.innerHTML), `CHECKER 계열 b1 마커 라벨 = 1(접두 없음, 기존 그대로)`);
+  ok(/>77</.test(byId.b2.innerHTML) && !/>P77</.test(byId.b2.innerHTML), `CHECKER 계열 b2 마커 라벨 = 77(접두 없음)`);
+  // dataset.no 는 여전히 원본 숫자(포맷 없음) — 위 ①의 nums 비교(p4 suiteSeries)와 회귀 없음 재확인
+  ok(String(byId.c1.dataset.no) === "1" && String(byId.b1.dataset.no) === "1", `dataset.no 는 원본 숫자 그대로(포맷 미적용): c1=${byId.c1.dataset.no}, b1=${byId.b1.dataset.no}`);
+}
+console.log("\n[뮤테이션C] 마커 라벨 포맷을 dispNo(포맷 없음)로 되돌리면 ⑥이 실패해야 함");
+{
+  const needle = 'const dispLabel = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(meta.no, meta.series) : String(dispNo);';
+  if (uiSrc.indexOf(needle) < 0) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const mutatedUiSrc = uiSrc.replace(needle, "const dispLabel = dispNo;");
+    const { markers } = runUI(seriesSrc, mutatedUiSrc, { pins: FIXTURE() });
+    const byId = {}; markers.forEach((m) => { byId[m.dataset.id] = m; });
+    const stillFormatted = /P1/.test(byId.c1.innerHTML);
+    console.log((!stillFormatted ? "  PASS(예상대로 실패 재현) " : "  FAIL(뮤테이션에도 통과 — 테스트가 가짜) ") + "c1 innerHTML has P1: " + stillFormatted);
+    if (stillFormatted) failed++;
+  }
+}
+
 console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));
 process.exit(failed === 0 ? 0 : 1);

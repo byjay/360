@@ -400,5 +400,75 @@ window.Auth = { isDesigner: true, headers() { return {}; } };
   } finally { await browser.close(); server.close(); }
 }
 
+/* ══════════════════ Part A2 — [추가] 활성 모드 핀 0개일 때 배지·칩 대칭 표시 ══════════════════
+ * 재현(지휘자 라이브 실측, 배포 ab4aefec/88e52ff): sunbo 를 360 모드로 바꾸면 지도 핀 0개·트리는
+ * 정상인데 "N PINS" 배지는 CHECKER 개수(11) 그대로 남고, 필터 칩 영역은 완전히 빈다(숨김).
+ * 근본원인(01b_PinSeries.js renderChips): 칩 카운트를 this.modePins(pins) 로 먼저 거른 뒤 셌다 —
+ * 활성 모드 자신의 계열만 셀 수 있게 되어 그 계열이 0개면 c.all 도 0이 되고, 칩바 전체가 숨는다.
+ * 수정: seriesCounts 는 항상 페이지 전체(두 계열) 기준으로 세고, 활성 모드일 때만 자기 계열 칩
+ * 하나로(0 이어도 표시) 좁힌다. 배지(#pin-count-badge)는 이미 PinSeries.modePins 기준이었다
+ * (WO 20260930-fixmode) — 라이브에서 "11" 로 남아 보인 것은 소스 문제가 아니라 그 배포본이
+ * 이 SoT 이전 빌드였을 가능성이 높다([Uncertain] 라이브 미확인, 배포는 지휘자 소관).
+ * ────────────────────────────────────────────────────────────────────────── */
+console.log("\n[Part A2 · 활성 모드 핀 0개 — 배지/칩 대칭 표시(360 0)]");
+function fixtureZeroContent(regMode) {
+  const decks = [{ id: "dChk", name: "체커구역", mode: "checker", deployment_id: "dep2", parent_id: null }];
+  const State = {
+    mode: "designer", regMode, pdfPage: 1, pdfPages: 1, currentDeploymentId: "dep2",
+    activePin: null, zones: [], zoneView: null, editMode: false, placing: false,
+    pins: [
+      { id: "c1", page: 1, x: 10, y: 10, checkboard: true, label: "1" },
+      { id: "c2", page: 1, x: 20, y: 20, checkboard: true, label: "2" }
+    ] // 360(content) 계열 핀은 0개 — 실측 재현과 동일 구성
+  };
+  const Projects = { decks, currentProject: { id: "prj1", name: "sunbo" }, currentDeck: decks[0], selectDeck() {} };
+  const App = { pinHasContent: () => false, focusPin() {}, isDeckUnsaved: () => false };
+  return { State, Projects, App };
+}
+function observeZero(regMode, srcs) {
+  const fx = fixtureZeroContent(regMode);
+  const { UI, PS, registry } = runUI(fx, srcs || {});
+  UI.renderPinsOnMap();
+  UI.renderPinList();
+  return { chips: registry["pin-filter-bar"]._html, chipsHidden: has(registry["pin-filter-bar"], "hidden"),
+    badge: registry["pin-count-badge"]._text, badgeHidden: has(registry["pin-count-badge"], "hidden"), markers: (registry["pins-layer"]._children || []).length };
+}
+{
+  const Z = observeZero("photo");   // 360 모드인데 content 핀이 0개
+  ok(Z.markers === 0, `A2-1 360 모드(핀 0개) → 지도 마커 0개(실제 ${Z.markers})`);
+  ok(Z.badgeHidden, `A2-2 "N PINS" 배지: 핀 0개면 숨김 처리(renderPinList 기존 동작, 회귀 없음) hidden=${Z.badgeHidden}`);
+  ok(!Z.chipsHidden, `A2-3 필터 칩 바: 360 모드에서 콘텐츠 핀 0개여도 숨지 않음(칩 자체로 "0" 을 보여줌) hidden=${Z.chipsHidden}`);
+  ok(/data-series="content"/.test(Z.chips) && !/data-series="checkboard"/.test(Z.chips), `A2-4 칩: 360 자신의 칩만(체크보드 칩은 없음) → ${Z.chips}`);
+  ok(/zpager-cnt">0</.test(Z.chips), `A2-5 칩 카운트 = "360 0"(대칭 표시) → ${Z.chips}`);
+
+  const C2 = observeZero("checkboard"); // 대조군: CHECKER 모드는 원래도 정상(칩 CHECKER 2)
+  ok(/data-series="checkboard"/.test(C2.chips) && /zpager-cnt">2</.test(C2.chips) && !/data-series="content"/.test(C2.chips),
+    `A2-6 대조군 CHECKER 모드(핀 2개) → [CHECKER 2]만(회귀 없음) → ${C2.chips}`);
+}
+console.log("\n[Part A2 뮤테이션] renderChips 를 구버전(활성모드 분기 없음 + modePins 선필터)으로 되돌리면 A2-3/A2-5 가 실패해야 함");
+{
+  const needleCount = "const c = this.seriesCounts(pins, page);";
+  const needleBranch = 'let html = "";\n      if (active) {\n        // 모드 작업공간(CHECKER/360 분리 화면) — 그 모드 자신의 칩만, 0개여도 대칭 표시한다\n' +
+    '        // (마스터 재현: CHECKER "CHECKER 11" 처럼 360 모드도 "360 0" 이 보여야 한다).\n' +
+    '        host.classList.remove("hidden");\n        html = chip(active, this.LABELS[active], c[active] || 0, !!f[active]);\n' +
+    '      } else {\n        // 모드 분리 없는 화면(뷰어/구 view) — 기존 2칩, 개수가 있는 계열만(회귀 없음).\n' +
+    '        if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }\n' +
+    '        host.classList.remove("hidden");\n        this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });\n      }';
+  if (seriesSrc.indexOf(needleCount) < 0 || seriesSrc.indexOf(needleBranch) < 0) {
+    console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?) count=" + (seriesSrc.indexOf(needleCount) >= 0) + " branch=" + (seriesSrc.indexOf(needleBranch) >= 0));
+    failed++;
+  } else {
+    // 구버전 그대로 복원: 카운트를 modePins() 로 먼저 거르고, 활성 분기 없이 c.all 기준 단일 경로.
+    let mutatedSeries = seriesSrc.replace(needleCount, "const c = this.seriesCounts(this.modePins(pins), page);");
+    mutatedSeries = mutatedSeries.replace(needleBranch,
+      'let html = "";\n      if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }\n' +
+      '      host.classList.remove("hidden");\n      this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });');
+    const Z2 = observeZero("photo", { series: mutatedSeries });
+    const broke = Z2.chipsHidden || !/data-series="content"/.test(Z2.chips) || !/zpager-cnt">0</.test(Z2.chips);
+    console.log((broke ? "  PASS(예상대로 실패 재현) " : "  FAIL(뮤테이션에도 통과 — 테스트가 가짜) ") + "chipsHidden=" + Z2.chipsHidden + " chips=" + JSON.stringify(Z2.chips));
+    if (!broke) failed++;
+  }
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nALL PASS");
 process.exit(failed ? 1 : 0);

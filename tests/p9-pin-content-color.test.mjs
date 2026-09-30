@@ -122,7 +122,8 @@ function runUI(sSrc, uSrc, pins, page = 1) {
   registry["pins-layer"]._children.forEach((m) => {
     const html = m._html;
     const stops = (html.match(/stop-color="(#[0-9a-fA-F]{6})"/g) || []).map((s) => s.slice(12, -1));
-    const txt = (html.match(/fill="(#[0-9a-fA-F]{6})">\d+<\/text>/) || [])[1] || null;
+    // [WO 20260930-marker-no] content(360) 계열은 "P" 접두가 붙는다(PinSeries.formatNo) — 접두 유무 무관하게 추출.
+    const txt = (html.match(/fill="(#[0-9a-fA-F]{6})">P?\d+<\/text>/) || [])[1] || null;
     const dash = (html.match(/stroke-dasharray="([^"]*)"/) || [])[1] || "";
     const headFillAttr = (html.match(/r="11\.8" fill="([^"]+)"/) || [])[1] || null;
     out[m.dataset.id] = {
@@ -610,7 +611,7 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
   // 🔴 이 <text> 라인은 체크보드 간소화 분기(497행대)와 일반 분기(543행대) 2곳에 동일 문자열로
   // 존재한다 — replace()(1곳만 치환)를 쓰면 c1(일반 분기 렌더)이 여전히 번호를 갖는 거짓-패스가
   // 난다. replaceAll 로 양쪽 다 제거해야 c1.text 가 실제로 null 이 된다.
-  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispNo).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispNo}</text>';
+  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>';
   const mutated = uiSrc.replaceAll(needle, "");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {

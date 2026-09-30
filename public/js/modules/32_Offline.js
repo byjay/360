@@ -210,6 +210,9 @@
     return null;
   }
 
+  // [WO 20260930-403] 권한없음/대상삭제로 거부된 depId — 세션 내 재시도 중단(op 로그는 보존, 무한재시도 금지)
+  const _deniedOpDeps = new Set();
+
   // App 에 op 플러시 메서드 부착 (_onReconnect 에서 호출)
   if (typeof App !== "undefined") {
     App._flushOpLogs = async function () {
@@ -218,6 +221,7 @@
       const opKeys = keys.filter((k) => String(k).startsWith("oplog:"));
       for (const k of opKeys) {
         const depId = String(k).slice("oplog:".length);
+        if (_deniedOpDeps.has(depId)) continue; // 이미 거부 확인됨(이 세션) — 재시도 안 함
         const ops = await OpLog.pending(depId);
         if (!ops.length) continue;
         try {
@@ -245,6 +249,17 @@
                 if (typeof UI !== "undefined") { UI.renderPinList(); UI.renderPinsOnMap(); }
                 if (typeof Zones !== "undefined" && Zones.render) { Zones.render(); Zones.renderList && Zones.renderList(); }
               } catch (e) {}
+            }
+          } else if (res) {
+            // [WO 20260930-403] 401(만료)/403·409(권한없음·대상삭제) 를 공유 지점에서 판정.
+            //   기존엔 이 분기가 아예 없어 권한거부/삭제된 배포본의 op 로그가 재연결마다
+            //   조용히 무한 재시도됐다(만료 안내도 없었다).
+            const kind = (typeof Auth !== "undefined" && Auth.classifyWriteFailure) ? await Auth.classifyWriteFailure(res) : null;
+            if (kind === "expired") {
+              if (typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            } else if (kind === "denied" || kind === "conflict") {
+              _deniedOpDeps.add(depId);            // op 로그는 그대로 보존, 이 세션에서만 재시도 중단
+              if (typeof Auth !== "undefined" && Auth.writeDenied) Auth.writeDenied(kind);
             }
           }
         } catch (e) { /* 재단절 → 다음 online 때 op 유지하여 재시도 */ }

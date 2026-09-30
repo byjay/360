@@ -80,16 +80,19 @@ function makeDoc(ids) {
 /* ══════════════════════════════════════════════════════════════════
  * ①②④ SyncQueue.flush() — 401/403 vs 일반 오류(500/예외) 구분
  * ══════════════════════════════════════════════════════════════════ */
+/** [WO 20260930-403] Auth.classifyWriteFailure 실 소스(22_Auth.js) 그대로 발췌 — 판정 로직을
+ *  테스트가 다시 구현하지 않는다(§G-2-5, 로직 복붙 금지는 테스트에도 적용). */
+function classifyBlock() { return extractBalanced(authSrc, "async classifyWriteFailure(res) {"); }
+
 function makeSyncQueueSandbox() {
   const fullSrc = syncSrc;
   const sqSrc = fullSrc.slice(0, fullSrc.indexOf("\n  };") + 5);
   const toasts = [];
   const gates = [];
   const authExpiredCalls = [];
-  const Auth = {
-    headers() { return {}; },
-    authExpired() { authExpiredCalls.push(1); }
-  };
+  const writeDeniedCalls = [];
+  const AuthSrc = "({ headers() { return {}; }, authExpired() { __authExpiredCalls.push(1); }, " +
+    "writeDenied(kind) { __writeDeniedCalls.push(kind); }, " + classifyBlock() + " })";
   const Prompt = { toast: (m) => toasts.push(m) };
   const storage = {};
   const localStorage = {
@@ -101,15 +104,16 @@ function makeSyncQueueSandbox() {
   let fetchImpl = async () => ({ ok: true, json: async () => ({ results: [] }) });
   const fetchMock = (...args) => fetchImpl(...args);
   const sandbox = {
-    console, Auth, Prompt, localStorage, navigator, window: {},
-    fetch: fetchMock, indexedDB: undefined, JSON, Object, Array, Set, Promise, Date, Math
+    console, Prompt, localStorage, navigator, window: {},
+    fetch: fetchMock, indexedDB: undefined, JSON, Object, Array, Set, Promise, Date, Math,
+    __authExpiredCalls: authExpiredCalls, __writeDeniedCalls: writeDeniedCalls
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(sqSrc + "\n;globalThis.__SQ = SyncQueue;", sandbox);
+  vm.runInContext("const Auth = " + AuthSrc + ";\n" + sqSrc + "\n;globalThis.__SQ = SyncQueue;", sandbox);
   return {
     SQ: sandbox.__SQ,
-    toasts, authExpiredCalls,
+    toasts, authExpiredCalls, writeDeniedCalls,
     setFetch: (fn) => { fetchImpl = fn; }
   };
 }
@@ -142,6 +146,16 @@ console.log("\n[①④ SyncQueue.flush — 401 시 큐 보존 + Auth.authExpired
   await SQ.flush();
   ok(authExpiredCalls.length === 0, "④ 네트워크 예외 → Auth.authExpired() 호출 없음");
   ok((await SQ.all()).length === 1, "④ 네트워크 예외 → 큐 op 보존");
+}
+{
+  // [WO 20260930-403] /api/sync/batch 의 403(requireDesigner 발 — 'designer login required')은
+  //   classifyWriteFailure 가 '만료'로 판정한다(그 엔드포인트엔 프로젝트 스코프 403이 없다) — 회귀 없음 증명.
+  const { SQ, authExpiredCalls, writeDeniedCalls, setFetch } = makeSyncQueueSandbox();
+  await SQ.enqueue({ kind: "image", name: "d.jpg", image_data: "d4" });
+  setFetch(async () => ({ ok: false, status: 403, clone() { return this; }, json: async () => ({ error: "forbidden — designer login required" }) }));
+  await SQ.flush();
+  ok(authExpiredCalls.length === 1, "SyncQueue 403('designer login required') → Auth.authExpired() 1회(회귀 없음): " + authExpiredCalls.length);
+  ok(writeDeniedCalls.length === 0, "SyncQueue 403('designer login required') → Auth.writeDenied() 호출 안 함: " + writeDeniedCalls.length);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -227,6 +241,10 @@ function makeFlushDraftsSandbox(patchRes) {
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +
+    // [WO 20260930-WP3 B5] _flushDirtyDrafts 가 this._projectIdOfKey(key) 를 부른다(68897c5) —
+    // 이 하네스에도 스텁을 실어야 한다(없으면 TypeError 가 바깥 catch 에 조용히 먹혀 fetch 자체가
+    // 한 번도 안 나가는 채 테스트가 항상 "실패"로 보였다 — 발견/수정, §G-2-5 조용한 실패 금지).
+    "  _projectIdOfKey() { return null; },\n" +
     "  _mergeById(a, b) { return (a || []).concat(b || []); },\n" +
     "  " + ruleBlock + ",\n" +
     srcBlocks +
@@ -237,6 +255,7 @@ function makeFlushDraftsSandbox(patchRes) {
     "  " + block + "\n" +
     "};\nglobalThis.__appTest = __appTest;";
   const authExpiredCalls = [];
+  const writeDeniedCalls = [];
   const savedDrafts = [];
   const draft = { dirty: true, pages: ["p1"], depId: "dep1", pins: [], zones: [], annotations: [], fileName: "도면" };
   const SyncQueue = {
@@ -244,18 +263,22 @@ function makeFlushDraftsSandbox(patchRes) {
     loadDraft: async () => draft,
     saveDraft: async (k, d) => { savedDrafts.push({ k, d: Object.assign({}, d) }); }
   };
-  const Auth = { headers: () => ({}), authExpired: () => authExpiredCalls.push(1) };
+  const AuthSrc = "({ headers() { return {}; }, authExpired() { __authExpiredCalls.push(1); }, " +
+    "writeDenied(kind) { __writeDeniedCalls.push(kind); }, " + classifyBlock() + " })";
   let call = 0;
   const fetchMock = async (url, opts) => {
     call++;
     if (opts && opts.method === "PATCH") return patchRes;
     return { ok: true, json: async () => ({ version: 1, pins: "[]", zones: "[]" }) }; // baseVer GET
   };
-  const sandbox = { console, SyncQueue, Auth, navigator: { onLine: true }, fetch: fetchMock, window: {}, JSON, Object };
+  const sandbox = {
+    console, SyncQueue, navigator: { onLine: true }, fetch: fetchMock, window: {}, JSON, Object,
+    __authExpiredCalls: authExpiredCalls, __writeDeniedCalls: writeDeniedCalls
+  };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(objSrc, sandbox);
-  return { appTest: sandbox.__appTest, authExpiredCalls, savedDrafts, draft };
+  vm.runInContext("const Auth = " + AuthSrc + ";\n" + objSrc, sandbox);
+  return { appTest: sandbox.__appTest, authExpiredCalls, writeDeniedCalls, savedDrafts, draft, callCount: () => call };
 }
 {
   const { appTest, authExpiredCalls, savedDrafts, draft } = makeFlushDraftsSandbox({ ok: false, status: 401 });
@@ -269,6 +292,41 @@ function makeFlushDraftsSandbox(patchRes) {
   const { appTest, savedDrafts } = makeFlushDraftsSandbox({ ok: true, status: 200, json: async () => ({ id: "dep1", version: 2 }) });
   await appTest._flushDirtyDrafts();
   ok(savedDrafts.length === 1 && savedDrafts[0].d.dirty === false, "① 정상(200) 흐름은 여전히 draft clean 저장(회귀 없음)");
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * ⑥ App._flushDirtyDrafts — 403(프로젝트 권한없음)은 만료가 아니라 '권한없음'으로 분류된다
+ *    (WP3 B5 deploymentWriteDenied 재현 — 68897c5 opus 팀 보고: 정상 권한거부가 재로그인 창을 띄웠다)
+ * ══════════════════════════════════════════════════════════════════ */
+console.log("\n[⑥ App._flushDirtyDrafts — 403(프로젝트 비멤버) → authExpired 아님, writeDenied + draft 보존 + 재시도 중단]");
+{
+  const denyRes = {
+    ok: false, status: 403,
+    json: async () => ({ error: "forbidden — not a designer of this project" }),
+    clone() { return this; }
+  };
+  const { appTest, authExpiredCalls, writeDeniedCalls, savedDrafts, draft, callCount } = makeFlushDraftsSandbox(denyRes);
+  await appTest._flushDirtyDrafts();
+  ok(authExpiredCalls.length === 0, "⑥ 403(프로젝트 권한없음) → Auth.authExpired() 호출 안 함(오인 재로그인 방지): " + authExpiredCalls.length);
+  ok(writeDeniedCalls.length === 1 && writeDeniedCalls[0] === "denied", "⑥ Auth.writeDenied('denied') 1회 호출: " + JSON.stringify(writeDeniedCalls));
+  ok(savedDrafts.length === 1 && savedDrafts[0].d.writeDenied === true, "⑥ draft 가 writeDenied:true 로 저장됨(삭제 안 됨, 보존): " + JSON.stringify(savedDrafts[0] && savedDrafts[0].d.writeDenied));
+  ok(draft.dirty === true, "⑥ draft.dirty 는 그대로(데이터 보존, 삭제/클린 마킹 안 됨)");
+  const before = callCount();
+  await appTest._flushDirtyDrafts();               // 재호출 — writeDenied 표시된 draft 는 재시도하지 않아야 함
+  ok(callCount() === before, "⑥ writeDenied 표시 후 재호출 시 추가 fetch 없음(무한 재시도 금지): " + before + " → " + callCount());
+}
+console.log("\n[⑥-b App._flushDirtyDrafts — 409(프로젝트 삭제) → authExpired 아님, writeDenied('conflict')]");
+{
+  const conflictRes = {
+    ok: false, status: 409,
+    json: async () => ({ error: "conflict — project deleted; deployment is read-only" }),
+    clone() { return this; }
+  };
+  const { appTest, authExpiredCalls, writeDeniedCalls, savedDrafts } = makeFlushDraftsSandbox(conflictRes);
+  await appTest._flushDirtyDrafts();
+  ok(authExpiredCalls.length === 0, "⑥-b 409 → Auth.authExpired() 호출 안 함: " + authExpiredCalls.length);
+  ok(writeDeniedCalls.length === 1 && writeDeniedCalls[0] === "conflict", "⑥-b Auth.writeDenied('conflict') 1회 호출: " + JSON.stringify(writeDeniedCalls));
+  ok(savedDrafts.length === 1 && savedDrafts[0].d.writeDenied === true, "⑥-b draft 도 writeDenied:true 로 보존");
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -325,20 +383,27 @@ function makeBadgeSandbox(offlineSrcArg) {
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[뮤테이션1] SyncQueue.flush 의 401 감지 분기를 제거 → ①(Auth.authExpired 호출)이 실패해야 함");
 {
-  const needle = 'if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();';
+  // [WO 20260930-403] 판정이 공유 지점(Auth.classifyWriteFailure)으로 이관됐다 — 뮤테이션 대상도
+  // 그 결과를 소비하는 분기(kind === "expired")로 옮긴다(§G-2-5, 판정 로직 자체는 22_Auth.js 쪽에서 검증).
+  const needle = 'if (kind === "expired") {';
   if (syncSrc.indexOf(needle) < 0) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const mutatedSyncSrc = syncSrc.replace(needle, "/* removed */");
+    const mutatedSyncSrc = syncSrc.replace(needle, "if (false) {");
     const fullSrc = mutatedSyncSrc;
     const sqSrc = fullSrc.slice(0, fullSrc.indexOf("\n  };") + 5);
     const authExpiredCalls = [];
-    const Auth = { headers: () => ({}), authExpired: () => authExpiredCalls.push(1) };
+    const AuthSrc = "({ headers() { return {}; }, authExpired() { __authExpiredCalls.push(1); }, " +
+      "writeDenied() {}, " + classifyBlock() + " })";
     const storage = {};
     const localStorage = { getItem: (k) => (k in storage ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v); }, removeItem: (k) => { delete storage[k]; } };
-    const sandbox = { console, Auth, Prompt: { toast() {} }, localStorage, navigator: { onLine: true }, window: {}, fetch: async () => ({ ok: false, status: 401 }), JSON, Object, Array, Set, Promise, Date, Math };
+    const sandbox = {
+      console, Prompt: { toast() {} }, localStorage, navigator: { onLine: true }, window: {},
+      fetch: async () => ({ ok: false, status: 401 }), JSON, Object, Array, Set, Promise, Date, Math,
+      __authExpiredCalls: authExpiredCalls
+    };
     sandbox.window = sandbox;
     vm.createContext(sandbox);
-    vm.runInContext(sqSrc + "\n;globalThis.__SQ = SyncQueue;", sandbox);
+    vm.runInContext("const Auth = " + AuthSrc + ";\n" + sqSrc + "\n;globalThis.__SQ = SyncQueue;", sandbox);
     await sandbox.__SQ.enqueue({ kind: "image", name: "m.jpg", image_data: "d" });
     await sandbox.__SQ.flush();
     const mutFailed = authExpiredCalls.length !== 1;

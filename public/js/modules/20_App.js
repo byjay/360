@@ -4358,6 +4358,9 @@
         let d;
         try { d = await SyncQueue.loadDraft(key); } catch (e) { continue; }
         if (!d || !d.dirty || !d.pages || !d.pages.length) continue;
+        // [WO 20260930-403] 이 draft 는 이전에 권한없음/대상삭제로 거부 확인됨 — 재시도 안 함(무한루프 방지).
+        //   draft 자체는 삭제하지 않고 그대로 보존(권한이 나중에 열리면 사용자가 다시 저장하면 된다).
+        if (d.writeDenied) continue;
         try {
           const body = {
             title: d.fileName || "도면", file_name: d.fileName || "",
@@ -4421,10 +4424,18 @@
             });
           }
           if (!res.ok) {
-            // [P16] 401/403(토큰 만료) → 공유 지점(Auth.authExpired)에서 세션당 1회 안내 + 재로그인 게이트.
-            //   그 외 실패는 종전처럼 조용히 재시도(dirty 유지). 큐/드래프트는 어떤 경우에도 보존.
-            if ((res.status === 401 || res.status === 403) && typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
-            continue;                              // 실패 → dirty 유지, 다음 기회에 재시도
+            // [WO 20260930-403] 401(진짜 만료) / 403·409(권한없음·대상삭제) 를 공유 지점(Auth.classifyWriteFailure)
+            //   에서 판정한다. 만료만 재로그인 게이트를 연다 — 권한없음/삭제는 토큰이 멀쩡하므로
+            //   draft 를 writeDenied 로 표시해 재시도를 멈추고(보존은 유지) 세션당 1회만 안내한다.
+            const kind = (typeof Auth !== "undefined" && Auth.classifyWriteFailure) ? await Auth.classifyWriteFailure(res) : null;
+            if (kind === "expired") {
+              if (typeof Auth !== "undefined" && Auth.authExpired) Auth.authExpired();
+            } else if (kind === "denied" || kind === "conflict") {
+              d.writeDenied = true;
+              try { await SyncQueue.saveDraft(key, d); } catch (e) {}
+              if (typeof Auth !== "undefined" && Auth.writeDenied) Auth.writeDenied(kind);
+            }
+            continue;                              // 실패 → dirty 유지, 다음 기회에 재시도(writeDenied 는 예외)
           }
           const rec = await res.json().catch(() => null);
           const wasNew = !d.depId;                // POST 로 '새' 배포본을 만든 경우

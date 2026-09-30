@@ -612,6 +612,45 @@
       try { this._openGate(); } catch (e) {}
     },
 
+    /** [WO 20260930-403] 오프라인 업로드 실패(401/403/409) 판정의 단일 지점(§G-2-5).
+     *  App._flushDirtyDrafts(20_App.js), App._flushOpLogs(32_Offline.js), SyncQueue.flush(05_SyncQueue.js)
+     *  가 모두 이 함수로 분류한다 — 서버 에러 문구가 바뀌면 여기 한 곳만 고친다.
+     *  근본원인: WP3 B5 가 /tables/deployments* 에 프로젝트 스코프 403(deploymentWriteDenied)을
+     *  새로 추가하자, 기존 "401/403 = 토큰 만료" 판정이 정상 권한거부를 오인해 불필요한
+     *  재로그인 창을 띄웠다(프로젝트 비멤버 designer의 오프라인 배포본 저장 시).
+     *  반환: 'expired'(진짜 재로그인 필요) | 'denied'(이 프로젝트 권한 없음) | 'conflict'(409, 삭제된 프로젝트) | null */
+    async classifyWriteFailure(res) {
+      if (!res) return null;
+      if (res.status === 401) return "expired";
+      if (res.status === 409) return "conflict";
+      if (res.status === 403) {
+        let msg = "";
+        try { const j = await res.clone().json(); msg = String((j && j.error) || ""); } catch (e) {}
+        // deploymentWriteDenied(src/index.tsx)의 정확한 문구만 '권한없음'으로 분류.
+        // 그 외(예: requireDesigner 의 'forbidden — designer login required', 파싱 실패)는
+        // 종전처럼 '만료'로 본다 — 프로젝트 스코프가 없는 엔드포인트(/api/sync/batch 등)의 403은
+        // 항상 requireDesigner 발(發), 즉 진짜 로그인 필요이므로 이 기본값이 안전하다.
+        if (msg.indexOf("not a designer of this project") >= 0) return "denied";
+        if (msg === "forbidden") return "denied";
+        return "expired";
+      }
+      return null;
+    },
+
+    _writeDeniedNotified: false,  // 세션당 1회만 안내(재시도마다 토스트 반복 방지)
+
+    /** 오프라인 큐/드래프트가 권한없음(403) 또는 대상삭제(409)로 실패했을 때 호출하는 공유 지점.
+     *  authExpired()와 달리 재로그인 게이트를 열지 않는다 — 토큰은 멀쩡하고 이 항목만 권한이 없다.
+     *  데이터(큐/드래프트/op로그)는 그대로 보존하고, 호출부가 해당 항목의 재시도를 멈춰야 한다. */
+    writeDenied(kind) {
+      if (this._writeDeniedNotified) return;
+      this._writeDeniedNotified = true;
+      const msg = kind === "conflict"
+        ? "프로젝트가 삭제되어 일부 변경사항을 동기화하지 못했습니다 — 로컬에는 보존됩니다"
+        : "이 프로젝트에 쓰기 권한이 없어 일부 변경사항을 동기화하지 못했습니다";
+      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg, 4000); } catch (e) {}
+    },
+
     /* ══════════════════════════════════════════════════════════════════
        [P40] 오프라인 재인증 — 현장에서 세션이 끊겨도 "이 기기에서 한 번 온라인 로그인에
        성공한 사용자"가 비밀번호로 다시 들어와 오프라인 작업을 이어갈 수 있게 한다.

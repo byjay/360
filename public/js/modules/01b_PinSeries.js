@@ -570,10 +570,13 @@
       if (!host) return;
       const page = (typeof State !== "undefined" && State.pdfPage) || 1;
       const pins = (typeof State !== "undefined" && State.pins) || [];
-      // [WO 20260930-fixmode] 칩·카운트도 활성 모드 작업공간 핀만(모드 없음이면 전체).
-      const c = this.seriesCounts(this.modePins(pins), page);
-      if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
-      host.classList.remove("hidden");
+      // [WO 20260930-badge] 🔴 카운트는 페이지 전체(두 계열) 기준으로 센다 — modePins()로 먼저
+      // 거르면 활성 모드가 아닌 계열은 항상 0으로 계산되고(칩 자체가 못 뜸), 활성 모드 핀이
+      // 0개면 c.all 도 0이 되어 칩바 전체가 숨어버린다(재현: 360 모드에서 콘텐츠 핀 0개일 때
+      // 칩 영역이 완전히 빈다 — 지휘자 라이브 보고). seriesCounts 는 항상 전체 기준으로 세고,
+      // 아래에서 활성 모드일 때만 자기 계열 칩 하나로 좁힌다.
+      const c = this.seriesCounts(pins, page);
+      const active = this.activeSeries();   // 모드 작업공간 SoT — null 이면 분리 없음(뷰어/구 view)
       const f = this.filter();
       const chip = (series, label, n, on) =>
         '<button type="button" class="zpager-tab pinfilter-chip pf-' + series + (on ? " active" : "") +
@@ -581,7 +584,17 @@
         '" title="' + label + ' 핀만 보기"><span class="pinfilter-dot"></span>' + label +
         '<span class="zpager-cnt">' + n + '</span></button>';
       let html = "";
-      this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });
+      if (active) {
+        // 모드 작업공간(CHECKER/360 분리 화면) — 그 모드 자신의 칩만, 0개여도 대칭 표시한다
+        // (마스터 재현: CHECKER "CHECKER 11" 처럼 360 모드도 "360 0" 이 보여야 한다).
+        host.classList.remove("hidden");
+        html = chip(active, this.LABELS[active], c[active] || 0, !!f[active]);
+      } else {
+        // 모드 분리 없는 화면(뷰어/구 view) — 기존 2칩, 개수가 있는 계열만(회귀 없음).
+        if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
+        host.classList.remove("hidden");
+        this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });
+      }
 
       host.innerHTML = html;
       if (!this._chipsBound) {
