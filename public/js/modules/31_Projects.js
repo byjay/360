@@ -711,8 +711,27 @@
      *  (parent_id NULL — "구역" 단, "영역" 아님) 중 가장 최근 생성분. 루트가 없으면 null(지어내지
      *  않음 — 아직 도면만 등록되고 구역이 하나도 없는 구간은 이 함수로도 찾을 수 없다: deployments
      *  테이블에 project_id 가 없어 client 에서 조회 불가 — RECON 2026-09-29, src/index.tsx 변경 필요). */
-    pickOriginalDeck(decks) {
+    /** [WO 20260930-WP3 · C3] 서버가 원본으로 기록했다고 응답한 배포본을 로컬 프로젝트 객체에 반영
+     *  (App._createInitialSave 의 is_project_original 응답 → 재조회 없이 pickOriginalDeck 이 바로 쓴다). */
+    markOriginal(projectId, depId) {
+      if (!projectId || !depId) return;
+      for (const p of [this.currentProject].concat(this.list || [])) {
+        if (p && p.id === projectId && !p.original_deployment_id) p.original_deployment_id = depId;
+      }
+    },
+
+    pickOriginalDeck(decks, project) {
       decks = decks || [];
+      // [WO 20260930-WP3 · C3] 🔴 1순위 = 서버 기록(projects.original_deployment_id — 처음 등록한 전체 도면).
+      //   종전 규칙(최신 루트 구역)은 구역 **복사본**을 골랐다(p93 C3 실측). 그 배포본을 가리키는 루트·전체(crop 없음)
+      //   구역이 있으면 그 구역, 없으면 구역 없는 원본 서술자(id:null — 호출부는 currentDeck=null 로 연다).
+      //   기록이 없는 레거시 프로젝트만 아래 종전 규칙으로 폴백한다(기존 데이터 호환).
+      const proj = project !== undefined ? project : this.currentProject;
+      const origId = proj && proj.original_deployment_id;
+      if (origId) {
+        const own = decks.find((d) => d && d.deployment_id === origId && d.parent_id == null && !d.crop);
+        return own || { id: null, deployment_id: origId, parent_id: null, crop: null, page: null, name: (proj && proj.name) || "원본", original: true };
+      }
       // [WO 20260929-parent-guard] 🔴 SoT — 고아 판정(부모가 없거나 목록에 없음)은
       // UI.groupDecksByParent(11_UI.js)와 공유한다. 예전엔 parent_id==null 만 루트로 쳐서,
       // 오염 데이터(부모가 다른/삭제된 프로젝트의 deck)를 가리키는 deck 이 영원히 "원본 없음"으로
@@ -741,7 +760,7 @@
       const latest = this.pickOriginalDeck(this.decks);
       if (!latest) { Prompt.toast && Prompt.toast("등록된 원본 도면이 없습니다 — '도면 등록'으로 먼저 올리세요"); return; }
       const rootCount = (this.decks || []).filter((d) => d && d.deployment_id && d.parent_id == null).length;
-      this.currentDeck = latest;
+      this.currentDeck = latest.id ? latest : null;   // [WP3 · C3] 구역 없는 원본 = 프로젝트 단위(nodeck)
       this._renderDecks();
       if (typeof App !== "undefined" && App.loadDeckDrawing) {
         await App.loadDeckDrawing(latest.deployment_id);

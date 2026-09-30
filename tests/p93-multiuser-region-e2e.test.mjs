@@ -12,8 +12,9 @@
  *     pdf.js 캔버스 렌더(PDF.load/snapshotAllPages → 자리표시 이미지 + pdf-lib 로 잰 실제 페이지 크기).
  *     벡터 복사(PDF.copyRegionToPdf)는 실 코드 + 실 pdf-lib.
  *
- * 판정은 "측정" 이다 — B4(H3)·B5(H4)·C3 는 현행 결함을 **측정만** 한다(발주: 고치지 말 것).
- *   그 셋은 FAIL 이어도 EXIT 에 넣지 않고 [MEASURE] 로 출력한다. EXIT 는 A(H7)·B1·B2·B3·C1·C2·C4 로 정한다.
+ * 판정은 "측정" 이다 — B4(H3)는 현행 결함을 **측정만** 한다([MEASURE], EXIT 제외).
+ *   B5(H4)·C3 는 WP3(0030 deployments.project_id · projects.original_deployment_id)로 고쳐 EXIT 에 포함한다.
+ *   EXIT 는 A(H7)·B1·B2·B3·B5·C1·C2·C3·C4 로 정한다.
  * 뮤테이션: P93_APP_SRC=<변형 20_App.js> 로 주입(예: HEAD 의 크롭 변환 저장 → H7 FAIL → EXIT=1).
  */
 import fs from "node:fs";
@@ -271,20 +272,46 @@ console.log("\n[B4] 두 사람이 대역 설정 없이 동시에 체크보드 �
   measure(lb2 !== la, "B4 남의 핀을 로드한 뒤 번호가 겹치지 않음 — A=" + la + " B 다음=" + lb2);
 }
 
-/* ══════════ B5 — 초대 권한(H4) 측정만 ══════════ */
-console.log("\n[B5] prj_B 에만 초대된 사람이 prj_A 배포본을 쓸 수 있나 (측정만, WP3)");
+/* ══════════ B5 — 초대 권한(H4) · WP3: 배포본 project_id 기준 프로젝트 단위 쓰기 권한 ══════════ */
+console.log("\n[B5] prj_B 에만 초대된 사람이 prj_A 배포본을 쓸 수 있나 (WP3 — 이제 EXIT 에 포함)");
 {
-  const { depId } = await seedDeployment([P(5001)]);
+  const d = (await api("a", "POST", "/tables/deployments", { title: "도면", file_name: "GA.pdf", project_id: "prj_A", pins: JSON.stringify([P(5001)]), pages_data: JSON.stringify([PAGE_URL]), drawing_data: PAGE_URL })).j;
+  const depId = d.id;
+  ok(d.project_id === "prj_A", "B5 POST 가 project_id 를 기록 — " + d.project_id);
   const pre = await api("bob", "PATCH", "/tables/deployments/" + depId, { pins: "[]" });
   const inv = await api("a", "POST", "/api/projects/prj_B/members", { email: USERS.bob, role: "designer" });
   const invV = await api("a", "POST", "/api/projects/prj_B/members", { email: USERS.carol, role: "viewer" });
   const post = await api("bob", "PATCH", "/tables/deployments/" + depId, { pins: "[]" });
+  const bOps = await api("bob", "POST", "/tables/deployments/" + depId + "/ops", { ops: [{ opId: "op-p93-b5", entity: "pin", action: "delete", id: 5001, ts: Date.now() }] });
+  const bDel = await api("bob", "DELETE", "/tables/deployments/" + depId);
+  const bHijack = await api("bob", "POST", "/tables/deployments", { title: "x", project_id: "prj_A", original: true });
   const pinsAfter = idsOf(await srvPins(depId));
+  const alive = (await getDep(depId)).deleted === false;
   const carol = await api("carol", "PATCH", "/tables/deployments/" + depId, { pins: "[]" });
-  console.log("   측정: 초대 전 bob PATCH=" + pre.status + " · 초대(designer)=" + inv.status + " · 초대 후 bob PATCH=" + post.status + " → prj_A 핀=" + JSON.stringify(pinsAfter) + " · viewer 초대(carol)=" + invV.status + " → PATCH=" + carol.status);
-  measure(pre.status === 403, "B5 대조군: 초대 전 외부인 PATCH 거부 — " + pre.status);
-  measure(post.status === 403, "B5 prj_B 초대(designer)만 받은 사람의 prj_A 배포본 PATCH 거부 — 실제 " + post.status + (post.status === 200 ? " (핀 전부 덮어씀: " + JSON.stringify(pinsAfter) + ")" : ""));
-  measure(carol.status === 403, "B5 viewer 초대자의 PATCH 거부 — " + carol.status);
+  console.log("   측정: 초대 전 bob PATCH=" + pre.status + " · 초대(designer)=" + inv.status + " · 초대 후 bob PATCH=" + post.status + " ops=" + bOps.status + " DELETE=" + bDel.status + " POST(prj_A)=" + bHijack.status + " → prj_A 핀=" + JSON.stringify(pinsAfter) + " alive=" + alive + " · viewer 초대(carol)=" + invV.status + " → PATCH=" + carol.status);
+  ok(pre.status === 403, "B5 대조군: 초대 전 외부인 PATCH 거부 — " + pre.status);
+  ok(post.status === 403 && bOps.status === 403 && bDel.status === 403, "B5 prj_B 초대(designer)만 받은 사람의 prj_A 배포본 PATCH/ops/DELETE 거부 — " + [post.status, bOps.status, bDel.status]);
+  ok(bHijack.status === 403, "B5 남의 프로젝트(prj_A)로 배포본 생성 거부 — " + bHijack.status);
+  ok(JSON.stringify(pinsAfter) === '["5001"]' && alive, "B5 거부 후 prj_A 배포본 핀·행 무변경 — " + JSON.stringify(pinsAfter));
+  ok(carol.status === 403, "B5 viewer 초대자의 PATCH 거부 — " + carol.status);
+  // 같은 프로젝트 designer 멤버 → 허용(잠금 사고 없음)
+  const invA = await api("a", "POST", "/api/projects/prj_A/members", { email: USERS.b, role: "designer" });
+  const cur = await getDep(depId);
+  const mem = await api("b", "PATCH", "/tables/deployments/" + depId, { base_version: cur.version, pins: JSON.stringify([P(5001), P(5002)]) });
+  const own = await api("a", "PATCH", "/tables/deployments/" + depId, { pins: JSON.stringify([P(5001), P(5002), P(5003)]) });
+  ok(invA.status === 200 && mem.status === 200 && own.status === 200, "B5 같은 프로젝트 designer 멤버·소유자 PATCH 허용 — 초대=" + invA.status + " 멤버=" + mem.status + " 소유자=" + own.status);
+  // 레거시(project_id NULL) → 종전 규칙(전역 designer 면 허용) 유지
+  const leg = await seedDeployment([P(5101)]);
+  const legRow = await getDep(leg.depId);
+  const legP = await api("bob", "PATCH", "/tables/deployments/" + leg.depId, { pins: JSON.stringify([P(5101), P(5102)]) });
+  ok(legRow.project_id == null && legP.status === 200, "B5 레거시 NULL 행은 현행 유지(전역 designer PATCH 200) — project_id=" + legRow.project_id + " status=" + legP.status);
+  // 삭제된 프로젝트의 배포본 → 409 (소유자라도)
+  await db.prepare("INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted) VALUES ('prj_DEL','prj_DEL','',?,0,0,0)").bind(USERS.a).run();
+  const dd = (await api("a", "POST", "/tables/deployments", { title: "del", project_id: "prj_DEL", pins: "[]" })).j;
+  const pdel = await api("a", "DELETE", "/api/projects/prj_DEL");
+  const wDel = await api("a", "PATCH", "/tables/deployments/" + dd.id, { pins: JSON.stringify([P(5201)]) });
+  const oDel = await api("a", "POST", "/tables/deployments/" + dd.id + "/ops", { ops: [{ opId: "op-p93-b5d", entity: "pin", action: "upsert", id: 5202, data: { x: 1, y: 1 }, ts: Date.now() }] });
+  ok(pdel.status === 200 && wDel.status === 409 && oDel.status === 409, "B5 삭제된 프로젝트의 배포본 쓰기 409 — 삭제=" + pdel.status + " PATCH=" + wDel.status + " ops=" + oDel.status);
 }
 
 /* ══════════ C — 전체 도면 등록 → 구역(벡터 복사) → 영역 ══════════ */
@@ -365,14 +392,25 @@ let area = null;
   ok(JSON.parse(o.pins).length === 3 && o.pins === orig0.pins, "C4 원본 핀 3개 그대로");
 }
 {
-  console.log("\n[C3] 트리 최상단 프로젝트 노드 → pickOriginalDeck/openOriginal (측정)");
+  console.log("\n[C3] 트리 최상단 프로젝트 노드 → pickOriginalDeck/openOriginal (WP3 — 이제 EXIT 에 포함)");
   await A.Projects.loadDecks();
+  // 서버 기록(재조회) — 클라 로컬 반영(markOriginal)과 별개로 GET /api/projects 가 원본을 돌려주는가
+  const srvProj = ((await api("a", "GET", "/api/projects")).j.data || []).find((p) => p.id === "prj_C");
+  const zoneRow = await getDep(zone.deployment_id);
+  // 새 세션(재접속) 흉내: 서버에서 받은 프로젝트 객체로 교체한 뒤 고른다
+  A.Projects.currentProject = srvProj;
   const pick = A.Projects.pickOriginalDeck(A.Projects.decks);
   await A.Projects.openOriginal();
   console.log("   측정: 루트 구역=" + JSON.stringify(A.Projects.decks.filter((d) => d.parent_id == null).map((d) => d.name + ":" + d.deployment_id)) +
-    " → pick=" + (pick && pick.deployment_id) + " · openOriginal 후 열린 배포본=" + A.State.autoSaveDepId + " · 원본=" + ORIG);
-  measure(!!pick && pick.deployment_id === ORIG, "C3 pickOriginalDeck 이 원본 배포본을 고른다");
-  measure(A.State.autoSaveDepId === ORIG, "C3 openOriginal 이 원본 전체 도면을 연다");
+    " → pick=" + (pick && pick.deployment_id) + " · openOriginal 후 열린 배포본=" + A.State.autoSaveDepId + " · 원본=" + ORIG +
+    " · 서버 original=" + (srvProj && srvProj.original_deployment_id) + " · 구역 복사본 project_id=" + zoneRow.project_id);
+  ok(!!srvProj && srvProj.original_deployment_id === ORIG, "C3 서버 projects.original_deployment_id = 처음 등록한 원본(구역 복사본 아님)");
+  ok(zoneRow.project_id === "prj_C", "C3 구역 복사본 배포본도 project_id 기록(권한 기준)");
+  ok(!!pick && pick.deployment_id === ORIG, "C3 pickOriginalDeck 이 원본 배포본을 고른다");
+  ok(A.State.autoSaveDepId === ORIG && A.Projects.currentDeck == null, "C3 openOriginal 이 원본 전체 도면을 연다(구역 없는 프로젝트 단위)");
+  // 폴백: 기록 없는 레거시 프로젝트는 종전 규칙(최신 루트 구역)
+  const legacyPick = A.Projects.pickOriginalDeck(A.Projects.decks, { id: "prj_C", name: "prj_C" });
+  ok(!!legacyPick && legacyPick.deployment_id === zone.deployment_id, "C3 원본 기록 없는 레거시 프로젝트 → 종전 규칙 폴백(최신 루트 구역)");
 }
 
 /* ══════════ A(H7) — 창(crop) 구역에서 저장해도 원본 행의 크롭 밖 핀·좌표 보존 ══════════ */

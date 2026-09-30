@@ -106,6 +106,8 @@ function makeDB(st) {
               if (like(q, "FROM local_users WHERE email = ?")) return st.localUsers[String(a[0]).toLowerCase()] || null;
               if (like(q, "FROM designers WHERE email = ?")) return st.designers.has(String(a[0]).toLowerCase()) ? { email: a[0], deleted: 0 } : null;
               if (like(q, "FROM decks WHERE id = ?")) return st.decks.find((d) => d.id === a[0]) || null;
+              // [WP3] 배포본 쓰기 권한(deploymentWriteDenied) — 두 프로젝트 모두 이 테스트의 설계자 소유
+              if (like(q, "FROM projects WHERE id = ?")) return (a[0] === PID_NEW || a[0] === PID_OLD) ? { owner: "designer@example.com", deleted: 0 } : null;
               if (like(q, "FROM deployments WHERE id = ?")) return st.deployments[a[0]] || null;
               if (like(q, "FROM tenant_members")) return null;
               return null;

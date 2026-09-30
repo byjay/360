@@ -1521,7 +1521,9 @@ function mapProject(r: any) {
     published: !!r.published, published_at: r.published_at || null, published_by: r.published_by || null,
     subdomain: r.subdomain || null,
     // [P61] 공유 주소. 토큰이 곧 열쇠이므로 노출 범위는 호출부에서 멤버로 제한한다(/api/projects 참조).
-    share_token: r.share_token || null, share_path: sharePathOf(r) }
+    share_token: r.share_token || null, share_path: sharePathOf(r),
+    // [WO 20260930-WP3 · C3] 프로젝트 원본(처음 등록한 전체 도면) 배포본. NULL = 미기록(레거시 → 클라 폴백 규칙)
+    original_deployment_id: r.original_deployment_id || null }
 }
 /** [P61] 비멤버 응답에서 공유 열쇠를 제거한다 — "남의 프로젝트 주소를 유추/열거 불가" 요구의 강제점.
  *  (뷰어는 배포된 프로젝트를 잠금 카드로 "보긴" 하지만, 그 주소를 손에 넣어선 안 된다) */
@@ -1617,6 +1619,32 @@ async function canManageProject(c: any, user: any, projectId: string): Promise<b
   if (own && own.owner === user.email) return true
   const m: any = await c.env.DB.prepare("SELECT role FROM project_members WHERE project_id = ? AND email = ?").bind(projectId, user.email).first()
   return !!(m && m.role === 'designer')
+}
+
+/** [WO 20260930-WP3 · B5] 🔴 배포본 쓰기 권한 — 배포본의 project_id 기준 단일 지점(§G-2-5).
+ *  POST·PATCH/PUT·ops·DELETE /tables/deployments 가 공유한다. requireDesigner(전역 게이트) **통과 후** 호출.
+ *  근본원인: grantProjectMembership 이 초대 designer 를 전역 designers 에 넣어, requireDesigner 하나로
+ *  다른 프로젝트 배포본까지 쓰기가 열렸다(p93 B5: prj_B 초대자 → prj_A PATCH 200).
+ *  반환: null = 허용 · { status, error } = 거부.
+ *   - project_id NULL(레거시·귀속 불명) → 허용(종전 규칙 유지 — 잠금 사고 방지)
+ *   - 프로젝트 삭제/없음 → 409(누구도 삭제된 프로젝트의 배포본에 쓰지 않는다)
+ *   - 슈퍼 · 소유자 · 그 프로젝트 designer 멤버 → 허용, 그 외 403
+ *   - 자동입장 공용 계정(AUTO_DESIGNER_EMAIL)은 AUTO_DESIGNER_TOKEN_ENABLED 동안 허용 — 그 좌석은
+ *     "로그인 없이 설계자 진입" 공용석이라 막으면 현 사용자 전원이 잠긴다(스위치를 끄면 자동으로 막힘).
+ *  🔴 TEMP_OPEN_ALL_TENANTS 는 보지 않는다(그 플래그는 열람·관리 범위용 — 쓰기 경계를 풀면 B5 재발). */
+async function deploymentWriteDenied(c: any, user: any, projectId: any): Promise<{ status: 403 | 409, error: string } | null> {
+  const pid = projectId == null ? '' : String(projectId)
+  if (!pid) return null
+  const p: any = await c.env.DB.prepare('SELECT owner, deleted FROM projects WHERE id = ?').bind(pid).first()
+  if (!p || Number(p.deleted)) return { status: 409, error: 'conflict — project deleted; deployment is read-only' }
+  const email = String(user?.email || '').trim().toLowerCase()
+  if (!email) return { status: 403, error: 'forbidden' }
+  if (isSuperAdmin(c, email)) return null
+  if (AUTO_DESIGNER_TOKEN_ENABLED && email === AUTO_DESIGNER_EMAIL) return null
+  if (String(p.owner || '').trim().toLowerCase() === email) return null
+  const m: any = await c.env.DB.prepare('SELECT role FROM project_members WHERE project_id = ? AND lower(email) = ?').bind(pid, email).first()
+  if (m && m.role === 'designer') return null
+  return { status: 403, error: 'forbidden — not a designer of this project' }
 }
 
 /* ── [P40] 초대/세션 상수 — 값의 단일 진실 소스(매직넘버 중복 금지) ── */
@@ -2760,6 +2788,8 @@ function mapDeployment(r: any) {
     // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(JSON). 구버전 배포본(컬럼 없음)은 '{}'
     //   → 클라이언트 _checkboardStart() 가 종전대로 1 반환(하위호환).
     checkboard_start: r.checkboard_start || '{}',
+    // [WO 20260930-WP3] 소속 프로젝트(NULL = 레거시·귀속 불명)
+    project_id: r.project_id || null,
     created_at: r.created_at,
     updated_at: r.updated_at,
     version: (r.version != null ? r.version : 0),
@@ -2980,14 +3010,19 @@ app.post('/tables/deployments', async (c) => {
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  // [WO 20260930-WP3] 소속 프로젝트 — 보냈으면 그 프로젝트 쓰기 권한 필수(남의 프로젝트에 배포본/원본을 꽂는 것 차단).
+  //   미전송(구버전 클라) = NULL(레거시 규칙).
+  const projectId = (typeof body.project_id === 'string' && body.project_id) ? body.project_id : null
+  const denied = await deploymentWriteDenied(c, user, projectId)
+  if (denied) return c.json({ error: denied.error }, denied.status)
 
   const id = genId('dep')
   const now = Date.now()
   // [PART 0 · Tenant 격리] 새 배포본은 작성자 테넌트로 귀속(슈퍼/미등록은 기본 테넌트)
   const ownerTenant = (await tenantOf(c, user)) || DEFAULT_TENANT
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, source_meta, checkboard_start, tenant_id, created_at, updated_at, version, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, source_meta, checkboard_start, tenant_id, project_id, created_at, updated_at, version, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
   ).bind(
     id,
     body.title || '',
@@ -3002,21 +3037,33 @@ app.post('/tables/deployments', async (c) => {
     // 클라이언트 localStorage 에만 있어 서버가 알 필요 없다 — 여기는 구버전/비로그인 폴백뿐.
     body.checkboard_start || null,
     ownerTenant,
+    projectId,
     now, now
   ).run()
+
+  // [WO 20260930-WP3 · C3] 프로젝트 원본 지정 — 클라가 "프로젝트 단위 첫 도면 등록"(original:true)으로 보낸 것만,
+  //   그리고 그 프로젝트의 원본이 **비어 있을 때만**(first-wins, 조건부 UPDATE 1문 = 경합에도 1개). 구역 복사본은 original 미전송.
+  let isProjectOriginal = false
+  if (projectId && body.original === true) {
+    const r: any = await c.env.DB.prepare(
+      'UPDATE projects SET original_deployment_id = ? WHERE id = ? AND deleted = 0 AND original_deployment_id IS NULL'
+    ).bind(id, projectId).run()
+    isProjectOriginal = !!(r && r.meta && r.meta.changes)
+  }
 
   let pinCount = 0
   try { pinCount = Array.isArray(JSON.parse(body.pins || '[]')) ? JSON.parse(body.pins || '[]').length : 0 } catch {}
   await logActivity(c, 'deployment.create', { targetType: 'deployment', targetId: id, detail: { title: body.title || '', file_name: body.file_name || '', pins: pinCount } })
 
-  return c.json(mapDeployment({
+  return c.json(Object.assign(mapDeployment({
     id, title: body.title || '', file_name: body.file_name || '',
     drawing_data: body.drawing_data || null, pages_data: body.pages_data || null,
     pins: body.pins || '[]', zones: body.zones || '[]', annotations: body.annotations || '[]',
     source_meta: body.source_meta || null,
     checkboard_start: body.checkboard_start || null,
+    project_id: projectId,
     created_at: now, updated_at: now, version: 0, deleted: 0
-  }))
+  }), { is_project_original: isProjectOriginal }))
 })
 
 // 갱신 (자동 저장 — 도면 업로드 즉시 생성된 배포본을 핀/영역 변경 시 갱신)
@@ -3036,6 +3083,11 @@ const updateDeployment = async (c: any) => {
       const rowTenant = (existing as any).tenant_id || DEFAULT_TENANT
       if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
     }
+  }
+  // [WO 20260930-WP3 · B5] 프로젝트 단위 쓰기 권한(공유 지점)
+  {
+    const denied = await deploymentWriteDenied(c, user, (existing as any).project_id)
+    if (denied) return c.json({ error: denied.error }, denied.status)
   }
   const now = Date.now()
   const curVersion = (existing.version != null ? Number(existing.version) : 0)
@@ -3107,6 +3159,11 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       const rowTenant = dep.tenant_id || DEFAULT_TENANT
       if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
     }
+  }
+  // [WO 20260930-WP3 · B5] 프로젝트 단위 쓰기 권한(공유 지점)
+  {
+    const denied = await deploymentWriteDenied(c, user, dep.project_id)
+    if (denied) return c.json({ error: denied.error }, denied.status)
   }
 
   // 현재 서버 상태를 id→객체 맵으로 로드
@@ -3226,14 +3283,17 @@ app.delete('/tables/deployments/:id', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const id = c.req.param('id')
+  const row: any = await c.env.DB.prepare('SELECT tenant_id, project_id FROM deployments WHERE id = ?').bind(id).first()
   // [PART 0 · Tenant 격리] 타 테넌트 배포본 삭제 차단(슈퍼/마이그레이션전 제외)
   const tid = await tenantOf(c, user)
-  if (tid) {
-    const row = await c.env.DB.prepare('SELECT tenant_id FROM deployments WHERE id = ?').bind(id).first()
-    if (row) {
-      const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
-      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
-    }
+  if (tid && row) {
+    const rowTenant = row.tenant_id || DEFAULT_TENANT
+    if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
+  }
+  // [WO 20260930-WP3 · B5] 프로젝트 단위 쓰기 권한(공유 지점)
+  if (row) {
+    const denied = await deploymentWriteDenied(c, user, row.project_id)
+    if (denied) return c.json({ error: denied.error }, denied.status)
   }
   await c.env.DB.prepare('UPDATE deployments SET deleted = 1, updated_at = ? WHERE id = ?')
     .bind(Date.now(), id).run()

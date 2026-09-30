@@ -66,6 +66,11 @@ function makeDB(state) {
                 return state.designers.has(String(a[0]).toLowerCase()) ? { email: a[0], deleted: 0 } : null;
               if (like(q, "FROM deployments WHERE id = ?"))
                 return state.deployments[a[0]] || null;
+              // [WP3] 배포본 쓰기 권한(deploymentWriteDenied) — 배포본의 project_id(prj1) 기준
+              if (like(q, "FROM projects WHERE id = ?"))
+                return state.projects[a[0]] || null;
+              if (like(q, "FROM project_members WHERE project_id = ? AND lower(email) = ?"))
+                return state.members[a[0] + "|" + a[1]] ? { role: state.members[a[0] + "|" + a[1]] } : null;
               if (like(q, "FROM tenant_members WHERE email = ?")) return null;
               return null;
             },
@@ -104,6 +109,9 @@ function freshState() {
     },
     designers: new Set(["invited.designer@example.com"]),   // 마스터가 초대해 배정한 designer
     deployments: { [DEP_ID]: { id: DEP_ID, project_id: "prj1", pins: "[]", zones: "[]", annotations: "[]", version: 3, deleted: 0, tenant_id: null, name: "T", created_at: 1, updated_at: 1 } },
+    // [WP3] prj1 = 마스터 소유, 초대 designer 는 prj1 의 designer 멤버(초대 = project_members 배정)
+    projects: { prj1: { owner: "designssir@gmail.com", deleted: 0 } },
+    members: { "prj1|invited.designer@example.com": "designer" },
     writes: [],
   };
 }

@@ -124,6 +124,7 @@ function buildOpsHandler(srcOverride) {
     ${validStatusMatch[0]}
     const DEFAULT_TENANT = 'tnt_default';
     async function requireDesigner(c) { return { email: 'designer@test.com' }; }
+    async function deploymentWriteDenied(c, user, pid) { return null; }  // [WP3] 프로젝트 권한 가드 — 이 테스트 대상 아님(p93 B5 가 실 워커로 검증)
     async function tenantOf(c, user) { return null; }
     function mapDeployment(row) { return row; }
     const app = { post(path, handler) { globalThis.__opsHandler = handler; } };
