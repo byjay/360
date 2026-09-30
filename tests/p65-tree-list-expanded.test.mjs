@@ -248,12 +248,13 @@ console.log("\n[Part A' · 프로덕션 재현 — parent_id NULL 40개 전부 �
 /* ── 뮤테이션 ⓒ: 구역 아래 영역 나열 로직 제거 → ④가 실패해야 한다 ───── */
 {
   console.log("\n[뮤테이션ⓒ] 구역 아래 영역 나열 로직 제거 → ④가 실패해야 함");
+  // [WO 20260930-fixmode] deckNode 가 모드 문맥(ctx)을 자식에게 넘긴다 — 대상 텍스트만 갱신, 치환(나열 제거)은 그대로.
   const needle = `if (!isRegion) {
-          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, ctx)); });
           else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
           any = true;
         } else if (subDecks.length) {
-          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, ctx)); });
           any = true;
         }`;
   const mut = uiSrc.replace(needle, `if (false) { subDecks.forEach(() => {}); }`);

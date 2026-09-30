@@ -92,6 +92,9 @@ function makeUI(src, ctx) {
 const has = (el, cls) => new RegExp("(^| )" + cls + "( |$)").test(el.className || "");
 const kidsOf = (el) => (el._children || []).find((c) => has(c, "tree-children"));
 const pick = (el, cls) => (el._children || []).filter((c) => has(c, cls));
+/* [WO 20260930-fixmode] 트리에 모드 단(프로젝트 → CHECKER / 360 → 구역)이 생겼다. 픽스처 핀은 전부 CHECKER
+   계열이므로 CHECKER 모드 노드 아래의 구역을 본다(모드 단 자체의 검사는 p91). */
+const deckUnderChecker = (proj) => pick(kidsOf(pick(kidsOf(proj), "tree-mode-checker")[0]), "tree-deck")[0];
 
 /** 실 좌표 포함판정(16_Zones.js _contains 의 rect 분기와 동일 로직) */
 const ZonesReal = {
@@ -158,7 +161,7 @@ function runFx(src, fixture) {
   UI.renderTree();
   const host = registry["side-tree"];
   const proj = pick(host, "tree-project")[0];
-  const deck = pick(kidsOf(proj), "tree-deck")[0];
+  const deck = deckUnderChecker(proj);
   const kids = kidsOf(deck);
   const zoneNode = pick(kids, "tree-zone")[0];
   const zonePinIds = zoneNode ? pick(kidsOf(zoneNode), "tree-node-pin").map((n) => n.innerHTML) : [];
@@ -187,7 +190,7 @@ function runFx(src, fixture) {
   UI.renderTree();
   const host = registry["side-tree"];
   const proj = pick(host, "tree-project")[0];
-  const deck = pick(kidsOf(proj), "tree-deck")[0];
+  const deck = deckUnderChecker(proj);
   const kids = kidsOf(deck);
   const zoneNodes = pick(kids, "tree-zone");
   const bigZone = zoneNodes.find((z) => /큰영역/.test(z._children[0].innerHTML));
@@ -218,7 +221,7 @@ function runFx(src, fixture) {
   UI.renderTree();
   const host = registry["side-tree"];
   const proj = pick(host, "tree-project")[0];
-  const deck = pick(kidsOf(proj), "tree-deck")[0];
+  const deck = deckUnderChecker(proj);
   const rootPins = pick(kidsOf(deck), "tree-node-pin");
   ok(rootPins.every((n) => /tree-pin-no">#\d+</.test(n.innerHTML)), "④ 모든 핀 행에 #번호 배지 존재");
 }

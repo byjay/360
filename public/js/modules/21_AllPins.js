@@ -63,8 +63,13 @@
       return { ico: I('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'), cls: "empty", txt: "콘텐츠 없음" };
     },
 
+    _modePins() {
+      return (typeof PinSeries !== "undefined" && PinSeries.modePins) ? PinSeries.modePins(State.pins) : (State.pins || []);
+    },
+
     _sorted() {
-      const arr = State.pins.map((p, i) => ({ pin: p, idx: i }));
+      // [WO 20260930-fixmode] 모드 = 작업공간 — 활성 모드 핀만(SoT: PinSeries.modePins)
+      const arr = this._modePins().map((p, i) => ({ pin: p, idx: i }));
       if (this.query) {
         arr.splice(0, arr.length, ...arr.filter((o) =>
           (o.pin.label || "").toLowerCase().includes(this.query)));
@@ -82,7 +87,7 @@
       const listEl = document.getElementById("allpins-list");
       const emptyEl = document.getElementById("allpins-empty");
       const countEl = document.getElementById("allpins-count");
-      if (countEl) countEl.textContent = State.pins.length;
+      if (countEl) countEl.textContent = this._modePins().length;
       const rows = this._sorted();
       listEl.innerHTML = "";
       if (!rows.length) { emptyEl.classList.remove("hidden"); return; }

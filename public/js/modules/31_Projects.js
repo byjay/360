@@ -133,6 +133,11 @@
       try { if (typeof ProjectHub !== "undefined" && ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible(); } catch (e) {}
     },
 
+    /** [WO 20260930-fixmode] 구역 생성 body 에 모드 태그(decks.mode) — 규칙 SoT = PinSeries.withDeckMode. POST 3곳 공유. */
+    _withDeckMode(body, parentDeck) {
+      return (typeof PinSeries !== "undefined" && PinSeries.withDeckMode) ? PinSeries.withDeckMode(body, parentDeck) : body;
+    },
+
     /** #3: 구역 생성. 반환된 구역 객체를 돌려줌(없으면 강제 생성 흐름에서 사용). */
     async createDeck(opts) {
       opts = opts || {};
@@ -199,6 +204,7 @@
         }
         const body = { name };
         if (opts.askDrawing !== false) body.page = page; // 자동생성 경로는 전송하지 않음 → 서버 NULL(구버전과 동일)
+        this._withDeckMode(body); // [WO 20260930-fixmode] 활성 모드 태그
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           body: JSON.stringify(body)
@@ -435,9 +441,11 @@
           // 복사본: 새 배포본(그 페이지 자체가 영역) · 창 방식: 원본과 같은 도면 + crop(원본 무변경).
           // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
           // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
-          body: JSON.stringify(plan.depId
+          // [WO 20260930-fixmode] 영역 = 부모 구역의 mode 상속(부모 NULL 이면 활성 모드) — PinSeries.withDeckMode SoT.
+          body: JSON.stringify(this._withDeckMode(plan.depId
             ? { name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }
-            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id })
+            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id },
+            (src.parent_id && (this.decks || []).find((x) => String(x.id) === String(src.parent_id))) || src))
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
@@ -627,9 +635,9 @@
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           // 복사본: 새 배포본(그 페이지 자체가 구역) · 창 방식(원본 없는 구버전 도면): 로드된 도면 + crop.
-          body: JSON.stringify(plan.depId
+          body: JSON.stringify(this._withDeckMode(plan.depId   // [WO 20260930-fixmode] 활성 모드 태그
             ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }
-            : { name, page, crop, deployment_id: depId, parent_id: null })
+            : { name, page, crop, deployment_id: depId, parent_id: null }))
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "구역 생성 실패 — 권한을 확인하세요"); return null; }

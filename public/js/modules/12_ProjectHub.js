@@ -452,18 +452,30 @@
       if (!decks.length) {
         return '<div class="hub-card-tree"><p class="hub-tree-empty">구역 없음</p></div>';
       }
-      const { roots, childrenOf } = UI.groupDecksByParent(decks);
-      const regionsHtml = (deck) => {
-        const kids = childrenOf.get(String(deck.id)) || [];
-        if (!kids.length) return "";
-        return '<ul class="hub-tree-regions">' + kids.map((r) =>
-          '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
+      /* [WO 20260930-fixmode] 사이드바 트리와 같은 구조 — 프로젝트 → CHECKER / 360 → 구역 → 영역.
+         모드 대응표·소속 판정 SoT = PinSeries.DECK_MODES / deckInMode(NULL 구역은 양쪽, 유실 0). */
+      const decksHtml = (list) => {
+        const { roots, childrenOf } = UI.groupDecksByParent(list);
+        const regionsHtml = (deck) => {
+          const kids = childrenOf.get(String(deck.id)) || [];
+          if (!kids.length) return "";
+          return '<ul class="hub-tree-regions">' + kids.map((r) =>
+            '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
+          ).join("") + '</ul>';
+        };
+        if (!roots.length) return '<p class="hub-tree-empty">구역 없음</p>';
+        return '<ul class="hub-tree-decks">' + roots.map((d) =>
+          '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">' + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>'
         ).join("") + '</ul>';
       };
-      const rootsHtml = roots.map((d) =>
-        '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">' + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>'
-      ).join("");
-      return '<div class="hub-card-tree"><ul class="hub-tree-decks">' + rootsHtml + '</ul></div>';
+      const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || null;
+      // 모드 정본 미로드(단독 모듈 하네스) — 모드 단 없이 구역부터(종전 구조)
+      if (!MODES) return '<div class="hub-card-tree">' + decksHtml(decks) + '</div>';
+      return '<div class="hub-card-tree"><ul class="hub-tree-modes">' + MODES.map((m) =>
+        '<li class="hub-tree-mode" data-act="mode-open" data-mode-reg="' + esc(m.regMode) + '" tabindex="0" role="button" title="' + esc(m.label) + ' 작업공간으로 열기">'
+        + '<span class="hub-tree-mode-label">' + esc(m.label) + '</span>'
+        + decksHtml(decks.filter((d) => PinSeries.deckInMode(d, m.tag))) + '</li>'
+      ).join("") + '</ul></div>';
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
@@ -647,15 +659,17 @@
         const treeEl = card.querySelector(".hub-card-tree");
         if (treeEl) {
           const openDeckNode = (e) => {
-            const node = e.target.closest("[data-deck-id]");
+            const node = e.target.closest("[data-deck-id],[data-mode-reg]");
             if (!node) return;
             e.stopPropagation();
-            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"));
+            // [WO 20260930-fixmode] 어느 모드 가지 아래를 눌렀는지 = 진입 모드(구역은 NULL 이면 양쪽에 있으므로 가지로 판정).
+            const modeLi = node.closest("[data-mode-reg]");
+            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"), modeLi ? modeLi.getAttribute("data-mode-reg") : null);
           };
           treeEl.addEventListener("click", openDeckNode);
           treeEl.addEventListener("keydown", (e) => {
             if (e.key !== "Enter" && e.key !== " ") return;
-            if (!e.target.closest("[data-deck-id]")) return;
+            if (!e.target.closest("[data-deck-id],[data-mode-reg]")) return;
             e.preventDefault();
             openDeckNode(e);
           });
@@ -711,10 +725,13 @@
      *  (기존 "구역 열기" 정본, 31_Projects.js)을 그대로 호출한다.
      *  requireDesigner 게이트가 열려(로그인 대기) 편집모드 진입이 아직 안 끝났으면 여기서
      *  멈춘다 — 로그인 완료 후에는 기존 동작(최신 배포본 진입)으로 이어진다(회귀 없음). */
-    async openProjectAtDeck(p, deckId) {
+    async openProjectAtDeck(p, deckId, regMode) {
       await this.openProject(p);
       if (!Auth.isDesigner) return;
       try {
+        // [WO 20260930-fixmode] 모드 전환 SoT = App._setRegMode(상단 세그먼트·사이드바 트리와 같은 함수)
+        if (regMode && typeof App !== "undefined" && App._setRegMode && State.regMode !== regMode) App._setRegMode(regMode);
+        if (deckId == null) return;
         await Projects.loadDecks();
         const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
         if (deck && Projects.selectDeck) await Projects.selectDeck(deck);

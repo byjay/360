@@ -1536,13 +1536,34 @@ async function isLiveDeckInProject(db: any, parentId: string, projectId: string)
   const row = await db.prepare('SELECT id FROM decks WHERE id = ? AND project_id = ? AND deleted = 0').bind(parentId, projectId).first()
   return !!row
 }
+/** [WO 20260930-fixmode] 🔴 decks.mode 신뢰 경계 — 'checker' | '360' 만 허용. 미전송(undefined)은 "지정 안 함".
+ *  그 외(null·빈 문자열·오타 등)는 { error } → 호출부가 400. 조용히 NULL 로 바꾸지 않는다(§10 조용한 실패 금지).
+ *  POST(/api/projects/:id/decks)·PUT(/api/decks/:id) 가 공유하는 단일 지점(SoT). */
+const DECK_MODES = ['checker', '360'] as const
+function parseDeckMode(v: any): { mode?: string; error?: string } {
+  if (v === undefined) return {}
+  if (typeof v === 'string' && (DECK_MODES as readonly string[]).includes(v)) return { mode: v }
+  return { error: "mode must be 'checker' or '360'" }
+}
+/** 영역(parent_id 있음)의 mode = 부모 구역 mode 상속. 부모가 태그돼 있는데 다른 값을 보내면 400. */
+async function resolveDeckMode(db: any, parentId: string | null, sent: string | undefined, fallback: string | null): Promise<{ mode: string | null; error?: string }> {
+  if (parentId) {
+    const pr: any = await db.prepare('SELECT mode FROM decks WHERE id = ?').bind(parentId).first()
+    const pm = pr && pr.mode ? String(pr.mode) : null
+    if (pm) {
+      if (sent !== undefined && sent !== pm) return { mode: null, error: 'mode must match parent deck mode' }
+      return { mode: pm }
+    }
+  }
+  return { mode: sent !== undefined ? sent : fallback }
+}
 function mapDeck(r: any) {
   // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
   let crop: any = null
   if (r.crop) { try { crop = JSON.parse(r.crop) } catch { crop = null } }
   // [WO 20260921] parent_id — NULL = 최상위 구역(도면 바로 아래), 값 있으면 그 구역 안의 영역.
   //   마이그레이션 0025 적용 전 행(컬럼 부재)은 undefined → null 로 정규화(구버전과 동일 취급).
-  const out: any = { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, parent_id: r.parent_id ?? null, created_at: r.created_at, updated_at: r.updated_at }
+  const out: any = { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, parent_id: r.parent_id ?? null, mode: r.mode ?? null, created_at: r.created_at, updated_at: r.updated_at }
   // [WO 20260921] 도면(deployment) 이름 — 트리의 '도면' 단이 파일명을 보여줘야 한다.
   //   🔴 필드 '추가'만 한다(기존 필드 제거·개명 없음 → 기존 호출부 무해).
   //   JOIN 하지 않은 경로(POST/PUT 응답)에서는 키 자체를 넣지 않는다 — 없는 값을 날조하지 않는다.
@@ -2640,16 +2661,22 @@ app.post('/api/projects/:id/decks', async (c) => {
   const crop = body.crop != null ? JSON.stringify(body.crop) : null
   // [WO 20260921] parent_id — 상위 구역 id. 미전송이면 NULL(=최상위 구역, 구버전과 동일).
   const parentId = body.parent_id != null && String(body.parent_id) !== '' ? String(body.parent_id) : null
+  // [WO 20260930-fixmode] mode — 'checker'|'360' 외 400. 미전송 = NULL(두 모드 공용, 구버전과 동일). 영역은 부모 상속.
+  const pm = parseDeckMode(body.mode)
+  if (pm.error) return c.json({ error: pm.error }, 400)
+  const rm = await resolveDeckMode(c.env.DB, parentId, pm.mode, null)
+  if (rm.error) return c.json({ error: rm.error }, 400)
+  const mode = rm.mode
   // [WO 20260929-parent-guard] 🔴 신뢰 경계 — 같은 프로젝트의 살아있는 deck 이 아니면 400.
   //   조용히 null 로 바꾸지 않는다(다른 프로젝트/삭제된 deck 을 가리키는 고아 생성을 서버에서 차단).
   if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, pid))) {
     return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
   }
   await c.env.DB.prepare(
-    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, parentId, now, now).run()
-  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, created_at: now, updated_at: now }))
+    `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, mode, created_at, updated_at, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, parentId, mode, now, now).run()
+  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, mode, created_at: now, updated_at: now }))
 })
 
 // 데크 수정 (디자이너) — 배포본 연결/이름/층번호
@@ -2676,10 +2703,16 @@ app.put('/api/decks/:id', async (c) => {
   if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, row.project_id))) {
     return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
   }
+  // [WO 20260930-fixmode] mode 부분 수정 — 미전송이면 기존값 유지. 'checker'|'360' 외 400. 부모 태그와 불일치 400.
+  const pm = parseDeckMode(body.mode)
+  if (pm.error) return c.json({ error: pm.error }, 400)
+  const rm = await resolveDeckMode(c.env.DB, parentId, pm.mode, row.mode ?? null)
+  if (rm.error) return c.json({ error: rm.error }, 400)
+  const mode = rm.mode
   await c.env.DB.prepare(
-    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, updated_at = ? WHERE id = ?'
-  ).bind(name, level, dep, page, crop, parentId, Date.now(), id).run()
-  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId }))
+    'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, mode = ?, updated_at = ? WHERE id = ?'
+  ).bind(name, level, dep, page, crop, parentId, mode, Date.now(), id).run()
+  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId, mode }))
 })
 
 // 데크 삭제 (디자이너)

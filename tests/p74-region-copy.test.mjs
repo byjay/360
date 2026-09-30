@@ -514,7 +514,8 @@ console.log("\n[뮤테이션]");
   });
 }
 {
-  const needle = "body: JSON.stringify(plan.depId\n            ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }\n            : { name, page, crop, deployment_id: depId, parent_id: null })";
+  // [WO 20260930-fixmode] 본문이 모드 태그 래퍼(this._withDeckMode)로 감싸졌다 — 대상 텍스트만 갱신, 뮤테이션 치환은 그대로.
+  const needle = "body: JSON.stringify(this._withDeckMode(plan.depId   // [WO 20260930-fixmode] 활성 모드 태그\n            ? { name, page: 1, crop: null, deployment_id: plan.depId, parent_id: null }\n            : { name, page, crop, deployment_id: depId, parent_id: null }))";
   ok(projSrc.includes(needle), "M6 대상 존재");
   const mSrc = projSrc.replace(needle, "body: JSON.stringify({ name, page, crop, deployment_id: depId, parent_id: null })");
   await mutate("M6 구역 생성이 옛 창 방식으로 회귀(벡터복사 결과 무시)", async () => {

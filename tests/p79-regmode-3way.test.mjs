@@ -187,7 +187,9 @@ const makeLocalStorage = () => { const store = {}; return { getItem: (k) => (k i
 function makeUiEnv(regMode, editMode) {
   const { document, registry } = makeUiDoc();
   const calls = { setActivePin: [], onPinTap: [], panOpen: [] };
-  const State = { pins: [{ id: "p1", x: 10, y: 10, page: 1, label: "1", checkboard: true }], pdfPage: 1, mode: "designer", regMode, editMode: !!editMode, activePin: null, zoneView: null, zones: [], pinEditUnlocked: null, placing: false, isoView: false };
+  // [WO 20260930-fixmode] 모드 = 작업공간 — 360(photo) 모드엔 360 핀만 보인다. 그 모드의 "기존 핀"은 360 계열이어야
+  // 클릭 라우팅을 검사할 수 있다(종전 fixture 는 모든 모드에서 CHECKER 핀 — 이제 360 모드에선 렌더되지 않는다).
+  const State = { pins: [{ id: "p1", x: 10, y: 10, page: 1, label: "1", checkboard: regMode !== "photo" }], pdfPage: 1, mode: "designer", regMode, editMode: !!editMode, activePin: null, zoneView: null, zones: [], pinEditUnlocked: null, placing: false, isoView: false };
   const App = { setActivePin: (id) => calls.setActivePin.push(id), onPinTap: (p) => calls.onPinTap.push(p), pinHasContent: () => false };
   const PinActionPop = { open: (id) => calls.panOpen.push(id) };
   const sandbox = { console, document, State, localStorage: makeLocalStorage(), App, PinActionPop, JSON, Map, Set };

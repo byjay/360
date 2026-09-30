@@ -101,14 +101,16 @@
       const list  = this.$("pin-list");
       const empty = this.$("pin-empty");
       const badge = this.$("pin-count-badge");
-      this._updatePinListCount(State.pins ? State.pins.length : 0);
+      // [WO 20260930-fixmode] 모드 = 작업공간 — 목록·카운트·"N PINS" 는 활성 모드 핀만(SoT: PinSeries.modePins).
+      const modePins = (typeof PinSeries !== "undefined" && PinSeries.modePins) ? PinSeries.modePins(State.pins) : (State.pins || []);
+      this._updatePinListCount(modePins.length);
       // [버그수정] 도면 미로드 화면(허브 등)에서 Notes.loadSummary→renderPinList 호출 시 요소 부재 → 가드
       if (!list) return;
       list.innerHTML = "";
       const sel = this._syncPinSel();
       const selecting = sel.on && this._pinBulkOk();
 
-      if (!State.pins || State.pins.length === 0) {
+      if (!modePins.length) {
         empty.classList.remove("hidden");
         badge.classList.add("hidden");
         this.hide("section-export");
@@ -126,7 +128,7 @@
         list.insertBefore(bar, list.firstChild);
       };
       empty.classList.add("hidden");
-      badge.textContent = State.pins.length + " PINS";
+      badge.textContent = modePins.length + " PINS";
       badge.classList.remove("hidden");
       if (State.mode === "designer") this.show("section-export");
 
@@ -138,19 +140,19 @@
       const curPage = State.pdfPage || 1;
       const isMulti = totalPages > 1;
       const visiblePins = isMulti
-        ? State.pins.filter(p => (p.page || 1) === curPage)
-        : State.pins;
+        ? modePins.filter(p => (p.page || 1) === curPage)
+        : modePins;
       // 🔴 [2026-09-17] 번호 중복 탐지 전용(표시만) — 자동 재채번 금지(마스터 명시).
       //   정본 = PinSeries.duplicateCheckboardIds (11_UI 도면 마커도 같은 함수를 쓴다).
       const dupPinIds = (typeof PinSeries !== "undefined") ? PinSeries.duplicateCheckboardIds(State.pins, curPage) : new Set();
 
       // 현재 페이지에 핀이 없으면 안내(다른 페이지에 핀이 있을 수 있음)
       if (isMulti && visiblePins.length === 0) {
-        const other = State.pins.length;
+        const other = modePins.length;
         empty.classList.remove("hidden");
         const et = empty.querySelector(".pin-empty-sub") || empty;
         list.innerHTML = `<p class="pin-empty-page">현재 페이지(P${curPage})에 등록된 포인트가 없습니다.${other ? ` 다른 페이지에 ${other}개의 포인트가 있습니다.` : ""}</p>`;
-        badge.textContent = State.pins.length + " PINS";
+        badge.textContent = modePins.length + " PINS";
         badge.classList.remove("hidden");
         if (State.mode === "designer") this.show("section-export");
         if (typeof AllPins !== "undefined") { AllPins.syncButton(); if (AllPins.open) AllPins.render(); }
@@ -410,7 +412,9 @@
         n.className = "tree-node tree-node-pin" + (State.activePin === p.id ? " active" : "");
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
         const meta = numMap ? numMap.get(p.id) : null;
-        const noLabel = meta ? '<span class="tree-pin-no">#' + esc(String(meta.no)) + '</span>' : "";
+        // [WO 20260930-fixmode] 표시 번호 포맷 SoT = PinSeries.formatNo(CHECKER "1" / 360 "P1") — 핀 패널 헤더(27_PinActionPop)와 같은 표기.
+        const noTxt = meta ? ((PinSeries.formatNo ? PinSeries.formatNo(meta.no, meta.series) : String(meta.no))) : "";
+        const noLabel = meta ? '<span class="tree-pin-no">#' + esc(noTxt) + '</span>' : "";
         n.innerHTML = ICO.pin + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         // [WO 20260929-bulkdel] 선택 모드(관리자): 버튼 안에 input 을 둘 수 없어 aria-pressed + 표시 기호로 선택 상태를 나타낸다
@@ -430,7 +434,7 @@
 
       /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
-      const { roots: rootDecks, childrenOf } = this.groupDecksByParent(decks);
+      const { roots: rootDecks, childrenOf: allChildrenOf } = this.groupDecksByParent(decks);
       const docLabel = (depId) => {
         if (!depId) return "도면 미등록";
         const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
@@ -448,12 +452,20 @@
       };
 
       /* ── 구역/영역 노드(같은 생성기 — 깊이만 다르다) ───────────────── */
-      const deckNode = (deck, isRegion) => {
-        const isCur = !!(curDeck && String(curDeck.id) === String(deck.id));
+      /* [WO 20260930-fixmode] ctx = { mode(PinSeries.DECK_MODES 한 항목), childrenOf(그 모드의 구역만 묶은 계층) }.
+         같은 구역(mode NULL)이 CHECKER·360 양쪽에 나오므로 강조·접힘 키·핀 목록은 모드별로 가른다. */
+      const actMode = (typeof PinSeries !== "undefined" && PinSeries.activeMode) ? PinSeries.activeMode() : null;
+      const deckNode = (deck, isRegion, ctx) => {
+        ctx = ctx || { mode: { tag: "", series: null }, childrenOf: allChildrenOf }; // 모드 단 없음(종전 구조)
+        const childrenOf = ctx.childrenOf;
+        const modeActive = !actMode || actMode.tag === ctx.mode.tag;
+        const isCur = modeActive && !!(curDeck && String(curDeck.id) === String(deck.id));
         const loaded = hasState(deck);
         const subDecks = childrenOf.get(String(deck.id)) || [];
+        // 이 모드 작업공간의 핀만(계열 SoT = PinSeries.seriesOf). 일괄삭제 범위도 이 목록 — 다른 모드 핀을 지우지 않는다.
+        const modePinsHere = (State.pins || []).filter((p) => p && (!ctx.mode.series || PinSeries.inMode(p, ctx.mode.series)));
         // [WO 20260928-tree-expand] 🔴 기본 펼침 — 사용자가 직접 닫은 적이 없으면 항상 open.
-        const collapseKey = String(deck.id);
+        const collapseKey = (ctx.mode.tag ? ctx.mode.tag + ":" : "") + String(deck.id);
         const g = document.createElement("div");
         g.className = (isRegion ? "tree-region" : "tree-deck") + (collapsed.has(collapseKey) ? "" : " open");
         const head = document.createElement("button");
@@ -483,16 +495,18 @@
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {
           if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { toggleOpen(); return; }
-          if (isCur) { toggleOpen(); }
-          else if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
+          if (isCur) { toggleOpen(); return; }
+          // 다른 모드 트리의 구역을 누르면 그 모드로 전환한 뒤 연다(모드 = 작업공간, 전환 SoT = App._setRegMode).
+          if (!modeActive && typeof App !== "undefined" && App._setRegMode) App._setRegMode(ctx.mode.regMode);
+          if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
         g.appendChild(head);
         // [WO 20260929-bulkdel] 관리자 전용 — 핀이 붙는(로드된) 노드에만: [선택]·[선택 삭제 N개]·[이 구역 핀 전체 삭제].
         //   범위 = 이 노드 아래 나열되는 핀 전부(State.pins — 아래 loaded 블록과 같은 목록).
-        if (loaded && this._pinBulkOk() && (State.pins || []).length) {
+        if (loaded && this._pinBulkOk() && modePinsHere.length) {
           const acts = document.createElement("div");
           acts.className = "tree-project-actions tree-pin-bulk";
-          this._pinBulkButtons({ scopePins: State.pins.slice(), scopeLabel: isRegion ? "이 영역" : "이 구역" })
+          this._pinBulkButtons({ scopePins: modePinsHere.slice(), scopeLabel: isRegion ? "이 영역" : "이 구역" })
             .forEach(b => acts.appendChild(b));
           g.appendChild(acts);
         }
@@ -504,11 +518,11 @@
         // 리스트로 나열돼야 한다" — 0개여도 숨기지 않고 "영역 없음"으로 알린다(구역 레벨 한정,
         // 영역 자신의 하위는 데이터가 있을 때만 표시해 기존 4단 방지 회귀(p62)를 건드리지 않는다).
         if (!isRegion) {
-          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, ctx)); });
           else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
           any = true;
         } else if (subDecks.length) {
-          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, ctx)); });
           any = true;
         }
         if (loaded) {
@@ -533,7 +547,7 @@
           const pinsOfZone = new Map();
           zones.forEach((z) => pinsOfZone.set(z.id, []));
           const rootPins = [];
-          pins.forEach((p) => {
+          modePinsHere.forEach((p) => {   // [WO 20260930-fixmode] 나열은 이 모드 계열 핀만(번호는 위 전체 기준)
             const z = zoneOfPin.get(p.id);
             if (z && pinsOfZone.has(z.id)) pinsOfZone.get(z.id).push(p);
             else rootPins.push(p);
@@ -575,7 +589,44 @@
         pw.appendChild(pk);
         mount = pk;
       }
-      rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));
+      /* ── 2단: 모드(CHECKER / 360) — [WO 20260930-fixmode] 마스터: "프로젝트 하단 최상단에 체커와 360으로
+         구분하고 그 하위로 구역-영역". 모드 노드 클릭 = 그 모드 진입(App._setRegMode — 상단 세그먼트와 같은 SoT).
+         구역은 decks.mode 로 소속(NULL = 기존 구역 → 양쪽 모두, 유실 0). ─────────────────── */
+      const modeOpen = this._treeModeOpen || (this._treeModeOpen = new Set());
+      const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || null;
+      if (!MODES) { // 모드 정본 미로드(단독 모듈 하네스) — 모드 단 없이 구역부터(종전 구조)
+        rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));
+        return;
+      }
+      MODES.forEach((m) => {
+        const mDecks = decks.filter((d) => PinSeries.deckInMode(d, m.tag));
+        const grp = this.groupDecksByParent(mDecks);
+        const isAct = !!(actMode && actMode.tag === m.tag);
+        const mw = document.createElement("div");
+        mw.className = "tree-mode tree-mode-" + (m.tag === "360" ? "360" : "checker") + ((!actMode || isAct || modeOpen.has(m.tag)) ? " open" : "");
+        mw.dataset.mode = m.tag;
+        const mh = document.createElement("button");
+        mh.type = "button";
+        mh.className = "tree-node tree-node-mode" + (isAct ? " active" : "");
+        mh.setAttribute("aria-pressed", String(isAct));
+        mh.title = m.label + " 작업공간" + (isAct ? " (현재 모드)" : " — 누르면 이 모드로 전환");
+        mh.innerHTML = C + '<span class="tree-label">' + esc(m.label) + '</span><span class="tree-cnt" title="구역 수">' + grp.roots.length + '</span>';
+        mh.addEventListener("click", (e) => {
+          const onCaret = !!(e && e.target && e.target.closest && e.target.closest(".tree-caret"));
+          if (onCaret || isAct || !actMode) {
+            if (mw.classList.toggle("open")) modeOpen.add(m.tag); else modeOpen.delete(m.tag);
+            return;
+          }
+          if (typeof App !== "undefined" && App._setRegMode) App._setRegMode(m.regMode);
+        });
+        mw.appendChild(mh);
+        const mk = document.createElement("div");
+        mk.className = "tree-children";
+        if (grp.roots.length) grp.roots.forEach((d) => mk.appendChild(deckNode(d, false, { mode: m, childrenOf: grp.childrenOf })));
+        else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "구역 없음"; mk.appendChild(eEl); }
+        mw.appendChild(mk);
+        mount.appendChild(mw);
+      });
     },
 
     renderPinsOnMap(dropPinId) {

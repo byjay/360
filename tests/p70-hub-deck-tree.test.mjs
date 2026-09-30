@@ -377,8 +377,9 @@ await withBrowser(async (browser) => {
 
 console.log("\n[뮤테이션ⓑ] 트리 컨테이너 기본 display:none 으로 바꿈 → ②가 실패해야 함");
 await withBrowser(async (browser) => {
-  const needle = 'return \'<div class="hub-card-tree"><ul class="hub-tree-decks">\' + rootsHtml + \'</ul></div>\';';
-  const mutated = projectHubSrc.replace(needle, 'return \'<div class="hub-card-tree" style="display:none"><ul class="hub-tree-decks">\' + rootsHtml + \'</ul></div>\';');
+  // [WO 20260930-fixmode] 이 하네스는 PinSeries 스텁(DECK_MODES 없음) → 카드 트리는 모드 단 없는 경로로 렌더된다.
+  const needle = 'if (!MODES) return \'<div class="hub-card-tree">\' + decksHtml(decks) + \'</div>\';';
+  const mutated = projectHubSrc.replace(needle, 'if (!MODES) return \'<div class="hub-card-tree" style="display:none">\' + decksHtml(decks) + \'</div>\';');
   if (mutated === projectHubSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; return; }
   const dir = tmpDirWithBundle(buildBundle(mutated, projectsSrc), "bundle.js");
   const server = await serveDir(dir);

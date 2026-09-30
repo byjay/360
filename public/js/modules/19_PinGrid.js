@@ -47,7 +47,9 @@
         : State.pdfPages;
       const curPage = State.pdfPage || 1;
       const isMulti = totalPages > 1;
-      const base = isMulti ? State.pins.filter(p => (p.page || 1) === curPage) : State.pins.slice();
+      // [WO 20260930-fixmode] 모드 = 작업공간 — 활성 모드 핀만(SoT: PinSeries.modePins)
+      const all = (typeof PinSeries !== "undefined" && PinSeries.modePins) ? PinSeries.modePins(State.pins) : State.pins.slice();
+      const base = isMulti ? all.filter(p => (p.page || 1) === curPage) : all;
       return base.map((p, i) => ({ pin: p, no: i + 1 }));
     },
 

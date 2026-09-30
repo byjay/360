@@ -260,9 +260,10 @@ suiteNoGhostLeak("🔴 전역 유령 localStorage 미반영 (정상 소스)", se
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션ⓐ] filter() 를 localStorage 복원 버전으로 되돌림 → 유령값 테스트가 실패해야 함");
-  const needle = 'filter() {\n      if (!this._filter) this._filter = { checkboard: true, content: true };\n      return this._filter;\n    },';
+  // [WO 20260930-fixmode] filter() 앞부분에 모드 게이트(activeSeries)가 붙었다 — needle 은 그 뒤 세션 상태 부분만.
+  const needle = '      if (!this._filter) this._filter = { checkboard: true, content: true };\n      return this._filter;\n    },';
   const mutated = seriesSrc.replace(needle,
-    'filter() {\n      if (!this._filter) {\n        this._filter = { checkboard: true, content: true };\n        try {\n          const raw = localStorage.getItem(this.FILTER_KEY);\n          if (raw) { const v = JSON.parse(raw); this.SERIES.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; }); }\n        } catch (e) {}\n      }\n      return this._filter;\n    },');
+    '      if (!this._filter) {\n        this._filter = { checkboard: true, content: true };\n        try {\n          const raw = localStorage.getItem(this.FILTER_KEY);\n          if (raw) { const v = JSON.parse(raw); this.SERIES.forEach(k => { if (typeof v[k] === "boolean") this._filter[k] = v[k]; }); }\n        } catch (e) {}\n      }\n      return this._filter;\n    },');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ghostSeed = { "wm-pin-filter": JSON.stringify({ content: true, empty: true, checkboard: false }) };

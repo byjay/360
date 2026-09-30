@@ -412,6 +412,11 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   font-size: 12px;
 }
 .hub-tree-decks, .hub-tree-regions { list-style: none; }
+/* [WO 20260930-fixmode] 허브 카드 트리 모드 단(CHECKER / 360) — 사이드바 트리와 같은 구조. 색 var(--text)(카드 배경 실측 p91). */
+.hub-tree-modes { list-style: none; }
+.hub-tree-mode { cursor: pointer; margin: 2px 0; }
+.hub-tree-mode-label { display: inline-block; padding: 3px 6px; font-weight: 800; font-size: 11px; letter-spacing: .06em; color: var(--text); }
+.hub-tree-mode > .hub-tree-decks, .hub-tree-mode > .hub-tree-empty { margin-left: 12px; }
 .hub-tree-regions { margin: 2px 0 6px 16px; }
 .hub-tree-deck, .hub-tree-region {
   display: block; cursor: pointer; border-radius: var(--radius-sm);
@@ -5173,6 +5178,11 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-doc:not(.open) > .tree-children{display:none;}
 .tree-region:not(.open) > .tree-children{display:none;}
 .tree-children{padding-left:12px;border-left:1px solid var(--border2);margin-left:10px;}
+/* [WO 20260930-fixmode] 모드 단(프로젝트 → CHECKER / 360 → 구역) — 작업공간 헤더. 굵기·자간으로 구역과 구분.
+   색은 기존 var(--text)(다크 런타임 실측은 tests/p91-mode-workspace.test.mjs Part C), 활성 = 기존 .tree-node.active. */
+.tree-node-mode{font-weight:800;font-size:12.5px;letter-spacing:.05em;color:var(--text);}
+.tree-mode:not(.open) .tree-node-mode .tree-caret{transform:rotate(-90deg);}
+.tree-mode:not(.open) > .tree-children{display:none;}
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
 .tree-cnt{min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--gold);color:#1a1206;font-size:9px;font-weight:700;flex:0 0 auto;}

@@ -129,6 +129,43 @@
     /** 채번 계열 (2종) */
     seriesOf(pin) { return (pin && pin.checkboard) ? "checkboard" : "content"; },
 
+    /* ══ 모드 = 작업공간 [WO 20260930-fixmode] ══════════════════════════════
+       마스터: "체커와 360을 완전히 다른 프로젝트처럼 구분 — 프로젝트 하위 최상단에 체커/360,
+       그 하위로 구역-영역". 🔴 이 표 하나가 모드(regMode) ↔ 핀 계열(series) ↔ 구역 태그(decks.mode)
+       ↔ 표시 이름의 유일한 대응표다. 지도 마커·미니맵·필터 칩·핀 목록·사이드바 트리·허브 카드 트리가
+       전부 아래 함수만 부른다(각자 판정하면 반드시 갈라진다 — §10 SoT).
+       decks.mode = NULL(마이그레이션 0029 이전 기존 구역)은 두 모드 모두에 보인다(유실 0). */
+    DECK_MODES: [
+      { tag: "checker", regMode: "checkboard", series: "checkboard", label: "CHECKER" },
+      { tag: "360",     regMode: "photo",      series: "content",    label: "360" }
+    ],
+    _modeBy(key, val) { return this.DECK_MODES.find((m) => m[key] === val) || null; },
+    /** 현재 활성 모드(편집화면 CHECKER/360). 뷰어·구 view 모드는 null(=분리 없음, 전부 표시). */
+    activeMode() {
+      if (typeof State === "undefined" || State.mode !== "designer") return null;
+      return this._modeBy("regMode", State.regMode);
+    },
+    /** 활성 모드의 핀 계열 — null 이면 모드 분리 없음 */
+    activeSeries() { const m = this.activeMode(); return m ? m.series : null; },
+    /** 새 구역·영역에 붙일 decks.mode 태그 — null 이면 태그 안 함(서버 NULL) */
+    deckModeTag() { const m = this.activeMode(); return m ? m.tag : null; },
+    /** 핀이 (지정 계열 또는) 활성 모드 작업공간에 속하는가 */
+    inMode(pin, series) {
+      const s = series !== undefined ? series : this.activeSeries();
+      return !s || this.seriesOf(pin) === s;
+    },
+    /** 활성 모드 작업공간의 핀만 */
+    modePins(pins) { return (pins || []).filter((p) => p && this.inMode(p)); },
+    /** 구역이 모드 tag 작업공간에 보이는가 — NULL(기존 구역)은 양쪽 모두(유실 0) */
+    deckInMode(deck, tag) { return !!deck && (deck.mode == null || deck.mode === "" || deck.mode === tag); },
+    /** 구역 생성 요청 body 에 활성 모드 태그를 붙인다(31_Projects.js POST 3곳 공유 지점).
+     *  영역은 부모 구역의 mode 를 상속 — 부모가 태그돼 있으면 그 값, NULL 이면 활성 모드. */
+    withDeckMode(body, parentDeck) {
+      const tag = (parentDeck && parentDeck.mode) || this.deckModeTag();
+      if (tag) body.mode = tag;
+      return body;
+    },
+
     /** [WO 20260929 addendum] 🔴 표시 번호 포맷 정본 — CHECKER 계열은 숫자 그대로, 360 계열은
      *  "P" 접두(마스터: "번호체계도 다르게 해"). 마커 머리(11_UI)·미니맵(07_Radar)·트리 행(11_UI)
      *  등 번호를 보여주는 모든 곳이 이 함수 하나만 부른다 — 각자 접두를 붙이면 반드시 갈라진다
@@ -325,6 +362,11 @@
      *  필터 바가 이제 모드(CHECKER/360)와 1:1인 2칩뿐이라 "미배치(empty)"는 별도 칩이 없다
      *  (content 칩 하나가 kindOf 상 content+empty 를 모두 포함 — seriesOf 기준이므로 자연히 그렇다). */
     filter() {
+      // [WO 20260930-fixmode] 🔴 모드 = 작업공간 — 활성 모드(CHECKER/360)가 있으면 표시 계열은 그 모드
+      // 하나로 고정된다(지도 마커·미니맵이 쓰는 isVisible() 이 이 값 하나만 본다 — 판정 지점 1곳).
+      // 세션 칩 상태(_filter)는 건드리지 않는다 — 뷰어(모드 없음)로 돌아가면 종전 칩 필터 그대로.
+      const act = this.activeSeries();
+      if (act) return { checkboard: act === "checkboard", content: act === "content" };
       if (!this._filter) this._filter = { checkboard: true, content: true };
       return this._filter;
     },
@@ -391,6 +433,7 @@
     toggle(series) {
       const f = this.filter();
       if (this.SERIES.indexOf(series) < 0) return;
+      if (this.activeSeries()) return; // [WO 20260930-fixmode] 모드 작업공간에선 칩 1개 = 표시 전용
       const next = Object.assign({}, f, {});
       next[series] = !f[series];
       // 마지막 하나를 끄는 건 전체 숨김 → 그 하나만 보기로 해석(단독 선택)
@@ -527,7 +570,8 @@
       if (!host) return;
       const page = (typeof State !== "undefined" && State.pdfPage) || 1;
       const pins = (typeof State !== "undefined" && State.pins) || [];
-      const c = this.seriesCounts(pins, page);
+      // [WO 20260930-fixmode] 칩·카운트도 활성 모드 작업공간 핀만(모드 없음이면 전체).
+      const c = this.seriesCounts(this.modePins(pins), page);
       if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
       host.classList.remove("hidden");
       const f = this.filter();
