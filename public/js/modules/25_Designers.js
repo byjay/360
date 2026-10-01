@@ -79,7 +79,72 @@
       if (tab === "proj-req") this.loadProjRequests(true);
       if (tab === "matrix") this.loadMatrix();
       if (tab === "flags") this.loadFlags();
-      if (tab === "logs") { this.loadLogActions(); this.loadLogs(true); }
+      if (tab === "logs") { this.loadLogActions(); this.loadLogs(true); this.loadInquiries(); }
+    },
+
+    /* [WO 20261001-viewerhelp] 개발자 문의 — 간단 목록 + 처리완료 체크(로그 패널 하단에 삽입).
+     * index.html 을 건드리지 않고 36_Help.js 와 같은 방식(JS 로 요소를 만들어 붙임)으로 구현한다
+     * (로그 패널 마크업을 다른 트랙이 동시에 건드릴 수 있어 최소 접촉 원칙). */
+    _inquiriesSection() {
+      let el = document.getElementById("adm-inquiries-section");
+      if (el) return el;
+      const panel = document.getElementById("adm-panel-logs");
+      if (!panel) return null;
+      el = document.createElement("div");
+      el.id = "adm-inquiries-section";
+      el.style.cssText = "margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)";
+      const h = document.createElement("div");
+      h.textContent = "개발자 문의";
+      h.style.cssText = "font-weight:700;font-size:13px;margin-bottom:8px;color:var(--text,#e8e2d4)";
+      const list = document.createElement("div");
+      list.id = "adm-inquiries-list";
+      list.style.cssText = "display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto";
+      el.appendChild(h);
+      el.appendChild(list);
+      panel.appendChild(el);
+      return el;
+    },
+
+    async loadInquiries() {
+      this._inquiriesSection();
+      const list = document.getElementById("adm-inquiries-list");
+      if (!list) return;
+      try {
+        const r = await fetch("/api/inquiries?limit=100", { headers: Auth.headers() });
+        const j = await r.json();
+        const rows = j.data || [];
+        if (!rows.length) { list.innerHTML = '<div style="font-size:12px;color:var(--muted,#9a9686)">접수된 문의가 없습니다.</div>'; return; }
+        list.innerHTML = rows.map((q) => {
+          const esc = (s) => UI.escapeHtml(s == null ? "" : String(s));
+          const when = q.created_at ? new Date(q.created_at).toLocaleString("ko-KR") : "-";
+          const checked = q.resolved ? "checked" : "";
+          return (
+            '<div class="adm-inquiry-row" data-id="' + esc(q.id) + '" style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px">' +
+              '<input type="checkbox" class="adm-inquiry-resolve" ' + checked + ' style="margin-top:3px" />' +
+              '<div style="flex:1;min-width:0">' +
+                '<div style="font-size:12.5px;font-weight:700">' + esc(q.title) + '</div>' +
+                '<div style="font-size:11.5px;color:var(--muted,#9a9686);white-space:pre-wrap;margin:2px 0">' + esc(q.body) + '</div>' +
+                '<div style="font-size:10.5px;color:var(--muted,#9a9686)">' + when + ' · ' + esc(q.sender_email || "비로그인") + (q.reply_email ? (" · 회신: " + esc(q.reply_email)) : "") + (q.project_name ? (" · " + esc(q.project_name)) : "") + '</div>' +
+              '</div>' +
+            '</div>'
+          );
+        }).join("");
+        list.querySelectorAll(".adm-inquiry-resolve").forEach((cb) => {
+          cb.addEventListener("change", async (e) => {
+            const row = e.target.closest(".adm-inquiry-row");
+            const id = row && row.dataset.id;
+            if (!id) return;
+            try {
+              await fetch("/api/inquiries/" + encodeURIComponent(id), {
+                method: "PATCH", headers: Object.assign({ "Content-Type": "application/json" }, Auth.headers()),
+                body: JSON.stringify({ resolved: e.target.checked })
+              });
+            } catch (err) { /* 네트워크 실패 — 다음 새로고침에 재시도 가능하도록 조용히 둠 */ }
+          });
+        });
+      } catch (e) {
+        list.innerHTML = '<div style="font-size:12px;color:var(--muted,#9a9686)">문의 목록을 불러오지 못했습니다.</div>';
+      }
     },
 
     /* ── 회사 도메인(프로젝트별 허용) 관리 ── */

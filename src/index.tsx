@@ -108,6 +108,11 @@ const AUTO_ENTRY_SKEY    = 'auto_entry_secret'          // app_settings(scope='*
 const SHARE_GATE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 /** 🔴 사용자에게 보여줄 문의 주소. 개발 관리자 gmail 주소는 어떤 화면에도 쓰지 않는다(마스터 확정). */
 const SUPPORT_CONTACT_EMAIL = 'designsir@seastargo.com'
+/** [WO 20261001-viewerhelp] 개발자 문의 — 남용 방지 상수의 단일 정본(값이 두 곳에 생기면 갈라진다). */
+const INQUIRY_RATE_LIMIT_PER_MIN = 3
+const INQUIRY_RATE_WINDOW_MS = 60 * 1000
+const INQUIRY_TITLE_MAX = 200
+const INQUIRY_BODY_MAX = 4000
 /** 🔴 개인정보(이름·소속·IP) 보관 기간 — activity_log 정리 정책의 **단일 정본**.
  *  근거: 도면 열람 기록은 계약·감사 대응상 최소 1년 필요, 그 이상은 목적 달성에 불필요
  *  (개인정보보호법 제21조 파기 원칙). 자동 삭제 배치는 마스터 확인 전이라 만들지 않았다 —
@@ -119,7 +124,9 @@ const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
  *  이 목록 밖의 모든 변경 요청은 거부된다(allowlist 방식 — 새 쓰기 라우트가 자동으로 보호됨). */
 // [P63] '/api/share/verify' = 초대코드 제출 = **권한을 얻는 통로 자체**라 열람전용에도 열어야 한다
 //   (로그인/가입 엔드포인트와 동일한 성격). 그 외 /api/share/* 쓰기는 여전히 거부된다.
-const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify']
+// [WO 20261001-viewerhelp] '/api/inquiries' = 로그인 없는 공유/배포 링크 열람자도 보낼 수 있어야
+//   하는 개발자 문의 접수 — 콘텐츠 쓰기가 아니라 "문의 제출" 통로 자체라 열람전용에도 연다.
+const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify', '/api/inquiries']
 
 const b64u = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const b64uDec = (s: string) => atob(s.replace(/-/g, '+').replace(/_/g, '/'))
@@ -546,6 +553,67 @@ async function sendVerificationEmail(c: any, email: string, code: string): Promi
   } catch (e) { /* 발송 실패 → dev-fallback */ }
   // dev-fallback: 메일 발송 미설정/실패 시 코드 자체를 응답에 포함(개발/시연용)
   return { sent: false, devCode: code }
+}
+
+/** [WO 20261001-viewerhelp] HTML 이스케이프 — 사용자 입력을 메일 HTML 본문에 넣기 전 반드시 통과. */
+function escapeHtmlServer(s: any): string {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
+
+/** [WO 20261001-viewerhelp] 개발자 문의 메일 발송. sendVerificationEmail 과 같은 Resend/SendGrid
+ *  경로(fromEmail·키)를 재사용한다 — 발송 로직을 두 곳에 따로 두면 반드시 갈라진다(SoT). */
+async function sendInquiryEmail(c: any, row: {
+  title: string; body: string; replyEmail?: string | null; senderEmail?: string | null;
+  projectName?: string | null; deploymentId?: string | null; mode?: string | null;
+  userAgent?: string | null; appVersion?: string | null
+}): Promise<{ sent: boolean; provider?: string }> {
+  const fromEmail = (c.env?.MAIL_FROM && String(c.env.MAIL_FROM).includes('@')) ? c.env.MAIL_FROM : 'no-reply@seastargo.com'
+  const subject = '[SEASTAR 360° 뷰어] 개발자 문의: ' + row.title.slice(0, 80)
+  const esc = escapeHtmlServer
+  const text = `개발자 문의\n제목: ${row.title}\n내용:\n${row.body}\n\n회신 이메일: ${row.replyEmail || '(미입력)'}\n보낸 계정: ${row.senderEmail || '(비로그인)'}\n프로젝트: ${row.projectName || '-'}\n배포본: ${row.deploymentId || '-'}\n모드: ${row.mode || '-'}\n브라우저: ${row.userAgent || '-'}\n앱 버전: ${row.appVersion || '-'}`
+  const html = `<div style="font-family:sans-serif;max-width:560px;margin:0 auto">
+    <h2 style="color:#0b3a5b">SEASTAR 360° 개발자 문의</h2>
+    <p><strong>제목</strong>: ${esc(row.title)}</p>
+    <p style="white-space:pre-wrap;background:#f1f5f9;padding:12px 16px;border-radius:8px">${esc(row.body)}</p>
+    <table style="font-size:13px;color:#334155;border-collapse:collapse">
+      <tr><td style="padding:2px 8px 2px 0">회신 이메일</td><td>${esc(row.replyEmail || '(미입력)')}</td></tr>
+      <tr><td style="padding:2px 8px 2px 0">보낸 계정</td><td>${esc(row.senderEmail || '(비로그인)')}</td></tr>
+      <tr><td style="padding:2px 8px 2px 0">프로젝트</td><td>${esc(row.projectName || '-')}</td></tr>
+      <tr><td style="padding:2px 8px 2px 0">배포본</td><td>${esc(row.deploymentId || '-')}</td></tr>
+      <tr><td style="padding:2px 8px 2px 0">모드</td><td>${esc(row.mode || '-')}</td></tr>
+      <tr><td style="padding:2px 8px 2px 0">브라우저</td><td>${esc(row.userAgent || '-')}</td></tr>
+      <tr><td style="padding:2px 8px 2px 0">앱 버전</td><td>${esc(row.appVersion || '-')}</td></tr>
+    </table>
+  </div>`
+  try {
+    if (c.env?.RESEND_API_KEY) {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + c.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromEmail, to: [SUPPORT_CONTACT_EMAIL], subject, html, text })
+      })
+      if (res.ok) return { sent: true, provider: 'resend' }
+      console.error('[inquiry mail] resend failed', res.status, await res.text().catch(() => ''))
+    } else if (c.env?.SENDGRID_API_KEY) {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + c.env.SENDGRID_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: SUPPORT_CONTACT_EMAIL }] }],
+          from: { email: fromEmail, name: 'SEASTAR 360 Viewer' },
+          subject,
+          content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }]
+        })
+      })
+      if (res.ok || res.status === 202) return { sent: true, provider: 'sendgrid' }
+      console.error('[inquiry mail] sendgrid failed', res.status, await res.text().catch(() => ''))
+    } else {
+      console.error('[inquiry mail] no mail provider configured (RESEND_API_KEY/SENDGRID_API_KEY)')
+    }
+  } catch (e) { console.error('[inquiry mail] send threw', e) }
+  return { sent: false }
 }
 
 /** 로컬 세션 토큰 검증 → 사용자 반환(없으면 null) */
@@ -1479,6 +1547,101 @@ app.delete('/api/activity-logs', async (c) => {
   } else {
     return c.json({ error: 'specify all=1 or before=<ms>' }, 400)
   }
+  return c.json({ success: true })
+})
+
+/* ════════════════════════════════════════════
+   inquiries — 개발자 문의 (뷰어 배포/편집 화면 공용, 로그인 불필요)
+   [WO 20261001-viewerhelp] 마스터: "뷰어로 배포된 모드에서도 도움말 기능 구현하고
+   개발자 문의 노트도 추가해 designsir@seastargo.com" — 수신 주소는 SUPPORT_CONTACT_EMAIL(SoT) 하나.
+════════════════════════════════════════════ */
+app.post('/api/inquiries', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const title = String(body?.title || '').trim()
+  const content = String(body?.body || '').trim()
+  if (!title || !content) return c.json({ error: '제목과 내용을 입력하세요.' }, 400)
+  if (title.length > INQUIRY_TITLE_MAX) return c.json({ error: `제목은 ${INQUIRY_TITLE_MAX}자 이내로 입력하세요.` }, 400)
+  if (content.length > INQUIRY_BODY_MAX) return c.json({ error: `내용은 ${INQUIRY_BODY_MAX}자 이내로 입력하세요.` }, 400)
+  const replyEmailRaw = body?.reply_email ? String(body.reply_email).trim() : ''
+  if (replyEmailRaw && !isValidEmail(replyEmailRaw)) return c.json({ error: '회신 이메일 형식이 올바르지 않습니다.' }, 400)
+
+  // 🔴 남용 방지: IP(또는 세션)당 분당 N건. CF 운영환경은 CF-Connecting-IP 가 항상 붙는다.
+  //   헤더가 없는 로컬환경에서는 'anon' 버킷 하나를 공유한다(개발용 — 운영 경로엔 영향 없음).
+  const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null
+  const limiterKey = ip || 'anon'
+  const now = Date.now()
+  const windowStart = now - INQUIRY_RATE_WINDOW_MS
+  try {
+    const cnt: any = await c.env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM inquiries WHERE ip = ? AND created_at > ? AND deleted = 0'
+    ).bind(limiterKey, windowStart).first()
+    if ((cnt?.n || 0) >= INQUIRY_RATE_LIMIT_PER_MIN) {
+      return c.json({ error: '문의가 너무 자주 접수되었습니다. 잠시 후 다시 시도해 주세요.' }, 429)
+    }
+  } catch (e) { /* 레이트리밋 조회 실패(마이그레이션 전 등) — 저장 단계에서 실패가 정직하게 드러난다 */ }
+
+  const user = await getUser(c).catch(() => null)
+  const id = randToken('inq-')
+  const ctx = (body && typeof body.context === 'object' && body.context) ? body.context : {}
+  const row = {
+    title, body: content,
+    replyEmail: replyEmailRaw || null,
+    // 🔴 열람전용(_readonly) 세션은 실사용자가 아니라 공유 통행증이다 — 보낸 계정으로 기록하지 않는다.
+    senderEmail: (user && !user._readonly && user.email) ? user.email : null,
+    projectName: ctx.project_name ? String(ctx.project_name).slice(0, 200) : null,
+    deploymentId: ctx.deployment_id ? String(ctx.deployment_id).slice(0, 120) : null,
+    mode: ctx.mode ? String(ctx.mode).slice(0, 40) : null,
+    userAgent: (c.req.header('User-Agent') || '').slice(0, 300),
+    appVersion: ctx.app_version ? String(ctx.app_version).slice(0, 80) : null
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO inquiries (id, created_at, title, body, reply_email, sender_email, project_name, deployment_id, mode, user_agent, app_version, ip, mail_sent, resolved, deleted)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)`
+    ).bind(id, now, row.title, row.body, row.replyEmail, row.senderEmail, row.projectName, row.deploymentId, row.mode, row.userAgent, row.appVersion, limiterKey).run()
+  } catch (e) {
+    // 🔴 저장까지 실패하면 조용히 숨기지 않고 실패를 알린다(조용한 실패 금지).
+    return c.json({ error: '문의 저장에 실패했습니다. 잠시 후 다시 시도하거나 이메일로 직접 보내주세요: ' + SUPPORT_CONTACT_EMAIL }, 500)
+  }
+
+  const mail = await sendInquiryEmail(c, row)
+  if (mail.sent) {
+    try { await c.env.DB.prepare('UPDATE inquiries SET mail_sent = 1 WHERE id = ?').bind(id).run() } catch {}
+  } else {
+    console.error('[inquiry] mail send failed, saved only. id=' + id)
+  }
+  await logActivity(c, 'inquiry.create', { actor: user, targetType: 'inquiry', targetId: id, detail: { mail_sent: mail.sent } })
+  // 🔴 저장이 됐으면(여기 도달) 메일 발송 성공 여부와 무관하게 사용자에게는 "접수됨"으로 응답한다.
+  return c.json({ success: true, id, mail_sent: mail.sent })
+})
+
+// 문의 목록(관리자 전용) — 간단 목록
+app.get('/api/inquiries', async (c) => {
+  const su = await requireAdmin(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const limit = Math.min(parseInt(c.req.query('limit') || '100', 10) || 100, 500)
+  try {
+    const { results } = await c.env.DB.prepare(
+      'SELECT * FROM inquiries WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
+    ).bind(limit).all()
+    return c.json({ data: results || [] })
+  } catch (e) {
+    return c.json({ data: [], note: 'inquiries not ready' })
+  }
+})
+
+// 문의 처리 완료 체크(관리자 전용)
+app.patch('/api/inquiries/:id', async (c) => {
+  const su = await requireAdmin(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  let body: any
+  try { body = await c.req.json() } catch { body = {} }
+  const resolved = body?.resolved ? 1 : 0
+  await c.env.DB.prepare('UPDATE inquiries SET resolved = ?, resolved_at = ? WHERE id = ?')
+    .bind(resolved, resolved ? Date.now() : null, id).run()
   return c.json({ success: true })
 })
 

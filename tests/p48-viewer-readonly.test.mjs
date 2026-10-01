@@ -220,7 +220,14 @@ console.log("\n[⑥ 🔴 고정 문자열 토큰만으로는 쓰기 불가 — �
 console.log("\n[⑦ 🔴 다른 쓰기 경로 전수 — src/index.tsx 의 모든 변경 라우트를 소스에서 뽑아 검사]");
 {
   const src = fs.readFileSync(path.join(ROOT, "src/index.tsx"), "utf8");
-  const ALLOW = ["/api/signup/", "/api/invite/", "/api/auth/", "/api/client-log"];
+  // [WO 20261001-viewerhelp] 🔴 하드코딩 복제본 대신 실제 SoT(READONLY_ALLOWED_WRITE_PREFIXES)를
+  //   소스에서 직접 파싱한다 — 복제본을 두면 반드시 갈라진다(실측: '/api/share/verify' 가 상수엔
+  //   있었지만 이 하드코딩 목록엔 없었다. 이번에 '/api/inquiries' 를 추가하며 드러남).
+  const prefixMatch = src.match(/const READONLY_ALLOWED_WRITE_PREFIXES = \[([^\]]*)\]/);
+  const ALLOW = prefixMatch
+    ? Array.from(prefixMatch[1].matchAll(/'([^']*)'/g)).map((mm) => mm[1])
+    : ["/api/signup/", "/api/invite/", "/api/auth/", "/api/client-log"]; // 상수를 못 찾으면 폴백
+  ok(ALLOW.includes("/api/inquiries"), "⑦ 전제: READONLY_ALLOWED_WRITE_PREFIXES 에 /api/inquiries 포함 확인 — 파싱 결과: " + ALLOW.join(","));
   const routes = [];
   const re = /app\.(post|put|patch|delete)\('([^']+)'/g;
   let m;

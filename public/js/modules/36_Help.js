@@ -61,23 +61,52 @@
       "deck-source-select": "구역 생성 방식 선택 — '+ 구역 생성'을 누르면 이 구역의 도면을 어떻게 마련할지 고를 수 있습니다. ① 기존 도면에서 영역 지정: 지금 열려 있는 도면 위에서 원하는 부분을 드래그로 긁으면, 원본은 그대로 둔 채 그 부분만 보이는 새 구역이 만들어집니다(도면 영역 추출과 동일 기능). ② 새 도면 파일 업로드: PDF·이미지 파일을 새로 올려 그 파일을 이 구역의 도면으로 씁니다. 지금 열려 있는 도면이 없으면 ①은 고를 수 없고 그 이유가 안내됩니다."
     },
 
+    /* [WO 20261001-viewerhelp] 뷰어 배포 화면(role-viewer)용 도움말 — SoT 는 이 배열 하나.
+     * 편집 전용 기능(핀 생성/삭제/정렬/합치기 등, 위 CONTENT 의 data-help 배지 체계)은
+     * 뷰어에는 그 대상 요소 자체가 DOM 에 없어 애초에 노출되지 않는다 — 여기서는 열람자가
+     * 실제로 쓰는 조작만 별도 패널(토글 클릭 시 전체 패널)로 보여준다. */
+    VIEWER_SECTIONS: [
+      { title: "도면 이동·확대", body: "손가락 두 개로 벌리거나 마우스 휠로 도면을 확대/축소합니다. 한 손가락 드래그(마우스는 클릭 드래그)로 도면을 이동합니다." },
+      { title: "핀 종류", body: "주황 배지 + 화살표 리더선은 CHECKER 점검 지점(번호 순서)입니다. 파란 물방울 핀은 360° 사진이 연결된 지점으로, 탭하면 360° 뷰어가 열립니다." },
+      { title: "360° 뷰어 조작", body: "화면을 드래그해 둘러보고 두 손가락(또는 휠)으로 확대/축소합니다. 미니맵에서 현재 위치·꼭지점을 확인하고 다른 지점을 눌러 이동할 수 있습니다. 전체화면 버튼으로 크게 보고, 닫기(X) 또는 ESC 키로 돌아갑니다." },
+      { title: "구역 찾기(트리)", body: "좌측 트리는 프로젝트 → 구역 → 영역 → CHECKER/360 순서로 구성됩니다. 원하는 항목을 누르면 바로 그 위치로 이동합니다." },
+      { title: "앱 설치", body: "브라우저 메뉴에서 '홈 화면에 추가'를 선택하면 아이콘으로 설치해 앱처럼 바로 열 수 있습니다." }
+    ],
+
     _inited: false,
     active: false,        // 도움말 모드 on/off
     _toggleBtn: null,
     _badges: [],           // [{ badge, target }]
     _popup: null,
     _hideTimer: null,
+    viewerPanelOpen: false,     // [WO 20261001-viewerhelp] 뷰어 패널 열림 상태
+    _viewerPanelEl: null,
+    _inquiryEl: null,
+    _inquiryEntryBtn: null,
 
     /** 정본에서 값을 읽는다. 키가 없으면 undefined(조용한 대체값 날조 금지). */
     get(key) {
       return Object.prototype.hasOwnProperty.call(this.CONTENT, key) ? this.CONTENT[key] : undefined;
     },
 
+    /** [WO 20261001-viewerhelp] 뷰어 배포 화면인지 — SoT: body.role-viewer 클래스(20_App.js openApp 가
+     *  유일하게 세팅). 이 모듈은 그 값을 읽기만 한다(값을 새로 만들지 않음 — SoT 1개). */
+    _isViewerRole() {
+      try { return !!(document.body && document.body.classList && document.body.classList.contains("role-viewer")); }
+      catch (e) { return false; }
+    },
+
     init() {
       if (this._inited) return;
       this._inited = true;
       this._createToggle();
-      document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.hide(); });
+      this._createInquiryEntryBtn();
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        this.hide();
+        this.closeInquiry();
+        this.closeViewerPanel();
+      });
       window.addEventListener("scroll", () => { if (this.active) this._reposition(); }, true);
       window.addEventListener("resize", () => { if (this.active) this._reposition(); });
     },
@@ -112,15 +141,269 @@
       ].join(";");
     },
 
-    toggle() { this.active ? this.disable() : this.enable(); },
+    /** [WO 20261001-viewerhelp] 뷰어 배포 화면에서는 data-help 배지 대상 요소 자체가 없으므로
+     *  배지 모드 대신 역할별 섹션을 담은 패널을 연다(판정 기준 1 — 역할별 분기, 편집 기능 자동 숨김:
+     *  편집 전용 버튼이 뷰어 DOM 에 없어 애초에 노출되지 않는다). 편집 화면은 종전 배지 토글 그대로. */
+    toggle() {
+      if (this._isViewerRole()) { this.viewerPanelOpen ? this.closeViewerPanel() : this.openViewerPanel(); return; }
+      this.active ? this.disable() : this.enable();
+    },
 
     /** [지휘자 발주 2026-09-29 항목2] 🔴 다른 화면의 플로팅 패널(예: 27_PinActionPop.js 핀 패널)이
      *  이 좌하단 토글과 겹칠 때 호출해 숨긴다/되돌린다(38_Install.js isEditorScreenActive 와 동일
      *  관례 — 겹치는 상시 UI 는 그 화면이 떠 있는 동안만 숨긴다). display 속성만 건드려 다른
      *  스타일(_toggleStyle 로 이미 적용된 색상/위치 등)은 그대로 유지한다. */
     setVisible(visible) {
-      if (!this._toggleBtn) return;
-      this._toggleBtn.style.display = visible ? "flex" : "none";
+      if (this._toggleBtn) this._toggleBtn.style.display = visible ? "flex" : "none";
+      if (this._inquiryEntryBtn) this._inquiryEntryBtn.style.display = visible ? "flex" : "none";
+    },
+
+    /* ══ [WO 20261001-viewerhelp] 뷰어 전용 도움말 패널 ══════════════════════════ */
+    openViewerPanel() {
+      this.closeViewerPanel();
+      if (this._toggleBtn) { this._toggleBtn.setAttribute("aria-pressed", "true"); this._toggleBtn.style.cssText = this._toggleStyle(true); }
+
+      const backdrop = document.createElement("div");
+      backdrop.setAttribute("data-help-viewer-backdrop", "1");
+      backdrop.style.cssText = [
+        "position:fixed", "inset:0", "background:rgba(0,0,0,.55)", "z-index:99990",
+        "display:flex", "align-items:flex-end", "justify-content:center"
+      ].join(";");
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) this.closeViewerPanel(); });
+
+      const panel = document.createElement("div");
+      panel.setAttribute("data-help-viewer-panel", "1");
+      panel.style.cssText = [
+        "position:relative", "width:100%", "max-width:480px", "max-height:80vh", "overflow-y:auto",
+        "background:#1a1712", "color:#ffffff", "border-radius:16px 16px 0 0", "padding:20px",
+        "box-sizing:border-box", "font-family:sans-serif"
+      ].join(";");
+
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.textContent = "닫기";
+      closeBtn.setAttribute("aria-label", "도움말 닫기");
+      closeBtn.style.cssText = "position:absolute;top:12px;right:12px;background:transparent;border:1px solid #665;color:#ffffff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px";
+      closeBtn.addEventListener("click", () => this.closeViewerPanel());
+      panel.appendChild(closeBtn);
+
+      const h = document.createElement("h3");
+      h.textContent = "사용 안내";
+      h.style.cssText = "margin:0 0 14px;font-size:17px;color:#ffffff;padding-right:60px";
+      panel.appendChild(h);
+
+      this.VIEWER_SECTIONS.forEach((sec) => {
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "margin-bottom:14px";
+        const t = document.createElement("div");
+        t.textContent = sec.title;
+        t.style.cssText = "font-weight:700;color:#c9962a;margin-bottom:4px;font-size:13.5px";
+        const b = document.createElement("div");
+        b.textContent = sec.body;
+        b.style.cssText = "font-size:13px;line-height:1.6;color:#f2ede1";
+        wrap.appendChild(t);
+        wrap.appendChild(b);
+        panel.appendChild(wrap);
+      });
+
+      const hr = document.createElement("div");
+      hr.style.cssText = "border-top:1px solid rgba(255,255,255,.15);margin:14px 0";
+      panel.appendChild(hr);
+
+      const inquiryBtn = document.createElement("button");
+      inquiryBtn.type = "button";
+      inquiryBtn.textContent = "개발자에게 문의";
+      inquiryBtn.setAttribute("data-help-inquiry-open", "1");
+      inquiryBtn.style.cssText = "width:100%;padding:12px;border:none;border-radius:10px;background:#c9962a;color:#1a1712;font-weight:700;font-size:14px;cursor:pointer";
+      inquiryBtn.addEventListener("click", () => this.openInquiry());
+      panel.appendChild(inquiryBtn);
+
+      backdrop.appendChild(panel);
+      document.body.appendChild(backdrop);
+      this._viewerPanelEl = backdrop;
+      this.viewerPanelOpen = true;
+    },
+
+    closeViewerPanel() {
+      if (this._viewerPanelEl && this._viewerPanelEl.parentNode) this._viewerPanelEl.parentNode.removeChild(this._viewerPanelEl);
+      this._viewerPanelEl = null;
+      this.viewerPanelOpen = false;
+      if (this._toggleBtn) { this._toggleBtn.setAttribute("aria-pressed", "false"); this._toggleBtn.style.cssText = this._toggleStyle(false); }
+    },
+
+    /* ══ [WO 20261001-viewerhelp] 개발자 문의 — 편집 화면·뷰어 화면 공용(둘 다 "?" 옆 "✉" 버튼으로 진입,
+     *  뷰어는 도움말 패널 하단에서도 진입). 로그인 여부와 무관하게 보낼 수 있다(서버가 열람전용 세션도 허용). ══ */
+    _createInquiryEntryBtn() {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-help-inquiry-toggle", "1");
+      btn.setAttribute("aria-label", "개발자에게 문의");
+      btn.textContent = "✉";
+      btn.style.cssText = [
+        "position:fixed", "left:64px", "bottom:16px", "width:40px", "height:40px",
+        "border-radius:50%", "border:none", "cursor:pointer", "z-index:9550",
+        "display:flex", "align-items:center", "justify-content:center",
+        "font-size:16px", "font-family:sans-serif", "box-shadow:0 4px 14px rgba(0,0,0,.3)",
+        "background:#1a1712", "color:#ffffff"
+      ].join(";");
+      btn.addEventListener("click", (e) => {
+        if (e.preventDefault) e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        this.openInquiry();
+      });
+      document.body.appendChild(btn);
+      this._inquiryEntryBtn = btn;
+    },
+
+    /** 현재 화면 정보 자동 첨부용 컨텍스트 — State/스크립트 태그에서 읽기만 한다(값을 새로 만들지 않음). */
+    _gatherContext() {
+      const ctx = { project_name: null, deployment_id: null, mode: null, app_version: null };
+      try {
+        if (typeof State !== "undefined" && State) {
+          ctx.project_name = State.currentProjectName || null;
+          ctx.deployment_id = State.currentDeploymentId || null;
+          ctx.mode = State.mode || null;
+        }
+      } catch (e) { /* State 미정의 환경(테스트 등) — 조용히 비워둠 */ }
+      try {
+        const s = document.querySelector('script[src*="main.js"]');
+        if (s && s.src) {
+          const m = String(s.src).match(/[?&]v=([^&]+)/);
+          ctx.app_version = m ? m[1] : null;
+        }
+      } catch (e) { /* 조회 불가 환경 — 비워둠 */ }
+      return ctx;
+    },
+
+    _fieldStyle() {
+      return "width:100%;box-sizing:border-box;padding:10px;margin-bottom:4px;border-radius:8px;border:1px solid #554;background:#2a2518;color:#ffffff;font-size:13.5px;font-family:sans-serif";
+    },
+
+    _fieldLabel(text) {
+      const l = document.createElement("div");
+      l.textContent = text;
+      l.style.cssText = "font-size:11.5px;color:#cbbfa0;margin-bottom:4px";
+      return l;
+    },
+
+    openInquiry() {
+      this.closeInquiry();
+      const backdrop = document.createElement("div");
+      backdrop.setAttribute("data-help-inquiry-backdrop", "1");
+      backdrop.style.cssText = [
+        "position:fixed", "inset:0", "background:rgba(0,0,0,.6)", "z-index:100000",
+        "display:flex", "align-items:center", "justify-content:center", "padding:16px", "box-sizing:border-box"
+      ].join(";");
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) this.closeInquiry(); });
+
+      const panel = document.createElement("div");
+      panel.setAttribute("data-help-inquiry-form", "1");
+      panel.style.cssText = [
+        "width:100%", "max-width:420px", "max-height:90vh", "overflow-y:auto",
+        "background:#1a1712", "color:#ffffff", "border-radius:14px", "padding:20px",
+        "box-sizing:border-box", "font-family:sans-serif"
+      ].join(";");
+
+      const h = document.createElement("h3");
+      h.textContent = "개발자에게 문의";
+      h.style.cssText = "margin:0 0 12px;font-size:16px";
+      panel.appendChild(h);
+
+      panel.appendChild(this._fieldLabel("제목"));
+      const titleInput = document.createElement("input");
+      titleInput.type = "text";
+      titleInput.placeholder = "무엇이 궁금하거나 불편하신가요?";
+      titleInput.setAttribute("data-help-inquiry-title", "1");
+      titleInput.style.cssText = this._fieldStyle();
+      panel.appendChild(titleInput);
+
+      panel.appendChild(this._fieldLabel("내용"));
+      const bodyInput = document.createElement("textarea");
+      bodyInput.placeholder = "내용을 자세히 적어주세요";
+      bodyInput.setAttribute("data-help-inquiry-body", "1");
+      bodyInput.rows = 5;
+      bodyInput.style.cssText = this._fieldStyle() + ";resize:vertical;min-height:100px";
+      panel.appendChild(bodyInput);
+
+      panel.appendChild(this._fieldLabel("회신 받을 이메일(선택)"));
+      const emailInput = document.createElement("input");
+      emailInput.type = "email";
+      emailInput.placeholder = "example@company.com";
+      emailInput.setAttribute("data-help-inquiry-email", "1");
+      emailInput.style.cssText = this._fieldStyle();
+      panel.appendChild(emailInput);
+
+      const ctx = this._gatherContext();
+      const ctxNote = document.createElement("div");
+      ctxNote.textContent = "자동 첨부: " + (ctx.project_name || "프로젝트 미지정") + " · " + (ctx.mode || "모드 미상") + (ctx.deployment_id ? (" · " + ctx.deployment_id) : "");
+      ctxNote.style.cssText = "font-size:11px;color:#9c927c;margin:2px 0 12px";
+      panel.appendChild(ctxNote);
+
+      const errEl = document.createElement("div");
+      errEl.setAttribute("data-help-inquiry-error", "1");
+      errEl.style.cssText = "font-size:12.5px;color:#ff8a8a;margin-bottom:8px;display:none";
+      panel.appendChild(errEl);
+
+      const btnRow = document.createElement("div");
+      btnRow.style.cssText = "display:flex;gap:8px;margin-top:4px";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.textContent = "취소";
+      cancelBtn.style.cssText = "flex:1;padding:10px;border-radius:8px;border:1px solid #665;background:transparent;color:#ffffff;cursor:pointer";
+      cancelBtn.addEventListener("click", () => this.closeInquiry());
+      const sendBtn = document.createElement("button");
+      sendBtn.type = "button";
+      sendBtn.textContent = "보내기";
+      sendBtn.setAttribute("data-help-inquiry-send", "1");
+      sendBtn.style.cssText = "flex:1;padding:10px;border-radius:8px;border:none;background:#c9962a;color:#1a1712;font-weight:700;cursor:pointer";
+      sendBtn.addEventListener("click", () => this._submitInquiry({ titleInput, bodyInput, emailInput, errEl, sendBtn, ctx }));
+      btnRow.appendChild(cancelBtn);
+      btnRow.appendChild(sendBtn);
+      panel.appendChild(btnRow);
+
+      backdrop.appendChild(panel);
+      document.body.appendChild(backdrop);
+      this._inquiryEl = backdrop;
+    },
+
+    closeInquiry() {
+      if (this._inquiryEl && this._inquiryEl.parentNode) this._inquiryEl.parentNode.removeChild(this._inquiryEl);
+      this._inquiryEl = null;
+    },
+
+    /** 서버 POST /api/inquiries 호출. 성공·실패 어느 쪽이든 사용자에게 조용히 넘어가지 않는다. */
+    async _submitInquiry(f) {
+      const title = (f.titleInput.value || "").trim();
+      const body = (f.bodyInput.value || "").trim();
+      const replyEmail = (f.emailInput.value || "").trim();
+      const showErr = (msg) => { f.errEl.textContent = msg; f.errEl.style.display = "block"; };
+      if (!title || !body) { showErr("제목과 내용을 입력하세요."); return; }
+
+      f.sendBtn.disabled = true;
+      const prevLabel = f.sendBtn.textContent;
+      f.sendBtn.textContent = "보내는 중…";
+      try {
+        const headers = { "Content-Type": "application/json" };
+        try { if (typeof Auth !== "undefined" && Auth.headers) Object.assign(headers, Auth.headers()); } catch (e) { /* 비로그인 — 헤더 없이 전송 */ }
+        const res = await fetch("/api/inquiries", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title, body, reply_email: replyEmail || undefined,
+            context: { project_name: f.ctx.project_name, deployment_id: f.ctx.deployment_id, mode: f.ctx.mode, app_version: f.ctx.app_version }
+          })
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.status === 429) { showErr(j.error || "잠시 후 다시 시도해 주세요."); return; }
+        if (!res.ok || !j.success) { showErr(j.error || "문의 접수에 실패했습니다."); return; }
+        this.closeInquiry();
+        try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("문의가 접수되었습니다. 감사합니다."); } catch (e) { /* 토스트 미정의 환경 */ }
+      } catch (e) {
+        showErr("네트워크 오류로 전송하지 못했습니다. 잠시 후 다시 시도하세요.");
+      } finally {
+        f.sendBtn.disabled = false;
+        f.sendBtn.textContent = prevLabel;
+      }
     },
 
     /** 도움말 모드 ON — data-help 요소마다 눈에 보이는 "?" 배지를 붙인다. */
