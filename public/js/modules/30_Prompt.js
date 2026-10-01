@@ -13,8 +13,10 @@
      *  이 캡이 없으면 버튼 연타·연쇄 액션 시 토스트가 세로로 무한정 쌓여
      *  360 뷰어 컨트롤바를 가리는 "검은 박스 스택"이 된다(마스터 스크린샷 실측). */
     TOAST_MAX: 2,
-    /** 가벼운 토스트 알림 (화면 하단 중앙, 자동 소멸) */
-    toast(msg, ms) {
+    /** 가벼운 토스트 알림 (화면 하단 중앙, 자동 소멸).
+     *  @param {{action?:{label:string,onClick:Function}}} [opts] [WO 20261001-autophoto2]
+     *  360 자동연결 "[다른 사진]" 재요청용 — 기존 2-인자 호출부(25곳)는 전부 하위호환. */
+    toast(msg, ms, opts) {
       // [빈 토스트 방지] 빈/undefined/공백 메시지는 내용 없는 검은 상자만 띄우므로 무시.
       const text = (msg === undefined || msg === null) ? "" : String(msg).trim();
       if (!text) return;
@@ -47,6 +49,15 @@
       t.className = "wm-toast";
       t.textContent = text;
       t.dataset.wmMsg = text;
+      if (opts && opts.action && opts.action.label && typeof opts.action.onClick === "function") {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = opts.action.label;
+        btn.className = "wm-toast-action";
+        btn.style.marginLeft = "10px";
+        btn.addEventListener("click", (ev) => { ev.stopPropagation(); kill(t); opts.action.onClick(); });
+        t.appendChild(btn);
+      }
       host.appendChild(t);
       requestAnimationFrame(() => t.classList.add("on"));
       arm(t, life);

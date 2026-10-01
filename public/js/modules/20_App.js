@@ -1694,11 +1694,12 @@
         this._placeCheckboardPin(pct);
         return; // placing 유지(다음 클릭도 번호 핀). 종료는 '＋ 번호 핀 찍기' 토글로.
       }
-      // [WO 20260930-autophoto] 360(photo) 모드: 핀 생성 직후 시각 최근접 자동 사진연결
-      //   (PhotoBatch.autoConnectPin, 기존 _buildTimeMatches/_uploadOneRow 재사용). 세션에
-      //   이미 고른 사진이 있으면 다시 묻지 않고 바로 매칭 — 없을 때만 다중 파일선택창을
-      //   연다(동기 호출, 모바일 user-activation 유지 — 기존 _openPinMediaPicker 관례).
-      //   첨부/미첨부 어느 쪽이든 핀은 유지된다(조용히 삭제 금지).
+      // [WO 20261001-autophoto2] 360(photo) 모드: 핀 생성 직후 곧바로 사진 선택창을 연다
+      //   (PhotoBatch.autoConnectPin, 기존 _uploadOneRow/PhotoNaming 재사용). 마스터 재지시
+      //   ("매번 연다") — 세션 후보 재사용으로 스킵하지 않고 클릭마다 항상 연다. 고른 파일 중
+      //   가장 최근(이미 다른 핀에 쓴 건 제외) 1장을 허용오차 없이 바로 등록한다. 핀 생성(동기)과
+      //   선택창 호출(.click()) 사이에 await 없음 — 모바일 user-activation 유지. 첨부/미첨부
+      //   어느 쪽이든 핀은 유지된다(조용히 삭제 금지).
       if (State.regMode === "photo") {
         const pin = this._placeCheckboardPin(pct);
         if (pin) {

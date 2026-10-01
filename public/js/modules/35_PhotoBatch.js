@@ -883,13 +883,20 @@
       if (modal) modal.classList.add("hidden");
     },
 
-    /* ══ [WO 20260930-autophoto] 360 핀 생성 즉시 자동 사진연결 ══════════════════
-       마스터: "360 모드는 사진이 자동 등록되는 로직, 여기만 필요해" / "포인트 생성
-       시간을 기록해 … 제일 근사한 시간에 저장된 360 그림을 찾아서 연동되게".
-       기존 시각매칭 정본(_buildTimeMatches/_sortRows/_uploadOneRow/PhotoNaming)만 재사용
-       — 새 매칭 알고리즘을 만들지 않는다(§10 SoT). _tm(수동 openTimeMatch)과는 완전히
-       분리된 세션 상태(_autoRows)를 둔다 — 서로 건드리지 않는다. */
-    _autoRows: [],          // 세션 동안 기억하는 후보 사진(선택된 배치 전체, 이미 연결된 건 매칭 성공 시 제거)
+    /* ══ [WO 20261001-autophoto2] 360 핀 생성 즉시 자동 사진연결(마스터 재지시) ══════════
+       마스터: "클릭하고 포인트가 생기면 바로 사진을 등록하게 해야지. 모바일에서는 360
+       모드에서는 해당 경로의 사진이 가장 근래에 생성된 걸 추천 등록하라고." — 라이브 재현
+       (지휘자 b8cd1f2a, 2026-10-01)에서 ±10분 허용오차 기반 자동매칭(WO 20260930-autophoto)이
+       실사용 핀 8개 전부 미연결로 FAIL. 설계를 바꾼다:
+       ① 클릭마다 **매번** 선택창을 연다(세션 후보 재사용·스킵 금지 — "새로 찍은 사진이 있다").
+       ② 허용오차로 탈락시키지 않는다 — 고른 파일 중 "가장 최근 생성"(이미 다른 핀에 쓴 파일은
+          건너뜀) 1장을 그대로 등록한다. 핀 생성시각과 크게(≥30분) 다르면 등록은 하되 사실만
+          토스트로 알린다.
+       기존 시각매칭 정본(_sortRows/_uploadOneRow/PhotoNaming)은 그대로 재사용 — 새 파싱/정렬
+       로직은 만들지 않는다(§10 SoT). _tm(수동 openTimeMatch)/_buildTimeMatches(허용오차 그리디
+       매칭)는 이 자동연결 경로가 더는 쓰지 않지만, 수동 시각매칭 모달(openTimeMatch/run)은
+       그대로 둔다(건드리지 않음). */
+    _autoRows: [],          // [레거시] 더는 채워지지 않음 — _autoRowsRemaining()이 항상 0을 반환해 기존 "대기 N장" 힌트가 자연히 꺼진다(UI 변경 없음).
     _pendingAutoPin: null,  // 파일선택창이 열려 있는 동안 기다리는 핀(선택 완료 후 매칭)
 
     /** 세션 기억 초기화 — [사진 다시 선택] 버튼(index.html #btn-photo-reselect). */
@@ -919,15 +926,15 @@
       document.body.appendChild(input);
     },
 
-    /** [핵심 API] 360(photo) 모드 핀 생성 직후 호출(_handlePlaceClick). CHECKER 계열은
-     *  대상이 아니다(00c18fd 차단 유지, SoT: PinSeries.seriesOf). 이미 세션에 후보 사진이
-     *  있으면 다시 고르지 않고 바로 매칭한다(마스터: "다음 포인트 생성 시간에는… 다시 물어보지
-     *  않는다" 취지). 없으면 다중 파일선택창을 연다(모바일 user-activation 유지 — 동기 호출,
-     *  기존 _openPinMediaPicker와 동일 관례). */
+    /** [핵심 API] 360(photo) 모드 핀 생성 직후 호출(_handlePlaceClick, 같은 동기 구간).
+     *  CHECKER 계열은 대상이 아니다(00c18fd 차단 유지, SoT: PinSeries.seriesOf). [WO
+     *  20261001-autophoto2] 마스터: "매번 연다" — 세션 후보가 있어도 다시 묻지 않고 건너뛰는
+     *  옛 동작을 버리고, 클릭마다 항상 다중 파일선택창을 연다(새로 찍은 사진을 매번 반영하려면
+     *  재사용에 의존할 수 없다). 호출부(_placeCheckboardPin)가 동기이므로 여기도 동기 호출만
+     *  한다(모바일 user-activation 유지 — await 금지, 기존 _openPinMediaPicker와 동일 관례). */
     autoConnectPin(pin) {
       if (!pin) return;
       if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return;
-      if (this._autoRows && this._autoRows.length) { this._autoTryConnect(pin); return; }
       this._pendingAutoPin = pin;
       this._ensureAutoInput();
       if (typeof Prompt !== "undefined" && Prompt.toast)
@@ -936,9 +943,10 @@
       if (input) input.click();
     },
 
-    /** 선택된 파일들을 시각순 정렬 + 360 판정까지 마친 뒤 세션에 누적하고, 기다리던 핀이
-     *  있으면 매칭을 시도한다. 취소(파일 0개)하면 대기 핀은 그대로 번호만 가진 채 남는다
-     *  (조용히 삭제 금지, 기존 _openPinMediaPicker 관례와 동일). */
+    /** 선택된 파일들을 시각순 정렬 + 360 판정까지 마친 뒤, 기다리던 핀에 바로 최신 1장을
+     *  등록한다(_autoPickAndConnect). 취소(파일 0개)하면 대기 핀은 그대로 번호만 가진 채
+     *  남는다(조용히 삭제 금지, 기존 _openPinMediaPicker 관례와 동일). [WO 20261001-autophoto2]
+     *  더는 세션(_autoRows)에 누적하지 않는다 — 이번 선택 안에서만 최신·미사용 1장을 고른다. */
     async _onAutoFilesChosen(files) {
       const pin = this._pendingAutoPin;
       this._pendingAutoPin = null;
@@ -948,15 +956,8 @@
         if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다");
         return;
       }
-      // [지휘자 발주 보강2 §1] 가장 최근 파일부터 — openTimeMatch와 동일 관례(quickTime).
-      const quickTime = (f) => {
-        const fn = this._parseThetaFilenameDate(f.name);
-        if (fn) return Date.parse(fn.iso);
-        return Number.isFinite(f.lastModified) ? f.lastModified : -Infinity;
-      };
-      const ordered = imgFiles.slice().sort((a, b) => quickTime(b) - quickTime(a));
       const rows = [];
-      for (const f of ordered) {
+      for (const f of imgFiles) {
         let exif = null;
         try { exif = this._parseExifDate(await f.slice(0, 262144).arrayBuffer()); } catch (e) { exif = null; }
         rows.push({
@@ -964,42 +965,56 @@
           thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name)
         });
       }
-      const sorted = this._sortRows(rows);
-      // 360 판정(App._detect360, 비동기)까지 기다린 뒤에야 후보로 쓴다 — 안 기다리면
-      // "허용오차 밖" 오판정이 날 수 있다(판정 전 is360===null 은 _buildTimeMatches가 제외함).
+      const sorted = this._sortRows(rows); // 시각 오름차순(기존 정본 재사용) — 최신 선택은 _autoPickAndConnect 가 sortKey 최댓값으로 고른다.
       await Promise.all(sorted.map((r) => new Promise((resolve) => {
         if (typeof App === "undefined" || !App._detect360) { resolve(); return; }
         App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; resolve(); });
       })));
-      this._autoRows = (this._autoRows || []).concat(sorted);
-      if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
-      if (pin) await this._autoTryConnect(pin);
+      if (pin) await this._autoPickAndConnect(pin, sorted);
     },
 
-    /** 대기 중인(혹은 방금 만든) 핀 1개 × 세션 후보 사진 전체를 _buildTimeMatches(정본)에
-     *  넘겨 최근접 1건만 취한다 — 새 매칭 로직 없음(§10 SoT 재사용). 매칭되면 그 사진을
-     *  세션 목록에서 제거해(다음 핀은 재사용 안 됨) 업로드(_uploadOneRow, 기존 경로)한다. */
-    async _autoTryConnect(pin) {
-      if (!pin) return;
-      const toleranceMs = 10 * 60 * 1000; // openTimeMatch 기본 허용오차(photobatch-tm-tolerance 기본값)와 동일 SoT 상수
-      const rows = (this._autoRows || []).filter((r) => !r.excluded);
-      const result = this._buildTimeMatches([{ pin, no: 0 }], rows, { toleranceMs });
-      const m = (result.matches || [])[0];
-      if (!m) {
-        const mins = Math.round(toleranceMs / 60000);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("±" + mins + "분 안에 촬영된 360 사진 없음 — [사진 선택]");
+    /** 핀이 이미 가진 사진의 원본 파일명 집합(pin.origName, _uploadOneRow 가 등록 시 남김) —
+     *  "이미 다른 핀에 연결된 사진은 건너뛴다"의 SoT(새 상태를 만들지 않고 기존 필드 재사용). */
+    _usedOrigNames() {
+      const used = new Set();
+      ((typeof State !== "undefined" && State.pins) || []).forEach((p) => { if (p && p.origName) used.add(p.origName); });
+      return used;
+    },
+
+    /** [WO 20261001-autophoto2 핵심] 마스터: "허용오차로 탈락시키지 않는다 — 가장 최근 생성된
+     *  사진을 추천 등록". 이번에 고른 파일들 중 360 판정(is360===true, App._detect360 정본) +
+     *  아직 다른 핀에 안 쓰인 것(_usedOrigNames) 중 촬영시각(sortKey, _sortRows 정본)이 가장
+     *  큰 1장을 그 핀에 바로 등록한다. 후보가 없으면(전부 360 아님 또는 전부 이미 사용) 조용히
+     *  넘어가지 않고 토스트로 사실을 알린다(가짜 연결 금지). 핀 생성시각과 ≥30분 차이나도
+     *  등록 자체는 거부하지 않는다 — 토스트에 사실만 덧붙인다. */
+    async _autoPickAndConnect(pin, rows) {
+      const BIG_GAP_WARN_MS = 30 * 60 * 1000;
+      const used = this._usedOrigNames();
+      const candidates = (rows || []).filter((r) => !r.excluded && r.is360 === true && !used.has(r.name));
+      if (!candidates.length) {
+        const anyNon360 = (rows || []).some((r) => r.is360 !== true);
+        if (typeof Prompt !== "undefined" && Prompt.toast)
+          Prompt.toast(anyNon360 ? "선택한 사진 중 360 사진이 없습니다 — [다른 사진]" : "선택한 사진이 모두 이미 다른 핀에 연결돼 있습니다 — [다른 사진]",
+            2200, { action: { label: "다른 사진", onClick: () => this.autoConnectPin(pin) } });
         return;
       }
+      let best = candidates[0];
+      candidates.forEach((r) => { if ((Number.isFinite(r.sortKey) ? r.sortKey : -Infinity) > (Number.isFinite(best.sortKey) ? best.sortKey : -Infinity)) best = r; });
       const usedNames = this._usedPhotoNames();
-      const r = await this._uploadOneRow(pin, m.row, false, usedNames);
+      const r = await this._uploadOneRow(pin, best, false, usedNames);
       if (r.status === "done") {
-        this._autoRows = (this._autoRows || []).filter((x) => x !== m.row);
         try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
         try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
         this._markUnsaved();
         if (typeof App !== "undefined" && App._updateCheckboardQuickStatus) App._updateCheckboardQuickStatus(State.pdfPage || 1);
+        const pinT = this._pinTimeMs(pin);
+        const dtMs = (Number.isFinite(pinT) && Number.isFinite(best.sortKey)) ? Math.abs(pinT - best.sortKey) : null;
+        const hhmm = best.timeLabel && best.timeLabel.length >= 16 ? best.timeLabel.slice(11, 16) : "";
+        let msg = "P" + (pin.label || "") + " ← " + best.name + (hhmm ? (" (" + hhmm + " 촬영)") : "") + " 등록" + (r.offline ? "(오프라인 저장됨)" : "");
+        if (dtMs != null && dtMs >= BIG_GAP_WARN_MS) msg += " · 핀 생성 " + Math.round(dtMs / 60000) + "분 전 사진";
+        msg += " · [다른 사진]";
         if (typeof Prompt !== "undefined" && Prompt.toast)
-          Prompt.toast("360 사진 자동 연결됨" + (r.offline ? "(오프라인 저장됨)" : "") + " · Δ" + Math.round(m.dtMs / 1000) + "초");
+          Prompt.toast(msg, 4000, { action: { label: "다른 사진", onClick: () => this.autoConnectPin(pin) } });
       } else if (r.status === "fail") {
         if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("360 사진 연결 실패: " + r.reason);
       }
