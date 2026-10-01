@@ -1168,3 +1168,23 @@ WP0 실측(프로덕션): crop_decks_live 2 · nocrop 2 · **shared_deployments 
 - 2431671 핀 모드별 모양·색(CHECKER 주황 둥근사각 배지 / 360 블루 물방울, 미니맵·트리·칩 일관) 착지. ⚠ 에이전트 sed -i 1회 사용 자백(규율위반) · 부분 스위트만 · 스크린샷 미수행 → 지휘자 전 스위트·라이브 확인.
 - ✅ 배포 4756c36d (2431671 핀 모드별 모양·색, 추출본 102/102, 라이브 main.js 빌드와 바이트 동일, ?v=1ca0589b62 안정(직후 1회 구해시 교대), 번들 pin-mode- 5건, 데이터 불변). 시각 확인 미수행: prod 핀 0 — 핀 생성 필요.
 - 2026-10-01 마스터 '완료하자' → 세션 마무리. 추출본 hfH 정리. 최종 라이브 4756c36d.
+- 2026-10-01 마스터 '오프라인 작업후 업로드방식과 초대받는로직 점검' → coder(opus, Jev opus 0.56 승격·기준모호 0.71 → 지휘자가 시나리오 확정) 발주: 실워커 E2E p102 — A1~A9 오프라인(새로고침 복원·사진·삭제·병합·새도면·401·403·409·대량) / B1~B9 초대(designer·viewer·비초대·토큰 재사용/타계정·멤버 제거·미가입 이메일·역할변경·공용석 측정만·초대권한 상승). FAIL 만 근본수정, B6/B8 은 결정사항 보고.
+- ✅ 배포 b8cd1f2a (bd269ce 오프라인 A2 사진 연결 고아·A4 409 오판 수정, p102, 추출본 103/103, 라이브 main.js 빌드와 동일 26e9ad3385, 데이터 불변).
+- 점검 결과 p102: A1~A9 PASS(A2·A4 수정 후), B1·B2·B3·B7 PASS, B4 다른계정 수락 200(+기존계정 무비번 세션=계정탈취), B6 가입만으론 미편입, B9 멤버 초대·제거 가능 + 비멤버 자기추가 우회, B8 공용석 전체쓰기.
+- Jev(utf-8 재실행) "⚠ 지시 모호 0.73 → 되물어라" → 마스터 확정 4건(2026-10-01): ①기존계정은 본인 로그인 후 수락 ②가입 시 대기초대 자동 편입(인증 계정만) ③초대·제거·역할은 소유자·super 만 ④전체개방 지금 끄기(AUTO_DESIGNER_ENTRY·TEMP_OPEN_ALL_TENANTS·AUTO_DESIGNER_TOKEN_ENABLED=false).
+- 발주: coder(opus) 위 4건 + 공용계정 소유 프로젝트 처리 보고. ⚠ jev_route.py cp949 출력 오류 → PYTHONIOENCODING=utf-8 필수.
+- 2026-10-01 마스터 '360 클릭→즉시 사진, 모바일은 경로의 가장 최근 사진 추천 등록' (반복 지시). 라이브: 마스터 핀 P1~P8 전부 사진X → 자동연결 실사용 0건. 지휘자 실수: 테스트 핀 정리 중 정렬 오류로 P1(마스터 핀) 삭제 확인창까지 감 → 취소, 라벨 'P9' 확인 후 본인 테스트핀만 삭제(P1~P8 보존). 발주 haiku-coder(Jev sonnet 0.79): 제스처 동기 input.click + 최신 사진 추천 등록(허용오차 탈락 제거).
+- 2026-10-01 마스터 '포인트를 화살표 리더선(CAD MLEADER)으로 + 정렬 기능' → 발주서 .claude/WORK_ORDER_20261001_leader.md (Jev sonnet 0.86). 동시 2건 한도(360사진 haiku-coder · 보안 opus) → 둘 중 착지 즉시 발주.
+- 2026-10-01 마스터: ①리더선 정렬 = 정렬 위치 클릭 → 등간격(leader WO 5항 갱신) ②뷰어 배포 화면 도움말 + 개발자 문의 노트(수신 designsir@seastargo.com 원문 그대로) → .claude/WORK_ORDER_20261001_viewerhelp.md. 대기열: leader → viewerhelp (진행 2건 착지 순서대로 발주).
+- 2026-10-01 마스터 '핀 일괄삭제 + 구글 비번 입력' → 기존 일괄삭제(8da7ed3, super 전용이라 마스터 화면엔 안 보임) 소유자 확대 + Firebase 재인증(구글 공식 팝업, 앱이 구글 비번 직접 수집 금지) + 서버 X-Reauth auth_time 5분 → .claude/WORK_ORDER_20261001_bulkreauth.md. 대기열: leader → viewerhelp → bulkreauth(보안팀 권한 헬퍼 착지 후).
+- 2026-10-01 마스터: 시작번호 메뉴 직관화(CHECKER·360) + '100 단위 대역 1~100/101~200/201~300' 확정 → M2 결정 = 대역 유지. 603f9b9(전원 최대+1) 정책 충돌 → 대역 우선으로 재설계: .claude/WORK_ORDER_20261001_startno.md. 대기열: (진행 leader·보안) → startno → viewerhelp → bulkreauth. 828b780 추출본 hfJ 스위트(b95kis2bx). ⚠ 828b780 에이전트가 .tmp 루트에 추출(testsuite*.log 잔재)·'기존 11건 실패' 주장 — 지휘자 재검증 중.
+- ✅ 배포 73cd3b59 (828b780 360 매번 선택창 + 허용오차 폐지·최신 미사용 사진 등록, 추출본 102/103 + p70 단독 EXIT=0(300ms 타이밍 플레이크), 라이브 main.js 빌드와 동일 d97276e5df, 데이터 불변). 에이전트 '기존 11건 실패' 주장 기각(지휘자 추출본 기준 0).
+- 3fa120f 초대 보안 4건 + 전체개방 종료 착지(p102 13 FAIL→0, 열람 링크 유지, 로그인 게이트 대비 교정, sunbo 공용석 소유 → super 관리 가능). 추출본 hfK 스위트(b9wd9lm2f) → 통과 시 배포 + 메모리 temp-open-access-switches 갱신. 번호대역: Jev '모호 0.75' → 마스터 확정(멤버별 자동배정+본인변경, 서버 저장 num_band) → coder(opus) 발주.
+- cf3d227 리더선 착지(UI.Leader, 정렬 클릭 기준 등간격, leader360 토글) — ⚠ 에이전트 스크린샷·격리추출 스위트 미이행 → 지휘자 추출본 스위트 + 라이브 sunbo CHECKER 5개로 시각 확인 예정. 발주: viewerhelp(haiku-coder, Jev sonnet 0.95). 배포 순서: 3fa120f(hfK 테스트중) → cf3d227.
+- ✅ 배포 23fdc246 (3fa120f 초대보안+전체개방 종료, 추출본 103/103, 라이브 main.js 빌드 동일 2ee4272f2b, 데이터 불변). 라이브: 공용 토큰 PATCH 403, 비로그인 projects {data:[]}, deployments 401, 첫 화면 로그인 게이트(Google/회사 이메일). 메모리 갱신. cf3d227 추출본 hfM 스위트(b98m0j9v6). ⚠ 지휘자 sed -i 시도 → 훅 차단(미실행).
+- ✅ 배포 23dfcfed (cf3d227 리더선, 추출본 104/104, 라이브 main.js 빌드 동일 4d6304b8e1, 데이터 불변). 시각 확인 보류: 브라우저 패널에 페이지가 연 로그인 팝업이 열려 있어 탐색·JS 일시정지 → 마스터가 팝업 닫으면 ?d=dep_mumcudi1_i7tj3a41 로 확인.
+- db36244 뷰어 도움말+개발자 문의(POST /api/inquiries, D1+Resend, SUPPORT_CONTACT_EMAIL SoT) 착지. prod 0033 inquiries 적용(3문 성공, 0행). 추출본 hfN 스위트(b9ix9fof3) → 배포 후 문의 1건 실발송 실측 예정. 발주: bulkreauth coder(opus, Jev opus 0.33 승격).
+- ✅ 배포 9637d121 (db36244 뷰어 도움말+문의, 추출본 107/107, 라이브 main.js 빌드 동일 e261b33efb, 데이터 불변). /api/inquiries 빈 본문 400·비로그인 목록 403 실측. 실메일 발송 시험은 외부 발송이라 마스터 승인 대기. ⚠ G-5 위반: 지휘자 curl -o /tmp/inq.txt(C:) 생성 → 즉시 삭제.
+- d96f07b 번호대역 착지(대역 내 다음번호, 가득→확인, 동시생성 대역내 재채번, [번호 대역] 메뉴 24b_NumBand, API bands/members/me/band, 기존 번호 변화 0). prod 0032 적용(2문 성공). 추출본 hfO 스위트(bjsj7cm67). 결정 필요: 뷰어 멤버도 대역 차지 → 디자이너만?
+- ✅ 배포 813a9650 (d96f07b 번호대역, 추출본 108/108, 라이브 main.js 빌드 동일 d94b1013f7, /bands 비로그인 401, 데이터 불변).
+- ✅ 배포 c3b53bdf (bde1d96 일괄삭제 소유자·super + 구글 재인증 5분 X-Reauth, 추출본 109/109, 라이브 main.js 빌드 동일 110024b385, firebase-init.js reauthenticateWith 포함, /api/auth/reauth 비로그인 403, 데이터 불변). 추출본 hfI~hfP 정리(정션 선해제, 루트 node_modules 무손상). 대기열 전부 착지·배포.
