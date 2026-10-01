@@ -968,10 +968,12 @@
         <span>전체 포인트</span>
         <span id="allpins-count" class="allpins-count">0</span>
       </div>
+      <button id="allpins-band-btn" class="allpins-band-btn hidden" type="button" title="번호 대역 설정"></button>
       <button id="btn-allpins-close" class="btn-allpins-close" title="닫기 (Esc)" aria-label="닫기">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
       </button>
     </header>
+    <div id="allpins-tabs" class="allpins-tabs" role="tablist" aria-label="모드"></div>
     <div class="allpins-tools">
       <div class="allpins-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
@@ -982,8 +984,17 @@
         <button class="allpins-sort-btn" data-sort="name" title="이름(가나다)순">이름순</button>
       </div>
     </div>
+    <div id="allpins-selectbar" class="allpins-selectbar hidden">
+      <button id="allpins-select-all" class="allpins-selall-btn" type="button">전체 선택</button>
+      <button id="allpins-select-clear" class="allpins-selall-btn" type="button">선택 해제</button>
+      <span id="allpins-select-count" class="allpins-selcount">0개 선택됨</span>
+    </div>
     <div id="allpins-list" class="allpins-list"></div>
     <div id="allpins-empty" class="allpins-empty hidden">표시할 포인트가 없습니다</div>
+    <div id="allpins-actions" class="allpins-actions hidden">
+      <button id="allpins-btn-delete" class="allpins-action-btn allpins-action-danger hidden" type="button" disabled>선택 삭제</button>
+      <button id="allpins-btn-renumber" class="allpins-action-btn hidden" type="button">번호 다시 매기기</button>
+    </div>
   </aside>
 </div>
 

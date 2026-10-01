@@ -3,7 +3,8 @@
  * (프레임워크 0 · 실행: node tests/p100-contrast-audit.test.mjs)
  *
  * [재현] 이 파일이 재현 겸 회귀 테스트다(지휘자 미측정 지시). 주요 화면(허브·편집·핀패널
- *   CHECKER/360·360뷰어·설정·모바일 도크/더보기·토스트·설치배너·합치기모달·일괄삭제 선택모드)를
+ *   CHECKER/360·360뷰어·설정·모바일 도크/더보기·토스트·설치배너·합치기모달·일괄삭제 선택모드·
+ *   [WO 20261001-allpins] 전체 포인트 패널 모드탭×정렬 4조합)를
  *   1280x800·375x812 두 뷰포트에서 실 브라우저로 열고, 화면에 보이는 모든 텍스트 요소에 대해
  *   getComputedStyle(color) 와 조상 background 합성(반투명 포함)으로 WCAG 대비를 계산한다.
  *   큰 글자(≥24px 또는 ≥18.66px+bold)는 3:1, 그 외는 4.5:1 미만이면 실패.
@@ -273,6 +274,33 @@ async function runFlow(vw, vh, tag) {
     await sleep(150);
     await measure("bulk-delete-select-mode");
   } else console.log("  [" + tag + "/bulk-delete] 선택 버튼 없음 — 스캔 건너뜀");
+
+  // S8b [WO 20261001-allpins] 전체 포인트 패널 — 모드 탭(CHECKER/360) × 정렬(번호순/이름순) 4조합.
+  //   이 패널의 .allpins-sort-btn.active 가 p100 발주의 재현 대상(밝은 베이지 배경 위 흰 글자).
+  await page.evaluate(() => { const b = document.getElementById("btn-all-pins"); if (b) b.click(); });
+  const apOpen = await page.waitForFunction(() => { const d = document.getElementById("allpins-drawer"); return d && d.classList.contains("on"); }, { timeout: 8000 }).then(() => true).catch(() => false);
+  if (apOpen) {
+    await sleep(300);
+    await measure("allpins-tab1-sort-page");
+    await page.evaluate(() => { const b = document.querySelector('.allpins-sort-btn[data-sort="name"]'); if (b) b.click(); });
+    await sleep(200);
+    await measure("allpins-tab1-sort-name");
+    const switched = await page.evaluate(() => {
+      const b = document.querySelector('#allpins-tabs [data-series]:not(.active)');
+      if (b) { b.click(); return true; }
+      return false;
+    });
+    if (switched) {
+      await page.waitForFunction(() => { const d = document.getElementById("allpins-drawer"); return d && d.classList.contains("on"); }, { timeout: 8000 }).catch(() => {});
+      await sleep(400);
+      await measure("allpins-tab2-sort-name");
+      await page.evaluate(() => { const b = document.querySelector('.allpins-sort-btn[data-sort="page"]'); if (b) b.click(); });
+      await sleep(200);
+      await measure("allpins-tab2-sort-page");
+    } else console.log("  [" + tag + "/allpins] 모드 탭 2번째 없음 — 2탭 스캔 건너뜀");
+    await page.evaluate(() => { const b = document.getElementById("btn-allpins-close"); if (b) b.click(); });
+    await sleep(250);
+  } else console.log("  [" + tag + "/allpins] 전체 포인트 패널 열기 실패(핀 없음?) — 스캔 건너뜀");
 
   // S9 토스트
   await page.evaluate(() => window.__T.Prompt.toast("측정용 안내 메시지입니다"));

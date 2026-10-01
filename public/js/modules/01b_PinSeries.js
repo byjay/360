@@ -500,6 +500,41 @@
       return { ok: true, changes: changes };
     },
 
+    /** [WO 20261001-allpins] 🔴 전체 포인트 패널 전용 재채번 — renumberCheckboardRange() 와 달리
+     *  단일 page 로 좁히지 않고, 호출부(21_AllPins.js)가 이미 정렬·선택한 pin 객체 배열을 그대로
+     *  받아 여러 페이지에 걸친 대상도 한 번에 연속 재채번한다(마스터: "체크나 360 모두 … 번호 다시
+     *  매기는 기능"). id 는 절대 건드리지 않는다. 결과 라벨이 대상 밖의 같은 페이지·같은 계열 핀과
+     *  겹치면(또는 대상끼리 다른 페이지에서 같은 숫자를 받아도 페이지가 다르면 겹침 아님)
+     *  renumberCheckboardRange 처럼 거부하지 않고 duplicateIds 로만 표시한다 — 호출부가 미리보기에서
+     *  경고 후 사용자 확인을 받고 그래도 적용할지 결정한다(이 패널은 "선택"이 이미 명시적 의도이므로
+     *  부분 반려보다 경고+확인이 맞다, 지휘자 확정).
+     *  @param {Array} allPins   State.pins(전체) — 중복 판정 기준
+     *  @param {Array} targets   이미 원하는 순서로 정렬된 대상 pin 객체 배열
+     *  @param {number} newStart 시작 번호
+     *  @param {string} series   'checkboard' | 'content'
+     *  @returns {{ok:boolean, changes:Array<{id,page:number,oldLabel,newLabel:string}>, duplicateIds:Set, reason?:string}} */
+    renumberSelection(allPins, targets, newStart, series) {
+      const ser = series === "content" ? "content" : "checkboard";
+      const s = parseInt(newStart, 10);
+      if (!Number.isFinite(s) || s < 1) return { ok: false, changes: [], duplicateIds: new Set(), reason: "시작 번호를 올바르게 입력하세요(1 이상 숫자)" };
+      const list = (targets || []).filter((p) => p && this.seriesOf(p) === ser);
+      if (!list.length) return { ok: false, changes: [], duplicateIds: new Set(), reason: "대상 핀이 없습니다" };
+      const targetIdSet = new Set(list.map((p) => p.id));
+      const changes = list.map((p, i) => ({ id: p.id, page: p.page || 1, oldLabel: p.label, newLabel: String(s + i) }));
+      // 중복 판정: (page, 새 라벨) 키별로 대상 밖 핀 + 이번에 바뀐 핀을 함께 세어 2개 이상이면 중복.
+      const count = new Map();
+      const bump = (pg, lbl) => { const k = pg + "|" + lbl; count.set(k, (count.get(k) || 0) + 1); };
+      (allPins || []).forEach((p) => {
+        if (!p || this.seriesOf(p) !== ser || targetIdSet.has(p.id)) return;
+        const lbl = String(p.label == null ? "" : p.label).trim();
+        if (lbl) bump(p.page || 1, lbl);
+      });
+      changes.forEach((c) => bump(c.page, c.newLabel));
+      const duplicateIds = new Set();
+      changes.forEach((c) => { if ((count.get(c.page + "|" + c.newLabel) || 0) > 1) duplicateIds.add(c.id); });
+      return { ok: true, changes: changes, duplicateIds: duplicateIds };
+    },
+
     /** [WO 20260918] 개별 번호 변경 검증 — 이미 쓰는 번호로 바꾸려 하면 거부(조용히 삼키지 않음).
      *  체크보드 핀에만 적용(콘텐츠/빈 핀의 label 은 자유 텍스트라 번호 유일성 규칙이 없다).
      *  @returns {{ok:boolean, newLabel?:string, reason?:string}} */
