@@ -64,6 +64,36 @@
         const res = await authMod.signInWithPopup(SF._auth, provider);
         return res.user;
       };
+      /* [WO 20261001-bulkreauth] 본인 재인증 — 구글 공식 창에서 비밀번호/2단계 인증을 거친다(앱은 비밀번호를 받지 않는다).
+         반환: 새 Firebase ID 토큰(auth_time 갱신). 팝업이 막힌 환경(모바일 등)은 redirect 로 폴백 →
+         페이지가 이동하므로 이 약속은 끝나지 않고, 복귀 후 SF.reauthRedirectResult() 가 토큰을 돌려준다. */
+      SF.REAUTH_REDIRECT_KEY = "wm_reauth_redirect";
+      SF.reauthGoogle = async (email) => {
+        try { if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen(); } catch (e) {}
+        const rp = new authMod.GoogleAuthProvider();
+        try { rp.setCustomParameters(email ? { login_hint: email } : { prompt: "select_account" }); } catch (e) {}
+        const cur = SF._auth.currentUser;
+        try {
+          const res = cur ? await authMod.reauthenticateWithPopup(cur, rp) : await authMod.signInWithPopup(SF._auth, rp);
+          return await res.user.getIdToken(true);
+        } catch (err) {
+          const code = String((err && err.code) || "");
+          if (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment") {
+            try { sessionStorage.setItem(SF.REAUTH_REDIRECT_KEY, String(Date.now())); } catch (e) {}
+            if (cur) await authMod.reauthenticateWithRedirect(cur, rp); else await authMod.signInWithRedirect(SF._auth, rp);
+            return new Promise(() => {});   // 페이지 이동 — 복귀 후 reauthRedirectResult()
+          }
+          throw err;
+        }
+      };
+      /** redirect 재인증 복귀 처리 — 표시가 있을 때만 결과를 읽고 새 ID 토큰을 돌려준다(없으면 null). */
+      SF.reauthRedirectResult = async () => {
+        let mark = null;
+        try { mark = sessionStorage.getItem(SF.REAUTH_REDIRECT_KEY); sessionStorage.removeItem(SF.REAUTH_REDIRECT_KEY); } catch (e) {}
+        if (!mark) return null;
+        const res = await authMod.getRedirectResult(SF._auth);
+        return (res && res.user) ? await res.user.getIdToken(true) : null;
+      };
       SF.logout = async () => authMod.signOut(SF._auth);
       SF.currentUser = () => SF._user;
       SF.onAuth = (cb) => { SF._authCbs.push(cb); if (SF._user !== undefined) cb(SF._user); };

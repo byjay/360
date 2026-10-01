@@ -81,7 +81,7 @@
     },
 
     /* ── [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 선택 상태 SoT(트리 핀 노드 · 핀 목록 패널 공유) ──
-       권한 판정 = App.canBulkDeletePins()(Auth.isAdmin 재사용). 삭제 = App.deletePins → 단건과 같은 _removePins. */
+       권한 판정 = App.canBulkDeletePins()(프로젝트 소유자·super — 서버 can_manage_members). 삭제 = App.deletePins(본인 재인증) → 단건과 같은 _removePins. */
     _pinSel: { on: false, ids: new Set() },
     _pinBulkOk() { return typeof App !== "undefined" && !!App.canBulkDeletePins && App.canBulkDeletePins(); },
     /** 렌더 직전 정리 — 권한이 없으면 선택 모드 해제, 이미 사라진 핀 id 는 선택에서 제거 */
@@ -117,7 +117,7 @@
         return b;
       };
       const finish = (n) => { if (n > 0) { s.on = false; s.ids.clear(); this.renderPinList(); } };
-      out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 한꺼번에 삭제(관리자)"));
+      out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 한꺼번에 삭제(프로젝트 소유자·슈퍼관리자, 본인 확인 필요)"));
       if (s.on) {
         const n = s.ids.size;
         const del = mk("선택 삭제 " + n + "개", "danger pin-bulk-del", async () => {

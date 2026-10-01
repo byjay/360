@@ -73,7 +73,9 @@ function makeApp({ fetchImpl = async () => ({ ok: true, status: 200, json: async
       saveDraft: async (k, d) => { drafts[k] = JSON.parse(JSON.stringify(d)); },
       allDraftKeys: async () => Object.keys(drafts),
     },
-    Auth: { headers: () => ({}), r2: (u) => u, isDesigner: true, isAdmin: admin, readonly: false },
+    // [WO 20261001-bulkreauth] 권한 = projectCanManage(소유자·super). 재인증은 p107 이 검사 — 여기선 통과로 고정.
+    Auth: { headers: () => ({}), r2: (u) => u, isDesigner: true, isAdmin: admin, projectCanManage: admin, readonly: false,
+      ensureReauth: async () => true, reauthHeader: () => ({}), clearReauth() {} },
     Prompt: { toast(m) { calls.toast.push(m); }, confirm: async (t, m) => { calls.confirm.push(m); return confirmAns; } },
     OpLog: { recordCurrent: async (e, a, id) => { calls.oplog.push([e, a, id]); } },
     persistLocalDeployment: async () => { calls.persist++; },
@@ -101,7 +103,7 @@ const res = (status, j) => ({ ok: status >= 200 && status < 300, status, json: a
 
 /* ══ A. 권한 · 확인 대화상자 ══ */
 {
-  console.log("\n[A. 권한 = Auth.isAdmin · Prompt.confirm(개수 명시)]");
+  console.log("\n[A. 권한 = Auth.projectCanManage(소유자·super) · Prompt.confirm(개수 명시)]");
   const a = makeApp({ admin: false });
   a.State.pins = [P(1), P(2), P(3)];
   const n = await a.App.deletePins([1, 2]);

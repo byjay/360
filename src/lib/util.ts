@@ -150,6 +150,29 @@ export async function verifyPassword(password: string, saltHex: string, hashHex:
   return diff === 0
 }
 
+/* ══ [WO 20261001-bulkreauth] 본인 재인증(핀 일괄삭제) ══════════════════════════
+ * 재인증 1회의 유효시간 SoT. 서버가 발급하는 단기 토큰(rx1.*)의 exp 와 Firebase auth_time 신선도 판정이
+ * 둘 다 이 값을 쓴다. 클라이언트는 서버가 돌려준 exp 만 믿는다(같은 값을 두 번 쓰지 않는다). */
+export const REAUTH_TTL_MS = 5 * 60 * 1000
+/** auth_time 이 서버 시각보다 앞서 있어도 허용하는 시계 오차(Google 발급 서버 ↔ Workers). */
+export const REAUTH_CLOCK_SKEW_MS = 60 * 1000
+
+/** Firebase ID 토큰의 auth_time(초) 이 nowMs 기준 ttlMs 이내인가. 숫자가 아니거나 너무 미래면 false. */
+export function reauthFresh(authTimeSec: unknown, nowMs: number, ttlMs: number = REAUTH_TTL_MS): boolean {
+  const t = Number(authTimeSec)
+  if (!Number.isFinite(t) || t <= 0) return false
+  const ageMs = nowMs - t * 1000
+  return ageMs <= ttlMs && ageMs >= -REAUTH_CLOCK_SKEW_MS
+}
+
+/** 상수시간 문자열 비교(길이 선비교) — 서명 검증용 */
+export function safeEqualStr(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
 /* ══ [P68] 회사명 대조 — 허용되지 않은 회사 리젝트의 1차 규칙 ══════════════
  * 🔴 손입력 회사명은 표기가 흔들린다. 이 정규화 + 정확일치의 실측 일치율은 **66.7%(16/24)**
  *   (2026-09-28, 조선/해양 협력사 24표본). 'HANLA ENS'·'DSME'·'HHI' 같은 영문·약어 표기를

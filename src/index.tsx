@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment,
-  randShareCode, normalizeShareCode, isShareCode } from './lib/util'
+  randShareCode, normalizeShareCode, isShareCode, REAUTH_TTL_MS, reauthFresh, safeEqualStr } from './lib/util'
 import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
 import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
 
@@ -1097,6 +1097,66 @@ app.post('/api/signup/logout', async (c) => {
   return c.json({ success: true })
 })
 
+/* ══ [WO 20261001-bulkreauth] 본인 재인증 → 단기 토큰(rx1.*, REAUTH_TTL_MS) ═══════════════════
+ * 핀 일괄삭제 직전 "지금 이 사람이 계정 주인인가" 를 다시 확인한다. 🔴 앱은 구글 비밀번호를 받지 않는다.
+ *  · Google(Firebase) 계정: 클라이언트가 구글 공식 창(reauthenticateWithPopup/Redirect)으로 재인증한 뒤
+ *    받은 **새 Firebase ID 토큰**을 보낸다 → 서명·프로젝트 검증(verifyFirebaseToken) + 이메일 일치 + auth_time 신선도.
+ *  · 회사 이메일(local-) 계정: 앱 비밀번호 → 로그인과 같은 verifyPassword(local_users).
+ * 성공 시 서명 토큰을 발급한다. 서명키 = 자동입장과 같은 autoEntrySecret(SoT), 도메인 분리 위해 'rx1.' 접두를 함께 서명.
+ * 이 토큰은 Authorization 으로 쓸 수 없다(resolveUser 가 rx1 접두를 모른다) — X-Reauth 헤더 전용. */
+const REAUTH_PREFIX = 'rx1.'
+async function mintReauthToken(c: any, email: string): Promise<{ token: string, exp: number } | null> {
+  const secret = await autoEntrySecret(c)
+  if (!secret) return null
+  const exp = Date.now() + REAUTH_TTL_MS
+  const payload = b64u(JSON.stringify({ e: String(email).toLowerCase(), exp, n: randToken('') }))
+  return { token: REAUTH_PREFIX + payload + '.' + (await hmacB64u(secret, REAUTH_PREFIX + payload)), exp }
+}
+/** X-Reauth 값이 이 사용자에게 발급된 유효(미만료) 재인증 토큰인가 */
+async function reauthTokenValid(c: any, token: string, email: string): Promise<boolean> {
+  if (typeof token !== 'string' || !token.startsWith(REAUTH_PREFIX)) return false
+  const rest = token.slice(REAUTH_PREFIX.length)
+  const dot = rest.lastIndexOf('.')
+  if (dot <= 0) return false
+  const payload = rest.slice(0, dot), sig = rest.slice(dot + 1)
+  const secret = await autoEntrySecret(c)
+  if (!secret) return false
+  if (!safeEqualStr(await hmacB64u(secret, REAUTH_PREFIX + payload), sig)) return false
+  let p: any
+  try { p = JSON.parse(b64uDec(payload)) } catch { return false }
+  if (!p || typeof p.exp !== 'number' || p.exp < Date.now()) return false
+  return !!email && p.e === String(email).toLowerCase()
+}
+app.post('/api/auth/reauth', async (c) => {
+  const user = await getUser(c)
+  // 실계정만 — 열람 링크·공용석·데모는 "본인" 이 없다
+  if (!user || user._readonly || user._auto || user._demo) return c.json({ error: 'reauth unavailable for this session' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = String(user.email || '').toLowerCase()
+  if (user._local) {
+    const password = String((body && body.password) || '')
+    if (!password) return c.json({ error: '비밀번호를 입력해 주세요.' }, 400)
+    const u: any = await c.env.DB.prepare('SELECT pw_hash, pw_salt FROM local_users WHERE email = ? AND deleted = 0').bind(email).first().catch(() => null)
+    if (!u || !(await verifyPassword(password, u.pw_salt, u.pw_hash))) {
+      await logActivity(c, 'auth.reauth_fail', { actor: { email }, targetType: 'local_user', targetId: email })
+      return c.json({ error: '비밀번호가 올바르지 않습니다.' }, 401)
+    }
+  } else {
+    const idToken = String((body && body.id_token) || '')
+    const payload = idToken ? await verifyFirebaseToken(idToken, (c.env && c.env.FIREBASE_PROJECT_ID) || undefined) : null
+    if (!payload || String(payload.email || '').toLowerCase() !== email) {
+      await logActivity(c, 'auth.reauth_fail', { actor: { email }, targetType: 'auth', targetId: email })
+      return c.json({ error: '구글 재인증 확인에 실패했습니다.' }, 401)
+    }
+    if (!reauthFresh(payload.auth_time, Date.now())) return c.json({ error: '구글 재인증이 오래되었습니다 — 다시 시도해 주세요.', stale: true }, 401)
+  }
+  const rx = await mintReauthToken(c, email)
+  if (!rx) return c.json({ error: 'reauth signing unavailable' }, 503)
+  await logActivity(c, 'auth.reauth', { actor: user, targetType: 'auth', targetId: email, detail: { local: !!user._local } })
+  return c.json({ ok: true, token: rx.token, exp: rx.exp })
+})
+
 /* ── 회사 도메인 화이트리스트 관리(슈퍼관리자 전용, 프로젝트별) ──
    · GET    /api/allowed-domains?project_id=<id|*>  목록(프로젝트별, 미지정 시 전체)
    · POST   /api/allowed-domains  { domain, project_id?, note? }
@@ -1829,7 +1889,13 @@ async function canManageMembers(c: any, user: any, projectId: string): Promise<b
   if (!user) return false
   if (isSuperAdmin(c, user.email)) return true
   const own: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ? AND deleted = 0').bind(projectId).first()
-  return !!own && isProjectOwner(own.owner, user.email)
+  return !!own && canManageMembersOf(c, user, own.owner)
+}
+/** canManageMembers 의 판정 본체(이미 읽은 owner 값으로) — /api/projects 목록의 can_manage_members 가 같은 판정을 쓴다(SoT).
+ *  [WO 20261001-bulkreauth] 클라이언트의 핀 일괄삭제 노출도 이 값만 본다. */
+function canManageMembersOf(c: any, user: any, owner: any): boolean {
+  if (!user) return false
+  return isSuperAdmin(c, user.email) || isProjectOwner(owner, user.email)
 }
 
 /** [WO 20261001-invite · 마스터 확정 ②] 이메일 앞 대기 초대(project_invites) → 멤버 자동 편입 + 초대 소진.
@@ -2002,7 +2068,8 @@ app.get('/api/projects', async (c) => {
     const isMember =!!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
     // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/전역디자이너/슈퍼 > 없음)
     const effRole = myRole.get(p.id) || ((isSuperUser || globalDesigner || isOwner) ? 'designer' : null)
-    const base = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null }
+    const base = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null,
+      can_manage_members: canManageMembersOf(c, user, p.owner) }   // [WO 20261001-bulkreauth] 소유자·super — 일괄삭제 노출 SoT
     // [P61] 🔴 공유 토큰은 멤버(설계자/소유자/배정멤버/슈퍼)에게만. 비멤버에게 주면 열거 차단이 무의미해진다.
     return isMember ? base : stripShareKey(base)
   }) })
@@ -3503,6 +3570,15 @@ const updateDeployment = async (c: any) => {
   {
     const denied = await deploymentWriteDenied(c, user, (existing as any).project_id)
     if (denied) return c.json({ error: denied.error }, denied.status)
+  }
+  // [WO 20261001-bulkreauth] 핀 일괄삭제 저장 = X-Reauth 헤더가 실린 요청. 재인증 무효/만료 또는 소유자·super 아님 → 403.
+  //   🔴 한계: pins 는 JSON 통째 저장이라 헤더를 뺀 요청은 일괄삭제인지 서버가 식별할 수 없다(UI 오조작·무단 사용 방지 목적).
+  {
+    const rx = c.req.header('X-Reauth')
+    if (rx != null) {
+      if (!(await reauthTokenValid(c, rx, user.email))) return c.json({ error: 'reauth required — expired or invalid', reauth_required: true }, 403)
+      if (!(await canManageMembers(c, user, (existing as any).project_id))) return c.json({ error: 'forbidden — only the project owner or super admin can bulk delete pins' }, 403)
+    }
   }
   const now = Date.now()
   const curVersion = (existing.version != null ? Number(existing.version) : 0)

@@ -70,6 +70,9 @@
         document.getElementById("prompt-modal-sub").textContent = opts.sub || "";
         const inp = document.getElementById("prompt-modal-input");
         inp.value = opts.value || ""; inp.placeholder = opts.placeholder || ""; this._allowEmpty = !!opts.allowEmpty;
+        // [WO 20261001-bulkreauth] opts.password — 같은 모달을 비밀번호 입력으로(가림 + 브라우저 저장 비번 자동완성). 닫힐 때 원복.
+        inp.type = opts.password ? "password" : "text";
+        inp.setAttribute("autocomplete", opts.password ? "current-password" : "off");
         const inp2 = document.getElementById("prompt-modal-input2");
         inp2.value = opts.secondValue || "";
         inp2.placeholder = (typeof opts.second === "string") ? opts.second : "";
@@ -85,7 +88,7 @@
       const inp = document.getElementById("prompt-modal-input");
       const inp2 = document.getElementById("prompt-modal-input2");
       const err = document.getElementById("prompt-modal-error");
-      const val = (inp.value || "").trim();
+      const val = inp.type === "password" ? (inp.value || "") : (inp.value || "").trim();   // 비밀번호는 공백도 값이다
       if (!val && !this._allowEmpty) { err.textContent = "값을 입력하세요."; err.classList.remove("hidden"); return; }
       const second = inp2.classList.contains("hidden") ? undefined : (inp2.value || "").trim();
       this._close({ value: val, second });
@@ -96,6 +99,9 @@
       setTimeout(() => m.classList.add("hidden"), 200);
       // [버그수정] 에러 텍스트 잔류 정리 — 다음 ask 모달에 이전 오류가 깜빡이지 않게
       const err = document.getElementById("prompt-modal-error"); if (err) { err.textContent = ""; err.classList.add("hidden"); }
+      // [WO 20261001-bulkreauth] 비밀번호 입력값을 DOM 에 남기지 않는다
+      const inp = document.getElementById("prompt-modal-input");
+      if (inp && inp.type === "password") { inp.value = ""; inp.type = "text"; inp.setAttribute("autocomplete", "off"); }
       const r = this._resolve; this._resolve = null;
       if (r) r(result);
     },

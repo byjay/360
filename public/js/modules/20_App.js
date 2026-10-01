@@ -2848,25 +2848,29 @@
       return true;
     },
 
-    /** [WO 20260929-bulkdel] 관리자 핀 일괄삭제 권한 — 역할 판정은 기존 Auth.isAdmin(super|admin, 22_Auth.js) 재사용.
+    /** [WO 20261001-bulkreauth] 핀 일괄삭제 권한 = 프로젝트 소유자·super(서버 can_manage_members → Auth.projectCanManage).
      *  저장(_autoSave)이 디자이너 모드에서만 동작하므로 모드도 함께 본다. 열람전용 세션(Auth.readonly)은 제외. */
     canBulkDeletePins() {
-      return State.mode === "designer" && typeof Auth !== "undefined" && !!Auth.isAdmin && !Auth.readonly;
+      return State.mode === "designer" && typeof Auth !== "undefined" && !!Auth.projectCanManage && !Auth.readonly;
     },
 
-    /** [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 확인(Prompt.confirm, 개수 명시) 후 단건과 같은 _removePins 경로.
+    /** [WO 20260929-bulkdel → 20261001-bulkreauth] 핀 일괄삭제 — 확인(Prompt.confirm, 개수 명시) → 본인 재인증(Auth.ensureReauth,
+     *  5분 내 재사용) → 단건과 같은 _removePins 경로. 재인증 실패·취소면 0건. 이 배포본의 다음 저장에 X-Reauth 를 싣는다.
      *  번호는 자동 재채번하지 않는다(기존 번호 리셋 기능이 따로 있다). 반환: 삭제된 개수. */
     async deletePins(ids, opts) {
-      if (!this.canBulkDeletePins()) { Prompt.toast("관리자만 핀을 일괄 삭제할 수 있습니다"); return 0; }
+      if (!this.canBulkDeletePins()) { Prompt.toast("프로젝트 소유자·슈퍼관리자만 핀을 일괄 삭제할 수 있습니다"); return 0; }
       const want = new Set((ids || []).map(String));
       const targets = (State.pins || []).filter(p => want.has(String(p.id)));
       if (!targets.length) return 0;
       const scope = (opts && opts.scopeLabel) ? `${opts.scopeLabel}의 ` : "";
       if (!await Prompt.confirm("포인트 일괄 삭제", `${scope}포인트 ${targets.length}개를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거되며, 번호는 자동으로 다시 매기지 않습니다)`)) return 0;
+      if (!Auth.ensureReauth || !(await Auth.ensureReauth())) { Prompt.toast("본인 확인이 끝나지 않아 삭제하지 않았습니다"); return 0; }
       const removed = this._removePins(targets.map(p => p.id));
+      if (removed.length) this._bulkReauthDep = State.autoSaveDepId || null;
       Prompt.toast(`포인트 ${removed.length}개 삭제됨`);
       return removed.length;
     },
+    _bulkReauthDep: null,   // [WO 20261001-bulkreauth] 일괄삭제가 아직 서버에 안 올라간 배포본 id — 그 PATCH 에만 X-Reauth
 
     /** 🔴 [WO 20260929-bulkdel] 핀 제거 공유 지점 — 단건(deletePin)·일괄(deletePins)이 같은 경로를 탄다.
      *  tombstone 기록(병합 부활 방지, _mergePins) → State 제거 → 렌더 → 오프라인 OpLog → _autoSave(draft+dirty).
@@ -3882,17 +3886,28 @@
      *  반환: { ok, rec?, conflictMerged? } */
     async _patchDeployment(depId, buildBody) {
       let sentPins = null;   // [WO 20260929-bulkdel] 성공 시 이 목록이 곧 서버의 새 기준(State.pinBaseIds)
+      // [WO 20261001-bulkreauth] 이 배포본에 아직 안 올라간 일괄삭제가 있으면 X-Reauth 를 싣는다.
+      //   재인증이 만료됐으면 저장 전에 다시 묻고, 실패·취소면 보내지 않는다(서버 403 도 1회 재인증 후 재시도).
+      const bulk = this._bulkReauthDep != null && this._bulkReauthDep === depId && typeof Auth !== "undefined" && !!Auth.ensureReauth;
+      if (bulk && !(await Auth.ensureReauth())) {
+        try { Prompt.toast && Prompt.toast("일괄삭제 저장에는 본인 확인이 필요합니다 — 다시 저장을 눌러 확인하세요", 3600); } catch (e) {}
+        return { ok: false, status: 403, reauth: true };
+      }
       const send = async () => {
         const body = buildBody();
         sentPins = null;
         if (typeof body.pins === "string") { try { sentPins = JSON.parse(body.pins); } catch (e) { sentPins = null; } }
         body.base_version = (State.depVersion != null ? State.depVersion : 0);
         const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
-          method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
+          method: "PATCH", headers: Auth.headers(bulk ? Auth.reauthHeader() : undefined), body: JSON.stringify(body)
         });
         return res;
       };
       let res = await send();
+      if (bulk && res.status === 403) {
+        let j = null; try { j = await res.clone().json(); } catch (e) {}
+        if (j && j.reauth_required) { Auth.clearReauth(); if (await Auth.ensureReauth()) res = await send(); }
+      }
       if (res.status === 409) {
         // 다른 사용자가 먼저 저장 → 병합 후 1회 재시도
         let j = null; try { j = await res.json(); } catch (e) {}
@@ -3906,6 +3921,7 @@
       let rec = null; try { rec = await res.json(); } catch (e) {}
       if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
       if (Array.isArray(sentPins)) State.pinBaseIds = this._pinIds(sentPins);
+      if (bulk) this._bulkReauthDep = null;   // 일괄삭제가 서버에 반영됨
       return { ok: true, rec };
     },
 

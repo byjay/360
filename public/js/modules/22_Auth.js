@@ -43,8 +43,11 @@
     /** 프로젝트 진입/이탈 시 배지 컨텍스트 갱신 — 호출부는 ProjectHub.openProject / Projects.selectProject. */
     setProjectContext(p) {
       this.projectRole = (p && (p.my_role || p.role)) || null;
+      // [WO 20261001-bulkreauth] 서버 판정(canManageMembersOf = 소유자·super)을 그대로 받는다 — 클라 재판정 금지.
+      this.projectCanManage = !!(p && p.can_manage_members);
       this._applyUi();
     },
+    projectCanManage: false,   // 현재 프로젝트의 멤버관리·핀 일괄삭제 자격(/api/projects can_manage_members)
 
     async init() {
       const $ = (id) => document.getElementById(id);
@@ -104,6 +107,8 @@
       this._loadServerConfig();
       // 복원된 토큰으로 권한 재확인
       if (this.idToken) await this.refresh();
+      // [WO 20261001-bulkreauth] 팝업 차단으로 redirect 재인증을 다녀왔으면 결과를 단기 토큰으로(비차단)
+      Promise.resolve().then(() => this._resumeReauthRedirect()).catch(() => {});
       // 유효한 로그인이 없을 때만:
       //  · AUTO_DESIGNER_ENTRY=true  → 로그인 없이 디자이너로 자동 진입(배지 숨김)
       //  · AUTO_DESIGNER_ENTRY=false → [마스터 2026-06-22] 로그인 필수, 즉시 로그인 게이트
@@ -203,6 +208,16 @@
       return !!(window.FIREBASE_ENABLED && window.SeaFirebase);
     },
 
+    /** firebase-init.js 의 동적 import 완료 대기(최대 5초) — 로그인·재인증 공용 */
+    async _waitFirebase() {
+      if (!window.SeaFirebase || window.SeaFirebase.ready) return;
+      await new Promise((res) => {
+        if (window.SeaFirebase.ready) return res();
+        const t = setTimeout(res, 5000);
+        document.addEventListener("seafirebase:ready", () => { clearTimeout(t); res(); }, { once: true });
+      });
+    },
+
     /** Firebase Google 로그인 → 앱 Auth 연결 (마스터: ID만 넣으면 바로 로그인)
      *  1) Firebase 팝업으로 Google 로그인
      *  2) Firebase ID 토큰을 받아 this.idToken 에 저장
@@ -210,14 +225,7 @@
      *  반환: role (실패 시 throw) */
     async loginWithFirebase() {
       if (!this.firebaseEnabled) throw new Error("Firebase 미설정");
-      if (!window.SeaFirebase.ready) {
-        // init.js 의 동적 import 완료 대기 (최대 5초)
-        await new Promise((res) => {
-          if (window.SeaFirebase.ready) return res();
-          const t = setTimeout(res, 5000);
-          document.addEventListener("seafirebase:ready", () => { clearTimeout(t); res(); }, { once: true });
-        });
-      }
+      await this._waitFirebase();
       const fbUser = await window.SeaFirebase.loginGoogle();
       // Firebase v10: getIdToken
       let idToken = null;
@@ -674,6 +682,76 @@
       try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg, 4000); } catch (e) {}
     },
 
+    /* ══ [WO 20261001-bulkreauth] 본인 재인증(핀 일괄삭제) ══════════════════════════════════
+       🔴 앱은 구글 비밀번호를 받지 않는다. Google 계정 = 구글 공식 창(Firebase reauthenticateWithPopup,
+       팝업 차단 시 redirect 폴백), 회사 이메일(local-) 계정 = 앱 비밀번호. 어느 쪽이든 서버(/api/auth/reauth)가
+       검증하고 단기 토큰(rx1.*)과 만료시각(exp)을 준다. 유효시간 SoT = 서버 REAUTH_TTL_MS(5분) — 클라는 exp 만 믿는다.
+       토큰은 sessionStorage(탭 한정)에 둔다 — redirect 복귀 후에도 이어지도록. 🔴 콘솔·로그 출력 금지. */
+    REAUTH_STORE_KEY: "wm_reauth",
+    _reauth: null,
+    _reauthLoad() {
+      if (this._reauth) return this._reauth;
+      try { const r = JSON.parse(sessionStorage.getItem(this.REAUTH_STORE_KEY) || "null"); if (r && r.token && r.exp) this._reauth = r; } catch (e) {}
+      return this._reauth;
+    },
+    /** 이 사용자의 재인증이 아직 유효한가(서버가 준 exp 기준) */
+    hasValidReauth() {
+      const r = this._reauthLoad();
+      return !!(r && this.user && r.email === this.user.email && Number(r.exp) > Date.now());
+    },
+    /** 일괄삭제 저장 요청에 실을 헤더 — 유효한 재인증이 없으면 빈 객체 */
+    reauthHeader() { return this.hasValidReauth() ? { "X-Reauth": this._reauth.token } : {}; },
+    clearReauth() { this._reauth = null; try { sessionStorage.removeItem(this.REAUTH_STORE_KEY); } catch (e) {} },
+    /** 재인증 증거(비밀번호 또는 새 ID 토큰) → 서버 검증 → 단기 토큰 보관. 반환 {ok, msg?} */
+    async _exchangeReauth(body) {
+      let r;
+      try { r = await fetch("/api/auth/reauth", { method: "POST", headers: this.headers(), body: JSON.stringify(body) }); }
+      catch (e) { return { ok: false, msg: "네트워크 오류 — 온라인에서 다시 시도하세요" }; }
+      let j = null; try { j = await r.json(); } catch (e) {}
+      if (!r.ok || !j || !j.token || !j.exp) return { ok: false, msg: (j && j.error) || ("본인 확인 실패(" + r.status + ")") };
+      this._reauth = { token: j.token, exp: Number(j.exp), email: (this.user && this.user.email) || "" };
+      try { sessionStorage.setItem(this.REAUTH_STORE_KEY, JSON.stringify(this._reauth)); } catch (e) {}
+      return { ok: true };
+    },
+    /** 유효한 재인증이 있으면 즉시 true(5분 내 재사용). 없으면 재인증 창 → 성공 true / 실패·취소 false. */
+    async ensureReauth() {
+      if (this.hasValidReauth()) return true;
+      if (!this.user || !this.idToken || this.readonly) return false;
+      const toast = (m) => { try { Prompt.toast(m, 3600); } catch (e) {} };
+      if (String(this.idToken).indexOf("local-") === 0) {
+        const res = await Prompt.ask({ title: "본인 확인", sub: "핀 일괄삭제 전 이 계정(" + this.user.email + ")의 앱 비밀번호를 다시 입력하세요.", placeholder: "비밀번호", password: true });
+        if (!res || !res.value) return false;
+        const x = await this._exchangeReauth({ password: res.value });
+        if (!x.ok) toast(x.msg);
+        return x.ok;
+      }
+      if (!this.firebaseEnabled) { toast("이 계정은 구글 본인 확인을 할 수 없어 일괄삭제를 진행할 수 없습니다"); return false; }
+      await this._waitFirebase();
+      if (!window.SeaFirebase.reauthGoogle) { toast("구글 본인 확인을 준비하지 못했습니다 — 잠시 후 다시 시도하세요"); return false; }
+      let idt = null;
+      try { idt = await window.SeaFirebase.reauthGoogle(this.user.email); }
+      catch (e) {
+        const code = String((e && e.code) || "");
+        if (code !== "auth/popup-closed-by-user" && code !== "auth/cancelled-popup-request") toast("구글 본인 확인 실패 — " + (code || "다시 시도하세요"));
+        return false;
+      }
+      if (!idt) return false;
+      const x = await this._exchangeReauth({ id_token: idt });
+      if (!x.ok) toast(x.msg);
+      return x.ok;
+    },
+    /** redirect 재인증 복귀(팝업 차단 환경) — 표시가 있을 때만 결과를 받아 단기 토큰으로 바꾼다. */
+    async _resumeReauthRedirect() {
+      if (!this.user || !this.firebaseEnabled) return;
+      await this._waitFirebase();
+      if (!window.SeaFirebase.reauthRedirectResult) return;
+      const idt = await window.SeaFirebase.reauthRedirectResult();
+      if (!idt) return;
+      const x = await this._exchangeReauth({ id_token: idt });
+      const mins = x.ok ? Math.max(1, Math.round((Number(this._reauth.exp) - Date.now()) / 60000)) : 0;
+      try { Prompt.toast(x.ok ? "본인 확인 완료 — " + mins + "분 안에 일괄삭제를 다시 실행하세요" : x.msg, 4000); } catch (e) {}
+    },
+
     /* ══════════════════════════════════════════════════════════════════
        [P40] 오프라인 재인증 — 현장에서 세션이 끊겨도 "이 기기에서 한 번 온라인 로그인에
        성공한 사용자"가 비밀번호로 다시 들어와 오프라인 작업을 이어갈 수 있게 한다.
@@ -771,7 +849,8 @@
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
       this._suppressDemoBadge = false;  // 다음 수동 데모 로그인 시 배지 정상 표시되도록 초기화
-      this._offlineOnly = false; this.projectRole = null;
+      this._offlineOnly = false; this.projectRole = null; this.projectCanManage = false;
+      this.clearReauth();   // [WO 20261001-bulkreauth] 재인증 토큰도 로그아웃과 함께 폐기
       try { sessionStorage.removeItem("wm_id_token"); localStorage.removeItem("wm_local_token"); } catch (e) {}
       this._clearAuthCache();   // 오프라인 권한 캐시도 함께 정리
       this.clearOfflineVerifier();  // [P40] 오프라인 재인증 검증자 삭제 — 로그아웃 후엔 이 기기에서 오프라인 진입 불가
