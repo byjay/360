@@ -373,6 +373,15 @@
       const layer = document.getElementById("pins-layer");
       if (!layer) return;
       const inv = this.pinScreenScale();
+      // [WO 20261001-leader] 리더 풍선(.pin-leader-bubble) — 바늘형 핀과 앵커가 다르다(중앙 vs 하단).
+      // ISO 여부와 무관하게 항상 평면 중앙 역스케일만 적용해 화면 기준 크기 고정(요구사항 §3).
+      for (const m of layer.children) {
+        if (m.classList && m.classList.contains("pin-leader-bubble")) {
+          m.style.transformOrigin = "50% 50%";
+          m.style.transform = `translate(-50%, -50%) scale(${inv.toFixed(3)})`;
+          m.style.zIndex = "21";
+        }
+      }
       const ISO_Z = [-32, 58, 148, 238];
       if (State.isoView) {
         const z = ISO_Z[State.isoDir % 4];
@@ -387,6 +396,7 @@
           `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-22deg) scale(${(inv * 1.18).toFixed(3)})`;
         layer.style.transformStyle = "preserve-3d";
         for (const m of layer.children) {
+          if (m.classList && m.classList.contains("pin-leader-bubble")) continue; // 위에서 이미 처리(중앙 앵커)
           m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) = 땅에 박히는 지점
           m.style.transformStyle = "preserve-3d"; // 마커 내부도 3D 보존(머리가 +Z로 솟음)
           m.style.transform = billboard;
@@ -396,6 +406,7 @@
         // 평면: 역스케일만(화면상 일정 크기 → 또렷 + 줌아웃 시 약간 확대)
         const flat = `translate(-50%, calc(-100% + 2px)) scale(${inv.toFixed(3)})`;
         for (const m of layer.children) {
+          if (m.classList && m.classList.contains("pin-leader-bubble")) continue; // 위에서 이미 처리(중앙 앵커)
           m.style.transformOrigin = "50% 100%";
           m.style.transform = flat;
           m.style.zIndex = "";

@@ -42,6 +42,44 @@
       c.classList.toggle("hidden", !n);
     },
 
+    /* ══ [WO 20261001-leader] CAD 스타일 화살표 리더선 + 번호 풍선(callout) ═══════════════════
+       데이터: pin.callout = {x,y}(페이지 % 절대좌표, 선택적). 없으면 defaultCallout()이 대상
+       오른쪽 위로 고정 오프셋을 계산한다(레거시 핀도 유실 0으로 정상 표시). 저장·병합은 기존
+       pin 객체 LWW 경로(App._markDirty → PinSeries.stampChanged, 전체 핀 비교)를 그대로 탄다
+       — callout 은 pin 의 평범한 필드라 PinSeries._sigOf(JSON.stringify)에 자동 포함된다.
+       순수함수(Leader.defaultCallout/calloutOf/align)로 분리 — DOM 없이 단위테스트 가능. */
+    Leader: {
+      DEFAULT_DX: 7, DEFAULT_DY: -9,     // 기본 콜아웃 오프셋(%, 대상에서 오른쪽 위)
+      BUBBLE_DIAM_PX: 22,                 // 풍선 화면 지름(px, 줌 무관 고정)
+      SPACING_FACTOR: 1.6,                // 정렬 간격 = 풍선 지름 × 1.6(이름 있는 상수)
+      /** 레거시 핀(callout 없음) 기본 위치 — 대상에서 오른쪽 위 고정 오프셋, 0~100 클램프. */
+      defaultCallout(pin) {
+        const px = (pin && Number.isFinite(pin.x)) ? pin.x : 0;
+        const py = (pin && Number.isFinite(pin.y)) ? pin.y : 0;
+        return {
+          x: Math.max(0, Math.min(100, px + this.DEFAULT_DX)),
+          y: Math.max(0, Math.min(100, py + this.DEFAULT_DY))
+        };
+      },
+      /** 핀의 실제 콜아웃(저장값 우선, 없으면 기본값). */
+      calloutOf(pin) {
+        if (pin && pin.callout && Number.isFinite(pin.callout.x) && Number.isFinite(pin.callout.y)) {
+          return { x: pin.callout.x, y: pin.callout.y };
+        }
+        return this.defaultCallout(pin);
+      },
+      /** 세로/가로 등간격 정렬 — 순수함수(DOM 無). pinsOrdered = [{id}], axis 'v'|'h'.
+       *  clickX/clickY = 클릭 지점(%), stepPct = 화면기준 간격을 호출부가 줌 역보정해 넘긴 %.
+       *  @returns [{id,x,y}] 번호(=배열) 순서대로 등간격 배치, 첫 항목 = 클릭 지점 그대로. */
+      align(pinsOrdered, axis, clickX, clickY, stepPct) {
+        return (pinsOrdered || []).map((p, i) => (
+          axis === "v"
+            ? { id: p.id, x: clickX, y: clickY + i * stepPct }
+            : { id: p.id, x: clickX + i * stepPct, y: clickY }
+        ));
+      }
+    },
+
     /* ── [WO 20260929-bulkdel] 관리자 핀 일괄삭제 — 선택 상태 SoT(트리 핀 노드 · 핀 목록 패널 공유) ──
        권한 판정 = App.canBulkDeletePins()(Auth.isAdmin 재사용). 삭제 = App.deletePins → 단건과 같은 _removePins. */
     _pinSel: { on: false, ids: new Set() },
@@ -94,7 +132,102 @@
           finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역" }));
         }));
       }
+      // [WO 20261001-leader §5] 마스터 2차 지시 — 리더선 풍선 정렬. 같은 선택 UI 재사용.
+      if (s.on) {
+        out.push(mk("정렬 ↕", "pin-align-v", () => this._startAlign("v"), "선택한 포인트의 풍선을 세로 등간격으로 정렬"));
+        out.push(mk("정렬 ↔", "pin-align-h", () => this._startAlign("h"), "선택한 포인트의 풍선을 가로 등간격으로 정렬"));
+      }
       return out;
+    },
+
+    /** 정렬 대기중 핀 집합(선택 없으면 현재 페이지의 활성 모드 핀 전체), 번호순 정렬. */
+    _alignCandidatePins() {
+      const s = this._pinSel;
+      const curPage = State.pdfPage || 1;
+      const curSeries = (State.regMode === "checkboard") ? "checkboard" : "content";
+      let pins;
+      if (s.ids.size) {
+        pins = Array.from(s.ids).map(k => (State.pins || []).find(p => p && String(p.id) === k)).filter(Boolean);
+      } else {
+        pins = (State.pins || []).filter(p => p && (p.page || 1) === curPage
+          && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === curSeries));
+      }
+      const numMap = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, curPage) : new Map();
+      pins.sort((a, b) => ((numMap.get(a.id) || {}).no || 0) - ((numMap.get(b.id) || {}).no || 0));
+      return pins;
+    },
+
+    /** 정렬 흐름 시작 — "도면에서 정렬할 위치를 클릭" 안내 후, 도면 클릭 1회를 캡처한다.
+     *  캡처 단계(capture:true)+stopPropagation 으로 20_App.js 의 기존 클릭 핸들러(배치/핀탭 등)에
+     *  영향을 주지 않는다(공유 파일 미수정). Esc 취소. */
+    _startAlign(axis) {
+      const pins = this._alignCandidatePins();
+      if (pins.length < 2) { Prompt.toast("정렬할 포인트가 2개 이상 필요합니다"); return; }
+      this._cancelAlign(); // 중복 대기 방지
+      const vp = this.$("map-viewport") || this.$("map-transform");
+      if (!vp) return;
+      Prompt.toast("도면에서 정렬할 위치를 클릭하세요 (Esc=취소)", 5000);
+      const onClick = (e) => {
+        e.stopPropagation();
+        if (e.preventDefault) e.preventDefault();
+        this._endAlignCapture();
+        const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent)
+          ? MapCtrl.viewportToPercent(e.clientX, e.clientY) : null;
+        if (pct) this._commitAlign(axis, pins, pct.x, pct.y);
+      };
+      const onKey = (e) => { if (e.key === "Escape") this._cancelAlign(); };
+      vp.addEventListener("click", onClick, true);
+      document.addEventListener("keydown", onKey);
+      this._alignCapture = { vp, onClick, onKey };
+    },
+    _endAlignCapture() {
+      const c = this._alignCapture;
+      if (!c) return;
+      c.vp.removeEventListener("click", c.onClick, true);
+      document.removeEventListener("keydown", c.onKey);
+      this._alignCapture = null;
+    },
+    _cancelAlign() {
+      if (!this._alignCapture) return;
+      this._endAlignCapture();
+      Prompt.toast("정렬 취소됨");
+    },
+    /** 정렬 확정 — stepPct 는 화면기준 간격(풍선지름×1.6px)을 현재 줌으로 역보정해 % 환산.
+     *  화살촉(대상 x,y)은 절대 건드리지 않고 callout 만 바꾼다. 되돌리기용 스냅샷 보관. */
+    _commitAlign(axis, pins, clickX, clickY) {
+      const transformEl = this.$("map-transform");
+      const natW = (transformEl && transformEl.offsetWidth) || 1000;
+      const natH = (transformEl && transformEl.offsetHeight) || 1000;
+      const zoom = (State.zoom || 1);
+      const spacingPx = this.Leader.BUBBLE_DIAM_PX * this.Leader.SPACING_FACTOR;
+      const stepPct = axis === "v"
+        ? (spacingPx / zoom) / natH * 100
+        : (spacingPx / zoom) / natW * 100;
+      const snapshot = pins.map(p => ({ id: p.id, callout: p.callout ? { x: p.callout.x, y: p.callout.y } : null }));
+      const placed = this.Leader.align(pins.map(p => ({ id: p.id })), axis, clickX, clickY, stepPct);
+      placed.forEach(r => {
+        const p = (State.pins || []).find(pp => pp.id === r.id);
+        if (p) p.callout = { x: Math.max(0, Math.min(100, r.x)), y: Math.max(0, Math.min(100, r.y)) };
+      });
+      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      this.renderPinsOnMap();
+      this._lastAlignUndo = snapshot;
+      Prompt.toast(pins.length + "개 풍선 정렬됨", 4000, {
+        action: { label: "되돌리기", onClick: () => this.undoAlign() }
+      });
+    },
+    /** 직전 정렬 1회 되돌리기(스냅샷 복원). 대상(x,y)은 애초에 안 건드렸으므로 복원 불필요. */
+    undoAlign() {
+      const snap = this._lastAlignUndo;
+      if (!snap || !snap.length) return;
+      snap.forEach(s => {
+        const p = (State.pins || []).find(pp => pp.id === s.id);
+        if (p) { if (s.callout) p.callout = s.callout; else delete p.callout; }
+      });
+      this._lastAlignUndo = null;
+      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      this.renderPinsOnMap();
+      Prompt.toast("정렬 되돌림");
     },
 
     renderPinList() {
@@ -644,6 +777,8 @@
     renderPinsOnMap(dropPinId) {
       const layer = this.$("pins-layer");
       layer.innerHTML = "";
+      const leaderLayer = this.$("leader-layer"); // [WO 20261001-leader] 리더선 전용 SVG(핀 레이어와 형제)
+      if (leaderLayer) leaderLayer.innerHTML = "";
       const curPage = State.pdfPage;
       // 🔴 번호/부류/색상 정본 = PinSeries (01b_PinSeries.js). 여기서 따로 세지 않는다.
       //    미니맵(07_Radar)도 같은 함수를 호출하므로 두 화면의 번호가 항상 일치한다.
@@ -911,11 +1046,135 @@
           });
         }
         layer.appendChild(marker);
+        // [WO 20261001-leader §2] CHECKER 는 기본 ON, 360(content)은 설정 토글(State.leader360, 기본 OFF)일 때만.
+        const leaderWanted = isChecker || (!isChecker && !!State.leader360);
+        if (leaderWanted && leaderLayer) {
+          this._renderLeader(leaderLayer, layer, pin, marker, dispLabel, headFill2, txtFill, isChecker);
+        }
       });
       if (typeof Zones !== "undefined") Zones.render();
       if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
       // ── [마스터 요청] 렌더 직후에도 ISO면 핀을 즉시 수직(빌보드)으로 세움 ──
       if (typeof MapCtrl !== "undefined" && MapCtrl._applyPinBillboard) MapCtrl._applyPinBillboard();
+    },
+
+    /** [WO 20261001-leader §3] 핀 1개의 리더선(SVG: 사선+랜딩+화살촉)과 번호 풍선(HTML div)을 그린다.
+     *  구성: 화살촉(빨강 채움 삼각형, 대상 쪽) → 사선 리더 → 풍선 쪽 짧은 수평 랜딩 → 원형 풍선(번호).
+     *  풍선이 대상의 왼쪽이면 랜딩도 반대 방향(좌측)으로 그린다.
+     *  선 두께는 vector-effect="non-scaling-stroke"로 줌과 무관하게 화면상 고정.
+     *  풍선 크기·글자는 MapCtrl.pinScreenScale()과 동일한 역스케일(._applyPinBillboard, pin-leader-bubble
+     *  분기)로 화면 기준 고정 — 풍선을 pins-layer 의 자식으로 두어 그 반복문을 그대로 공유한다. */
+    _renderLeader(leaderLayer, pinsLayer, pin, marker, dispLabel, lineColor, txtFill, isChecker) {
+      // 🔴 [형제 호출부 보호] 기존 회귀테스트(p4/p9/p12/p50/p54/p55/p79/p91/p101 등 10여 개)는
+      // 경량 가짜 document(SVG 네임스페이스 API 無)로 renderPinsOnMap()을 구동한다. 실 브라우저는
+      // 항상 createElementNS 를 지원하므로 운영 동작엔 영향 없이, 이 환경에서만 리더(장식)를
+      // 생략하고 마커 렌더(이미 검증된 회귀 대상)는 그대로 유지한다.
+      if (typeof document.createElementNS !== "function") return;
+      const co = this.Leader.calloutOf(pin);
+      const dir = (co.x >= pin.x) ? 1 : -1;
+      const landLen = 2.2; // % 단위 — 풍선 바로 앞 수평 랜딩 길이
+      const landX = co.x - dir * landLen;
+      const svgNS = "http://www.w3.org/2000/svg";
+      const g = document.createElementNS(svgNS, "g");
+      g.setAttribute("class", "pin-leader-g");
+      g.dataset.id = pin.id;
+      const path = document.createElementNS(svgNS, "path");
+      path.setAttribute("class", "pin-leader-line");
+      path.setAttribute("d", `M ${pin.x} ${pin.y} L ${landX} ${co.y} L ${co.x} ${co.y}`);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "#dc2626");
+      path.setAttribute("stroke-width", "1.6");
+      path.setAttribute("vector-effect", "non-scaling-stroke");
+      g.appendChild(path);
+      // 화살촉(대상 쪽, 사선 방향을 향함)
+      const ang = Math.atan2(co.y - pin.y, landX - pin.x);
+      const alen = 1.6, awid = 0.9;
+      const tipX = pin.x, tipY = pin.y;
+      const baseX = tipX - alen * Math.cos(ang), baseY = tipY - alen * Math.sin(ang);
+      const perpX = -Math.sin(ang) * awid, perpY = Math.cos(ang) * awid;
+      const arrow = document.createElementNS(svgNS, "polygon");
+      arrow.setAttribute("class", "pin-leader-arrow");
+      arrow.setAttribute("points",
+        `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
+      arrow.setAttribute("fill", "#dc2626");
+      g.appendChild(arrow);
+      leaderLayer.appendChild(g);
+
+      // 풍선(HTML, 고정 px — pin-marker 와 같은 줌 역스케일 반복문(_applyPinBillboard)을 공유)
+      const bubble = document.createElement("div");
+      bubble.className = "pin-leader-bubble" + (isChecker ? " pin-leader-checker" : " pin-leader-360");
+      bubble.style.left = co.x + "%";
+      bubble.style.top  = co.y + "%";
+      bubble.dataset.id = pin.id;
+      bubble.dataset.calloutX = String(co.x);
+      bubble.dataset.calloutY = String(co.y);
+      const fs = String(dispLabel).length >= 3 ? 8 : 11;
+      bubble.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="10.4" fill="#ffffff" stroke="${lineColor || "#b91c1c"}" stroke-width="2"/>
+        <text x="12" y="12.6" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${fs}" font-weight="800" fill="${txtFill || "#1a1a1a"}">${dispLabel}</text>
+      </svg>`;
+      // 클릭 = 기존 마커 클릭과 동일 동작(핀 패널 열기 등) — SoT 중복 없이 그대로 전달
+      bubble.addEventListener("click", (e) => { e.stopPropagation(); marker.click(); });
+      // 드래그 = 콜아웃만 이동(대상/화살촉은 불변). 마커 이동과 동일한 잠금 규칙(pinEditUnlocked) 재사용.
+      if (State.mode === "designer") {
+        bubble.classList.add("draggable");
+        let dragging = false, moved = false, startX = 0, startY = 0;
+        const onMove = (ev) => {
+          const cx = ev.touches ? ev.touches[0].clientX : ev.clientX;
+          const cy = ev.touches ? ev.touches[0].clientY : ev.clientY;
+          if (!dragging) return;
+          if (!moved && Math.hypot(cx - startX, cy - startY) < 5) return;
+          moved = true;
+          bubble.classList.add("moving");
+          const pct = MapCtrl.viewportToPercent(cx, cy);
+          if (pct) {
+            pin.callout = { x: pct.x, y: pct.y };
+            bubble.style.left = pct.x + "%";
+            bubble.style.top  = pct.y + "%";
+            this._renderLeaderLineOnly(leaderLayer, pin, g, path, arrow);
+          }
+          if (ev.cancelable) ev.preventDefault();
+        };
+        const onUp = () => {
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup", onUp);
+          document.removeEventListener("touchmove", onMove);
+          document.removeEventListener("touchend", onUp);
+          dragging = false;
+          bubble.classList.remove("moving");
+          if (moved) {
+            if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+            Prompt.toast && Prompt.toast("풍선 위치 이동됨 · 자동저장");
+            if (typeof App !== "undefined" && App._autoSave) App._autoSave();
+          }
+        };
+        bubble.addEventListener("pointerdown", (ev) => {
+          if (State.pinEditUnlocked !== pin.id) return; // 마커와 동일한 잠금 규칙
+          startX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+          startY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+          dragging = true; moved = false;
+          document.addEventListener("pointermove", onMove, { passive: false });
+          document.addEventListener("pointerup", onUp);
+          document.addEventListener("touchmove", onMove, { passive: false });
+          document.addEventListener("touchend", onUp);
+        });
+      }
+      pinsLayer.appendChild(bubble);
+    },
+    /** 드래그 중 리페인트 없이 선/화살촉만 갱신(성능 — 매 move 마다 전체 renderPinsOnMap 재호출 안 함). */
+    _renderLeaderLineOnly(leaderLayer, pin, g, path, arrow) {
+      const co = this.Leader.calloutOf(pin);
+      const dir = (co.x >= pin.x) ? 1 : -1;
+      const landLen = 2.2;
+      const landX = co.x - dir * landLen;
+      path.setAttribute("d", `M ${pin.x} ${pin.y} L ${landX} ${co.y} L ${co.x} ${co.y}`);
+      const ang = Math.atan2(co.y - pin.y, landX - pin.x);
+      const alen = 1.6, awid = 0.9;
+      const tipX = pin.x, tipY = pin.y;
+      const baseX = tipX - alen * Math.cos(ang), baseY = tipY - alen * Math.sin(ang);
+      const perpX = -Math.sin(ang) * awid, perpY = Math.cos(ang) * awid;
+      arrow.setAttribute("points",
+        `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
     },
 
     updatePdfPagination() {

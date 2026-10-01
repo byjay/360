@@ -680,6 +680,8 @@
           <div id="anno-text-layer" class="anno-text-layer"></div>
           <!-- Pins layer -->
           <div id="pins-layer" class="pins-layer"></div>
+          <!-- [WO 20261001-leader] CAD 리더선(사선+화살촉) SVG — 좌표는 pins-layer 와 동일한 % 기준 -->
+          <svg id="leader-layer" class="leader-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
           <!-- Pending pin pulse -->
           <div id="pending-pin" class="pending-pin hidden"></div>
           <!-- Zone 그리기 중 임시 사각형(레거시) -->
@@ -2265,6 +2267,11 @@
             </div>
             <p id="settings-checkboard-hint" class="settings-note-sm">개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.</p>
           </div>
+          <!-- [WO 20261001-leader §2] 360(content) 계열 리더선 토글 — CHECKER는 항상 ON(토글 없음), 기본 OFF. -->
+          <label class="settings-leader-toggle-row" for="chk-leader360" style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
+            <input id="chk-leader360" type="checkbox" />
+            <span>360 포인트도 화살표 리더선으로 표시</span>
+          </label>
         </div>
         <div id="settings-viewer-note" class="settings-note hidden">
           이 계정은 <b>디자이너 권한이 없습니다</b>. 편집하려면 슈퍼관리자에게 디자이너 지정을 요청하세요.

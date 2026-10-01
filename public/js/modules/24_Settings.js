@@ -14,6 +14,16 @@
         this._renderPinColor();
         // [토스트 스팸 제거] 색상 스와치 선택 결과가 핀에 즉시 반영돼 눈에 보인다.
       });
+      // [WO 20261001-leader §2] 360 리더선 토글 — State.leader360 SoT, localStorage 로만 영속(서버 저장 아님).
+      const chkLeader360 = $("chk-leader360");
+      if (chkLeader360) {
+        chkLeader360.checked = !!State.leader360;
+        chkLeader360.addEventListener("change", () => {
+          State.leader360 = chkLeader360.checked;
+          try { localStorage.setItem("seastar_leader360", chkLeader360.checked ? "1" : "0"); } catch (e) {}
+          if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
+        });
+      }
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
       const bd = document.querySelector('#settings-modal .admin-gate-backdrop');
