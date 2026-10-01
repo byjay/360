@@ -7,6 +7,208 @@
 
     init(canvas) { this.canvas = canvas; },
 
+    /* ══════════════════════════════════════════
+       [지휘자 발주 2026-10-01] "사진으로 빨려 들어가는" 전환 효과 — Dive
+       핀 탭(및 트리/핀패널의 모든 진입점) → 도면 줌인 → 원형 개방 → 화각 펼침(총 ~800ms).
+       닫기는 역재생. 모든 진입점이 이미 App.openPano() 1개로 수렴하므로(grep 확인됨)
+       그 선두에서 open()을 1회 호출하는 것만으로 전수 적용된다 — 호출부 복제 없음.
+       🔴 MapCtrl/State는 절대 건드리지 않는다(#map-viewport 인라인 style만 조작 → 시각효과만,
+       끝나면 완전히 원복). close()의 역재생도 이 파일(06_PanoViewer.js) 안에서 전부 처리한다
+       (닫기 버튼/Esc/뒤로 전부 PanoViewer.close() 1개로 수렴 — grep 확인됨). */
+    Dive: {
+      ZOOM_MS: 350,          // ① 도면 줌인 구간 길이(0~350ms)
+      OPEN_DELAY_MS: 250,    // ② 원형 개방 시작 시각
+      OPEN_MS: 350,          //    원형 개방 지속시간(250~600ms)
+      FOV_DELAY_MS: 300,     // ③ 화각 펼침 시작 시각(최소값 — 텍스처가 늦으면 로드 완료 후 시작)
+      FOV_MS: 500,           //    화각 펼침 지속시간(300~800ms)
+      TOTAL_MS: 800,
+      ZOOM_SCALE: 3,         // 도면 확대 배율
+      FOV_NARROW: 30,        // 시작 화각(좁게)
+      CLOSE_FOV_MS: 200,     // 닫기 역재생: fov 좁히기
+      CLOSE_OPEN_MS: 300,    //               원형 닫기
+      CLOSE_ZOOM_MS: 300,    //               도면 줌아웃 (합 800ms)
+      REDUCED_FADE_MS: 200,  // 접근성/저사양 대체: 페이드
+      busy: false,           // 진행 중(열기 또는 닫기) — true면 재입장 무시("중복 탭 무시")
+      closing: false,
+      _raf: null,
+      _targetFov: 75,
+      _startTs: 0,
+      _pos: null,
+
+      /** prefers-reduced-motion 또는 저사양(코어 ≤2) → 풀 연출 대신 페이드로 대체 */
+      reduced() {
+        try {
+          if (typeof window !== "undefined" && window.matchMedia &&
+            window.matchMedia("(prefers-reduced-motion: reduce)").matches) return true;
+        } catch (e) {}
+        try {
+          if (typeof navigator !== "undefined" && navigator.hardwareConcurrency &&
+            navigator.hardwareConcurrency <= 2) return true;
+        } catch (e) {}
+        return false;
+      },
+
+      /** 핀 마커의 현재 화면좌표(중심). 마커가 없거나 화면 밖이면 화면 중앙. */
+      screenPos(pin) {
+        const vw = (typeof window !== "undefined" && window.innerWidth) || 0;
+        const vh = (typeof window !== "undefined" && window.innerHeight) || 0;
+        try {
+          const el = pin && typeof document !== "undefined" &&
+            document.querySelector('.pin-marker[data-id="' + pin.id + '"]');
+          if (el) {
+            const r = el.getBoundingClientRect();
+            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+            if (cx >= 0 && cy >= 0 && (!vw || cx <= vw) && (!vh || cy <= vh)) return { x: cx, y: cy };
+          }
+        } catch (e) {}
+        return { x: vw / 2, y: vh / 2 };
+      },
+
+      _mapEl() { return typeof document !== "undefined" ? document.getElementById("map-viewport") : null; },
+      _ovEl() { return typeof document !== "undefined" ? document.getElementById("pano-overlay") : null; },
+      _now() { return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now(); },
+
+      /** #map-viewport(도면 컨테이너)를 화면좌표 pos 중심으로 scale까지 애니메이션.
+       *  🔴 MapCtrl.transform/State는 절대 건드리지 않는 별개 엘리먼트 — 순수 시각효과. */
+      _zoomMap(pos, scale, ms, easing, instant) {
+        const el = this._mapEl(); if (!el) return;
+        el.style.transformOrigin = pos.x + "px " + pos.y + "px";
+        if (instant) { el.style.transition = "none"; el.style.transform = "scale(" + scale + ")"; return; }
+        el.style.transition = "transform " + ms + "ms " + easing;
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => { el.style.transform = "scale(" + scale + ")"; });
+        } else {
+          el.style.transform = "scale(" + scale + ")";
+        }
+      },
+      /** 도면 확대를 완전히 원복(MapCtrl이 다음 applyTransform에서 쓰는 값과 무관 — 그냥 이 엘리먼트의 흔적 제거). */
+      _resetMap() {
+        const el = this._mapEl(); if (!el) return;
+        el.style.transition = "none"; el.style.transform = ""; el.style.transformOrigin = "";
+      },
+
+      _setClip(pos, pct) {
+        const ov = this._ovEl(); if (!ov) return;
+        ov.style.clipPath = "circle(" + pct + "% at " + pos.x + "px " + pos.y + "px)";
+      },
+
+      /** S.fov를 from→to 로 ms간 보간(ease-out cubic). PanoViewer의 기존 렌더루프(_invalidate)를 재사용. */
+      _rampFov(pv, from, to, ms, onDone) {
+        if (this._raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this._raf);
+        const t0 = this._now();
+        const step = (now) => {
+          const k = Math.min(1, (now - t0) / ms);
+          const e = 1 - Math.pow(1 - k, 3);
+          pv.S.fov = from + (to - from) * e;
+          pv._invalidate();
+          if (k < 1 && typeof requestAnimationFrame === "function") { this._raf = requestAnimationFrame(step); }
+          else { this._raf = null; if (onDone) onDone(); }
+        };
+        if (typeof requestAnimationFrame === "function") this._raf = requestAnimationFrame(step);
+        else step(t0 + ms); // rAF 없는 환경(테스트) — 즉시 종료값으로
+      },
+
+      /** load()/loadVideo()가 S를 리셋한 직후 호출 — 기본 화각(target)을 기억하고,
+       *  다이빙 중이면 즉시 좁은 화각으로 바꿔 "펼쳐지는" 시작점을 만든다. */
+      markLoadStart(pv) {
+        this._targetFov = pv.S.fov;
+        if (this.busy && !this.closing && !this.reduced()) pv.S.fov = this.FOV_NARROW;
+      },
+      /** 텍스처(이미지/영상) 준비 완료 시 load()/loadVideo()가 호출 — 화각 펼침 애니메이션 시작.
+       *  최소 FOV_DELAY_MS 는 보장하되, 로드가 늦었으면(이미 지났으면) 그 즉시 시작한다. */
+      onTextureReady(pv) {
+        if (!this.busy || this.closing || this.reduced()) return;
+        const wait = Math.max(0, this.FOV_DELAY_MS - (this._now() - this._startTs));
+        const start = () => this._rampFov(pv, this.FOV_NARROW, this._targetFov, this.FOV_MS);
+        if (typeof setTimeout === "function") setTimeout(start, wait); else start();
+      },
+
+      /** ① 진입 — App.openPano() 선두에서 1회 호출(모든 진입점 공유). */
+      open(pv, pin) {
+        if (this.busy) return; // 🔴 중복 탭 무시(재시작 금지)
+        this.busy = true; this.closing = false;
+        this._startTs = this._now();
+        const pos = this.screenPos(pin);
+        this._pos = pos;
+        const ov = this._ovEl(), map = this._mapEl();
+        if (this.reduced() || !ov || !map) {
+          // 접근성/저사양/DOM 없음 — 200ms 페이드로 대체(줌/원형/화각 생략)
+          if (ov) {
+            ov.classList.remove("hidden");
+            ov.style.transition = "none"; ov.style.opacity = "0";
+            const go = () => { ov.style.transition = "opacity " + this.REDUCED_FADE_MS + "ms ease"; ov.style.opacity = "1"; };
+            if (typeof requestAnimationFrame === "function") requestAnimationFrame(go); else go();
+          }
+          if (typeof setTimeout === "function") {
+            setTimeout(() => {
+              if (ov) { ov.style.transition = ""; ov.style.opacity = ""; }
+              this.busy = false;
+            }, this.REDUCED_FADE_MS + 40);
+          } else { this.busy = false; }
+          return;
+        }
+        ov.classList.remove("hidden");
+        this._setClip(pos, 0);
+        ov.style.transition = "none";
+        this._zoomMap(pos, this.ZOOM_SCALE, this.ZOOM_MS, "ease-in");
+        map.classList.add("dive-dim");
+        setTimeout(() => {
+          ov.style.transition = "clip-path " + this.OPEN_MS + "ms ease-out";
+          const go = () => this._setClip(pos, 150);
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(go); else go();
+        }, this.OPEN_DELAY_MS);
+        setTimeout(() => { this._resetMap(); map.classList.remove("dive-dim"); }, this.OPEN_DELAY_MS + this.OPEN_MS + 20);
+        setTimeout(() => {
+          ov.style.transition = ""; ov.style.clipPath = "";
+          this.busy = false;
+        }, this.TOTAL_MS);
+      },
+
+      /** ④ 닫기 역재생 — PanoViewer.close()가 호출. 핀 위치는 "지금" 다시 계산(그사이 이동했을 수 있음). */
+      close(pv, onDone) {
+        if (this.closing) { return; } // 🔴 닫기 중복 호출 무시(재시작 금지)
+        const ov = this._ovEl(), map = this._mapEl();
+        const pin = pv._currentPin;
+        const pos = this.screenPos(pin) || this._pos || { x: 0, y: 0 };
+        if (this.reduced() || !ov || !map) {
+          if (ov) {
+            this.closing = true;
+            ov.style.transition = "opacity " + this.REDUCED_FADE_MS + "ms ease";
+            ov.style.opacity = "0";
+            setTimeout(() => {
+              ov.style.transition = ""; ov.style.opacity = "";
+              this.closing = false; this.busy = false;
+              onDone();
+            }, this.REDUCED_FADE_MS);
+          } else { this.busy = false; onDone(); }
+          return;
+        }
+        this.closing = true; this.busy = true;
+        if (this._raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this._raf);
+        const fromFov = pv.S.fov;
+        const finish = () => {
+          this._resetMap(); map.classList.remove("dive-dim");
+          ov.style.transition = ""; ov.style.clipPath = "";
+          this.closing = false; this.busy = false;
+          onDone();
+        };
+        // 원형이 아직 열려있어 화면이 전부 덮여 있는 동안 미리 확대해 둔다(무해 — 안 보임).
+        this._zoomMap(pos, this.ZOOM_SCALE, 0, "linear", true);
+        map.classList.add("dive-dim");
+        // ① fov 좁히기 → ② 원형을 핀 위치로 닫기 → ③ 도면 줌아웃
+        this._rampFov(pv, fromFov, this.FOV_NARROW, this.CLOSE_FOV_MS, () => {
+          ov.style.transition = "clip-path " + this.CLOSE_OPEN_MS + "ms ease-in";
+          const go = () => this._setClip(pos, 0);
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(go); else go();
+          setTimeout(() => {
+            ov.style.transition = "";
+            this._zoomMap(pos, 1, this.CLOSE_ZOOM_MS, "ease-out");
+            setTimeout(finish, this.CLOSE_ZOOM_MS + 20);
+          }, this.CLOSE_OPEN_MS + 20);
+        });
+      }
+    },
+
     /** [지휘자 발주 2026-09-29 항목6] 뷰어 제목에 사진 저장명(영역/구역_시각 등, PhotoNaming.describe
      *  가 정본 — 35_PhotoBatch.js, 27_PinActionPop.js 사진 캡션과 동일 SoT)을 덧붙인다.
      *  PhotoNaming 미로드/정보 없음이면 빈 문자열 → 기존 제목 그대로(요구사항 "없으면 기존 동작 유지"). */
@@ -45,6 +247,7 @@
     load(src, locationName) {
       const $ = id => document.getElementById(id);
       this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
+      this.Dive.markLoadStart(this);
 
       $("pano-location-name").textContent = "360° — " + locationName + this._savedNameSuffix();
       $("pano-loading").classList.remove("hidden");
@@ -87,6 +290,7 @@
         this._applyGPanoLevel(src);
         // [마스터: 구면 마커] 이 핀에 저장된 360 안 마커 렌더
         if (this._currentPin) this.renderSpots(this._currentPin.spots || []);
+        this.Dive.onTextureReady(this);
       };
       img.onerror = () => {
         const isExternal = /^https?:\/\//i.test(src) && !src.startsWith(location.origin);
@@ -107,6 +311,7 @@
     loadVideo(src, locationName) {
       const $ = id => document.getElementById(id);
       this.S = { lon: 0, lat: 0, fov: 75, dragging: false, lx: 0, ly: 0, autoRotate: false, roll: 0 };
+      this.Dive.markLoadStart(this);
 
       $("pano-location-name").textContent = "360° ▶ " + locationName + this._savedNameSuffix();
       $("pano-loading").classList.remove("hidden");
@@ -146,6 +351,7 @@
         this._resize();
         this._startLoop();
         video.play().catch(() => {/* 사용자 제스처 후 재생됨 */});
+        this.Dive.onTextureReady(this);
       }, { once: true });
       video.addEventListener("error", () => this._showError(src, "360° 영상을 불러올 수 없습니다 (코덱/CORS 확인)"));
 
@@ -491,7 +697,13 @@
     },
     onWheel(e)    { e.preventDefault(); this.setFov(e.deltaY * 0.05); },
 
+    /** 닫기(×/Esc/뒤로 전부 이 함수 1개로 수렴 — grep 확인됨). 역재생 연출 뒤 실제 정리(_closeImmediate)를 돌린다.
+     *  중복 호출(연타)은 Dive.close() 안에서 무시된다("중복 탭 무시"). */
     close() {
+      if (!this.open) return;
+      this.Dive.close(this, () => this._closeImmediate());
+    },
+    _closeImmediate() {
       this.open = false;
       this._currentPin = null;
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
@@ -529,6 +741,21 @@
   ══════════════════════════════════════════ */
   if (typeof document !== "undefined" && document.addEventListener) {
   document.addEventListener("DOMContentLoaded", () => {
+    // [지휘자 발주 2026-10-01] "사진으로 빨려 들어가는" 전환 효과 — 진입점 전수(핀 탭/트리/핀패널/
+    // Radar/PanoNav)가 이미 App.openPano() 1개로 수렴한다(grep 확인됨). 20_App.js는 타 팀(열람자
+    // 요청 기능) 점유라 편집하지 않고, 위 R1/R2/R4/R6과 같은 방식으로 DOMContentLoaded 이후
+    // App.openPano를 비침투적으로 감싸(monkey-patch) Dive.open()을 선두에 끼운다(재구현 0,
+    // 원 함수는 그대로 이어서 호출). App.openPano가 아직 없거나 이미 감싸졌으면 건너뛴다.
+    if (typeof App !== "undefined" && typeof App.openPano === "function" && !App.openPano.__diveWrapped) {
+      const _origOpenPano = App.openPano.bind(App);
+      const _wrappedOpenPano = function (pin) {
+        if (typeof PanoViewer !== "undefined" && PanoViewer.Dive) PanoViewer.Dive.open(PanoViewer, pin);
+        return _origOpenPano(pin);
+      };
+      _wrappedOpenPano.__diveWrapped = true;
+      App.openPano = _wrappedOpenPano;
+    }
+
     // R1/R2 — 파노 헤더 "더보기"(꼭지점4+이슈)
     const moreBtn = document.getElementById("btn-pano-more");
     const morePanel = document.getElementById("pano-header-more");

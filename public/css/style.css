@@ -1400,6 +1400,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px, 100% 100%;
 }
 .map-viewport:active { cursor: grabbing; }
+/* [지휘자 발주 2026-10-01] 360 Dive 전환 중 뒤 도면을 살짝 블러·어둡게(06_PanoViewer.js PanoViewer.Dive).
+   #map-viewport 인라인 transform(확대)과 별개로 CSS만으로 처리 — MapCtrl/State 불변. */
+.map-viewport.dive-dim { filter: blur(3px) brightness(.72); transition: filter .2s ease; }
 /* ISO 3D 뷰 — 원근 투영 + 도면 부양감(엔지니어링 아이소메트릭) */
 .map-viewport {
   perspective: 2600px;
