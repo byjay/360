@@ -82,6 +82,8 @@ await page.setRequestInterception(true);
 page.on("request", (r) => (/^https?:\/\/(?!127\.0\.0\.1)/.test(r.url()) ? r.respond({ status: 200, contentType: "text/plain", body: "" }) : r.continue()));
 const errs = [];
 page.on("pageerror", (e) => errs.push(String(e && e.message)));
+// [WO 20261001-invite ④] 공용석 종료 — 로그인한 디자이너로 진입(세션 토큰 보유 → 목 /api/auth/me 인증). 없으면 로그인 게이트가 덮는다.
+await page.evaluateOnNewDocument(() => { try { sessionStorage.setItem("wm_id_token", "tokT"); } catch (e) {} });
 await page.goto("http://127.0.0.1:" + server.address().port + "/", { waitUntil: "load" });
 await page.waitForFunction(() => window.__T, { timeout: 20000 });
 

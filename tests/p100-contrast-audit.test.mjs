@@ -185,6 +185,16 @@ async function runFlow(vw, vh, tag) {
   await page.goto("http://127.0.0.1:" + server.address().port + "/", { waitUntil: "load" });
   await page.waitForFunction(() => window.__T, { timeout: 20000 });
 
+  // [WO 20261001-invite ④] 공용석 종료 — 비로그인 첫 화면 = 로그인 게이트. 먼저 그 화면을 재고,
+  //   이어서 "로그인한 사용자"(세션 토큰 보유 → 목 /api/auth/me 인증)로 새로고침해 나머지 화면을 잰다.
+  const gateUp = await page.waitForFunction(() => { const g = document.getElementById("login-gate"); return g && !g.classList.contains("hidden"); }, { timeout: 15000 }).then(() => true).catch(() => false);
+  ok(gateUp, tag + " 비로그인 첫 화면에 로그인 게이트가 뜬다");
+  await sleep(400);
+  await measure("login-gate");
+  await page.evaluate(() => sessionStorage.setItem("wm_id_token", "tokT"));
+  await page.reload({ waitUntil: "load" });
+  await page.waitForFunction(() => window.__T, { timeout: 20000 });
+
   async function measure(screen) {
     const rows = await page.evaluate(SCAN);
     const fails = rows.filter((r) => !r.pass);

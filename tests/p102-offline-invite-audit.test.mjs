@@ -99,9 +99,9 @@ const api = async (k, method, url, body) => {
 const getDep = async (id) => (await api("a", "GET", "/tables/deployments/" + id)).j;
 const srvPins = async (id) => JSON.parse((await getDep(id)).pins || "[]");
 const PAGE_URL = "/api/r2/object/assets/p102-base.png";
-async function seedDeployment(pins, prj) {
-  const d = (await api("a", "POST", "/tables/deployments", { title: "도면", file_name: "GA.pdf", project_id: prj, pins: JSON.stringify(pins), pages_data: JSON.stringify([PAGE_URL]), drawing_data: PAGE_URL })).j;
-  const deck = (await api("a", "POST", "/api/projects/" + prj + "/decks", { name: "D" + d.id.slice(-5), deployment_id: d.id, page: 1 })).j;
+async function seedDeployment(pins, prj, k = "a") {
+  const d = (await api(k, "POST", "/tables/deployments", { title: "도면", file_name: "GA.pdf", project_id: prj, pins: JSON.stringify(pins), pages_data: JSON.stringify([PAGE_URL]), drawing_data: PAGE_URL })).j;
+  const deck = (await api(k, "POST", "/api/projects/" + prj + "/decks", { name: "D" + d.id.slice(-5), deployment_id: d.id, page: 1 })).j;
   return { depId: d.id, deck };
 }
 const P = (id, x = 50, y = 50, extra = {}) => Object.assign({ id, x, y, page: 1, label: String(id), checkboard: true, createdAt: id }, extra);
@@ -651,8 +651,55 @@ const listed = async (k) => ((await api(k, "GET", "/api/projects")).j.data || []
   const invX = await api("a", "POST", "/api/projects/prj_I/members", { email: "eve@seastar.test", role: "designer" });
   const cross = await acceptInvite(tokenOf(invX.j.invite_url), { name: "mallory", password: "mallory-pw-1" }, "m");
   const crossMe = cross.j && cross.j.token ? await me(cross.j.token) : {};
-  console.log("   측정(B4 교차): mallory 로그인 상태로 eve 초대 수락=" + cross.status + " → 발급 세션의 신원=" + crossMe.email + " · eve 계정 비번=mallory 가 정함");
-  measure("B4", cross.status !== 200, "다른 계정이 수락 시 거부되는가(현재: 링크=무기명 자격증명, 호출자 신원 무시) — " + cross.status);
+  console.log("   측정(B4 교차): mallory 로그인 상태로 eve 초대 수락=" + cross.status + " → 발급 세션의 신원=" + crossMe.email + " (200 이면 eve 계정 비번을 mallory 가 정함)");
+  // [WO 20261001-invite · 마스터 확정 ①] 다른 계정으로 로그인한 상태의 수락 = 403, 세션 발급 0
+  ok("B4", cross.status === 403 && !(cross.j && cross.j.token) && !crossMe.email, "다른 계정(로그인 상태)이 남의 초대 수락 → 403 · 세션 발급 0 — " + cross.status);
+  // 이미 가입된 이메일 앞 대기 초대: 비로그인 수락 → 401(세션 0) · 그 이메일 로그인 → 200(멤버, 새 세션 0)
+  const invK = await api("a", "POST", "/api/projects/prj_I/members", { email: "kim@seastar.test", role: "designer" });
+  const tokK = tokenOf(invK.j && invK.j.invite_url);
+  USERS.k = "kim@seastar.test"; await addUser("k", USERS.k, false);   // 초대 후 다른 경로로 가입된 계정
+  const infoK = await api(null, "GET", "/api/invite/" + tokK);
+  const anonK = await acceptInvite(tokK, {});
+  const wrongK = await acceptInvite(tokK, {}, "m");
+  const memK0 = await first("SELECT role FROM project_members WHERE project_id = 'prj_I' AND email = ?", [USERS.k]);
+  const selfK = await acceptInvite(tokK, {}, "k");
+  const memK1 = await first("SELECT role FROM project_members WHERE project_id = 'prj_I' AND email = ?", [USERS.k]);
+  console.log("   측정(B4 기존계정): 조회 needs_account=" + (infoK.j && infoK.j.needs_account) + " · 비로그인 수락=" + anonK.status + " 토큰=" + !!(anonK.j && anonK.j.token) +
+    " · 타계정 수락=" + wrongK.status + " · 본인 로그인 수락=" + selfK.status + " 토큰=" + !!(selfK.j && selfK.j.token) + " → 멤버 " + JSON.stringify(memK0) + "→" + JSON.stringify(memK1));
+  ok("B4", anonK.status === 401 && !(anonK.j && anonK.j.token) && anonK.j && anonK.j.code === "login_required", "가입된 이메일 링크 비로그인 수락 → 401 login_required · 세션 발급 0");
+  ok("B4", wrongK.status === 403 && wrongK.j && wrongK.j.code === "wrong_account" && /초대받은 이메일로 로그인/.test(wrongK.j.error || ""), "타계정 로그인 수락 → 403 '초대받은 이메일로 로그인하세요'");
+  ok("B4", !memK0 && selfK.status === 200 && !(selfK.j && selfK.j.token) && memK1 && memK1.role === "designer", "초대 이메일로 로그인한 상태에서만 수락(멤버 편입 · 새 세션 미발급)");
+  // 클라(실 22_Auth + 실 37_Invite): 비로그인으로 링크 → 로그인 게이트 → 로그인(refresh) → 같은 토큰으로 자동 수락
+  {
+    const invC = await api("a", "POST", "/api/projects/prj_I/members", { email: "kc@seastar.test", role: "designer" });
+    const tokC = tokenOf(invC.j && invC.j.invite_url);
+    USERS.kc = "kc@seastar.test"; await addUser("kc", USERS.kc, false);
+    const KC = makeClient("kc", makeDevice());
+    const INV_SRC = rdEnv("P102_INV_SRC", M + "37_Invite.js");
+    vm.runInContext(INV_SRC, KC.sandbox);
+    const Inv = vm.runInContext("Invite", KC.sandbox);
+    KC.Auth.user = null; KC.Auth.idToken = null; KC.Auth.role = "viewer";
+    Inv._token = tokC; await Inv.open();
+    const mode0 = Inv._mode;
+    await Inv.accept();
+    const pend = KC.sandbox.sessionStorage.getItem("wm_pending_invite");
+    const gate0 = KC.gate();
+    KC.Auth.idToken = tokens.kc; await KC.Auth.refresh();          // 로그인 완료 지점(모든 로그인 경로 공통)
+    let memC = null;
+    for (let i = 0; i < 40 && !memC; i++) { await sleep(25); memC = await first("SELECT role FROM project_members WHERE project_id = 'prj_I' AND email = ?", [USERS.kc]); }
+    // 다른 계정(mallory)으로 로그인한 기기에서 링크
+    const invW = await api("a", "POST", "/api/projects/prj_I/members", { email: "kw@seastar.test", role: "viewer" });
+    const MW = makeClient("m", makeDevice());
+    vm.runInContext(INV_SRC, MW.sandbox);
+    const InvW = vm.runInContext("Invite", MW.sandbox);
+    InvW._token = tokenOf(invW.j && invW.j.invite_url); await InvW.open();
+    const errW = String(MW.sandbox.document.getElementById("inv-error").textContent || "");
+    console.log("   측정(B4 클라): 비로그인 모드=" + mode0 + " · 참여클릭 → 보류토큰=" + (pend === tokC) + " 로그인게이트=" + gate0 + " · 로그인 후 멤버=" + JSON.stringify(memC) +
+      " 토스트=" + JSON.stringify(KC.toasts.filter((t) => /참여/.test(t))) + " · 타계정 모드=" + InvW._mode + " 안내=" + errW.slice(0, 30));
+    ok("B4", mode0 === "login" && pend === tokC && gate0 >= 1, "클라: 가입된 이메일·비로그인 → 로그인 게이트 + 토큰 보류");
+    ok("B4", !!memC && memC.role === "designer" && !KC.sandbox.sessionStorage.getItem("wm_pending_invite"), "클라: 로그인 직후 같은 토큰으로 자동 수락 → 멤버 편입 · 보류 토큰 소거");
+    ok("B4", InvW._mode === "wrong" && /초대받은 이메일\(kw@seastar\.test\)로 로그인하세요/.test(errW), "클라: 다른 계정 로그인 상태 → '초대받은 이메일로 로그인하세요'");
+  }
 
   // B5 멤버 제거 → 즉시 403
   const w5a = await patchAs("n");
@@ -676,8 +723,23 @@ const listed = async (k) => ((await api(k, "GET", "/api/projects")).j.data || []
   const me6 = acc6.j && acc6.j.token ? await me(acc6.j.token) : {};
   console.log("   측정(B6): 초대=" + inv6.status + " · 가입 send=" + sc.status + " verify=" + vf.status + " → 가입 직후 멤버=" + JSON.stringify(mem6a) + " · 링크 needs_account=" + (info6.j && info6.j.needs_account) +
     " · 수락(비밀번호 없이)=" + acc6.status + " → 멤버=" + JSON.stringify(mem6b) + " · 수락 응답 세션 신원=" + me6.email);
-  measure("B6", !!mem6a, "가입만으로 자동 멤버? (현재: 아니오 — 링크 수락 필요)");
-  measure("B6", !(acc6.j && acc6.j.token), "가입된 계정 앞 링크를 비밀번호 없이 수락하면 그 계정 세션이 발급되는가(발급=링크 소지자 누구나 로그인)");
+  // [WO 20261001-invite · 마스터 확정 ②] 인증 완료 가입 = 대기 초대 자동 편입 + 초대 소진
+  const used6 = await first("SELECT used FROM project_invites WHERE project_id = 'prj_I' AND email = ?", ["late@seastar.test"]);
+  ok("B6", vf.status === 200 && !!mem6a && mem6a.role === "designer" && used6 && Number(used6.used) === 1, "메일 인증 가입 직후 대기 초대 자동 멤버 편입 · 초대 소진 — " + JSON.stringify(mem6a));
+  ok("B6", !(acc6.j && acc6.j.token), "가입된 계정 앞 링크를 비밀번호 없이 수락해도 세션 미발급 — " + acc6.status);
+  // 로그인(/api/auth/me) 경로: 인증된 계정만 편입, 미인증 계정은 편입 금지
+  const inv6v = await api("a", "POST", "/api/projects/prj_I/members", { email: "gv@seastar.test", role: "viewer" });
+  const inv6u = await api("a", "POST", "/api/projects/prj_I/members", { email: "gu@seastar.test", role: "designer" });
+  USERS.gv = "gv@seastar.test"; await addUser("gv", USERS.gv, false);
+  USERS.gu = "gu@seastar.test"; await addUser("gu", USERS.gu, false);
+  await run("UPDATE local_users SET email_verified = 0 WHERE email = ?", [USERS.gu]);
+  await me(tokens.gv); await me(tokens.gu);
+  const m6v = await first("SELECT role FROM project_members WHERE project_id = 'prj_I' AND email = ?", [USERS.gv]);
+  const m6u = await first("SELECT role FROM project_members WHERE project_id = 'prj_I' AND email = ?", [USERS.gu]);
+  const u6u = await first("SELECT used FROM project_invites WHERE project_id = 'prj_I' AND email = ?", [USERS.gu]);
+  console.log("   측정(B6 로그인): 초대=" + inv6v.status + "/" + inv6u.status + " · 인증계정 로그인 후 멤버=" + JSON.stringify(m6v) + " · 미인증계정 로그인 후 멤버=" + JSON.stringify(m6u) + " 초대 used=" + (u6u && u6u.used));
+  ok("B6", m6v && m6v.role === "viewer", "인증된 계정의 첫 로그인(/api/auth/me) → 대기 초대 자동 편입");
+  ok("B6", !m6u && u6u && Number(u6u.used) === 0, "이메일 미인증 계정은 편입 금지 · 초대 보존");
 
   // B7 역할 변경 viewer → designer 즉시 반영(그리고 역방향)
   const w7a = await patchAs("v");
@@ -694,7 +756,24 @@ const listed = async (k) => ((await api(k, "GET", "/api/projects")).j.data || []
   const w8 = await patchAs("auto");
   const m8 = await api("auto", "POST", "/api/projects/prj_I/members", { email: "stranger@seastar.test", role: "designer" });
   console.log("   측정(B8): 익명 auto-entry=" + ae.status + " kind=" + (ae.j && ae.j.kind) + " · 남의 프로젝트 배포본 PATCH=" + w8 + " · 남의 프로젝트에 멤버 초대=" + m8.status);
-  measure("B8", w8 !== 200, "로그인 없이 공용석으로 아무 프로젝트나 쓰기 가능(68897c5 의도 · 마스터 결정 사항 — 수정 안 함) PATCH=" + w8);
+  // [WO 20261001-invite · 마스터 확정 ④] 전체개방 종료 — 공용석 designer 발급 0 · 쓰기 0 · 초대 0
+  ok("B8", ae.j && ae.j.kind === "viewer" && ae.j.readonly === true && w8 === 403 && m8.status === 403, "로그인 없는 공용석: designer 발급 거부(viewer) · PATCH " + w8 + " · 초대 " + m8.status);
+  const legacy = await api("auto-designer-entry-360", "PATCH", "/tables/deployments/" + depI, { pins: "[]" });
+  ok("B8", legacy.status === 403, "레거시 고정 문자열 토큰 쓰기 거부 — " + legacy.status);
+  // 공용석(auto.designer) 소유 프로젝트: 익명 열람 토큰이 '소유자'로 둔갑하지 않음 · super 는 관리 가능
+  await mkProject("prj_AUTO", "auto.designer@seastargo.com");
+  USERS.s = "designssir@gmail.com"; await addUser("s", USERS.s, false);
+  const { depId: depAuto } = await seedDeployment([P(9101)], "prj_AUTO", "s");
+  const anonSee = ((await api("auto", "GET", "/api/projects")).j.data || []).find((p) => p.id === "prj_AUTO");
+  const sunList = await listed("c");
+  const sInv = await api("s", "POST", "/api/projects/prj_AUTO/members", { email: USERS.c, role: "designer" });
+  const curA = await getDep(depAuto);
+  const sW = await api("s", "PATCH", "/tables/deployments/" + depAuto, { base_version: curA.version, pins: curA.pins });
+  const cW = (await api("c", "PATCH", "/tables/deployments/" + depAuto, { base_version: (await getDep(depAuto)).version, pins: curA.pins })).status;
+  console.log("   측정(B8 공용석 소유): 익명 열람토큰에 prj_AUTO 노출=" + !!anonSee + (anonSee ? " is_member=" + anonSee.is_member : "") + " · chloe 허브 노출=" + sunList.includes("prj_AUTO") +
+    " · super 멤버추가=" + sInv.status + " super PATCH=" + sW.status + " · 추가된 chloe PATCH=" + cW);
+  ok("B8", !anonSee, "공용석 소유 미배포 프로젝트가 익명 열람 토큰에 노출되지 않음(소유자 둔갑 0)");
+  ok("B8", sInv.status === 200 && sW.status === 200 && cW === 200, "공용석 소유 프로젝트 = super(designssir) 가 멤버 추가·쓰기 가능 → 데이터 접근 단절 0");
 
   // B9 초대 관리 권한 — 가정: 소유자·super 만
   await mkMember("prj_I", USERS.b, "designer");
@@ -704,8 +783,20 @@ const listed = async (k) => ((await api(k, "GET", "/api/projects")).j.data || []
   const c9b = await patchAs("c");
   const d9 = await api("d", "POST", "/api/projects/prj_I/members", { email: USERS.d, role: "designer" });    // 전역 designer 아님
   console.log("   측정(B9): 멤버 designer(bruno) 초대=" + b9a.status + " 제거=" + b9b.status + " · 비멤버 designer(chloe) 자기 추가=" + c9a.status + " → PATCH=" + c9b + " · 비designer(dora) 자기 추가=" + d9.status);
-  measure("B9", b9a.status === 403 && b9b.status === 403, "멤버 designer 의 초대·제거 차단(가정: 소유자·super 만) — 초대 " + b9a.status + " 제거 " + b9b.status);
-  measure("B9", c9a.status === 403, "비멤버 designer 가 자기 자신을 designer 로 추가 → B5 쓰기 경계 우회 — 추가 " + c9a.status + " → PATCH " + c9b);
+  ok("B9", b9a.status === 403 && b9b.status === 403, "멤버 designer 의 초대·제거 차단(소유자·super 만) — 초대 " + b9a.status + " 제거 " + b9b.status);
+  ok("B9", c9a.status === 403 && c9b === 403, "비멤버 designer 가 자기 자신을 designer 로 추가 → 403 · 쓰기 403 — 추가 " + c9a.status + " → PATCH " + c9b);
+  // 역할 변경 · 접근신청 승인 · 권한 매트릭스(형제 경로)도 같은 규칙
+  const b9c = await api("b", "POST", "/api/projects/prj_I/members", { email: USERS.b, role: "designer" });          // 멤버 designer 의 역할 변경(자기 자신)
+  const b9m = await api("b", "POST", "/api/admin/access-matrix", { updates: [{ email: "mx@seastar.test", project_id: "prj_I", role: "designer" }] });
+  const mx = await first("SELECT role FROM project_members WHERE project_id = 'prj_I' AND email = ?", ["mx@seastar.test"]);
+  await run("INSERT INTO project_access_requests (id, project_id, email, message, status, created_at, updated_at) VALUES ('par_p102', 'prj_I', ?, '', 'pending', ?, ?)", [USERS.d, Date.now(), Date.now()]);
+  const b9r = await api("b", "POST", "/api/projects/prj_I/access-requests/par_p102/approve");
+  const sOwn = await api("s", "DELETE", "/api/projects/prj_I/members/" + encodeURIComponent(USERS.a));
+  const aOwn = await api("a", "DELETE", "/api/projects/prj_I/members/" + encodeURIComponent(USERS.a));
+  const sAdd = await api("s", "POST", "/api/projects/prj_I/members", { email: "byadmin@seastar.test", role: "viewer" });
+  console.log("   측정(B9 형제): 멤버 역할변경=" + b9c.status + " · 매트릭스 반영=" + JSON.stringify(mx) + " · 접근신청 승인=" + b9r.status + " · 소유자 제거(super)=" + sOwn.status + " (본인)=" + aOwn.status + " · super 초대=" + sAdd.status);
+  ok("B9", b9c.status === 403 && !mx && b9r.status === 403, "멤버 designer 의 역할 변경·매트릭스·접근신청 승인도 403");
+  ok("B9", sOwn.status === 400 && aOwn.status === 400 && sAdd.status === 200, "소유자는 제거 불가(super·본인 모두) · super 는 초대 가능");
   ok("B9", d9.status === 403, "전역 designer 가 아닌 사용자의 멤버 관리 거부 — " + d9.status);
 }
 

@@ -1,6 +1,9 @@
   // [마스터 2026-08-31] 디자이너 기능은 로그인 없이 바로 진입, 관리자만 구글 로그인 필요.
   //   마스터가 "다시 로그인 필수로" 지시하면 이 값을 false 로 바꾸면 즉시 원복(로그인 게이트 필수).
-  const AUTO_DESIGNER_ENTRY = true;
+  // [WO 20261001-invite · 마스터 확정 ④] 공용석 종료 → false. 로그인 없는 사용자는 로그인/가입 게이트.
+  //   단, 열람 링크(?d= · /srview)는 종전대로 **열람 전용** 토큰으로 진입한다(_isViewLink — 쓰기 자격 아님).
+  //   짝 스위치: src/index.tsx AUTO_DESIGNER_TOKEN_ENABLED · TEMP_OPEN_ALL_TENANTS.
+  const AUTO_DESIGNER_ENTRY = false;
   // [P48 보안 2026-09-18] 이 고정 문자열은 **공개 번들에 박혀 있으므로 비밀이 아니다.**
   //   서버(src/index.tsx)는 이제 이 문자열을 **열람 전용**으로만 인정한다 — 쓰기는 거부(403).
   //   편집 가능한 자동입장 토큰은 서버가 서명해 발급한다(POST /api/auth/auto-entry).
@@ -110,9 +113,17 @@
       // [버그①수정 2026-08-31] await 누락으로 ProjectHub.load()가 토큰 세팅 전에 실행돼
       //   "등록된 프로젝트가 없습니다"로 렌더되던 레이스 제거 — 토큰세팅+refresh 완료를 반드시 기다린다.
       if (!this.user && !this._hasLocalToken()) {
-        if (AUTO_DESIGNER_ENTRY) await this._autoDesignerEntry();
+        if (AUTO_DESIGNER_ENTRY || this._isViewLink()) await this._autoDesignerEntry();
         else this._openGate();
       }
+    },
+
+    /** 열람 링크(배포 `?d=` · 공유 `/srview/...`)로 들어왔는가 — 공용석 종료 후 자동입장 허용 조건.
+     *  🔴 _autoDesignerEntry 의 kind='viewer' 조건과 **같은 두 가지**여야 한다(p48·p61 계약 문구를 보존하려고 거기는 원형 유지).
+     *  여기에 없는 링크 유형은 로그인 게이트로 간다(안전한 쪽으로 실패). */
+    _isViewLink() {
+      try { if (new URLSearchParams(location.search).get("d")) return true; } catch (e) {}
+      return typeof ShareLink !== "undefined" && !!ShareLink.token();
     },
 
     /** 서버(/api/auth/config)에서 Google Client ID 를 받아 GIS 재초기화.
@@ -301,6 +312,10 @@
           try { if (typeof SyncQueue !== "undefined" && SyncQueue._onReconnect) SyncQueue._onReconnect(); } catch (e) {}
         }
         this._saveAuthCache(data);   // 성공 시 권한 스냅샷 저장
+        // [WO 20261001-invite ①] 로그인 완료 → 보류된 초대 링크를 같은 토큰으로 자동 수락 재시도.
+        //   Firebase·GIS·회사이메일 로그인이 모두 refresh() 를 지나므로 이 한 지점에서만 건다(§G-2-5).
+        //   공용석/열람 토큰(auto)은 실계정이 아니므로 제외.
+        if (!data.auto && !data.demo) { try { if (typeof Invite !== "undefined" && Invite.resumePending) Promise.resolve(Invite.resumePending()).catch(() => {}); } catch (e) {} }
       } else if (!netFail) {
         // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
         this.user = null; this.role = "viewer"; this.idToken = null;

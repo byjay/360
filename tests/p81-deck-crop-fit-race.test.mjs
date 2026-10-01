@@ -93,6 +93,8 @@ async function openAndMeasure(bundle, flow) {
   const page = await browser.newPage();
   try {
     await page.setViewport({ width: 1280, height: 800 });
+    // [WO 20261001-invite ④] 공용석 종료 — 로그인한 사용자로 진입(세션 토큰 보유 → 목 /api/auth/me 인증). 없으면 로그인 게이트가 허브를 덮는다.
+    await page.evaluateOnNewDocument(() => { try { sessionStorage.setItem("wm_id_token", "tokT"); } catch (e) {} });
     await page.goto("http://127.0.0.1:" + server.address().port + "/", { waitUntil: "load" });
     const clickHub = async (id) => {
       const sel = '[data-deck-id="' + id + '"]';

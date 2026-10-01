@@ -50,7 +50,8 @@ const SUPER_ADMIN = SUPER_ADMIN_FALLBACK // 모듈 레벨 데모/문서용 기�
 //   AUTO_DESIGNER_ENTRY(로그인 없는 데모 디자이너 자동입장)와 짝을 이루는 임시 스위치.
 //   구글 로그인을 재개하면 이 값을 false 로 되돌려 테넌트 격리를 즉시 복원한다.
 //   권한 체크(requireDesigner/requireAdmin/isSuperAdmin)는 절대 건드리지 않음 — "보이는 범위"만 확장.
-const TEMP_OPEN_ALL_TENANTS = true
+// [WO 20261001-invite · 마스터 확정 ④] 전체개방 종료 → false. 소유자/super 외 멤버 관리 불가 · 허브는 테넌트/멤버 기준.
+const TEMP_OPEN_ALL_TENANTS = false
 
 /* ══ [마스터 2026-08-31] 로그인 없는 디자이너 자동입장 전용 토큰 ═════════════
  * 배경: 데모 토큰 패밀리(demo-super/demo-designer/demo-viewer)는 2026-06-23 P0 보안조치로
@@ -61,7 +62,10 @@ const TEMP_OPEN_ALL_TENANTS = true
  *   ② roleOf 는 super/admin 을 통과하지 못하므로 결과가 언제나 'designer'.
  *   ③ demoLoginEnabled(c) 와 완전히 독립 — 이 스위치 하나로만 열고 닫는다.
  * 되돌리기: 아래 ENABLED=false + 클라 public/js/modules/22_Auth.js 의 AUTO_DESIGNER_ENTRY=false. */
-const AUTO_DESIGNER_TOKEN_ENABLED = true   // 2026-08-31 마스터 지시: 로그인 없이 디자이너 진입. 구글로그인 재개 시 false.
+// [WO 20261001-invite · 마스터 확정 ④] 공용석 종료 → false. 이 스위치는 **편집(designer) 공용석**만 닫는다.
+//   열람 전용 서명 토큰(ae1 kind=viewer: `?d=` 배포 링크 · /srview 공유 링크 · 초대코드 게이트 통행증)은 유지된다
+//   — 끄면 공유 링크 열람이 전부 끊기기 때문(autoEntryFromToken 참조).
+const AUTO_DESIGNER_TOKEN_ENABLED = false
 const AUTO_DESIGNER_TOKEN = 'auto-designer-entry-360'
 const AUTO_DESIGNER_EMAIL = 'auto.designer@seastargo.com'   // 예약 계정(실사용자 아님)
 const AUTO_DESIGNER_USER = { email: AUTO_DESIGNER_EMAIL, name: '설계자', picture: '', role: 'designer' as const }
@@ -165,7 +169,6 @@ async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?:
 
 /** 자동입장 서명 토큰 검증 → 사용자(열람전용 여부 포함). 서명/만료 불일치면 null. */
 async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
-  if (!AUTO_DESIGNER_TOKEN_ENABLED) return null
   if (!token.startsWith(AUTO_ENTRY_PREFIX)) return null
   const rest = token.slice(AUTO_ENTRY_PREFIX.length)
   const dot = rest.lastIndexOf('.')
@@ -183,6 +186,8 @@ async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
   try { p = JSON.parse(b64uDec(payload)) } catch { return null }
   if (!p || typeof p.exp !== 'number' || p.exp < Date.now()) return null
   if (p.k !== 'designer' && p.k !== 'viewer') return null
+  // [WO 20261001-invite] 공용석이 닫히면 이미 발급된 편집 토큰도 즉시 무효(열람 전용 토큰은 유지)
+  if (p.k === 'designer' && !AUTO_DESIGNER_TOKEN_ENABLED) return null
   // [P63] _gate = 초대코드를 통과한 프로젝트 id(없으면 null). 🔴 쓰기 권한과 무관하다.
   return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null }
 }
@@ -555,7 +560,8 @@ async function resolveLocalSession(c: any, token: string): Promise<any | null> {
     ).bind(sess.email).first()
     if (!u) return null
     // SELECT * 라 must_change_password 컬럼 미적용(migration 전)이면 undefined→false 로 안전
-    return { email: String(u.email).toLowerCase(), name: u.name || '', picture: '', _local: true, must_change: Number(u.must_change_password || 0) === 1 }
+    return { email: String(u.email).toLowerCase(), name: u.name || '', picture: '', _local: true, must_change: Number(u.must_change_password || 0) === 1,
+      _emailVerified: Number(u.email_verified || 0) === 1 }   // [WO 20261001-invite] 대기 초대 자동 편입 자격
   } catch { return null }
 }
 
@@ -595,7 +601,8 @@ async function resolveUser(c: any): Promise<any | null> {
   // 2) 실패 시 Firebase ID 토큰 검증 — env.FIREBASE_PROJECT_ID(sedmsys) 설정 시 해당 프로젝트만 신뢰
   if (!payload) payload = await verifyFirebaseToken(token, (c.env && c.env.FIREBASE_PROJECT_ID) || undefined)
   if (!payload) return null
-  return { email: String(payload.email).toLowerCase(), name: payload.name || payload.display_name || '', picture: payload.picture || '' }
+  return { email: String(payload.email).toLowerCase(), name: payload.name || payload.display_name || '', picture: payload.picture || '',
+    _emailVerified: payload.email_verified === true }   // [WO 20261001-invite] Google/Firebase 가 인증한 이메일만 자동 편입
 }
 
 /* ══ [P48] 🔴 쓰기 차단 단일 지점(chokepoint) ═══════════════════════════════
@@ -718,6 +725,9 @@ function roleOf(c: any, email: string, designer: boolean): 'super' | 'admin' | '
 app.get('/api/auth/me', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ authenticated: false, role: 'viewer' })
+  // [WO 20261001-invite · 마스터 확정 ②] 로그인(구글 첫 로그인 포함) 시 그 이메일 앞 대기 초대를 자동 편입.
+  //   🔴 이메일 인증된 실계정만(_emailVerified) — 데모/공용석/미인증 계정은 편입 금지. 편입 후 역할 판정이 바뀌므로 먼저 수행.
+  if (!user._demo && !user._auto && user._emailVerified) await claimPendingInvites(c, user.email)
   const designer = await isDesigner(c, user.email)
   const role = roleOf(c, user.email, designer)
   // 로그인 시 디자이너의 표시 이름 갱신(존재 시, 데모 계정 제외)
@@ -965,6 +975,9 @@ app.post('/api/signup/verify', async (c) => {
     }
   }
 
+  // [WO 20261001-invite · 마스터 확정 ②] 메일 인증코드 검증을 통과한 이 시점 = 이메일 소유 증명 → 대기 프로젝트 초대 자동 편입
+  const claimed = await claimPendingInvites(c, email)
+
   // 자동 로그인: 세션 토큰 발급
   const token = randToken('local-')
   const exp = now + LOCAL_SESSION_TTL_MS // 30일 (SoT: LOCAL_SESSION_TTL_MS)
@@ -975,7 +988,7 @@ app.post('/api/signup/verify', async (c) => {
   let grantedRole = (invite && invite.role) ? invite.role : 'viewer'
   if (isDesignerDomain(c, email)) grantedRole = 'designer'
   await logActivity(c, 'signup.completed', { actor: { email }, targetType: 'local_user', targetId: email, detail: { domain: emailDomain(email), invited: !!invite, company, department, role: grantedRole } })
-  return c.json({ success: true, token, email, name: name || email.split('@')[0], company, department, role: grantedRole, invited: !!invite })
+  return c.json({ success: true, token, email, name: name || email.split('@')[0], company, department, role: grantedRole, invited: !!invite, projects_joined: claimed })
 })
 
 // 3) 로그인(이메일 + 비밀번호)
@@ -1623,7 +1636,7 @@ async function visibleProjectFilter(c: any, user: any): Promise<((p: any) => boo
   const globalDesigner = email ? await isDesigner(c, email) : false
   return (p: any) => {
     const role = myRole.get(p.id)
-    const isOwner = !!email && p.owner === email
+    const isOwner = isProjectOwner(p.owner, email)
     // (턴④) 기본 가시성: 멤버 OR 미배정(공개) OR 소유자
     const baseVisible = role != null || !restricted.has(p.id) || isOwner
     if (!baseVisible) return false
@@ -1635,14 +1648,64 @@ async function visibleProjectFilter(c: any, user: any): Promise<((p: any) => boo
   }
 }
 
-/** 사용자가 특정 프로젝트의 멤버를 관리(배정/해제)할 수 있는가: 슈퍼 또는 소유자 또는 designer-역할 멤버 */
+/** [WO 20261001-invite] 프로젝트 소유자 판정의 단일 지점(§G-2-5).
+ *  🔴 공용석 예약계정(AUTO_DESIGNER_EMAIL)은 **누구의 소유자도 아니다** — 열람 전용 서명 토큰(공유 링크 방문자)도
+ *  같은 이메일을 쓰므로, 이 예외가 없으면 익명 방문자가 공용석이 만든 프로젝트(sunbo 등)의 '소유자'로 둔갑한다.
+ *  공용석 소유 프로젝트는 super 관리자가 관리한다(isSuperAdmin 우회). */
+function isProjectOwner(owner: any, email: any): boolean {
+  const e = String(email || '').trim().toLowerCase()
+  if (!e || e === AUTO_DESIGNER_EMAIL) return false
+  return String(owner || '').trim().toLowerCase() === e
+}
+
+/** [WO 20261001-invite · 마스터 확정 ③] 멤버 초대·제거·역할 변경(접근신청 승인·권한 매트릭스 포함) 권한 —
+ *  **프로젝트 소유자와 super 관리자만**. designer 멤버·전역 designer 는 403(자기 자신 추가도 동일).
+ *  근본원인(p102 B9): canManageProject 가 designer 멤버까지 허용 + TEMP_OPEN_ALL_TENANTS 로 전원 허용 →
+ *  비멤버 designer 가 자기를 멤버로 추가해 B5 쓰기 경계를 우회했다. */
+async function canManageMembers(c: any, user: any, projectId: string): Promise<boolean> {
+  if (!user) return false
+  if (isSuperAdmin(c, user.email)) return true
+  const own: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ? AND deleted = 0').bind(projectId).first()
+  return !!own && isProjectOwner(own.owner, user.email)
+}
+
+/** [WO 20261001-invite · 마스터 확정 ②] 이메일 앞 대기 초대(project_invites) → 멤버 자동 편입 + 초대 소진.
+ *  🔴 호출부는 **이메일 소유가 증명된 시점**만: 가입 인증코드 검증(/api/signup/verify) · 인증된 계정 로그인(/api/auth/me).
+ *  토큰 수락과 같은 compare-and-swap(used=0 → 1)으로 동시 요청에도 1회만 편입. 삭제된 프로젝트·만료 초대는 건너뛴다.
+ *  반환: 편입된 프로젝트 수. */
+async function claimPendingInvites(c: any, rawEmail: string): Promise<number> {
+  const email = String(rawEmail || '').trim().toLowerCase()
+  if (!email || email === AUTO_DESIGNER_EMAIL) return 0
+  const now = Date.now()
+  let rows: any[] = []
+  try {
+    const r: any = await c.env.DB.prepare(
+      `SELECT i.id, i.project_id, i.role, i.invited_by FROM project_invites i JOIN projects p ON p.id = i.project_id
+       WHERE lower(i.email) = ? AND i.used = 0 AND i.revoked = 0 AND i.expires_at > ? AND p.deleted = 0`
+    ).bind(email, now).all()
+    rows = r.results || []
+  } catch { return 0 }
+  let n = 0
+  for (const inv of rows) {
+    const consumed: any = await c.env.DB.prepare('UPDATE project_invites SET used = 1, used_at = ? WHERE id = ? AND used = 0 AND revoked = 0')
+      .bind(now, inv.id).run()
+    if (!Number((consumed && consumed.meta && (consumed.meta.changes ?? consumed.meta.changed_db)) ?? 0)) continue
+    await grantProjectMembership(c, inv.project_id, email, inv.role, inv.invited_by || 'invite', now)
+    await logActivity(c, 'project.invite.auto_claim', { actor: { email }, targetType: 'project', targetId: inv.project_id, detail: { role: inv.role, invite: inv.id } })
+    n++
+  }
+  return n
+}
+
+/** 사용자가 특정 프로젝트를 관리(공유코드·배포·삭제·멤버목록 열람)할 수 있는가: 슈퍼 또는 소유자 또는 designer-역할 멤버.
+ *  🔴 멤버 초대·제거·역할 변경은 이 함수가 아니라 canManageMembers(소유자·super 만)로 판정한다. */
 async function canManageProject(c: any, user: any, projectId: string): Promise<boolean> {
   if (!user) return false
   if (isSuperAdmin(c, user.email)) return true
   // [임시개방] 완성 전까지만. 구글로그인 재개 시 TEMP_OPEN_ALL_TENANTS=false 로 되돌리면 소유자/슈퍼만 관리 가능하도록 복원됨
   if (TEMP_OPEN_ALL_TENANTS) return true
   const own: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ? AND deleted = 0').bind(projectId).first()
-  if (own && own.owner === user.email) return true
+  if (own && isProjectOwner(own.owner, user.email)) return true
   const m: any = await c.env.DB.prepare("SELECT role FROM project_members WHERE project_id = ? AND email = ?").bind(projectId, user.email).first()
   return !!(m && m.role === 'designer')
 }
@@ -1667,7 +1730,7 @@ async function deploymentWriteDenied(c: any, user: any, projectId: any): Promise
   if (!email) return { status: 403, error: 'forbidden' }
   if (isSuperAdmin(c, email)) return null
   if (AUTO_DESIGNER_TOKEN_ENABLED && email === AUTO_DESIGNER_EMAIL) return null
-  if (String(p.owner || '').trim().toLowerCase() === email) return null
+  if (isProjectOwner(p.owner, email)) return null
   const m: any = await c.env.DB.prepare('SELECT role FROM project_members WHERE project_id = ? AND lower(email) = ?').bind(pid, email).first()
   if (m && m.role === 'designer') return null
   return { status: 403, error: 'forbidden — not a designer of this project' }
@@ -1732,13 +1795,13 @@ app.get('/api/projects', async (c) => {
   }
   const list = TEMP_OPEN_ALL_TENANTS ? (results || []) : (results || []).filter((p: any) => {
     if (isSuperUser) return true
-    const isOwner = !!email && p.owner === email
+    const isOwner = isProjectOwner(p.owner, email)
     if (globalDesigner || isOwner || myRole.has(p.id)) return true
     return !!p.published  // 비멤버도 배포된 프로젝트는 보임(잠금 상태로)
   })
   return c.json({ data: list.map((p: any) => {
-    const isOwner = !!email && p.owner === email
-    const isMember = !!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
+    const isOwner = isProjectOwner(p.owner, email)
+    const isMember =!!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
     // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/전역디자이너/슈퍼 > 없음)
     const effRole = myRole.get(p.id) || ((isSuperUser || globalDesigner || isOwner) ? 'designer' : null)
     const base = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null }
@@ -2276,7 +2339,8 @@ app.post('/api/projects/:id/members', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const pid = c.req.param('id')
-  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  // [WO 20261001-invite ③] 초대·역할 변경 = 소유자·super 만(자기 자신 추가 포함)
+  if (!(await canManageMembers(c, user, pid))) return c.json({ error: 'forbidden — only the project owner or super admin can manage members' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const email = normEmail(body.email)
@@ -2334,7 +2398,7 @@ app.delete('/api/projects/:id/invites/:iid', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const pid = c.req.param('id')
-  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  if (!(await canManageMembers(c, user, pid))) return c.json({ error: 'forbidden — only the project owner or super admin can manage members' }, 403)
   const iid = decodeURIComponent(c.req.param('iid'))
   await c.env.DB.prepare('UPDATE project_invites SET revoked = 1 WHERE id = ? AND project_id = ?').bind(iid, pid).run()
   await logActivity(c, 'project.member.invite_revoke', { actor: user, targetType: 'project', targetId: pid, detail: { invite: iid } })
@@ -2351,6 +2415,7 @@ app.get('/api/invite/:token', async (c) => {
     project_name: (proj && proj.name) || inv.project_id,
     expires_at: inv.expires_at,
     needs_account: !exist,                            // false → 이름·비번을 다시 묻지 않는다
+    needs_login: !!exist,                             // [WO 20261001-invite] 가입된 이메일 → 그 이메일로 로그인한 상태에서만 수락
     name: (exist && exist.name) || ''
   })
 })
@@ -2361,10 +2426,27 @@ app.post('/api/invite/:token/accept', async (c) => {
   let body: any
   try { body = await c.req.json() } catch { body = {} }
 
+  // [WO 20261001-invite · 마스터 확정 ①] 🔴 초대 링크는 신원 증명이 아니다 — 호출자 신원과 묶는다.
+  //   근본원인(p102 B4): 종전엔 링크 소지자 누구에게나 inv.email 의 세션을 발급했다 → 기존 계정 탈취.
+  //   · 로그인 상태(실계정) + 이메일 ≠ 초대 이메일 → 403 wrong_account
+  //   · 로그인 상태 + 이메일 = 초대 이메일 → 멤버 편입만(새 세션 발급 0)
+  //   · 비로그인 + 이미 가입된 이메일 → 401 login_required (그 이메일로 로그인 후 같은 토큰으로 재시도)
+  //   · 비로그인 + 신규 이메일 → 종전대로 이름·비밀번호로 가입 + 수락
+  //   공용석/열람 토큰·데모는 실계정 신원이 아니므로 '비로그인'으로 취급한다.
+  const caller = await getUser(c)
+  const callerEmail = (caller && !caller._auto && !caller._demo) ? String(caller.email || '').trim().toLowerCase() : ''
+  const invEmail = String(inv.email || '').trim().toLowerCase()
+  if (callerEmail && callerEmail !== invEmail) {
+    return c.json({ error: '초대받은 이메일로 로그인하세요. (초대: ' + inv.email + ' · 현재 로그인: ' + callerEmail + ')', code: 'wrong_account', invite_email: inv.email }, 403)
+  }
   const exist: any = await c.env.DB.prepare('SELECT email FROM local_users WHERE email = ? AND deleted = 0').bind(inv.email).first().catch(() => null)
+  if (!callerEmail && exist) {
+    return c.json({ error: '이미 가입된 이메일입니다 — ' + inv.email + ' 로 로그인하면 자동으로 참여됩니다.', code: 'login_required', invite_email: inv.email }, 401)
+  }
+  const selfAccept = !!callerEmail          // 초대 이메일 본인이 로그인한 상태
   const name = String(body.name || '').trim()
   const password = String(body.password || '')
-  if (!exist) {
+  if (!exist && !selfAccept) {
     // 🔴 이름 필수 · 비밀번호 필수(가입과 동일 기준 8자) — 기본 비밀번호는 존재하지 않는다.
     if (!name) return c.json({ error: '이름을 입력해 주세요.' }, 400)
     if (password.length < INVITE_MIN_PASSWORD) return c.json({ error: `비밀번호는 ${INVITE_MIN_PASSWORD}자 이상이어야 합니다.` }, 400)
@@ -2378,6 +2460,12 @@ app.post('/api/invite/:token/accept', async (c) => {
   if (!changes) return c.json({ error: '이미 사용된 초대 링크입니다.' }, 409)
 
   const now = Date.now()
+  if (selfAccept) {
+    // 본인 로그인 상태 — 계정 생성·세션 발급 없이 멤버 편입만(이미 가진 세션을 그대로 쓴다)
+    await grantProjectMembership(c, inv.project_id, inv.email, inv.role, inv.invited_by || 'invite', now)
+    await logActivity(c, 'project.invite.accept', { actor: { email: inv.email }, targetType: 'project', targetId: inv.project_id, detail: { role: inv.role, created: false, logged_in: true } })
+    return c.json({ success: true, email: inv.email, role: inv.role, project_id: inv.project_id, created: false, logged_in: true })
+  }
   if (!exist) {
     const { hash, salt } = await hashPassword(password)
     await c.env.DB.prepare(
@@ -2436,8 +2524,11 @@ app.delete('/api/projects/:id/members/:email', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const pid = c.req.param('id')
-  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  if (!(await canManageMembers(c, user, pid))) return c.json({ error: 'forbidden — only the project owner or super admin can manage members' }, 403)
   const email = normEmail(decodeURIComponent(c.req.param('email')))
+  // [WO 20261001-invite ③] 소유자 자신은 제거할 수 없다(super 포함)
+  const ownRow: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ?').bind(pid).first()
+  if (ownRow && isProjectOwner(ownRow.owner, email)) return c.json({ error: '프로젝트 소유자는 제거할 수 없습니다.' }, 400)
   await c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').bind(pid, email).run()
   await logActivity(c, 'project.member.remove', { actor: user, targetType: 'project', targetId: pid, detail: { email } })
   return c.json({ success: true })
@@ -2487,7 +2578,8 @@ app.post('/api/projects/:id/access-requests/:rid/approve', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'login required' }, 401)
   const pid = c.req.param('id')
-  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  // [WO 20261001-invite ③] 승인 = 멤버 추가 → 소유자·super 만
+  if (!(await canManageMembers(c, user, pid))) return c.json({ error: 'forbidden — only the project owner or super admin can manage members' }, 403)
   const rid = c.req.param('rid')
   const req: any = await c.env.DB.prepare('SELECT * FROM project_access_requests WHERE id = ? AND project_id = ?').bind(rid, pid).first()
   if (!req) return c.json({ error: 'not found' }, 404)
@@ -2507,7 +2599,7 @@ app.post('/api/projects/:id/access-requests/:rid/reject', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'login required' }, 401)
   const pid = c.req.param('id')
-  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  if (!(await canManageMembers(c, user, pid))) return c.json({ error: 'forbidden — only the project owner or super admin can manage members' }, 403)
   const rid = c.req.param('rid')
   const req: any = await c.env.DB.prepare('SELECT id FROM project_access_requests WHERE id = ? AND project_id = ?').bind(rid, pid).first()
   if (!req) return c.json({ error: 'not found' }, 404)
@@ -2530,6 +2622,8 @@ app.get('/api/admin/project-access-requests', async (c) => {
     return c.json({ data: results || [] })
   }
   // 내가 관리하는 프로젝트만 (소유자 OR designer 역할)
+  // [WO 20261001-invite] 공용석/열람 토큰(auto.designer)은 아무 프로젝트도 관리하지 않는다(isProjectOwner 와 같은 규칙)
+  if (user._auto || !isProjectOwner(user.email, user.email)) return c.json({ data: [] })
   const [owned, designerOf]: any[] = await Promise.all([
     c.env.DB.prepare("SELECT id FROM projects WHERE owner = ? AND deleted = 0").bind(user.email).all(),
     c.env.DB.prepare("SELECT project_id FROM project_members WHERE email = ? AND role = 'designer'").bind(user.email).all(),
@@ -2596,10 +2690,13 @@ app.post('/api/admin/access-matrix', async (c) => {
   const now = Date.now()
   let count = 0
   for (const u of updates) {
-    if (!isSuperAdmin(c, user.email) && !(await canManageProject(c, user, u.project_id))) continue
+    // [WO 20261001-invite ③] 매트릭스도 멤버 추가·제거·역할 변경 → 소유자·super 만 · 소유자 제거 불가
+    if (!(await canManageMembers(c, user, u.project_id))) continue
     const email = normEmail(u.email)
     if (!email || !isValidEmail(email)) continue
     if (u.role === 'none') {
+      const ownRow: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ?').bind(u.project_id).first()
+      if (ownRow && isProjectOwner(ownRow.owner, email)) continue
       await c.env.DB.prepare('DELETE FROM project_members WHERE project_id = ? AND email = ?').bind(u.project_id, email).run()
     } else {
       const role = ['viewer', 'editor', 'designer'].includes(u.role) ? u.role : 'viewer'

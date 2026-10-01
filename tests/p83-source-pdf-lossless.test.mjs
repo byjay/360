@@ -142,6 +142,8 @@ async function open(server, ctx, opts = {}) {
     if (/^https?:\/\/(?!127\.0\.0\.1)/.test(url)) return r.respond({ status: 200, contentType: "application/javascript", body: "" });
     return r.continue();
   });
+  // [WO 20261001-invite ④] 공용석 종료 — 로그인한 디자이너로 진입(세션 토큰 보유 → 목 /api/auth/me 인증). 없으면 로그인 게이트가 덮는다.
+  await page.evaluateOnNewDocument(() => { try { sessionStorage.setItem("wm_id_token", "tokT"); } catch (e) {} });
   await page.goto("http://127.0.0.1:" + server.address().port + "/", { waitUntil: "load" });
   await page.waitForFunction(() => window.__T && window.pdfjsLib, { timeout: 20000 });
   await page.evaluate(() => {

@@ -414,7 +414,13 @@ select option,
 .login-card .signin-sub { color: #9aa3b2; }
 .login-logo-bottom { display: flex; flex-direction: column; align-items: center; gap: 5px; margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.07); }
 .login-logo-bottom img { max-height: 40px; max-width: 150px; object-fit: contain; opacity: .92; }
-.login-corp { font-size: 10px; color: #6b7079; letter-spacing: .5px; }
+.login-corp { font-size: 10px; color: #9aa3b2; letter-spacing: .5px; }
+/* [WO 20261001-invite] 공용석 종료로 로그인 게이트가 모든 비로그인 사용자의 첫 화면이 됨 → p100 실측 대비 미달 4건 교정.
+   style.css 의 .signin-or/.signin-footer/.signin-admin-mail 는 밝은 카드용 색이라 어두운 .login-card(#0b0e14) 위에서
+   4.06 · 3.3 · 1.59 · (corp 3.88):1 이었다. 아래 값은 #0b0e14 기준 6.34 · 7.54 · 12.48 · 7.59:1. */
+.login-card .signin-or { color: #9a9387; }
+.login-card .signin-footer { color: #a8a195; }
+.login-card .signin-admin-mail { color: #d6cfc2; }
 
 /* [마스터: '전체 포인트' 패널 글자 안 보임] 밝은 크림 그라데이션 위 밝은 글자 → 안 보임.
    밝은 패널 + 검은 글자로 고정(흰바탕=검정 규칙). 강조 배지(카운트/종류)는 유지. */

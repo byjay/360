@@ -22,6 +22,7 @@
  *   가짜는 D1 데이터스토어뿐이다(핸들러·라우팅·인증체인은 전부 실 소스).
  */
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -176,12 +177,22 @@ console.log("\n[④ 마스터(슈퍼관리자) 쓰기 200 (회귀)]");
   ok(r2.status === 200, "④ 슈퍼관리자 POST /api/projects → 200 (실제 " + r2.status + ")");
 }
 
-console.log("\n[⑤ 자동 디자이너 직접 접속(`?d=` 없음, kind=designer) 쓰기 200 (회귀)]");
+// [WO 20261001-invite · 마스터 확정 ④] 공용석(로그인 없는 designer) 종료 — 종전 ⑤ "designer 발급·PATCH 200" 은
+//   마스터 결정으로 뒤집혔다. 이제: designer 를 요청해도 열람전용 발급 · 종전에 발급된 **유효 서명** designer 토큰도 무효.
+console.log("\n[⑤ 공용석 종료 — kind=designer 요청도 열람전용 · 기존 서명 designer 토큰 무효]");
 const designer = await mint("designer");
-ok(designer.kind === "designer" && designer.readonly === false, "⑤ designer 종류로 발급됨: kind=" + designer.kind);
+ok(designer.kind === "viewer" && designer.readonly === true, "⑤ designer 요청 → 열람전용 발급: kind=" + designer.kind + " readonly=" + designer.readonly);
 {
-  const r = await call("PATCH", "/tables/deployments/" + DEP_ID, { token: designer.token, body: { pins: [{ id: "p3" }] } });
-  ok(r.status === 200, "⑤ 자동입장(designer) PATCH → 200 (실제 " + r.status + ")");
+  const before = STATE.writes.length;
+  // 공용석이 열려 있던 시절 발급된 것과 동일한 **정상 서명** designer 토큰(서버 비밀키로 HMAC)
+  const secret = STATE.settings.auto_entry_secret;
+  const pl = Buffer.from(JSON.stringify({ k: "designer", exp: Date.now() + 1e6, n: "p48" })).toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(pl).digest("base64url");
+  const old = "ae1." + pl + "." + sig;
+  const r = await call("PATCH", "/tables/deployments/" + DEP_ID, { token: old, body: { pins: [{ id: "p3" }] } });
+  const me = await (await call("GET", "/api/auth/me", { token: old })).json();
+  ok(!!secret && (r.status === 401 || r.status === 403) && STATE.writes.length === before, "⑤ 정상 서명 designer 토큰 PATCH 거부 · 쓰기 0 (실제 " + r.status + ")");
+  ok(me.authenticated === false, "⑤ 정상 서명 designer 토큰 = 미인증(/api/auth/me authenticated=" + me.authenticated + ")");
 }
 
 console.log("\n[⑥ 🔴 고정 문자열 토큰만으로는 쓰기 불가 — 번들에 박혀 공개된 값이므로 자격이 될 수 없다]");
@@ -190,8 +201,12 @@ console.log("\n[⑥ 🔴 고정 문자열 토큰만으로는 쓰기 불가 — �
   const r = await call("PATCH", "/tables/deployments/" + DEP_ID, { token: LEGACY, body: { pins: [{ id: "hack2" }] } });
   ok(r.status === 403, "⑥ 고정 문자열 PATCH → 403 (실제 " + r.status + ")");
   ok(STATE.writes.length === before, "⑥ DB 쓰기 0건");
+  // [WO 20261001-invite ④] 공용석 종료 → 공개 고정 문자열은 열람 자격도 없다(= 익명). 종전 "GET 200" 은 마스터 결정으로 뒤집힘.
+  //   열람 링크(?d= · /srview) 방문자는 서버 서명 viewer 토큰(②)으로 계속 열람한다.
   const g = await call("GET", "/tables/deployments/" + DEP_ID, { token: LEGACY });
-  ok(g.status === 200, "⑥ 단, 기존 세션의 열람은 깨지지 않는다 → GET 200 (실제 " + g.status + ")");
+  const ga = await call("GET", "/tables/deployments/" + DEP_ID, {});
+  const lm = await (await call("GET", "/api/auth/me", { token: LEGACY })).json();
+  ok(g.status === ga.status && g.status !== 200 && lm.authenticated === false, "⑥ 고정 문자열 = 익명과 동일(GET " + g.status + " = 익명 " + ga.status + " · me.authenticated=" + lm.authenticated + ")");
   // 토큰 위조 내성: 서명 없이 kind 만 designer 로 바꿔 넣어도 통과 못 한다
   const forgedPayload = Buffer.from(JSON.stringify({ k: "designer", exp: Date.now() + 1e6, n: "x" })).toString("base64url");
   const f = await call("PATCH", "/tables/deployments/" + DEP_ID, { token: "ae1." + forgedPayload + ".AAAA", body: { pins: [] } });
@@ -222,11 +237,14 @@ console.log("\n[⑦ 🔴 다른 쓰기 경로 전수 — src/index.tsx 의 모�
     if (res.status !== 403) leaks.push(r.method + " " + r.p + " → " + res.status);
   }
   ok(leaks.length === 0, "⑦ 열람전용 세션이 뚫는 쓰기 경로 0개" + (leaks.length ? " — 누출: " + leaks.join(", ") : ""));
-  // 고정 문자열 토큰도 같은 전수 검사
+  // 고정 문자열 토큰도 같은 전수 검사.
+  //   [WO 20261001-invite ④] 공용석 종료 후 고정 문자열은 미인증 → 판정 기준 = "익명보다 1개라도 더 통과하면 누출".
+  //   (종전 기준 "403 만 허용" 은 토큰이 '인증된 열람전용' 이던 시절 것 — 지금은 401 이 정답인 경로가 있다)
   const leaks2 = [];
   for (const r of routes) {
     const res = await call(r.method, r.p, { token: LEGACY, body: {} });
-    if (res.status !== 403) leaks2.push(r.method + " " + r.p + " → " + res.status);
+    const anon = await call(r.method, r.p, { body: {} });
+    if (res.status !== anon.status || (res.status >= 200 && res.status < 300)) leaks2.push(r.method + " " + r.p + " → " + res.status + "(익명 " + anon.status + ")");
   }
   ok(leaks2.length === 0, "⑦ 고정 문자열 토큰이 뚫는 쓰기 경로 0개" + (leaks2.length ? " — 누출: " + leaks2.join(", ") : ""));
 }
@@ -235,6 +253,8 @@ console.log("\n[⑧ 클라이언트 — `?d=` 일 때 열람전용 종류만 요
 {
   const auth = fs.readFileSync(path.join(ROOT, "public/js/modules/22_Auth.js"), "utf8");
   ok(/get\("d"\)\s*\?\s*"viewer"\s*:\s*"designer"/.test(auth), "⑧ ?d= 존재 시 kind='viewer' 로 발급 요청");
+  // [WO 20261001-invite] 공용석 종료 후에도 열람 링크(?d=·/srview)는 열람전용 자동입장을 탄다(_isViewLink 가 ?d=·ShareLink 를 본다)
+  ok(/get\("d"\)\)\s*return true/.test(auth) && /ShareLink\.token\(\);?\s*\n\s*\}/.test(auth) && /AUTO_DESIGNER_ENTRY\s*\|\|\s*this\._isViewLink\(\)/.test(auth) && /const AUTO_DESIGNER_ENTRY = false;/.test(auth), "⑧ 공용석 종료(AUTO_DESIGNER_ENTRY=false) 후에도 열람 링크는 열람전용 자동입장");
   ok(auth.includes("/api/auth/auto-entry"), "⑧ 서버 발급 엔드포인트를 호출한다(고정 문자열 직접 사용 아님)");
   const main = fs.readFileSync(path.join(ROOT, "public/js/main.js"), "utf8");
   ok(main.includes("/api/auth/auto-entry"), "⑧ 번들(main.js)에 반영됨 — assemble 미러 확인");

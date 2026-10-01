@@ -248,7 +248,8 @@ const S = await scenario();
   ok(r3.status === 403, "① 프로젝트 구조(decks)도 막힌다 → " + r3.status);
   // 🔴 라이브에서 실제로 뚫렸던 우회로 2건 — 재발 방지
   const r4 = await S.call("GET", "/tables/deployments/" + DEP, { token: "auto-designer-entry-360" });
-  ok(r4.status === 403, "①e 🔴 레거시 고정문자열 토큰도 게이트를 못 뚫는다 → " + r4.status);
+  // [WO 20261001-invite ④] 공용석 종료 후 레거시 고정문자열 = 미인증(401). 게이트 403 과 같이 '열람 불가' 다.
+  ok(r4.status === 403 || r4.status === 401, "①e 🔴 레거시 고정문자열 토큰도 게이트를 못 뚫는다 → " + r4.status);
   const r5 = await S.call("GET", "/tables/deployments/" + DEP, { token: "demo-viewer" });
   ok(r5.status === 403 || r5.status === 401, "①f 🔴 데모 뷰어 토큰도 게이트를 못 뚫는다(로컬 실측 우회로) → " + r5.status);
 }
@@ -435,7 +436,9 @@ console.log("\n[뮤테이션ⓓ] 게이트 통과에 쓰기를 허용하면 ⑦�
 {
   const w = await buildWorker([{ file: "index.tsx",
     from: "  if (gatePid) kind = 'viewer'   // [불변식] 게이트 통과가 쓰기 권한이 되는 경로를 원천 차단",
-    to:   "  if (gatePid) kind = 'designer'" }]);
+    to:   "  if (gatePid) kind = 'designer'" },
+    // [WO 20261001-invite] 공용석 종료(designer 토큰 전면 무효)가 이 불변식을 가리지 않도록, 공용석이 열린 상태를 가정해 검사한다
+    { file: "index.tsx", from: "const AUTO_DESIGNER_TOKEN_ENABLED = false", to: "const AUTO_DESIGNER_TOKEN_ENABLED = true" }]);
   if (w) {
     const s2 = await scenario(w);
     const j = await J(await s2.call("POST", "/api/share/verify", { body: { t: s2.shareToken, company: "c", name: "n", code: s2.made.code } }));
