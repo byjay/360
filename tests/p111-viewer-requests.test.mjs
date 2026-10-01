@@ -357,8 +357,16 @@ console.log("\n[C4 트리 구역 노드 배지]");
 {
   const src = SRC.ui;
   ok(/Requests\.openCountForDeck\(deck\.id\)/.test(src) && /if \(reqTag\) head\.insertAdjacentHTML\("beforeend", reqTag\);/.test(src), "C4 deckNode 머리에 미처리 요청 배지(reqTag) 렌더(런타임 확인 = 헤드리스 D2)");
+  // [p115 지휘자 재현] 🔴 근본원인 — 이전 조건은 "42_Requests.js 바로 다음 줄이 99_footer.js"라는
+  // 인접성을 그대로 리터럴 매치했다. 그 사이에 새 모듈(43_ProjectInfo.js 등)이 들어오면 Requests.js
+  // 연결 자체는 멀쩡한데도 테스트가 깨졌다(취약 조건). 의도(등록 + footer 이전 + App.init 호출)는
+  // 그대로 두고, "바로 다음 줄"이 아니라 "등록돼 있고 99_footer.js 보다 앞"으로 견고화한다.
   const manifest = rd(M + "_manifest.txt");
-  ok(/41_RegionMerge\.js\n42_Requests\.js\n99_footer\.js/.test(manifest) && /Requests\.init\(\)/.test(SRC.app), "C4 고아 방지 — _manifest 등록 + App.init 에서 Requests.init()");
+  const manifestLines = manifest.split("\n").map((l) => l.trim()).filter(Boolean);
+  const reqIdx = manifestLines.indexOf("42_Requests.js");
+  const footerIdx = manifestLines.indexOf("99_footer.js");
+  const registeredBeforeFooter = reqIdx !== -1 && footerIdx !== -1 && reqIdx < footerIdx;
+  ok(registeredBeforeFooter && /Requests\.init\(\)/.test(SRC.app), "C4 고아 방지 — _manifest 등록(99_footer.js 이전) + App.init 에서 Requests.init()");
 }
 
 clearTimeout(watchdog);

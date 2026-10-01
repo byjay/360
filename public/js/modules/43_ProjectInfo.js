@@ -170,7 +170,10 @@
           const j = await r.json().catch(() => ({}));
           const serverInfo = this._normalize(j.data);
           const msg = (serverInfo.updatedBy ? serverInfo.updatedBy + "님이 " : "다른 사용자가 ") + "먼저 수정했습니다. 내 변경으로 덮어쓸까요?";
-          const ok = (typeof Prompt !== "undefined" && Prompt.confirm) ? await Prompt.confirm("충돌 — 덮어쓰기", msg) : confirm(msg);
+          // [p76] 🔴 네이티브 confirm() 금지 — PWA 독립실행모드(iOS/WebKit)에서 조용히 false 를
+          // 반환하는 과거 실사고(36_Help.js 등과 동일 근본원인). 30_Prompt.js 는 이 모듈보다
+          // 먼저 로드되는 핵심 모듈(_manifest.txt)이라 폴백 없이 항상 Prompt.confirm 을 쓴다.
+          const ok = await Prompt.confirm("충돌 — 덮어쓰기", msg);
           if (!ok) { this._info = serverInfo; this._baseUpdatedAt = serverInfo.updatedAt; this._render(this._panelEl.querySelector('[role="dialog"]') || this._panelEl); return; }
           this._baseUpdatedAt = serverInfo.updatedAt;
           return this.save(true);
