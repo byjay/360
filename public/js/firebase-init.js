@@ -19,7 +19,7 @@
   const SF = {
     ready: false,
     _app: null, _auth: null, _db: null, _storage: null, _user: null,
-    _authCbs: [],
+    _authCbs: [], _idTokenCbs: [],
   };
   window.SeaFirebase = SF;
 
@@ -29,6 +29,7 @@
     SF.logout = async () => {};
     SF.currentUser = () => null;
     SF.onAuth = (cb) => { try { cb(null); } catch (e) {} };
+    SF.onIdTokenChanged = () => {};   // 미설정 시 no-op(22_Auth.js 가드가 이 없는 경우도 대비하지만 안전하게)
     SF.saveDoc = SF.getDoc = SF.listDocs = SF.deleteDoc = SF.uploadFile =
       async () => { throw new Error("Firebase 미설정"); };
     return;
@@ -54,6 +55,17 @@
         SF._user = u;
         SF._authCbs.forEach((cb) => { try { cb(u); } catch (e) {} });
       });
+      /* [p113 토큰만료 수정] onAuthStateChanged 는 로그인/로그아웃에만 울린다. Firebase SDK가
+         내부적으로(또는 reauth가) ID 토큰을 갱신할 때는 onIdTokenChanged 만 울리므로 별도로
+         구독을 열어둔다(22_Auth.js 의 Auth.headers() 가 최신 토큰을 돌려주기 위한 공급원).
+         🔴 [형제 호출부] 기존 p107 테스트 하니스의 authMod 스텁은 onAuthStateChanged 등 일부만
+         흉내내므로, 실 SDK에는 항상 있는 이 함수가 없어도 초기화 전체가 죽지 않도록 가드한다. */
+      if (typeof authMod.onIdTokenChanged === "function") {
+        authMod.onIdTokenChanged(SF._auth, (u) => {
+          SF._idTokenCbs.forEach((cb) => { try { cb(u); } catch (e) {} });
+        });
+      }
+      SF.onIdTokenChanged = (cb) => { SF._idTokenCbs.push(cb); };
 
       // [SEcMS 검증 로직 이식] services/firebase.ts signInWithGoogle 패턴
       SF.loginGoogle = async () => {

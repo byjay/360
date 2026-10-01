@@ -12,6 +12,10 @@
   // 마스터 전용 자동입장 키(선택). 서버에 AUTO_ENTRY_DESIGNER_KEY 를 설정한 뒤
   //   주소창에 ?akey=<키> 로 한 번 들어오면 이 브라우저에 저장되어 계속 편집 진입한다.
   const AUTO_ENTRY_KEY_LS = "wm_auto_entry_key";
+  // [p113 토큰만료 수정] Firebase ID 토큰 TTL(1시간) 만료 5분 전에 선제 갱신한다.
+  //   JWT exp 디코드가 실패하면(형식 변경 등) 50분 주기 안전망으로 폴백한다.
+  const ID_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+  const ID_TOKEN_REFRESH_FALLBACK_MS = 50 * 60 * 1000;
 
   const Auth = {
     idToken: null,
@@ -21,6 +25,10 @@
     _pendingDesigner: null,
     _gsiInited: false,
     _suppressDemoBadge: false,
+    // [p113] Firebase(Google) 세션에서만 토큰 자동갱신을 돈다 — 로컬/데모/자동입장 세션은 영향 없음.
+    _usingFirebase: false,
+    _idTokenTimer: null,
+    _idTokenListenerAttached: false,
 
     get clientId() {
       const id = (typeof window !== "undefined" && window.WM_GOOGLE_CLIENT_ID) || "";
@@ -280,6 +288,71 @@
       return u + (u.indexOf("?") < 0 ? "?" : "&") + "t=" + encodeURIComponent(this.idToken);
     },
 
+    /** JWT(.header.payload.signature)의 payload.exp(초단위)를 밀리초로 디코드. 실패하면 null. */
+    _decodeJwtExpMs(token) {
+      try {
+        const part = String(token).split(".")[1];
+        if (!part) return null;
+        const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+        const pad = b64 + "===".slice((b64.length + 3) % 4);
+        const payload = JSON.parse(atob(pad));
+        return payload && payload.exp ? payload.exp * 1000 : null;
+      } catch (e) { return null; }
+    },
+
+    /** [p113] Firebase 세션 중에만 — 만료 임박 시 강제 갱신을 예약한다(선제 갱신 + 안전망 주기).
+     *  onIdTokenChanged 가 SDK 자체 갱신을 받아 이 타이머를 매번 재설정하므로 중복 호출은 무해하다. */
+    _scheduleIdTokenRefresh() {
+      if (this._idTokenTimer) { clearTimeout(this._idTokenTimer); this._idTokenTimer = null; }
+      if (!this._usingFirebase) return;
+      const expMs = this._decodeJwtExpMs(this.idToken);
+      const delay = expMs
+        ? Math.max(5000, expMs - Date.now() - ID_TOKEN_REFRESH_MARGIN_MS)
+        : ID_TOKEN_REFRESH_FALLBACK_MS;
+      this._idTokenTimer = setTimeout(() => this._forceRefreshIdToken(), delay);
+    },
+
+    /** 현재 Firebase 사용자의 ID 토큰을 강제 갱신 — 결과는 onIdTokenChanged 리스너가 this.idToken 에 반영한다. */
+    async _forceRefreshIdToken() {
+      if (!this._usingFirebase || !this.firebaseEnabled) return;
+      try {
+        const cur = window.SeaFirebase && window.SeaFirebase._auth && window.SeaFirebase._auth.currentUser;
+        if (cur) await cur.getIdToken(true);
+      } catch (e) {}
+      this._scheduleIdTokenRefresh();
+    },
+
+    /** 숨김 탭에서 타이머가 늦게 돌 수 있으므로, 탭이 다시 보일 때 만료 임박이면 즉시 갱신. */
+    _onVisibilityRefreshCheck() {
+      if (typeof document === "undefined" || document.visibilityState !== "visible" || !this._usingFirebase) return;
+      const expMs = this._decodeJwtExpMs(this.idToken);
+      if (expMs && (expMs - Date.now()) < ID_TOKEN_REFRESH_MARGIN_MS) this._forceRefreshIdToken();
+    },
+
+    /** [p113] onIdTokenChanged 구독을 1회만 건다(세션당 1개). 이메일 가드로 로컬/데모 세션을 보호한다 —
+     *  CompanyAuth(29_CompanyAuth.js)가 Auth.idToken 을 직접 바꿔도 Firebase currentUser 의 이메일과
+     *  다르면(통상 그렇다) 이 콜백은 아무것도 하지 않는다(§G-2-5 — 공유 지점 1곳에서만 고친다). */
+    _attachIdTokenListener() {
+      if (this._idTokenListenerAttached) return;
+      if (!this.firebaseEnabled || !window.SeaFirebase || !window.SeaFirebase.onIdTokenChanged) return;
+      this._idTokenListenerAttached = true;
+      window.SeaFirebase.onIdTokenChanged(async (fbUser) => {
+        if (!fbUser || !this._usingFirebase || !this.user || !this.user.email) return;
+        if (String(fbUser.email || "").toLowerCase() !== String(this.user.email).toLowerCase()) return;
+        try {
+          const t = await fbUser.getIdToken();
+          if (t) {
+            this.idToken = t;
+            try { sessionStorage.setItem("wm_id_token", t); } catch (e) {}
+            this._scheduleIdTokenRefresh();
+          }
+        } catch (e) {}
+      });
+      if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", () => this._onVisibilityRefreshCheck());
+      }
+    },
+
     /** 서버에 권한 확인 → UI 갱신
      *  오프라인 권한 유지: 온라인이면 서버 응답을 localStorage에 캐싱,
      *    네트워크 실패(오프라인)이면서 토큰이 있으면 캐시된 권한을 복원.
@@ -324,9 +397,24 @@
         //   Firebase·GIS·회사이메일 로그인이 모두 refresh() 를 지나므로 이 한 지점에서만 건다(§G-2-5).
         //   공용석/열람 토큰(auto)은 실계정이 아니므로 제외.
         if (!data.auto && !data.demo) { try { if (typeof Invite !== "undefined" && Invite.resumePending) Promise.resolve(Invite.resumePending()).catch(() => {}); } catch (e) {} }
+        // [p113] 이 세션이 Firebase(Google) 로그인인지 판별 — 로컬(local-)·데모·자동입장 토큰은 제외.
+        //   § refresh() 는 로그인·복원 경로가 모두 거치는 한 지점이라 여기서만 판정한다.
+        const looksFirebase = !data.auto && !data.demo && this.firebaseEnabled &&
+          window.SeaFirebase && window.SeaFirebase._auth && window.SeaFirebase._auth.currentUser &&
+          String(this.idToken || "").indexOf("local-") !== 0;
+        if (looksFirebase) {
+          this._usingFirebase = true;
+          this._attachIdTokenListener();
+          this._scheduleIdTokenRefresh();
+        } else if (this._usingFirebase) {
+          this._usingFirebase = false;
+          if (this._idTokenTimer) { clearTimeout(this._idTokenTimer); this._idTokenTimer = null; }
+        }
       } else if (!netFail) {
         // 서버가 명확히 미인증 응답 → 정리(캐시도 삭제)
         this.user = null; this.role = "viewer"; this.idToken = null;
+        this._usingFirebase = false;
+        if (this._idTokenTimer) { clearTimeout(this._idTokenTimer); this._idTokenTimer = null; }
         try { sessionStorage.removeItem("wm_id_token"); } catch (e) {}
         this._clearAuthCache();
       }
@@ -848,6 +936,9 @@
         }
       } catch (e) {}
       this.idToken = null; this.user = null; this.role = "viewer";
+      // [p113] 로그아웃 → 토큰 자동갱신 타이머 해제(리스너 자체는 재바인딩 가드가 있어 그대로 둬도 무해).
+      this._usingFirebase = false;
+      if (this._idTokenTimer) { clearTimeout(this._idTokenTimer); this._idTokenTimer = null; }
       this._suppressDemoBadge = false;  // 다음 수동 데모 로그인 시 배지 정상 표시되도록 초기화
       this._offlineOnly = false; this.projectRole = null; this.projectCanManage = false;
       this.clearReauth();   // [WO 20261001-bulkreauth] 재인증 토큰도 로그아웃과 함께 폐기
