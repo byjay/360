@@ -277,6 +277,9 @@
     const depId = _curDepId();
     if (depId) { try { pending = (await OpLog.pending(depId)).length; } catch (e) {} }
     try { pending += await SyncQueue.count(); } catch (e) {}
+    // [WO 20261001-mobilefast R3] ops/이미지 큐 외에 "dirty draft"(서버 미반영 핀·영역 변경분)도
+    // 대기 건수에 포함 — 단일 판정(App._countDirtyDrafts, §G-2-5)을 공유한다.
+    try { if (typeof App !== "undefined" && App._countDirtyDrafts) pending += await App._countDirtyDrafts(); } catch (e) {}
     // [P16] 토큰 만료로 업로드가 막힌 상태를 "동기화 중"과 구분해 정직하게 표시.
     //   온라인이어도 인증이 만료됐으면 실제로는 못 올라가는 중이므로 최우선으로 판정.
     if (typeof Auth !== "undefined" && Auth._expired) {

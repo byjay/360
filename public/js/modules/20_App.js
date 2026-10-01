@@ -1203,6 +1203,10 @@
       let pinch = null;              // 2손가락 핀치 상태 {dist, cx, cy}
       let lastTapTime = 0;           // 더블탭 추적
       let lastTapXY = null;
+      // [WO 20261001-mobilefast] 핀치 해제 직후 손가락이 거의 동시에 떨어지며 생기는
+      // touchend 를 "탭"으로 오인하지 않도록 쿨다운(요구사항 §1: "손을 뗀 뒤 250ms 탭 무시").
+      let pinchEndedAt = 0;
+      const PINCH_TAP_COOLDOWN_MS = 250;
 
       const touchDist = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
       const touchMid  = (t0, t1) => ({ x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 });
@@ -1218,11 +1222,14 @@
           return;
         }
         if (e.touches.length === 1) {
+          // [WO 20261001-mobilefast] 핀치 해제 직후 250ms — 잔여 터치를 배치/그리기로 처리하지 않는다
+          // (여전히 손가락은 화면에 있을 수 있으므로 팬 추적은 유지, 탭 계열 동작만 차단).
+          const inPinchCooldown = (Date.now() - pinchEndedAt) < PINCH_TAP_COOLDOWN_MS;
           // 핀(또는 액션버튼) 위 터치는 배치보다 핀 클릭을 우선 (체크보드 핀 클릭 보장)
           if (e.target && e.target.closest(".pin-marker")) { return; }
-          if (State.placing) { this._handlePlaceTouch(e); return; }
+          if (State.placing) { if (!inPinchCooldown) this._handlePlaceTouch(e); return; }
           // [버그복원] 모바일 영역 그리기 — 데스크톱 mousedown 과 동일하게 터치에서도 onDrawStart
-          if (State.drawingZone && typeof Zones !== "undefined") {
+          if (!inPinchCooldown && State.drawingZone && typeof Zones !== "undefined") {
             if (Zones.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
           }
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -1231,17 +1238,17 @@
 
       vp.addEventListener("touchmove", e => {
         if (e.touches.length === 2 && pinch) {
-          // 핀치 줌: 거리 비율만큼 확대/축소, 두 손가락 중점을 기준점으로
+          // [WO 20261001-mobilefast] 중심점 고정 핀치 줌+팬을 한 수식으로(MapCtrl.pinchTransform) —
+          // 종전 2단계 합성(zoomBy 뒤 중점이동 보정 추가)은 ratio≠1 매 프레임 드리프트가 났다.
           const newDist = touchDist(e.touches[0], e.touches[1]);
           const mid = touchMid(e.touches[0], e.touches[1]);
           if (pinch.dist > 0) {
             const ratio = newDist / pinch.dist;
-            if (ratio && isFinite(ratio)) MapCtrl.zoomBy(ratio, mid.x, mid.y);
+            const rect = MapCtrl.viewport.getBoundingClientRect();
+            const r = MapCtrl.pinchTransform(State.pan, State.zoom, rect.left, rect.top, pinch.cx, pinch.cy, mid.x, mid.y, ratio);
+            State.pan = r.pan; State.zoom = r.zoom;
+            MapCtrl.applyTransform();
           }
-          // 두 손가락 중점 이동분만큼 팬도 함께(자연스러운 동작)
-          State.pan.x += mid.x - pinch.cx;
-          State.pan.y += mid.y - pinch.cy;
-          MapCtrl.applyTransform();
           pinch = { dist: newDist, cx: mid.x, cy: mid.y };
           e.preventDefault();
           return;
@@ -1263,9 +1270,17 @@
 
       vp.addEventListener("touchend", e => {
         // 핀치 종료(손가락이 2개 미만이 되면)
+        const wasPinching = !!pinch;
         if (pinch && (!e.touches || e.touches.length < 2)) pinch = null;
         // 손가락이 0개면 팬도 종료
         if (!e.touches || e.touches.length === 0) {
+          // [WO 20261001-mobilefast] 핀치 중이었다면 이 해제는 탭이 아니다 — 더블탭/배치 추적에
+          // 섞이지 않도록 쿨다운만 찍고 즉시 종료(요구사항 §1: "멀티터치 → 탭 무효").
+          if (wasPinching) {
+            pinchEndedAt = Date.now();
+            lastTouch = null; lastTapTime = 0; lastTapXY = null;
+            return;
+          }
           // [버그복원] 영역 그리기(rect/circle) 종료 우선 — poly 는 onDrawStart 탭 누적이라 제외
           if (State.drawingZone && typeof Zones !== "undefined" && Zones._drag) {
             const dt = (e.changedTouches && e.changedTouches[0]);
@@ -1275,7 +1290,7 @@
           }
           // 더블탭 줌 감지 (touchend 시점, 직전 탭과 시간·위치 근접)
           const t = (e.changedTouches && e.changedTouches[0]) || null;
-          if (t && !State.placing) {
+          if (t && !State.placing && (Date.now() - pinchEndedAt) >= PINCH_TAP_COOLDOWN_MS) {
             const now = Date.now();
             const x = t.clientX, y = t.clientY;
             if (now - lastTapTime < 300 && lastTapXY &&
@@ -4572,6 +4587,24 @@
       } catch (e) { return false; }
     },
 
+    /** [WO 20261001-mobilefast R3] 대기 배지(32_Offline.updateNetBadge)용 — 서버 미반영 dirty draft
+     *  개수. _flushDirtyDrafts 와 **같은 판정**(d.dirty && d.pages.length && !writeDenied)을 쓴다
+     *  (§G-2-5 공유 판정 — 갈라지면 한쪽은 세는데 한쪽은 안 올리는 불일치가 난다).
+     *  종전엔 배지가 OpLog(ops 로그)+SyncQueue(이미지 큐)만 세어, CHECKER 핀처럼 draft 로만
+     *  남는 오프라인 편집은 대기 0건으로 잘못 표시됐다(R3 재현: 오프라인 핀 5개 → "오프라인 0"). */
+    async _countDirtyDrafts() {
+      if (typeof SyncQueue === "undefined" || !SyncQueue.allDraftKeys) return 0;
+      let keys = [];
+      try { keys = await SyncQueue.allDraftKeys(); } catch (e) { return 0; }
+      let n = 0;
+      for (const key of keys) {
+        let d;
+        try { d = await SyncQueue.loadDraft(key); } catch (e) { continue; }
+        if (d && d.dirty && d.pages && d.pages.length && !d.writeDenied) n++;
+      }
+      return n;
+    },
+
     /** 온라인 복귀 시 dirty draft 를 서버로 자동 업로드 */
     async _flushDirtyDrafts() {
       if (!navigator.onLine) return;
@@ -4888,8 +4921,9 @@
       } catch (e) {}
     },
 
-    /** [마스터: 자동저장 OFF] 핀/영역/도면 변경 시 — 서버 즉시저장 대신
-     *  로컬 draft 로 즉시 보존(소실 방지) + 'dirty' 표시 → 실제 서버 반영은 '저장' 버튼(_saveNow). */
+    /** [WO 20261001-mobilefast 갱신] 핀/영역/도면 변경 시 — 로컬 draft 로 즉시 보존(소실 방지) +
+     *  'dirty' 표시는 그대로 두고, **온라인이면** 추가로 서버 자동 반영을 디바운스 예약한다
+     *  (_scheduleAutoSync). [수동 저장] 버튼은 남아 있고 언제든 즉시 반영에 쓸 수 있다. */
     _autoSave(opts) {
       if (State.mode !== "designer") return;
       opts = opts || {};
@@ -4897,6 +4931,36 @@
       // 로컬 우선 보관(새로고침/오프라인에도 작업 보존) — 비차단
       this._saveDraftLocal(opts.withPages ? null : null).catch(() => {});
       this._markDirty();
+      this._scheduleAutoSync();
+    },
+
+    /** [WO 20261001-mobilefast R5] 온라인 편집 중 "[저장]을 눌러야만 서버에 반영"되던 지연을 없앤다.
+     *  순수 디바운스(매 편집마다 타이머 리셋, 조용해진 뒤 1.5s 후 1회 반영) — "연속 편집 중 과도한
+     *  요청을 막는다(최대 1요청/1.5s)" 요구는 이걸로 충분(개별 핀 배치·삭제·이동은 각각 끊어진
+     *  이산 동작이라 1.5s 안에 여러 번 겹쳐도 디바운스가 1건으로 합친다 — 결과는 동일).
+     *  🔴 Date.now() 산술로 "경과시간" 을 계산하지 않는다 — 시계를 모킹하는 테스트(예: 재인증
+     *  5분 경과 시뮬레이션으로 Date.now() 가 시각을 건너뛰는 p107)에서 타이머가 조기 점화돼
+     *  의도치 않은 네트워크 저장이 다른 테스트 흐름과 경합했다(실측 회귀 — 고정 ms만 사용해 제거). */
+    AUTO_SYNC_DEBOUNCE_MS: 1500,
+    _autoSyncTimer: null,
+    _scheduleAutoSync() {
+      // [방어] 일부 단위테스트 sandbox(vm)는 타이머 전역을 주지 않는다 — 10_MapCtrl.js._scheduleSettle
+      // 과 같은 패턴(§G-2-5)으로 조용히 건너뛴다(실 브라우저는 항상 존재, 동작 불변).
+      if (typeof setTimeout !== "function") return;
+      if (typeof navigator === "undefined" || !navigator.onLine) return;  // 오프라인 복귀는 _flushDirtyDrafts 가 별도 처리
+      if (typeof clearTimeout === "function") clearTimeout(this._autoSyncTimer);
+      this._autoSyncTimer = setTimeout(() => this._runAutoSync(), this.AUTO_SYNC_DEBOUNCE_MS);
+    },
+    async _runAutoSync() {
+      this._autoSyncTimer = null;
+      if (!navigator.onLine || !this._dirty) return;
+      if (this.autoSaving) { this._scheduleAutoSync(); return; }
+      // 신규 배포본(아직 서버에 없음)인데 프로젝트/구역 컨텍스트가 없으면 _saveNow 가 매번
+      // "저장할 구역이 없습니다" 토스트를 띄운다 — 조용히 건너뛰고 다음 편집 때 다시 시도한다
+      // (로컬 draft 는 이미 _autoSave 에서 저장됐으므로 데이터 유실은 없다).
+      const hasCtx = State.autoSaveDepId || ((typeof Projects !== "undefined") && Projects.currentProject && Projects.currentDeck);
+      if (!hasCtx) return;
+      try { await this._saveNow({ silent: true }); } catch (e) {}
     },
 
     /** 실제 서버 저장(수동 '저장' 버튼). 배포본 없으면 생성+구역연결, 있으면 PATCH.
@@ -4968,8 +5032,10 @@
         this._dirty = false; this._dirtyPages = false; this._updateSaveBtn();
         try { this._markDeckUnsaved(this._deckIdOfKey(this._draftKey()), false); } catch (e) {}  // [B4]
         this._setSaveIndicator("saved");
-        // [마스터: 저장 확인이 안 됨] 명확한 완료 피드백(모바일 토스트)
-        try { Prompt.toast && Prompt.toast("저장 완료"); } catch (e) {}
+        // [마스터: 저장 확인이 안 됨] 명확한 완료 피드백(모바일 토스트).
+        // [WO 20261001-mobilefast] 자동저장(opts.silent)은 상단 #autosave-indicator로 충분히
+        // 보이므로 토스트는 생략 — 1.5s 주기 자동저장마다 토스트가 쌓이는 스팸 방지.
+        if (!opts.silent) { try { Prompt.toast && Prompt.toast("저장 완료"); } catch (e) {} }
         return true;
       } catch (e) {
         this._setSaveIndicator(navigator.onLine ? "error" : "offline");

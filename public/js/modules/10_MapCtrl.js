@@ -6,6 +6,10 @@
     _boundaryFitZoom: null,        // 경계를 화면에 꽉 채우는(cover) 최소 배율(캐시)
     BOUNDARY_ZOOM_HEADROOM: 6,     // 경계 최소 배율 대비 추가로 확대 가능한 배수
     BOUNDARY_ZOOM_MAX_HARD: 64,    // 절대 상한(메모리 예산은 PDF.effectivePxCap 이 별도로 지킴)
+    // [WO 20261001-mobilefast] 일반 줌(휠·핀치·+/-버튼) 상한 — 종전 8배는 모바일 핀치로 세밀한
+    // 도면 판독(치수선·작은 글자)에 부족하다는 마스터 지적. zoomBy/handleWheel/pinchTransform 공유.
+    MIN_ZOOM: 0.2,
+    MAX_ZOOM: 16,
 
     init(viewport, transform) {
       this.viewport = viewport; this.transform = transform;
@@ -445,12 +449,35 @@
       const rect = this.viewport.getBoundingClientRect();
       const mx = (cx != null ? cx : rect.left + rect.width / 2) - rect.left;
       const my = (cy != null ? cy : rect.top + rect.height / 2) - rect.top;
-      const newZoom = Math.max(0.2, Math.min(8, State.zoom * factor));
+      const newZoom = Math.max(this.MIN_ZOOM, Math.min(this.MAX_ZOOM, State.zoom * factor));
       const f = newZoom / State.zoom;
       State.pan.x = mx - f * (mx - State.pan.x);
       State.pan.y = my - f * (my - State.pan.y);
       State.zoom = newZoom;
       this.applyTransform();
+    },
+
+    /** [WO 20261001-mobilefast] 2손가락 핀치 줌+팬을 "한 번에" 정확히 계산하는 순수 함수(테스트 가능,
+     *  DOM 비의존). prevMid/curMid 는 client 좌표. 직전 프레임 중점이 가리키던 도면좌표가, 이번
+     *  프레임 중점(화면 위치)에 그대로 유지되도록 pan 을 역산한다 — 기존 구현(zoomBy 로 중점을
+     *  맞춘 뒤 중점 이동분만큼 pan 을 추가로 더하는 2단계 합성)은 ratio≠1(줌과 팬이 동시에 일어나는
+     *  매 프레임)일 때 (curMid-prevMid)*(1-ratio) 만큼 드리프트가 났다(대수적으로 유도·검증).
+     *  zoom 은 [MIN_ZOOM,MAX_ZOOM] 으로 클램프하고, pan 산식은 "실제로 적용된" actualRatio 를
+     *  써서 경계에서도(배율이 더 안 늘어도) 드리프트 없이 일관된 중점 고정을 유지한다. */
+    pinchTransform(pan, zoom, rectLeft, rectTop, prevMidX, prevMidY, curMidX, curMidY, distRatio) {
+      const r = (distRatio && isFinite(distRatio) && distRatio > 0) ? distRatio : 1;
+      const rawZoom = zoom * r;
+      const newZoom = Math.max(this.MIN_ZOOM, Math.min(this.MAX_ZOOM, rawZoom));
+      const actualRatio = zoom > 0 ? newZoom / zoom : 1;
+      const prevLocalX = prevMidX - rectLeft, prevLocalY = prevMidY - rectTop;
+      const curLocalX = curMidX - rectLeft, curLocalY = curMidY - rectTop;
+      return {
+        zoom: newZoom,
+        pan: {
+          x: curLocalX - actualRatio * (prevLocalX - pan.x),
+          y: curLocalY - actualRatio * (prevLocalY - pan.y)
+        }
+      };
     },
 
     /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록.
@@ -516,7 +543,7 @@
       e.preventDefault();
       this.cancelFly();
       const delta = -e.deltaY * 0.001;
-      const newZoom = Math.max(0.3, Math.min(8, State.zoom + delta * State.zoom));
+      const newZoom = Math.max(0.3, Math.min(this.MAX_ZOOM, State.zoom + delta * State.zoom));
       const rect = this.viewport.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;

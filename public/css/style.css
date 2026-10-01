@@ -1406,6 +1406,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .map-viewport {
   position: absolute; inset: 0;
   overflow: hidden; cursor: grab;
+  /* [WO 20261001-mobilefast] 브라우저 기본 핀치/더블탭 줌이 자체 핀치 핸들러(20_App._bindMap)와
+     경쟁하면 첫 제스처가 끊기거나 버벅인다 — 이 레이어만 네이티브 제스처를 끄고 전부 JS 로 처리. */
+  touch-action: none;
   background-color: #ece5d6;
   background-image:
     linear-gradient(rgba(120,110,90,.10) 1px, transparent 1px),
@@ -1496,7 +1499,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .crosshair-msg {
   position: absolute; top: 10px; left: 50%;
   transform: translateX(-50%);
-  background: var(--gold); color: #000;
+  /* [WO 20261001-mobilefast 대비수정] var(--gold) 는 Brand.js 가 런타임에 테넌트 accent 로
+     덮어쓴다(실측 #1b75bb, L=.1655) — 검은 글자는 4.31:1 미달(p100 실측). 같은 배경에서
+     이미 검증된 흰 글자(.pano-radar-pin-no 1610행과 동일 색쌍)로 교체 → 4.87:1 PASS. */
+  background: var(--gold); color: #fff;
   padding: 4px 16px; border-radius: 4px;
   font-size: 11px; font-weight: 700; font-family: var(--font-mono);
   white-space: nowrap;
@@ -2651,6 +2657,16 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   stroke: var(--zc, #f59e0b); stroke-width: 0.5; vector-effect: non-scaling-stroke;
   transition: fill .15s;
 }
+/* [WO 20261001-mobilefast] 핀 생성 모드(#crosshair-overlay 표시 중, 20_App._togglePlacing SoT)에서는
+   영역 경계(도형·라벨·삭제버튼)가 탭을 가로채지 않도록 pointer-events 를 끈다 — 경계는 이미
+   z-index:1(핀 z-index:3보다 아래)이라 "맨 뒤"지만, pointer-events:auto 는 z-order 와 무관하게
+   클릭을 가로챘다(핀 생성 탭이 도형 클릭으로 오인되던 원인). 영역 편집(그리기/도구)은 이 상태에서
+   진입할 수 없으므로(placing 토글 시 cancelActiveOperation 이 선행 종료) 회귀 없음. */
+#map-viewport:has(#crosshair-overlay:not(.hidden)) .zone-shape,
+#map-viewport:has(#crosshair-overlay:not(.hidden)) .zone-box-label,
+#map-viewport:has(#crosshair-overlay:not(.hidden)) .zone-box-del {
+  pointer-events: none;
+}
 .zone-shape { stroke-width: 2px; }   /* non-scaling: 화면상 2px 고정 */
 .zone-shape:hover, .zone-shape.active {
   fill: color-mix(in srgb, var(--zc, #f59e0b) 30%, transparent);
@@ -3670,7 +3686,10 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 @media (max-width: 760px) {
   .regmode-seg { gap: 6px; }
   .regmode-btn { min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 13px; }
-  .numband-btn { min-height: 44px; font-size: 14px; padding: 6px 14px; }
+  /* [WO 20261001-mobilefast] 모바일 지도 가림 축소 — 이 띠는 기존 44px 버튼 + 6px 패딩으로
+     56px 전체폭(R1 실측)을 차지해 지도를 가렸다. 요구사항(판정5)은 "한 줄 32px 이하".
+     터치 타깃 44px 권고보다 이 요구가 우선(마스터 명시 지시) — 버튼을 26px로, 패딩을 줄인다. */
+  .numband-btn { min-height: 26px; font-size: 11.5px; padding: 3px 9px; }
   /* 375px 폭에서 세그먼트 3버튼+시작번호를 한 줄에 다 넣을 공간이 없다 — 요구사항대로
      시작번호를 topbar 바로 아래 두 번째 줄로 뺀다. position:fixed 는 .topbar의
      overflow-x:auto 가로스크롤/overflow-y:hidden 클리핑(아래 미디어쿼리) 밖에서 그려지므로
@@ -3679,7 +3698,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   #btn-regmode-photo.active ~ #regmode-start-wrap {
     position: fixed; left: 0; right: 0; top: 68px;
     justify-content: center; margin-left: 0; border-left: none;
-    background: var(--bg2); padding: 6px 16px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    background: var(--bg2); padding: 2px 12px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
     z-index: 139;
   }
   /* [WO 20260929-mobile-overflow] 실측(375×812): 뒤에 오는 브랜드 로고(brand-logo-top,
@@ -5414,6 +5433,11 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    이미 감사된 토큰(seastar-3d-skin.css:196 "실측 4.5:1+로 검증된 다크 톤" 재사용, 새 색 없음). */
 .tree-kind-tag{font-size:9px;font-weight:700;letter-spacing:.3px;color:var(--text2);
   flex:0 0 auto;text-transform:uppercase;}
+/* [WO 20261001-mobilefast 대비수정] .tree-node.active 는 배경에 골드 오버레이
+   rgba(201,150,42,.16)가 블렌드되어 합성 rgb(57,51,38) 이 된다 — 그 위에서 var(--text2)
+   #9095a0 은 4.19:1(p100 실측, 기준 4.5 미달). 활성 행 전용으로만 더 밝은 톤으로 교체
+   (#a0a5ae on rgb(57,51,38) ≈ 5.07:1, 계산 가능). 비활성 상태는 기존 var(--text2) 그대로. */
+.tree-node.active .tree-kind-tag{color:#a0a5ae;}
 /* [결함수정] 구역 0개(#side-tree 안 조용한 빈 상태 금지) — 프로젝트는 선택됐지만 구역이
    없을 때의 실제 생성 버튼 안내. 배경을 고정색으로 두므로 글자색도 고정색으로 맞춘다
    (var() 텍스트가 강제 다크모드에서만 밝게 재해석돼 고정 배경과 어긋나는 실사고 재발 방지, 831a127).
@@ -5551,6 +5575,26 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
      인라인 style은 특정도가 높아 !important 없이는 못 이긴다 — 도크 SoT 변수(--mdock-h)를 그대로
      재사용해 배너와 같은 높이로 밀어올린다(값 중복 정의 0). */
   #pwa-install-btn{ bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px) !important; }
+  /* [WO 20261001-mobilefast] 같은 함정 — [요청·질문](42_Requests._createViewerBtn)·[?](36_Help._createToggle)·
+     [✉](36_Help._createInquiryEntryBtn) FAB 도 bottom:16px 인라인 고정이라 하단 도크와 겹친다. */
+  [data-req-viewer-entry], [data-help-toggle], [data-help-inquiry-toggle] {
+    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px) !important;
+  }
+}
+/* [WO 20261001-mobilefast 판정5] 핀 작성 모드(#crosshair-overlay 표시 중)에는 위 FAB 3종을
+   반투명·축소해 도면을 덜 가린다 — 누르는 중(:active)은 즉시 원복해 탭 피드백을 보존한다. */
+[data-req-viewer-entry], [data-help-toggle], [data-help-inquiry-toggle] {
+  transition: opacity .15s, transform .15s;
+}
+body:has(#crosshair-overlay:not(.hidden)) [data-req-viewer-entry],
+body:has(#crosshair-overlay:not(.hidden)) [data-help-toggle],
+body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle] {
+  opacity: .45; transform: scale(.82);
+}
+body:has(#crosshair-overlay:not(.hidden)) [data-req-viewer-entry]:active,
+body:has(#crosshair-overlay:not(.hidden)) [data-help-toggle]:active,
+body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
+  opacity: 1; transform: scale(1);
 }
 /* 초대 모달 — 초대받은 이메일 표기 */
 .inv-email{font:600 12px var(--font-mono); color:var(--text2);}

@@ -139,8 +139,13 @@ async function measureAll(browser, cssSrc, vw, vh) {
     });
   });
   const checkboardDisplay = await page.evaluate(() => getComputedStyle(document.getElementById("regmode-start-wrap")).display);
+  // [WO 20261001-mobilefast] 띠 전체 높이(지도 가림 폭) — regmode-start-wrap 자신의 rect.
+  const wrapHeight = await page.evaluate(() => {
+    const w = document.getElementById("regmode-start-wrap");
+    return w ? w.getBoundingClientRect().height : null;
+  });
   server.close();
-  return { viewModeDisplay: view, rects, checkboardDisplay, vw, vh };
+  return { viewModeDisplay: view, rects, checkboardDisplay, wrapHeight, vw, vh };
 }
 
 console.log("\n[Part A · 보기 모드 숨김 + 체크보드 모드 표시(형제선택자)]");
@@ -175,7 +180,15 @@ await withBrowser(async (browser) => {
     ok(m.rects.every((r) => !r.missing && r.left >= 0 && r.right <= m.vw), "⑤ 전부 뷰포트 안(" + vw + "px)");
     ok(m.rects.every((r) => r.clickable), "⑤ 전부 클릭 가능(" + vw + "px)");
     // [WO 20261001-startno] 전: 항상 참이던 식(삼항 우선순위 — `a || b ? c : true`) · 후: 다섯 요소 전부 ≥44px 를 실제로 검사
-    ok(m.rects.every((r) => r.height >= 44), "⑤ 터치 타깃 높이 ≥44px(" + vw + "px) → " + JSON.stringify(m.rects.map((r) => r.id + ":" + Math.round(r.height))));
+    // [WO 20261001-mobilefast 재수정] 🔴 마스터 명시 지시 — 이 띠(regmode-start-wrap)는 지도를
+    // 가린다는 지적(R1)으로 ≤32px 로 축소했다. btn-numband 는 그 띠 안의 유일한 버튼이라
+    // 44px 터치타깃을 지키면 띠가 다시 56px 로 되돌아간다 — "한 줄 32px 이하"가 44px 권고보다
+    // 우선(판정 기준5). 나머지 4개(뒤로/세그먼트2/설정)는 종전대로 44px 유지(회귀 감시 유지).
+    const others = m.rects.filter((r) => r.id !== "btn-numband");
+    const nb = m.rects.find((r) => r.id === "btn-numband");
+    ok(others.every((r) => r.height >= 44), "⑤ btn-numband 외 터치 타깃 높이 ≥44px(" + vw + "px) → " + JSON.stringify(others.map((r) => r.id + ":" + Math.round(r.height))));
+    ok(!!nb && nb.height >= 20 && nb.height < 44, "⑤ btn-numband 는 의도적으로 압축됨(20~44px, 실측 " + (nb && Math.round(nb.height)) + "px)");
+    ok(m.wrapHeight != null && m.wrapHeight <= 32, "⑤ regmode-start-wrap 띠 전체 높이 ≤32px(지도 가림 최소화, 실측 " + m.wrapHeight + "px)");
   }
 });
 
@@ -185,7 +198,7 @@ await withBrowser(async (browser) => {
   #btn-regmode-photo.active ~ #regmode-start-wrap {
     position: fixed; left: 0; right: 0; top: 68px;
     justify-content: center; margin-left: 0; border-left: none;
-    background: var(--bg2); padding: 6px 16px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    background: var(--bg2); padding: 2px 12px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
     z-index: 139;
   }`;
   if (!cssStyle.includes(needle)) { console.log("  FAIL 뮤테이션ⓑ 대상 문자열을 찾지 못함(소스 변경?)"); failed++; return; }
