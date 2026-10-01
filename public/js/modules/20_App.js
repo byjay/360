@@ -23,6 +23,7 @@
       // ProjectHub가 프로젝트 목록을 불러오기 전에 로그인 토큰 세팅이 반드시 끝나 있어야 한다.
       await Auth.init();
       Settings.init();
+      if (typeof NumBand !== "undefined") NumBand.init();   // [WO 20261001-startno] 번호 대역 메뉴
       Designers.init();
       if (typeof UserMgmt !== "undefined") UserMgmt.init();
       if (typeof ThetaIntake !== "undefined") ThetaIntake.init();
@@ -751,6 +752,8 @@
           if (thetaChip && thetaChip.classList) thetaChip.classList.toggle("hidden", isChecker);
         }
       } catch (e) {}
+      // [WO 20261001-startno] 모드 전환·편집 진입 = 상단 [번호 대역] 표시(현재 모드 계열의 다음 번호) 갱신 지점
+      if (typeof NumBand !== "undefined" && NumBand.render) { try { NumBand.render(); } catch (e) {} }
     },
 
     _togglePlacing() {
@@ -1465,33 +1468,52 @@
      *  (예: 사용자A=100, 사용자B=200 — 번호만 봐도 누가 찍었는지 알고, 충돌이 구조적으로 없다).
      *  로그인 사용자의 대역(PinSeries.userBandStart, localStorage 영속, 계열별 키)이 있으면
      *  최우선이고, 없으면 계열별 페이지값(State.checkboardStart[series], 구버전/비로그인 폴백)을 쓴다. */
+    /*  🔴 [WO 20261001-startno] 시작번호 = **내 대역의 시작값**(대역 안의 직접 입력 하한이 있으면 그 값).
+     *  대역 k 는 서버(project_members.num_band — 24b_NumBand.js 가 받아 PinSeries 캐시에 둔다) SoT.
+     *  배포본 checkboardStart(페이지별·전원 공유 — 사용자 대역과 섞이면 서로 덮어쓴다)는 더 이상 채번에 쓰지 않는다
+     *  (prod 실측: deployments.checkboard_start 는 NULL 25 · "{}" 5 — 값이 있는 행 0, 영향 0). page 인자는 시그니처 호환. */
     _checkboardStart(page, series) {
       const ser = series === "content" ? "content" : "checkboard";
-      const p = page || State.pdfPage || 1;
-      const author = this._pinAuthor();
-      const band = (author && typeof PinSeries !== "undefined" && PinSeries.userBandStart) ? PinSeries.userBandStart(author, ser) : null;
-      if (band != null) return band;
-      const bucket = (State.checkboardStart && State.checkboardStart[ser]) || {};
-      const v = bucket[p];
-      const n = parseInt(v, 10);
-      return (Number.isFinite(n) && n >= 1) ? n : 1;
+      const r = PinSeries.bandRange(this._numBand());
+      const f = PinSeries.userStart(this._pinAuthor(), ser);
+      return (f != null && f >= r.lo && f <= r.hi) ? f : r.lo;
     },
-    /** 시작 번호 설정(계열별). 로그인 사용자는 "내 대역"(사용자+계열에 귀속 — localStorage,
-     *  배포본 단일 필드에 저장하면 다른 사용자가 저장할 때 덮어써진다)을 최우선으로 저장한다.
-     *  비로그인/데모(author 없음)는 종전처럼 페이지별 값만 저장(하위호환). */
+    /** 내 번호 대역 k (서버 배정 캐시 → 없으면 1). */
+    _numBand() {
+      const k = PinSeries.myBand(this._pinAuthor());
+      return (Number.isFinite(k) && k >= 1) ? k : 1;
+    },
+    /** 대역 변경 — 캐시 즉시 반영 + 서버 저장(24b_NumBand.persistBand, 로드돼 있을 때). */
+    _setNumBand(k) {
+      const b = PinSeries.bandRange(k).band;
+      PinSeries.setMyBand(this._pinAuthor(), b);
+      if (typeof NumBand !== "undefined" && NumBand.persistBand) NumBand.persistBand(b);
+      if (typeof NumBand !== "undefined" && NumBand.render) NumBand.render();
+      return b;
+    },
+    /** 직접 입력(고급) — 입력값이 속한 대역으로 귀속 + 그 대역 안 하한으로 기억(사용자·프로젝트·계열별). */
     _setCheckboardStart(page, value, series) {
       const ser = series === "content" ? "content" : "checkboard";
-      const p = page || State.pdfPage || 1;
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
-      const author = this._pinAuthor();
-      if (author && typeof PinSeries !== "undefined" && PinSeries.setUserBandStart) {
-        PinSeries.setUserBandStart(author, n, ser);
-      }
-      State.checkboardStart = this._normalizeCheckboardStart(State.checkboardStart);
-      State.checkboardStart[ser][p] = n;
-      this._autoSave && this._autoSave();
+      PinSeries.setUserStart(this._pinAuthor(), ser, n);
+      this._setNumBand(PinSeries.bandOf(n));
       return n;
+    },
+    /** 대역이 가득 찼을 때 — 넘쳐 들어가지 않고 확인창으로 다음 빈 대역 제안(동시에 하나만). */
+    async _bandFull(nx) {
+      if (this._bandFullAsking) return;
+      this._bandFullAsking = true;
+      try {
+        const next = (typeof NumBand !== "undefined" && NumBand.nextFreeBand) ? NumBand.nextFreeBand(nx.band) : nx.band + 1;
+        const ok = (typeof Prompt !== "undefined" && Prompt.confirm)
+          ? await Prompt.confirm("번호 대역", "대역이 가득 찼습니다 — 다음 대역(" + PinSeries.bandLabel(next) + ")으로 바꿀까요?")
+          : false;
+        if (ok) {
+          this._setNumBand(next);
+          Prompt.toast && Prompt.toast("번호 대역 " + PinSeries.bandLabel(next) + " — 도면을 다시 누르면 이어서 찍힙니다");
+        }
+      } finally { this._bandFullAsking = false; }
     },
 
     /** [WO 20260918] 🔴 사용자가 버튼을 눌러서만 실행되는 일괄 재채번(자동 재채번 아님 —
@@ -1560,9 +1582,11 @@
       // 🔴 채번 정본 = PinSeries. 계열마다 독립으로 "페이지 내 그 계열 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage, series);
       const _auth0 = this._pinAuthor();
-      // 🔴 [WO 20260930-numdup] 다음 번호 = 로드된 전원 핀 최댓값+1(시작번호는 하한) — author 인자는
-      //   nextSeriesNo 가 무시한다(작성자별로 보면 남의 번호와 겹쳤다, p93 B4).
-      const no = PinSeries.nextSeriesNo(State.pins, curPage, start, _auth0, series);
+      // 🔴 [WO 20260930-numdup] 다음 번호 = 로드된 전원 핀 최댓값+1 — 작성자별로 보면 남의 번호와 겹쳤다(p93 B4).
+      // 🔴 [WO 20261001-startno] 단, 내 대역 안에서만(다른 대역 핀 무시). 가득 차면 핀을 만들지 않고 확인창.
+      const nx = PinSeries.nextInBand(State.pins, curPage, series, this._numBand(), start);
+      if (nx.full) { this._bandFull(nx); return null; }
+      const no = nx.no;
       // [WO 20260929-createdAt] 생성시각 명시 저장(PinSeries.createdAt 이 우선 사용 — id 파생은 구버전 폴백)
       const _now0 = Date.now();
       const pin = { id: _now0, createdAt: _now0, x: pct.x, y: pct.y, page: curPage, label: String(no) };
@@ -1581,6 +1605,7 @@
       this._updateSyncBadge && this._updateSyncBadge();
       this._autoSave && this._autoSave();
       this._updateCheckboardQuickStatus(curPage);
+      if (typeof NumBand !== "undefined" && NumBand.render) NumBand.render(); // 상단 "다음 N" 갱신
       // 🔴 [WO 20260929 마스터 정정] 이 함수는 항상 "번호 핀만" 만든다 — 폼·팝업·파일창·확인창·
       //   토스트 스팸 없음("체크보드 빈 곳 클릭 = 다른 반응 없음"). 사진 즉시등록(photo 모드)은
       //   호출부(_handlePlaceClick)가 반환된 pin 으로 별도 _openPinMediaPicker() 를 부른다.
@@ -1633,27 +1658,8 @@
       }
     },
 
-    /** 현재 페이지에서 방금 찍은 계열(series)의 번호 범위(시작~마지막).
-     *  🔴 번호는 PinSeries 정본에서만 파생(자체 채번 금지). 찍은 핀이 없으면 시작번호로 폴백.
-     *  [마스터 요청 2026-09-03] series 를 함께 반환해 PhotoBatch.open() 이 다른 계열과
-     *  혼동하지 않게 한다(번호는 계열마다 독립 채번이라 계열 지정 필수).
-     *  [WO 20260929 addendum] series 생략 시 "checkboard"(하위호환) — 360(photo) 모드는
-     *  _updateCheckboardQuickStatus() 가 State.regMode 로 판정해 "content" 를 넘긴다. */
-    _checkboardQuickRange(page, series) {
-      const ser = series === "content" ? "content" : "checkboard";
-      const pg = page || State.pdfPage || 1;
-      const map = PinSeries.numbers(State.pins, pg);
-      let start = null, end = null;
-      (State.pins || []).forEach((p) => {
-        if (!p || (p.page || 1) !== pg || PinSeries.seriesOf(p) !== ser) return;
-        const info = map.get(p.id);
-        if (!info) return;
-        if (start === null || info.no < start) start = info.no;
-        if (end === null || info.no > end) end = info.no;
-      });
-      const fallback = this._checkboardStart(pg, ser);
-      return { start: start === null ? fallback : start, end: end === null ? fallback : end, series: ser };
-    },
+    /* [WO 20261001-startno] 구 _checkboardQuickRange()(페이지 전체 최소~최대) 삭제 — 유일 호출부였던 아래 상태문구가
+       대역 안 다음 번호(PinSeries.nextInBand)로 바뀌어 고아가 됐다(남의 대역 번호까지 범위에 섞였다). */
 
     /** [마스터 요청 2026-09-03, WO 20260918 갱신] "지금 몇 번부터 / 몇 개 찍었는지"를 기존
      *  place-hint 문구에 반영한다. (구 "사진 폴더 연동" 퀵버튼 노출 토글은 그 버튼이 렌더
@@ -1664,7 +1670,6 @@
       const pg = page || State.pdfPage || 1;
       const series = (State.regMode === "photo") ? "content" : "checkboard";
       const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
-      const range = this._checkboardQuickRange(pg, series);
       const hint = UI.$("place-hint");
       // [WO 20260930-autophoto] 남은 360 후보 사진 수를 함께 보여준다(PhotoBatch 세션 SoT).
       const avail = (series === "content" && typeof PhotoBatch !== "undefined" && PhotoBatch._autoRowsRemaining) ? PhotoBatch._autoRowsRemaining() : 0;
@@ -1673,9 +1678,11 @@
             ? ("도면 위를 클릭하면 번호 핀과 함께 대기 중인 360 사진 " + avail + "장 중 가장 가까운 시각이 자동 연결됩니다")
             : "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다")
         : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
+      // [WO 20261001-startno] "다음" = 내 대역 안 다음 번호(정본 nextInBand) — 페이지 전체 최댓값+1 은 남의 대역일 수 있다.
+      const nx = PinSeries.nextInBand(State.pins, pg, series, this._numBand(), this._checkboardStart(pg, series));
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ("시작 " + this._checkboardStart(pg, series) + "번부터 · " + cnt + "개 찍음 · 다음 " + (range.end + 1) + "번 (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
+          ? ("대역 " + PinSeries.bandLabel(nx.band) + " · " + cnt + "개 찍음 · " + (nx.full ? "대역 가득" : ("다음 " + PinSeries.formatNo(nx.no, series) + "번")) + " (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
           : emptyHint;
       }
       // [WO 20260930-autophoto] "사진 다시 선택" 버튼 — 360 모드에서 대기 사진이 있을 때만 노출.
@@ -2963,7 +2970,8 @@
       const fresh = changes.filter(c => { const k = c.id + ":" + c.from + ">" + c.to; if (seen.has(k)) return false; seen.add(k); return true; });
       fresh.forEach(c => { if (typeof Log !== "undefined" && Log.push) Log.push("pin.renumber", c.id, { oldLabel: c.from, newLabel: c.to, page: c.page, reason: "concurrent" }); });
       if (fresh.length && typeof Prompt !== "undefined" && Prompt.toast) {
-        Prompt.toast("번호 " + fresh.map(c => c.from + " → " + c.to).join(", ") + " 조정(동시 생성)");
+        const fmt = (n, s) => (s && PinSeries.formatNo) ? PinSeries.formatNo(n, s) : n;   // 360 은 P접두(대역 계열 공통)
+        Prompt.toast("번호 " + fresh.map(c => fmt(c.from, c.series) + " → " + fmt(c.to, c.series)).join(", ") + " 조정(동시 생성)");
       }
       return changes;
     },

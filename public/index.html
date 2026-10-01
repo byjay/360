@@ -200,13 +200,10 @@
     <div id="regmode-seg" class="regmode-seg designer-only" role="group" aria-label="편집 모드 선택">
       <button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="CHECKER — 도면 클릭 시 번호 핀만 생성">CHECKER</button>
       <button id="btn-regmode-photo" class="regmode-btn" type="button" title="360 — 핀 생성 즉시 사진 파일창">360</button>
-      <!-- [WO 20260929 topbar-cleanup] 체크보드/사진등록 모드 전용 인라인 시작번호.
-           표시는 CSS 형제선택자(#btn-regmode-checkboard.active ~, #btn-regmode-photo.active ~)로만
-           결정 — 20_App.js가 이미 토글하는 .active 클래스를 읽기만 한다(새 JS 훅 없음).
-           SoT: App._setCheckboardStart()(20_App.js, 24_Settings.js에서 호출) — 값 자체는 여기서 만들지 않는다. -->
+      <!-- [WO 20261001-startno] 구 `시작 #` 입력 → [번호 대역 ▾] 버튼(누르면 24b_NumBand 시트). 표시 여부는
+           종전대로 CSS 형제선택자(#btn-regmode-*.active ~ #regmode-start-wrap). 문구는 NumBand.render() 가 채운다. -->
       <span id="regmode-start-wrap" class="regmode-start-wrap">
-        <label for="input-regmode-start" class="regmode-start-label">시작 #</label>
-        <input id="input-regmode-start" class="regmode-start-input" type="number" min="1" inputmode="numeric" title="CHECKER/360 다음 번호 시작값 — 세팅 패널과 동기화" disabled />
+        <button id="btn-numband" class="numband-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="번호 대역 — 100번 단위로 사람마다 번호대를 나눠 씁니다(CHECKER·360 공통)"><span id="numband-btn-text">대역 1–100</span><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
       </span>
     </div>
 
@@ -2257,12 +2254,12 @@
                (style.css 의 #section-checkboard{display:none!important} 로 렌더 고아였음)를 이관.
                기존 App._checkboardStart/_setCheckboardStart/_renumberCheckboard() 정본 재사용, 새 저장 로직 없음. -->
           <div id="settings-checkboard-block" class="settings-checkboard-block">
+            <!-- [WO 20261001-startno] 시작 번호 입력 → 번호 대역 시트(24b_NumBand)로 일원화. 이 버튼은 같은 시트를 연다. -->
             <div class="checkboard-start-row">
-              <label id="settings-checkboard-start-label" for="settings-checkboard-start" class="checkboard-start-label">CHECKER 시작 번호</label>
-              <input id="settings-checkboard-start" class="checkboard-start-input" type="number" min="1" step="1" inputmode="numeric" title="이 구역(페이지)에서 다음에 찍을 번호. 클릭마다 1씩 증가합니다." />
+              <span id="settings-checkboard-start-label" class="checkboard-start-label">번호 대역</span>
+              <button id="btn-settings-numband" class="admin-gate-btn ghost" type="button" aria-haspopup="dialog">대역 1–100</button>
             </div>
             <div class="settings-checkboard-actions">
-              <button id="btn-settings-checkboard-apply" class="admin-gate-btn ghost" type="button">적용</button>
               <button id="btn-settings-checkboard-renumber" class="admin-gate-btn ghost" type="button">전체 번호 일괄 변경</button>
             </div>
             <p id="settings-checkboard-hint" class="settings-note-sm">개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.</p>

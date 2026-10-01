@@ -27,6 +27,7 @@
 23_PinPrefs.js
 23b_PinIcons.js
 24_Settings.js
+24b_NumBand.js
 25_Designers.js
 25c_UserMgmt.js
 26_PdfAnno.js

@@ -352,6 +352,50 @@ const saveAll = async (cs) => { let r = await Promise.all(cs.map(save)); for (le
   ok(b1auto === "9" && lab(b1) !== "9" && lab(b1) !== "5", "B4 수동 9 와 겹친 자동 9(먼저 만들었어도) 는 재채번 — " + lab(b1));
   ok(JSON.stringify(dupIds) === JSON.stringify([String(a1.id), String(b2.id)].sort()), "B4 수동끼리 겹친 5 는 재채번 없이 duplicateCheckboardIds 로 표시");
 }
+/* [WO 20261001-startno] 100 단위 대역 — 실 서버 병합(409)에서도 재채번이 대역 안에 머무는가 */
+{
+  // B4-f 같은 대역(101–200) 두 사람 동시 생성 → 나중 핀이 대역 안 다음 번호(102)
+  const { depId, deck } = await seedDeployment([]);
+  const [A, B] = ["a", "b"].map(makeClient);
+  for (const c of [A, B]) { await open(c, depId, deck); c.App._setNumBand(2); }
+  const ta = toastLog(A), tb = toastLog(B);
+  const pa = await place(A, 10, 10), pb = await place(B, 20, 20);
+  const la = pa.label, lb = pb.label;
+  await saveAll([A, B]);
+  const srv = await srvPins(depId);
+  const lab = (p) => (srv.find((q) => String(q.id) === String(p.id)) || {}).label;
+  console.log("   측정(B4-f 같은 대역): 생성 A=" + la + " B=" + lb + " → 서버 A=" + lab(pa) + " B=" + lab(pb) + " 토스트=" + JSON.stringify(numdupToasts(ta, tb)));
+  ok(la === "101" && lb === "101" && lab(pa) === "101" && lab(pb) === "102", "B4-f 같은 대역 동시 생성 101·101 → 서버 101·102(대역 안 다음 번호, 1–100 으로 안 내려감)");
+}
+{
+  // B4-g 다른 대역(A=101–200, B=201–300) 동시 생성 → 재채번 0 · 토스트 0
+  const { depId, deck } = await seedDeployment([]);
+  const [A, B] = ["a", "b"].map(makeClient);
+  for (const c of [A, B]) await open(c, depId, deck);
+  A.App._setNumBand(2); B.App._setNumBand(3);
+  const ta = toastLog(A), tb = toastLog(B);
+  const pa = await place(A, 10, 10), pb = await place(B, 20, 20);
+  await saveAll([A, B]);
+  const srv = await srvPins(depId);
+  const lab = (p) => (srv.find((q) => String(q.id) === String(p.id)) || {}).label;
+  console.log("   측정(B4-g 다른 대역): 서버 A=" + lab(pa) + " B=" + lab(pb) + " 토스트=" + JSON.stringify(numdupToasts(ta, tb)));
+  ok(lab(pa) === "101" && lab(pb) === "201" && numdupToasts(ta, tb).length === 0, "B4-g 다른 대역 동시 생성 → 101·201 그대로 · 재채번 0");
+}
+{
+  // B4-h 360 계열도 같은 대역 동시 → 101·102(P101·P102) · CHECKER 번호와 독립
+  const { depId, deck } = await seedDeployment([]);
+  const [A, B] = ["a", "b"].map(makeClient);
+  for (const c of [A, B]) { await open(c, depId, deck); c.App._setNumBand(2); }
+  const ac = await place(A, 5, 5);                       // CHECKER 101
+  for (const c of [A, B]) c.State.regMode = "photo";
+  const pa = await place(A, 10, 10), pb = await place(B, 20, 20);
+  await saveAll([A, B]);
+  const srv = await srvPins(depId);
+  const lab = (p) => (srv.find((q) => String(q.id) === String(p.id)) || {}).label;
+  console.log("   측정(B4-h 360): CHECKER=" + lab(ac) + " 360 A=" + lab(pa) + " B=" + lab(pb) + " 계열=" + JSON.stringify(srv.map((p) => (p.checkboard ? "C" : "P") + p.label)));
+  ok(lab(ac) === "101" && lab(pa) === "101" && lab(pb) === "102" && !srv.find((p) => String(p.id) === String(pb.id)).checkboard,
+    "B4-h 360 같은 대역 동시 → P101·P102 · CHECKER 101 과 독립");
+}
 
 /* ══════════ B5 — 초대 권한(H4) · WP3: 배포본 project_id 기준 프로젝트 단위 쓰기 권한 ══════════ */
 console.log("\n[B5] prj_B 에만 초대된 사람이 prj_A 배포본을 쓸 수 있나 (WP3 — 이제 EXIT 에 포함)");

@@ -202,7 +202,10 @@ console.log("\n[뮤테이션B] NaN 필터 제거(Number.isFinite 체크 삭제 �
   // ponytail: `n > maxNo` 단독 치환은 NaN 비교가 항상 false 라 우연히 안전하다(JS 의미론).
   // isFinite 가드가 실제로 막는 실수 = "Math.max(maxNo, n)" 로 단순화하는 흔한 리팩터 —
   // Math.max(x, NaN) = NaN 이라 한 번 오염되면 그 뒤로 계속 NaN 이 전파된다.
-  const needle = "if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시";
+  // [WO 20261001-startno] 최댓값 계산이 nextInBand(대역 범위 필터 포함)로 옮겨졌다 — 같은 가드 라인을 대상으로 한다.
+  //   대역 코드는 maxNo 가 NaN(거짓)이면 대역 시작값으로 떨어지므로 결과는 NaN 이 아니라 "1"(= 기존 3 과 무관한 오답)이다.
+  //   전: Number.isNaN(next5) · 후: next5 !== 4(⑤ 의 정답) — 어느 쪽이든 ⑤ 가 실패하는 조건을 재현한다.
+  const needle = "if (Number.isFinite(n) && n >= r.lo && n <= r.hi && n > maxNo) maxNo = n; // 다른 대역 핀 무시";
   ok(seriesSrc.indexOf(needle) >= 0, "뮤테이션B 대상 라인 존재 확인");
   const mutated = seriesSrc.replace(needle, "maxNo = Math.max(maxNo, n);");
   ok(mutated !== seriesSrc, "뮤테이션B 적용 확인(치환 발생)");
@@ -213,7 +216,7 @@ console.log("\n[뮤테이션B] NaN 필터 제거(Number.isFinite 체크 삭제 �
     { id: "m3", page: 1, checkboard: true, label: "abc" }
   ];
   const next5 = PS.nextCheckboardNo(messy, 1, 1);
-  ok(Number.isNaN(next5), `뮤테이션 적용 시 NaN 오염 재현(다음 번호 = ${next5}) → ⑤가 실패할 조건 재현`);
+  ok(next5 !== 4, `뮤테이션 적용 시 NaN 오염으로 정답(4)이 깨짐(다음 번호 = ${next5}) → ⑤가 실패할 조건 재현`);
 }
 
 console.log("\n[뮤테이션C] 콘텐츠 등록/미등록 색 분기 제거 → ⑥ 실패해야 함");

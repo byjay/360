@@ -1922,6 +1922,41 @@ async function grantProjectMembership(c: any, pid: string, email: string, role: 
     // viewer 로 (재)배정 시, 과거 designer 로 받았던 전역 권한은 회수(이 프로젝트 한정 의도)
     await c.env.DB.prepare("UPDATE designers SET deleted = 1 WHERE email = ? AND added_by LIKE 'project-invite:%'").bind(email).run().catch(() => {})
   }
+  await projectBands(c, pid)   // [WO 20261001-startno] 새 멤버 → 빈 번호 대역 자동 배정
+}
+
+/* ── [WO 20261001-startno] 100 단위 번호 대역(마스터 확정: 멤버별 자동 배정 + 본인 변경, 서버 저장) ──
+ * 대역 k = (k-1)*100+1 … k*100. 소유자 = projects.owner_num_band(없으면 1), 멤버 = project_members.num_band.
+ * NULL 멤버(0032 이전 행·직접 INSERT 경로)는 멤버 추가 순서(created_at, email)대로 **빈** 대역을 채우고 저장한다(지연 백필).
+ * 같은 상태에서 몇 번 불러도 같은 결과(결정론) · `num_band IS NULL` 조건부 UPDATE 라 동시 호출에도 덮어쓰기 0.
+ * 본인이 고른 대역(남과 겹침 허용 — 클라가 확인창)은 그대로 둔다. 멤버 추가 경로 전부가 이 함수 하나를 부른다(§G-2-5). */
+const NUM_BAND_SIZE = 100
+const NUM_BAND_MAX = 999   // 대역 번호 상한(=번호 99,900) — 입력 오류 방어용 경계
+async function projectBands(c: any, pid: string): Promise<{ owner: string, ownerBand: number, members: { email: string, role: string, band: number, created_at: number }[] } | null> {
+  const p: any = await c.env.DB.prepare('SELECT owner, owner_num_band FROM projects WHERE id = ? AND deleted = 0').bind(pid).first().catch(() => null)
+  if (!p) return null
+  const owner = String(p.owner || '').trim().toLowerCase()
+  const ownerBand = Number(p.owner_num_band) >= 1 ? Number(p.owner_num_band) : 1
+  const r: any = await c.env.DB.prepare('SELECT email, role, created_at, num_band FROM project_members WHERE project_id = ? ORDER BY created_at, email').bind(pid).all()
+  const rows = (r.results || []).filter((m: any) => String(m.email || '').trim().toLowerCase() !== owner)
+  const used = new Set<number>([ownerBand])
+  for (const m of rows) if (Number(m.num_band) >= 1) used.add(Number(m.num_band))
+  const members: { email: string, role: string, band: number, created_at: number }[] = []
+  for (const m of rows) {
+    let band = Number(m.num_band) >= 1 ? Number(m.num_band) : 0
+    if (!band) {
+      band = 1
+      while (used.has(band)) band++
+      used.add(band)
+      const w: any = await c.env.DB.prepare('UPDATE project_members SET num_band = ? WHERE project_id = ? AND email = ? AND num_band IS NULL').bind(band, pid, m.email).run()
+      if (!Number((w && w.meta && (w.meta.changes ?? w.meta.changed_db)) ?? 0)) {   // 동시 요청이 먼저 채웠다 → 그 값을 따른다
+        const cur: any = await c.env.DB.prepare('SELECT num_band FROM project_members WHERE project_id = ? AND email = ?').bind(pid, m.email).first()
+        if (cur && Number(cur.num_band) >= 1) band = Number(cur.num_band)
+      }
+    }
+    members.push({ email: String(m.email), role: String(m.role), band, created_at: Number(m.created_at) || 0 })
+  }
+  return { owner, ownerBand, members }
 }
 
 /** 초대 토큰 원문 → 유효한 초대행(없으면 null). 조회는 항상 해시로 한다(원문은 DB 에 없다). */
@@ -2539,6 +2574,64 @@ app.post('/api/projects/:id/members', async (c) => {
   return c.json({ success: true, email, role, created: false, existing: true })
 })
 
+/* ── [WO 20261001-startno] 번호 대역 조회/변경 ──
+ * GET /api/projects/:id/bands            — 소유자·멤버·super. 대역표(소유자+멤버, 이름) + 내 대역(비멤버 super 는 null)
+ * PUT /api/projects/:id/members/me/band   — body {band, email?}. 본인만 · 남의 대역은 소유자·super(canManageMembers)만.
+ *     남과 같은 대역 선택은 허용(같은 대역 안에서 이어 씀 — 확인창은 클라 몫). 소유자 대역은 projects.owner_num_band. */
+async function bandsPayload(c: any, pid: string, me: string) {
+  const t = await projectBands(c, pid)
+  if (!t) return null
+  const emails = [t.owner, ...t.members.map((m) => m.email.toLowerCase())].filter(Boolean)
+  const names = new Map<string, string>()
+  if (emails.length) {
+    const ph = emails.map(() => '?').join(',')
+    const r: any = await c.env.DB.prepare(`SELECT lower(email) AS email, name FROM local_users WHERE lower(email) IN (${ph}) AND deleted = 0`).bind(...emails).all().catch(() => ({ results: [] }))
+    for (const u of (r.results || [])) if (u.name) names.set(String(u.email), String(u.name))
+  }
+  const bands = [
+    ...(t.owner ? [{ band: t.ownerBand, email: t.owner, name: names.get(t.owner) || '', owner: true }] : []),
+    ...t.members.map((m) => ({ band: m.band, email: m.email, name: names.get(m.email.toLowerCase()) || '', owner: false })),
+  ]
+  const mine = me && me === t.owner ? t.ownerBand : (t.members.find((m) => m.email.toLowerCase() === me)?.band ?? null)
+  return { band_size: NUM_BAND_SIZE, me: { email: me, band: mine, owner: !!me && me === t.owner }, bands }
+}
+
+app.get('/api/projects/:id/bands', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const pid = c.req.param('id')
+  const me = String(user.email || '').trim().toLowerCase()
+  const proj: any = await c.env.DB.prepare('SELECT owner FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
+  if (!proj) return c.json({ error: 'not found' }, 404)
+  const isMember = !!(await c.env.DB.prepare('SELECT 1 AS x FROM project_members WHERE project_id = ? AND lower(email) = ?').bind(pid, me).first())
+  if (!isSuperAdmin(c, me) && !isProjectOwner(proj.owner, me) && !isMember) return c.json({ error: 'forbidden' }, 403)
+  return c.json(await bandsPayload(c, pid, me))
+})
+
+app.put('/api/projects/:id/members/me/band', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'login required' }, 401)
+  const pid = c.req.param('id')
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const band = Number(body.band)
+  if (!Number.isInteger(band) || band < 1 || band > NUM_BAND_MAX) return c.json({ error: 'band must be an integer 1..' + NUM_BAND_MAX }, 400)
+  const me = String(user.email || '').trim().toLowerCase()
+  const target = body.email ? normEmail(body.email) : me
+  if (target !== me && !(await canManageMembers(c, user, pid))) return c.json({ error: 'forbidden — only the owner or super admin can change another member\'s band' }, 403)
+  const t = await projectBands(c, pid)   // 바꾸기 전에 NULL 멤버를 먼저 확정(내 이동으로 남의 백필 결과가 흔들리지 않게)
+  if (!t) return c.json({ error: 'not found' }, 404)
+  if (target === t.owner) {
+    await c.env.DB.prepare('UPDATE projects SET owner_num_band = ? WHERE id = ?').bind(band, pid).run()
+  } else if (t.members.some((m) => m.email.toLowerCase() === target)) {
+    await c.env.DB.prepare('UPDATE project_members SET num_band = ? WHERE project_id = ? AND lower(email) = ?').bind(band, pid, target).run()
+  } else {
+    return c.json({ error: 'not a member of this project' }, 404)
+  }
+  await logActivity(c, 'project.member.band', { actor: user, targetType: 'project', targetId: pid, detail: { email: target, band } })
+  return c.json(await bandsPayload(c, pid, me))
+})
+
 /* ── [P40] 프로젝트 초대 링크 ───────────────────────────────────────────
  * GET  /api/projects/:id/invites      대기 중 초대 목록(관리자) — 토큰 원문은 절대 반환하지 않음
  * DELETE /api/projects/:id/invites/:iid  초대 취소(revoke)
@@ -2753,6 +2846,7 @@ app.post('/api/projects/:id/access-requests/:rid/approve', async (c) => {
     `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, 'viewer', ?, ?)
      ON CONFLICT(project_id, email) DO UPDATE SET role = 'viewer', granted_by = excluded.granted_by`
   ).bind(pid, req.email, user.email, now).run()
+  await projectBands(c, pid)   // [WO 20261001-startno] 승인 = 멤버 추가 → 빈 번호 대역 자동 배정
   await logActivity(c, 'project.access.approved', { actor: user, targetType: 'project', targetId: pid, detail: { email: req.email } })
   return c.json({ success: true })
 })
@@ -2867,6 +2961,7 @@ app.post('/api/admin/access-matrix', async (c) => {
         `INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`
       ).bind(u.project_id, email, role, user.email, now).run()
+      await projectBands(c, u.project_id)   // [WO 20261001-startno] 매트릭스 추가도 빈 번호 대역 자동 배정
     }
     count++
   }

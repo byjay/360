@@ -3529,16 +3529,55 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
    이미 토글하는 .active 클래스를 형제선택자로 읽기만 한다(새 JS 훅 없음). 값 SoT는
    App._setCheckboardStart()(24_Settings.js 에서 호출), 여기는 표기만. */
 .regmode-start-wrap { display: none; align-items: center; gap: 6px; margin-left: 6px; padding-left: 8px; border-left: 1px solid rgba(0,0,0,.14); flex-shrink: 0; }
-.regmode-start-label { font-size: 11px; font-weight: 600; color: var(--text2); white-space: nowrap; }
-.regmode-start-input { width: 52px; padding: 4px 6px; font-size: 13px; border-radius: 6px; border: 1px solid rgba(0,0,0,.18); background: #fff; color: #0f172a; text-align: center; }
-.regmode-start-input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
+/* [WO 20261001-startno] 구 `시작 #` 입력 → [번호 대역 ▾] 버튼 + 시트(24b_NumBand). 🔴 색은 전부 고정값 —
+   seastar-3d-skin.css 가 :root --bg2/--text 를 다크로 remap 하므로 var() 를 쓰면 런타임 대비가 뒤집힌다.
+   대비(WCAG 2.1): #0f172a/#fff 17.85 · #475569/#fff 7.58 · #fff/#0f172a 17.85 · #1e3a8a/#eff6ff 9.73 ·
+   #991b1b/#fef2f2 7.53 · #fff/#c2410c 5.18 · #fff/#047857 5.48 · #e2e8f0/#0f172a 14.5 · #0f172a/#fbbf24 10.7 */
+.numband-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; min-height: 32px; border-radius: 8px; border: 1px solid #94a3b8; background: #ffffff; color: #0f172a; font-size: 12.5px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.numband-btn:hover { background: #f1f5f9; }
+.numband-btn:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
 #btn-regmode-checkboard.active ~ #regmode-start-wrap,
 #btn-regmode-photo.active ~ #regmode-start-wrap { display: flex; }
+.numband-sheet { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: flex-start; justify-content: center; padding-top: 76px; }
+.numband-sheet.hidden { display: none; }
+.numband-sheet .numband-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .45); }
+.numband-sheet .numband-panel { position: relative; width: min(460px, 94vw); max-height: calc(100vh - 96px); overflow-y: auto; box-sizing: border-box; background: #ffffff; color: #0f172a; border-radius: 14px; padding: 16px 16px 12px; box-shadow: 0 18px 48px rgba(15, 23, 42, .35); }
+.numband-sheet .numband-head { display: flex; align-items: center; gap: 8px; }
+.numband-sheet .numband-title { margin: 0; font-size: 16px; font-weight: 800; color: #0f172a; }
+.numband-sheet .numband-mode { font-size: 11.5px; font-weight: 800; padding: 3px 8px; border-radius: 999px; color: #ffffff; background: #c2410c; }
+.numband-sheet .numband-mode.nb-content { background: #047857; }
+.numband-sheet .numband-x { margin-left: auto; min-width: 36px; min-height: 36px; border: none; border-radius: 8px; background: transparent; color: #334155; font-size: 22px; line-height: 1; cursor: pointer; }
+.numband-sheet .numband-x:hover { background: #f1f5f9; }
+.numband-sheet .numband-sub { margin: 6px 0 12px; font-size: 12.5px; line-height: 1.5; color: #475569; }
+.numband-sheet .numband-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; }
+.numband-sheet .numband-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 52px; padding: 8px 10px; border-radius: 10px; border: 1.5px solid #cbd5e1; background: #f8fafc; color: #0f172a; text-align: left; cursor: pointer; box-sizing: border-box; min-width: 0; }
+.numband-sheet .numband-chip:hover { border-color: #64748b; }
+.numband-sheet .numband-chip:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.numband-sheet .numband-chip.is-taken { border-style: dashed; border-color: #b45309; }
+.numband-sheet .numband-chip.is-mine { background: #0f172a; border-color: #0f172a; color: #ffffff; }
+.numband-sheet .numband-chip-range { font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.numband-sheet .numband-chip-meta { font-size: 11.5px; color: #475569; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.numband-sheet .numband-chip.is-mine .numband-chip-meta { color: #e2e8f0; }
+.numband-sheet .numband-chip-mine { font-size: 10.5px; font-weight: 800; padding: 1px 6px; border-radius: 999px; background: #fbbf24; color: #0f172a; }
+.numband-sheet .numband-next { margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: #eff6ff; color: #1e3a8a; font-size: 15px; font-weight: 800; }
+.numband-sheet .numband-next.is-full { background: #fef2f2; color: #991b1b; }
+.numband-sheet .numband-adv { margin-top: 10px; font-size: 13px; color: #0f172a; }
+.numband-sheet .numband-adv > summary { cursor: pointer; color: #1e3a8a; font-weight: 700; min-height: 32px; line-height: 32px; }
+.numband-sheet .numband-adv-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.numband-sheet .numband-adv-label { font-size: 12.5px; color: #334155; font-weight: 700; }
+.numband-sheet .numband-start { width: 96px; min-height: 36px; padding: 6px 8px; border-radius: 8px; border: 1px solid #94a3b8; background: #ffffff; color: #0f172a; font-size: 14px; font-weight: 700; text-align: center; box-sizing: border-box; }
+.numband-sheet .numband-apply { min-height: 36px; padding: 6px 14px; border-radius: 8px; border: none; background: #0f172a; color: #ffffff; font-weight: 700; cursor: pointer; }
+.numband-sheet .numband-hint { margin: 6px 0 0; font-size: 12px; color: #475569; line-height: 1.5; }
+.numband-sheet .numband-status { margin: 8px 0 0; min-height: 1em; font-size: 12px; color: #334155; }
+@media (max-width: 720px) {
+  .numband-sheet { align-items: flex-end; padding-top: 0; }
+  .numband-sheet .numband-panel { width: 100vw; max-height: 82vh; border-radius: 16px 16px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .numband-sheet .numband-chip { min-height: 56px; }
+}
 @media (max-width: 760px) {
   .regmode-seg { gap: 6px; }
   .regmode-btn { min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 13px; }
-  .regmode-start-input { min-width: 56px; min-height: 44px; font-size: 15px; }
-  .regmode-start-label { font-size: 12px; }
+  .numband-btn { min-height: 44px; font-size: 14px; padding: 6px 14px; }
   /* 375px 폭에서 세그먼트 3버튼+시작번호를 한 줄에 다 넣을 공간이 없다 — 요구사항대로
      시작번호를 topbar 바로 아래 두 번째 줄로 뺀다. position:fixed 는 .topbar의
      overflow-x:auto 가로스크롤/overflow-y:hidden 클리핑(아래 미디어쿼리) 밖에서 그려지므로

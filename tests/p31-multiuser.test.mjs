@@ -23,8 +23,15 @@
  *   - 20_App.js _checkboardStart()/_setCheckboardStart(): 사용자 대역이 있으면 최우선,
  *     없으면 기존 페이지별 값(State.checkboardStart)으로 폴백(하위호환).
  *
+ * 🔴 [WO 20261001-startno] 정책 갱신(마스터 확정: 100 단위 대역, 서버 배정 + 본인 변경):
+ *   - 대역 k = (k-1)*100+1 … k*100. 시작값 101 → 대역 2(101–200), 201 → 대역 3. (구 기대 "100/200" 은
+ *     새 대역에서 1–100 의 마지막 칸 / 101–200 의 끝이라 픽스처를 101/201 로 옮겼다)
+ *   - 다음 번호 = 내 대역 안 전원 핀 최댓값+1(다른 대역 무시) → ③ 기대 201(603f9b9 대역 침범) → 103.
+ *   - 대역 가득 → 핀 생성 안 함 + 확인창(③-d) · 같은 대역 다른 사람 → 남의 핀 포함 이어 씀(③-c).
+ *   - 영속화는 PinSeries.myBand/setMyBand(서버 값 캐시, 프로젝트+사용자 키) + userStart(직접 입력 하한).
+ *
  * 실제 모듈 소스(01b_PinSeries.js / 20_App.js)를 그대로 vm 에 평가한다(목 구현 아님).
- * 뮤테이션 5건이 붙어 있어, 고친 코드를 되돌리면 해당 검사가 실패한다.
+ * 뮤테이션 6건이 붙어 있어, 고친 코드를 되돌리면 해당 검사가 실패한다.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -67,14 +74,16 @@ function makeCtx(sSrc, aSrc, sharedStore) {
   const State = { pins: [], pdfPage: 1, checkboard: true, checkboardStart: {}, activePin: null };
   const Auth = { user: null };
   const ls = makeLocalStorage(sharedStore);
+  const confirms = [];
   const sandbox = {
     console, document: {}, JSON, Map, Set,
-    localStorage: ls, State, Auth, UI: makeUI(), Prompt: { toast() {} }
+    localStorage: ls, State, Auth, UI: makeUI(),
+    Prompt: { toast() {}, confirm: async (t, m) => { confirms.push(String(m)); return false; } }
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(sSrc + "\n" + aSrc + "\n;globalThis.__APP=App; globalThis.__PS=PinSeries;", sandbox);
-  return { State, Auth, App: sandbox.__APP, PS: sandbox.__PS, store: ls._store };
+  return { State, Auth, App: sandbox.__APP, PS: sandbox.__PS, store: ls._store, confirms };
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -85,24 +94,41 @@ function suiteBandCore(label, sSrc, aSrc) {
   const ctx = makeCtx(sSrc, aSrc);
 
   ctx.Auth.user = { email: "a@seastar.test" };
-  ctx.App._setCheckboardStart(1, 100);
+  ctx.App._setCheckboardStart(1, 101);
   ctx.App._placeCheckboardPin({ x: 1, y: 1 });
-  ok(ctx.State.pins[0].label === "100", `① 사용자A 대역 100 설정 → 첫 핀 = ${ctx.State.pins[0].label} (기대 100)`);
+  ok(ctx.State.pins[0].label === "101", `① 사용자A 시작 101(대역 101–200) → 첫 핀 = ${ctx.State.pins[0].label} (기대 101)`);
   ctx.App._placeCheckboardPin({ x: 2, y: 2 });
-  ok(ctx.State.pins[1].label === "101", `사용자A 두 번째 핀 = ${ctx.State.pins[1].label} (기대 101)`);
+  ok(ctx.State.pins[1].label === "102", `사용자A 두 번째 핀 = ${ctx.State.pins[1].label} (기대 102)`);
 
   ctx.Auth.user = { email: "b@seastar.test" };
-  ctx.App._setCheckboardStart(1, 200);
+  ctx.App._setCheckboardStart(1, 201);
   ctx.App._placeCheckboardPin({ x: 3, y: 3 });
-  ok(ctx.State.pins[2].label === "200", `② 사용자B 대역 200 설정 → 첫 핀 = ${ctx.State.pins[2].label} (기대 200)`);
+  ok(ctx.State.pins[2].label === "201", `② 사용자B 시작 201(대역 201–300) → 첫 핀 = ${ctx.State.pins[2].label} (기대 201)`);
 
   ctx.Auth.user = { email: "a@seastar.test" };
   ctx.App._placeCheckboardPin({ x: 4, y: 4 });
-  // [WO 20260930-numdup] 🔴 의미 변경(지휘자 발주): 다음 번호 = 로드된 전원 핀 최댓값+1, 대역은 하한만.
-  //   종전 기대 102(author 필터 — 내 핀만 봄)는 남의 번호와 겹치는 결함(p93 B4 서버 라벨 ["1","1"])의 원인이었다.
-  //   대가로 대역 침범(201)을 허용한다 — 번호 유일성이 우선.
-  ok(ctx.State.pins[3].label === "201",
-    `③ 번호 유일: A(100,101)+B(200) 이후 A 가 찍으면 = ${ctx.State.pins[3].label} (기대 201 = 전원 최댓값+1, 기존 번호와 겹치지 않음)`);
+  // 🔴 [WO 20261001-startno] 의미 변경(마스터 확정 — 대역 우선): 603f9b9 의 기대 201(전원 최댓값+1 = B 대역 침범)을
+  //   폐기한다. 다음 번호 = 내 대역(101–200) 안 최댓값+1 = 103, 다른 대역(B 의 201)은 무시.
+  const p3 = ctx.State.pins[3];
+  ok(!!p3 && p3.label === "103",
+    `③ 대역 우선: A(101,102)+B(201) 이후 A 가 찍으면 = ${p3 && p3.label} (기대 103 — 다른 대역 핀 무시, 침범 0)`);
+
+  // ③-c 같은 대역을 고른 다른 사람은 남의 핀까지 포함해 이어 쓴다(대역 내 유일)
+  ctx.Auth.user = { email: "b@seastar.test" };
+  ctx.App._setNumBand(2);
+  ctx.App._placeCheckboardPin({ x: 5, y: 5 });
+  const p4 = ctx.State.pins[4];
+  ok(!!p4 && p4.label === "104", `③-c B 가 A 의 대역(101–200)으로 옮기면 = ${p4 && p4.label} (기대 104 — A 의 101~103 포함 최댓값+1)`);
+
+  // ③-d 대역 가득 → 핀을 만들지 않고 확인창(넘침 0)
+  const c3 = makeCtx(sSrc, aSrc);
+  c3.Auth.user = { email: "a@seastar.test" };
+  c3.State.pins.push({ id: 1, page: 1, checkboard: true, label: "100", author: "z@seastar.test" });
+  const before = c3.State.pins.length;
+  const r = c3.App._placeCheckboardPin({ x: 1, y: 1 });
+  ok(r === null && c3.State.pins.length === before, `③-d 대역 1–100 에 100 이 있으면 새 핀 0개(넘침 0) — 반환=${r} 핀수 ${before}→${c3.State.pins.length}`);
+  ok(c3.confirms.length === 1 && /가득 찼습니다/.test(c3.confirms[0]) && /101–200/.test(c3.confirms[0]),
+    `③-d 확인창 "대역이 가득 찼습니다 — 다음 대역(101–200)…" 1회 — ${JSON.stringify(c3.confirms)}`);
 
   // ③-b 대역 없이: A 가 1,2 → B 가 찍으면 3 (author 필터면 B 자기 핀 0개 → 1 = A 의 1 과 중복)
   const c2 = makeCtx(sSrc, aSrc);
@@ -123,30 +149,30 @@ function suitePersistence(label, sSrc, aSrc) {
   console.log("\n[" + label + "]");
   const ctx1 = makeCtx(sSrc, aSrc);
   ctx1.Auth.user = { email: "a@seastar.test" };
-  ctx1.App._setCheckboardStart(1, 100);
+  ctx1.App._setCheckboardStart(1, 101);
 
   // "세션 재개" = 같은 localStorage store 를 공유하는 새 vm 컨텍스트(State.pins 는 초기화됨)
   const ctx2 = makeCtx(sSrc, aSrc, ctx1.store);
   ctx2.Auth.user = { email: "a@seastar.test" };
-  ok(ctx2.App._checkboardStart(1) === 100,
-    `④ 설정 영속: 새 세션에서 재설정 없이 조회 = ${ctx2.App._checkboardStart(1)} (기대 100)`);
+  ok(ctx2.App._checkboardStart(1) === 101 && ctx2.App._numBand() === 2,
+    `④ 설정 영속: 새 세션에서 재설정 없이 조회 = ${ctx2.App._checkboardStart(1)} · 대역 ${ctx2.App._numBand()} (기대 101 · 2)`);
 
   // 다른 사용자(B)가 자기 대역을 저장 — 같은 store 공유
   ctx2.Auth.user = { email: "b@seastar.test" };
-  ctx2.App._setCheckboardStart(1, 200);
-  ok(ctx2.App._checkboardStart(1) === 200, "사용자B 조회 = 200 (자기 자신 대역 확인)");
+  ctx2.App._setCheckboardStart(1, 201);
+  ok(ctx2.App._checkboardStart(1) === 201, "사용자B 조회 = 201 (자기 자신 대역 확인)");
 
   // A 로 다시 전환 — B 의 저장이 A 의 대역을 지우지 않아야 한다
   ctx2.Auth.user = { email: "a@seastar.test" };
-  ok(ctx2.App._checkboardStart(1) === 100,
-    `⑤ 다른 사용자(B) 저장 후에도 A 대역 유지 = ${ctx2.App._checkboardStart(1)} (기대 100, B 저장에 의해 사라지면 안 됨)`);
+  ok(ctx2.App._checkboardStart(1) === 101,
+    `⑤ 다른 사용자(B) 저장 후에도 A 대역 유지 = ${ctx2.App._checkboardStart(1)} (기대 101, B 저장에 의해 사라지면 안 됨)`);
 
   // 완전히 새로운 컨텍스트(같은 store)에서도 여전히 두 사용자 값이 독립적으로 유지
   const ctx3 = makeCtx(sSrc, aSrc, ctx1.store);
   ctx3.Auth.user = { email: "a@seastar.test" };
-  ok(ctx3.App._checkboardStart(1) === 100, "제3 세션에서도 A=100 유지");
+  ok(ctx3.App._checkboardStart(1) === 101, "제3 세션에서도 A=101 유지");
   ctx3.Auth.user = { email: "b@seastar.test" };
-  ok(ctx3.App._checkboardStart(1) === 200, "제3 세션에서도 B=200 유지(서로 다른 키에 독립 저장 — SoT 충돌 없음)");
+  ok(ctx3.App._checkboardStart(1) === 201, "제3 세션에서도 B=201 유지(서로 다른 키에 독립 저장 — SoT 충돌 없음)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -232,7 +258,7 @@ function suitePaletteSoT(label, sSrc) {
 }
 
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */
-suiteBandCore("①②③ 사용자별 대역 + 침범 방지 (정상 소스)", seriesSrc, appSrc);
+suiteBandCore("①②③ 100 단위 대역 + 침범 방지 + 같은 대역 이어 쓰기 + 가득 (정상 소스)", seriesSrc, appSrc);
 suitePersistence("④⑤ 영속화 + 타 사용자 저장 무간섭 (정상 소스)", seriesSrc, appSrc);
 suiteDefault("⑥ 설정 없으면 기본 1 (정상 소스)", seriesSrc, appSrc);
 suiteAxesUnchanged("⑦ 기존 3축 불변 (정상 소스)", seriesSrc);
@@ -243,23 +269,12 @@ suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSr
  * 뮤테이션 A: [WO 20260930-numdup] nextSeriesNo 에 author 필터 복원 → ③·③-b 가 실패해야 함
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션A] author 필터(내 핀만 봄) 복원 → ③·③-b 가 실패해야 함");
+  // [WO 20261001-startno] nextInBand 에는 author 인자가 없다 — "내 핀만 봄" 을 Auth.user 비교로 주입한다.
+  console.log("\n[뮤테이션A] author 필터(내 핀만 봄) 주입 → ③-b 가 실패해야 함");
   const needle = "        if (this.seriesOf(p) !== ser) return;\n        const n = parseInt(p.label, 10);";
-  const mutated = seriesSrc.replace(needle, "        if (this.seriesOf(p) !== ser) return;\n        if (author != null && p.author !== author) return;\n        const n = parseInt(p.label, 10);");
+  const mutated = seriesSrc.replace(needle, "        if (this.seriesOf(p) !== ser) return;\n        if (p.author && Auth.user && p.author !== Auth.user.email) return;\n        const n = parseInt(p.label, 10);");
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const ctx = makeCtx(mutated, appSrc);
-    ctx.Auth.user = { email: "a@seastar.test" };
-    ctx.App._setCheckboardStart(1, 100);
-    ctx.App._placeCheckboardPin({ x: 1, y: 1 });
-    ctx.App._placeCheckboardPin({ x: 2, y: 2 });
-    ctx.Auth.user = { email: "b@seastar.test" };
-    ctx.App._setCheckboardStart(1, 200);
-    ctx.App._placeCheckboardPin({ x: 3, y: 3 });
-    ctx.Auth.user = { email: "a@seastar.test" };
-    ctx.App._placeCheckboardPin({ x: 4, y: 4 });
-    ok(ctx.State.pins[3].label === "102",
-      `뮤테이션 적용 시 ③ 기대(201)와 달라짐(테스트 실효성 증명) → ${ctx.State.pins[3].label} (기대 102)`);
     const c2 = makeCtx(mutated, appSrc);
     c2.Auth.user = { email: "a@seastar.test" };
     c2.App._placeCheckboardPin({ x: 1, y: 1 });
@@ -272,41 +287,66 @@ suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSr
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 B: 대역 영속화(localStorage 저장) 제거 → ④가 실패해야 함
+ * 뮤테이션 A2: [WO 20261001-startno] 대역 범위 필터 제거(603f9b9 전원 최댓값 복귀) → ③ 이 실패해야 함
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션B] 대역 영속화 제거(저장 안 함) → ④가 실패해야 함");
-  const needle = 'try { localStorage.setItem(this._bandPrefix(series) + author, String(n)); } catch (e) {}';
+  console.log("\n[뮤테이션A2] 대역 범위 필터 제거(다른 대역 핀도 최댓값에 섞음) → ③ 이 실패해야 함");
+  const needle = "if (Number.isFinite(n) && n >= r.lo && n <= r.hi && n > maxNo) maxNo = n;";
+  const mutated = seriesSrc.replace(needle, "if (Number.isFinite(n) && n > maxNo) maxNo = n;");
+  if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const ctx = makeCtx(mutated, appSrc);
+    ctx.Auth.user = { email: "a@seastar.test" };
+    ctx.App._setCheckboardStart(1, 101);
+    ctx.App._placeCheckboardPin({ x: 1, y: 1 });
+    ctx.App._placeCheckboardPin({ x: 2, y: 2 });
+    ctx.Auth.user = { email: "b@seastar.test" };
+    ctx.App._setCheckboardStart(1, 201);
+    ctx.App._placeCheckboardPin({ x: 3, y: 3 });
+    ctx.Auth.user = { email: "a@seastar.test" };
+    ctx.App._placeCheckboardPin({ x: 4, y: 4 });
+    const p3 = ctx.State.pins[3];
+    ok(!p3 || p3.label !== "103",
+      `뮤테이션 적용 시 ③ 기대(103)와 달라짐(테스트 실효성 증명) → ${p3 ? p3.label : "핀 없음(B 대역 202 를 가득으로 오판)"}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 뮤테이션 B: 대역 캐시 영속화(localStorage 저장) 제거 → ④가 실패해야 함
+ * ──────────────────────────────────────────────────────────── */
+{
+  console.log("\n[뮤테이션B] 대역 캐시 영속화 제거(저장 안 함) → ④가 실패해야 함");
+  const needle = "this._lsSet(this.BAND_CACHE_PREFIX + this._scope(author), b);";
   const mutated = seriesSrc.replace(needle, '/* [뮤테이션] 영속화 제거 */');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ctx1 = makeCtx(mutated, appSrc);
     ctx1.Auth.user = { email: "a@seastar.test" };
-    ctx1.App._setCheckboardStart(1, 100);
+    ctx1.App._setCheckboardStart(1, 101);
     const ctx2 = makeCtx(mutated, appSrc, ctx1.store);
     ctx2.Auth.user = { email: "a@seastar.test" };
-    ok(ctx2.App._checkboardStart(1) !== 100,
-      `뮤테이션 적용 시 새 세션에서 대역이 사라짐(테스트 실효성 증명) → ${ctx2.App._checkboardStart(1)} (기대 100 아님)`);
+    ok(ctx2.App._checkboardStart(1) !== 101,
+      `뮤테이션 적용 시 새 세션에서 대역이 사라짐(테스트 실효성 증명) → ${ctx2.App._checkboardStart(1)} (기대 101 아님)`);
   }
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션 C: 사용자별 저장을 단일 필드(author 무시)로 바꿈 → ⑤가 실패해야 함
+ * 뮤테이션 C: 사용자별 저장을 단일 키(author 무시)로 바꿈 → ⑤가 실패해야 함
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션C] 사용자별 저장 키를 단일 키로 축소(author 무시) → ⑤가 실패해야 함");
-  const needle = "this._bandPrefix(series) + author";
-  const mutated = seriesSrc.split(needle).join("this._bandPrefix(series)");
+  const needle = 'return pid + ":" + (author || "-");';
+  const mutated = seriesSrc.replace(needle, 'return pid + ":-";');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ctx = makeCtx(mutated, appSrc);
     ctx.Auth.user = { email: "a@seastar.test" };
-    ctx.App._setCheckboardStart(1, 100);
+    ctx.App._setCheckboardStart(1, 101);
     ctx.Auth.user = { email: "b@seastar.test" };
-    ctx.App._setCheckboardStart(1, 200); // 단일 키이므로 A 값을 덮어씀
+    ctx.App._setCheckboardStart(1, 201); // 단일 키이므로 A 값을 덮어씀
     ctx.Auth.user = { email: "a@seastar.test" };
-    ok(ctx.App._checkboardStart(1) !== 100,
-      `뮤테이션 적용 시 B 저장이 A 대역을 덮어씀(테스트 실효성 증명) → A 조회 = ${ctx.App._checkboardStart(1)} (기대 100 아님)`);
+    ok(ctx.App._checkboardStart(1) !== 101,
+      `뮤테이션 적용 시 B 저장이 A 대역을 덮어씀(테스트 실효성 증명) → A 조회 = ${ctx.App._checkboardStart(1)} (기대 101 아님)`);
   }
 }
 

@@ -11,8 +11,11 @@
  *  ④ [저장] 버튼 상태(aria-live) 보강.
  *  ⑤ 모바일 360/375/414 각 폭에서 뒤로·세그먼트3·시작번호·설정·저장 모두 화면 안 + 클릭 가능.
  *
+ *  🔴 [WO 20261001-startno] ② 갱신: 인라인 입력 → [번호 대역 ▾] 버튼(#btn-numband) + 시트(24b_NumBand). 상단·모달
+ *     버튼 문구는 NumBand.render() 한 곳에서 나온다. ⑤ 의 검사 대상 id 도 input-regmode-start → btn-numband.
+ *
  * 뮤테이션 2건, 각 EXIT=1 확인 후 원복:
- *  ⓐ 24_Settings.js 인라인 apply 의 `this._renderCheckboardStart();` 제거 → ②(모달 쪽 반영)가 실패해야 함
+ *  ⓐ 24b_NumBand.js render 의 모달 버튼 갱신(`if (sb) sb.textContent = txt;`) 제거 → ②(모달 쪽 반영)가 실패해야 함
  *  ⓑ style.css 모바일 2번째 줄 배치(position:fixed) 규칙 제거 → ⑤(375px 인라인 시작번호 화면 안)가 실패해야 함
  */
 import fs from "node:fs";
@@ -44,7 +47,9 @@ ok(!/id="mode-label"/.test(indexHtml), "① #mode-label 마크업 제거됨");
 ok(!/<span class="topbar-sep">/.test(indexHtml), "① .topbar-sep 마크업 제거됨");
 ok(/UI\.\$\("topbar-dot"\)/.test(appSrc) && /if \(dot\)/.test(appSrc), "20_App.js의 topbar-dot 참조는 여전히 if(dot) 가드 보유(요소 없어도 안전)");
 ok(/UI\.\$\("mode-label"\)/.test(appSrc) && /if \(_ml\)/.test(appSrc), "20_App.js의 mode-label 참조는 여전히 if(_ml) 가드 보유(요소 없어도 안전)");
-ok(/id="input-regmode-start"/.test(indexHtml), "② 인라인 시작번호 입력(#input-regmode-start) 마크업 존재");
+// [WO 20261001-startno] 전: 인라인 `시작 #` 입력(#input-regmode-start) 존재 · 후: 그 자리에 [번호 대역 ▾] 버튼(#btn-numband)
+ok(!/id="input-regmode-start"/.test(indexHtml) && /<button id="btn-numband"[^>]*aria-haspopup="dialog"/.test(indexHtml),
+  "② 상단 `시작 #` 입력 → [번호 대역 ▾] 버튼(#btn-numband, aria-haspopup=dialog) 교체");
 ok(/aria-live="polite"/.test(indexHtml.match(/<button id="btn-save"[^>]*>/)[0]), "④ #btn-save 에 aria-live=\"polite\" 부여");
 
 /* ══════════════════════════════════════════════════════════
@@ -122,7 +127,7 @@ async function measureAll(browser, cssSrc, vw, vh) {
   const rects = await page.evaluate(() => {
     document.getElementById("btn-regmode-checkboard").classList.add("active");
     // [WO 20260929 2모드 전환] btn-regmode-view는 세그먼트에서 제거됐다(디자이너 UI 도달 불가) — 검사 대상에서도 제외.
-    const ids = ["btn-back", "btn-regmode-checkboard", "btn-regmode-photo", "input-regmode-start", "btn-settings"];
+    const ids = ["btn-back", "btn-regmode-checkboard", "btn-regmode-photo", "btn-numband", "btn-settings"]; // [WO 20261001-startno] 입력 → 대역 버튼
     return ids.map((id) => {
       const el = document.getElementById(id);
       if (!el) return { id, missing: true };
@@ -169,8 +174,8 @@ await withBrowser(async (browser) => {
     console.log("  [실측 " + vw + "x" + vh + "] " + JSON.stringify(m.rects));
     ok(m.rects.every((r) => !r.missing && r.left >= 0 && r.right <= m.vw), "⑤ 전부 뷰포트 안(" + vw + "px)");
     ok(m.rects.every((r) => r.clickable), "⑤ 전부 클릭 가능(" + vw + "px)");
-    const touchTargets = m.rects.filter((r) => r.id !== "input-regmode-start" || true);
-    ok(touchTargets.every((r) => r.height >= 44 || r.id === "input-regmode-start" ? r.height >= 40 : true), "⑤ 터치 타깃 높이 확보(" + vw + "px)");
+    // [WO 20261001-startno] 전: 항상 참이던 식(삼항 우선순위 — `a || b ? c : true`) · 후: 다섯 요소 전부 ≥44px 를 실제로 검사
+    ok(m.rects.every((r) => r.height >= 44), "⑤ 터치 타깃 높이 ≥44px(" + vw + "px) → " + JSON.stringify(m.rects.map((r) => r.id + ":" + Math.round(r.height))));
   }
 });
 
@@ -257,9 +262,12 @@ function makeSeqDate() {
   class SeqDate extends Date { static now() { return t++; } }
   return SeqDate;
 }
-function makeEnv(settingsSrcToUse) {
+/* [WO 20261001-startno] 전: 인라인 입력 ↔ 모달 입력 양방향 동기화(입력 2개) ·
+   후: 입력은 시트 하나(24b_NumBand), 상단 버튼·모달 버튼 문구가 같은 NumBand.render() 에서 나온다(양쪽 항상 동일). */
+const numbandSrc = rd("public/js/modules/24b_NumBand.js");
+function makeEnv(numbandSrcToUse, hasDrawing = true) {
   const { document, registry } = makeDoc();
-  const State = { pdfPage: 1, checkboardStart: {}, pins: [], pdfDoc: {}, viewerPages: null, pinColor: null };
+  const State = { pdfPage: 1, checkboardStart: {}, pins: [], pdfDoc: hasDrawing ? {} : null, viewerPages: null, pinColor: null, regMode: "checkboard" };
   const UI = makeUI(document);
   const Auth = { user: { name: "designer", email: "d@x.com" }, isDesigner: true, isSuper: false, role: "designer" };
   const sandbox = {
@@ -268,62 +276,43 @@ function makeEnv(settingsSrcToUse) {
     JSON, Array, Map, Set, Date: makeSeqDate(), setTimeout
   };
   vm.createContext(sandbox);
-  vm.runInContext(seriesSrc + "\n" + appSrc + "\n;globalThis.__App = App;", sandbox);
+  vm.runInContext(seriesSrc + "\n" + appSrc + "\n" + numbandSrcToUse + "\n;globalThis.__App = App; globalThis.__NB = NumBand;", sandbox);
   sandbox.App = sandbox.__App;
-  vm.runInContext(settingsSrcToUse + "\n;globalThis.__Settings = Settings;", sandbox);
+  vm.runInContext(settingsSrc + "\n;globalThis.__Settings = Settings;", sandbox);
   const Settings = sandbox.__Settings;
   Settings.init();
+  sandbox.__NB.init();
   Settings.render();
-  return { Settings, App: sandbox.App, State, registry };
+  return { Settings, App: sandbox.App, NB: sandbox.__NB, State, registry };
 }
 
 {
-  const { App, registry } = makeEnv(settingsSrc);
-  ok(registry["settings-checkboard-start"].value === "1" && registry["input-regmode-start"].value === "1",
-    "초기 렌더 — 모달·인라인 둘 다 기본값 1로 일치");
-
-  // 인라인 → 모달
-  registry["input-regmode-start"].value = "42";
-  registry["input-regmode-start"].blur();
-  ok(App._checkboardStart(1) === 42, "인라인 입력(blur) → App._setCheckboardStart() SoT 반영(=42)");
-  ok(registry["settings-checkboard-start"].value === "42", "② 인라인→모달 동기화 — 모달 입력도 42로 갱신됨");
-
-  // 모달 → 인라인
-  registry["settings-checkboard-start"].value = "77";
-  registry["btn-settings-checkboard-apply"].click();
-  ok(App._checkboardStart(1) === 77, "모달 [적용] → SoT 반영(=77)");
-  ok(registry["input-regmode-start"].value === "77", "② 모달→인라인 동기화 — 인라인 입력도 77로 갱신됨");
+  const { App, registry } = makeEnv(numbandSrc);
+  ok(registry["numband-btn-text"].textContent === "대역 1–100 · 다음 1" && registry["btn-settings-numband"].textContent === "대역 1–100 · 다음 1",
+    "초기 렌더 — 상단·모달 버튼 둘 다 '대역 1–100 · 다음 1' → " + JSON.stringify([registry["numband-btn-text"].textContent, registry["btn-settings-numband"].textContent]));
+  App._setCheckboardStart(1, 150, "checkboard");
+  ok(registry["numband-btn-text"].textContent === "대역 101–200 · 다음 150", "② 직접 입력 150 → 상단 '대역 101–200 · 다음 150' → " + registry["numband-btn-text"].textContent);
+  ok(registry["btn-settings-numband"].textContent === registry["numband-btn-text"].textContent, "② 모달 버튼도 같은 문구(한 렌더 지점)");
+  App._setNumBand(3);
+  ok(registry["numband-btn-text"].textContent === "대역 201–300 · 다음 201", "칩 선택(대역 3) → '대역 201–300 · 다음 201' → " + registry["numband-btn-text"].textContent);
 }
 
 {
-  const { registry } = makeEnv(settingsSrc);
-  // hasDrawing=false 시나리오
-  const { document, registry: registry2 } = makeDoc();
-  const State2 = { pdfPage: 1, checkboardStart: {}, pins: [], pdfDoc: null, viewerPages: null, pinColor: null };
-  const UI2 = makeUI(document);
-  const Auth2 = { user: { name: "d", email: "d@x.com" }, isDesigner: true, isSuper: false, role: "designer" };
-  const sandbox2 = { console, document, window: { addEventListener() {} }, State: State2, UI: UI2, Auth: Auth2, App: null, Prompt: { toast() {} }, PinPrefs: { get: () => "green", PALETTE: [] }, JSON, Array, Map, Set, Date: makeSeqDate(), setTimeout };
-  vm.createContext(sandbox2);
-  vm.runInContext(seriesSrc + "\n" + appSrc + "\n;globalThis.__App = App;", sandbox2);
-  sandbox2.App = sandbox2.__App;
-  vm.runInContext(settingsSrc + "\n;globalThis.__Settings = Settings;", sandbox2);
-  sandbox2.__Settings.init();
-  sandbox2.__Settings.render();
-  ok(registry2["input-regmode-start"].disabled === true, "도면 없음 → 인라인 시작번호도 비활성화");
+  const { registry } = makeEnv(numbandSrc, false);
+  ok(registry["numband-btn-text"].textContent === "대역 1–100" && registry["btn-settings-checkboard-renumber"].disabled === true,
+    "도면 없음 → 버튼은 대역만(다음 번호 없음) · 일괄 변경 비활성 → " + JSON.stringify(registry["numband-btn-text"].textContent));
 }
 
-console.log("\n[뮤테이션ⓐ] 인라인 apply 의 this._renderCheckboardStart() 제거 → 모달 쪽 동기화 실패해야 함");
+console.log("\n[뮤테이션ⓐ] NumBand.render 의 모달 버튼 갱신 제거 → 모달 쪽 동기화 실패해야 함");
 {
-  const needle = `          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value, series);
-          this._renderCheckboardStart();`;
-  if (!settingsSrc.includes(needle)) { console.log("  FAIL 뮤테이션ⓐ 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  const needle = "if (sb) sb.textContent = txt;";
+  if (!numbandSrc.includes(needle)) { console.log("  FAIL 뮤테이션ⓐ 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const mutated = settingsSrc.replace(needle, `          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value, series);`);
+    const mutated = numbandSrc.replace(needle, "/* [뮤테이션] */");
     const { App, registry } = makeEnv(mutated);
-    registry["input-regmode-start"].value = "99";
-    registry["input-regmode-start"].blur();
-    ok(App._checkboardStart(1) === 99, "사전조건 — SoT 자체는 여전히 99로 반영됨");
-    ok(registry["settings-checkboard-start"].value !== "99", "뮤테이션 적용 시 모달 입력이 갱신되지 않고 낡은 값에 머문다(동기화가 깨짐을 증명) → " + registry["settings-checkboard-start"].value);
+    App._setCheckboardStart(1, 150, "checkboard");
+    ok(registry["numband-btn-text"].textContent === "대역 101–200 · 다음 150", "사전조건 — 상단은 여전히 갱신됨");
+    ok(registry["btn-settings-numband"].textContent !== registry["numband-btn-text"].textContent, "뮤테이션 적용 시 모달 버튼이 낡은 문구에 머문다(동기화가 깨짐을 증명) → " + JSON.stringify(registry["btn-settings-numband"].textContent));
   }
 }
 

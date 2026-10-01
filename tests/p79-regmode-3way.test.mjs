@@ -388,7 +388,9 @@ console.log("\n[G1] 세그먼트/설정 블록/필터칩/도움말 — 구 모�
 {
   ok(!/<span class="checkboard-menu-title">체크보드<\/span>/.test(htmlSrc), "메뉴 타이틀 '체크보드' 문자열 없음(CHECKER로 교체됨)");
   ok(/<span class="checkboard-menu-title">CHECKER<\/span>/.test(htmlSrc), "메뉴 타이틀 = CHECKER");
-  ok(/<label[^>]*for="settings-checkboard-start"[^>]*>CHECKER 시작 번호<\/label>/.test(htmlSrc), "설정 블록 제목 라벨(정적 기본값) = CHECKER 시작 번호");
+  // [WO 20261001-startno] 전: <label for="settings-checkboard-start">CHECKER 시작 번호 · 후: 시작번호 입력이 번호 대역 시트로
+  //   일원화되어 블록 제목은 모드 공통 "번호 대역"(CHECKER·360 같은 대역) — 구 모드 명칭 잔존 0 취지는 아래 줄이 그대로 본다.
+  ok(/<span id="settings-checkboard-start-label"[^>]*>번호 대역<\/span>/.test(htmlSrc), "설정 블록 제목(정적 기본값) = 번호 대역(모드 공통)");
   ok(!/<label[^>]*>체크보드 시작 번호<\/label>/.test(htmlSrc), "구 표기 라벨 '체크보드 시작 번호' 없음(주석 언급은 허용)");
   ok(/checkboard: "CHECKER"/.test(seriesSrc), "핀 필터 칩 라벨(PinSeries.LABELS.checkboard) = CHECKER");
   ok(!appSrc.includes('"체크보드 모드"'), "20_App.js 문자열 리터럴 '체크보드 모드' 잔존 0");

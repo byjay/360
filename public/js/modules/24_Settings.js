@@ -48,45 +48,14 @@
       // [WO 20260929 addendum, 지휘자 정정] 마스터: "세팅도 각 모드에서 가능하게 해" — 인라인·모달
       // 둘 다 App._checkboardStart()/_setCheckboardStart() 에 "현재 모드(State.regMode)의 계열"을
       // 함께 넘긴다(_currentSeries() 한 곳에서만 판정 — §10 SoT).
-      $("btn-settings-checkboard-apply") && $("btn-settings-checkboard-apply").addEventListener("click", () => {
-        const input = $("settings-checkboard-start");
-        if (!input || input.disabled) return;
-        const series = this._currentSeries();
-        const n = App._setCheckboardStart(State.pdfPage || 1, input.value, series);
-        // [WO 20260929 topbar-cleanup] 세팅 모달 ↔ 상단바 인라인 입력 양방향 동기화 —
-        // 값 자체는 App._setCheckboardStart()가 유일한 SoT, 여기선 두 표시를 함께 새로고침만 한다.
-        this._renderCheckboardStart();
-        Prompt.toast && Prompt.toast((typeof PinSeries !== "undefined" ? PinSeries.LABELS[series] : series) + " 다음 번호부터 " + n + "번으로 시작합니다");
-      });
+      // [WO 20261001-startno] 시작 번호 [적용]·상단 인라인 입력 → 번호 대역 시트(24b_NumBand)로 일원화.
+      //   #btn-settings-numband 바인딩·문구는 NumBand.init()/render() 가 맡는다(SoT 1개, 중복 UI 제거).
       $("btn-settings-checkboard-renumber") && $("btn-settings-checkboard-renumber").addEventListener("click", () => {
         const btn = $("btn-settings-checkboard-renumber");
         if (btn && btn.disabled) return;
         App._renumberCheckboard(this._currentSeries()); // 기존 Prompt.ask(시작번호 입력)+Prompt.confirm 흐름 그대로
       });
-      // [WO 20260929 topbar-cleanup] 상단바 인라인 시작번호(#input-regmode-start) — 세팅 모달과
-      // 같은 SoT(App._setCheckboardStart())를 호출하고 렌더는 _renderCheckboardStart() 한 곳에서만.
-      const inlineStart = $("input-regmode-start");
-      if (inlineStart) {
-        const applyInline = () => {
-          if (inlineStart.disabled || inlineStart.value === "") return;
-          const series = this._currentSeries();
-          const n = App._setCheckboardStart(State.pdfPage || 1, inlineStart.value, series);
-          this._renderCheckboardStart();
-          Prompt.toast && Prompt.toast((typeof PinSeries !== "undefined" ? PinSeries.LABELS[series] : series) + " 다음 번호부터 " + n + "번으로 시작합니다");
-        };
-        inlineStart.addEventListener("blur", applyInline);
-        inlineStart.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") { e.preventDefault(); inlineStart.blur(); }
-        });
-      }
-      // [WO 20260929 topbar-cleanup] 20_App.js가 이미 바인딩한 3모드 세그먼트 버튼에 추가(가법) 리스너로
-      // 편승 — 20_App.js는 수정하지 않는다(다른 팀 점유). _bindTopbar()가 App.init() 초반(Settings.init()
-      // 이전)에 먼저 실행되므로, 여기서 나중에 등록되는 이 리스너는 State.regMode가 이미 갱신된 뒤
-      // 실행된다(등록 순서=실행 순서, addEventListener 다중 리스너 허용).
-      ["checkboard", "photo"].forEach((m) => {
-        const b = $("btn-regmode-" + m);
-        if (b) b.addEventListener("click", () => this._renderCheckboardStart());
-      });
+      // [WO 20261001-startno] 모드 전환 시 표시 갱신은 App._syncRegModeButtons() → NumBand.render() 한 곳.
       // 설정 패널 내 로그아웃
       $("btn-settings-signout") && $("btn-settings-signout").addEventListener("click", () => {
         Auth.signOut();
@@ -124,31 +93,17 @@
      *  [WO 20260929 addendum, 지휘자 정정] 마스터: "세팅도 각 모드에서 가능하게 해" — 라벨·값
      *  모두 _currentSeries()(현재 모드)를 따라 CHECKER/360 로 갈린다. */
     _renderCheckboardStart() {
+      // [WO 20261001-startno] 시작 번호 입력은 번호 대역 시트로 일원화 — 여기선 대역 버튼 문구(NumBand.render)와
+      // 일괄 변경 버튼의 도면 의존 비활성·이유 문구만 그린다.
       const $ = (id) => document.getElementById(id);
-      const input = $("settings-checkboard-start");
       const hint  = $("settings-checkboard-hint");
-      const applyBtn = $("btn-settings-checkboard-apply");
       const renumberBtn = $("btn-settings-checkboard-renumber");
-      const inline = $("input-regmode-start");
-      const label = $("settings-checkboard-start-label");
-      const series = this._currentSeries();
-      const seriesLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[series]) || series;
-      if (label) label.textContent = seriesLabel + " 시작 번호";
       const hasDrawing = (typeof State !== "undefined") && (State.pdfDoc || (State.viewerPages && State.viewerPages.length));
-      if (input) input.disabled = !hasDrawing;
-      if (applyBtn) applyBtn.disabled = !hasDrawing;
+      if (typeof NumBand !== "undefined" && NumBand.render) NumBand.render();
       if (renumberBtn) renumberBtn.disabled = !hasDrawing;
-      if (inline) inline.disabled = !hasDrawing;
-      if (!hasDrawing) {
-        if (input) input.value = "";
-        if (inline) inline.value = "";
-        if (hint) hint.textContent = "도면(구역)을 먼저 불러와야 시작 번호를 설정할 수 있습니다.";
-        return;
-      }
-      const n = (typeof App !== "undefined" && App._checkboardStart) ? String(App._checkboardStart(State.pdfPage || 1, series)) : "1";
-      if (input) input.value = n;
-      if (inline) inline.value = n;
-      if (hint) hint.textContent = "개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.";
+      if (hint) hint.textContent = hasDrawing
+        ? "개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다."
+        : "도면(구역)을 먼저 불러와야 번호를 일괄 변경할 수 있습니다.";
     },
 
     open() {

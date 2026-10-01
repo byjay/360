@@ -151,45 +151,41 @@ function makeFullEnv(pins) {
 
 /* ══ ②③ 연속 클릭 시 번호 1씩 증가 + 범위는 PinSeries 정본에서 파생 ══════ */
 {
-  const { App, State } = makeLightEnv();
+  const { App, State, registry } = makeLightEnv();
   State.checkboard = true;
-  // [WO 20260929 addendum] State.checkboardStart 형식이 계열별 중첩으로 바뀌었다(App._normalizeCheckboardStart).
-  State.checkboardStart = { checkboard: { 1: 5 } }; // 시작번호 5
+  // [WO 20261001-startno] 시작번호 SoT 가 배포본 State.checkboardStart(페이지·전원 공유) → 내 대역 + 직접 입력 하한
+  //   (App._setCheckboardStart)로 바뀌었다. 픽스처만 정본 진입점으로 옮기고 기대값(5,6,7)은 그대로.
+  App._setCheckboardStart(1, 5, "checkboard"); // 시작번호 5
   App._placeCheckboardPin({ x: 10, y: 10 });
   App._placeCheckboardPin({ x: 20, y: 20 });
   App._placeCheckboardPin({ x: 30, y: 30 });
   const labels = State.pins.map((p) => p.label);
   ok(labels.join(",") === "5,6,7", "② 연속 클릭 시 번호가 시작번호(5)부터 1씩 증가 → " + labels.join(","));
 
-  // ③ 범위는 PinSeries.numbers() 파생값(label 우선)을 그대로 반영해야 한다.
-  State.pins[2].label = "50"; // SoT=PinSeries 이므로 범위가 이 값을 따라가야 정상
-  const range = App._checkboardQuickRange(1);
-  ok(range.start === 5 && range.end === 50,
-    "③ 범위(시작~마지막)가 PinSeries.numbers() 파생값을 그대로 따름 → " + JSON.stringify(range));
+  // ③ [WO 20261001-startno] 구 _checkboardQuickRange()(페이지 전체 최소~최대)는 유일 호출부가 대역 문구로 바뀌어 삭제됐다.
+  //   전: "범위가 numbers() 파생값(label=50)을 따른다" · 후: 상태 문구의 "다음" 이 내 대역 안 정본(nextInBand)을 따른다 —
+  //   label=50 이면 다음 51, 다른 대역 핀(250)이 있어도 251 이 아니다.
+  State.pins[2].label = "50";
+  State.pins.push({ id: 99, page: 1, checkboard: true, label: "250" });
+  App._updateCheckboardQuickStatus(1);
+  const hintEl = registry["place-hint"];
+  ok(/다음 51번/.test(hintEl.textContent) && /대역 1–100/.test(hintEl.textContent),
+    "③ 상태 문구 = 내 대역(1–100) 안 다음 번호 51(다른 대역 250 무시) → " + JSON.stringify(hintEl.textContent));
 
-  console.log("\n[뮤테이션③] _checkboardQuickRange 가 PinSeries 를 우회해 자체 순번(인덱스)으로 세면 실패해야 함");
-  const needle = `        const info = map.get(p.id);
-        if (!info) return;
-        if (start === null || info.no < start) start = info.no;
-        if (end === null || info.no > end) end = info.no;`;
-  const mutated = appSrc.replace(needle,
-    `        idx++;
-        if (start === null || idx < start) start = idx;
-        if (end === null || idx > end) end = idx;`
-  ).replace(
-    "let start = null, end = null;",
-    "let start = null, end = null, idx = 0;"
-  );
+  console.log("\n[뮤테이션③] 상태 문구가 대역을 무시하고 페이지 전체 최댓값+1 로 세면 실패해야 함");
+  const needle = "const nx = PinSeries.nextInBand(State.pins, pg, series, this._numBand(), this._checkboardStart(pg, series));";
+  const mutated = appSrc.replace(needle, "const nx = PinSeries.nextInBand(State.pins, pg, series, PinSeries.bandOf(Math.max(0, ...State.pins.map(p => parseInt(p.label, 10) || 0)) + 1), 0);");
   if (mutated === appSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { document } = makeDoc();
-    const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: JSON.parse(JSON.stringify(State.pins)), checkboardStart: { checkboard: { 1: 5 } } };
+    const { document, registry: regM } = makeDoc();
+    const StateM = { checkboard: true, mode: "designer", pdfPage: 1, pins: JSON.parse(JSON.stringify(State.pins)), checkboardStart: {} };
     const UIm = { $: (id) => document.getElementById(id), hide() {}, text() {}, togglePinList() {}, renderPinList() {}, renderPinsOnMap() {} };
-    const sandboxM = { console, document, window: { addEventListener() {} }, State: StateM, UI: UIm, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate() };
+    const sandboxM = { console, document, window: { addEventListener() {} }, State: StateM, UI: UIm, Prompt: { toast() {} }, JSON, Array, Map, Set, Math, parseInt, Date: makeSeqDate() };
     vm.createContext(sandboxM);
     vm.runInContext(seriesSrc + "\n" + mutated + "\n;globalThis.__App = App;", sandboxM);
-    const rangeM = sandboxM.__App._checkboardQuickRange(1);
-    ok(rangeM.end !== 50, `뮤테이션 적용 시 정본(label=50)을 무시하고 자체 인덱스로 계산해 깨짐(테스트 실효성 증명) → end=${rangeM.end}`);
+    sandboxM.__App._updateCheckboardQuickStatus(1);
+    const hM = regM["place-hint"];
+    ok(!/다음 51번/.test(hM.textContent), `뮤테이션 적용 시 대역 밖 번호를 다음으로 안내(테스트 실효성 증명) → ${JSON.stringify(hM.textContent)}`);
   }
 }
 

@@ -79,7 +79,8 @@ function makeApp({ fetchImpl = async () => ({ ok: true, status: 200, json: async
     persistLocalDeployment: async () => { calls.persist++; },
     _revokeVideoBlob() {}, Zones: { refreshPinLinks() {} },
     MapCtrl: { applyTransform() {}, fit() {} }, Log: { push() {} },
-    PinSeries: { preferredMode: () => "designer", setPreferredMode() {}, nextSeriesNo: () => 1 },
+    // [WO 20261001-startno] _placeCheckboardPin 이 대역 정본(nextInBand · myBand)을 부른다 — 스텁도 같은 표면으로.
+    PinSeries: { preferredMode: () => "designer", setPreferredMode() {}, nextSeriesNo: () => 1, myBand: () => null, nextInBand: () => ({ no: 1, full: false, band: 1, lo: 1, hi: 100 }) },
     fetch: fetchImpl, URLSearchParams, AbortController,
     setTimeout: (f, ms) => (ms && ms >= 1000 ? 0 : setTimeout(f, ms)), clearTimeout,
     JSON, Array, Map, Set, Date, Promise, Object, Number, String,

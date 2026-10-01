@@ -240,7 +240,11 @@
           no = Number.isFinite(lbl) ? lbl : nCheck;
         } else {
           nContent++;
-          no = nContent;
+          // [WO 20261001-startno] 360 도 대역 번호(P101…)를 보여야 한다 — label 이 순수 숫자면 그 값,
+          //   아니면(자유 텍스트 이름·label 없음) 종전 페이지 내 순번. prod 360 핀 8개(label "1"~"8")는 실측상
+          //   순번과 label 이 같아 표시 번호가 바뀌지 않는다(.tmp 조회 diff 0).
+          const raw = String(p.label == null ? "" : p.label).trim();
+          no = /^\d+$/.test(raw) ? parseInt(raw, 10) : nContent;
         }
         map.set(p.id, { no: no, kind: this.kindOf(p), series: series });
       });
@@ -272,19 +276,64 @@
      *  (p93 B4 실측: 서버 라벨 ["1","1"]). 이제 로드된 **전원 핀**의 최댓값+1 — 시작번호(사용자
      *  대역 포함)는 하한으로만 쓴다. 대가: 대역 A=100 이 B 의 200 을 본 뒤엔 201 로 이어진다
      *  (대역 침범 — 번호 유일성이 우선). 서로 보기 전에 동시에 만든 겹침은 저장 병합 때
-     *  resolveConcurrentNos() 가 재채번한다. */
-    nextSeriesNo(pins, page, start, author, series) {
+     *  resolveConcurrentNos() 가 재채번한다.
+     *  🔴 [WO 20261001-startno] 대역 우선 — 위 "대역 침범 허용"을 폐기한다(마스터 확정: 100 단위 대역).
+     *  다음 번호 = 내 대역(band, 생략 시 start 가 속한 대역) 안의 전원 같은 계열 핀 최댓값+1, 대역 밖 핀은 무시.
+     *  start 는 그 대역 안에서만 하한으로 쓴다. 대역이 가득 차면 null(넘쳐 들어가지 않는다 — 호출부가 확인창). */
+    nextSeriesNo(pins, page, start, author, series, band) {
+      const s = (Number.isFinite(start) && start >= 1) ? start : 1;
+      const k = (Number.isFinite(band) && band >= 1) ? band : this.bandOf(s);
+      return this.nextInBand(pins, page, series, k, s).no;
+    },
+
+    /* ══ [WO 20261001-startno] 100 단위 번호 대역 정본 ══════════════════════════════
+       대역 k = (k-1)*BAND_SIZE+1 … k*BAND_SIZE (1–100, 101–200 …). CHECKER·360 이 같은 대역 번호 k 를 쓰되
+       번호는 계열마다 독립 증가한다. 대역 배정은 서버(project_members.num_band) SoT — 이 객체는 계산만 한다. */
+    BAND_SIZE: 100,
+    bandOf(no) {
+      const n = parseInt(no, 10);
+      return (Number.isFinite(n) && n >= 1) ? Math.floor((n - 1) / this.BAND_SIZE) + 1 : 1;
+    },
+    bandRange(k) {
+      const b = (Number.isFinite(k) && k >= 1) ? Math.floor(k) : 1;
+      return { band: b, lo: (b - 1) * this.BAND_SIZE + 1, hi: b * this.BAND_SIZE };
+    },
+    bandLabel(k) { const r = this.bandRange(k); return r.lo + "–" + r.hi; },
+    /** 대역 안 다음 번호. @returns {{no:number|null, full:boolean, band:number, lo:number, hi:number}} */
+    nextInBand(pins, page, series, band, floor) {
       const pg = page || 1;
       const ser = series === "content" ? "content" : "checkboard";
-      const s = (Number.isFinite(start) && start >= 1) ? start : 1;
+      const r = this.bandRange(band);
       let maxNo = 0;
       (pins || []).forEach(p => {
-        if (!p || (p.page || 1) !== pg) return;
+        if (!p || (p.page || 1) !== pg) return;               // 삭제 표식 핀도 센다 — 구멍 재사용 금지(종전 규칙)
         if (this.seriesOf(p) !== ser) return;
-        const n = parseInt(p.label, 10);
-        if (Number.isFinite(n) && n > maxNo) maxNo = n; // label 이 숫자가 아니면(NaN) 무시
+        const n = parseInt(p.label, 10);                       // label 이 숫자가 아니면(NaN) 무시
+        if (Number.isFinite(n) && n >= r.lo && n <= r.hi && n > maxNo) maxNo = n; // 다른 대역 핀 무시
       });
-      return Math.max(s, maxNo + 1);
+      let no = maxNo ? maxNo + 1 : r.lo;
+      const f = parseInt(floor, 10);
+      if (Number.isFinite(f) && f >= r.lo && f <= r.hi && f > no) no = f;  // 하한은 대역 안일 때만
+      const full = no > r.hi;
+      return { no: full ? null : no, full: full, band: r.band, lo: r.lo, hi: r.hi };
+    },
+    /** 대역 사용 현황(칩 표시용) — 계열별 그 대역 안 핀 수와 작성자별 개수. */
+    bandUsage(pins, page, series) {
+      const pg = page || 1;
+      const ser = series === "content" ? "content" : "checkboard";
+      const out = new Map();   // band → { count, authors: Map<author, n> }
+      (pins || []).forEach(p => {
+        if (!p || p._deleted || (p.page || 1) !== pg || this.seriesOf(p) !== ser) return;
+        const raw = String(p.label == null ? "" : p.label).trim();
+        if (!/^\d+$/.test(raw)) return;
+        const k = this.bandOf(raw);
+        if (!out.has(k)) out.set(k, { count: 0, authors: new Map() });
+        const u = out.get(k);
+        u.count++;
+        const a = p.author || "";
+        u.authors.set(a, (u.authors.get(a) || 0) + 1);
+      });
+      return out;
     },
 
     /** 🔴 [2026-09-17] 같은 페이지 체크보드 계열에서 label 이 중복된 핀 id 집합.
@@ -314,7 +363,9 @@
      *  · 기존 데이터 불변: 묶음이 전부 기준 핀(baseIds = 내가 알던 서버본)이거나 기준 핀이 둘 이상이면
      *    이미 저장돼 있던 중복이라 건드리지 않는다(위 duplicateCheckboardIds 주석의 "자동 재채번 금지").
      *    baseIds 를 모르면(null) 동시 생성 여부를 판정할 수 없으니 아무것도 바꾸지 않는다.
-     *  · 360 계열은 대상 아님 — 표시 번호가 label 이 아니라 페이지 내 순번(numbers())이라 화면상 겹칠 수 없다.
+     *  · [WO 20261001-startno] 360 계열도 대상 — numbers() 가 이제 숫자 label 을 그대로 표시(P101…)하므로 겹칠 수 있다.
+     *    묶음 키 = 계열|페이지|번호. 🔴 옮길 곳 = 그 번호가 속한 **대역 안** 최댓값+1 — 대역 밖으로 절대 옮기지 않고,
+     *    대역이 가득 찼으면 옮기지 않는다(duplicateCheckboardIds 가 중복으로 표시).
      *  · 흔들림 방지: 재채번한 핀엔 renumberedFrom(옛 번호)을 남긴다. 낡은 화면(옛 번호를 든 클라이언트)이
      *    병합하면 로컬 우선 규칙 때문에 옛 번호로 되돌린 뒤 또 다른 번호로 옮기게 되는데, srvPins 를 넘기면
      *    "서버본이 내 옛 번호에서 옮겨 둔 핀"은 서버 번호를 먼저 채택한다(수동 번호 제외).
@@ -331,31 +382,35 @@
       const base = new Set(Array.from(baseIds, String));
       const at = (p) => { const t = this.createdAt(p); return Number.isFinite(t) ? t : Infinity; };
       const byAge = (a, b) => (at(a) - at(b)) || (String(a.id) < String(b.id) ? -1 : (String(a.id) > String(b.id) ? 1 : 0));
-      const groups = new Map(), maxByPage = new Map();
+      const groups = new Map(), maxByBand = new Map();
       pins.forEach(p => {
-        if (!p || p._deleted || this.seriesOf(p) !== "checkboard") return;
+        if (!p || p._deleted) return;
+        const ser = this.seriesOf(p);
         const lbl = String(p.label == null ? "" : p.label).trim();
         if (!/^\d+$/.test(lbl)) return;
         const pg = p.page || 1, n = parseInt(lbl, 10);
-        maxByPage.set(pg, Math.max(maxByPage.get(pg) || 0, n));
-        const k = pg + "|" + n;
-        if (!groups.has(k)) groups.set(k, { pg: pg, n: n, list: [] });
+        const bk = ser + "|" + pg + "|" + this.bandOf(n);
+        maxByBand.set(bk, Math.max(maxByBand.get(bk) || 0, n));
+        const k = ser + "|" + pg + "|" + n;
+        if (!groups.has(k)) groups.set(k, { ser: ser, pg: pg, n: n, bk: bk, list: [] });
         groups.get(k).list.push(p);
       });
       const changes = [];
       Array.from(groups.values())
         .filter(g => g.list.length > 1)
-        .sort((a, b) => (a.pg - b.pg) || (a.n - b.n))
+        .sort((a, b) => (a.ser < b.ser ? -1 : (a.ser > b.ser ? 1 : 0)) || (a.pg - b.pg) || (a.n - b.n))
         .forEach(g => {
           const inBase = g.list.filter(p => base.has(String(p.id))).length;
           if (inBase === g.list.length || inBase > 1) return;   // 이미 저장돼 있던 중복 → 표시만
           g.list.sort(byAge);
           const keep = g.list.find(p => p.labelManual) || g.list[0];
+          const hi = this.bandRange(this.bandOf(g.n)).hi;
           g.list.forEach(p => {
             if (p === keep || p.labelManual) return;
-            const to = (maxByPage.get(g.pg) || 0) + 1;
-            maxByPage.set(g.pg, to);
-            changes.push({ id: p.id, page: g.pg, from: String(p.label), to: String(to) });
+            const to = (maxByBand.get(g.bk) || 0) + 1;
+            if (to > hi) return;                                  // 대역 가득 → 옮기지 않음(중복 표시만)
+            maxByBand.set(g.bk, to);
+            changes.push({ id: p.id, page: g.pg, series: g.ser, from: String(p.label), to: String(to) });
             p.renumberedFrom = String(p.label);
             p.label = String(to);
           });
@@ -581,29 +636,33 @@
       return { color: color, initial: initial, author: a, band: null };
     },
 
-    /** [WO 20260917 멀티유저 ①·재설계] 사용자별 번호 대역 시작값 — localStorage 에 사용자
-     *  이메일 기준으로 저장한다(🔴 배포본 단일 필드에 저장하면 다른 사용자가 저장할 때
-     *  덮어써진다 — 사용자별 값은 그 사용자에게 붙어야 한다는 마스터 지시. 각 브라우저의
-     *  localStorage 는 사용자별로 독립이므로 이 문제가 구조적으로 발생하지 않는다). */
-    BAND_KEY_PREFIX: "wm-user-band:",
-    // [WO 20260929 addendum] 360(content) 계열 전용 대역 키 — CHECKER 대역과 절대 같은 키를
-    // 쓰면 안 된다(두 계열이 같은 시작번호를 공유하면 "번호체계 분리" 요구가 깨진다).
-    BAND_KEY_PREFIX_360: "wm-user-band-360:",
-    _bandPrefix(series) { return series === "content" ? this.BAND_KEY_PREFIX_360 : this.BAND_KEY_PREFIX; },
-    /** series 생략 시 종전대로 checkboard 대역(하위호환, 기존 1-인자 호출부 그대로 동작). */
-    userBandStart(author, series) {
-      if (!author) return null;
-      try {
-        const raw = localStorage.getItem(this._bandPrefix(series) + author);
-        const n = parseInt(raw, 10);
-        return (Number.isFinite(n) && n >= 1) ? n : null;
-      } catch (e) { return null; }
+    /** 🔴 [WO 20261001-startno] 내 번호 대역 — 정본은 **서버**(project_members.num_band · 소유자는 projects.owner_num_band,
+     *  마스터 확정: 다른 기기에서도 같은 대역). 여기 localStorage 는 그 값의 **캐시**(오프라인·서버 응답 전)일 뿐이고,
+     *  24b_NumBand.refresh() 가 서버 값으로 덮어쓴다. 키 = 프로젝트 + 사용자(대역은 CHECKER·360 공통).
+     *  직접 입력 하한(고급)만 계열별 키 — 대역 안에서만 의미가 있다(App._checkboardStart).
+     *  구 키(wm-user-band:· wm-user-band-360: — 사용자 전역·계열별 시작값)는 더 이상 읽지 않는다. */
+    BAND_CACHE_PREFIX: "wm-num-band:",
+    START_KEY_PREFIX: "wm-num-start:",
+    _scope(author) {
+      const pid = (typeof State !== "undefined" && State.currentProjectId) || "-";
+      return pid + ":" + (author || "-");
     },
-    setUserBandStart(author, value, series) {
-      if (!author) return null;
+    _mem: {},   // localStorage 가 막힌 환경(사생활 모드·저장소 차단)에서도 이 탭 동안은 유지
+    _lsNum(key) {
+      let v = null;
+      try { v = localStorage.getItem(key); } catch (e) { v = null; }
+      if (v == null) v = this._mem[key];
+      const n = parseInt(v, 10);
+      return (Number.isFinite(n) && n >= 1) ? n : null;
+    },
+    _lsSet(key, n) { this._mem[key] = String(n); try { localStorage.setItem(key, String(n)); } catch (e) {} },
+    myBand(author) { return this._lsNum(this.BAND_CACHE_PREFIX + this._scope(author)); },
+    setMyBand(author, k) { const b = this.bandRange(k).band; this._lsSet(this.BAND_CACHE_PREFIX + this._scope(author), b); return b; },
+    userStart(author, series) { return this._lsNum(this.START_KEY_PREFIX + this._scope(author) + ":" + (series === "content" ? "content" : "checkboard")); },
+    setUserStart(author, series, value) {
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
-      try { localStorage.setItem(this._bandPrefix(series) + author, String(n)); } catch (e) {}
+      this._lsSet(this.START_KEY_PREFIX + this._scope(author) + ":" + (series === "content" ? "content" : "checkboard"), n);
       return n;
     },
 
@@ -616,7 +675,7 @@
     userMark(pin, no) {
       if (!pin) return null;
       if (pin.checkboard && Number.isFinite(no)) {
-        const band = Math.floor((no - 1) / 100); // 0=1~100, 1=101~200 … "100번대/200번대" 그룹
+        const band = this.bandOf(no) - 1; // 0=1~100, 1=101~200 … "100번대/200번대" 그룹 (BAND_SIZE 정본)
         const color = this.USER_MARK_PALETTE[band % this.USER_MARK_PALETTE.length];
         return { color: color, initial: String(band + 1), author: pin.author || null, band: band };
       }

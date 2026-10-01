@@ -263,44 +263,36 @@ function makeSettingsEnv(hasDrawing) {
 }
 {
   const { Settings, App, State, registry, renumberCalls } = makeSettingsEnv(true);
+  // [WO 20261001-startno] 시작 번호 입력·[적용]은 번호 대역 시트(24b_NumBand · p104)로 일원화됐다.
+  //   전: 모달 입력 101 → [적용] → _checkboardStart === 101 · 후: 모달에는 입력이 없고(마크업 0) 같은 정본
+  //   App._setCheckboardStart 를 시트가 부른다 — 여기서는 정본 자체(150 → 대역 101–200 안 하한 150)와 모달 잔여 UI 를 본다.
   Settings.render(); // 모달 렌더 — 디자이너면 _renderCheckboardStart() 호출
-  ok(registry["settings-checkboard-start"].disabled === false, "도면 로드됨 → 시작번호 입력 활성화");
-  ok(registry["settings-checkboard-start"].value === "1", "초기값 = 1(기본 시작번호)");
+  const indexHtml = rd("public/index.html");
+  ok(!/id="settings-checkboard-start"/.test(indexHtml) && !/id="btn-settings-checkboard-apply"/.test(indexHtml),
+    "모달의 중복 시작번호 입력·[적용] 마크업 제거(SoT 1개)");
+  ok(/id="btn-settings-numband"/.test(indexHtml), "모달에 [번호 대역] 버튼(같은 시트를 연다) 존재");
+  ok(registry["btn-settings-checkboard-renumber"].disabled === false, "도면 로드됨 → 일괄 변경 버튼 활성화");
 
-  registry["settings-checkboard-start"].value = "101";
-  registry["btn-settings-checkboard-apply"].click();
-  ok(App._checkboardStart(1) === 101, "적용 클릭 → App._checkboardStart(1) === 101 로 반영됨");
-  ok(registry["settings-checkboard-start"].value === "101", "입력 필드도 적용된 값으로 갱신됨");
+  ok(App._setCheckboardStart(1, 150, "checkboard") === 150 && App._checkboardStart(1) === 150 && App._numBand() === 2,
+    "정본 _setCheckboardStart(150) → 시작 150 · 대역 2(101–200)로 자동 귀속 → " + App._checkboardStart(1) + " · " + App._numBand());
 
-  // 다음 체크보드 핀 번호가 실제로 101부터 시작하는지(정본 PinSeries.nextCheckboardNo 경유)까지 확인
-  const pins = [];
-  const no = App.PinSeries ? null : null; // (App 은 PinSeries 를 전역으로 참조 — 아래는 실제 배치로 검증)
   registry["btn-settings-checkboard-renumber"].click();
   ok(renumberCalls.length === 1, "전체 번호 일괄 변경 클릭 → 기존 App._renumberCheckboard() 정본 그대로 호출됨");
 
-  console.log("\n[뮤테이션③] [적용] 버튼이 입력값을 무시하도록 바꾸면 — 실패해야 함");
-  const needle = "const n = App._setCheckboardStart(State.pdfPage || 1, input.value, series);";
-  const mutated = settingsSrc.replace(needle, "const n = App._setCheckboardStart(State.pdfPage || 1, 1, series);");
-  if (mutated === settingsSrc) { console.log("  FAIL 뮤테이션③ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  console.log("\n[뮤테이션③] 직접 입력 하한 저장을 지우면(대역만 귀속) — 실패해야 함");
+  const needle = "PinSeries.setUserStart(this._pinAuthor(), ser, n);";
+  const mutated = appSrc.replace(needle, "/* [뮤테이션] 하한 저장 제거 */");
+  if (mutated === appSrc) { console.log("  FAIL 뮤테이션③ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { Settings: SettingsM, App: AppM, registry: regM } = (() => {
-      const { document: docM, registry: regM2 } = makeDoc();
-      const StateM = { pdfPage: 1, checkboardStart: {}, pins: [], pdfDoc: {}, viewerPages: null, pinColor: null };
-      const UIm = makeUI(docM);
-      const AuthM = { user: { name: "d", email: "d@x.com" }, isDesigner: true, isSuper: false, role: "designer" };
-      const sandboxM = { console, document: docM, window: { addEventListener() {} }, State: StateM, UI: UIm, Auth: AuthM, App: null, Prompt: { toast() {} }, PinPrefs: { get: () => "green", PALETTE: [] }, JSON, Array, Map, Set, Date: makeSeqDate(), setTimeout };
-      vm.createContext(sandboxM);
-      vm.runInContext(seriesSrc + "\n" + appSrc + "\n;globalThis.__App = App;", sandboxM);
-      sandboxM.App = sandboxM.__App;
-      vm.runInContext(mutated + "\n;globalThis.__Settings = Settings;", sandboxM);
-      const SettingsM2 = sandboxM.__Settings;
-      SettingsM2.init();
-      return { Settings: SettingsM2, App: sandboxM.App, registry: regM2 };
-    })();
-    SettingsM.render();
-    regM["settings-checkboard-start"].value = "250";
-    regM["btn-settings-checkboard-apply"].click();
-    ok(AppM._checkboardStart(1) !== 250, "뮤테이션 적용 시 입력값(250)이 무시되고 1로 고정됨(②가 깨짐을 증명) → " + AppM._checkboardStart(1));
+    const { document: docM } = makeDoc();
+    const StateM = { pdfPage: 1, checkboardStart: {}, pins: [], pdfDoc: {}, viewerPages: null, pinColor: null };
+    const AuthM = { user: { name: "d", email: "d@x.com" }, isDesigner: true, isSuper: false, role: "designer" };
+    const sandboxM = { console, document: docM, window: { addEventListener() {} }, State: StateM, UI: makeUI(docM), Auth: AuthM, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate(), setTimeout };
+    vm.createContext(sandboxM);
+    vm.runInContext(seriesSrc + "\n" + mutated + "\n;globalThis.__App = App;", sandboxM);
+    const AppM = sandboxM.__App;
+    AppM._setCheckboardStart(1, 150, "checkboard");
+    ok(AppM._checkboardStart(1) !== 150, "뮤테이션 적용 시 입력값(150)이 무시되고 대역 시작값으로 떨어짐(②가 깨짐을 증명) → " + AppM._checkboardStart(1));
   }
 }
 
@@ -309,8 +301,7 @@ console.log("\n[②b 도면 미로드 → 입력 비활성 + 이유 문구]");
 {
   const { Settings, registry } = makeSettingsEnv(false);
   Settings.render();
-  ok(registry["settings-checkboard-start"].disabled === true, "도면 없음 → 입력 비활성화");
-  ok(registry["btn-settings-checkboard-apply"].disabled === true, "도면 없음 → 적용 버튼 비활성화");
+  // [WO 20261001-startno] 입력·[적용] 은 제거됐다(번호 대역 시트로 일원화) — 남은 일괄 변경 버튼의 비활성 + 이유만 본다.
   ok(registry["btn-settings-checkboard-renumber"].disabled === true, "도면 없음 → 일괄변경 버튼 비활성화");
   ok(/도면|구역/.test(registry["settings-checkboard-hint"].textContent), "이유 문구가 표시됨(조용히 무시 아님) → " + JSON.stringify(registry["settings-checkboard-hint"].textContent));
 }
