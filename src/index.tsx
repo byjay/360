@@ -1778,7 +1778,23 @@ function mapProject(r: any) {
     // [P61] 공유 주소. 토큰이 곧 열쇠이므로 노출 범위는 호출부에서 멤버로 제한한다(/api/projects 참조).
     share_token: r.share_token || null, share_path: sharePathOf(r),
     // [WO 20260930-WP3 · C3] 프로젝트 원본(처음 등록한 전체 도면) 배포본. NULL = 미기록(레거시 → 클라 폴백 규칙)
-    original_deployment_id: r.original_deployment_id || null }
+    original_deployment_id: r.original_deployment_id || null,
+    // [WO 20261001-projectinfo] 프로젝트 정보(메모+일정) — 저장 안 됐으면 빈 기본값(지어내지 않음, 결측과 빈값 구분 불필요: UI 는 둘 다 "없음"으로 취급).
+    info_json: parseProjectInfo(r.info_json) }
+}
+/** [WO 20261001-projectinfo] 🔴 SoT — projects.info_json(TEXT) 파싱. 깨진/구버전 값은 조용히 삼키지 않고
+ *  빈 기본값으로 안전 폴백(파싱 실패로 500 나던 사고 방지). PATCH 핸들러와 이 함수가 유일한 지점. */
+function parseProjectInfo(raw: any): { note: string, schedule: any[], updatedAt: number | null, updatedBy: string | null } {
+  if (!raw) return { note: '', schedule: [], updatedAt: null, updatedBy: null }
+  try {
+    const o = JSON.parse(raw)
+    return {
+      note: typeof o.note === 'string' ? o.note : '',
+      schedule: Array.isArray(o.schedule) ? o.schedule : [],
+      updatedAt: Number.isFinite(o.updatedAt) ? o.updatedAt : null,
+      updatedBy: typeof o.updatedBy === 'string' ? o.updatedBy : null,
+    }
+  } catch { return { note: '', schedule: [], updatedAt: null, updatedBy: null } }
 }
 /** [P61] 비멤버 응답에서 공유 열쇠를 제거한다 — "남의 프로젝트 주소를 유추/열거 불가" 요구의 강제점.
  *  (뷰어는 배포된 프로젝트를 잠금 카드로 "보긴" 하지만, 그 주소를 손에 넣어선 안 된다) */
@@ -2141,6 +2157,60 @@ app.delete('/api/projects/:id', async (c) => {
   await c.env.DB.prepare('UPDATE decks SET deleted = 1, updated_at = ? WHERE project_id = ?').bind(now, id).run()
   await logActivity(c, 'project.delete', { actor: user, targetType: 'project', targetId: id })
   return c.json({ success: true })
+})
+
+/** [WO 20261001-projectinfo] 🔴 단일 PATCH 지점(§G-2-5) — 이름 변경·원본 지정·정보메모 셋이 공유한다.
+ *  필드별 권한을 각자 확인: name/original_deployment_id = 소유자·super(canManageMembersOf),
+ *  info_json = 디자이너 이상(canManageProject, 멤버 포함). info_json 은 LWW + 충돌 경고
+ *  (base_updated_at 이 서버 값과 다르면 409 — 클라가 확인 후 재요청하면 강제 저장). */
+app.patch('/api/projects/:id', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  const proj: any = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!proj) return c.json({ error: 'not found' }, 404)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const sets: string[] = []
+  const binds: any[] = []
+  if (body.name !== undefined) {
+    if (!canManageMembersOf(c, user, proj.owner)) return c.json({ error: 'forbidden — owner/super only' }, 403)
+    const name = String(body.name).replace(/[\u0000-\u001f]/g, '').trim()
+    if (!name || name.length > 80) return c.json({ error: 'name must be 1-80 chars' }, 400)
+    sets.push('name = ?'); binds.push(name)
+  }
+  if (body.original_deployment_id !== undefined) {
+    if (!canManageMembersOf(c, user, proj.owner)) return c.json({ error: 'forbidden — owner/super only' }, 403)
+    sets.push('original_deployment_id = ?'); binds.push(body.original_deployment_id ? String(body.original_deployment_id) : null)
+  }
+  if (body.info_json !== undefined) {
+    if (!(await canManageProject(c, user, id))) return c.json({ error: 'forbidden — designer+ only' }, 403)
+    const cur = parseProjectInfo(proj.info_json)
+    if (body.base_updated_at !== undefined && cur.updatedAt && Number(body.base_updated_at) !== Number(cur.updatedAt)) {
+      return c.json({ error: 'conflict — modified by someone else', data: cur }, 409)
+    }
+    const incoming = body.info_json || {}
+    const now = Date.now()
+    const next = {
+      note: typeof incoming.note === 'string' ? incoming.note.slice(0, 20000) : '',
+      schedule: Array.isArray(incoming.schedule) ? incoming.schedule.slice(0, 200).map((s: any) => ({
+        id: String((s && s.id) || genId('sch')),
+        date: (s && typeof s.date === 'string') ? s.date.slice(0, 20) : '',
+        kind: (s && typeof s.kind === 'string') ? s.kind.slice(0, 40) : '',
+        content: (s && typeof s.content === 'string') ? s.content.slice(0, 500) : '',
+        done: !!(s && s.done),
+      })) : [],
+      updatedAt: now, updatedBy: user.email || '',
+    }
+    sets.push('info_json = ?'); binds.push(JSON.stringify(next))
+  }
+  if (!sets.length) return c.json({ error: 'nothing to update' }, 400)
+  sets.push('updated_at = ?'); binds.push(Date.now())
+  binds.push(id)
+  await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run()
+  await logActivity(c, 'project.update', { actor: user, targetType: 'project', targetId: id, detail: { fields: Object.keys(body) } })
+  const updated: any = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first()
+  return c.json({ data: mapProject(updated) })
 })
 
 /* ════════════════════════════════════════════════════════════

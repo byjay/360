@@ -574,12 +574,17 @@
           '<div class="hub-card-body">' +
             '<div class="hub-card-name">' + UI.escapeHtml(p.name) +
               (p.published ? ' <span class="hub-pub-badge" title="뷰어에게 배포됨">● 배포됨</span>' : '') +
+              (p.can_manage_members && !isLocked ? ' <button type="button" class="hub-card-rename" data-act="rename" title="이름 변경" aria-label="이름 변경">✎</button>' : '') +
             '</div>' +
             '<div class="hub-card-meta">' +
               (deckTxt ? '<span class="hub-card-decks">' + deckTxt + '</span>' : '') +
               (dateTxt ? '<span class="hub-card-date">' + dateTxt + '</span>' : '') +
               (isPending ? '<span class="hub-card-req-badge">⏳ 신청 접수됨</span>' : '') +
             '</div>' +
+            // [WO 20261001-projectinfo] 다음 일정 1줄 — SoT: ProjectInfo.nextLine(info_json). 없으면 그리지 않는다(지어내지 않음).
+            (!isLocked && typeof ProjectInfo !== "undefined" && ProjectInfo.nextLine(p.info_json)
+              ? '<div class="hub-card-next-sched" title="프로젝트 정보의 다음 일정">📅 ' + UI.escapeHtml(ProjectInfo.nextLine(p.info_json)) + '</div>'
+              : '') +
             (deployUrl
               ? '<div class="hub-card-url">' +
                   '<span class="hub-card-url-text" title="' + UI.escapeHtml(deployUrl) + '" data-act="url-toggle">' + UI.escapeHtml(deployUrl) + '</span>' +
@@ -611,12 +616,15 @@
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>' +
                   '<span class="hub-card-act-label">멤버</span>' +
                 '</button>' +
+                '<button class="hub-card-act hub-card-info" title="프로젝트 정보 — 메모·일정" data-act="info" aria-label="프로젝트 정보">' +
+                  '<span aria-hidden="true" style="font-size:14px;line-height:1">ⓘ</span><span class="hub-card-act-label">정보</span>' +
+                '</button>' +
                 '<button class="hub-card-act hub-card-del" title="삭제" data-act="del" aria-label="삭제">' +
                   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
                   '<span class="hub-card-act-label">삭제</span>' +
                 '</button>' +
               '</div>'
-            : '') +
+            : (!isLocked ? '<div class="hub-card-actions" style="opacity:1;position:static;justify-content:flex-end;padding:0 4px 8px"><button class="hub-card-act hub-card-info" title="프로젝트 정보 — 메모·일정 보기" data-act="info" aria-label="프로젝트 정보" style="width:auto;min-width:44px;height:30px;padding:0 10px;flex-direction:row;gap:5px"><span aria-hidden="true" style="font-size:14px;line-height:1">ⓘ</span><span style="font-size:11px;font-weight:700">정보</span></button></div>' : '')) +
           // [WO 20260928-hub-tree] 마스터: "전체 프로젝트 페이지에 구역-영역 리스트, 이름이
           // 동시에 보여야" — 잠긴(비멤버) 카드는 구조를 드러내지 않는다(§ 개인정보/권한).
           (isLocked ? '' : this._renderDeckTreeHtml(p));
@@ -637,6 +645,12 @@
         // 삭제 버튼
         const del = card.querySelector('[data-act="del"]');
         if (del) del.addEventListener("click", (e) => { e.stopPropagation(); this.deleteProject(p); });
+
+        // [WO 20261001-projectinfo] 이름 변경(✎) · 프로젝트 정보(ⓘ) — 트리와 같은 공유 지점(SoT)을 호출한다.
+        const renameBtn = card.querySelector('[data-act="rename"]');
+        if (renameBtn) renameBtn.addEventListener("click", (e) => { e.stopPropagation(); if (typeof Projects !== "undefined" && Projects.renameProject) Projects.renameProject(p); });
+        const infoBtn = card.querySelector('[data-act="info"]');
+        if (infoBtn) infoBtn.addEventListener("click", (e) => { e.stopPropagation(); if (typeof ProjectInfo !== "undefined" && ProjectInfo.open) ProjectInfo.open(p); });
 
         // [오프라인 작업지시서 ] 오프라인 다운로드 버튼 — 실 로직은 downloadProject() 정본(SoT)
         const dl = card.querySelector('[data-act="dl"]');

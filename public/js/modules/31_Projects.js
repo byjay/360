@@ -800,6 +800,63 @@
       this._applyDeckCropView(Object.assign({}, latest, { name: label, crop: null }));
     },
 
+    /** [WO 20261001-projectinfo] 트리 "원본 미지정 — [지정]" 버튼의 유일한 진입점(SoT) —
+     *  현재 열린 도면을 projects.original_deployment_id 로 서버에 기록한다. 권한은 서버가 최종
+     *  판정(canManageMembersOf — 소유자·super)하고, 클라는 can_manage_members 로 버튼을 가린다. */
+    async setOriginalToCurrent() {
+      if (!this.currentProject) return;
+      if (!this.currentProject.can_manage_members) { Prompt.toast && Prompt.toast("권한이 없습니다(소유자/관리자만)"); return; }
+      const depId = (this.currentDeck && this.currentDeck.deployment_id) || (typeof State !== "undefined" && State.currentDeploymentId);
+      if (!depId) { Prompt.toast && Prompt.toast("먼저 도면을 열어야 원본으로 지정할 수 있습니다"); return; }
+      if (typeof Prompt !== "undefined" && Prompt.confirm && !(await Prompt.confirm("원본 지정", "현재 열린 도면을 이 프로젝트의 원본으로 지정할까요?"))) return;
+      try {
+        const r = await fetch("/api/projects/" + this.currentProject.id, {
+          method: "PATCH", headers: Object.assign({ "Content-Type": "application/json" }, Auth.headers()),
+          body: JSON.stringify({ original_deployment_id: depId }),
+        });
+        if (!r.ok) { Prompt.toast && Prompt.toast("지정 실패(" + r.status + ")"); return; }
+        const j = await r.json().catch(() => ({}));
+        if (j && j.data) Object.assign(this.currentProject, j.data);
+        Prompt.toast && Prompt.toast("원본으로 지정했습니다");
+        if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
+      } catch (e) { Prompt.toast && Prompt.toast("지정 실패(네트워크)"); }
+    },
+
+    /** [WO 20261001-projectinfo] 프로젝트 이름 변경 — 허브 카드 ✎ / 트리 프로젝트 노드 [이름변경] 가
+     *  공유하는 유일한 진입점(SoT). proj 생략 시 currentProject(트리 호출부). 허브 카드는 목록의 임의
+     *  프로젝트 객체를 넘긴다(편집 화면 상태를 건드리지 않는다). 권한은 서버 PATCH 가 최종 판정(소유자·super). */
+    async renameProject(proj) {
+      const target = proj || this.currentProject;
+      if (!target) return;
+      if (!target.can_manage_members) { Prompt.toast && Prompt.toast("권한이 없습니다(소유자/관리자만)"); return; }
+      if (typeof Prompt === "undefined" || !Prompt.ask) return;
+      const r0 = await Prompt.ask({ title: "프로젝트 이름 변경", value: target.name, placeholder: "프로젝트 이름(1~80자)" });
+      if (!r0 || !r0.value) return;
+      const name = r0.value.trim();
+      if (!name || name.length > 80) { Prompt.toast && Prompt.toast("이름은 1~80자여야 합니다"); return; }
+      try {
+        const r = await fetch("/api/projects/" + target.id, {
+          method: "PATCH", headers: Object.assign({ "Content-Type": "application/json" }, Auth.headers()),
+          body: JSON.stringify({ name }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { Prompt.toast && Prompt.toast(j.error || ("변경 실패(" + r.status + ")")); return; }
+        if (j && j.data) Object.assign(target, j.data);
+        const li = (this.list || []).find((p) => p.id === target.id);
+        if (li && li !== target) Object.assign(li, j.data || { name });
+        if (this.currentProject && this.currentProject.id === target.id) {
+          if (typeof State !== "undefined") State.currentProjectName = target.name;
+          if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
+        }
+        if (typeof ProjectHub !== "undefined") {
+          const hli = (ProjectHub.list || []).find((p) => p.id === target.id);
+          if (hli) Object.assign(hli, j.data || { name });
+          if (ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible();
+        }
+        Prompt.toast && Prompt.toast("이름을 변경했습니다");
+      } catch (e) { Prompt.toast && Prompt.toast("변경 실패(네트워크)"); }
+    },
+
     /** 🔴 [WO 20260928] "바운더리를 잘라서 별도의 페이지로 구성" (마스터 확정) —
      *  구역(crop 보유)을 **독립 페이지처럼** 화면에 적용한다: 크롭 렌더 대상 고정 + 그 영역으로 화면 맞춤.
      *  🔴 비파괴 — 원본 PDF/배포본은 그대로고, 이건 원본을 들여다보는 **창(view)** 이다(픽셀 재저장 0).

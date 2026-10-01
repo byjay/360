@@ -443,17 +443,63 @@
       const collapsed = this._treeCollapsed || (this._treeCollapsed = new Set());
       const esc = (s) => this.escapeHtml(s);
       const C = '<svg class="tree-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+      // [WO 20261001-projectinfo·tree-hierarchy] 🔴 아이콘 SoT — 단계별 1종, 같은 선 굵기(2)·
+      //   같은 크기(16px)·같은 색 규칙(currentColor, .tree-node 색 상속 ≥3:1 기존 감사 그대로).
+      //   프로젝트(폴더) → 원본 PDF(문서, 신규) → 구역(갈래 노드) → 영역(크롭 프레임) → 핀(모드별 형태).
+      //   이모지·혼재 아이콘 금지 — 전부 이 한 곳에서 파생(기존 ✎과거 📁/이모지 흔적 제거).
       const ICO = {
-        project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
-        deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
-        region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
-        pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+        project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+        // [WO 20261001-projectinfo] 원본 PDF 전용 — 문서 아이콘(접힌 모서리). 구역(갈래 노드)과
+        // 혼동 금지(과거엔 ICO.deck 재사용 + 📄 이모지를 겹쳐 썼다 — 중복/혼재 제거).
+        origin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+        deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+        // 영역(crop) — 구역 내부를 잘라낸 프레임 모양(구역의 갈래 아이콘과 실루엣부터 다르다).
+        region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
+        pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
         // [WO 20260930-pinstyle] CHECKER 핀 트리 아이콘 = 둥근사각 번호 배지(도면 마커와 같은 형태
         // 언어). 360(티어드롭)과 실루엣부터 다르게 — 색맹 대비 1차 단서.
-        pinChecker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>'
+        pinChecker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>'
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
+      // [WO 20261001-projectinfo] 🔴 docLabel 을 여기로 끌어올린다(원래 위치는 이 함수 뒤쪽) —
+      //   아래 originNode()와 "구역 0개" 분기(이 함수 더 아래, early return)가 둘 다 이 함수를 쓴다.
+      //   decks/State 에만 의존하므로 끌어올려도 동작은 그대로다(순수 함수 이동, 로직 변경 0).
+      const docLabel = (depId) => {
+        if (!depId) return "도면 미등록";
+        const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
+        if (hit) return hit.deployment_file_name || hit.deployment_title;
+        if (String(depId) === String(State.currentDeploymentId || "") && State.fileName) return State.fileName;
+        return "등록 도면";
+      };
+      /* [WO 20261001-projectinfo] 🔴 공유 지점(SoT) — "원본 PDF" 트리 노드 한 벌.
+       *  마스터: "원 프로젝트 최상위 PDF는 항상 최상단 트리에서 보이게 해야지" — 구역 0개 분기와
+       *  구역 보유 분기가 이 함수 하나를 호출한다(각자 만들면 §10 SoT 위반). 판정은
+       *  Projects.pickOriginalDeck(기존 SoT, 31_Projects.js) 그대로 — 새 판정 로직 금지. */
+      const originNode = () => {
+        if (!proj) return null;
+        const pick = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks, proj) : null;
+        const n = document.createElement("button");
+        n.className = "tree-node tree-node-origin";
+        if (pick) {
+          const label = (pick.deployment_id ? docLabel(pick.deployment_id) : null) || pick.name || "원본 도면";
+          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">' + esc(label) + '</span>';
+          n.title = "원본 전체 도면 열기";
+          n.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal(); });
+        } else {
+          const canSet = !!(proj.can_manage_members);
+          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">미지정</span>'
+            + (canSet ? ' <span class="btn-mini tree-origin-set" data-origin-set="1" role="button" tabindex="0">지정</span>' : "");
+          n.title = canSet ? "현재 열린 도면을 원본으로 지정할 수 있습니다" : "원본 전체 도면이 아직 지정되지 않았습니다";
+          if (canSet) {
+            n.addEventListener("click", (e) => {
+              if (e && e.stopPropagation) e.stopPropagation();
+              if (typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent();
+            });
+          }
+        }
+        return n;
+      };
       /* [WO 20260929-tree1] 🔴 공유 지점 — 프로젝트 트리 노드(이름 + 다운로드/삭제 버튼 흡수)를
        *  만드는 코드 한 벌. 구역이 0개라도(빈 프로젝트) 이 노드는 그대로 있어야 한다 — 예전엔
        *  별도 박스(#section-projects)라 구역 수와 무관하게 항상 보였다. 흡수하면서 그 보장까지
@@ -472,6 +518,10 @@
           if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal();
         });
         pw.appendChild(ph);
+        // [WO 20261001-projectinfo] 🔴 원본 노드는 "프로젝트 바로 아래 첫 줄"이어야 한다(마스터 지시)
+        // — 액션 버튼 행보다 먼저 붙인다(둘 다 이 함수 안이라 호출부 2곳이 각자 순서를 정할 일이 없다).
+        const on = originNode();
+        if (on) pw.appendChild(on);
         /* [WO 20260929-tree1] 🔴 근본수정(2차, CDP 실측) — #project-actions(실 DOM)를 트리 안으로
          *  "이동"시키면(appendChild) 다음 renderTree() 호출의 `host.innerHTML=""` 가 그 노드를
          *  통째로 파괴한다(2번째 렌더부터 getElementById('project-actions') 가 null — 영구 소실,
@@ -495,6 +545,18 @@
           });
           return b;
         };
+        // [WO 20261001-projectinfo] 이름 변경(소유자·super) · 프로젝트 정보(디자이너 이상 — 서버가 최종 판정).
+        if (proj.can_manage_members) {
+          const renameBtn = document.createElement("button");
+          renameBtn.type = "button"; renameBtn.className = "btn-mini"; renameBtn.textContent = "이름변경";
+          renameBtn.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (typeof Projects !== "undefined" && Projects.renameProject) Projects.renameProject(); });
+          actions.appendChild(renameBtn);
+        }
+        const infoBtn = document.createElement("button");
+        infoBtn.type = "button"; infoBtn.className = "btn-mini"; infoBtn.textContent = "ⓘ 정보";
+        infoBtn.title = "프로젝트 정보 — 메모·일정";
+        infoBtn.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (typeof ProjectInfo !== "undefined" && ProjectInfo.open) ProjectInfo.open(proj); });
+        actions.appendChild(infoBtn);
         actions.appendChild(proxyBtn("다운로드", "btn-download-project"));
         actions.appendChild(proxyBtn("프로젝트 삭제", "btn-delete-project", "danger"));
         pw.appendChild(actions);
@@ -573,13 +635,7 @@
       /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
       const { roots: rootDecks, childrenOf: allChildrenOf } = this.groupDecksByParent(decks);
-      const docLabel = (depId) => {
-        if (!depId) return "도면 미등록";
-        const hit = decks.find((d) => String(d.deployment_id || "") === String(depId) && (d.deployment_file_name || d.deployment_title));
-        if (hit) return hit.deployment_file_name || hit.deployment_title;
-        if (String(depId) === String(State.currentDeploymentId || "") && State.fileName) return State.fileName;
-        return "등록 도면";
-      };
+      // [WO 20261001-projectinfo] docLabel 은 이 함수 위쪽(decks 선언 직후)으로 이동했다 — 중복 정의 제거.
 
       /* 같은 도면을 여러 deck(구역/영역)이 가리키므로 State(영역JSON·핀)를 붙일 deck 을 하나로 정한다.
          선택된 deck 이 그 도면 안에 있으면 그 deck 에만, 없으면 종전대로 로드된 deck 에 붙인다. */
@@ -625,7 +681,10 @@
         //   인라인 리터럴 색(#ffffff/#b91c1c 6.5:1) — 트리 테마 변수와 무관하게 대비 고정.
         const _reqN = (State.mode === "designer" && typeof Requests !== "undefined" && Requests.openCountForDeck) ? Requests.openCountForDeck(deck.id) : 0;
         const reqTag = _reqN > 0 ? '<span class="tree-req-badge" data-req-deck="' + esc(String(deck.id)) + '" title="미처리 요청 ' + _reqN + '건" style="margin-left:4px;min-width:16px;padding:0 5px;border-radius:8px;background:#b91c1c;color:#ffffff;font-size:10.5px;font-weight:700;line-height:16px;text-align:center">' + _reqN + '</span>' : "";
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + zoneCntTag;
+        // [WO 20261001-projectinfo·tree-hierarchy] 🔴 마스터: "단계마다 라벨 접두나 툴팁을 둬서
+        // 이름만으로 헷갈리지 않게" — 아이콘(형태)만으로는 약하므로 작은 텍스트 꼬리표를 더한다.
+        const kindTag = '<span class="tree-kind-tag">' + (isRegion ? "영역" : "구역") + '</span>';
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + zoneCntTag;
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.

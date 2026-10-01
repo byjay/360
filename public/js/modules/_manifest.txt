@@ -45,4 +45,5 @@
 38_Install.js
 41_RegionMerge.js
 42_Requests.js
+43_ProjectInfo.js
 99_footer.js

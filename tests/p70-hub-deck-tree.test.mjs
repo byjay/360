@@ -527,10 +527,12 @@ await withBrowser(async (browser) => {
 
 console.log("\n[뮤테이션ⓔ] srcTag(도면 출처 부가 라벨)를 되살림 → ①이 실패해야 함");
 await withBrowser(async (browser) => {
-  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + zoneCntTag;";
+  // [WO 20261001-projectinfo·tree-hierarchy] 마스터 지시로 kindTag("구역"/"영역" 꼬리표)를 추가했다
+  // (전·후 대조: kindTag 삽입 1건, srcTag 관련 구조는 그대로) — needle 을 그 줄에 맞춰 갱신.
+  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + zoneCntTag;";
   const srcTag = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
   const mutated = uiSrc.replace(needle,
-    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + srcTag + " + _tag + zoneCntTag;");
+    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + srcTag + " + _tag + zoneCntTag;");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { m } = await measureSidebarTree(browser, mutated);
