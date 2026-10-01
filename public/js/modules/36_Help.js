@@ -210,6 +210,17 @@
       hr.style.cssText = "border-top:1px solid rgba(255,255,255,.15);margin:14px 0";
       panel.appendChild(hr);
 
+      // [WO 20261001-viewreq] 핀 없는(도면/구역 단위) 요청 진입 — 디자이너에게 가는 요청은 개발자 문의와 별개다.
+      if (typeof Requests !== "undefined" && Requests.openViewer) {
+        const reqBtn = document.createElement("button");
+        reqBtn.type = "button";
+        reqBtn.textContent = "디자이너에게 요청·질문 (이 도면)";
+        reqBtn.setAttribute("data-help-request-open", "1");
+        reqBtn.style.cssText = "width:100%;padding:12px;margin:0 0 8px;border:1px solid #c9962a;border-radius:10px;background:transparent;color:#f7d98a;font-weight:700;font-size:14px;cursor:pointer";
+        reqBtn.addEventListener("click", () => { this.closeViewerPanel(); Requests.openViewer({}); });
+        panel.appendChild(reqBtn);
+      }
+
       const inquiryBtn = document.createElement("button");
       inquiryBtn.type = "button";
       inquiryBtn.textContent = "개발자에게 문의";

@@ -113,6 +113,13 @@ const INQUIRY_RATE_LIMIT_PER_MIN = 3
 const INQUIRY_RATE_WINDOW_MS = 60 * 1000
 const INQUIRY_TITLE_MAX = 200
 const INQUIRY_BODY_MAX = 4000
+/** [WO 20261001-viewreq] 열람자 요청·질문 남용 방지 상수(정본). 디자이너 작성·답변은 제한하지 않는다. */
+const NOTE_REQUEST_RATE_LIMIT_PER_MIN = 5
+const NOTE_BODY_MAX = 4000
+const NOTE_AUTHOR_MAX = 60
+const NOTE_CONTACT_MAX = 200
+const NOTE_KINDS = ['note', 'request', 'question', 'reply']
+const NOTE_VIEWER_KINDS = ['request', 'question']   // 열람자가 쓸 수 있는 종류
 /** 🔴 개인정보(이름·소속·IP) 보관 기간 — activity_log 정리 정책의 **단일 정본**.
  *  근거: 도면 열람 기록은 계약·감사 대응상 최소 1년 필요, 그 이상은 목적 달성에 불필요
  *  (개인정보보호법 제21조 파기 원칙). 자동 삭제 배치는 마스터 확인 전이라 만들지 않았다 —
@@ -126,7 +133,10 @@ const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
 //   (로그인/가입 엔드포인트와 동일한 성격). 그 외 /api/share/* 쓰기는 여전히 거부된다.
 // [WO 20261001-viewerhelp] '/api/inquiries' = 로그인 없는 공유/배포 링크 열람자도 보낼 수 있어야
 //   하는 개발자 문의 접수 — 콘텐츠 쓰기가 아니라 "문의 제출" 통로 자체라 열람전용에도 연다.
-const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify', '/api/inquiries']
+// [WO 20261001-viewreq] '/api/notes' = 열람자(공유/배포 링크 포함)의 요청·질문 접수 통로(마스터: "보기만 + 요청은 가능").
+//   🔴 가드를 통과시키는 대신 노트 라우트 자체가 열람전용 세션을 따로 판정한다(noteActor):
+//   작성은 kind=request|question·status=open 으로 강제, 수정·삭제는 수정키(X-Note-Key) 일치 본인만, 답변·상태변경은 디자이너만.
+const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify', '/api/inquiries', '/api/notes']
 
 const b64u = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const b64uDec = (s: string) => atob(s.replace(/-/g, '+').replace(/_/g, '/'))
@@ -727,11 +737,8 @@ app.use('*', async (c, next) => {
   //   LIMIT 1 로 하나만 골라 판정하면 **게이트가 꺼진 쪽이 뽑히면 그대로 뚫린다**(fail-open).
   //   따라서 참조하는 프로젝트를 전부 보고, **하나라도 잠겨 있으면 잠근다**(fail-closed).
   const pids = await gatedProjectIdsOf(c, p)
-  if (!pids.length) return next()                        // 프로젝트를 특정할 수 없으면 원래 라우트 판단에 맡긴다
-  if (user._gate && pids.includes(String(user._gate))) return next()   // 이 프로젝트 게이트 통과 세션
-  let lockedPid: string | null = null
-  for (const pid of pids) { if (await projectHasActiveShareCode(c, pid)) { lockedPid = pid; break } }
-  if (!lockedPid) return next()                          // 어느 프로젝트도 코드 미발급 = 게이트 꺼짐
+  const lockedPid = await shareGateLockedPid(c, user, pids)
+  if (!lockedPid) return next()                          // 특정 불가 · 통과 세션 · 코드 미발급 = 원래 라우트 판단에 맡긴다
   return c.json({
     error: 'gate required — invite code',
     gate_required: true,
@@ -1615,6 +1622,24 @@ app.delete('/api/activity-logs', async (c) => {
    [WO 20261001-viewerhelp] 마스터: "뷰어로 배포된 모드에서도 도움말 기능 구현하고
    개발자 문의 노트도 추가해 designsir@seastargo.com" — 수신 주소는 SUPPORT_CONTACT_EMAIL(SoT) 하나.
 ════════════════════════════════════════════ */
+/** 🔴 레이트리밋 공용 헬퍼(단일 지점) — 개발자 문의(/api/inquiries)와 열람자 요청(/api/notes)이 함께 쓴다.
+ *  키 = IP. CF 운영환경은 CF-Connecting-IP 가 항상 붙는다. 헤더가 없는 로컬환경에서는 'anon' 버킷 하나를 공유한다. */
+function rateLimitKey(c: any): string {
+  return c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'anon'
+}
+/** 테이블별 최근 창(INQUIRY_RATE_WINDOW_MS = 1분) 건수 조회 SQL — 테이블명은 이 목록 밖에서 들어올 수 없다(SQL 주입 차단).
+ *  pin_notes 는 삭제분도 센다(지우고 다시 써서 한도를 우회하지 못하게). 디자이너 행은 ip 를 남기지 않아 집계에서 빠진다. */
+const RATE_LIMIT_SQL = {
+  inquiries: 'SELECT COUNT(*) AS n FROM inquiries WHERE ip = ? AND created_at > ? AND deleted = 0',
+  pin_notes: 'SELECT COUNT(*) AS n FROM pin_notes WHERE ip = ? AND created_at > ?',
+} as const
+async function overRateLimit(c: any, table: keyof typeof RATE_LIMIT_SQL, key: string, limitPerWindow: number): Promise<boolean> {
+  try {
+    const cnt: any = await c.env.DB.prepare(RATE_LIMIT_SQL[table]).bind(key, Date.now() - INQUIRY_RATE_WINDOW_MS).first()
+    return (cnt?.n || 0) >= limitPerWindow
+  } catch (e) { return false }   // 조회 실패(마이그레이션 전 등) — 저장 단계에서 실패가 정직하게 드러난다
+}
+
 app.post('/api/inquiries', async (c) => {
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
@@ -1628,18 +1653,11 @@ app.post('/api/inquiries', async (c) => {
 
   // 🔴 남용 방지: IP(또는 세션)당 분당 N건. CF 운영환경은 CF-Connecting-IP 가 항상 붙는다.
   //   헤더가 없는 로컬환경에서는 'anon' 버킷 하나를 공유한다(개발용 — 운영 경로엔 영향 없음).
-  const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null
-  const limiterKey = ip || 'anon'
+  const limiterKey = rateLimitKey(c)
   const now = Date.now()
-  const windowStart = now - INQUIRY_RATE_WINDOW_MS
-  try {
-    const cnt: any = await c.env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM inquiries WHERE ip = ? AND created_at > ? AND deleted = 0'
-    ).bind(limiterKey, windowStart).first()
-    if ((cnt?.n || 0) >= INQUIRY_RATE_LIMIT_PER_MIN) {
-      return c.json({ error: '문의가 너무 자주 접수되었습니다. 잠시 후 다시 시도해 주세요.' }, 429)
-    }
-  } catch (e) { /* 레이트리밋 조회 실패(마이그레이션 전 등) — 저장 단계에서 실패가 정직하게 드러난다 */ }
+  if (await overRateLimit(c, 'inquiries', limiterKey, INQUIRY_RATE_LIMIT_PER_MIN)) {
+    return c.json({ error: '문의가 너무 자주 접수되었습니다. 잠시 후 다시 시도해 주세요.' }, 429)
+  }
 
   const user = await getUser(c).catch(() => null)
   const id = randToken('inq-')
@@ -2004,7 +2022,16 @@ async function projectBands(c: any, pid: string): Promise<{ owner: string, owner
   const owner = String(p.owner || '').trim().toLowerCase()
   const ownerBand = Number(p.owner_num_band) >= 1 ? Number(p.owner_num_band) : 1
   const r: any = await c.env.DB.prepare('SELECT email, role, created_at, num_band FROM project_members WHERE project_id = ? ORDER BY created_at, email').bind(pid).all()
-  const rows = (r.results || []).filter((m: any) => String(m.email || '').trim().toLowerCase() !== owner)
+  const all = (r.results || []).filter((m: any) => String(m.email || '').trim().toLowerCase() !== owner)
+  // [WO 20261001-viewreq] 🔴 마스터: 열람자(viewer)는 번호 대역을 배정받지 않는다(핀을 만들지 않는다).
+  //   이미 배정된 viewer 대역은 여기서 해제(NULL)한다 — 역할 변경 경로가 몇 개든 대역 정본은 이 함수 하나라
+  //   다음 조회/멤버 추가 때 자동으로 맞춰진다. viewer → designer 로 바뀌면 아래 백필이 그때 빈 대역을 준다.
+  for (const m of all) {
+    if (String(m.role) === 'viewer' && Number(m.num_band) >= 1) {
+      await c.env.DB.prepare("UPDATE project_members SET num_band = NULL WHERE project_id = ? AND email = ? AND role = 'viewer'").bind(pid, m.email).run()
+    }
+  }
+  const rows = all.filter((m: any) => String(m.role) !== 'viewer')
   const used = new Set<number>([ownerBand])
   for (const m of rows) if (Number(m.num_band) >= 1) used.add(Number(m.num_band))
   const members: { email: string, role: string, band: number, created_at: number }[] = []
@@ -2326,7 +2353,14 @@ async function gatedProjectIdsOf(c: any, path: string): Promise<string[]> {
     let depId = m ? decodeURIComponent(m[1]) : ''
     // /api/notes?deployment_id=... · /api/notes/summary?deployment_id=...
     if (!depId && path.startsWith('/api/notes')) depId = String(c.req.query('deployment_id') || '')
-    if (!depId) return []
+    return await projectIdsOfDeployment(c, depId)
+  } catch { return [] }
+}
+
+/** 배포본을 참조하는 프로젝트 id 전부(삭제 deck 제외). 특정 불가면 빈 배열. */
+async function projectIdsOfDeployment(c: any, depId: string): Promise<string[]> {
+  if (!depId) return []
+  try {
     const { results } = await c.env.DB.prepare(
       'SELECT project_id FROM decks WHERE deployment_id = ? AND deleted = 0'
     ).bind(depId).all()
@@ -2334,6 +2368,15 @@ async function gatedProjectIdsOf(c: any, path: string): Promise<string[]> {
     for (const r of (results || [])) { const v = (r as any).project_id; if (v && !out.includes(String(v))) out.push(String(v)) }
     return out
   } catch { return [] }
+}
+
+/** 🔴 게이트 판정 본체(단일 지점) — 읽기 미들웨어와 열람자 요청 작성(POST /api/notes)이 공유한다.
+ *  pids 중 이 세션이 통과하지 못한 잠긴 프로젝트 id(없으면 null). 하나라도 잠겨 있으면 잠근다(fail-closed). */
+async function shareGateLockedPid(c: any, user: any, pids: string[]): Promise<string | null> {
+  if (!pids.length) return null
+  if (user && user._gate && pids.includes(String(user._gate))) return null   // 이 프로젝트 게이트 통과 세션
+  for (const pid of pids) { if (await projectHasActiveShareCode(c, pid)) return pid }
+  return null
 }
 
 /** 이 프로젝트에 **살아있는** 초대코드가 하나라도 있나 = 게이트 ON 여부. */
@@ -2692,6 +2735,8 @@ app.put('/api/projects/:id/members/me/band', async (c) => {
     await c.env.DB.prepare('UPDATE projects SET owner_num_band = ? WHERE id = ?').bind(band, pid).run()
   } else if (t.members.some((m) => m.email.toLowerCase() === target)) {
     await c.env.DB.prepare('UPDATE project_members SET num_band = ? WHERE project_id = ? AND lower(email) = ?').bind(band, pid, target).run()
+  } else if (await c.env.DB.prepare("SELECT 1 AS x FROM project_members WHERE project_id = ? AND lower(email) = ? AND role = 'viewer'").bind(pid, target).first()) {
+    return c.json({ error: 'viewers have no number band — 열람자는 번호 대역을 쓰지 않습니다' }, 409)   // [WO 20261001-viewreq]
   } else {
     return c.json({ error: 'not a member of this project' }, 404)
   }
@@ -3844,11 +3889,20 @@ app.post('/api/sync/batch', async (c) => {
    · 조회: 누구나 (현장 열람)
    · 작성: 누구나 (익명 가능 — 현장 협업), 로그인 시 작성자/역할 기록
    · 수정/삭제/상태변경: 작성자(이메일 일치) 또는 디자이너
+   [WO 20261001-viewreq] 열람자 요청·질문 — 같은 테이블(kind/parent_id/deck_id, 0034):
+   · 열람자(viewer 멤버·공유/배포 링크 익명) = kind request|question · status open 고정 · 익명은 이름 필수
+   · 핀 없는 요청 = pin_id ''(도면/구역 단위) + deck_id. 답변 = 디자이너만, kind reply + parent_id
+   · 본인 판정: 실계정 = 이메일, 익명 = 작성 응답의 수정키(X-Note-Key, DB 엔 해시만)
 ════════════════════════════════════════════ */
 const VALID_STATUS = ['open', 'progress', 'done']
 
-function mapNote(r: any) {
+/** withContact = 디자이너 응답에만 익명 회신 이메일(author_contact)을 싣는다(열람자끼리 노출 금지). */
+function mapNote(r: any, withContact = false) {
   return {
+    ...(withContact ? { author_contact: r.author_contact ?? null } : {}),
+    kind: r.kind || 'note',
+    parent_id: r.parent_id ?? null,
+    deck_id: r.deck_id ?? null,
     id: r.id,
     deployment_id: r.deployment_id,
     pin_id: r.pin_id,
@@ -3865,9 +3919,79 @@ function mapNote(r: any) {
   }
 }
 
+/** [WO 20261001-viewreq] 🔴 노트 주체 판정 — 단일 지점(작성·수정·삭제·요청함이 공유).
+ *  guest    = 열람전용 세션(공유/배포 링크 — 공용 계정 이메일이라 신원이 아니다) 또는 토큰 없음
+ *  viewer   = 실계정 비디자이너(프로젝트 viewer 멤버 등)
+ *  designer/super = 실계정 + isDesigner */
+async function noteActor(c: any): Promise<{ user: any, designer: boolean, role: 'super' | 'designer' | 'viewer' | 'guest', email: string | null }> {
+  const user = await getUser(c)
+  if (!user || user._readonly) return { user, designer: false, role: 'guest', email: null }
+  const designer = await isDesigner(c, user.email)
+  return { user, designer, role: designer ? (isSuperAdmin(c, user.email) ? 'super' : 'designer') : 'viewer', email: String(user.email || '').toLowerCase() || null }
+}
+
+/** [WO 20261001-viewreq] 노트가 속한 구역/영역(decks.id) 확정 — 요청함 그룹핑 키.
+ *  핀 요청: 배포본 핀 좌표(page·x·y %)를 이 배포본 deck 들의 crop(% · NULL = 페이지 전체)에 대어 **가장 작은** deck(= 가장 깊은 영역).
+ *  핀 없는 요청: 클라가 보던 deck(hint)이 이 배포본 deck 이면 그것, 아니면 최상위 구역(parent_id NULL) 우선.
+ *  특정 불가(이 배포본을 가리키는 deck 0) = null — 지어내지 않는다(요청함이 "구역 미지정"으로 정직하게 표시). */
+async function resolveNoteDeck(c: any, depId: string, pinId: string, hint: string): Promise<string | null> {
+  let decks: any[] = []
+  try {
+    decks = (await c.env.DB.prepare(
+      'SELECT id, page, crop, parent_id FROM decks WHERE deployment_id = ? AND deleted = 0 ORDER BY COALESCE(level_no, 999999), created_at'
+    ).bind(depId).all()).results || []
+  } catch { return null }
+  if (!decks.length) return null
+  const rootFirst = decks.find((d: any) => !d.parent_id) || decks[0]
+  if (!pinId) return String((hint && decks.find((d: any) => String(d.id) === hint)) ? hint : rootFirst.id)
+  let pin: any = null
+  try {
+    const dep: any = await c.env.DB.prepare('SELECT pins FROM deployments WHERE id = ?').bind(depId).first()
+    const pins = JSON.parse((dep && dep.pins) || '[]')
+    pin = (Array.isArray(pins) ? pins : []).find((p: any) => p && String(p.id) === pinId) || null
+  } catch { pin = null }
+  if (!pin) return String(rootFirst.id)
+  const pg = Number(pin.page) || 1, x = Number(pin.x), y = Number(pin.y)
+  let best: any = null, bestArea = Infinity
+  for (const d of decks) {
+    if (d.page != null && Number(d.page) !== pg) continue
+    let crop: any = null
+    try { crop = d.crop ? JSON.parse(d.crop) : null } catch { crop = null }
+    let area = 100 * 100
+    if (crop && crop.w > 0 && crop.h > 0) {
+      if (!(x >= crop.x && x <= crop.x + crop.w && y >= crop.y && y <= crop.y + crop.h)) continue
+      area = crop.w * crop.h
+    }
+    if (area < bestArea || (area === bestArea && best && !best.parent_id && d.parent_id)) { best = d; bestArea = area }
+  }
+  return String((best || rootFirst).id)
+}
+
+/** [WO 20261001-viewreq] 디자이너 요청함 — 프로젝트의 모든 구역/영역 배포본에 달린 요청·질문 + 답변.
+ *  권한 = 그 프로젝트 쓰기 권한(deploymentWriteDenied — 슈퍼·소유자·designer 멤버, SoT). 그룹핑은 클라가 트리 SoT(groupDecksByParent)로. */
+app.get('/api/projects/:id/requests', async (c) => {
+  const a = await noteActor(c)
+  if (a.role === 'guest') return c.json({ error: 'unauthorized' }, 401)
+  const pid = c.req.param('id')
+  const denied = await deploymentWriteDenied(c, a.user, pid)
+  if (denied) return c.json({ error: denied.error }, denied.status)
+  const { results } = await c.env.DB.prepare(
+    `SELECT n.* FROM pin_notes n
+      WHERE n.deleted = 0 AND n.kind IN ('request', 'question', 'reply')
+        AND n.deployment_id IN (SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL)
+      ORDER BY n.created_at ASC LIMIT 2000`
+  ).bind(pid).all()
+  const rows: any[] = results || []
+  const tops = new Set(rows.filter((r) => r.kind !== 'reply').map((r) => String(r.id)))
+  const data = rows.filter((r) => r.kind !== 'reply' || tops.has(String(r.parent_id))).map((r) => mapNote(r, true))
+  const open = data.filter((n: any) => n.kind !== 'reply' && n.status !== 'done').length
+  return c.json({ data, open })
+})
+
 // 노트 목록 — deployment_id 필수, pin_id 선택, status 선택
 app.get('/api/notes', async (c) => {
-  if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2] 노트(이슈)는 로그인 사용자만
+  const actor = await noteActor(c)
+  if (!actor.user) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2] 노트(이슈)는 로그인 사용자만
   const dep = c.req.query('deployment_id')
   if (!dep) return c.json({ error: 'deployment_id required' }, 400)
   const pin = c.req.query('pin_id')
@@ -3880,7 +4004,7 @@ app.get('/api/notes', async (c) => {
   sql += ' ORDER BY created_at ASC LIMIT ?'
   args.push(limit)
   const { results } = await c.env.DB.prepare(sql).bind(...args).all()
-  return c.json({ data: (results || []).map(mapNote), total: (results || []).length })
+  return c.json({ data: (results || []).map((r: any) => mapNote(r, actor.designer)), total: (results || []).length })
 })
 
 // 배포 단위 노트 요약(핀별 카운트/상태) — 도면 위 뱃지 표시용
@@ -3894,7 +4018,7 @@ app.get('/api/notes/summary', async (c) => {
             SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open,
             SUM(CASE WHEN status='progress' THEN 1 ELSE 0 END) AS progress,
             SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done
-     FROM pin_notes WHERE deleted = 0 AND deployment_id = ?
+     FROM pin_notes WHERE deleted = 0 AND deployment_id = ? AND kind != 'reply'
      GROUP BY pin_id`
   ).bind(dep).all()
   const map: any = {}
@@ -3911,45 +4035,84 @@ app.get('/api/notes/summary', async (c) => {
 app.post('/api/notes', async (c) => {
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
-  const deployment_id = String(body.deployment_id || '').trim()
-  const pin_id = String(body.pin_id || '').trim()
+  const a = await noteActor(c)
+  let deployment_id = String(body.deployment_id || '').trim()
+  let pin_id = String(body.pin_id ?? '').trim()
   const text = String(body.body || '').trim()
-  if (!deployment_id || !pin_id) return c.json({ error: 'deployment_id, pin_id required' }, 400)
+  // [WO 20261001-viewreq] 종류 — 디자이너 기본 note(종전), 열람자 기본 request. 열람자는 request|question 만.
+  let kind = String(body.kind || (a.designer ? 'note' : 'request'))
+  if (!NOTE_KINDS.includes(kind)) return c.json({ error: 'invalid kind' }, 400)
+  const parentId = String(body.parent_id || '').trim()
+  let parent: any = null
+  if (kind === 'reply' || parentId) {   // 답변 권한은 아래 단일 판정(열람자 = request|question 만)이 끊는다
+    if (!parentId) return c.json({ error: 'parent_id required' }, 400)
+    parent = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ? AND deleted = 0').bind(parentId).first()
+    if (!parent) return c.json({ error: 'parent not found' }, 404)
+    kind = 'reply'; deployment_id = String(parent.deployment_id); pin_id = String(parent.pin_id || '')   // 답변은 원 요청 위치를 그대로 따른다
+  }
+  if (!a.designer && !NOTE_VIEWER_KINDS.includes(kind)) return c.json({ error: 'forbidden — viewers can only send request or question' }, 403)
+  // 핀 없는(도면/구역 단위) 글은 요청·질문·답변만 — 종전 이슈 노트(kind=note)는 핀 필수 그대로
+  if (!deployment_id || (!pin_id && kind === 'note')) return c.json({ error: 'deployment_id, pin_id required' }, 400)
   if (!text) return c.json({ error: 'body required' }, 400)
-  if (text.length > 4000) return c.json({ error: 'body too long' }, 400)
-  let status = String(body.status || 'open')
-  if (!VALID_STATUS.includes(status)) status = 'open'
+  if (text.length > NOTE_BODY_MAX) return c.json({ error: 'body too long' }, 400)
 
-  // 로그인 사용자면 작성자 정보 기록
-  const user = await getUser(c)
-  const author = user ? (user.name || user.email) : (String(body.author || '').trim() || '익명')
-  const author_email = user ? user.email : null
-  const author_role = user ? (await isDesigner(c, user.email) ? (isSuperAdmin(c, user.email) ? 'super' : 'designer') : 'viewer') : 'guest'
+  // 작성자 — 실계정은 계정 정보, 익명(공유/배포 링크·무토큰)은 자기 신고 이름(필수) + 회신 이메일(선택)
+  let author: string, author_contact: string | null = null
+  if (a.role === 'guest') {
+    author = String(body.author || '').trim()
+    if (!author) return c.json({ error: '이름을 입력하세요.' }, 400)
+    if (author.length > NOTE_AUTHOR_MAX) return c.json({ error: `이름은 ${NOTE_AUTHOR_MAX}자 이내로 입력하세요.` }, 400)
+    const contact = String(body.contact || '').trim()
+    if (contact && (contact.length > NOTE_CONTACT_MAX || !isValidEmail(contact))) return c.json({ error: '회신 이메일 형식이 올바르지 않습니다.' }, 400)
+    author_contact = contact || null
+    // 🔴 초대코드 게이트 — 읽기와 같은 판정(shareGateLockedPid). 코드 미통과 링크 세션은 쓰지도 못한다.
+    const locked = await shareGateLockedPid(c, a.user, await projectIdsOfDeployment(c, deployment_id))
+    if (locked) return c.json({ error: 'gate required — invite code', gate_required: true, project_id: locked }, 403)
+  } else {
+    author = a.user.name || a.user.email
+  }
+  // 남용 방지 — 열람자(익명·viewer)만 IP 당 분당 N건. 디자이너 작성·답변은 ip 를 남기지 않아 집계에서 빠진다.
+  const limiterKey = a.designer ? null : rateLimitKey(c)
+  if (limiterKey && await overRateLimit(c, 'pin_notes', limiterKey, NOTE_REQUEST_RATE_LIMIT_PER_MIN)) {
+    return c.json({ error: '요청이 너무 자주 접수되었습니다. 잠시 후 다시 시도해 주세요.' }, 429)
+  }
+  let status = a.designer ? String(body.status || 'open') : 'open'
+  if (!VALID_STATUS.includes(status)) status = 'open'
+  const assignee = a.designer ? (String(body.assignee || '') || null) : null
+  const deck_id = parent ? (parent.deck_id ?? null) : await resolveNoteDeck(c, deployment_id, pin_id, String(body.deck_id || ''))
+  const pin_label = parent ? String(parent.pin_label || '') : String(body.pin_label || '').slice(0, 200)
+  // 익명 본인 확인 수정키 — 원문은 이 응답에만, DB 엔 해시만(초대 토큰과 같은 규칙)
+  const editKey = a.role === 'guest' ? randToken('nk-') : null
+  const author_key_hash = editKey ? await sha256Hex(editKey) : null
 
   const id = genId('note')
   const now = Date.now()
+  const row = {
+    id, deployment_id, pin_id, pin_label, body: text, status, assignee, author, author_email: a.email, author_role: a.role,
+    created_at: now, updated_at: now, resolved_at: status === 'done' ? now : null,
+    kind, parent_id: parent ? String(parent.id) : null, deck_id, author_contact,
+  }
   await c.env.DB.prepare(
     `INSERT INTO pin_notes
-      (id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+      (id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted,
+       kind, parent_id, deck_id, author_contact, author_key_hash, ip)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    id, deployment_id, pin_id, String(body.pin_label || ''), text, status,
-    String(body.assignee || '') || null, author, author_email, author_role,
-    now, now, status === 'done' ? now : null
+    row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.author, row.author_email, row.author_role,
+    row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey
   ).run()
-  return c.json(mapNote({
-    id, deployment_id, pin_id, pin_label: body.pin_label || '', body: text, status,
-    assignee: body.assignee || null, author, author_email, author_role,
-    created_at: now, updated_at: now, resolved_at: status === 'done' ? now : null,
-  }))
+  return c.json({ ...mapNote(row, a.designer || a.role === 'guest'), ...(editKey ? { edit_key: editKey } : {}) })
 })
 
-/** 노트 수정 권한: 작성자(이메일 일치) 또는 디자이너 */
-async function canEditNote(c: any, note: any): Promise<boolean> {
-  const user = await getUser(c)
-  if (!user) return false  // 익명 노트는 디자이너만 수정 가능
-  if (await isDesigner(c, user.email)) return true
-  return note.author_email && note.author_email === user.email
+/** 노트 수정 권한 — 'designer'(내용·상태·담당자) · 'author'(자기 글) · null.
+ *  🔴 열람전용 세션은 공용 계정 이메일이라 이메일 일치로 본인을 판정하면 남의 익명 글까지 고친다 → 수정키(X-Note-Key)만 인정. */
+async function noteEditRight(c: any, note: any): Promise<'designer' | 'author' | null> {
+  const a = await noteActor(c)
+  if (a.designer) return 'designer'
+  const key = c.req.header('X-Note-Key') || ''
+  if (key && note.author_key_hash && (await sha256Hex(key)) === String(note.author_key_hash)) return 'author'
+  if (a.email && note.author_email && String(note.author_email).toLowerCase() === a.email) return 'author'
+  return null
 }
 
 // 노트 수정(내용/상태/담당자)
@@ -3957,9 +4120,14 @@ app.patch('/api/notes/:id', async (c) => {
   const id = c.req.param('id')
   const note = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ? AND deleted = 0').bind(id).first()
   if (!note) return c.json({ error: 'not found' }, 404)
-  if (!(await canEditNote(c, note))) return c.json({ error: 'forbidden' }, 403)
+  const right = await noteEditRight(c, note)
+  if (!right) return c.json({ error: 'forbidden' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  // [WO 20261001-viewreq] 요청·질문·답변의 처리 상태·담당자는 디자이너 몫 — 작성자(열람자)는 내용만 고친다.
+  if (right === 'author' && String(note.kind || 'note') !== 'note' && (typeof body.status === 'string' || typeof body.assignee === 'string')) {
+    return c.json({ error: 'forbidden — only designers can change status' }, 403)
+  }
 
   const fields: string[] = []
   const args: any[] = []
@@ -3967,7 +4135,7 @@ app.patch('/api/notes/:id', async (c) => {
   if (typeof body.body === 'string') {
     const t = body.body.trim()
     if (!t) return c.json({ error: 'body required' }, 400)
-    if (t.length > 4000) return c.json({ error: 'body too long' }, 400)
+    if (t.length > NOTE_BODY_MAX) return c.json({ error: 'body too long' }, 400)
     fields.push('body = ?'); args.push(t)
   }
   if (typeof body.status === 'string' && VALID_STATUS.includes(body.status)) {
@@ -3982,17 +4150,18 @@ app.patch('/api/notes/:id', async (c) => {
   args.push(id)
   await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ?`).bind(...args).run()
   const updated = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ?').bind(id).first()
-  return c.json(mapNote(updated))
+  return c.json(mapNote(updated, right === 'designer'))
 })
 
-// 노트 삭제(soft)
+// 노트 삭제(soft) — 원 요청을 지우면 그 답변도 함께(고아 답변 0)
 app.delete('/api/notes/:id', async (c) => {
   const id = c.req.param('id')
   const note = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ? AND deleted = 0').bind(id).first()
   if (!note) return c.json({ error: 'not found' }, 404)
-  if (!(await canEditNote(c, note))) return c.json({ error: 'forbidden' }, 403)
-  await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ?')
-    .bind(Date.now(), id).run()
+  if (!(await noteEditRight(c, note))) return c.json({ error: 'forbidden' }, 403)
+  const now = Date.now()
+  await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ? OR parent_id = ?')
+    .bind(now, id, id).run()
   return c.json({ success: true })
 })
 

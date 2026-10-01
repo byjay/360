@@ -254,7 +254,8 @@ console.log("\n[⑨ D1 저장 실패 시 접수됨으로 속이지 않음]");
 console.log("\n[뮤테이션] 레이트리밋 조건 제거 → ③(4번째 429)이 실패해야 함");
 {
   const src = fs.readFileSync(path.join(ROOT, "src/index.tsx"), "utf8");
-  const needle = "if ((cnt?.n || 0) >= INQUIRY_RATE_LIMIT_PER_MIN) {";
+  // [WO 20261001-viewreq] 레이트리밋 조회가 공용 헬퍼(overRateLimit — 열람자 요청과 공유)로 이동 → 같은 판정 지점을 끊는다
+  const needle = "if (await overRateLimit(c, 'inquiries', limiterKey, INQUIRY_RATE_LIMIT_PER_MIN)) {";
   if (!src.includes(needle)) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const mutated = src.replace(needle, "if (false) {");

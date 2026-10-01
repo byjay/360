@@ -197,7 +197,9 @@ try {
 
   await api("o", "POST", "/api/projects/prj_S/members", { email: U.m1, role: "designer" });
   const m1Now = await dbBand("prj_S", U.m1);
-  await api("o", "POST", "/api/projects/prj_S/members", { email: U.m2, role: "viewer" });
+  // [WO 20261001-viewreq] 마스터 확정: viewer 는 대역을 배정받지 않는다 → m2 를 designer 로(이후 단언 전부 불변).
+  //   viewer 미배정·해제·designer 전환 시 배정은 p111 S8 이 지킨다.
+  await api("o", "POST", "/api/projects/prj_S/members", { email: U.m2, role: "designer" });
   const m2Now = await dbBand("prj_S", U.m2);
   ok(m1Now === 2 && m2Now === 3, "S2 멤버 추가 즉시(조회 전) DB 배정: m1=2 · m2=3 (추가 순서·빈 대역) — " + m1Now + "," + m2Now);
   const g2 = await api("m1", "GET", "/api/projects/prj_S/bands");

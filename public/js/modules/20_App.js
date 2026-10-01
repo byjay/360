@@ -34,6 +34,8 @@
       // [고아 방지] 36_Help 도 자체 init() 안에서만 토글 버튼/배지를 바인딩한다 —
       //   여기서 부르지 않으면 번들에는 있는데 도움말이 뜨지 않는다(전역 CLAUDE.md §5 렌더 고아).
       if (typeof Help !== "undefined") Help.init();
+      // [WO 20261001-viewreq] 열람자 요청·질문 + 디자이너 요청함 — 진입 버튼은 이 init 이 만든다(고아 방지).
+      if (typeof Requests !== "undefined") Requests.init();
       Prompt.init();
       Projects.init();
       ProjectHub.init();
@@ -106,6 +108,8 @@
       document.body.classList.toggle("role-designer", isDesigner);
       document.body.classList.toggle("role-viewer", !isDesigner);
       document.body.classList.toggle("mode-checkboard", isCheckboard);
+      // [WO 20261001-viewreq] 역할 클래스가 바뀌는 유일한 지점 — 요청 진입 버튼(뷰어 [요청·질문] / 디자이너 [요청함]) 동기화
+      if (typeof Requests !== "undefined" && Requests.refresh) Requests.refresh();
       const accentVar = isQuickTool ? "var(--blue)" : (isDesigner ? "var(--gold)" : "var(--green)");
       document.documentElement.style.setProperty("--accent", accentVar);
       UI.$("topbar").style.borderBottomColor = isQuickTool ? "rgba(47,109,181,.28)" : (isDesigner ? "rgba(245,158,11,.2)" : "rgba(16,185,129,.2)");
@@ -2813,6 +2817,8 @@
       if (!focused) { this.focusPinIso(pin); return; }
       if (this.pinHasContent(pin)) this.openPano(pin);
       else if (State.mode === "designer" && typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
+      // [WO 20261001-viewreq] 뷰어: 미디어 없는 포인트(CHECKER 등) = 볼 것이 없으니 그 포인트 요청·질문 창(안내 문구 포함)
+      else if (typeof Requests !== "undefined" && Requests.openViewer) Requests.openViewer({ pin, noMedia: true });
       else this.openPano(pin); // 뷰어: 미디어 없으면 openPano 가 안내 표시
     },
 
@@ -3847,6 +3853,8 @@
     /** 틱 1회. 반환(진단용): hidden|idle|busy|editing|same|stale|error|merged:N */
     async _liveTick() {
       if (!this._livePollActive()) { this._livePollStop(); return "hidden"; }
+      // [WO 20261001-viewreq] 요청함 배지 — 새 폴링 없이 이 틱에 얹는다(도면 미로드·편집 중이어도 배지는 갱신)
+      if (typeof Requests !== "undefined" && Requests.refresh) Requests.refresh();
       if (State.mode !== "designer" || !State.autoSaveDepId) return "idle";
       if (this._livePollBusy) return "busy";
       if (this._liveEditingNow()) return "editing";

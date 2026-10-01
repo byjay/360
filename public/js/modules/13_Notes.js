@@ -126,6 +126,11 @@
     },
 
     toggle() {
+      // [WO 20261001-viewreq] 뷰어 = 보기 + 요청·질문만 — 이슈 노트 패널(상태·담당자 편집) 대신 그 포인트의 요청·질문 창.
+      if (typeof State !== "undefined" && State.mode !== "designer" && typeof Requests !== "undefined" && Requests.openViewer && this._pin) {
+        Requests.openViewer({ pin: this._pin });
+        return;
+      }
       const p = document.getElementById("pano-notes-panel");
       if (!p) return;
       if (p.classList.contains("hidden")) this.openPanel();
@@ -181,8 +186,11 @@
       const emptyEl = document.getElementById("pnp-empty");
       if (!listEl) return;
       // [마스터] 필터 탭에 상태별 카운트 표시 (전체/미해결/진행중/완료 N)
-      const counts = { all: this._list.length, open: 0, progress: 0, done: 0 };
-      this._list.forEach((n) => { const s = n.status || "open"; if (counts[s] != null) counts[s]++; });
+      // [WO 20261001-viewreq] 디자이너 답변(kind=reply)은 별도 항목이 아니라 원 요청 아래에 붙인다(개수에서도 제외)
+      const repliesOf = this._repliesOf(this._list);
+      const topList = this._list.filter((n) => n.kind !== "reply");
+      const counts = { all: topList.length, open: 0, progress: 0, done: 0 };
+      topList.forEach((n) => { const s = n.status || "open"; if (counts[s] != null) counts[s]++; });
       document.querySelectorAll("#pnp-filter .pnp-fbtn").forEach((b) => {
         const base = { all: "전체", open: "미해결", progress: "진행중", done: "완료" }[b.dataset.f] || b.dataset.f;
         const c = counts[b.dataset.f] || 0;
@@ -190,7 +198,7 @@
       });
       // [마스터] 최신순 정렬(최근 이슈가 위로)
       const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
-      let items = this._list.slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
+      let items = topList.slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
       if (this._filter !== "all") items = items.filter((n) => n.status === this._filter);
       if (items.length === 0) {
         listEl.innerHTML = "";
@@ -220,11 +228,13 @@
           <article class="pnp-item st-${st}" data-id="${n.id}">
             <div class="pnp-item-head">
               <span class="pnp-badge st-${st}">${stLabel}</span>
+              ${this._kindTag(n)}
               <span class="pnp-author">${UI.escapeHtml(n.author || "익명")}</span>
               ${assignee}
               <span class="pnp-time">${this._timeAgo(n.created_at)}</span>
             </div>
             <div class="pnp-body">${UI.escapeHtml(n.body)}</div>
+            ${(repliesOf.get(String(n.id)) || []).map((r) => `<div class="pnp-body" data-reply-of="${UI.escapeHtml(n.id)}">↳ 답변 · ${UI.escapeHtml(r.author || "")}: ${UI.escapeHtml(r.body)}</div>`).join("")}
             ${stBtns}
           </article>`;
       }).join("");
@@ -337,15 +347,38 @@
       const el = document.getElementById(containerId);
       if (!el) return;
       const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
-      const items = (this._list || []).slice().sort((a, b) => ts(b.created_at) - ts(a.created_at));
+      const repliesOf = this._repliesOf(this._list || []);
+      const items = (this._list || []).filter((n) => n.kind !== "reply").sort((a, b) => ts(b.created_at) - ts(a.created_at));
       if (!items.length) { el.innerHTML = '<div style="color:#94a3b8;">등록된 노트 없음</div>'; return; }
       el.innerHTML = items.map((n) => {
         const st = n.status || "open";
         const stLabel = this.STATUS[st] || st;
+        const kindTxt = (n.kind === "request" || n.kind === "question") ? "[" + (n.kind === "request" ? "요청" : "질문") + "] " : "";
         return '<div style="padding:5px 0;border-bottom:1px solid rgba(0,0,0,.06);">' +
           '<span style="font-weight:700;color:#334155;">[' + UI.escapeHtml(stLabel) + ']</span> ' +
-          '<span style="color:#0f172a;">' + UI.escapeHtml(n.body) + '</span></div>';
+          '<span style="color:#0f172a;">' + UI.escapeHtml(kindTxt + n.body) + '</span>' +
+          (repliesOf.get(String(n.id)) || []).map((r) => '<div style="color:#334155;margin-left:10px;">↳ ' + UI.escapeHtml((r.author || "") + ": " + r.body) + '</div>').join("") +
+          '</div>';
       }).join("");
+    },
+
+    /** [WO 20261001-viewreq] 답변(kind=reply) → 원 요청 id 별 묶음(생성순). render/renderCompact 공용. */
+    _repliesOf(list) {
+      const m = new Map();
+      (list || []).forEach((n) => {
+        if (!n || n.kind !== "reply" || !n.parent_id) return;
+        const k = String(n.parent_id);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(n);
+      });
+      const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
+      m.forEach((arr) => arr.sort((a, b) => ts(a.created_at) - ts(b.created_at)));
+      return m;
+    },
+    /** 요청·질문 표시 태그(기존 이슈 노트는 빈 문자열 — 종전 화면 그대로) */
+    _kindTag(n) {
+      if (!n || (n.kind !== "request" && n.kind !== "question")) return "";
+      return '<span class="pnp-assignee-tag">' + (n.kind === "request" ? "요청" : "질문") + '</span>';
     },
 
     /** [핀 액션 패널 재사용] 노트 1건 등록 — submit()과 같은 /api/notes 엔드포인트.

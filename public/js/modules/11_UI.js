@@ -621,7 +621,12 @@
         // [WO 20260928-tree-expand→20260929-tree-label] 🔴 마스터: 이름이 비어 있으면 빈칸이 아니라
         // "(이름 없음)"으로 정직하게 표시(CLAUDE.md §5). SoT: UI.deckLabelHtml(deck.name, 파일명 아님).
         const _nameLabel = this.deckLabelHtml(deck);
+        // [WO 20261001-viewreq] 미처리 요청 배지 — 정본 = Requests 캐시(서버 요청함). 0 이면 그리지 않는다(지어내지 않음).
+        //   인라인 리터럴 색(#ffffff/#b91c1c 6.5:1) — 트리 테마 변수와 무관하게 대비 고정.
+        const _reqN = (State.mode === "designer" && typeof Requests !== "undefined" && Requests.openCountForDeck) ? Requests.openCountForDeck(deck.id) : 0;
+        const reqTag = _reqN > 0 ? '<span class="tree-req-badge" data-req-deck="' + esc(String(deck.id)) + '" title="미처리 요청 ' + _reqN + '건" style="margin-left:4px;min-width:16px;padding:0 5px;border-radius:8px;background:#b91c1c;color:#ffffff;font-size:10.5px;font-weight:700;line-height:16px;text-align:center">' + _reqN + '</span>' : "";
         head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + zoneCntTag;
+        if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
         // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.
