@@ -32,6 +32,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+import { findHelpToggleBottomRaw } from "./_lib/find-help-toggle-bottom.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -416,8 +417,11 @@ console.log("\n[⑤ 모바일 375×812 — 드래그 진입 UI 가 하단 독·�
   const pinfilterBarRect = { x: 0, y: VIEWPORT.h - evalPx(findDecl(pfBlock, "\\.pinfilter-bar", "bottom")) - evalPx(ROOT_VARS["pinfilter-h-mobile"]), w: VIEWPORT.w, h: evalPx(ROOT_VARS["pinfilter-h-mobile"]) };
   ok(overlapArea(mobileDockRect, pinfilterBarRect) === 0,
     "⑤f .mobile-dock ∩ .pinfilter-bar = 0 → dock=" + JSON.stringify(mobileDockRect));
-  const helpMediaSrc = styleCss.match(/@media \(max-width: 760px\) \{([\s\S]*?)\[data-help-toggle\]\{([\s\S]*?)\}/);
-  const helpBottom = evalPx(helpMediaSrc[2].match(/bottom\s*:\s*([^;]+);/)[1].replace("!important", "").trim());
+  // [WO 20261002-gap 재발주] 공유 헬퍼(tests/_lib/find-help-toggle-bottom.mjs,
+  // p34·p41·p46·p47 와 공용) — 4073788 이후 [data-help-toggle] 가 쉼표 그룹 중간 항목이다.
+  const helpBottomRawP49 = findHelpToggleBottomRaw(styleCss);
+  if (helpBottomRawP49 === null) throw new Error("[data-help-toggle] 모바일 bottom 규칙을 찾지 못함");
+  const helpBottom = evalPx(helpBottomRawP49);
   ok(overlapArea(mobileDockRect, { x: 16, y: VIEWPORT.h - helpBottom - 40, w: 40, h: 40 }) === 0,
     "⑤g .mobile-dock ∩ [data-help-toggle] = 0");
 

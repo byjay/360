@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { findHelpToggleBottomBlock } from "./_lib/find-help-toggle-bottom.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const styleCssPath = path.join(__dirname, "..", "public", "css", "style.css");
@@ -207,8 +208,12 @@ function run() {
   );
 
   // ── 결함4: "?" 버튼 vs mobile-dock 겹침 = 0 ──
-  const dockBlock = findMediaBlock(style, "@media (max-width: 760px) {", "mobile-dock");
-  const helpToggleRule = dockBlock && findLastRule(dockBlock, /\[data-help-toggle\]/);
+  // [WO 20261002-gap 재발주] 🔴 4073788 에서 [data-help-toggle] 의 bottom !important 규칙이
+  // "mobile-dock 을 정의하는 미디어 블록 안"에서 별도 블록(body:has(#screen-app.active) 그룹,
+  // CLAUDE.md §10 SoT 통합)으로 옮겨졌다 — 공유 헬퍼(tests/_lib/find-help-toggle-bottom.mjs,
+  // p41·p46·p47·p49 와 공용)로 style 전체에서 직접 찾는다(산식은 그대로
+  // pinfilter-bottom-mobile+pinfilter-h-mobile+8px — 값 자체는 불변, 검색 범위만 확장).
+  const helpToggleRule = findHelpToggleBottomBlock(style);
   let helpRect = null, dockRect = null, overlap4 = null, overlap5 = null, overlap6 = null;
   try {
     const vars3 = { "pinfilter-bottom-mobile": pinfilterBottomMobile, "pinfilter-h-mobile": pinfilterHMobile };

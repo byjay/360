@@ -10,6 +10,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { findHelpToggleBottomRaw } from "./_lib/find-help-toggle-bottom.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -174,7 +175,11 @@ const btnSaveH = padV * 2 + btnSaveFontSize + btnSaveBorder * 2;
 const btnSaveRect = { x: 0, y: VIEWPORT.h - btnSaveBottom - btnSaveH, w: VIEWPORT.w, h: btnSaveH };
 
 // [data-help-toggle]
-const helpBottom = evalPx(findDecl(styleCss, "\\[data-help-toggle\\]", "bottom"));
+// [WO 20261002-gap 재발주] 🔴 findDecl 은 셀렉터 바로 뒤에 "{" 만 와야 매치한다 — 4073788
+// 이후 이 셀렉터는 쉼표 그룹 중간 항목이라 findDecl 이 못 찾는다. 공유 헬퍼(p34·p41·p46·p49 공용)로 교체.
+const helpBottomRawP47 = findHelpToggleBottomRaw(styleCss);
+if (helpBottomRawP47 === null) throw new Error("[data-help-toggle] 모바일 bottom 규칙을 찾지 못함");
+const helpBottom = evalPx(helpBottomRawP47);
 const helpToggleRect = { x: 0, y: VIEWPORT.h - helpBottom - 40, w: VIEWPORT.w, h: 40 };
 
 // 로고 영역 최악 높이(#screen-app 상단바 컨텍스트): .topbar 고정 높이(68px) — 이미지(44px, 아래 계산)

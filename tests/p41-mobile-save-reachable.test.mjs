@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { findHelpToggleBottomRaw } from "./_lib/find-help-toggle-bottom.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CSS_DIR = path.join(__dirname, "..", "public", "css");
@@ -164,9 +165,12 @@ const helpJs = readFileSync(path.join(JS_DIR, "36_Help.js"), "utf8");
 if (!/width:40px.*height:40px|width:40px[\s\S]{0,40}height:40px/.test(helpJs)) {
   throw new Error("36_Help.js 의 helpToggle 40x40 리터럴을 찾지 못함(소스 변경됨?)");
 }
-const helpMediaSrc = styleCss.match(/@media \(max-width: 760px\) \{([\s\S]*?)\[data-help-toggle\]\{([\s\S]*?)\}/);
-if (!helpMediaSrc) throw new Error("[data-help-toggle] 모바일 bottom !important 규칙을 찾지 못함");
-const helpBottomRaw = helpMediaSrc[2].match(/bottom\s*:\s*([^;]+);/)[1].replace("!important", "").trim();
+// [WO 20261002-gap 재발주] 🔴 4073788 에서 [data-help-toggle] 가 쉼표로 묶인 셀렉터 그룹의
+// 중간 항목(body:has(#screen-app.active) [data-help-toggle], ...)으로 옮겨져 바로 뒤에 "{" 가
+// 오지 않는다 — 공유 헬퍼(tests/_lib/find-help-toggle-bottom.mjs, p34·p46·p47·p49 와 공용)로
+// 그룹 어디에 있든 bottom:...!important 규칙을 찾는다.
+const helpBottomRaw = findHelpToggleBottomRaw(styleCss);
+if (helpBottomRaw === null) throw new Error("[data-help-toggle] 모바일 bottom !important 규칙을 찾지 못함");
 const helpBottom = evalPx(helpBottomRaw);
 const helpToggleRect = { x: 16, y: VIEWPORT.h - helpBottom - 40, w: 40, h: 40 };
 

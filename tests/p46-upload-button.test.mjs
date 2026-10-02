@@ -26,6 +26,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { findHelpToggleBottomRaw } from "./_lib/find-help-toggle-bottom.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -232,9 +233,11 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
   ok(overlapArea(mobileDockRect, pinfilterBarRect) === 0,
     "⑤c .mobile-dock ∩ .pinfilter-bar = 0 → dock=" + JSON.stringify(mobileDockRect) + " pf=" + JSON.stringify(pinfilterBarRect));
 
-  const helpMediaSrc = styleCss.match(/@media \(max-width: 760px\) \{([\s\S]*?)\[data-help-toggle\]\{([\s\S]*?)\}/);
-  if (!helpMediaSrc) throw new Error("[data-help-toggle] 모바일 규칙을 찾지 못함");
-  const helpBottom = evalPx(helpMediaSrc[2].match(/bottom\s*:\s*([^;]+);/)[1].replace("!important", "").trim());
+  // [WO 20261002-gap 재발주] 공유 헬퍼(tests/_lib/find-help-toggle-bottom.mjs,
+  // p34·p41·p47·p49 와 공용) — 4073788 이후 [data-help-toggle] 가 쉼표 그룹 중간 항목이다.
+  const helpBottomRaw = findHelpToggleBottomRaw(styleCss);
+  if (helpBottomRaw === null) throw new Error("[data-help-toggle] 모바일 규칙을 찾지 못함");
+  const helpBottom = evalPx(helpBottomRaw);
   const helpToggleRect = { x: 16, y: VIEWPORT.h - helpBottom - 40, w: 40, h: 40 };
   ok(overlapArea(mobileDockRect, helpToggleRect) === 0,
     "⑤d .mobile-dock ∩ [data-help-toggle] = 0 → helpRect=" + JSON.stringify(helpToggleRect));
