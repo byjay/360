@@ -16,7 +16,12 @@
    열람자(`viewer@test.local`). 샘플 프로젝트 `proj_localseed`(구역 1 > 영역 1, CHECKER 핀 5 + 360 핀 2).
 
 ## 범위/한계
-- `pages_data`는 실제 ga.pdf 래스터화가 아니라 구조 등록용 placeholder다(헤드리스 PDF 렌더는 범위 밖).
-  원본 PDF 자체는 로컬 R2(`.tmp/localdev-state`)에 `localseed/ga.pdf`로 업로드되어 있다.
+- `pages_data`는 실제 ga.pdf 래스터화가 아니라 **실제 비율(2400x1700) 평면도 placeholder PNG**다
+  (4x3 격자 "방" 윤곽, zlib 직접 인코딩 — 신규 의존성 0). 종전 1x1 TINY_JPEG은 naturalWidth=1 이라
+  핀 마커 스케일이 폭주(5796x10212px, 화면 밖)했다 — 이제 모바일 375px 화면 테스트가 가능하다.
+  360 placeholder(1024x512 equirectangular)도 같은 방식. 헤드리스 PDF.js 렌더(ga.pdf 실제 래스터화)는
+  여전히 범위 밖. 원본 PDF 자체는 로컬 R2(`.tmp/localdev-state`)에 `localseed/ga.pdf`로 업로드되어 있다.
+  샘플 프로젝트에는 메인에서 잘라 만든 구역(`dk_localseed_zoneB`, crop=격자 방 하나)도 포함된다
+  (46_DeckOutline 윤곽 표시 확인용).
 - `.tmp/localdev/.dev.vars`에는 외부 키(Firebase/Resend 등)를 넣지 않는다 — 로컬 세션(`local-` 토큰) 로그인만 검증 대상.
 - 재실행은 멱등(이미 적용된 마이그레이션/계정은 덮어쓰기 또는 스킵).

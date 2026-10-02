@@ -14,6 +14,7 @@ import { execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 
@@ -69,8 +70,80 @@ function esc(s) {
   return String(s).replace(/'/g, "''");
 }
 
-// 1x1 최소 유효 JPEG(검정 1px) — 360 핀 테스트 이미지(리포지토리에 재사용 가능한 픽스처 없어 최소 생성)
-const TINY_JPEG_DATAURL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLFRgTEA4dHyMgHx0cICAjJSYlJSIjJioqKSo2NTU7Oz1GSUA/RUdHSUdM/9sAQwEICQkMCwsVDQ0VIhUXFSIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEAG//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAQIAAAAAAAAAAAAAAAAAAQIRAwBBUWH/2Q==';
+// ── 최소 PNG 인코더(stdlib zlib 만 사용 — 신규 의존성 0) ──────────────────────────────
+// 8bit grayscale, 필터 없음(filter byte 0 고정). 도면/360 placeholder 를 "실제 크기"로
+// 만들기 위함 — 종전 1x1 TINY_JPEG 은 naturalWidth=1 이라 핀 마커 스케일이 폭주했다(R1 재현).
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function pngChunk(type, data) {
+  const typeBuf = Buffer.from(type, 'ascii');
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([typeBuf, data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
+/** 8bit grayscale PNG 데이터URL. pixelFn(x,y) => 0..255 */
+function pngDataUrl(width, height, pixelFn) {
+  const raw = Buffer.alloc((width + 1) * height);
+  let p = 0;
+  for (let y = 0; y < height; y++) {
+    raw[p++] = 0; // filter: none
+    for (let x = 0; x < width; x++) raw[p++] = pixelFn(x, y) & 0xFF;
+  }
+  const idat = zlib.deflateSync(raw, { level: 9 });
+  const sig = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0; // bitdepth8,grayscale,...
+  const png = Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', idat), pngChunk('IEND', Buffer.alloc(0))]);
+  return 'data:image/png;base64,' + png.toString('base64');
+}
+
+// ── 도면 placeholder: 실제 비율 평면도(격자 "방" 윤곽) ──────────────────────────────
+// 4x3 격자(여백 5%). 구역(zoneB)의 crop% 은 이 격자 경계와 정확히 일치시켜
+// 도면 위에서 "의미 있는 방 하나"로 보이게 한다.
+const DRAWING_W = 2400, DRAWING_H = 1700;
+const GRID_COLS = 4, GRID_ROWS = 3, MARGIN_PCT = 5, LINE_PX = 4;
+const CELL_W_PCT = (100 - MARGIN_PCT * 2) / GRID_COLS;
+const CELL_H_PCT = (100 - MARGIN_PCT * 2) / GRID_ROWS;
+function pctToPx(pct, dim) { return Math.round(pct / 100 * dim); }
+function drawingPixel(x, y) {
+  const onV = (pct) => Math.abs(x - pctToPx(pct, DRAWING_W)) <= LINE_PX / 2;
+  const onH = (pct) => Math.abs(y - pctToPx(pct, DRAWING_H)) <= LINE_PX / 2;
+  if (onV(MARGIN_PCT) || onV(100 - MARGIN_PCT) || onH(MARGIN_PCT) || onH(100 - MARGIN_PCT)) return 20;
+  for (let i = 1; i < GRID_COLS; i++) { if (onV(MARGIN_PCT + CELL_W_PCT * i)) return 60; }
+  for (let j = 1; j < GRID_ROWS; j++) { if (onH(MARGIN_PCT + CELL_H_PCT * j)) return 60; }
+  return 250;
+}
+// zoneB(아래) 가 도면 위에서 가리킬 방 — 격자 col=1,row=1 (0-base)
+const ZONEB_CROP = {
+  x: MARGIN_PCT + CELL_W_PCT * 1, y: MARGIN_PCT + CELL_H_PCT * 1,
+  w: CELL_W_PCT, h: CELL_H_PCT,
+};
+
+// ── 360 placeholder: 실제 비율 equirectangular(수평선 + 8분할 세로선) ──────────────
+const PANO_W = 1024, PANO_H = 512;
+function panoPixel(x, y) {
+  const horizon = PANO_H / 2;
+  if (x % 128 < 2) return 10;
+  if (Math.abs(y - horizon) <= 2) return 10;
+  if (y < horizon) return Math.round(225 - (horizon - y) / horizon * 55);
+  return Math.round(95 + (y - horizon) / horizon * 55);
+}
+const DRAWING_DATAURL = pngDataUrl(DRAWING_W, DRAWING_H, drawingPixel);
+const PANO_DATAURL = pngDataUrl(PANO_W, PANO_H, panoPixel);
 
 async function main() {
   const util = await loadUtil();
@@ -113,6 +186,7 @@ async function main() {
   const depId = 'dep_localseed_original';
   const zoneId = 'dk_localseed_zoneA';
   const areaId = 'dk_localseed_zoneA_area1';
+  const zoneBId = 'dk_localseed_zoneB';
   const panoIds = ['pano_localseed_1', 'pano_localseed_2'];
 
   sqlLines.push(
@@ -131,12 +205,12 @@ async function main() {
     `ON CONFLICT(project_id, email) DO UPDATE SET role=excluded.role;`
   );
 
-  // pano_images(360 테스트 이미지 2개 — 리포지토리 픽스처 부재로 최소 유효 JPEG 생성)
+  // pano_images(360 테스트 이미지 2개 — 실제 비율 equirectangular PNG, zlib 직접 인코딩)
   for (let i = 0; i < panoIds.length; i++) {
     sqlLines.push(
       `INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted, tenant_id) VALUES ` +
-      `('${panoIds[i]}', '360 테스트 ${i + 1}', '${TINY_JPEG_DATAURL}', 1, 1, ${now}, ${now}, 0, 'tnt_default') ` +
-      `ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, deleted=0;`
+      `('${panoIds[i]}', '360 테스트 ${i + 1}', '${esc(PANO_DATAURL)}', ${PANO_W}, ${PANO_H}, ${now}, ${now}, 0, 'tnt_default') ` +
+      `ON CONFLICT(id) DO UPDATE SET image_data=excluded.image_data, width=excluded.width, height=excluded.height, updated_at=excluded.updated_at, deleted=0;`
     );
   }
 
@@ -150,15 +224,16 @@ async function main() {
   }
   const pinsJson = esc(JSON.stringify(pins));
 
-  // pages_data: 실제 ga.pdf 래스터화는 하지 않음(헤드리스 PDF.js 렌더는 이 스크립트 범위 밖·무거움).
-  //   구조적 등록만 수행 — source_meta.pdf_url 이 R2 의 실제 ga.pdf 를 가리킨다(아래 업로드).
-  const pagesData = esc(JSON.stringify([TINY_JPEG_DATAURL]));
+  // pages_data: 실제 비율(2400x1700) 평면도 placeholder PNG — naturalWidth/Height 가 1 이던
+  //   종전 TINY_JPEG 폭주(R1 재현: 마커 5796x10212px)를 없앤다. ga.pdf 래스터화는 여전히 범위 밖
+  //   (헤드리스 PDF.js 렌더는 무거움) — source_meta.pdf_url 은 있으면 실제 ga.pdf 를 가리킨다(아래 업로드).
+  const pagesData = esc(JSON.stringify([DRAWING_DATAURL]));
   let sourceMeta = 'NULL';
   const gaPdf = path.join(TMP, 'ga.pdf');
   if (fs.existsSync(gaPdf)) {
     try {
       sh(`node node_modules/wrangler/bin/wrangler.js r2 object put seastar-assets/localseed/ga.pdf --local --persist-to "${STATE}" --file "${gaPdf.replace(/\\/g, '/')}" --content-type application/pdf`);
-      sourceMeta = `'${esc(JSON.stringify({ v: 1, pdf_url: '/api/r2/object/localseed/ga.pdf', pages: [{ w: 1, h: 1, pw: 1, ph: 1 }] }))}'`;
+      sourceMeta = `'${esc(JSON.stringify({ v: 1, pdf_url: '/api/r2/object/localseed/ga.pdf', pages: [{ w: DRAWING_W, h: DRAWING_H, pw: DRAWING_W, ph: DRAWING_H }] }))}'`;
     } catch (e) {
       console.warn('[seed-local] R2 로컬 업로드 실패(무시) — source_meta 는 NULL로 둠: ' + String(e.message).split('\n')[0]);
     }
@@ -167,7 +242,7 @@ async function main() {
   sqlLines.push(
     `INSERT INTO deployments (id, title, file_name, pages_data, pins, zones, annotations, created_at, updated_at, deleted, tenant_id, version, project_id, source_meta) VALUES ` +
     `('${depId}', '원본 도면(local seed)', 'ga.pdf', '${pagesData}', '${pinsJson}', '[]', '[]', ${now}, ${now}, 0, 'tnt_default', 0, '${projId}', ${sourceMeta}) ` +
-    `ON CONFLICT(id) DO UPDATE SET pins=excluded.pins, updated_at=excluded.updated_at, deleted=0;`
+    `ON CONFLICT(id) DO UPDATE SET pins=excluded.pins, pages_data=excluded.pages_data, source_meta=excluded.source_meta, updated_at=excluded.updated_at, deleted=0;`
   );
 
   // 구역(최상위, parent_id NULL) + 영역(구역 하위, parent_id=구역)
@@ -181,6 +256,12 @@ async function main() {
     `('${areaId}', '${projId}', 'A구역-1영역', '${depId}', 1, '${zoneId}', ${now}, ${now}, 0) ` +
     `ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, deleted=0;`
   );
+  // zoneB — 메인 도면에서 "창 방식"으로 잘라 만든 구역(crop% = 격자 방 하나, 46_DeckOutline 윤곽 표시 확인용)
+  sqlLines.push(
+    `INSERT INTO decks (id, project_id, name, deployment_id, page, crop, parent_id, created_at, updated_at, deleted) VALUES ` +
+    `('${zoneBId}', '${projId}', 'B구역(메인 크롭)', '${depId}', 1, '${esc(JSON.stringify(ZONEB_CROP))}', NULL, ${now}, ${now}, 0) ` +
+    `ON CONFLICT(id) DO UPDATE SET crop=excluded.crop, updated_at=excluded.updated_at, deleted=0;`
+  );
 
   const sqlFile = path.join(TMP, '_seed-local.sql');
   fs.writeFileSync(sqlFile, sqlLines.join('\n') + '\n', 'utf8');
@@ -193,7 +274,8 @@ async function main() {
 
   console.log('[seed-local] 완료. 계정 이메일(비밀번호는 ' + credFile + ' 참조, 콘솔 미출력):');
   for (const c of creds) console.log('  - ' + c.role + ': ' + c.email);
-  console.log('[seed-local] 샘플 프로젝트: ' + projId + ' (구역 ' + zoneId + ' > 영역 ' + areaId + ', 핀 ' + pins.length + '개)');
+  console.log('[seed-local] 샘플 프로젝트: ' + projId + ' (구역 ' + zoneId + ' > 영역 ' + areaId + ', 구역 ' + zoneBId + '[crop], 핀 ' + pins.length + '개)');
+  console.log('[seed-local] 도면 ' + DRAWING_W + 'x' + DRAWING_H + 'px, 360 placeholder ' + PANO_W + 'x' + PANO_H + 'px (zlib PNG, 신규 의존성 0)');
 }
 
 main().catch((e) => { console.error('[seed-local] 실패:', e); process.exit(1); });
