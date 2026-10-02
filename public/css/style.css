@@ -3771,6 +3771,13 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     background: var(--bg2); padding: 2px 12px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
     z-index: 139;
   }
+  /* [WO 20261002-fixmobile2] 🔴 실측(지휘자 R2, 375×812): 배치모드 안내 배너(.crosshair-msg,
+     map-viewport 기준 top:10px absolute → 화면좌표 68+10=78px)가 바로 위 번호대역 칩 줄
+     (위 규칙 top:68px, 높이 = padding 2px×2 + .numband-btn min-height 26px = 30px → 화면좌표
+     68~98px, z-index:139)과 겹쳤다(68~98 vs 78~97). 마스터 "숨기지 마" — 배너를 칩 줄 아래로
+     내린다. map-viewport 는 topbar(68px) 바로 아래에서 시작하므로 화면좌표 98px+8px갭 = 106px은
+     map-viewport 기준 106-68=38px. */
+  .crosshair-msg { top: 38px; }
   /* [WO 20260929-mobile-overflow] 실측(375×812): 뒤에 오는 브랜드 로고(brand-logo-top,
      ~150px)·점·모드라벨 등이 앞자리를 차지해 3모드 세그먼트의 "사진 등록" 버튼이 화면 밖으로
      완전히 밀려 아예 안 보였다(가로 스크롤로만 도달 — 요구사항은 스크롤 없이 화면 안).
@@ -5647,6 +5654,14 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
      인라인 style은 특정도가 높아 !important 없이는 못 이긴다 — 도크 SoT 변수(--mdock-h)를 그대로
      재사용해 배너와 같은 높이로 밀어올린다(값 중복 정의 0). */
   #pwa-install-btn{ bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px) !important; }
+  /* [WO 20261002-fixmobile2] 🔴 실측(지휘자 R3, 375px): 허브 화면에서 배너(.pwa-install-banner)와
+     이 FAB가 정확히 같은 공식(mdock-h+세이프에어리어+12px)을 써 완전히 겹쳤다(마스터 "숨기지 마" —
+     FAB를 배너 위로 올린다). 배너 높이는 헤드리스 크롬 실측(375px, 안드로이드 — ios 힌트 숨김 상태)
+     98px(.tmp/fixmobile2/measure.out, pwa-install-banner rect height) — 배너의 기존 bottom 공식에
+     그 높이+8px 갭만 더해 바로 위에 쌓는다(값 중복정의 아님: 배너 공식을 그대로 재사용). */
+  body:has(#pwa-install-banner.on) #pwa-install-btn {
+    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px + 98px + 8px) !important;
+  }
   /* [WO 20261001-mobilefast] 같은 함정 — [요청·질문](42_Requests._createViewerBtn)·[?](36_Help._createToggle)·
      [✉](36_Help._createInquiryEntryBtn) FAB 도 bottom:16px 인라인 고정이라 하단 도크와 겹친다. */
   /* [WO 20261002-gap 재수정, 마스터 "숨기지 마"] 🔴 위 calc(도크+12px=70px)는 도크만 피하고
@@ -5663,6 +5678,17 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
   body:has(#screen-app.active) [data-help-toggle],
   body:has(#screen-app.active) [data-help-inquiry-toggle] {
     bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px) !important;
+  }
+  /* [WO 20261002-fixmobile2] 🔴 실측(지휘자 R1, 375×812): 트리 시트(.sidebar, 위 "사이드바→바텀시트"
+     규칙에서 bottom:calc(58px+세이프에어리어), max-height:52vh, z-index:145)가 열리면 FAB 3종
+     (z-index:9550)이 시트 위에 그대로 떠 "CHECKER" 항목을 가렸다(겹침 1600px²). 마스터 "숨기지 마" —
+     z-index만 낮추는 것도 숨김이니 금지, 위치만 옮긴다. 시트의 상한(max-height:52vh)을 그대로 재사용해
+     FAB를 그 위로 올린다 — 시트 실제 높이가 더 짧아도(height:auto) FAB가 더 높이 뜰 뿐 가려지지 않는다.
+     body.sidebar-open 은 20_App.js 토글의 결과 클래스를 구독만 한다(그 파일은 수정하지 않음). */
+  body.sidebar-open [data-req-viewer-entry],
+  body.sidebar-open [data-help-toggle],
+  body.sidebar-open [data-help-inquiry-toggle] {
+    bottom: calc(52vh + 58px + env(safe-area-inset-bottom, 0px) + 8px) !important;
   }
 }
 /* [WO 20261001-mobilefast 판정5] 핀 작성 모드(#crosshair-overlay 표시 중)에는 위 FAB 3종을
