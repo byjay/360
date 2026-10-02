@@ -186,9 +186,11 @@
       this._cancelDraw();
       this.render();
       this.renderList();
-      // [오프라인 작업지시서 ] 오프라인이면 구역 upsert op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 구역 upsert op 기록 (로컬 스냅샷은 아래 App._autoSave 가
+      //   공유 SoT로 1회만 수행 — [WO offline2 회귀수정] persistLocalDeployment 중복 호출 제거,
+      //   지휘자 재현 R2/p92 "B persistLocalDeployment 1회")
       if (!navigator.onLine && typeof OpLog !== "undefined") {
-        OpLog.recordCurrent("zone", "upsert", zone.id, zone).then(() => persistLocalDeployment()).catch(() => {});
+        OpLog.recordCurrent("zone", "upsert", zone.id, zone).catch(() => {});
       }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
     },
@@ -425,9 +427,10 @@
       if (this._active === id) this._active = null;
       this.render();
       this.renderList();
-      // [오프라인 작업지시서 ] 오프라인이면 구역 삭제 op 기록 + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 구역 삭제 op 기록(로컬 스냅샷은 App._autoSave 공유 SoT
+      //   1회 — [WO offline2 회귀수정] persistLocalDeployment 중복 호출 제거)
       if (!navigator.onLine && typeof OpLog !== "undefined") {
-        OpLog.recordCurrent("zone", "delete", id).then(() => persistLocalDeployment()).catch(() => {});
+        OpLog.recordCurrent("zone", "delete", id).catch(() => {});
       }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
       return true;

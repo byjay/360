@@ -2291,10 +2291,10 @@
       this._uploadPinImageBg(pin, file, imgName, docs);
       // [오프라인 작업지시서 ] 즉시등록(instant) 핀도 오프라인이면 OpLog 에 기록 →
       //   재연결 시 ops 엔드포인트로 멱등 replay (기존 instant 경로는 OpLog 누락이었음).
+      //   로컬 스냅샷(bundle:dep:)은 바로 아래 _autoSave가 공유 SoT로 1회만 쓴다
+      //   ([WO offline2 회귀수정] persistLocalDeployment 중복 호출 제거).
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
-        OpLog.recordCurrent("pin", "upsert", pin.id, pin)
-          .then(() => { try { return persistLocalDeployment(); } catch (e) {} })
-          .catch(() => {});
+        OpLog.recordCurrent("pin", "upsert", pin.id, pin).catch(() => {});
       }
       this._autoSave && this._autoSave();
     },
@@ -2503,9 +2503,10 @@
       UI.renderPinList();
       UI.renderPinsOnMap(wasEditing ? null : pin.id); // 신규만 드롭 애니메이션
       MapCtrl.flyTo(pin.x, pin.y, Math.max(State.zoom, 2.2), 500);
-      // [오프라인 작업지시서 ] 오프라인이면 엔티티 op 기록 + 로컬 스냅샷(온라인은 _autoSave 경로 유지)
+      // [오프라인 작업지시서 ] 오프라인이면 엔티티 op 기록(로컬 스냅샷은 아래 _autoSave가 공유
+      //   SoT로 1회만 — [WO offline2 회귀수정] persistLocalDeployment 중복 호출 제거)
       if (!navigator.onLine && typeof OpLog !== "undefined") {
-        try { await OpLog.recordCurrent("pin", "upsert", pin.id, pin); await persistLocalDeployment(); } catch (e) {}
+        try { await OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {}
       }
       this._autoSave(); // 버튼 없이 즉시 서버 저장
 
@@ -3123,10 +3124,12 @@
       if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
       UI.renderPinList();
       UI.renderPinsOnMap();
-      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록(핀마다, 순서 보존) + 로컬 스냅샷
+      // [오프라인 작업지시서 ] 오프라인이면 삭제 op 기록(핀마다, 순서 보존). 로컬 스냅샷은 아래
+      //   _autoSave 가 공유 SoT로 1회만 쓴다([WO offline2 회귀수정] persistLocalDeployment
+      //   중복 호출 제거, 지휘자 재현 R2/p92 "B persistLocalDeployment 1회").
       if (!navigator.onLine && typeof OpLog !== "undefined") {
         removed.reduce((pr, p) => pr.then(() => OpLog.recordCurrent("pin", "delete", p.id)), Promise.resolve())
-          .then(() => persistLocalDeployment()).catch(() => {});
+          .catch(() => {});
       }
       this._autoSave();
       return removed;
@@ -5252,9 +5255,13 @@
       //   온라인에서 만든 핀/영역/주석은 서버엔 반영돼도 이 로컬 캐시엔 안 남아, 나중에 오프라인으로
       //   재진입하면 "사라진" 것처럼 보였다(p114 defect P2). _autoSave 는 모든 편집 경로(핀/구역/
       //   주석/병합)가 공유하는 단일 지점(§G-2-5)이므로 온라인 여부와 무관하게 여기서 한 번만
-      //   캐시를 갱신한다 — 기존 5곳의 오프라인 전용 호출은 중복이지만 무해하므로 그대로 둔다
-      //   (Offline.persistLocalDeployment 는 State 를 그대로 직렬화만 — 삭제/덮어쓰기 없음, LWW·
-      //   tombstone 은 손대지 않는다).
+      //   캐시를 갱신한다.
+      //   [WO offline2 회귀수정 2026-10-02] 🔴 지휘자 재현(p92 "B persistLocalDeployment 1회" FAIL,
+      //   HEAD 추출본) — 기존 5곳의 오프라인 전용 체이닝(OpLog 뒤 로컬 캐시 재기록) 호출을
+      //   "무해한 중복"으로 두고 여기 하나를 추가했더니 오프라인 편집 1건당 실제로 2회(각 호출부+
+      //   여기) 호출돼 같은 IndexedDB 레코드를 중복 기록했다(낭비 — 코드로 수정, 테스트 기대 변경
+      //   아님). 그 5곳(16_Zones.js×2·20_App.js×2·26_PdfAnno.js·41_RegionMerge.js)의 중복 호출을
+      //   제거해 여기 한 곳만 남겼다 — OpLog.recordCurrent(오프라인 replay용 기록)는 그대로 유지.
       try { if (typeof persistLocalDeployment === "function") persistLocalDeployment().catch(() => {}); } catch (e) {}
       this._markDirty();
       this._scheduleAutoSync();

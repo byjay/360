@@ -275,9 +275,11 @@
       if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
       if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); UI.renderPinsOnMap && UI.renderPinsOnMap(); }
       if (typeof PinGrid !== "undefined" && PinGrid.render) { try { PinGrid.render(); } catch (e) {} }
+      // [WO offline2 회귀수정] 로컬 스냅샷은 아래 App._autoSave 가 공유 SoT로 1회만 쓴다
+      //   (persistLocalDeployment 중복 호출 제거)
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         add.reduce((pr, p) => pr.then(() => OpLog.recordCurrent("pin", "upsert", p.id, p)), Promise.resolve())
-          .then(() => (typeof persistLocalDeployment === "function" ? persistLocalDeployment() : null)).catch(() => {});
+          .catch(() => {});
       }
       if (typeof App !== "undefined" && App._autoSave) App._autoSave();
       const batch = { batchId: prep.batchId, ids: add.map((p) => p.id), noteIds: [], depId: State.currentDeploymentId };

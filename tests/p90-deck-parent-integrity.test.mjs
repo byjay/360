@@ -92,8 +92,12 @@ const projectsSrc = src("31_Projects.js");
 /* ── 뮤테이션ⓐ: setCurrentProject 의 리셋 줄 제거 → ①이 실패해야 한다 ── */
 {
   console.log("\n[뮤테이션ⓐ] setCurrentProject() 의 currentDeck=null 제거 → ①이 실패해야 함");
-  const needle = "setCurrentProject(p) {\n      this.currentProject = p || null;\n      this.currentDeck = null;\n    },";
-  const mut = projectsSrc.replace(needle, "setCurrentProject(p) {\n      this.currentProject = p || null;\n    },");
+  // [WO offline2 회귀수정] 🔴 needle을 "함수 전체(뒤에 `},` 직결)"가 아니라 리셋 두 줄만으로 좁힌다 —
+  //   31_Projects.js setCurrentProject()에 write-through(bundle:project:)·LS_LAST_OPEN 기억 코드가
+  //   이 두 줄 **뒤에** 추가되면서(offline2 R2/R3) 옛 needle이 "사실과 달리" 못 찾았다(G-4⑧:
+  //   검사 대상 불변식은 그대로 "currentDeck=null 리셋이 있는가" — 바뀐 건 그 줄 뒤에 붙은 코드뿐).
+  const needle = "setCurrentProject(p) {\n      this.currentProject = p || null;\n      this.currentDeck = null;\n";
+  const mut = projectsSrc.replace(needle, "setCurrentProject(p) {\n      this.currentProject = p || null;\n");
   if (mut === projectsSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const P = loadProjects(mut);

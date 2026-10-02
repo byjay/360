@@ -52,12 +52,21 @@ ok(offlineSrc.indexOf("App._pendingSyncCount = pending;") !== -1,
 
 /* ── R5: _autoSave(모든 편집의 공유 SoT)가 온라인 여부와 무관하게 bundle:dep: 캐시를 갱신 ── */
 console.log("\n[R5] _autoSave — 온라인 편집도 오프라인 캐시(bundle:dep:) 갱신");
-ok(/_autoSave\(opts\) \{[\s\S]{0,1200}?persistLocalDeployment\(\)\.catch/.test(appSrc),
+ok(/_autoSave\(opts\) \{[\s\S]{0,1500}?persistLocalDeployment\(\)\.catch/.test(appSrc),
   "_autoSave 안에서 (온라인/오프라인 무관) persistLocalDeployment() 호출");
-// 🔴 기존 5곳의 "오프라인일 때만" 호출은 중복이지만 무해하므로 남아있어야 한다(삭제하지 않음 — 데이터 유실 보수 규칙)
-const offlineOnlyCalls = (appSrc.match(/!navigator\.onLine[\s\S]{0,200}?persistLocalDeployment\(\)/g) || []).length
-  + (appSrc.match(/persistLocalDeployment\(\)[\s\S]{0,40}?\.catch/g) || []).length;
-ok(offlineOnlyCalls > 0, "기존 오프라인 전용 persistLocalDeployment 호출부가 그대로 남아있음(제거 0, 중복 호출은 무해)");
+// [WO offline2 회귀수정] 🔴 지휘자 재현(p92 "B persistLocalDeployment 1회" FAIL) — 처음엔 기존
+//   5곳(오프라인 전용 .then(persistLocalDeployment)) 을 "무해한 중복"으로 남겼으나, 실제로는
+//   오프라인 편집 1건당 2회 호출(해당 호출부 + _autoSave) 돼 같은 레코드를 중복 기록했다(낭비).
+//   올바른 수정은 그 5곳의 persistLocalDeployment() 호출을 제거해 _autoSave 한 곳만 남기는
+//   것(OpLog.recordCurrent 는 유지) — 아래는 "제거됐는지"를 검사한다(이전 버전과 반대 방향).
+//   🔴 실제 "호출"만 센다(주석 속 설명 문구는 제외) — 두 호출 모양(직접 `.catch(`, 또는
+//   `.then(() => persistLocalDeployment())`) 전부를 센다. 이 파일의 설명 주석은 전부 뒤에 백틱(`)
+//   으로 끝나거나 괄호가 안 닫혀 아래 두 패턴과 겹치지 않는다(실측 확인).
+const CALL_PAT = /persistLocalDeployment\(\)\.catch\(|\.then\(\(\) => persistLocalDeployment\(\)\)/g;
+const allPersistCalls = [appSrc, offlineSrc,
+  rd("public/js/modules/16_Zones.js"), rd("public/js/modules/26_PdfAnno.js"), rd("public/js/modules/41_RegionMerge.js")
+].reduce((n, s) => n + (s.match(CALL_PAT) || []).length, 0);
+ok(allPersistCalls === 1, "persistLocalDeployment() 실호출이 전체 소스에 정확히 1곳(_autoSave)만 — 중복 제거 확인, 실제 " + allPersistCalls + "곳");
 
 console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));
 process.exit(failed === 0 ? 0 : 1);
