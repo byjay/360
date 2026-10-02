@@ -444,13 +444,18 @@
      *  캐시가 아직 없으면(오프라인/잠김 등 "모름") 빈 문자열 — "구역 없음"을 함부로 단정하지 않는다. */
     _renderDeckTreeHtml(p) {
       const decks = this._deckTreeCache[p.id];
-      if (decks === undefined) return "";
       const esc = (s) => UI.escapeHtml(s);
+      // [WO 20261002-allmenu §5] 🔴 "메인은 항상 보이게" — 원본(메인 PDF) 줄은 구역 목록 상태와 무관하게
+      //   맨 위에 그린다(decks 로딩 전·실패·0개 포함). 근거 = projects.original_deployment_id(서버 기록)만 —
+      //   없으면 "미지정"으로 정직하게(지어내지 않음). 클릭 = 기존 프로젝트 진입(openProject → 원본 열기).
+      const originHtml = '<div class="hub-tree-origin" data-act="origin-open" data-origin="1" tabindex="0" role="button" title="메인(원본) 도면으로 열기">'
+        + '<span class="hub-tree-origin-tag">원본</span><span class="hub-tree-origin-label">' + (p.original_deployment_id ? "메인 PDF" : "미지정") + '</span></div>';
+      if (decks === undefined) return '<div class="hub-card-tree">' + originHtml + '</div>';
       // [WO 20260929-tree-label] 🔴 공유 지점(SoT) — UI.deckLabelHtml(11_UI.js) 하나만 쓴다.
       // 이 카드 트리와 사이드바 트리(renderTree)가 각자 이름 폴백을 만들면 반드시 갈라진다.
       const titleOf = (d) => esc(d.name ? d.name : "(이름 없음)");
       if (!decks.length) {
-        return '<div class="hub-card-tree"><p class="hub-tree-empty">구역 없음</p></div>';
+        return '<div class="hub-card-tree">' + originHtml + '<p class="hub-tree-empty">구역 없음</p></div>';
       }
       /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
          구역·영역은 두 모드가 공유하는 한 벌만 렌더한다(중복 0). 모드 분리는 트리 맨 안쪽(더 이상
@@ -481,7 +486,7 @@
             + UI.deckLabelHtml(d) + regionsHtml(d) + (hasRegions ? "" : leafModesHtml(d)) + '</li>';
         }).join("") + '</ul>';
       };
-      return '<div class="hub-card-tree">' + decksHtml(decks) + '</div>';
+      return '<div class="hub-card-tree">' + originHtml + decksHtml(decks) + '</div>';
     },
 
     /** Auth 상태 변경 시 (로그인/로그아웃) 다시 그려 +새프로젝트·편집 버튼 토글 */
@@ -679,6 +684,8 @@
         const treeEl = card.querySelector(".hub-card-tree");
         if (treeEl) {
           const openDeckNode = (e) => {
+            // [WO 20261002-allmenu §5] 원본 줄 = 프로젝트 진입(기존 openProject — 진입 시 원본을 연다).
+            if (e.target.closest("[data-origin]")) { e.stopPropagation(); this.openProject(p); return; }
             const node = e.target.closest("[data-deck-id],[data-mode-reg]");
             if (!node) return;
             e.stopPropagation();
@@ -689,7 +696,7 @@
           treeEl.addEventListener("click", openDeckNode);
           treeEl.addEventListener("keydown", (e) => {
             if (e.key !== "Enter" && e.key !== " ") return;
-            if (!e.target.closest("[data-deck-id],[data-mode-reg]")) return;
+            if (!e.target.closest("[data-deck-id],[data-mode-reg],[data-origin]")) return;
             e.preventDefault();
             openDeckNode(e);
           });

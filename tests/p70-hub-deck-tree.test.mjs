@@ -379,8 +379,10 @@ console.log("\n[뮤테이션ⓑ] 트리 컨테이너 기본 display:none 으로 
 await withBrowser(async (browser) => {
   // [WO 20260930-moderole] 마스터 2차 지시로 모드 가지(MODES 분기)를 제거 — 카드 트리는 이제
   // 구역·영역 공유 구조 한 경로로만 렌더된다(모드 단 없음, 항상 이 return 한 줄).
-  const needle = 'return \'<div class="hub-card-tree">\' + decksHtml(decks) + \'</div>\';';
-  const mutated = projectHubSrc.replace(needle, 'return \'<div class="hub-card-tree" style="display:none">\' + decksHtml(decks) + \'</div>\';');
+  // [WO 20261002-allmenu §5] needle 갱신(전·후 대조): 전 `'<div class="hub-card-tree">' + decksHtml(decks)` →
+  //   후 `... + originHtml + decksHtml(decks)` (원본 줄을 맨 위에 항상 그린다). 변형(display:none)·판정(②)은 그대로.
+  const needle = 'return \'<div class="hub-card-tree">\' + originHtml + decksHtml(decks) + \'</div>\';';
+  const mutated = projectHubSrc.replace(needle, 'return \'<div class="hub-card-tree" style="display:none">\' + originHtml + decksHtml(decks) + \'</div>\';');
   if (mutated === projectHubSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; return; }
   const dir = tmpDirWithBundle(buildBundle(mutated, projectsSrc), "bundle.js");
   const server = await serveDir(dir);
@@ -529,10 +531,13 @@ console.log("\n[뮤테이션ⓔ] srcTag(도면 출처 부가 라벨)를 되살�
 await withBrowser(async (browser) => {
   // [WO 20261001-projectinfo·tree-hierarchy] 마스터 지시로 kindTag("구역"/"영역" 꼬리표)를 추가했다
   // (전·후 대조: kindTag 삽입 1건, srcTag 관련 구조는 그대로) — needle 을 그 줄에 맞춰 갱신.
-  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + zoneCntTag;";
-  const srcTag = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
+  // [WO 20261002-allmenu §5] needle 갱신(전·후 대조): 전 `... + _tag + zoneCntTag;` → 후 `... + _tag + srcTag + zoneCntTag`
+  //   (+ 다음 줄 ⋯ 메뉴). 새 srcTag 는 "잘라옴" 또는 "별도 등록 · 파일명"(자기 도면일 때만) — 같은 도면을 공유하는
+  //   이 픽스처(구역·영역 둘 다 dep1)에서는 파일명이 행에 나오지 않는다(①은 그대로 유효). 변형(파일명 부가 라벨 부활)은 그대로.
+  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
+  const docSrc = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
   const mutated = uiSrc.replace(needle,
-    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + srcTag + " + _tag + zoneCntTag;");
+    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { m } = await measureSidebarTree(browser, mutated);

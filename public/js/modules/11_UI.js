@@ -501,6 +501,125 @@
       return (deck && deck.name) ? esc(deck.name) : '<span class="tree-name-missing">(이름 없음)</span>';
     },
 
+    /* ══ [WO 20261002-allmenu] 권한·출처·트리 ⋯ 메뉴 — 공유 지점(SoT) ══════════════════════════════
+       permCheck 는 트리 ⋯ 메뉴와 전체 기능 메뉴(45_FeatureMenu)가 함께 쓴다 — 🔴 숨김 금지 원칙의 사유 문구가
+       화면마다 갈라지지 않게 한 곳에서만 만든다. 반환 = "" (가능) 또는 사유 문자열(비활성 표시용). */
+    permCheck(perm) {
+      const A = (typeof Auth !== "undefined") ? Auth : null;
+      const designer = typeof State !== "undefined" && State.mode === "designer" && !!(A && A.isDesigner) && !(A && A.readonly);
+      const P = (typeof Projects !== "undefined") ? Projects : null;
+      switch (perm) {
+        case "designer": return designer ? "" : "디자이너(편집) 전용 — 열람 화면에서는 사용할 수 없습니다";
+        case "owner":
+          if (!designer) return "디자이너(편집) 전용 — 열람 화면에서는 사용할 수 없습니다";
+          return ((P && P.currentProject && P.currentProject.can_manage_members) || (A && A.isSuper)) ? "" : "소유자·관리자 전용";
+        case "admin": return (A && A.isAdmin) ? "" : "관리자 전용";
+        case "super": return (A && A.isSuper) ? "" : "슈퍼관리자 전용";
+        case "login": return (A && (A.user || A.role)) ? "" : "로그인 후 사용";
+        default: return "";
+      }
+    },
+    /** 트리용 프로젝트 서술자 — Projects.currentProject → 목록에서 State.currentProjectId → {id,name}. 없으면 null. */
+    _treeProject() {
+      const P = (typeof Projects !== "undefined") ? Projects : null;
+      if (P && P.currentProject) return P.currentProject;
+      const pid = (typeof State !== "undefined") ? State.currentProjectId : null;
+      if (!pid) return null;
+      const lists = [(P && P.list) || [], (typeof ProjectHub !== "undefined" && ProjectHub.list) || []];
+      for (const l of lists) { const hit = l.find((p) => p && String(p.id) === String(pid)); if (hit) return hit; }
+      return { id: pid, name: State.currentProjectName || "프로젝트" };
+    },
+    /** 구역 도면 출처 — {kind:"none"|"main"|"crop"|"own", label}. crop = 메인(또는 다른 도면)을 잘라 쓰는 창/벡터 복사,
+     *  own = 이 구역에 따로 등록한 도면. 데이터 SoT = deck.crop · deck.src_dep_id · deployment_id(새 컬럼 0). */
+    deckSourceOf(deck, mainDepId, decks) {
+      if (!deck || !deck.deployment_id) return { kind: "none", label: "도면 미등록" };
+      const isCrop = !!(deck.crop && deck.crop.w > 0 && deck.crop.h > 0);
+      if (!isCrop && mainDepId && String(deck.deployment_id) === String(mainDepId)) return { kind: "main", label: "메인 도면" };
+      // 다른 구역과 같은 배포본을 보는 구역(창·레거시 영역)도 "잘라옴" — 자기 도면이 아니다(App._deckOwnsDrawing 과 같은 규칙).
+      const shared = (decks || []).some((d) => d && String(d.id) !== String(deck.id) && String(d.deployment_id || "") === String(deck.deployment_id));
+      if (isCrop || deck.src_dep_id || shared) return { kind: "crop", label: "잘라옴" };
+      return { kind: "own", label: "별도 등록 · " + (deck.deployment_file_name || deck.deployment_title || "도면 파일") };
+    },
+    originMenuItems(proj, pick) {
+      const items = [];
+      items.push({ label: "원본 전체 도면 열기", reason: pick ? "" : "메인(원본) 도면이 아직 없습니다",
+        run: () => { if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal(); } });
+      const ownerWhy = this.permCheck("owner");
+      items.push({ label: "메인 도면 교체", danger: true, reason: ownerWhy || (pick ? "" : "메인(원본) 도면이 아직 없습니다 — 도면을 먼저 등록하세요"),
+        desc: "프로젝트 메인 PDF 를 새 파일로(확인창)",
+        run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "main" }); } });
+      if (!pick) {
+        items.push({ label: "지금 열린 도면을 원본으로 지정", reason: ownerWhy || ((typeof State !== "undefined" && State.currentDeploymentId) ? "" : "먼저 도면을 열어야 합니다"),
+          run: () => { if (typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent(); } });
+      }
+      return items;
+    },
+    deckMenuItems(deck, mainDepId) {
+      const src = this.deckSourceOf(deck, mainDepId, (typeof Projects !== "undefined" && Projects.decks) || []);
+      const why = this.permCheck("designer");
+      const label = src.kind === "none" ? "도면 등록" : src.kind === "own" ? "도면 교체" : src.kind === "crop" ? "이 구역 도면 따로 등록" : "도면 등록/교체";
+      const items = [{ label: "출처: " + src.label, info: true }];
+      items.push({ label, desc: "PDF·이미지 — 메인 PDF 는 바뀌지 않습니다",
+        reason: why || (src.kind === "main" ? "메인 도면 — 원본 ⋯ → [메인 도면 교체](소유자·관리자)" : ""),
+        run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "deck", deck }); } });
+      return items;
+    },
+    /** 트리 ⋯ 팝오버(공유 생성기) — items: [{label, run, reason?, desc?, info?, danger?}].
+     *  🔴 숨김 금지: reason 이 있으면 비활성(aria-disabled) + 사유를 항목 안에 글자로 보인다. 바깥 클릭·Esc 로 닫힘. */
+    openTreeMenu(anchor, title, items) {
+      this.closeTreeMenu();
+      if (typeof document === "undefined" || !document.body) return null;
+      const pop = document.createElement("div");
+      pop.className = "tree-pop";
+      pop.setAttribute("role", "menu");
+      pop.setAttribute("aria-label", title || "메뉴");
+      const h = document.createElement("div");
+      h.className = "tree-pop-title";
+      h.textContent = title || "";
+      pop.appendChild(h);
+      (items || []).forEach((it) => {
+        if (it.info) { const p = document.createElement("div"); p.className = "tree-pop-info"; p.textContent = it.label; pop.appendChild(p); return; }
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "tree-pop-item" + (it.danger ? " danger" : "") + (it.reason ? " is-disabled" : "");
+        b.setAttribute("role", "menuitem");
+        if (it.reason) b.setAttribute("aria-disabled", "true");
+        b.innerHTML = '<span class="tree-pop-label">' + this.escapeHtml(it.label) + '</span>'
+          + (it.reason ? '<span class="tree-pop-why">' + this.escapeHtml(it.reason) + '</span>'
+            : (it.desc ? '<span class="tree-pop-desc">' + this.escapeHtml(it.desc) + '</span>' : ""));
+        b.addEventListener("click", (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          if (it.reason) { try { Prompt.toast && Prompt.toast(it.reason); } catch (er) {} return; }
+          this.closeTreeMenu();
+          if (it.run) it.run();
+        });
+        pop.appendChild(b);
+      });
+      document.body.appendChild(pop);
+      try {
+        const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+        const vw = (typeof window !== "undefined" && window.innerWidth) || 1024;
+        if (r) {
+          pop.style.top = Math.round(r.bottom + 4) + "px";
+          pop.style.left = Math.round(Math.max(8, Math.min(r.left, vw - 288))) + "px";
+        }
+      } catch (e) {}
+      const onDoc = (e) => { if (!pop.contains || !pop.contains(e.target)) this.closeTreeMenu(); };
+      const onKey = (e) => { if (e.key === "Escape") this.closeTreeMenu(); };
+      setTimeout(() => { document.addEventListener("click", onDoc, true); }, 0);
+      document.addEventListener("keydown", onKey);
+      this._treePop = { pop, onDoc, onKey };
+      return pop;
+    },
+    closeTreeMenu() {
+      const t = this._treePop;
+      if (!t) return;
+      this._treePop = null;
+      document.removeEventListener("click", t.onDoc, true);
+      document.removeEventListener("keydown", t.onKey);
+      if (t.pop && t.pop.parentNode) t.pop.parentNode.removeChild(t.pop);
+    },
+
     renderTree() {
       const host = this.$("side-tree");
       if (!host) return;
@@ -545,35 +664,48 @@
        *  마스터: "원 프로젝트 최상위 PDF는 항상 최상단 트리에서 보이게 해야지" — 구역 0개 분기와
        *  구역 보유 분기가 이 함수 하나를 호출한다(각자 만들면 §10 SoT 위반). 판정은
        *  Projects.pickOriginalDeck(기존 SoT, 31_Projects.js) 그대로 — 새 판정 로직 금지. */
+      /* [WO 20261002-allmenu §5] 🔴 "메인은 항상 보이게" — 프로젝트 객체가 아직 없어도(허브 진입 직후·
+       *  decks 로딩 전·오프라인·열람자 링크) 원본 노드는 그린다(R2: 종전 `if (!proj) return null`).
+       *  표시 근거가 없으면 지어내지 않고 지금 열린 도면 이름 또는 "미지정"으로 정직하게 표시한다.
+       *  ⋯ 메뉴: [원본 열기] · [메인 도면 교체](소유자·super, 확인창) · [원본으로 지정]. */
       const originNode = () => {
-        if (!proj) return null;
         const pick = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks, proj) : null;
         const n = document.createElement("button");
         n.className = "tree-node tree-node-origin";
+        const moreHtml = ' <span class="tree-more" role="button" tabindex="0" aria-label="원본 도면 메뉴" title="원본 도면 메뉴 — 열기·메인 도면 교체">⋯</span>';
+        const canSet = !!(proj && proj.can_manage_members);
         if (pick) {
           const label = (pick.deployment_id ? docLabel(pick.deployment_id) : null) || pick.name || "원본 도면";
-          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">' + esc(label) + '</span>';
+          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">' + esc(label) + '</span>' + moreHtml;
           n.title = "원본 전체 도면 열기";
-          n.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal(); });
+        } else if (!proj && State.currentDeploymentId) {
+          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">' + esc(State.fileName || "지금 열린 도면") + '</span>' + moreHtml;
+          n.title = "프로젝트 정보를 아직 불러오지 못했습니다 — 지금 열린 도면";
         } else {
-          const canSet = !!(proj.can_manage_members);
           n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">미지정</span>'
-            + (canSet ? ' <span class="btn-mini tree-origin-set" data-origin-set="1" role="button" tabindex="0">지정</span>' : "");
+            + (canSet ? ' <span class="btn-mini tree-origin-set" data-origin-set="1" role="button" tabindex="0">지정</span>' : "") + moreHtml;
           n.title = canSet ? "현재 열린 도면을 원본으로 지정할 수 있습니다" : "원본 전체 도면이 아직 지정되지 않았습니다";
-          if (canSet) {
-            n.addEventListener("click", (e) => {
-              if (e && e.stopPropagation) e.stopPropagation();
-              if (typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent();
-            });
-          }
         }
+        n.addEventListener("click", (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          const more = e && e.target && e.target.closest ? e.target.closest(".tree-more") : null;
+          if (more) { this.openTreeMenu(more, "원본 도면", this.originMenuItems(proj, pick)); return; }
+          if (pick) { if (typeof Projects !== "undefined" && Projects.openOriginal) Projects.openOriginal(); return; }
+          if (canSet && typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent();
+        });
         return n;
       };
       /* [WO 20260929-tree1] 🔴 공유 지점 — 프로젝트 트리 노드(이름 + 다운로드/삭제 버튼 흡수)를
        *  만드는 코드 한 벌. 구역이 0개라도(빈 프로젝트) 이 노드는 그대로 있어야 한다 — 예전엔
        *  별도 박스(#section-projects)라 구역 수와 무관하게 항상 보였다. 흡수하면서 그 보장까지
        *  깨면 안 된다(§10 SoT — 아래 두 호출부가 각자 만들면 반드시 갈라진다). */
-      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
+      // [WO 20261002-allmenu §5] R2 근본원인 — 허브 카드 진입 직후 등 Projects.currentProject 가 아직 비어 있는
+      //   창(타이밍)에 그려지면 프로젝트·원본 노드가 통째로 사라졌다. 타이밍과 무관하게 막는다: 열린 프로젝트 id
+      //   (State.currentProjectId — openProject/openApp 이 동기로 세팅)로 목록에서 찾고, 그래도 없으면 id·이름만 담은
+      //   서술자로 그린다(권한 필드 없음 = 권한 버튼 없음, 지어내지 않음).
+      const proj = this._treeProject();
+      const _mainPick = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks, proj) : null;
+      const mainDepId = (_mainPick && _mainPick.deployment_id) || null;
       const mountProjectNode = (rootCount) => {
         const pw = document.createElement("div");
         pw.className = "tree-project open";
@@ -633,7 +765,13 @@
         return pw;
       };
       if (!decks.length) {
-        if (!proj) { host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>'; return; }
+        // [WO 20261002-allmenu §5] 🔴 early return 경로에서도 원본 노드를 **먼저** 그린다(R2).
+        if (!proj) {
+          host.innerHTML = '<p class="tree-empty">구역이 없습니다.<br>위 도구의 ‘구역 생성’으로 추가하세요.</p>';
+          const on0 = originNode();
+          if (host.insertBefore && host.firstChild !== undefined) host.insertBefore(on0, host.firstChild); else host.appendChild(on0);
+          return;
+        }
         const pw = mountProjectNode(0);
         /* [WO 20260929-tree1] 🔴 근본수정 — 31_Projects._renderSideTreeEmpty() 가 #side-tree.innerHTML
          *  을 직접 덮어써 renderTree() 가 방금 여기 붙인 #project-actions(실 DOM, 리스너 보유)를
@@ -753,7 +891,12 @@
         // [WO 20261001-projectinfo·tree-hierarchy] 🔴 마스터: "단계마다 라벨 접두나 툴팁을 둬서
         // 이름만으로 헷갈리지 않게" — 아이콘(형태)만으로는 약하므로 작은 텍스트 꼬리표를 더한다.
         const kindTag = '<span class="tree-kind-tag">' + (isRegion ? "영역" : "구역") + '</span>';
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + zoneCntTag;
+        // [WO 20261002-allmenu §5] 구역 도면 출처(잘라옴 / 별도 등록 · 파일명) — SoT = UI.deckSourceOf.
+        const _src = this.deckSourceOf(deck, mainDepId, decks);
+        const srcTag = (_src.kind === "crop" || _src.kind === "own")
+          ? '<span class="tree-src-tag tree-src-' + _src.kind + '" title="구역 도면 출처: ' + esc(_src.label) + '">' + esc(_src.label) + '</span>' : "";
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag
+          + '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
@@ -762,6 +905,8 @@
         // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {
+          const more = e && e.target && e.target.closest ? e.target.closest(".tree-more") : null;
+          if (more) { if (e.stopPropagation) e.stopPropagation(); this.openTreeMenu(more, (isRegion ? "영역 " : "구역 ") + (deck.name || "(이름 없음)"), this.deckMenuItems(deck, mainDepId)); return; }
           if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { toggleOpen(); return; }
           if (isCur) { toggleOpen(); return; }
           if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
@@ -900,6 +1045,8 @@
         pk.className = "tree-children";
         pw.appendChild(pk);
         mount = pk;
+      } else {
+        host.appendChild(originNode());   // [WO 20261002-allmenu §5] 프로젝트 서술자가 없어도 원본은 최상단에
       }
       /* ── 2단: 구역(두 모드 공유) — [WO 20260930-moderole] 마스터 2차 지시로 모드 가지(88e52ff)를
          제거하고 구역·영역을 프로젝트 바로 아래 한 벌만 렌더한다(중복 0). 모드 분리는 deckNode()

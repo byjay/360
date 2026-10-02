@@ -2082,7 +2082,11 @@
       //  옛 "구역 0개면 도면 로드 차단 + createDeck({askDrawing:false}) 로 구역부터 생성" 게이트를 제거한다 —
       //  그 게이트가 "도면 등록 = 구역 생성" 을 코드에서 한 덩어리로 묶고 있던 근본 원인이었다.
       //  구역이 0개여도 도면은 그냥 로드된다. 구역은 첫 영역 지정 시 생긴다(31_Projects.createDeckFromLoadedDrawing).
-      if (typeof Projects !== "undefined" && Projects.currentProject) {
+      // [WO 20261002-allmenu §5] 명시 대상(메인 교체)은 "구역 먼저 선택" 가드를 건너뛴다 — 메인은 구역이 아니다.
+      const _target = this._drawingTarget || null;
+      this._drawingTarget = null;
+      const _isMainTarget = !!(_target && _target.kind === "main");
+      if (!_isMainTarget && typeof Projects !== "undefined" && Projects.currentProject) {
         const decks = Projects.decks || [];
         if (decks.length > 0 && !Projects.currentDeck) {
           if (decks.length === 1) { Projects.currentDeck = decks[0]; if (Projects._renderDecks) Projects._renderDecks(); }
@@ -2094,6 +2098,20 @@
           }
         }
       }
+      // [WO 20261002-allmenu §5] 🔴 등록 계획(SoT = _drawingPlan) — State.reset() **전에** 정한다.
+      //   근본원인: 종전 _afterDrawingLoaded 는 "구역에 도면이 있으면 그 배포본을 PATCH(교체)" 한 가지 규칙이라,
+      //   메인을 잘라 쓰는 창(crop) 구역에서 도면을 올리면 **메인 배포본이 덮어써졌다**(메인 PDF 교체).
+      //   메인은 원본 노드 ⋯ [메인 도면 교체](소유자·super)로만 바뀐다 — 그 외 경로에서 메인이 대상이면 막는다.
+      let _plan = null;
+      if (typeof Projects !== "undefined" && Projects.currentProject) {
+        _plan = this._drawingPlan(_isMainTarget ? null : (Projects.currentDeck || null), _target);
+        if (_plan.blocked) { Prompt && Prompt.toast && Prompt.toast(_plan.blocked, 5200); return; }
+        // 같은 배포본을 갈아끼우는 교체면 지금 열린 핀·영역을 그대로 이어받는다(State.reset 이 비우기 전에 보관).
+        if (_plan.mode === "replace" && _plan.depId && String(_plan.depId) === String(State.currentDeploymentId || "")) {
+          _plan.keep = { pins: State.pins, zones: State.zones, pinTombstones: State.pinTombstones, pinBaseIds: State.pinBaseIds, depVersion: State.depVersion };
+        }
+      }
+      this._regPlan = _plan;
       const _isPdf = file.type === "application/pdf" || (file.name || "").toLowerCase().endsWith(".pdf");
       if (typeof Log !== "undefined") Log.push(_isPdf ? "pdf.register" : "drawing.upload", file.name, { type: file.type, size: file.size });
       this._releasePdfDocs();
@@ -4276,21 +4294,30 @@
         //    "도면 등록만으로 구역이 생기는" 상태를 만들었다(마스터가 두 번 지적한 바로 그 지점).
         //    이제 **이미 존재하는** 구역만 컨텍스트로 채택한다. 0개면 deck = null 로 두고,
         //    첫 영역 지정 시 Projects.createDeckFromLoadedDrawing() 이 배포본+구역+crop 을 묶어 만든다.
+        // [WO 20261002-allmenu §5] _loadDrawing 이 State.reset() 전에 정한 등록 계획(SoT = _drawingPlan).
+        const plan = this._regPlan || null;
+        this._regPlan = null;
+        const isMain = !!(plan && plan.kind === "main");
         let deck = null;
-        if (typeof Projects !== "undefined" && Projects.currentProject) {
+        if (!isMain && typeof Projects !== "undefined" && Projects.currentProject) {
           deck = Projects.currentDeck || (Projects.decks && Projects.decks[0]) || null;
           if (deck && Projects.currentDeck !== deck) Projects.currentDeck = deck;
         }
-        // 2) 도면 교체 지원: 구역에 기존 도면이 있으면 그 배포본을 덮어써서 교체(고아 방지),
-        //    없으면 새 배포본 생성. (구역당 도면 1개 유지 — 구역을 여러 개 만들면 도면 다수 등록)
+        // 2) 도면 교체 지원: 구역이 **자기 도면**을 가졌으면 그 배포본을 덮어써서 교체(고아 방지),
+        //    메인을 잘라 쓰던(창·공유) 구역은 새 배포본을 만들어 이 구역에만 연결(separate — 메인 불변),
+        //    도면이 없으면 새 배포본 생성 후 연결. 메인 교체는 명시 대상(plan.kind==="main")일 때만.
         // [마스터: 자동저장 OFF] 도면 업로드해도 서버 즉시저장 안 함 → 로컬 보존 + dirty.
         //   실제 서버 생성/교체·구역연결은 '저장' 버튼(_saveNow)에서 수행.
-        const isReplace = !!(deck && deck.deployment_id);
+        const deckPlan = (plan && plan.kind === "deck" && deck && plan.deck && String(plan.deck.id) === String(deck.id)) ? plan : null;
+        const isReplace = isMain || (deckPlan ? deckPlan.mode === "replace" : !!(deck && deck.deployment_id));
         if (isReplace) {
-          State.autoSaveDepId = deck.deployment_id;     // 저장 시 이 배포본을 PATCH(교체)
+          State.autoSaveDepId = isMain ? plan.depId : deck.deployment_id;     // 저장 시 이 배포본을 PATCH(교체)
+          if (isMain) State.currentDeploymentId = plan.depId;
+          this._restoreKeptState(plan && plan.keep);
         } else {
           State.autoSaveDepId = null;
-          if (deck) this._pendingDeckLink = { deckId: deck.id, deck };  // 저장 시 생성+연결
+          // separate: 저장 시 새 배포본 생성 + 이 구역 연결(crop·원본상자 해제 — 더 이상 메인을 잘라 쓰지 않는다)
+          if (deck) this._pendingDeckLink = { deckId: deck.id, deck, detach: !!(deckPlan && deckPlan.mode === "separate") };
         }
         await this._saveDraftLocal(await this._snapshotPages());   // 도면 즉시 로컬 보존(소실 방지) — 원본 PDF 도 함께(_draftSrcFields)
         this._pruneDraftSources();                                 // 이전 도면의 원본 중 더는 안 쓰는 것 정리(비차단)
@@ -4298,8 +4325,10 @@
         //   #side-tree 의 빈 상태 안내가 "도면 없음" → "도면 있음 + 구역 0" 분기로 갈아타는 지점이다.
         //   (여기서 건너뛰면 도면을 올렸는데 사이드바가 옛 안내에 머물러 다음 행동을 알 수 없다)
         try { if (typeof Projects !== "undefined" && Projects._renderDecks) Projects._renderDecks(); } catch (e) {}
-        if (deck) {
-          Prompt.toast && Prompt.toast((isReplace ? "도면 교체됨" : "도면 등록됨") + " — '저장' 버튼을 눌러 반영하세요 (구역: " + deck.name + ")");
+        if (isMain) {
+          Prompt.toast && Prompt.toast("메인 도면 교체됨 — '저장' 버튼을 눌러 반영하세요(기존 포인트·영역은 좌표 그대로 유지)", 5200);
+        } else if (deck) {
+          Prompt.toast && Prompt.toast((isReplace ? "도면 교체됨" : (deckPlan && deckPlan.mode === "separate" ? "구역 전용 도면 등록됨(메인 도면은 그대로)" : "도면 등록됨")) + " — '저장' 버튼을 눌러 반영하세요 (구역: " + deck.name + ")");
         } else {
           // 🔴 [WO 20260928 · 라이브 실측] 375×812 에서 #side-tree 는 바텀시트 안(y≈1045px = 화면 밖)이라
           //   안내를 그려도 사용자는 보지 못한다("도면만 올라가고 다음 행동을 모르는" 상태 = 빈 화면과 동급).
@@ -4308,6 +4337,82 @@
           Prompt.toast && Prompt.toast("도면이 등록됐습니다 — 도면에서 영역을 드래그하면 그 부분이 '구역'이 됩니다", 5200);
         }
       } catch (e) { /* 비치명적 */ }
+    },
+
+    /* ── [WO 20261002-allmenu §5] 도면 등록 대상 — "프로젝트 메인 PDF 는 하나, 구역별로 따로 등록 가능" ──
+       🔴 SoT: 어떤 배포본을 PATCH(교체)할지 / 새로 만들지 / 막을지는 _drawingPlan 한 곳에서만 정한다.
+       버튼·트리 ⋯·전체 기능 메뉴·드래그앤드롭 등 모든 진입이 _loadDrawing 으로 모이고 거기서 이 함수를 부른다. */
+    /** 프로젝트 메인(원본) 배포본 id — Projects.pickOriginalDeck(기존 SoT) 그대로. 없으면 null(지어내지 않음). */
+    _mainDepId() {
+      if (typeof Projects === "undefined" || !Projects.pickOriginalDeck) return null;
+      const pick = Projects.pickOriginalDeck(Projects.decks || [], Projects.currentProject);
+      return (pick && pick.deployment_id) || null;
+    },
+    /** 구역이 "자기 도면"을 가졌나 — 창(crop) 아님 · 메인 아님 · 다른 구역과 배포본 공유 안 함. */
+    _deckOwnsDrawing(deck) {
+      // 판정 SoT = UI.deckSourceOf(트리 출처 꼬리표와 같은 규칙 — 두 벌 금지)
+      return UI.deckSourceOf(deck, this._mainDepId(), (typeof Projects !== "undefined" && Projects.decks) || []).kind === "own";
+    },
+    /** @returns {{kind:"main"|"deck"|"none", mode:"replace"|"separate"|"link"|"new", depId?:string, deck?:object, blocked?:string}} */
+    _drawingPlan(deck, target) {
+      if (target && target.kind === "main") return { kind: "main", mode: "replace", depId: target.depId };
+      if (!deck) return { kind: "none", mode: "new" };
+      if (!deck.deployment_id) return { kind: "deck", mode: "link", deck };
+      const main = this._mainDepId();
+      const isCrop = !!(deck.crop && deck.crop.w > 0 && deck.crop.h > 0);
+      if (!isCrop && main && String(main) === String(deck.deployment_id)) {
+        return { blocked: "메인 도면은 트리의 원본 ⋯ → [메인 도면 교체]에서만 바꿀 수 있습니다(소유자·관리자). 구역 도면은 그 구역 ⋯ → [도면 등록/교체]로 올리세요." };
+      }
+      if (this._deckOwnsDrawing(deck)) return { kind: "deck", mode: "replace", deck, depId: deck.deployment_id };
+      return { kind: "deck", mode: "separate", deck };
+    },
+    /** 교체 시 이어받은 핀·영역 복원(State.reset 이 비운 것을 되돌린다 — 새 상태 0, 같은 필드 그대로). */
+    _restoreKeptState(keep) {
+      if (!keep) return;
+      State.pins = keep.pins || []; State.zones = keep.zones || [];
+      State.pinTombstones = keep.pinTombstones || {}; State.pinBaseIds = keep.pinBaseIds || null;
+      if (keep.depVersion != null) State.depVersion = keep.depVersion;
+      try { UI.renderPinsOnMap(); UI.renderPinList(); if (typeof Zones !== "undefined" && Zones.render) Zones.render(); } catch (e) {}
+    },
+    /** 트리 ⋯ · 전체 기능 메뉴의 [도면 등록/교체]·[메인 도면 교체] 유일 진입점.
+     *  target = {kind:"deck", deck} | {kind:"main"}. 기존 _pickDrawingFile → _loadDrawing → _afterDrawingLoaded → 저장(_createInitialSave
+     *  /_patchDeployment) 경로를 그대로 쓴다(새 업로드 경로 0). 확인창 = Prompt.confirm(네이티브 confirm 금지, p76). */
+    async registerDrawingFor(target) {
+      if (!target) return false;
+      const toast = (m, ms) => { try { Prompt.toast && Prompt.toast(m, ms); } catch (e) {} };
+      if (State.mode !== "designer" || (typeof Auth !== "undefined" && (!Auth.isDesigner || Auth.readonly))) { toast("디자이너(편집) 전용 — 편집 화면에서 사용하세요"); return false; }
+      if (typeof Projects === "undefined" || !Projects.currentProject) { toast("프로젝트를 먼저 여세요"); return false; }
+      if (target.kind === "main") {
+        const proj = Projects.currentProject;
+        if (!(proj.can_manage_members || (typeof Auth !== "undefined" && Auth.isSuper))) { toast("소유자·관리자 전용 — 메인 도면 교체는 프로젝트 소유자·슈퍼관리자만 할 수 있습니다"); return false; }
+        const depId = this._mainDepId();
+        if (!depId) { toast("메인(원본) 도면이 아직 없습니다 — 먼저 도면을 등록하거나 원본을 지정하세요"); return false; }
+        const go = await Prompt.confirm("메인 도면 교체",
+          "프로젝트 메인 PDF 를 새 파일로 바꿉니다.\n· 기존 포인트·영역은 좌표(%) 그대로 남아 새 도면과 어긋날 수 있습니다.\n· 메인을 잘라 쓰는 구역(창 방식)도 새 도면 기준으로 보입니다.\n· 따로 등록한 구역 도면은 바뀌지 않습니다.\n계속할까요?");
+        if (!go) return false;
+        const file = await this._pickDrawingFile();
+        if (!file) return false;
+        if (String(State.currentDeploymentId || "") !== String(depId) && Projects.openOriginal) await Projects.openOriginal();
+        this._drawingTarget = { kind: "main", depId };
+        await this._loadDrawing(file);
+        return true;
+      }
+      const deck = target.deck;
+      if (!deck) return false;
+      const plan = this._drawingPlan(deck, null);
+      if (plan.blocked) { toast(plan.blocked, 5200); return false; }
+      const nm = deck.name || "(이름 없음)";
+      const msg = plan.mode === "separate"
+        ? "‘" + nm + "’ 에 이 구역만의 도면(PDF·이미지)을 따로 올립니다.\n· 메인 PDF 는 바뀌지 않습니다.\n· 이 구역은 더 이상 메인 도면을 잘라 쓰지 않습니다(메인 위 윤곽도 사라집니다).\n· 이 구역에서 보이던 기존 포인트는 메인 도면에 그대로 남습니다.\n계속할까요?"
+        : plan.mode === "replace"
+          ? "‘" + nm + "’ 구역의 도면을 새 파일로 바꿉니다.\n· 메인 PDF 는 바뀌지 않습니다.\n· 기존 포인트는 좌표(%) 그대로 유지됩니다.\n계속할까요?"
+          : null;
+      if (msg && !(await Prompt.confirm(plan.mode === "separate" ? "구역 도면 별도 등록" : "구역 도면 교체", msg))) return false;
+      const file = await this._pickDrawingFile();
+      if (!file) return false;
+      if (!Projects.currentDeck || String(Projects.currentDeck.id) !== String(deck.id)) { if (Projects.selectDeck) await Projects.selectDeck(deck); }
+      await this._loadDrawing(file);
+      return true;
     },
 
     /** [WO 20260928] 모바일 사이드 시트(트리)를 연다.
@@ -4382,13 +4487,13 @@
         });
       });
     },
-    async _linkDeckDeployment(deckId, depId, deckObj) {
+    async _linkDeckDeployment(deckId, depId, deckObj, extra) {
       if (!deckId || !depId) return false;
-      const body = {
+      const body = Object.assign({
         name: (deckObj && deckObj.name) || undefined,
         level_no: (deckObj && deckObj.level_no) || null,
         deployment_id: depId
-      };
+      }, extra || {});   // [WO 20261002-allmenu §5] separate 등록: crop/page/src_* 해제를 같은 PUT 에 싣는다(재시도 큐에도 그대로)
       // 1) 재시도 큐에 먼저 기록(localStorage) — 즉시 성공해도 무해(성공 시 제거)
       this._enqueueDeckLink(deckId, depId, body);
       try {
@@ -5183,8 +5288,15 @@
           // 도면 업로드로 대기 중이던 구역 연결 마무리
           if (this._pendingDeckLink) {
             const p = this._pendingDeckLink; this._pendingDeckLink = null;
-            if (p.deck) { p.deck.deployment_id = State.autoSaveDepId; try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {} }
-            await this._linkDeckDeployment(p.deckId, State.autoSaveDepId, p.deck);
+            // [WO 20261002-allmenu §5] separate(메인을 잘라 쓰던 구역에 별도 도면) — 창(crop)·원본상자를 함께 해제한다.
+            //   서버 PUT 은 미전송 필드를 유지하므로 명시적으로 null 을 보낸다(src_* 는 셋 묶음 — parseDeckSrcBox).
+            const detach = p.detach ? { page: null, crop: null, src_dep_id: null, src_page: null, src_crop: null } : null;
+            if (p.deck) {
+              p.deck.deployment_id = State.autoSaveDepId;
+              if (detach) Object.assign(p.deck, detach);
+              try { Projects._renderDecks && Projects._renderDecks(); } catch (e) {}
+            }
+            await this._linkDeckDeployment(p.deckId, State.autoSaveDepId, p.deck, detach);
           } else if (typeof Projects !== "undefined" && Projects.currentDeck && !Projects.currentDeck.deployment_id && State.autoSaveDepId) {
             // [견고화] _pendingDeckLink 가 소실(새로고침 등)됐어도 현재 구역에 새 도면을 자동 연결
             //   → "도면을 등록·저장했는데 구역에 안 붙어 도면없음으로 보이는" 회귀 방지

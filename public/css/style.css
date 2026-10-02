@@ -5741,3 +5741,46 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
   .mdock-chip.mdock-align { min-height: 44px; }
   .mdock-chip.mdock-align .checker-align-label { font-size: 12px; font-weight: 800; line-height: 1.1; }
 }
+
+/* [WO 20261002-allmenu §5] 트리 ⋯ 메뉴 · 구역 도면 출처 꼬리표 · 허브 카드 원본 줄.
+   🔴 색은 전부 자기 배경을 가진 고정 색쌍(트리 다크 배경·테마 변수 재해석과 무관하게 대비 고정, 831a127 교훈):
+   ⋯ #f3f4f6 on #374151 = 9.6:1 · 잘라옴 #3730a3 on #e0e7ff = 8.0:1 · 별도 등록 #166534 on #dcfce7 = 6.5:1 ·
+   팝오버 본문 #1f2937 on #ffffff = 14.7:1 · 비활성 라벨 #4b5563 on #ffffff = 7.6:1 · 사유 #92400e on #fffbeb = 6.6:1 ·
+   위험 #b91c1c on #ffffff = 6.5:1 · 허브 원본 꼬리표 #ffffff on #1e3a8a = 10.4:1. 터치 타깃 ≥32px. */
+.tree-more {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  min-width: 32px; min-height: 32px; margin-left: auto; border-radius: 8px;
+  background: #374151; color: #f3f4f6; font-size: 16px; font-weight: 800; line-height: 1; cursor: pointer;
+}
+.tree-more:hover, .tree-more:focus-visible { background: #4b5563; outline: 2px solid #93c5fd; outline-offset: 1px; }
+.tree-src-tag {
+  font-size: 9.5px; font-weight: 700; line-height: 1.6; padding: 0 5px; border-radius: 6px; margin-left: 4px;
+  flex: 0 1 auto; min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tree-src-crop { color: #3730a3; background: #e0e7ff; border: 1px solid #4338ca; }
+.tree-src-own { color: #166534; background: #dcfce7; border: 1px solid #15803d; }
+.tree-pop {
+  position: fixed; z-index: 520; width: 280px; max-width: calc(100vw - 16px);
+  background: #ffffff; color: #1f2937; border: 1px solid #d1d5db; border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.28); padding: 6px; font-family: var(--font-ui);
+}
+.tree-pop-title { font-size: 12px; font-weight: 800; color: #1f2937; padding: 6px 8px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-pop-info { font-size: 11.5px; color: #374151; background: #f3f4f6; border-radius: 6px; padding: 6px 8px; margin: 2px 0 4px; }
+.tree-pop-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  min-height: 40px; padding: 7px 10px; border: none; border-radius: 8px; background: #ffffff;
+  color: #1f2937; font: inherit; font-size: 13px; font-weight: 700; text-align: left; cursor: pointer;
+}
+.tree-pop-item:hover, .tree-pop-item:focus-visible { background: #eef2ff; outline: none; }
+.tree-pop-item.danger { color: #b91c1c; }
+.tree-pop-item.is-disabled { color: #4b5563; cursor: not-allowed; }
+.tree-pop-item.is-disabled:hover { background: #ffffff; }
+.tree-pop-desc { font-size: 11px; font-weight: 500; color: #4b5563; }
+.tree-pop-why { font-size: 11px; font-weight: 600; color: #92400e; background: #fffbeb; border-radius: 4px; padding: 1px 5px; }
+@media (max-width: 760px) {
+  .tree-pop { left: 8px !important; right: 8px; top: auto !important; width: auto;
+    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 8px); max-height: 60vh; overflow: auto; }
+}
+.hub-tree-origin { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 3px 6px; margin: 0 0 2px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-weight: 700; }
+.hub-tree-origin:hover, .hub-tree-origin:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: none; }
+.hub-tree-origin-tag { font-size: 10px; font-weight: 800; color: #ffffff; background: #1e3a8a; border-radius: 5px; padding: 1px 6px; }
