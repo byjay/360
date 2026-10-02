@@ -84,6 +84,27 @@ function isApi(url) {
 //   확인: 32_Offline.js는 /tables/pano_images/* 를 fetch하고, isApi()는 '/tables/'로 시작하는
 //   경로를 가로채지 않는다(위 isApi 참조) → 이 요청은 애초에 이 SW를 거쳐 캐시에 들어가지 않는다.
 //   즉 이 미디어 캐시를 아무리 비워도 사용자가 명시적으로 받은 오프라인 데이터는 유실되지 않는다.
+/* [WO 20261002-allmenu §8 ①] 공유 받은 사진 → 이미 떠 있는 창으로 넘기기(순수 판단 + 응답 생성, 테스트 가능).
+   대상 창 = 가장 최근 포커스 창 1개(여러 창이 동시에 같은 캐시를 읽어 중복 인입하지 않게). 공유 POST 로 막
+   만들어지는 창(resultingClientId)은 제외. 창이 없으면 종전처럼 ./?shared=1 로 앱을 연다. */
+const SHARE_HANDOFF_HTML = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+  + '<title>SEASTAR — 사진 보냄</title></head><body style="margin:0;font-family:system-ui,sans-serif;background:#ffffff;color:#1f2937;display:flex;min-height:100vh;align-items:center;justify-content:center">'
+  + '<main style="max-width:360px;padding:24px;text-align:center"><p style="font-size:17px;font-weight:700;margin:0 0 8px">사진을 열려 있는 SEASTAR 창으로 보냈습니다</p>'
+  + '<p style="font-size:14px;margin:0 0 18px;color:#374151">SEASTAR 창에서 "어디에 등록할까요?"를 확인하세요. 이 창은 닫아도 됩니다.</p>'
+  + '<a href="./" style="display:inline-block;min-height:44px;line-height:44px;padding:0 18px;border-radius:10px;background:#1d4ed8;color:#ffffff;font-weight:700;text-decoration:none">SEASTAR 로 돌아가기</a></main>'
+  + '<script>setTimeout(function(){try{window.close()}catch(e){}},400)</script></body></html>';
+async function shareHandoffResponse(e, clientsApi) {
+  let wins = [];
+  try { wins = (await clientsApi.matchAll({ type: 'window', includeUncontrolled: false })) || []; } catch (err) { wins = []; }
+  const rid = e && e.resultingClientId;
+  wins = wins.filter((w) => w && (!rid || w.id !== rid));
+  if (!wins.length) return Response.redirect('./?shared=1', 303);
+  const target = wins.find((w) => w.focused) || wins[0];
+  try { target.postMessage({ type: 'theta-shared', at: Date.now() }); } catch (err) {}
+  try { if (target.focus) await target.focus(); } catch (err) { /* 포커스 권한 없음 — 안내 페이지가 대신 알린다 */ }
+  return new Response(SHARE_HANDOFF_HTML, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
 const MEDIA_CACHE = 'wm-media-v1';
 const MEDIA_CACHE_MAX_ENTRIES = 60;             // 근거: 360사진 평균 3~5MB 기준 최대 ~300MB 유지
 const MEDIA_CACHE_MAX_ENTRIES_LOW_STORAGE = 20; // 기기 저장공간 여유가 적을 때 더 공격적으로 축소
@@ -147,7 +168,12 @@ self.addEventListener('fetch', (e) => {
         await cache.put(new Request('/__shared__/index'),
           new Response(JSON.stringify({ ids, names, at: Date.now() }), { headers: { 'Content-Type': 'application/json' } }));
       } catch (err) { /* 무시 — 빈 손으로라도 앱은 열어줌 */ }
-      return Response.redirect('./?shared=1', 303);
+      // [WO 20261002-allmenu §8 ①] 🔴 이미 떠 있는 SEASTAR 창이 있으면 그 창에 postMessage 로 넘기고(작업 맥락 유지 —
+      //   열린 도면·모드), 새 창은 앱을 다시 띄우지 않고 안내 페이지만 보인다. 창이 없을 때만 종전처럼 ?shared=1 로 연다.
+      //   플랫폼 제약(정직 기록): 단일 창만 쓰는 모바일은 공유 POST 가 기존 창을 그대로 이동시킬 수 있다(launch_handler
+      //   client_mode "auto" 설명 — developer.chrome.com/docs/web-platform/launch-handler). 그 경우에도 사진은 위 캐시 →
+      //   클라 트레이(IndexedDB)로 옮겨지므로 유실 0, 다만 열린 도면 맥락은 다시 열어야 한다.
+      return shareHandoffResponse(e, self.clients);
     })());
     return;
   }

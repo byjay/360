@@ -991,12 +991,21 @@
     async _onAutoFilesChosen(files) {
       const pin = this._pendingAutoPin;
       this._pendingAutoPin = null;
-      const IMG_RE = /\.(jpe?g|png|webp)$/i;
-      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
-      if (!imgFiles.length) {
+      const sorted = await this.buildAutoRows(files);
+      if (!sorted.length) {
         if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지 파일을 찾을 수 없습니다");
         return;
       }
+      if (pin) await this._autoPickAndConnect(pin, sorted);
+    },
+
+    /** [WO 20261002-allmenu §8] 🔴 SoT — "최근 360 사진 추천" 의 행 만들기(EXIF 촬영시각 → THETA 파일명 → mtime 정렬 +
+     *  360 판정)를 한 곳으로 뽑았다. 자동연결(_onAutoFilesChosen)과 THETA 공유/복귀 흐름(ThetaIntake)이 같은 함수를 쓴다.
+     *  @returns {Promise<Array>} 시각 오름차순 행(_sortRows 정본). 최신 = recentFirst360(rows)[0]. */
+    async buildAutoRows(files) {
+      const IMG_RE = /\.(jpe?g|png|webp)$/i;
+      const imgFiles = (files || []).filter((f) => IMG_RE.test(f.name));
+      if (!imgFiles.length) return [];
       const rows = [];
       for (const f of imgFiles) {
         let exif = null;
@@ -1011,7 +1020,13 @@
         if (typeof App === "undefined" || !App._detect360) { resolve(); return; }
         App._detect360(r.file, (is360, w, h) => { r.is360 = is360; r.w = w; r.h = h; resolve(); });
       })));
-      if (pin) await this._autoPickAndConnect(pin, sorted);
+      return sorted;
+    },
+
+    /** 360 판정 행만, 촬영시각 최신순(_autoPickAndConnect 의 "최신 = sortKey 최댓값" 규칙과 동일). */
+    recentFirst360(rows) {
+      const key = (r) => (Number.isFinite(r.sortKey) ? r.sortKey : -Infinity);
+      return (rows || []).filter((r) => r && !r.excluded && r.is360 === true).slice().sort((a, b) => key(b) - key(a));
     },
 
     /** 핀이 이미 가진 사진의 원본 파일명 집합(pin.origName, _uploadOneRow 가 등록 시 남김) —

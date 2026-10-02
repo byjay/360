@@ -9,10 +9,24 @@
      · 통합: 위치 탭은 기존 배치 흐름(App._handlePlaceClick) 재사용. 인입 사진은
        State.intakeFile 로 주입 → 파일 선택 없이 _acceptPinMediaFile 로 360 핀 자동 등록.
   ══════════════════════════════════════════════════════════════ */
+  /* [WO 20261002-allmenu §7] 🔴 RICOH THETA 앱 진입 URL — SoT(이 한 곳). 지휘자 실측 출처:
+     Android 패키지 com.theta360(Play), iOS App Store id1023254741. iOS 공식 URL 스킴은 확인되지 않아
+     App Store 링크로 연다(설치돼 있으면 스토어에 [열기]가 뜬다) — 스킴을 추측해 쓰지 않는다. */
+  const THETA_APP = Object.freeze({
+    PACKAGE: "com.theta360",
+    PLAY_URL: "https://play.google.com/store/apps/details?id=com.theta360",
+    APPSTORE_URL: "https://apps.apple.com/app/ricoh-theta/id1023254741",
+    WAIT_KEY: "theta_app_wait_v1",
+    WAIT_MS: 10 * 60 * 1000,              // THETA 대기 플래그 유효 10분(WO §8 ②)
+    LABEL: "RICOH THETA 앱 열기",
+    HINT: "THETA 앱에서 촬영 → 돌아와 사진 선택"
+  });
+
   const ThetaIntake = {
     _pending: [],          // [{ id, name, dataURL }]
     _activeId: null,
     _KEY: "theta_intake_v1",
+    APP: THETA_APP,
 
     init() {
       const $ = (id) => document.getElementById(id);
@@ -23,7 +37,286 @@
       this._restore();
       // [마스터: 사진 들어오면 트리거] 공유로 들어온 사진 자동 인입(?shared=1)
       try { if (new URLSearchParams(location.search).get("shared") === "1") this.handleShared(); } catch (e) {}
+      // [WO 20261002-allmenu §8 ①] 이미 떠 있는 창 — SW 가 공유 사진을 캐시에 넣고 postMessage 로 알린다(리로드 없음).
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.addEventListener) {
+          navigator.serviceWorker.addEventListener("message", (e) => { if (e && e.data && e.data.type === "theta-shared") this.handleShared(); });
+        }
+      } catch (e) {}
+      // [WO 20261002-allmenu §7·§8 ②] THETA 앱에서 돌아옴(visible) → 대기 플래그가 유효하면 복귀 시트.
+      try { document.addEventListener("visibilitychange", () => this.onVisibility()); } catch (e) {}
+      this.mountAppButtons();
     },
+
+    /* ── [WO 20261002-allmenu §7] RICOH THETA 앱 바로 열기 ─────────────────────────── */
+    /** 플랫폼 판정(순수) — iOS 규칙은 38_Install.isIOS 와 같다(iPadOS 13+ = MacIntel + 터치). */
+    platformOf(nav) {
+      nav = nav || {};
+      const ua = String(nav.userAgent || "");
+      if (/iPad|iPhone|iPod/.test(ua) || (nav.platform === "MacIntel" && Number(nav.maxTouchPoints || 0) > 1)) return "ios";
+      if (/Android/i.test(ua)) return "android";
+      return "desktop";
+    },
+    /** 플랫폼별 THETA 앱 진입 URL. desktop = null(휴대폰 전용). */
+    appUrl(platform) {
+      if (platform === "android") {
+        return "intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package="
+          + THETA_APP.PACKAGE + ";S.browser_fallback_url=" + encodeURIComponent(THETA_APP.PLAY_URL) + ";end";
+      }
+      if (platform === "ios") return THETA_APP.APPSTORE_URL;
+      return null;
+    },
+    /** 전체 기능 메뉴·도크·사진 시트가 같이 쓰는 비활성 사유(숨김 금지) — "" = 사용 가능. */
+    appDisabledReason(nav) {
+      return this.platformOf(nav || (typeof navigator !== "undefined" ? navigator : {})) === "desktop" ? "휴대폰에서 사용" : "";
+    },
+    /** 앱 열기 — 대기 플래그(시각·대상 핀)를 켠 뒤 이동. 돌아오면 onVisibility 가 복귀 시트를 띄운다. */
+    openApp(opts) {
+      const nav = (typeof navigator !== "undefined") ? navigator : {};
+      const url = this.appUrl(this.platformOf(nav));
+      if (!url) { this._toast("휴대폰에서 사용 — RICOH THETA 앱은 휴대폰에서 열 수 있습니다"); return false; }
+      this._armWait(opts && opts.pinId != null ? opts.pinId : null);
+      this._go(url);
+      return true;
+    },
+    _go(url) { try { window.location.href = url; } catch (e) {} },
+    _armWait(pinId) {
+      try { localStorage.setItem(THETA_APP.WAIT_KEY, JSON.stringify({ at: Date.now(), pinId: pinId == null ? null : pinId })); } catch (e) {}
+    },
+    /** 대기 플래그를 꺼내며 항상 지운다(1회성). 10분 지났으면 null. */
+    _takeWait(now) {
+      let w = null;
+      try { w = JSON.parse(localStorage.getItem(THETA_APP.WAIT_KEY) || "null"); localStorage.removeItem(THETA_APP.WAIT_KEY); } catch (e) { w = null; }
+      if (!w || !Number.isFinite(w.at)) return null;
+      return ((now != null ? now : Date.now()) - w.at) <= THETA_APP.WAIT_MS ? w : null;
+    },
+    onVisibility() {
+      if (typeof document !== "undefined" && document.visibilityState && document.visibilityState !== "visible") return;
+      const w = this._takeWait();
+      if (w) this.showReturnSheet(w);
+    },
+    /** 복귀 시트 — 브라우저 보안상 갤러리를 자동으로 읽을 수 없어 탭 1회로 파일창을 연다.
+     *  핀 시트에서 열었으면(pinId) 기존 "최근 360 추천"(PhotoBatch.autoConnectPin, 828b780)을 그대로 부른다. */
+    showReturnSheet(w) {
+      const pin = (w && w.pinId != null && typeof State !== "undefined") ? (State.pins || []).find((p) => String(p.id) === String(w.pinId)) : null;
+      return this._sheet({
+        id: "theta-return-sheet",
+        title: "THETA에서 찍은 사진 등록",
+        body: pin ? ("포인트 " + (pin.label || "") + " 에 가장 최근 360 사진을 등록합니다.") : "사진을 고르면 가장 최근 360 사진부터 어디에 등록할지 묻습니다.",
+        actions: [
+          { label: "사진 선택", primary: true, run: () => {
+            if (pin && typeof PhotoBatch !== "undefined" && PhotoBatch.autoConnectPin) { PhotoBatch.autoConnectPin(pin); return; }
+            this._pickFiles((files) => this.receive(files, { source: "return" }));
+          } },
+          { label: "닫기", run: () => {} }
+        ]
+      });
+    },
+    _pickFiles(cb) {
+      const inp = document.createElement("input");
+      inp.type = "file"; inp.accept = "image/*"; inp.multiple = true; inp.style.display = "none";
+      inp.addEventListener("change", () => { const f = Array.from(inp.files || []); try { inp.remove(); } catch (e) {} if (f.length) cb(f); });
+      document.body.appendChild(inp);
+      inp.click();
+    },
+    /** 앱 열기 버튼(공유 생성기) — 모바일 도크(360 모드)와 핀 사진 시트(#pap-reg-mobile-hint 아래)에 같은 버튼. */
+    makeAppButton(cls, pinIdFn) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = cls + " theta-app-btn";
+      const why = this.appDisabledReason();
+      b.innerHTML = '<span class="theta-app-label"><span aria-hidden="true">📷</span> ' + THETA_APP.LABEL + '</span><span class="theta-app-hint">' + (why || THETA_APP.HINT) + '</span>';
+      b.title = why ? (THETA_APP.LABEL + " — " + why) : (THETA_APP.LABEL + " — " + THETA_APP.HINT);
+      if (why) b.setAttribute("aria-disabled", "true");
+      b.addEventListener("click", (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (why) { this._toast(why); return; }
+        this.openApp({ pinId: pinIdFn ? pinIdFn() : null });
+      });
+      return b;
+    },
+    mountAppButtons() {
+      const bar = document.querySelector ? document.querySelector("#mobile-dock .mdock-bar") : null;
+      if (bar && !document.getElementById("mdock-theta-app")) {
+        const b = this.makeAppButton("mdock-chip mdock-theta", null);
+        b.id = "mdock-theta-app";
+        const more = document.getElementById("mdock-more-toggle");
+        if (more && more.parentNode === bar) bar.insertBefore(b, more); else bar.appendChild(b);
+      }
+      const hint = document.getElementById("pap-reg-mobile-hint");
+      if (hint && hint.parentNode && !document.getElementById("pap-theta-app")) {
+        const b = this.makeAppButton("pap-theta-app", () => (typeof PinActionPop !== "undefined" ? PinActionPop._pinId : null));
+        b.id = "pap-theta-app";
+        hint.parentNode.insertBefore(b, hint.nextSibling);
+      }
+      this.syncAppButtons();
+    },
+    /** 360 모드(디자이너)에서 도크에 표시 — 렌더 지점 SoT = App._syncRegModeButtons 가 모드 전환마다 부른다. */
+    syncAppButtons() {
+      const d = document.getElementById("mdock-theta-app");
+      const on = typeof State !== "undefined" && State.mode === "designer" && State.regMode === "photo";
+      if (d && d.classList) d.classList.toggle("hidden", !on);
+    },
+
+    /* ── [WO 20261002-allmenu §8] THETA → SEASTAR: "어디에 등록?" → 포인트 탭 → 등록 ───────────
+       🔴 "두 앱이 다 실행 중일 때만" — 자동 흐름은 isLive()(편집 화면 + 프로젝트 + 열린 도면)일 때만 시작한다.
+       아니면 사진을 받은 사진 트레이(_pending, IndexedDB 영속)에 보관하고 안내만 한다(조용히 버리지 않는다).
+       받은 사진은 흐름 시작 전 항상 먼저 트레이에 영속한다 — 창이 바뀌거나 닫혀도 유실 0. */
+    isLive() {
+      if (typeof State === "undefined" || State.mode !== "designer" || !State.fileType) return false;
+      return !!(typeof Projects !== "undefined" && Projects.currentProject);
+    },
+    async receive(files, opts) {
+      const ids = await this.importFiles(files, { lenient: true, silent: true });
+      if (!ids.length) { this._toast("받은 사진 중 360 사진이 없습니다"); return { started: false, stored: 0 }; }
+      if (!this.isLive()) {
+        this.showTray();
+        this._toast("받은 360 사진 " + ids.length + "장을 보관했습니다 — 도면을 연 뒤 [받은 사진 등록]으로 등록하세요", 5200);
+        return { started: false, stored: ids.length };
+      }
+      this.hideTray();
+      await this.startFlow(ids);
+      return { started: true, stored: ids.length };
+    },
+    /** 보관된(트레이) 사진으로 흐름 시작 — 전체 기능 메뉴 [받은 사진 등록] 의 진입점. */
+    async startFromPending() {
+      if (!this._pending.length) { this._toast("받은 사진이 없습니다"); return false; }
+      if (!this.isLive()) { this._toast("도면을 먼저 연 뒤 등록하세요(편집 화면)"); this.showTray(); return false; }
+      await this.startFlow(this._pending.map((p) => p.id));
+      return true;
+    },
+    /** ids(트레이 항목) → 촬영시각 최신순(PhotoBatch.buildAutoRows/recentFirst360 정본)으로 한 장씩. */
+    async startFlow(ids) {
+      const items = ids.map((id) => this._pending.find((p) => p.id === id)).filter(Boolean);
+      const files = items.map((it) => { const f = this._dataURLtoFile(it.dataURL, it.name); if (f) f._tiId = it.id; return f; }).filter(Boolean);
+      let rows = (typeof PhotoBatch !== "undefined" && PhotoBatch.buildAutoRows) ? await PhotoBatch.buildAutoRows(files) : files.map((f) => ({ file: f, name: f.name, is360: true }));
+      rows.forEach((r) => { r.tiId = r.file && r.file._tiId; if (r.is360 == null) r.is360 = true; });
+      rows = (typeof PhotoBatch !== "undefined" && PhotoBatch.recentFirst360) ? PhotoBatch.recentFirst360(rows) : rows;
+      this._flow = { queue: rows, total: rows.length };
+      return this._flowNext();
+    },
+    _flowNext() {
+      const fl = this._flow;
+      if (!fl || !fl.queue.length) { this._flow = null; this._endTap(); this.renderTray(); if (this._pending.length) this.showTray(); return null; }
+      const row = fl.queue[0];
+      return this.showWhereSheet(row, fl.queue.length);
+    },
+    cancelFlow() {
+      this._flow = null; this._endTap(); this._closeSheet();
+      this.renderTray(); if (this._pending.length) this.showTray();
+      this._toast("등록을 취소했습니다 — 받은 사진은 트레이에 남아 있습니다");
+    },
+    showWhereSheet(row, remaining) {
+      const deck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
+      const here = deck ? (deck.name || "(이름 없음)") : "지금 열린 도면";
+      const when = row.timeLabel ? row.timeLabel : (row.exif && row.exif.date ? String(row.exif.date) : "촬영시각 정보 없음");
+      return this._sheet({
+        id: "theta-where-sheet",
+        title: "어디에 등록할까요?" + (remaining > 1 ? " (남은 " + remaining + "장)" : ""),
+        thumb: row.file,
+        body: row.name + " · " + when,
+        actions: [
+          { label: "현재 구역·영역에 등록 — " + here, primary: true, run: () => this._awaitTap(row) },
+          { label: "다른 구역 선택", run: () => this._pickDeck(row) },
+          { label: "취소", run: () => this.cancelFlow() }
+        ]
+      });
+    },
+    _pickDeck(row) {
+      const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
+      const acts = decks.map((d) => ({ label: (d.parent_id ? "영역 · " : "구역 · ") + (d.name || "(이름 없음)"), run: async () => {
+        if (Projects.selectDeck) await Projects.selectDeck(d);
+        this._awaitTap(row);
+      } }));
+      acts.push({ label: "뒤로", run: () => this.showWhereSheet(row, (this._flow && this._flow.queue.length) || 1) });
+      return this._sheet({ id: "theta-where-sheet", title: "등록할 구역·영역", body: decks.length ? "" : "구역이 없습니다 — 지금 열린 도면에 등록하세요", actions: acts });
+    },
+    /** "등록할 포인트를 탭하세요" — 지도 클릭 1회를 캡처 단계에서 가로챈다(UI._startAlign 과 같은 방식, 기존 클릭 처리 무간섭).
+     *  기존 핀 탭 = 그 핀에 등록(이미 사진 있으면 이력 적립 — PhotoNaming.pushHistory 경로) · 빈 곳 = 360 핀 생성 후 등록. */
+    _awaitTap(row) {
+      this._closeSheet();
+      this._endTap();
+      if (typeof State !== "undefined" && State.regMode !== "photo" && typeof App !== "undefined" && App._setRegMode) App._setRegMode("photo");
+      const vp = document.getElementById("map-viewport");
+      if (!vp) { this._toast("도면이 열려 있지 않습니다"); return; }
+      const banner = document.createElement("div");
+      banner.id = "theta-tap-banner";
+      banner.className = "theta-tap-banner";
+      banner.setAttribute("role", "status");
+      banner.innerHTML = '<span class="theta-tap-text">등록할 포인트를 탭하세요 — 기존 포인트 = 사진 이력에 추가 · 빈 곳 = 새 360 포인트</span>';
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "theta-tap-cancel"; cancel.textContent = "취소";
+      cancel.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.cancelFlow(); });
+      banner.appendChild(cancel);
+      document.body.appendChild(banner);
+      const onClick = (e) => {
+        if (e.stopPropagation) e.stopPropagation();
+        if (e.preventDefault) e.preventDefault();
+        const hit = e.target && e.target.closest ? e.target.closest("[data-id]") : null;
+        let pin = hit ? (State.pins || []).find((p) => String(p.id) === String(hit.dataset ? hit.dataset.id : hit.getAttribute("data-id"))) : null;
+        if (!pin) {
+          const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent) ? MapCtrl.viewportToPercent(e.clientX, e.clientY) : null;
+          if (!pct) return;
+          pin = (typeof App !== "undefined" && App._placeCheckboardPin) ? App._placeCheckboardPin(pct) : null;
+          if (!pin) return;   // 대역 가득 등 — App 이 이미 알렸다
+        }
+        this._endTap();
+        this._register(pin, row);
+      };
+      vp.addEventListener("click", onClick, true);
+      this._tap = { vp, onClick, banner };
+    },
+    _endTap() {
+      const t = this._tap;
+      if (!t) return;
+      this._tap = null;
+      try { t.vp.removeEventListener("click", t.onClick, true); } catch (e) {}
+      if (t.banner && t.banner.parentNode) t.banner.parentNode.removeChild(t.banner);
+    },
+    /** 등록 = PhotoBatch._uploadOneRow(정본: 온라인 업로드 / 오프라인 SyncQueue · 덮어쓰기 전 이력 적립). */
+    async _register(pin, row) {
+      if (typeof PhotoBatch === "undefined" || !PhotoBatch._uploadOneRow) { this._toast("사진 등록 모듈이 없습니다"); return null; }
+      const used = PhotoBatch._usedPhotoNames ? PhotoBatch._usedPhotoNames() : new Set();
+      const r = await PhotoBatch._uploadOneRow(pin, row, true, used, "THETA");
+      if (r.status === "done") {
+        if (row.tiId) { this._pending = this._pending.filter((p) => p.id !== row.tiId); await this._persist(); }
+        try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
+        try { if (PhotoBatch._markUnsaved) PhotoBatch._markUnsaved(); } catch (e) {}
+        this._toast("포인트 " + (pin.label || "") + " ← " + row.name + " 등록" + (r.offline ? " (오프라인 저장됨 — 연결되면 동기화)" : ""));
+      } else {
+        this._toast("등록 실패: " + (r.reason || "알 수 없음") + " — 사진은 트레이에 남아 있습니다");
+      }
+      if (this._flow) this._flow.queue.shift();
+      this._flowNext();
+      return r;
+    },
+    /** 하단 시트(공유 생성기) — 버튼 ≥40px, 고정 색쌍(CSS .theta-sheet*). */
+    _sheet(spec) {
+      this._closeSheet();
+      const s = document.createElement("div");
+      s.id = spec.id;
+      s.className = "theta-sheet";
+      s.setAttribute("role", "dialog");
+      s.setAttribute("aria-label", spec.title);
+      const h = document.createElement("div"); h.className = "theta-sheet-title"; h.textContent = spec.title; s.appendChild(h);
+      if (spec.thumb) {
+        try { const im = document.createElement("img"); im.className = "theta-sheet-thumb"; im.alt = ""; im.src = URL.createObjectURL(spec.thumb); s.appendChild(im); } catch (e) {}
+      }
+      if (spec.body) { const p = document.createElement("div"); p.className = "theta-sheet-body"; p.textContent = spec.body; s.appendChild(p); }
+      (spec.actions || []).forEach((a) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "theta-sheet-btn" + (a.primary ? " primary" : "");
+        b.textContent = a.label;
+        b.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); this._closeSheet(); a.run && a.run(); });
+        s.appendChild(b);
+      });
+      document.body.appendChild(s);
+      this._sheetEl = s;
+      return s;
+    },
+    _closeSheet() { const s = this._sheetEl; this._sheetEl = null; if (s && s.parentNode) s.parentNode.removeChild(s); },
+    _toast(m, ms) { try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(m, ms); } catch (e) {} },
 
     /** Web Share Target 으로 들어온 사진을 캐시에서 읽어 자동 인입(트리거). */
     async handleShared() {
@@ -47,7 +340,9 @@
         for (const id of ids) { try { await cache.delete(id); } catch (e) {} }
         try { await cache.delete("/__shared__/index"); } catch (e) {}
         if (files.length) {
-          await this.importFiles(files, { lenient: true });  // 공유=명시적 의도 → R* 아니어도 360이면 인입
+          // 공유=명시적 의도 → R* 아니어도 360이면 인입. [WO 20261002-allmenu §8] 열린 도면이 있으면(isLive)
+          //   "어디에 등록?" 흐름, 아니면 보관 + 안내(receive 가 판정 — 앱 새로 띄운 부팅 직후는 도면이 없어 보관만).
+          await this.receive(files, { source: "share" });
         }
       } catch (e) {}
     },
@@ -92,10 +387,13 @@
       } catch (e) { return null; }
     },
 
+    /** @returns {Promise<string[]>} 이번에 트레이에 들어간 항목 id 들. opts.silent = 트레이 표시·토스트 생략(호출부가 안내). */
     async importFiles(files, opts) {
-      if (!files || !files.length) return;
+      if (!files || !files.length) return [];
       const lenient = !!(opts && opts.lenient);   // 공유로 들어온 경우: R* 아니어도 360이면 인입
+      const silent = !!(opts && opts.silent);
       let accepted = 0, skipped = 0;
+      const ids = [];
       for (const f of files) {
         if (!f.type || !f.type.startsWith("image/")) { skipped++; continue; }
         if (!lenient && !this._isR(f.name)) { skipped++; continue; }     // R* 파일명만 (버튼 인입)
@@ -103,14 +401,19 @@
         if (!ok360) { skipped++; continue; }                 // THETA equirectangular(2:1)만
         try {
           const dataURL = await this._toDataURL(f);
-          this._pending.push({ id: "ti_" + Date.now() + "_" + accepted, name: f.name, dataURL: dataURL });
+          const id = "ti_" + Date.now() + "_" + accepted;
+          this._pending.push({ id, name: f.name, dataURL: dataURL });
+          ids.push(id);
           accepted++;
         } catch (e) { skipped++; }
       }
       await this._persist();
-      this.renderTray(); this.showTray();
+      this.renderTray();
+      if (silent) return ids;
+      this.showTray();
       if (typeof Prompt !== "undefined" && Prompt.toast)
         Prompt.toast("360 인입 " + accepted + "장" + (skipped ? " · 제외 " + skipped + "장(R*/360 아님)" : "") + (accepted ? " — 사진을 눌러 도면에 위치를 지정하세요" : ""));
+      return ids;
     },
 
     renderTray() {

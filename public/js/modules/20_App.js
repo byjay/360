@@ -781,6 +781,8 @@
       if (typeof NumBand !== "undefined" && NumBand.render) { try { NumBand.render(); } catch (e) {} }
       // [WO 20261002-allmenu §2] CHECKER 툴바 [정렬 ↕][정렬 ↔] 표시 — 같은 렌더 지점(모드 전환 SoT)에서 동기화.
       if (UI.syncCheckerAlignTools) { try { UI.syncCheckerAlignTools(); } catch (e) {} }
+      // [WO 20261002-allmenu §7] 360 모드 모바일 도크 [RICOH THETA 앱 열기] — 같은 렌더 지점에서 동기화.
+      if (typeof ThetaIntake !== "undefined" && ThetaIntake.syncAppButtons) { try { ThetaIntake.syncAppButtons(); } catch (e) {} }
     },
 
     _togglePlacing() {
