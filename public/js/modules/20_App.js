@@ -18,6 +18,7 @@
       MapCtrl.init(UI.$("map-viewport"), UI.$("map-transform"));
       PanoViewer.init(UI.$("pano-canvas"));
       AllPins.init();
+      try { if (UI.mountCheckerAlignTools) UI.mountCheckerAlignTools(); } catch (e) {}   // [WO 20261002-allmenu §2] 정렬 상시 노출
       try { State.pinColor = PinPrefs.get(); } catch (e) {}  // 저장된 핀 색상 복원(기본 그린)
       // [버그①수정 2026-08-31] Auth.init()이 async(데모 자동로그인 refresh 포함)로 바뀌어 await 필요 —
       // ProjectHub가 프로젝트 목록을 불러오기 전에 로그인 토큰 세팅이 반드시 끝나 있어야 한다.
@@ -778,6 +779,8 @@
       } catch (e) {}
       // [WO 20261001-startno] 모드 전환·편집 진입 = 상단 [번호 대역] 표시(현재 모드 계열의 다음 번호) 갱신 지점
       if (typeof NumBand !== "undefined" && NumBand.render) { try { NumBand.render(); } catch (e) {} }
+      // [WO 20261002-allmenu §2] CHECKER 툴바 [정렬 ↕][정렬 ↔] 표시 — 같은 렌더 지점(모드 전환 SoT)에서 동기화.
+      if (UI.syncCheckerAlignTools) { try { UI.syncCheckerAlignTools(); } catch (e) {} }
     },
 
     _togglePlacing() {

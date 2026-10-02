@@ -5731,3 +5731,13 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 #map-viewport:has(#crosshair-overlay:not(.hidden)) .deck-outline-label {
   pointer-events: none;
 }
+
+/* [WO 20261002-allmenu §2] CHECKER 툴바 리더선 정렬 [정렬 ↕][정렬 ↔] — 상시 노출(11_UI.mountCheckerAlignTools).
+   데스크톱은 기존 .tb-btn 표면 그대로(#2b2820 on #ffffff~#ece5d7 ≈ 12:1), 모바일 칩은 .mdock-chip 색 그대로. */
+.checker-align-tools { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.checker-align-tools.hidden { display: none !important; }
+.checker-align-btn .checker-align-label { font-size: 12px; font-weight: 700; white-space: nowrap; letter-spacing: .2px; }
+@media (max-width: 760px) {
+  .mdock-chip.mdock-align { min-height: 44px; }
+  .mdock-chip.mdock-align .checker-align-label { font-size: 12px; font-weight: 800; line-height: 1.1; }
+}

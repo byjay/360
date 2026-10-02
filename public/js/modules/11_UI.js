@@ -84,16 +84,22 @@
        권한 판정 = App.canBulkDeletePins()(프로젝트 소유자·super — 서버 can_manage_members). 삭제 = App.deletePins(본인 재인증) → 단건과 같은 _removePins. */
     _pinSel: { on: false, ids: new Set() },
     _pinBulkOk() { return typeof App !== "undefined" && !!App.canBulkDeletePins && App.canBulkDeletePins(); },
+    /** [WO 20261002-allmenu §2] 🔴 [선택] 모드 진입 권한 = 디자이너 이상 누구나(편집 화면 + 쓰기 가능 세션).
+     *  선택은 정렬(리더선)·삭제가 공유하는 도구라, 삭제 권한(_pinBulkOk: 소유자·super)으로 선택 자체를
+     *  막으면 정렬이 소유자 밖에서는 숨어 버린다(R1 근본원인). 삭제 버튼만 _pinBulkOk 로 가른다. */
+    _pinSelOk() {
+      return typeof State !== "undefined" && State.mode === "designer" && !(typeof Auth !== "undefined" && Auth.readonly);
+    },
     /** 렌더 직전 정리 — 권한이 없으면 선택 모드 해제, 이미 사라진 핀 id 는 선택에서 제거 */
     _syncPinSel() {
       const s = this._pinSel;
-      if (!this._pinBulkOk()) { s.on = false; s.ids.clear(); return s; }
+      if (!this._pinSelOk()) { s.on = false; s.ids.clear(); return s; }
       const live = new Set((State.pins || []).map(p => String(p.id)));
       Array.from(s.ids).forEach(k => { if (!live.has(k)) s.ids.delete(k); });
       return s;
     },
     setPinSelectMode(on) {
-      this._pinSel.on = !!on && this._pinBulkOk();
+      this._pinSel.on = !!on && this._pinSelOk();
       this._pinSel.ids.clear();
       this.renderPinList();
     },
@@ -117,17 +123,20 @@
         return b;
       };
       const finish = (n) => { if (n > 0) { s.on = false; s.ids.clear(); this.renderPinList(); } };
-      out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 한꺼번에 삭제(프로젝트 소유자·슈퍼관리자, 본인 확인 필요)"));
+      const canDel = this._pinBulkOk();
+      out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 풍선 정렬(디자이너) 또는 한꺼번에 삭제(프로젝트 소유자·슈퍼관리자, 본인 확인 필요)"));
       if (s.on) {
         const n = s.ids.size;
         const del = mk("선택 삭제 " + n + "개", "danger pin-bulk-del", async () => {
           finish(await App.deletePins(Array.from(s.ids)));
         });
-        del.disabled = n === 0;
+        // [WO 20261002-allmenu §2] 🔴 숨김 금지 — 소유자·super 가 아니면 비활성 + 사유(title/aria).
+        del.disabled = n === 0 || !canDel;
+        if (!canDel) { del.title = "소유자·관리자 전용 — 프로젝트 소유자·슈퍼관리자만 일괄 삭제할 수 있습니다"; del.setAttribute("aria-disabled", "true"); }
         out.push(del);
       }
       const scope = Array.isArray(opts.scopePins) ? opts.scopePins : null;
-      if (scope && scope.length) {
+      if (canDel && scope && scope.length) {
         out.push(mk((opts.scopeLabel || "이 구역") + " 핀 전체 삭제 (" + scope.length + ")", "danger pin-bulk-scope", async () => {
           finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역" }));
         }));
@@ -140,7 +149,62 @@
       return out;
     },
 
-    /** 정렬 대기중 핀 집합(선택 없으면 현재 페이지의 활성 모드 핀 전체), 번호순 정렬. */
+    /* ── [WO 20261002-allmenu §2] 🔴 리더선 정렬 상시 노출 — CHECKER 툴바(데스크톱 #pdf-toolbar ·
+       모바일 도크 .mdock-bar)에 [정렬 ↕][정렬 ↔] 를 항상 둔다. R1 근본원인: 정렬 버튼이 트리 핀 목록의
+       [선택] 모드(소유자·super 전용) 안에서만 생성됐다. 새 정렬 로직 0 — 같은 _startAlign 을 부른다
+       (선택 0 → _alignCandidatePins 가 현재 구역·영역의 CHECKER 핀 전체). 표시 SoT = syncCheckerAlignTools
+       (App._syncRegModeButtons 가 모드 전환마다 부른다). */
+    ALIGN_TOOLS: [
+      { axis: "v", label: "정렬 ↕", title: "리더선 풍선 세로 정렬 — 선택한 포인트(없으면 이 구역·영역의 CHECKER 포인트 전체)를 클릭 위치 기준 등간격으로" },
+      { axis: "h", label: "정렬 ↔", title: "리더선 풍선 가로 정렬 — 선택한 포인트(없으면 이 구역·영역의 CHECKER 포인트 전체)를 클릭 위치 기준 등간격으로" }
+    ],
+    mountCheckerAlignTools() {
+      if (typeof document === "undefined") return;
+      const mkBtn = (t, cls) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = cls + " checker-align-btn";
+        b.dataset.alignAxis = t.axis;
+        b.title = t.title;
+        b.setAttribute("aria-label", t.title);
+        b.innerHTML = '<span class="checker-align-label">' + this.escapeHtml(t.label) + '</span>';
+        b.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); this._startAlign(t.axis); });
+        return b;
+      };
+      const tb = this.$("pdf-toolbar");
+      if (tb && !this.$("checker-align-tools")) {
+        const grp = document.createElement("span");
+        grp.id = "checker-align-tools";
+        grp.className = "checker-align-tools hidden";
+        grp.setAttribute("role", "group");
+        grp.setAttribute("aria-label", "리더선 정렬");
+        const sep = document.createElement("span"); sep.className = "tb-sep";
+        grp.appendChild(sep);
+        this.ALIGN_TOOLS.forEach((t) => grp.appendChild(mkBtn(t, "tb-btn tb-btn-wide")));
+        tb.appendChild(grp);
+      }
+      const bar = document.querySelector ? document.querySelector("#mobile-dock .mdock-bar") : null;
+      if (bar && !this.$("mdock-align-v")) {
+        const more = this.$("mdock-more-toggle");
+        this.ALIGN_TOOLS.forEach((t) => {
+          const b = mkBtn(t, "mdock-chip mdock-align hidden");
+          b.id = "mdock-align-" + t.axis;
+          if (more && more.parentNode === bar) bar.insertBefore(b, more); else bar.appendChild(b);
+        });
+      }
+      this.syncCheckerAlignTools();
+    },
+    /** CHECKER 모드(디자이너 편집 화면)일 때 툴바에 보인다(전체 기능 메뉴에는 모드와 무관하게 항상 있다 —
+     *  다른 모드에서 누르면 CHECKER 로 전환 후 실행). */
+    syncCheckerAlignTools() {
+      const on = typeof State !== "undefined" && State.mode === "designer" && State.regMode === "checkboard";
+      [this.$("checker-align-tools"), this.$("mdock-align-v"), this.$("mdock-align-h")]
+        .forEach((el) => { if (el && el.classList) el.classList.toggle("hidden", !on); });
+    },
+
+    /** 정렬 대기중 핀 집합(선택 없으면 현재 구역·영역·페이지의 활성 모드 핀 전체), 번호순 정렬.
+     *  [WO 20261002-allmenu §2] 창(crop) 구역·영역을 보고 있으면 그 창 안의 핀만 — 같은 도면을 공유하는
+     *  다른 구역의 핀까지 끌려오지 않게 한다(판정 = 지금 보는 deck 의 crop, 페이지 % 상자). */
     _alignCandidatePins() {
       const s = this._pinSel;
       const curPage = State.pdfPage || 1;
@@ -149,8 +213,12 @@
       if (s.ids.size) {
         pins = Array.from(s.ids).map(k => (State.pins || []).find(p => p && String(p.id) === k)).filter(Boolean);
       } else {
+        const deck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
+        const c = (deck && deck.crop && deck.crop.w > 0 && deck.crop.h > 0
+          && String(deck.deployment_id || "") === String(State.currentDeploymentId || "")) ? deck.crop : null;
+        const inCrop = (p) => !c || (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h);
         pins = (State.pins || []).filter(p => p && (p.page || 1) === curPage
-          && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === curSeries));
+          && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === curSeries) && inCrop(p));
       }
       const numMap = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, curPage) : new Map();
       pins.sort((a, b) => ((numMap.get(a.id) || {}).no || 0) - ((numMap.get(b.id) || {}).no || 0));
@@ -241,7 +309,7 @@
       if (!list) return;
       list.innerHTML = "";
       const sel = this._syncPinSel();
-      const selecting = sel.on && this._pinBulkOk();
+      const selecting = sel.on && this._pinSelOk();
 
       if (!modePins.length) {
         empty.classList.remove("hidden");
@@ -252,9 +320,10 @@
         this.renderTree();   // [WO 20260929-bulkdel] 마지막 핀까지 지워도 트리가 옛 핀을 남기지 않게(종전 조기 return 이 건너뜀)
         return;
       }
-      // [WO 20260929-bulkdel] 관리자 일괄삭제 도구줄(목록 맨 위) — 비관리자에겐 DOM 자체를 만들지 않는다
+      // [WO 20260929-bulkdel → 20261002-allmenu §2] 선택 도구줄(목록 맨 위) — 디자이너 이상(선택·정렬).
+      //   삭제 버튼만 소유자·super(_pinBulkButtons 안에서 비활성 + 사유). 열람 화면엔 만들지 않는다.
       const mountBulkBar = () => {
-        if (!this._pinBulkOk()) return;
+        if (!this._pinSelOk()) return;
         const bar = document.createElement("div");
         bar.className = "pin-bulk-bar";
         this._pinBulkButtons().forEach(b => bar.appendChild(b));
@@ -630,7 +699,7 @@
         return n;
       };
       const pinSel = this._syncPinSel();
-      const selecting = pinSel.on && this._pinBulkOk();
+      const selecting = pinSel.on && this._pinSelOk();
 
       /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
@@ -803,7 +872,7 @@
               });
               mw.appendChild(mh);
               // [WO 20260929-bulkdel] 관리자 전용 — 범위 = 이 모드 그룹의 핀만(다른 모드 핀은 지우지 않는다).
-              if (this._pinBulkOk() && modePinsHere.length) {
+              if (this._pinSelOk() && modePinsHere.length) {
                 const acts = document.createElement("div");
                 acts.className = "tree-project-actions tree-pin-bulk";
                 this._pinBulkButtons({ scopePins: modePinsHere.slice(), scopeLabel: (isRegion ? "이 영역" : "이 구역") + " " + m.label })

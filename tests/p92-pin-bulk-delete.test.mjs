@@ -279,8 +279,21 @@ function makeUIEnv({ admin }) {
   console.log("\n[G. UI — 11_UI.js]");
   const nv = makeUIEnv({ admin: false });
   nv.UI.renderPinList();
+  // [WO 20261002-allmenu §2] 🔴 assertion 개정(G-4⑧ 전·후 대조):
+  //   전: 비관리자 → pin-bulk-bar/tree-pin-bulk DOM 자체가 없다([선택] 모드가 소유자·super 전용이었다).
+  //   후: [선택] 모드는 디자이너 이상(정렬과 공유) — 비관리자 디자이너도 [선택] 은 보인다. 그러나
+  //       파괴적 삭제는 여전히 막힌다: 범위 전체 삭제(pin-bulk-scope) 0개, 선택 모드의 [선택 삭제]는
+  //       비활성 + aria-disabled. 열람(viewer) 화면은 종전처럼 도구 DOM 0(아래 별도 검사).
   const nvAll = walk(nv.registry["pin-list"]).concat(walk(nv.registry["side-tree"]));
-  ok(!nvAll.some((e) => has(e, "pin-bulk-bar") || has(e, "tree-pin-bulk")), "G 비관리자: 일괄삭제 도구 DOM 없음");
+  ok(!nvAll.some((e) => has(e, "pin-bulk-scope")), "G 비관리자: 범위 전체 삭제 버튼 DOM 없음");
+  ok(nvAll.some((e) => has(e, "pin-bulk-toggle")), "G 비관리자 디자이너: [선택](정렬·선택 공용) 은 보임");
+  nv.UI.setPinSelectMode(true);
+  const nvDel = walk(nv.registry["pin-list"]).filter((e) => has(e, "pin-bulk-del"));
+  ok(nvDel.length > 0 && nvDel.every((b) => b.disabled === true), "G 비관리자: 선택 모드의 [선택 삭제] 는 전부 비활성");
+  const vw = makeUIEnv({ admin: false }); vw.State.mode = "viewer";
+  vw.UI.renderPinList();
+  const vwAll = walk(vw.registry["pin-list"]).concat(walk(vw.registry["side-tree"]));
+  ok(!vwAll.some((e) => has(e, "pin-bulk-bar") || has(e, "tree-pin-bulk")), "G 열람(viewer): 선택·일괄삭제 도구 DOM 없음(종전 불변식 유지)");
 
   const u = makeUIEnv({ admin: true });
   u.UI.renderPinList();
