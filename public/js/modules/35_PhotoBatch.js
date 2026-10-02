@@ -111,6 +111,39 @@
       if (pin.origName) parts.push("원본 " + pin.origName);
       if (!Number.isFinite(pin.shotAt) && !pin.origName && pin.imageName) parts.push(pin.imageName);
       return parts.join(" · ");
+    },
+
+    /** [WO 20261002-gap 묶음A①] 사진 교체 직전 "지금 현재 사진"을 pin.timeline 이력에 적립 —
+     *  단건(27_PinActionPop)·일괄(35_PhotoBatch run/applyTimeMatch)·자동연결(autoConnectPin)·
+     *  오프라인(큐 적립) 4경로가 공유하는 SoT 1개(§10). pin.imageId/imageUrl/pendingOpId 중
+     *  하나도 없으면(신규 등록) 적립할 "이전 사진"이 없으므로 조용히 아무 것도 하지 않는다.
+     *  현재 필드 자체는 호출부가 뒤이어 새 값으로 덮어쓴다(이 함수는 적립만, 교체는 안 함). */
+    pushHistory(pin, source) {
+      if (!pin) return;
+      const hasCurrent = pin.imageId || pin.imageUrl || pin.pendingOpId;
+      if (!hasCurrent) return;
+      if (!Array.isArray(pin.timeline)) pin.timeline = [];
+      const last = pin.timeline[pin.timeline.length - 1];
+      const dup = last && (
+        (pin.imageId && last.imageId === pin.imageId) ||
+        (pin.imageUrl && last.imageUrl === pin.imageUrl) ||
+        (pin.pendingOpId && last.pendingOpId === pin.pendingOpId)
+      );
+      if (dup) return; // 재시도/중복호출 안전장치 — 같은 사진을 두 번 적립하지 않는다
+      pin.timeline.push({
+        id: "tl" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        imageId: pin.imageId || null,
+        imageUrl: pin.imageUrl || null,
+        pendingOpId: pin.pendingOpId || null,
+        origKey: pin.origKey || null,
+        isVideo: !!pin.isVideo,
+        shotAt: Number.isFinite(pin.shotAt) ? pin.shotAt : (pin.capturedAt || null),
+        shotSrc: pin.shotSrc || null,
+        origName: pin.origName || null,
+        source: source || null,
+        by: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || null,
+        at: Date.now()
+      });
     }
   };
 
@@ -602,7 +635,7 @@
      *  그 안에서 IndexedDB "ops" 스토어에 영속돼 앱 재시작 후에도 남는다 — 05_SyncQueue.js:210-242).
      *  @param {Set<string>} [usedNames] 이 배치가 공유하는 이름 충돌 회피 집합(PhotoNaming).
      *  @returns {Promise<{status:'done'|'skip'|'fail', offline?:boolean, reason?:string}>} */
-    async _uploadOneRow(pin, row, overwrite, usedNames) {
+    async _uploadOneRow(pin, row, overwrite, usedNames, source) {
       if (!overwrite && PinSeries.hasContent(pin)) return { status: "skip" };
       try {
         const { dataURL, width, height } = await Cloud.resizeImage(row.file);
@@ -612,20 +645,28 @@
         const fullName = (typeof PhotoNaming !== "undefined") ? PhotoNaming.name(pin, row.name, shotAt, namesSet) : row.name;
         namesSet.add(fullName);
         const imgName = fullName.replace(/\.[^.]+$/, "");
-        let uploaded = false;
+        let uploaded = false, newImageId = null, newOpId = null;
         if (navigator.onLine) {
-          try { const imageId = await Cloud.uploadImage(imgName, dataURL, width, height); pin.imageId = imageId; Cloud._cache[imageId] = dataURL; uploaded = true; } catch (e) { uploaded = false; }
+          try { newImageId = await Cloud.uploadImage(imgName, dataURL, width, height); uploaded = true; } catch (e) { uploaded = false; }
         }
         if (!uploaded) {
-          const opId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
-          if (opId) { pin.pendingOpId = opId; pin.pendingSync = true; Cloud._cache["op:" + opId] = dataURL; }
-          else throw new Error("저장공간 부족");
+          newOpId = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
+          if (!newOpId) throw new Error("저장공간 부족");
         }
+        // [WO 20261002-gap 묶음A①] 덮어쓰기 직전, 지금 "현재" 사진을 이력에 적립(SoT — pushHistory).
+        if (typeof PhotoNaming !== "undefined" && PhotoNaming.pushHistory) PhotoNaming.pushHistory(pin, source || "일괄등록");
+        if (uploaded) { pin.imageId = newImageId; Cloud._cache[newImageId] = dataURL; pin.pendingOpId = null; pin.pendingSync = false; }
+        else { pin.pendingOpId = newOpId; pin.pendingSync = true; Cloud._cache["op:" + newOpId] = dataURL; }
+        pin.origKey = null; // 새 사진의 원본 보관 키는 아래 keepOriginal이 비동기로 채운다
         pin.imageName = imgName;
         if (row.is360) pin.is360 = true;
         // [지휘자 발주 보강§4] 표시용 메타 — 값 없는 건 세팅하지 않는다(있는 것만, 지어내지 않음).
         pin.origName = row.name;
         if (shotAt != null) { pin.shotAt = shotAt; pin.shotSrc = row.timeSource || null; }
+        // [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보관 — 보기용(4096px)과 별도로 R2에 백그라운드 업로드.
+        if (row.is360 && typeof SyncQueue !== "undefined" && SyncQueue.keepOriginal) {
+          SyncQueue.keepOriginal(pin, row.file, uploaded ? newImageId : null);
+        }
         return { status: "done", offline: !uploaded };
       } catch (e) {
         return { status: "fail", reason: (e && e.message) || String(e) };
@@ -671,7 +712,7 @@
           const m = queue.shift();
           const { pin, row } = m;
           this._setRowStatus(row, "업로드 중...");
-          const r = await this._uploadOneRow(pin, row, overwrite, usedNames);
+          const r = await this._uploadOneRow(pin, row, overwrite, usedNames, "일괄등록");
           if (r.status === "skip") { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); }
           else if (r.status === "fail") { fail++; this._setRowStatus(row, "실패: " + r.reason); }
           else { done++; this._setRowStatus(row, r.offline ? "오프라인 저장됨" : "완료"); }
@@ -868,7 +909,7 @@
       let done = 0, fail = 0, skip = 0;
       const usedNames = this._usedPhotoNames();
       for (const m of matches) {
-        const r = await this._uploadOneRow(m.pin, m.row, overwrite, usedNames);
+        const r = await this._uploadOneRow(m.pin, m.row, overwrite, usedNames, "시각매칭");
         if (r.status === "skip") skip++; else if (r.status === "fail") fail++; else done++;
       }
       try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
@@ -1001,7 +1042,7 @@
       let best = candidates[0];
       candidates.forEach((r) => { if ((Number.isFinite(r.sortKey) ? r.sortKey : -Infinity) > (Number.isFinite(best.sortKey) ? best.sortKey : -Infinity)) best = r; });
       const usedNames = this._usedPhotoNames();
-      const r = await this._uploadOneRow(pin, best, false, usedNames);
+      const r = await this._uploadOneRow(pin, best, false, usedNames, "자동연결");
       if (r.status === "done") {
         try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
         try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}

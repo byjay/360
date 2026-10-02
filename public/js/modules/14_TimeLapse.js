@@ -9,9 +9,15 @@
       $("btn-tl-prev") && $("btn-tl-prev").addEventListener("click", () => this.step(-1));
       $("btn-tl-next") && $("btn-tl-next").addEventListener("click", () => this.step(1));
       $("btn-tl-compare") && $("btn-tl-compare").addEventListener("click", () => Compare.open());
+      // [WO 20261002-gap 묶음A④⑤] 원본 보기·되돌리기·삭제(이력)
+      $("btn-tl-revert") && $("btn-tl-revert").addEventListener("click", () => this.revertCurrent());
+      $("btn-tl-delete") && $("btn-tl-delete").addEventListener("click", () => this.deleteShot());
     },
 
-    /** 핀의 timeline을 정규화 (단일 파노라마 fallback 포함) */
+    /** 핀의 timeline을 정규화 (단일 파노라마 fallback 포함).
+     *  [WO 20261002-gap 묶음A②] 촬영시각 SoT = shotAt — capturedAt은 과거 데이터 호환용 읽기 폴백.
+     *  rawIndex: pin.timeline 안의 실제 배열 index(현재/승격 전 "current" 슬롯은 -1) — 되돌리기·삭제가
+     *  정확한 항목을 가리키도록(정규화 배열은 매번 새 객체라 참조 비교를 쓸 수 없다). */
     _normalize(pin) {
       const out = [];
       if (Array.isArray(pin.timeline) && pin.timeline.length) {
@@ -19,11 +25,14 @@
           if (!t) return;
           out.push({
             id: t.id || ("tl" + i),
+            rawIndex: i,
             label: t.label || ("시점 " + (i + 1)),
             imageId: t.imageId || null,
             imageUrl: t.imageUrl || null,
+            pendingOpId: t.pendingOpId || null,
+            origKey: t.origKey || null,
             isVideo: !!t.isVideo,
-            capturedAt: t.capturedAt || null,
+            capturedAt: (Number.isFinite(t.shotAt) ? t.shotAt : null) || t.capturedAt || null,
           });
         });
       }
@@ -34,12 +43,15 @@
         if (!dup) {
           out.push({
             id: "current",
+            rawIndex: -1,
             label: out.length ? "현재" : (pin.label || "현재"),
             imageId: pin.imageId || null,
             imageUrl: pin.imageUrl || null,
+            pendingOpId: pin.pendingOpId || null,
+            origKey: pin.origKey || null,
             isVideo: !!(pin.videoUrl || pin.isVideo),
             videoUrl: pin.videoUrl || null,
-            capturedAt: pin.capturedAt || null,
+            capturedAt: (Number.isFinite(pin.shotAt) ? pin.shotAt : null) || pin.capturedAt || null,
           });
         }
       }
@@ -59,7 +71,7 @@
       const bar = document.getElementById("pano-timeline");
       if (!bar) return;
       // 시점 2개 이상일 때만 표시
-      if (this._shots.length < 2) { bar.classList.add("hidden"); return; }
+      if (this._shots.length < 2) { bar.classList.add("hidden"); this._renderActions(); return; }
       bar.classList.remove("hidden");
       const cur = document.getElementById("tl-current");
       if (cur) cur.textContent = (this._idx + 1) + " / " + this._shots.length;
@@ -80,6 +92,66 @@
       wrap.querySelectorAll(".tl-chip").forEach((b) => {
         b.addEventListener("click", () => this.goto(parseInt(b.dataset.i, 10)));
       });
+      this._renderActions();
+    },
+
+    /** [WO 20261002-gap 묶음A④⑤] 선택된 시점의 원본 보기 링크 + 되돌리기·삭제 버튼 노출 제어.
+     *  원본 보기 = 누구나(열람 전용 — 신규 업로드 아님). 되돌리기 = 편집 권한. 삭제(이력) = 관리자만. */
+    _renderActions() {
+      const $ = (id) => document.getElementById(id);
+      // 원본 링크는 선택 시점(있으면)·없으면 핀의 현재 사진 기준(타임라인 바가 숨겨진 단일사진 핀도 노출)
+      const shot = this.currentShot() || (this._shots[this._shots.length - 1] || null);
+      const origKey = (shot && shot.origKey) || (this._pin && this._pin.origKey) || null;
+      const origBtn = $("btn-pano-orig");
+      if (origBtn) {
+        if (origKey) {
+          origBtn.href = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(origKey) : origKey;
+          origBtn.classList.remove("hidden");
+        } else { origBtn.classList.add("hidden"); origBtn.removeAttribute("href"); }
+      }
+      const canEdit = typeof PanoViewer !== "undefined" && PanoViewer.canEditSpots && PanoViewer.canEditSpots();
+      const isAdmin = typeof Auth !== "undefined" && Auth.isAdmin;
+      const revertBtn = $("btn-tl-revert");
+      if (revertBtn) revertBtn.classList.toggle("hidden", !(canEdit && shot && shot.rawIndex >= 0));
+      const deleteBtn = $("btn-tl-delete");
+      if (deleteBtn) deleteBtn.classList.toggle("hidden", !(isAdmin && shot && shot.rawIndex >= 0));
+    },
+
+    /** [WO 20261002-gap 묶음A⑤] 선택한 과거 시점을 "현재"로 되돌린다 — 지금 현재는 이력으로 적립.
+     *  (이미 현재인 시점(rawIndex===-1)은 되돌릴 대상이 아니다.) */
+    revertCurrent() {
+      const shot = this.currentShot(), pin = this._pin;
+      if (!shot || !pin || shot.rawIndex == null || shot.rawIndex < 0) return;
+      if (!Array.isArray(pin.timeline)) return;
+      if (typeof PhotoNaming !== "undefined" && PhotoNaming.pushHistory) PhotoNaming.pushHistory(pin, "되돌리기");
+      pin.timeline.splice(shot.rawIndex, 1); // 되돌린 항목은 이력에서 제거 → 현재로 승격
+      pin.imageId = shot.imageId || null;
+      pin.imageUrl = shot.imageUrl || null;
+      pin.pendingOpId = shot.pendingOpId || null;
+      pin.origKey = shot.origKey || null;
+      pin.isVideo = !!shot.isVideo;
+      if (shot.capturedAt != null) { pin.shotAt = shot.capturedAt; pin.shotSrc = "되돌림"; }
+      try { App._markDirty && App._markDirty(); } catch (e) {}
+      try { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); } catch (e) {}
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이전 사진으로 되돌렸습니다 (미저장)");
+      this.setPin(pin);
+    },
+
+    /** [WO 20261002-gap 묶음A⑤] 이력 항목 1개를 완전히 삭제(관리자). 현재(아직 승격 전) 사진은
+     *  대상이 아니다 — 먼저 되돌리기로 교체한 뒤 지워야 한다(조용한 데이터 소실 금지). */
+    async deleteShot() {
+      const shot = this.currentShot(), pin = this._pin;
+      if (!shot || !pin || shot.rawIndex == null || shot.rawIndex < 0) return;
+      if (!Array.isArray(pin.timeline)) return;
+      const ok = (typeof Prompt !== "undefined" && Prompt.confirm)
+        ? await Prompt.confirm("이력 삭제", "이 시점(" + (shot.label || "") + ")을 이력에서 완전히 삭제합니다. 되돌릴 수 없습니다.")
+        : true;
+      if (!ok) return;
+      pin.timeline.splice(shot.rawIndex, 1);
+      try { App._markDirty && App._markDirty(); } catch (e) {}
+      this._idx = Math.max(0, this._idx - 1);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이력 삭제됨 (미저장)");
+      this.setPin(pin);
     },
 
     step(delta) {

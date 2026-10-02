@@ -420,19 +420,34 @@
       if (statusEl) statusEl.textContent = "업로드 중…";
       try {
         const { dataURL, width, height } = await Cloud.resizeImage(file);
-        // [지휘자 발주 보강 2026-09-29 §3] 저장 이름 = 영역/구역이름_등록시각(PhotoNaming SoT,
+        // [WO 20261002-gap 묶음A②] 촬영시각 SoT = shotAt — 단건 등록도 35_PhotoBatch._sortRows의
+        // 정본 우선순위(EXIF DateTimeOriginal → THETA 파일명 타임스탬프 → 파일 수정시각)를 그대로
+        // 재사용한다(_parseExifDate 재사용 — 새 EXIF 파서 금지). 신호가 전혀 없을 때만 등록시각(Date.now())으로 폴백.
+        let shotAt = null, shotSrc = null;
+        if (typeof PhotoBatch !== "undefined" && PhotoBatch._sortRows) {
+          try {
+            const exif = PhotoBatch._parseExifDate(await file.slice(0, 262144).arrayBuffer());
+            const sorted = PhotoBatch._sortRows([{ file, name: file.name, lastModified: file.lastModified, exif }])[0];
+            if (sorted && Number.isFinite(sorted.sortKey)) { shotAt = sorted.sortKey; shotSrc = sorted.timeSource; }
+          } catch (e) { /* EXIF 실패는 치명적이지 않음 — 아래 등록시각 폴백 */ }
+        }
+        if (shotAt == null) { shotAt = Date.now(); shotSrc = "등록시각"; }
+        // [지휘자 발주 보강 2026-09-29 §3] 저장 이름 = 영역/구역이름_촬영시각(PhotoNaming SoT,
         // 35_PhotoBatch.js) — 없으면 기존처럼 핀 라벨 기반. typeof 가드는 로드순서 무관 재사용 관례.
-        const shotAt = Date.now();
         const fullName = (typeof PhotoNaming !== "undefined")
           ? PhotoNaming.name(pin, file.name, shotAt, new Set())
           : (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
         const imgName = fullName.replace(/\.[^.]+$/, "");
         const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
-        pin.imageId = imageId; pin.imageName = imgName;
+        // [WO 20261002-gap 묶음A①] 덮어쓰기 직전, 지금 "현재" 사진을 이력에 적립(SoT — pushHistory).
+        if (typeof PhotoNaming !== "undefined" && PhotoNaming.pushHistory) PhotoNaming.pushHistory(pin, "단건등록");
+        pin.imageId = imageId; pin.imageName = imgName; pin.origKey = null; pin.pendingOpId = null; pin.pendingSync = false;
         // [지휘자 발주 보강 §4] 표시용 메타(있는 것만 — 지어내지 않음).
-        pin.origName = file.name; pin.shotAt = shotAt; pin.shotSrc = "등록시각";
+        pin.origName = file.name; pin.shotAt = shotAt; pin.shotSrc = shotSrc;
         if (wantsTheta) pin.is360 = true; // SoT: 20_App.js:2083 과 동일 필드(신규 필드 도입 금지)
         if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
+        // [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보관 — 보기용(4096px)과 별도로 R2에 백그라운드 업로드.
+        if (wantsTheta && typeof SyncQueue !== "undefined" && SyncQueue.keepOriginal) SyncQueue.keepOriginal(pin, file, imageId);
         if (typeof App !== "undefined" && App._markDirty) App._markDirty();
         if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
         if (statusEl) statusEl.textContent = (wantsTheta ? "360° 사진 등록됨" : "사진 등록됨") + " (미저장 — 저장 버튼으로 서버에 반영하세요)";

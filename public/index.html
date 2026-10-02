@@ -1028,6 +1028,11 @@
           <span>이슈</span>
           <span id="pano-notes-count" class="pano-notes-count hidden">0</span>
         </button>
+        <!-- [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보기/다운로드 — TimeLapse._renderActions가 href·표시를 채운다 -->
+        <a id="btn-pano-orig" class="btn-pano-notes hidden" href="#" target="_blank" rel="noopener" title="360 원본(풀해상도) 보기·다운로드" aria-label="원본 보기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>원본</span>
+        </a>
       </div>
       <button id="btn-pano-close" class="btn-pano-close" title="뷰어 닫기 (Esc)" aria-label="닫기">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
@@ -1067,6 +1072,14 @@
           <option value="open">미해결</option>
           <option value="progress">진행중</option>
           <option value="done">완료</option>
+        </select>
+        <!-- [WO 20261002-gap 묶음C] 기한·심각도(선택) — 결함 워크플로. 값 없으면 서버에 안 보냄(지어내지 않음). -->
+        <input id="pnp-due" class="pnp-due" type="date" title="기한(선택)" />
+        <select id="pnp-severity" class="pnp-severity" title="심각도(선택)">
+          <option value="">심각도-</option>
+          <option value="상">상</option>
+          <option value="중">중</option>
+          <option value="하">하</option>
         </select>
         <button type="submit" id="pnp-submit" class="pnp-submit">등록</button>
       </div>
@@ -1242,6 +1255,8 @@
         <span class="tl-ico"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
         <span class="tl-title">타임랩스</span>
         <span id="tl-current" class="tl-current">—</span>
+        <button id="btn-tl-revert" class="tl-compare-btn tl-revert-btn hidden" type="button" title="선택한 시점을 현재로 되돌리기">↺ 되돌리기</button>
+        <button id="btn-tl-delete" class="tl-compare-btn tl-delete-btn hidden" type="button" title="선택한 시점 이력 삭제(관리자)">🗑 삭제</button>
         <button id="btn-tl-compare" class="tl-compare-btn" type="button" title="전/후 분할 비교">⇄ 분할비교</button>
       </div>
       <div id="tl-chips" class="tl-chips"><!-- TimeLapse.render() --></div>

@@ -2650,6 +2650,12 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: .15s;
 }
 .tl-compare-btn:hover { filter: brightness(1.12); transform: translateY(-1px); }
+/* [WO 20261002-gap 묶음A⑤] 되돌리기(편집권한)·삭제(관리자) — 분할비교 pill과 같은 톤, 역할색만 구분.
+   .tl-compare-btn 자체가 margin-left:auto라 세 버튼(되돌리기·삭제·분할비교)이 우측에 순서대로 모인다. */
+.tl-revert-btn { background: color-mix(in srgb, #60a5fa 78%, #000 0%); border-color: color-mix(in srgb, #60a5fa 60%, #fff 0%); margin-left: 6px; }
+.tl-delete-btn { background: color-mix(in srgb, #ef4444 78%, #000 0%); border-color: color-mix(in srgb, #ef4444 60%, #fff 0%); margin-left: 6px; }
+/* [WO 20261002-gap 묶음A④] 헤더의 "원본" 링크(<a>) — 버튼과 동일 톤, 밑줄 제거 */
+#btn-pano-orig { text-decoration: none; }
 .tl-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
 .tl-chips::-webkit-scrollbar { height: 5px; }
 .tl-chips::-webkit-scrollbar-thumb { background: rgba(43,40,32,0.34); border-radius: 3px; }

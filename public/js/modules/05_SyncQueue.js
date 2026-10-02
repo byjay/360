@@ -23,12 +23,13 @@
 
     DRAFT_STORE: "drafts",
     AUTH_STORE: "authlocal",   // [P40] 오프라인 재인증 검증자(verifier) — 평문 비밀번호는 절대 담지 않는다
+    ORIG_STORE: "origs",       // [WO 20261002-gap 묶음A④] 360 원본(풀해상도) R2 업로드 재시도 큐
 
     async _open() {
       if (this._db) return this._db;
       if (!("indexedDB" in window)) return null; // localStorage 폴백 사용
       this._db = await new Promise((res, rej) => {
-        const req = indexedDB.open(this.DB_NAME, 4);   // v2: drafts / v3: authlocal / v4: sources(원본 도면 바이트)
+        const req = indexedDB.open(this.DB_NAME, 5);   // v2: drafts / v3: authlocal / v4: sources(원본 도면 바이트) / v5: origs(360 원본 재시도)
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(this.SRC_STORE)) {
@@ -42,6 +43,9 @@
           }
           if (!db.objectStoreNames.contains(this.AUTH_STORE)) {
             db.createObjectStore(this.AUTH_STORE, { keyPath: "key" });  // 오프라인 재인증 검증자
+          }
+          if (!db.objectStoreNames.contains(this.ORIG_STORE)) {
+            db.createObjectStore(this.ORIG_STORE, { keyPath: "opId" }); // 360 원본 바이트(ArrayBuffer) 재시도 큐
           }
         };
         req.onsuccess = () => {
@@ -402,6 +406,93 @@
       } catch (e) { /* 정리 실패해도 정본 DB_NAME 경로는 영향 없음 */ }
     },
 
+    /* ═══ [WO 20261002-gap 묶음A④] 360 원본(풀해상도) R2 업로드 — 보기용 4096px과 별도로
+       보관한다. 온라인이면 즉시 App._uploadToR2(기존 SoT, 20_App.js:3477)로 올리고, 실패/오프라인이면
+       ORIG_STORE(ArrayBuffer)에 적립해 재연결 시 자동 재시도한다(flushOriginals, _onReconnect에서 호출).
+       🔴 localStorage 폴백 없음 — 수 MB~수십 MB 바이너리는 못 담는다(없으면 토스트로 정직하게 알린다). ═══ */
+    /** 호출부(단건/배치/자동연결)가 업로드 성공 직후 fire-and-forget으로 부른다(await 불필요).
+     *  @param {object} pin  @param {File} file 원본 파일(THETA 등) @param {string|null} imageId 보기용 사진의 cloud id(상관 키) */
+    async keepOriginal(pin, file, imageId) {
+      if (!pin || !file) return;
+      let ab;
+      try { ab = await file.arrayBuffer(); } catch (e) { return; }
+      const ct = file.type || "image/jpeg";
+      const BIG = 20 * 1024 * 1024;
+      if (ab.byteLength > BIG && typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast("원본 용량이 큽니다(" + fmtBytes(ab.byteLength) + ") — 백그라운드 업로드 중…");
+      }
+      let ok = false;
+      if (navigator.onLine && typeof App !== "undefined" && App._uploadToR2) {
+        try {
+          const url = await App._uploadToR2(ab, ct);
+          if (url) { this._applyOrigUrl(pin.id, imageId, url); ok = true; }
+        } catch (e) { ok = false; }
+      }
+      if (!ok) {
+        const opId = "orig" + Date.now() + Math.random().toString(36).slice(2, 8);
+        const stored = await this._saveOrig({ opId, pinId: pin.id, imageId: imageId || null, contentType: ct, origName: file.name || null, ab, createdAt: Date.now() });
+        if (!stored && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("원본 보관 실패 — 기기 저장공간 부족(보기용 사진은 정상 저장됨)");
+      }
+    },
+    /** pinId+imageId로 "지금 그 사진이 있는 자리"(현재 필드 또는 timeline 이력 항목)를 찾아
+     *  origKey를 채운다(SoT 1곳) — 업로드가 느려 그 사이 사진이 교체돼 이력으로 넘어가도 정확히 찾는다. */
+    _applyOrigUrl(pinId, imageId, url) {
+      try {
+        const pins = (typeof State !== "undefined" && State.pins) || [];
+        const pin = pins.find((p) => p && p.id === pinId);
+        if (!pin) return false;
+        if (imageId && pin.imageId === imageId) { pin.origKey = url; }
+        else if (Array.isArray(pin.timeline) && imageId) {
+          const t = pin.timeline.find((x) => x && x.imageId === imageId);
+          if (t) t.origKey = url; else { pin.origKey = pin.origKey || url; }
+        } else { pin.origKey = pin.origKey || url; }
+        try { App._markDirty && App._markDirty(); } catch (e) {}
+        try { if (App._saveDraftLocal) { const p = App._saveDraftLocal(); if (p && p.catch) p.catch(() => {}); } } catch (e) {}
+        return true;
+      } catch (e) { return false; }
+    },
+    async _saveOrig(rec) {
+      const db = await this._open();
+      if (db && db.objectStoreNames.contains(this.ORIG_STORE)) {
+        try {
+          await new Promise((res, rej) => {
+            const tx = db.transaction(this.ORIG_STORE, "readwrite");
+            tx.objectStore(this.ORIG_STORE).put(rec);
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+          });
+          return true;
+        } catch (e) { /* IDB 실패 → 정직하게 false(로그인 세션이 짧으면 사진 자체는 이미 저장됨) */ }
+      }
+      return false;
+    },
+    /** 재연결 시 적립된 원본들을 전부 업로드 시도. 실패분은 큐에 남아 다음 재연결에 재시도. */
+    async flushOriginals() {
+      if (!navigator.onLine) return { ok: false, offline: true };
+      const db = await this._open();
+      if (!db || !db.objectStoreNames.contains(this.ORIG_STORE)) return { ok: true, uploaded: 0 };
+      const all = await new Promise((res) => {
+        const tx = db.transaction(this.ORIG_STORE, "readonly");
+        const rq = tx.objectStore(this.ORIG_STORE).getAll();
+        rq.onsuccess = () => res(rq.result || []); rq.onerror = () => res([]);
+      });
+      let uploaded = 0;
+      for (const rec of all) {
+        try {
+          const url = (typeof App !== "undefined" && App._uploadToR2) ? await App._uploadToR2(rec.ab, rec.contentType) : null;
+          if (url) {
+            this._applyOrigUrl(rec.pinId, rec.imageId, url);
+            await new Promise((res) => {
+              const tx = db.transaction(this.ORIG_STORE, "readwrite");
+              tx.objectStore(this.ORIG_STORE).delete(rec.opId);
+              tx.oncomplete = res; tx.onerror = res;
+            });
+            uploaded++;
+          }
+        } catch (e) { /* 다음 재연결에 재시도 — 큐 보존 */ }
+      }
+      return { ok: true, uploaded };
+    },
+
     /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
     async _onReconnect() {
       if (this._reconnecting) return; this._reconnecting = true;
@@ -418,6 +509,8 @@
         if (typeof App !== "undefined" && App._flushOpLogs) {
           try { await App._flushOpLogs(); } catch (e) {}
         }
+        // [WO 20261002-gap 묶음A④] 360 원본 재시도 큐도 재연결마다 비운다.
+        try { await this.flushOriginals(); } catch (e) {}
         // 재연동 토스트(대기 항목이 실제로 있었을 때만)
         if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
           Prompt.toast("온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
