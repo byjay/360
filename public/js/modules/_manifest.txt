@@ -46,6 +46,7 @@
 41_RegionMerge.js
 42_Requests.js
 43_ProjectInfo.js
+45_FeatureMenu.js
 46_DeckOutline.js
 47_Report.js
 48_GPS.js

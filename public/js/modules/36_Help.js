@@ -86,7 +86,17 @@
 
     /** 정본에서 값을 읽는다. 키가 없으면 undefined(조용한 대체값 날조 금지). */
     get(key) {
-      return Object.prototype.hasOwnProperty.call(this.CONTENT, key) ? this.CONTENT[key] : undefined;
+      if (Object.prototype.hasOwnProperty.call(this.CONTENT, key)) return this.CONTENT[key];
+      // [WO 20261002-allmenu §3] 문구 SoT 공유 — 전체 기능 메뉴(45_FeatureMenu.FEATURES)의 id 도 도움말 키로 쓸 수 있다
+      //   (`data-help="align-v"` 등). 그 설명은 메뉴 정의 한 곳에서만 온다(복제 금지).
+      try {
+        if (typeof FeatureMenu !== "undefined" && FeatureMenu._f) {
+          const f = FeatureMenu._f(key);
+          const d = f ? FeatureMenu.descOf(f) : "";
+          if (f && d) return f.label + " — " + d + (f.keys ? " (단축키 " + f.keys + ")" : "");
+        }
+      } catch (e) {}
+      return undefined;
     },
 
     /** [WO 20261001-viewerhelp] 뷰어 배포 화면인지 — SoT: body.role-viewer 클래스(20_App.js openApp 가

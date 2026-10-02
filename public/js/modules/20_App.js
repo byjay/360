@@ -29,6 +29,7 @@
       if (typeof UserMgmt !== "undefined") UserMgmt.init();
       if (typeof ThetaIntake !== "undefined") ThetaIntake.init();
       if (typeof PdfPopup !== "undefined") PdfPopup.init();
+      if (typeof FeatureMenu !== "undefined") { try { FeatureMenu.init(); } catch (e) {} }   // [WO 20261002-allmenu §1] 전체 기능 메뉴
       // [고아 방지] 35_PhotoBatch 는 자체 init() 안에서만 버튼을 바인딩한다 —
       //   여기서 부르지 않으면 번들에는 있는데 버튼이 죽는다(전역 CLAUDE.md §5 렌더 고아).
       if (typeof PhotoBatch !== "undefined") PhotoBatch.init();
