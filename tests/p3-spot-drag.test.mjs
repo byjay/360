@@ -164,8 +164,19 @@ suiteViewerBlocked("④ 뷰어 권한은 마커 이동 불가", pvSrc);
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션] onPointerDown 분기를 제거하면 ①이 실패해야 함");
+  // [WO 20261001-panoshapes 재검증] onPointerDown 앞머리에 도형 그리기(_shapeDraw) 분기가
+  // 추가되어 needle을 그 아래 점 마커 분기까지 포함하도록 갱신(뮤테이션 취지는 동일 — 전부 제거).
   const needle = `    onPointerDown(x, y) {
       this._downX = x; this._downY = y; this._moved = false;
+      // [WO 20261001-panoshapes] 그리기 모드(App.setShapeDrawMode로 켜짐) — 디자이너만, 카메라 드래그 대신 도형 드래그 시작.
+      if (this._shapeDraw && this.canEditSpots()) {
+        const ll0 = this.screenToLonLat(x, y);
+        this._shapeDraft = ll0 ? (this._shapeDraw === "circle"
+          ? { type: "circle", lon: ll0.lon, lat: ll0.lat, radiusDeg: 0.4 }
+          : { type: "rect", lon1: ll0.lon, lat1: ll0.lat, lon2: ll0.lon, lat2: ll0.lat }) : null;
+        this.S.dragging = false; this._dragSpotId = null;
+        return;
+      }
       const hitId = this.canEditSpots() ? this.hitSpotAt(x, y) : null;
       this._dragSpotId = hitId || null;
       if (hitId) {
