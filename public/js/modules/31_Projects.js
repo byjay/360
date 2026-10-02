@@ -113,13 +113,25 @@
       if (!reqPid) { this.decks = []; this._renderDecks(); return; }
       let data = [];
       try {
+        // [WO 20261002-gap] 🔴 오프라인이면 네트워크를 시도조차 하지 않고 바로 캐시 폴백(아래
+        //   catch 분기와 같은 경로 — fetch 가 끊긴 소켓에서 수십 초씩 멈추는 걸 막는다).
+        if (!navigator.onLine) throw new Error("offline");
         // [버그수정] GET /decks 는 인증 필수(401) — Auth.headers() 누락 시 빈 목록 → "구역 없음".
         //   createDeck(POST)는 헤더가 있어 생성되지만, 직후 loadDecks 가 401 로 빈 목록을 받아
-        //   "생성해도 구역이 안 나오는" 회귀였다. (도면 등록 시 ensureDeck 도 동일 증상)
+        //   "생성해도 구역이 안 나오는" 회귀였다. (도면 로드 시 ensureDeck 도 동일 증상)
         const r = await fetch("/api/projects/" + reqPid + "/decks", { headers: Auth.headers() });
         const j = await r.json();
         data = j.data || [];
-      } catch (e) { data = []; }
+        // [WO 20261002-gap] 🔴 write-through — 온라인에서 받은 구역 목록을 오프라인 캐시에도
+        //   남긴다(OfflineBundle.download() 이 쓰는 같은 키 bundle:decks:<pid> 재사용 — SoT,
+        //   새 키 금지). [다운로드]를 누르지 않고 열어본 프로젝트도 오프라인 트리가 비지 않는다.
+        try { if (typeof SyncQueue !== "undefined" && SyncQueue.saveDraft) await SyncQueue.saveDraft("bundle:decks:" + reqPid, data); } catch (e) {}
+      } catch (e) {
+        // [WO 20261002-gap] 🔴 근본수정 — 오프라인/네트워크 실패 시 빈 배열로 "구역이 없습니다"를
+        //   보이던 조용한 실패(§5) 대신, IndexedDB 캐시(직전 온라인 방문 또는 [다운로드] 번들)로
+        //   폴백한다. 20_App.js loadLatestDeployment() 의 같은 폴백과 동일 규칙(공유, 신규 메커니즘 아님).
+        try { data = (typeof OfflineLoad !== "undefined") ? await OfflineLoad.decks(reqPid) : []; } catch (e2) { data = []; }
+      }
       // 응답 도착 사이 프로젝트가 바뀌었으면 무시
       if (!this.currentProject || this.currentProject.id !== reqPid) return;
       // 서버가 다른 프로젝트 deck을 섞어줘도(이론상) 현재 프로젝트 것만 사용

@@ -362,6 +362,8 @@ async function runScenario(P) {
     return { occ, ovl, tg, blocked };
   };
   const defect = (prio, title, evidence, cause) => { report.defects.push({ prio, title, evidence, cause: cause || null }); console.log(`[DEFECT ${prio}] ${title} :: ${JSON.stringify(evidence).slice(0, 300)}`); };
+  // [WO 20261002-gap] 두 사각형의 교차 면적(px²) — 0 이면 겹침 없음.
+  const ovArea = (a, b) => { if (!a || !b) return 0; const ox = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)); const oy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)); return ox * oy; };
   const S = (expr) => evSafe("(function(){ var S = window.__T && __T.State; if (!S) return null; return (" + expr + "); })()");
   const tapSel = async (sel, label, quiet) => {
     const c = await evSafe(`__M.center(${JSON.stringify(sel)})`);
@@ -487,6 +489,40 @@ async function runScenario(P) {
   await P.wait(1500);
   T.coldTotalToDrawingMs = Date.now() - t0;
   await snap("online-drawing");
+  // [WO 20261002-gap] 🔴 모바일 겹침 회귀 검사(마스터 "숨기지 마" — 역할 표시는 그대로, 위치만 분리):
+  //   ① 도움말(?)/개발자 문의(✉) FAB vs 핀 필터 칩 바(#pin-filter-bar) — 실측 결함 3850px² 유사.
+  //   ② 구역 페이저(#zone-pager) vs 번호대역 띠(#regmode-start-wrap, 모바일 고정) — 실측 3850px².
+  //   핀/구역 없이도 재현 가능해야 하므로 각 요소를 강제로 보여 측정한 뒤 원상복구한다(부작용 0).
+  {
+    const fabOv = await evSafe(`(function(){
+      function r(sel){ var el = document.querySelector(sel); if (!el) return null; var b = el.getBoundingClientRect(); return { top:b.top, bottom:b.bottom, left:b.left, right:b.right }; }
+      var bar = document.getElementById('pin-filter-bar'); var wasHidden = bar && bar.classList.contains('hidden');
+      if (bar) bar.classList.remove('hidden');
+      var out = { help: r('[data-help-toggle]'), inquiry: r('[data-help-inquiry-toggle]'), filterBar: r('#pin-filter-bar') };
+      if (bar && wasHidden) bar.classList.add('hidden');
+      return out;
+    })()`);
+    const helpOv = ovArea(fabOv && fabOv.help, fabOv && fabOv.filterBar);
+    const inquiryOv = ovArea(fabOv && fabOv.inquiry, fabOv && fabOv.filterBar);
+    report.mobileOverlap = { fabOv, helpOv, inquiryOv };
+    ok(helpOv === 0, "[WO20261002-gap] 도움말(?) FAB × 핀 필터 칩 바 겹침 0", { helpOv, fabOv });
+    ok(inquiryOv === 0, "[WO20261002-gap] 개발자 문의(✉) FAB × 핀 필터 칩 바 겹침 0", { inquiryOv, fabOv });
+
+    const zpOv = await evSafe(`(function(){
+      function r(el){ if (!el) return null; var b = el.getBoundingClientRect(); return { top:b.top, bottom:b.bottom, left:b.left, right:b.right }; }
+      var bar = document.getElementById('zone-pager'); if (!bar) return null;
+      var hadHidden = bar.classList.contains('hidden'), hadVisible = bar.classList.contains('pager-visible'), prevHtml = bar.innerHTML;
+      bar.classList.remove('hidden'); bar.classList.add('pager-visible');
+      bar.innerHTML = '<button class="zpager-tab active">전체 도면</button><button class="zpager-tab">테스트 구역</button>';
+      if (window.__T && __T.App && __T.App._positionZonePager) __T.App._positionZonePager(bar, null);
+      var out = { zone: r(bar), band: r(document.getElementById('regmode-start-wrap')) };
+      if (hadHidden) bar.classList.add('hidden'); if (!hadVisible) bar.classList.remove('pager-visible'); bar.innerHTML = prevHtml;
+      return out;
+    })()`);
+    const zoneOv = ovArea(zpOv && zpOv.zone, zpOv && zpOv.band);
+    report.mobileOverlap.zpOv = zpOv; report.mobileOverlap.zoneOv = zoneOv;
+    ok(zoneOv === 0, "[WO20261002-gap] 구역 페이저(#zone-pager) × 번호대역 띠(#regmode-start-wrap) 겹침 0", { zoneOv, zpOv });
+  }
   if (process.env.P114_STOP === "drawing") { assertOcclusion(); return; }
   // [a7a7bb0 검증] 온라인 편집 → 서버 반영: 도크 [포인트] → 도면 탭 1회 → 서버 배포본 pins 에 그 핀이 보일 때까지(Fast 3G)
   {

@@ -458,23 +458,43 @@
       this._showZonePagerThenFade(bar);
     },
 
-    /** 구역 페이저를 활성 구역 도형(zone-shape) 바로 아래에 배치. 없으면 상단 중앙 기본값 */
+    /** 구역 페이저를 활성 구역 도형(zone-shape) 바로 아래에 배치. 없으면 상단 중앙 기본값.
+     *  [WO 20261002-gap] 🔴 근본수정 — 모바일 CHECKER/360 모드에선 topbar 바로 아래
+     *  '번호 대역' 띠(#regmode-start-wrap)가 position:fixed로 추가 행(실측 68~98px)을
+     *  차지한다. #map-area는 그 사실을 모르고 topbar 바로 밑에서 시작하므로, 페이저의
+     *  기본 top(10px/8px)이 그 띠와 겹쳤다(실측 3850px² — 띠가 가려져 대역 메뉴가 안 열림).
+     *  두 분기(전체 도면/활성 구역) 모두 이 공유 하한(minTop)을 쓴다(SoT, 한쪽만 고치면
+     *  나머지가 깨진다 — CLAUDE.md §G-2-5). */
+    _zonePagerMinTop(area) {
+      let minTop = 10;
+      const bandEl = document.getElementById("regmode-start-wrap");
+      if (bandEl) {
+        const cs = getComputedStyle(bandEl);
+        if (cs.display !== "none" && cs.position === "fixed") {
+          const bandRect = bandEl.getBoundingClientRect();
+          const areaTop = area.getBoundingClientRect().top;
+          if (bandRect.height > 0) minTop = Math.max(minTop, (bandRect.bottom - areaTop) + 6);
+        }
+      }
+      return minTop;
+    },
     _positionZonePager(bar, activeZoneId) {
       const area = UI.$("map-area");
       if (!area) return;
+      const minTop = this._zonePagerMinTop(area);
       const shape = activeZoneId ? document.querySelector('.zone-shape[data-zone="' + activeZoneId + '"]') : null;
       if (!shape) {
         // 활성 구역 없음(전체 도면) — 기본 상단 중앙
-        bar.style.top = "10px"; bar.style.left = "50%"; bar.style.right = ""; bar.style.transform = "translateX(-50%)";
+        bar.style.top = minTop + "px"; bar.style.left = "50%"; bar.style.right = ""; bar.style.transform = "translateX(-50%)";
         return;
       }
       const areaRect = area.getBoundingClientRect();
       const sRect = shape.getBoundingClientRect();
-      let top = (sRect.bottom - areaRect.top) + 8;
+      let top = Math.max(minTop, (sRect.bottom - areaRect.top) + 8);
       let left = (sRect.left + sRect.width / 2) - areaRect.left;
       // 화면 하단을 벗어나면 구역 위쪽에 배치
       const barH = bar.offsetHeight || 40;
-      if (top + barH > areaRect.height - 8) top = Math.max(8, (sRect.top - areaRect.top) - barH - 8);
+      if (top + barH > areaRect.height - 8) top = Math.max(minTop, (sRect.top - areaRect.top) - barH - 8);
       // 좌우 클램프(대략 절반 너비 확보)
       const halfW = (bar.offsetWidth || 200) / 2;
       left = Math.min(Math.max(left, halfW + 8), areaRect.width - halfW - 8);

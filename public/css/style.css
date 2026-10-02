@@ -3815,12 +3815,14 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     padding-bottom:env(safe-area-inset-bottom,0px);}
   .mdock-bar{display:flex;align-items:stretch;height:var(--mdock-h);}
   /* [결함4 2026-09-17 지휘자 실측] 도움말 "?" 토글(36_Help.js, 인라인 bottom:16px/z-index:9550)이
-     이 도크(위 .mobile-dock, z-index:140)에 덮여 "메뉴" 항목이 눌리지 않았다.
-     도크 높이(58px)만 피하면 그 위 .pinfilter-bar(bottom:64px, 실측 높이 48px)와 새로 겹치므로
-     칩 바 상단까지 올린다 — SoT 변수 재사용(값 중복 정의 없음), 인라인 스타일 덮으려면 !important 필요. */
-  [data-help-toggle]{
-    bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px) !important;
-  }
+     이 도크(위 .mobile-dock, z-index:140)에 덮여 "메뉴" 항목이 눌리지 않았다. 도크 높이(58px)만
+     피하면 그 위 .pinfilter-bar(bottom:64px, 실측 높이 48px)와 새로 겹치므로 칩 바 상단까지
+     올린다 — SoT 변수 재사용(값 중복 정의 없음), 인라인 스타일 덮으려면 !important 필요.
+     [WO 20261002-gap] 🔴 이 규칙이 [요청·질문]·[✉] 과 따로(중복) 있어 §10 SoT 위반이었다 —
+     아래(이 파일 더 아래) body:has(#screen-app.active) 그룹 규칙 하나로 합쳤다(36_Help.js
+     "?"도 포함). .mobile-dock·.pinfilter-bar 둘 다 #screen-app 안에만 있어(허브 화면엔 둘 다
+     없음) 화면별로 나눠야 허브에서 새로 겹치지 않는다(실측: p114 "허브→도면표시" 회귀,
+     CHECKER 잎이 가려짐 — 이 규칙이 화면 구분 없이 항상 걸려 있던 게 원인). */
   .mdock-chip{position:relative;flex:1 1 0;min-width:40px;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:2px;padding:6px 1px;
     background:transparent;border:none;cursor:pointer;color:#6b6457;
@@ -5647,8 +5649,20 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
   #pwa-install-btn{ bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px) !important; }
   /* [WO 20261001-mobilefast] 같은 함정 — [요청·질문](42_Requests._createViewerBtn)·[?](36_Help._createToggle)·
      [✉](36_Help._createInquiryEntryBtn) FAB 도 bottom:16px 인라인 고정이라 하단 도크와 겹친다. */
-  [data-req-viewer-entry], [data-help-toggle], [data-help-inquiry-toggle] {
-    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px) !important;
+  /* [WO 20261002-gap 재수정, 마스터 "숨기지 마"] 🔴 위 calc(도크+12px=70px)는 도크만 피하고
+     그 바로 위에 뜨는 핀 필터 칩 바(.pinfilter-bar, bottom:var(--pinfilter-bottom-mobile)=64px,
+     높이 var(--pinfilter-h-mobile)=48px → y:700~748)를 몰랐다 — FAB(y:702~742)가 그 안에
+     완전히 겹쳐 떴다(실측). .wm-toast-host(위)가 이미 쓰는 같은 SoT 계산(칩 바 bottom+높이+여백)
+     을 그대로 재사용해 칩 바 위로 올린다 — 숨기거나 역할표시를 바꾸지 않고 위치만 이동.
+     🔴 이 FAB 3종은 body 레벨(화면 무관 상시 표시)이라 허브 화면(#screen-projects, 핀 필터
+     칩 없음)에도 똑같이 뜬다 — 위로 올리면 **스크롤 가능한** 허브 카드 트리 내용과 새로
+     겹칠 수 있다(실측: p114 "온라인: 허브 → 도면 표시" 회귀, CHECKER 잎이 가려짐). 핀 필터
+     칩이 존재하는 편집 화면(#screen-app.active)에서만 올리고, 허브 화면은 기존 도크-회피
+     계산(bottom:70px)을 그대로 둔다(§10 SoT 함정 재발 방지, CLAUDE.md §G-2-5). */
+  body:has(#screen-app.active) [data-req-viewer-entry],
+  body:has(#screen-app.active) [data-help-toggle],
+  body:has(#screen-app.active) [data-help-inquiry-toggle] {
+    bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px) !important;
   }
 }
 /* [WO 20261001-mobilefast 판정5] 핀 작성 모드(#crosshair-overlay 표시 중)에는 위 FAB 3종을
