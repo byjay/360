@@ -118,15 +118,21 @@ function buildOpsHandler() {
   const genIdSrc = extractBalanced(serverSrc, "function genId(prefix: string): string {");
   const validStatusMatch = serverSrc.match(/const VALID_STATUS = \[[^\]]*\]/);
   if (!validStatusMatch) throw new Error("VALID_STATUS not found");
+  const validStatusPatchMatch = serverSrc.match(/const VALID_STATUS_PATCH = \[[^\]]*\]/);
+  if (!validStatusPatchMatch) throw new Error("VALID_STATUS_PATCH not found");
   const opsCallSrc = extractBalanced(serverSrc, "app.post('/tables/deployments/:id/ops', async (c) => {") + ")";
 
   const tsSrc = `
     ${genIdSrc}
     ${validStatusMatch[0]}
+    ${validStatusPatchMatch[0]}
+    const SEVERITY_LEVELS = ['상', '중', '하'];
     const DEFAULT_TENANT = 'tnt_default';
     async function requireDesigner(c) { return { email: 'designer@test.com' }; }
     async function deploymentWriteDenied(c, user, pid) { return null; }  // [WP3] 프로젝트 권한 가드 — 이 테스트 대상 아님(p93 B5 가 실 워커로 검증)
     async function tenantOf(c, user) { return null; }
+    // [WO 20261002-gap] '확인(verified)' 권한 게이트 — 이 테스트는 verified 전환을 다루지 않으므로 거부로 고정(p111/p117 가 별도 검증).
+    async function canManageMembers(c, user, pid) { return false; }
     function mapDeployment(row) { return row; }
     const app = { post(path, handler) { globalThis.__opsHandler = handler; } };
     ${opsCallSrc}

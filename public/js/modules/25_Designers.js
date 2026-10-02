@@ -118,6 +118,23 @@
           const esc = (s) => UI.escapeHtml(s == null ? "" : String(s));
           const when = q.created_at ? new Date(q.created_at).toLocaleString("ko-KR") : "-";
           const checked = q.resolved ? "checked" : "";
+          // [WO 20261002-gap 묶음D] 메일 발송 실패 배지 + 사유 + 재발송. mail_error 는 서버가 저장한 {status,summary,keyRevoked} JSON(키 값 제외).
+          let mailBadge = "";
+          if (!q.mail_sent && q.mail_error) {
+            let info = null;
+            try { info = JSON.parse(q.mail_error); } catch (e) {}
+            const keyRevoked = !!(info && info.keyRevoked);
+            const summary = info ? esc(String(info.summary || "")) : esc(q.mail_error);
+            const label = keyRevoked ? "메일 키 확인 필요" : "메일 발송 실패";
+            mailBadge =
+              '<div style="margin:4px 0 0;font-size:10.5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+                '<span style="background:#b91c1c;color:#ffffff;padding:1px 7px;border-radius:999px;font-weight:700">' + label + '</span>' +
+                '<span style="color:var(--muted,#9a9686)" title="' + summary + '">' + (info ? "상태 " + esc(String(info.status == null ? "-" : info.status)) : "") + '</span>' +
+                '<button type="button" class="adm-inquiry-resend" style="padding:1px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:transparent;color:inherit;font-size:10.5px;cursor:pointer">재발송</button>' +
+              '</div>';
+          } else if (!q.mail_sent) {
+            mailBadge = '<div style="margin:4px 0 0;font-size:10.5px;color:var(--muted,#9a9686)">메일 미발송</div>';
+          }
           return (
             '<div class="adm-inquiry-row" data-id="' + esc(q.id) + '" style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px">' +
               '<input type="checkbox" class="adm-inquiry-resolve" ' + checked + ' style="margin-top:3px" />' +
@@ -125,6 +142,7 @@
                 '<div style="font-size:12.5px;font-weight:700">' + esc(q.title) + '</div>' +
                 '<div style="font-size:11.5px;color:var(--muted,#9a9686);white-space:pre-wrap;margin:2px 0">' + esc(q.body) + '</div>' +
                 '<div style="font-size:10.5px;color:var(--muted,#9a9686)">' + when + ' · ' + esc(q.sender_email || "비로그인") + (q.reply_email ? (" · 회신: " + esc(q.reply_email)) : "") + (q.project_name ? (" · " + esc(q.project_name)) : "") + '</div>' +
+                mailBadge +
               '</div>' +
             '</div>'
           );
@@ -140,6 +158,20 @@
                 body: JSON.stringify({ resolved: e.target.checked })
               });
             } catch (err) { /* 네트워크 실패 — 다음 새로고침에 재시도 가능하도록 조용히 둠 */ }
+          });
+        });
+        list.querySelectorAll(".adm-inquiry-resend").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            const row = e.target.closest(".adm-inquiry-row");
+            const id = row && row.dataset.id;
+            if (!id) return;
+            btn.disabled = true; btn.textContent = "재발송 중…";
+            try {
+              const r = await fetch("/api/inquiries/" + encodeURIComponent(id) + "/resend", { method: "POST", headers: Auth.headers() });
+              const j = await r.json().catch(() => ({}));
+              if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(j.mail_sent ? "재발송 성공" : "재발송 실패");
+            } catch (err) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("재발송 실패(네트워크)"); }
+            await this.loadInquiries();
           });
         });
       } catch (e) {

@@ -259,7 +259,20 @@ try {
   ok(ib.status === 200 && ibD.status === 200, "S6 소유자·designer 멤버 요청함 200 — " + ib.status + "/" + ibD.status);
   ok(ibV.status === 403 && ibA.status === 401, "S6 viewer 403 · 공유 링크 401 — " + ibV.status + "/" + ibA.status);
   const items = ib.j.data || [];
-  ok(items.every((n) => n.kind !== "note"), "S6 요청함에는 이슈 노트(kind=note, 디자이너 6건) 제외");
+  // [WO 20261002-gap 묶음C·3] 🔴 마스터 지시로 뒤집힘 — 전역 목록이 이슈 노트(kind=note)도 포함하도록 확장됐다.
+  //   서버는 포함, 클라 탭([요청·질문]/[결함 노트])이 분리해 보여준다(_applyFilters, SoT).
+  ok(items.some((n) => n.kind === "note") && items.filter((n) => n.kind === "note").length === 6, "S6 요청함 전역 목록에 이슈 노트(kind=note) 6건 포함(WO 20261002-gap) — " + items.filter((n) => n.kind === "note").length);
+  {
+    const C0 = makeCtx();
+    C0.Requests._tab = "reqq";
+    const reqqOnly = C0.Requests._applyFilters(items);
+    ok(reqqOnly.every((n) => n.kind !== "note"), "S6 탭[요청·질문] 필터 → 결함 노트 0건 — " + reqqOnly.filter((n) => n.kind === "note").length);
+    C0.Requests._tab = "note";
+    const noteOnly = C0.Requests._applyFilters(items);
+    // reply 는 탭과 무관하게 항상 통과(원 요청에 재부착하기 위해) — kind='note' 가 아닌 top-level 항목은 0건이어야 한다.
+    const noteTops = noteOnly.filter((n) => n.kind !== "reply");
+    ok(noteTops.length === 6 && noteTops.every((n) => n.kind === "note"), "S6 탭[결함 노트] 필터 → 이슈 노트(top)만 6건 — " + noteTops.length);
+  }
   const decks = (await api("o", "GET", "/api/projects/prj_R/decks")).j.data;
   const C = makeCtx();
   const g = C.Requests.groupByTree(items, decks, false);
@@ -268,7 +281,8 @@ try {
   ok(g.nodes.map((nd) => nd.deck.name + ":" + nd.depth).join(",") === "구역A:0,영역A1:1,구역B:0", "S6 트리 순서 = 구역A → 영역A1 → 구역B — " + g.nodes.map((nd) => nd.deck.name + ":" + nd.depth).join(","));
   ok(by["구역A"].items.length === 2 && by["구역A"].items[0].pin_id === "" && by["구역A"].items[1].pin_id === "p1", "S6 구역A = [구역 단위 1 · #1 1] (구역 단위 먼저) — " + by["구역A"].items.map((n) => n.pin_id || "∅").join(","));
   ok(by["영역A1"].items.length === 2 && by["영역A1"].items[0].pin_id === "" && by["영역A1"].items[1].pin_id === "p2", "S6 영역A1 = [구역 단위 1 · #2 1] — " + by["영역A1"].items.map((n) => n.pin_id || "∅").join(","));
-  ok(by["구역B"].items.length === 6, "S6 구역B = 6(v2 1 + 익명 5) — " + by["구역B"].items.length);
+  // [WO 20261002-gap] 구역B = 요청·질문 6(v2 1 + 익명 5) + 이슈 노트(kind=note) 6(S3 디자이너 루프) = 12.
+  ok(by["구역B"].items.length === 12, "S6 구역B = 12(요청·질문 6 + 이슈노트 6, WO 20261002-gap) — " + by["구역B"].items.length);
   ok(g.nodes.reduce((s, nd) => s + nd.items.length, 0) + g.unassigned.length === tops.length && g.unassigned.length === 0, "S6 합계 = 요청 수(" + tops.length + ") · 미지정 0");
   ok(by["구역A"].items[1].replies.length === 1 && by["구역A"].items[1].replies[0].body === "내일 재촬영하겠습니다", "S6 답변은 원 요청 아래(replies)");
   const openN = tops.filter((n) => n.status !== "done").length;
@@ -277,7 +291,8 @@ try {
   ok(gOpen.nodes.find((nd) => nd.deck.name === "구역A").items.length === 1, "S6 '미처리만' 필터 → 구역A 완료 건 숨김");
   C.Requests._items = items; C.Requests._pid = "prj_R";
   C.sandbox.Projects = { decks, currentProject: { id: "prj_R" } };
-  ok(C.Requests.openCountForDeck(deckA.id) === 1 && C.Requests.openCountForDeck(deckA1.id) === 2 && C.Requests.openCountForDeck(deckB.id) === 6, "S6 트리 배지 개수 A=1 · A1=2 · B=6 — " + [deckA.id, deckA1.id, deckB.id].map((x) => C.Requests.openCountForDeck(x)).join(","));
+  // [WO 20261002-gap] 트리 배지 = 요청/질문 + 결함 노트 미완 합산(openCountForDeck._isOpen, SoT) → B=12.
+  ok(C.Requests.openCountForDeck(deckA.id) === 1 && C.Requests.openCountForDeck(deckA1.id) === 2 && C.Requests.openCountForDeck(deckB.id) === 12, "S6 트리 배지 개수 A=1 · A1=2 · B=12(WO 20261002-gap 결함노트 합산) — " + [deckA.id, deckA1.id, deckB.id].map((x) => C.Requests.openCountForDeck(x)).join(","));
   C.sandbox.Projects.currentProject = { id: "prj_OTHER" };
   ok(C.Requests.openCountForDeck(deckA.id) === 0 && C.Requests.openCount() === 0, "S6 프로젝트를 바꾸면(갱신 전) 이전 프로젝트 배지·개수 잔류 0");
 

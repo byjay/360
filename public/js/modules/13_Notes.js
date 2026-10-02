@@ -259,15 +259,25 @@
       const status = (document.getElementById("pnp-status-sel") || {}).value || "open";
       const assignee = (document.getElementById("pnp-assignee") || {}).value || "";
       const author = (document.getElementById("pnp-author") || {}).value || "";
+      // [WO 20261002-gap 묶음C] 기한·심각도(선택) — 값이 없으면 보내지 않는다(지어내지 않음).
+      const dueEl = document.getElementById("pnp-due");
+      const due_at = (dueEl && dueEl.value) ? new Date(dueEl.value + "T00:00:00").getTime() : null;
+      const sevEl = document.getElementById("pnp-severity");
+      const severity = (sevEl && sevEl.value) ? sevEl.value : null;
       this._busy = true;
       const submitBtn = document.getElementById("pnp-submit");
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "등록 중…"; }
+      const clearExtra = () => {
+        if (document.getElementById("pnp-assignee")) document.getElementById("pnp-assignee").value = "";
+        if (dueEl) dueEl.value = "";
+        if (sevEl) sevEl.value = "";
+      };
       // [오프라인 노트] pin/zone/anno 와 같은 OpLog 경로에 편입 — 새 큐 만들지 않음(§편입)
       if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) {
         const now = Date.now();
         const noteObj = {
           id: this._tmpId(), deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
-          body, status, assignee, author: author || (Auth && Auth.user && Auth.user.name) || "익명",
+          body, status, assignee, due_at, severity, author: author || (Auth && Auth.user && Auth.user.name) || "익명",
           author_email: (Auth && Auth.user && Auth.user.email) || null,
           author_role: (Auth && Auth.isDesigner) ? "designer" : "guest",
           created_at: now, updated_at: now, resolved_at: status === "done" ? now : null,
@@ -277,7 +287,7 @@
           await OpLog.recordCurrent("note", "upsert", noteObj.id, noteObj);
           await this._saveSnapshot(this._list, now); // [오프라인 노트 영속화] 즉시 로컬 스냅샷(재시작 유실 방지)
           input.value = "";
-          if (document.getElementById("pnp-assignee")) document.getElementById("pnp-assignee").value = "";
+          clearExtra();
           this.render();
         } catch (e) {}
         this._busy = false;
@@ -290,12 +300,12 @@
           headers: Auth.headers(),
           body: JSON.stringify({
             deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
-            body, status, assignee, author,
+            body, status, assignee, due_at, severity, author,
           }),
         });
         if (r.ok) {
           input.value = "";
-          if (document.getElementById("pnp-assignee")) document.getElementById("pnp-assignee").value = "";
+          clearExtra();
           await this.loadForPin();
           await this.loadSummary();
         }

@@ -4,6 +4,7 @@ import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPa
   randShareCode, normalizeShareCode, isShareCode, REAUTH_TTL_MS, reauthFresh, safeEqualStr } from './lib/util'
 import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
 import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
+import { askJevSeverity, gateSeverity, SEVERITY_LEVELS } from './lib/jevSeverity'
 
 type Bindings = {
   DB: D1Database
@@ -528,10 +529,55 @@ async function checkSignupDomain(c: any, email: string, projectId?: string): Pro
   return { ok: true }
 }
 
-/** 이메일 발송. RESEND_API_KEY 또는 SENDGRID_API_KEY 가 있으면 실제 발송, 없으면 dev-fallback(코드 반환). */
-async function sendVerificationEmail(c: any, email: string, code: string): Promise<{ sent: boolean; devCode?: string; provider?: string }> {
-  const subject = '[SEASTAR 360° 뷰어] 이메일 인증코드'
+/** [WO 20261002-gap 묶음D] 메일 발송 실패 사유 — 상태코드 + 응답 본문 요약(키 값 제외) + 키 폐기(401/403) 플래그. */
+type MailError = { status: number | null; summary: string; keyRevoked: boolean }
+
+/** [WO 20261002-gap 묶음D] Resend/SendGrid 공용 발송 — 성공/실패를 값으로 구분한다(🔴 삼키는 catch 금지, 실패 사유를 버리지 않는다).
+ *  null = 두 키 모두 미설정(호출부가 dev-fallback 또는 '설정 안 됨'으로 처리). sendVerificationEmail·sendInquiryEmail 공유 지점(SoT) —
+ *  발송 로직을 두 곳에 따로 두면 반드시 갈라진다. */
+async function postMail(c: any, opts: { to: string; subject: string; html: string; text: string }):
+  Promise<{ sent: true; provider: string } | { sent: false; error: MailError } | null> {
   const fromEmail = (c.env?.MAIL_FROM && String(c.env.MAIL_FROM).includes('@')) ? c.env.MAIL_FROM : 'no-reply@seastargo.com'
+  const summarize = (s: string) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200)
+  try {
+    if (c.env?.RESEND_API_KEY) {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + c.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromEmail, to: [opts.to], subject: opts.subject, html: opts.html, text: opts.text })
+      })
+      if (res.ok) return { sent: true, provider: 'resend' }
+      const txt = await res.text().catch(() => '')
+      return { sent: false, error: { status: res.status, summary: summarize(txt), keyRevoked: res.status === 401 || res.status === 403 } }
+    }
+    if (c.env?.SENDGRID_API_KEY) {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + c.env.SENDGRID_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: opts.to }] }],
+          from: { email: fromEmail, name: 'SEASTAR 360 Viewer' },
+          subject: opts.subject,
+          content: [{ type: 'text/plain', value: opts.text }, { type: 'text/html', value: opts.html }]
+        })
+      })
+      if (res.ok || res.status === 202) return { sent: true, provider: 'sendgrid' }
+      const txt = await res.text().catch(() => '')
+      return { sent: false, error: { status: res.status, summary: summarize(txt), keyRevoked: res.status === 401 || res.status === 403 } }
+    }
+    return null   // 키 미설정
+  } catch (e: any) {
+    const name = (e && (e.name || e.constructor?.name)) || 'error'
+    return { sent: false, error: { status: null, summary: 'network:' + String(name).slice(0, 60), keyRevoked: false } }
+  }
+}
+
+/** 이메일 발송. RESEND_API_KEY 또는 SENDGRID_API_KEY 가 있으면 실제 발송, 없으면 dev-fallback(코드 반환).
+ *  🔴 [WO 20261002-gap R6] 키가 설정됐는데 실제로 실패하면(네트워크/4xx/5xx) dev_code 를 주지 않는다 —
+ *  그걸 주면 메일 인프라가 고장 났을 때도 인증코드가 응답에 그대로 노출되는 백도어가 된다(가짜 성공 금지).
+ *  dev-fallback 은 "키 자체가 없는" 의도된 개발/시연 모드에만 쓴다. */
+async function sendVerificationEmail(c: any, email: string, code: string): Promise<{ sent: boolean; devCode?: string; provider?: string; mailError?: MailError }> {
+  const subject = '[SEASTAR 360° 뷰어] 이메일 인증코드'
   const text = `SEASTAR 360° 위치 뷰어 가입 인증코드: ${code}\n\n이 코드는 발급 후 1시간 동안만 유효합니다. 본인이 요청하지 않았다면 무시하세요.`
   const html = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
     <h2 style="color:#0b3a5b">SEASTAR 360° 위치 뷰어</h2>
@@ -539,30 +585,12 @@ async function sendVerificationEmail(c: any, email: string, code: string): Promi
     <div style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f1f5f9;padding:16px 24px;border-radius:12px;text-align:center;color:#0b3a5b">${code}</div>
     <p style="color:#64748b;font-size:13px">이 코드는 발급 후 <strong>1시간</strong> 동안만 유효합니다. 본인이 요청하지 않았다면 무시하세요.</p>
   </div>`
-  try {
-    if (c.env?.RESEND_API_KEY) {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + c.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: fromEmail, to: [email], subject, html, text })
-      })
-      if (res.ok) return { sent: true, provider: 'resend' }
-    } else if (c.env?.SENDGRID_API_KEY) {
-      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + c.env.SENDGRID_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email }] }],
-          from: { email: fromEmail, name: 'SEASTAR 360 Viewer' },
-          subject,
-          content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }]
-        })
-      })
-      if (res.ok || res.status === 202) return { sent: true, provider: 'sendgrid' }
-    }
-  } catch (e) { /* 발송 실패 → dev-fallback */ }
-  // dev-fallback: 메일 발송 미설정/실패 시 코드 자체를 응답에 포함(개발/시연용)
-  return { sent: false, devCode: code }
+  const r = await postMail(c, { to: email, subject, html, text })
+  if (r === null) return { sent: false, devCode: code }   // 키 미설정 — 의도된 개발/시연 모드(종전 동작)
+  if (r.sent) return { sent: true, provider: r.provider }
+  console.error('[signup mail] send failed', r.error.status, r.error.summary)
+  // 🔴 키가 설정됐는데 실패 = 실제 장애. dev_code 를 주지 않는다(가짜 성공·코드 노출 백도어 금지).
+  return { sent: false, mailError: r.error }
 }
 
 /** [WO 20261001-viewerhelp] HTML 이스케이프 — 사용자 입력을 메일 HTML 본문에 넣기 전 반드시 통과. */
@@ -578,8 +606,7 @@ async function sendInquiryEmail(c: any, row: {
   title: string; body: string; replyEmail?: string | null; senderEmail?: string | null;
   projectName?: string | null; deploymentId?: string | null; mode?: string | null;
   userAgent?: string | null; appVersion?: string | null
-}): Promise<{ sent: boolean; provider?: string }> {
-  const fromEmail = (c.env?.MAIL_FROM && String(c.env.MAIL_FROM).includes('@')) ? c.env.MAIL_FROM : 'no-reply@seastargo.com'
+}): Promise<{ sent: boolean; provider?: string; mailError?: MailError }> {
   const subject = '[SEASTAR 360° 뷰어] 개발자 문의: ' + row.title.slice(0, 80)
   const esc = escapeHtmlServer
   const text = `개발자 문의\n제목: ${row.title}\n내용:\n${row.body}\n\n회신 이메일: ${row.replyEmail || '(미입력)'}\n보낸 계정: ${row.senderEmail || '(비로그인)'}\n프로젝트: ${row.projectName || '-'}\n배포본: ${row.deploymentId || '-'}\n모드: ${row.mode || '-'}\n브라우저: ${row.userAgent || '-'}\n앱 버전: ${row.appVersion || '-'}`
@@ -597,33 +624,14 @@ async function sendInquiryEmail(c: any, row: {
       <tr><td style="padding:2px 8px 2px 0">앱 버전</td><td>${esc(row.appVersion || '-')}</td></tr>
     </table>
   </div>`
-  try {
-    if (c.env?.RESEND_API_KEY) {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + c.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: fromEmail, to: [SUPPORT_CONTACT_EMAIL], subject, html, text })
-      })
-      if (res.ok) return { sent: true, provider: 'resend' }
-      console.error('[inquiry mail] resend failed', res.status, await res.text().catch(() => ''))
-    } else if (c.env?.SENDGRID_API_KEY) {
-      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + c.env.SENDGRID_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: SUPPORT_CONTACT_EMAIL }] }],
-          from: { email: fromEmail, name: 'SEASTAR 360 Viewer' },
-          subject,
-          content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }]
-        })
-      })
-      if (res.ok || res.status === 202) return { sent: true, provider: 'sendgrid' }
-      console.error('[inquiry mail] sendgrid failed', res.status, await res.text().catch(() => ''))
-    } else {
-      console.error('[inquiry mail] no mail provider configured (RESEND_API_KEY/SENDGRID_API_KEY)')
-    }
-  } catch (e) { console.error('[inquiry mail] send threw', e) }
-  return { sent: false }
+  const r = await postMail(c, { to: SUPPORT_CONTACT_EMAIL, subject, html, text })
+  if (r === null) {
+    console.error('[inquiry mail] no mail provider configured (RESEND_API_KEY/SENDGRID_API_KEY)')
+    return { sent: false, mailError: { status: null, summary: 'no mail provider configured', keyRevoked: false } }
+  }
+  if (r.sent) return { sent: true, provider: r.provider }
+  console.error('[inquiry mail] send failed', r.error.status, r.error.summary)
+  return { sent: false, mailError: r.error }
 }
 
 /** 로컬 세션 토큰 검증 → 사용자 반환(없으면 null) */
@@ -960,7 +968,9 @@ app.post('/api/signup/send-code', async (c) => {
   ).bind(randToken('ec-'), email, code, 'signup', now, expires).run()
 
   const mail = await sendVerificationEmail(c, email, code)
-  await logActivity(c, 'signup.code_sent', { actor: { email }, targetType: 'signup', targetId: email, detail: { provider: mail.provider || 'dev-fallback', invited: !!chk.invited } })
+  await logActivity(c, 'signup.code_sent', { actor: { email }, targetType: 'signup', targetId: email,
+    detail: { provider: mail.provider || (mail.mailError ? 'failed' : 'dev-fallback'), invited: !!chk.invited,
+      mailErrorStatus: mail.mailError ? mail.mailError.status : null, keyRevoked: mail.mailError ? mail.mailError.keyRevoked : false } })
   const resp: any = { success: true, sent: mail.sent, email, invited: !!chk.invited, expires_at: expires, valid_minutes: 60 }
   if (chk.invited) {
     const inv = await findInvite(c, email)
@@ -970,6 +980,12 @@ app.post('/api/signup/send-code', async (c) => {
     // 메일 발송 미설정/실패 시: 시연/개발용으로 코드 직접 반환
     resp.dev_code = mail.devCode
     resp.dev_note = '메일 발송이 설정되지 않아 인증코드를 직접 반환합니다(개발/시연용). RESEND_API_KEY 또는 SENDGRID_API_KEY 시크릿을 설정하면 실제 메일이 발송됩니다.'
+  } else if (!mail.sent && mail.mailError) {
+    // [WO 20261002-gap R6] 🔴 키는 설정됐지만 실제 발송이 실패 — 가짜 성공 금지. 코드는 주지 않고 정확히 안내한다.
+    resp.success = false
+    resp.error = mail.mailError.keyRevoked
+      ? '메일 발송 실패(관리자 확인 필요) — 메일 키 확인 필요'
+      : '메일 발송 실패(관리자 확인 필요). 잠시 후 다시 시도하거나 관리자에게 문의하세요.'
   }
   return c.json(resp)
 })
@@ -1686,13 +1702,38 @@ app.post('/api/inquiries', async (c) => {
 
   const mail = await sendInquiryEmail(c, row)
   if (mail.sent) {
-    try { await c.env.DB.prepare('UPDATE inquiries SET mail_sent = 1 WHERE id = ?').bind(id).run() } catch {}
+    try { await c.env.DB.prepare('UPDATE inquiries SET mail_sent = 1, mail_error = NULL WHERE id = ?').bind(id).run() } catch {}
   } else {
-    console.error('[inquiry] mail send failed, saved only. id=' + id)
+    // [WO 20261002-gap 묶음D] 🔴 실패 사유를 버리지 않는다 — 상태코드+요약을 저장(키 값 제외) + 서버 로그.
+    console.error('[inquiry] mail send failed, saved only. id=' + id, mail.mailError)
+    const errText = mail.mailError ? JSON.stringify(mail.mailError).slice(0, 500) : null
+    try { await c.env.DB.prepare('UPDATE inquiries SET mail_error = ? WHERE id = ?').bind(errText, id).run() } catch {}
   }
-  await logActivity(c, 'inquiry.create', { actor: user, targetType: 'inquiry', targetId: id, detail: { mail_sent: mail.sent } })
+  await logActivity(c, 'inquiry.create', { actor: user, targetType: 'inquiry', targetId: id, detail: { mail_sent: mail.sent, mail_error_status: mail.mailError ? mail.mailError.status : null } })
   // 🔴 저장이 됐으면(여기 도달) 메일 발송 성공 여부와 무관하게 사용자에게는 "접수됨"으로 응답한다.
   return c.json({ success: true, id, mail_sent: mail.sent })
+})
+
+/** [WO 20261002-gap 묶음D·2] 관리자 — 발송 실패한 문의 메일 재발송. 성공 시 mail_error 를 비운다. */
+app.post('/api/inquiries/:id/resend', async (c) => {
+  const su = await requireAdmin(c)
+  if (!su) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  const row: any = await c.env.DB.prepare('SELECT * FROM inquiries WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  const mail = await sendInquiryEmail(c, {
+    title: row.title, body: row.body, replyEmail: row.reply_email, senderEmail: row.sender_email,
+    projectName: row.project_name, deploymentId: row.deployment_id, mode: row.mode,
+    userAgent: row.user_agent, appVersion: row.app_version,
+  })
+  if (mail.sent) {
+    await c.env.DB.prepare('UPDATE inquiries SET mail_sent = 1, mail_error = NULL WHERE id = ?').bind(id).run()
+  } else {
+    const errText = mail.mailError ? JSON.stringify(mail.mailError).slice(0, 500) : null
+    await c.env.DB.prepare('UPDATE inquiries SET mail_error = ? WHERE id = ?').bind(errText, id).run()
+  }
+  await logActivity(c, 'inquiry.resend', { actor: su, targetType: 'inquiry', targetId: id, detail: { mail_sent: mail.sent } })
+  return c.json({ success: true, mail_sent: mail.sent, mail_error: mail.mailError || null })
 })
 
 // 문의 목록(관리자 전용) — 간단 목록
@@ -1930,6 +1971,15 @@ async function canManageMembers(c: any, user: any, projectId: string): Promise<b
 function canManageMembersOf(c: any, user: any, owner: any): boolean {
   if (!user) return false
   return isSuperAdmin(c, user.email) || isProjectOwner(owner, user.email)
+}
+
+/** [WO 20261002-gap 묶음C] 🔴 마스터 확정 — '확인(verified)' 전환은 소유자·super 만. 서버에서 강제(403).
+ *  노트는 deployment_id 로 프로젝트에 연결되므로(projectIdsOfDeployment), 그 프로젝트 중 하나라도
+ *  관리 권한(canManageMembers, SoT)이 있으면 허용. 프로젝트를 특정 못 하면(마이그레이션 전 등) 거부(fail-closed). */
+async function canVerifyNoteByDeployment(c: any, user: any, depId: string): Promise<boolean> {
+  const pids = await projectIdsOfDeployment(c, depId)
+  for (const pid of pids) { if (await canManageMembers(c, user, pid)) return true }
+  return false
 }
 
 /** [WO 20261001-invite · 마스터 확정 ②] 이메일 앞 대기 초대(project_invites) → 멤버 자동 편입 + 초대 소진.
@@ -3808,14 +3858,17 @@ app.post('/tables/deployments/:id/ops', async (c) => {
         if (isTemp) {
           const newId = genId('note')
           const status = VALID_STATUS.includes(d.status) ? d.status : 'open'
+          // [WO 20261002-gap 묶음C] 오프라인 생성도 due_at·severity 를 잃지 않는다(형제 호출부 = POST /api/notes).
+          const dueAt = (d.due_at != null && Number.isFinite(Number(d.due_at))) ? Number(d.due_at) : null
+          const severityIn = (typeof d.severity === 'string' && SEVERITY_LEVELS.includes(d.severity as any)) ? d.severity : null
           await c.env.DB.prepare(
             `INSERT INTO pin_notes
-              (id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+              (id, deployment_id, pin_id, pin_label, body, status, assignee, due_at, severity, author, author_email, author_role, created_at, updated_at, resolved_at, deleted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
           ).bind(
             newId, id, String(d.pin_id || ''), String(d.pin_label || ''),
             String(d.body || '').slice(0, 4000), status,
-            (d.assignee ? String(d.assignee) : null), String(d.author || '익명'),
+            (d.assignee ? String(d.assignee) : null), dueAt, severityIn, String(d.author || '익명'),
             d.author_email || null, d.author_role || 'guest',
             opTsNote, opTsNote, status === 'done' ? opTsNote : null
           ).run()
@@ -3823,11 +3876,22 @@ app.post('/tables/deployments/:id/ops', async (c) => {
         } else {
           const fields: string[] = []; const args: any[] = []
           if (typeof d.body === 'string') { fields.push('body = ?'); args.push(d.body.slice(0, 4000)) }
-          if (typeof d.status === 'string' && VALID_STATUS.includes(d.status)) {
+          // [WO 20261002-gap 묶음C] 🔴 형제 호출부(PATCH /api/notes/:id)와 같은 게이트 — 오프라인 큐도 우회 불가.
+          //   권한 없는 verified 는 조용히 건너뛴다(배치의 다른 엔티티 동기화를 막지 않는다 — 조용한 실패 아님, 그 필드만 미반영).
+          if (typeof d.status === 'string' && VALID_STATUS_PATCH.includes(d.status) &&
+              (d.status !== 'verified' || await canManageMembers(c, user, dep.project_id))) {
             fields.push('status = ?'); args.push(d.status)
-            fields.push('resolved_at = ?'); args.push(d.status === 'done' ? opTsNote : null)
+            fields.push('resolved_at = ?'); args.push((d.status === 'done' || d.status === 'verified') ? opTsNote : null)
           }
           if (typeof d.assignee === 'string') { fields.push('assignee = ?'); args.push(d.assignee.trim() || null) }
+          if (d.due_at !== undefined) {
+            const dueAt2 = d.due_at === null ? null : Number(d.due_at)
+            if (dueAt2 === null || Number.isFinite(dueAt2)) { fields.push('due_at = ?'); args.push(dueAt2) }
+          }
+          if (d.severity !== undefined) {
+            const sev2 = (typeof d.severity === 'string' && SEVERITY_LEVELS.includes(d.severity as any)) ? d.severity : null
+            fields.push('severity = ?'); args.push(sev2)
+          }
           if (fields.length) {
             fields.push('updated_at = ?'); args.push(opTsNote)
             args.push(realId)
@@ -3965,6 +4029,9 @@ app.post('/api/sync/batch', async (c) => {
    · 본인 판정: 실계정 = 이메일, 익명 = 작성 응답의 수정키(X-Note-Key, DB 엔 해시만)
 ════════════════════════════════════════════ */
 const VALID_STATUS = ['open', 'progress', 'done']
+/** [WO 20261002-gap 묶음C] 결함 노트 전용 4단계 — '확인(verified)'은 소유자·super 만(canVerifyNoteByDeployment, 아래).
+ *  생성 시점(VALID_STATUS)엔 포함하지 않는다 — 확인은 완료 뒤 검토 행위라 처음부터 고를 값이 아니다. */
+const VALID_STATUS_PATCH = ['open', 'progress', 'done', 'verified']
 
 /** withContact = 디자이너 응답에만 익명 회신 이메일(author_contact)을 싣는다(열람자끼리 노출 금지). */
 function mapNote(r: any, withContact = false) {
@@ -3980,6 +4047,8 @@ function mapNote(r: any, withContact = false) {
     body: r.body,
     status: r.status,
     assignee: r.assignee,
+    due_at: r.due_at ?? null,          // [WO 20261002-gap] 기한(epoch ms)
+    severity: r.severity ?? null,      // [WO 20261002-gap] '상'|'중'|'하'(사람이 확정한 값만)
     author: r.author,
     author_email: r.author_email,
     author_role: r.author_role,
@@ -4047,14 +4116,15 @@ app.get('/api/projects/:id/requests', async (c) => {
   if (denied) return c.json({ error: denied.error }, denied.status)
   const { results } = await c.env.DB.prepare(
     `SELECT n.* FROM pin_notes n
-      WHERE n.deleted = 0 AND n.kind IN ('request', 'question', 'reply')
+      WHERE n.deleted = 0 AND n.kind IN ('request', 'question', 'reply', 'note')
         AND n.deployment_id IN (SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL)
       ORDER BY n.created_at ASC LIMIT 2000`
   ).bind(pid).all()
   const rows: any[] = results || []
   const tops = new Set(rows.filter((r) => r.kind !== 'reply').map((r) => String(r.id)))
   const data = rows.filter((r) => r.kind !== 'reply' || tops.has(String(r.parent_id))).map((r) => mapNote(r, true))
-  const open = data.filter((n: any) => n.kind !== 'reply' && n.status !== 'done').length
+  // [WO 20261002-gap] 미완 = done·verified 둘 다 제외(결함 노트의 '확인' 단계까지 처리된 것으로 본다)
+  const open = data.filter((n: any) => n.kind !== 'reply' && n.status !== 'done' && n.status !== 'verified').length
   return c.json({ data, open })
 })
 
@@ -4149,6 +4219,10 @@ app.post('/api/notes', async (c) => {
   let status = a.designer ? String(body.status || 'open') : 'open'
   if (!VALID_STATUS.includes(status)) status = 'open'
   const assignee = a.designer ? (String(body.assignee || '') || null) : null
+  // [WO 20261002-gap 묶음C] 기한·심각도 — 생성 시점은 디자이너만, '확인' 단계는 생성 시 불가(VALID_STATUS 에 verified 없음).
+  const due_at = (a.designer && body.due_at != null && Number.isFinite(Number(body.due_at))) ? Number(body.due_at) : null
+  let severity: string | null = a.designer && typeof body.severity === 'string' ? body.severity : null
+  if (severity && !SEVERITY_LEVELS.includes(severity as any)) severity = null
   const deck_id = parent ? (parent.deck_id ?? null) : await resolveNoteDeck(c, deployment_id, pin_id, String(body.deck_id || ''))
   const pin_label = parent ? String(parent.pin_label || '') : String(body.pin_label || '').slice(0, 200)
   // 익명 본인 확인 수정키 — 원문은 이 응답에만, DB 엔 해시만(초대 토큰과 같은 규칙)
@@ -4158,17 +4232,17 @@ app.post('/api/notes', async (c) => {
   const id = genId('note')
   const now = Date.now()
   const row = {
-    id, deployment_id, pin_id, pin_label, body: text, status, assignee, author, author_email: a.email, author_role: a.role,
+    id, deployment_id, pin_id, pin_label, body: text, status, assignee, due_at, severity, author, author_email: a.email, author_role: a.role,
     created_at: now, updated_at: now, resolved_at: status === 'done' ? now : null,
     kind, parent_id: parent ? String(parent.id) : null, deck_id, author_contact,
   }
   await c.env.DB.prepare(
     `INSERT INTO pin_notes
-      (id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted,
+      (id, deployment_id, pin_id, pin_label, body, status, assignee, due_at, severity, author, author_email, author_role, created_at, updated_at, resolved_at, deleted,
        kind, parent_id, deck_id, author_contact, author_key_hash, ip)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.author, row.author_email, row.author_role,
+    row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.due_at, row.severity, row.author, row.author_email, row.author_role,
     row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey
   ).run()
   return c.json({ ...mapNote(row, a.designer || a.role === 'guest'), ...(editKey ? { edit_key: editKey } : {}) })
@@ -4195,7 +4269,9 @@ app.patch('/api/notes/:id', async (c) => {
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   // [WO 20261001-viewreq] 요청·질문·답변의 처리 상태·담당자는 디자이너 몫 — 작성자(열람자)는 내용만 고친다.
-  if (right === 'author' && String(note.kind || 'note') !== 'note' && (typeof body.status === 'string' || typeof body.assignee === 'string')) {
+  // [WO 20261002-gap] due_at·severity 도 같은 등급(결함 노트 전용 필드 — 요청/질문 작성자는 건드릴 수 없다).
+  if (right === 'author' && String(note.kind || 'note') !== 'note' &&
+      (typeof body.status === 'string' || typeof body.assignee === 'string' || body.due_at !== undefined || body.severity !== undefined)) {
     return c.json({ error: 'forbidden — only designers can change status' }, 403)
   }
 
@@ -4208,12 +4284,31 @@ app.patch('/api/notes/:id', async (c) => {
     if (t.length > NOTE_BODY_MAX) return c.json({ error: 'body too long' }, 400)
     fields.push('body = ?'); args.push(t)
   }
-  if (typeof body.status === 'string' && VALID_STATUS.includes(body.status)) {
+  if (typeof body.status === 'string' && VALID_STATUS_PATCH.includes(body.status)) {
+    // [WO 20261002-gap 묶음C] 🔴 마스터 확정 — '확인(verified)'은 소유자·super 만. 서버 강제(403).
+    if (body.status === 'verified') {
+      const actor = await noteActor(c)
+      if (!(await canVerifyNoteByDeployment(c, actor.user, note.deployment_id))) {
+        return c.json({ error: 'forbidden — verified requires project owner or super' }, 403)
+      }
+    }
     fields.push('status = ?'); args.push(body.status)
-    fields.push('resolved_at = ?'); args.push(body.status === 'done' ? now : null)
+    fields.push('resolved_at = ?'); args.push((body.status === 'done' || body.status === 'verified') ? now : null)
   }
   if (typeof body.assignee === 'string') {
     fields.push('assignee = ?'); args.push(body.assignee.trim() || null)
+  }
+  // [WO 20261002-gap] 기한 — null 허용(해제). 숫자가 아니면 400(지어내지 않음).
+  if (body.due_at !== undefined) {
+    const d = body.due_at === null ? null : Number(body.due_at)
+    if (d !== null && !Number.isFinite(d)) return c.json({ error: 'invalid due_at' }, 400)
+    fields.push('due_at = ?'); args.push(d)
+  }
+  // [WO 20261002-gap] 심각도 — 사람이 저장 전 확정한 값만 저장(Jev 는 제안만, 여기서 자동확정 없음).
+  if (body.severity !== undefined) {
+    const s = body.severity === null ? null : String(body.severity)
+    if (s && !SEVERITY_LEVELS.includes(s as any)) return c.json({ error: 'invalid severity' }, 400)
+    fields.push('severity = ?'); args.push(s || null)
   }
   if (fields.length === 0) return c.json({ error: 'nothing to update' }, 400)
   fields.push('updated_at = ?'); args.push(now)
@@ -4233,6 +4328,22 @@ app.delete('/api/notes/:id', async (c) => {
   await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ? OR parent_id = ?')
     .bind(now, id, id).run()
   return c.json({ success: true })
+})
+
+/** [WO 20261002-gap 묶음C·5] 결함 노트 본문 → 심각도 제안(Jev, 원시 확률만). 🔴 사람이 저장 전 확정 —
+ *  이 응답은 '제안'일 뿐 저장하지 않는다(PATCH /api/notes/:id 로 severity 를 사람이 확정해 보낸다).
+ *  권한 = noteEditRight(이 노트를 고칠 수 있는 사람만 제안도 받는다). 키 없음·실패 = level:null(폴백, 거짓 성공 금지). */
+app.post('/api/notes/:id/severity-suggest', async (c) => {
+  const id = c.req.param('id')
+  const note = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!note) return c.json({ error: 'not found' }, 404)
+  if (!(await noteEditRight(c, note))) return c.json({ error: 'forbidden' }, 403)
+  const t0 = Date.now()
+  const probe = await askJevSeverity(c.env, String((note as any).body || ''))
+  const gate = gateSeverity(probe)
+  await logActivity(c, 'note.severity_suggest', { actor: await getUser(c), targetType: 'note', targetId: id,
+    detail: { ok: probe.ok, p: gate.p, estimated: gate.estimated, ms: Date.now() - t0 } })
+  return c.json({ level: gate.level, estimated: gate.estimated, p: gate.p, ok: probe.ok, error: probe.ok ? null : probe.error })
 })
 
 /* ════════════════════════════════════════════

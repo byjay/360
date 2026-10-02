@@ -14,18 +14,28 @@
         #ffffff/#b91c1c 6.5:1 · #cbbfa0/#1a1712 10.4:1 · #ff8a8a/#1a1712 8.1:1
   ══════════════════════════════════════════ */
   const Requests = {
-    KIND: { request: "요청", question: "질문" },
-    STATUS: { open: "접수", progress: "처리중", done: "완료" },
+    // [WO 20261002-gap 묶음C] kind='note' = 결함 노트(디자이너 전용 이슈, 전역 목록 탭에 추가). 열람자 요청·질문은 그대로.
+    KIND: { request: "요청", question: "질문", note: "결함" },
+    STATUS: { open: "접수", progress: "처리중", done: "완료", verified: "확인완료" },
     ROLE: { super: "관리자", designer: "디자이너", viewer: "열람자", guest: "익명" },
+    SEVERITY: { 상: "상", 중: "중", 하: "하" },
     STATUS_STYLE: {
       open: "background:#fecaca;color:#450a0a",
       progress: "background:#fde68a;color:#422006",
       done: "background:#bbf7d0;color:#052e16",
+      verified: "background:#ddd6fe;color:#312e81",   // 대비 9.3:1
     },
     KIND_STYLE: {
       request: "background:#c9962a;color:#1a1712",
       question: "background:#bfdbfe;color:#0b1f44",
+      note: "background:#fca5a5;color:#450a0a",        // 대비 6.9:1
     },
+    SEVERITY_STYLE: {
+      상: "background:#fecaca;color:#450a0a",
+      중: "background:#fde68a;color:#422006",
+      하: "background:#e5e7eb;color:#1f2937",
+    },
+    OVERDUE_STYLE: "background:#b91c1c;color:#ffffff",  // 대비 6.5:1(파일 상단 고지와 동일 색)
     KEYS_LS: "wm_note_keys",       // { noteId: 수정키 } — 익명 작성자 본인 확인(서버엔 해시만)
     NAME_LS: "wm_req_author",      // 익명 이름 기억(다음 작성 편의)
     _items: [],                    // 디자이너 요청함 캐시(서버 /api/projects/:id/requests)
@@ -38,6 +48,11 @@
     _viewerBtn: null,
     _panelEl: null,
     _filterOpen: true,
+    // [WO 20261002-gap 묶음C·3] 전역 [결함/요청 목록] 탭 + 필터 + 정렬 상태
+    _tab: "reqq",                  // 'reqq'(요청·질문) | 'note'(결함 노트)
+    _fAssignee: "",                // 담당자 자유텍스트 부분일치
+    _fOverdue: false,              // 기한 지남만
+    _sort: "recent",               // 'recent' | 'due'
 
     /* ── 공통 ── */
     _el(tag, style, text) {
@@ -180,7 +195,22 @@
     },
 
     /** 미처리(접수·처리중) 요청 수 — 답변 행 제외 */
-    openCount(items) { return (items || this._live()).filter((n) => n.kind !== "reply" && n.status !== "done").length; },
+    // [WO 20261002-gap 묶음C] 미완 판정 단일 지점 — done·verified 둘 다 완료로 본다(결함 노트 '확인' 단계 포함).
+    //   세 곳(openCount·groupByTree·openCountForDeck)이 따로 판정하면 반드시 갈라진다(SoT).
+    _isOpen(n) { return n.kind !== "reply" && n.status !== "done" && n.status !== "verified"; },
+    openCount(items) { return (items || this._live()).filter((n) => this._isOpen(n)).length; },
+    // [WO 20261002-gap 묶음C·3] 기한 지남 — 미완 + due_at 과거만. 완료/확인된 건은 지났어도 지남 배지를 달지 않는다.
+    _isOverdue(n) { return !!(n.due_at && Number(n.due_at) < Date.now() && this._isOpen(n)); },
+    // 전역 탭([요청·질문]/[결함 노트]) + 필터(담당·기한지남) — 트리 그룹핑 전에 적용(groupByTree 는 순수 유지).
+    _applyFilters(items) {
+      let out = (items || []).filter((n) => n.kind === "reply" || (this._tab === "note" ? n.kind === "note" : n.kind !== "note"));
+      if (this._fAssignee.trim()) {
+        const q = this._fAssignee.trim().toLowerCase();
+        out = out.filter((n) => n.kind === "reply" || (String(n.assignee || "").toLowerCase().indexOf(q) >= 0));
+      }
+      if (this._fOverdue) out = out.filter((n) => n.kind === "reply" || this._isOverdue(n));
+      return out;
+    },
 
     _renderInboxBtn() {
       if (!this._inboxBtn) return;
@@ -211,7 +241,7 @@
       });
       const ts = (v) => (typeof v === "number") ? v : (Date.parse(v) || 0);
       const withReplies = tops
-        .filter((n) => !onlyOpen || n.status !== "done")
+        .filter((n) => !onlyOpen || this._isOpen(n))
         .map((n) => Object.assign({}, n, { replies: (repliesOf.get(String(n.id)) || []).slice().sort((a, b) => ts(a.created_at) - ts(b.created_at)) }));
       const byDeck = new Map(), unassigned = [];
       withReplies.forEach((n) => {
@@ -221,13 +251,20 @@
         byDeck.get(did).push(n);
       });
       const pinNo = (n) => { const v = parseInt(String(n.pin_label || "").replace(/^P/i, ""), 10); return Number.isFinite(v) ? v : Infinity; };
-      const order = (a, b) => {
-        const ap = a.pin_id ? 1 : 0, bp = b.pin_id ? 1 : 0;
-        if (ap !== bp) return ap - bp;                                  // 구역 단위(핀 없음) 먼저
-        if (ap && pinNo(a) !== pinNo(b)) return pinNo(a) - pinNo(b);    // 핀 번호 순
-        if (ap && String(a.pin_id) !== String(b.pin_id)) return String(a.pin_id) < String(b.pin_id) ? -1 : 1;
-        return ts(a.created_at) - ts(b.created_at);
-      };
+      // [WO 20261002-gap 묶음C·3] 정렬 = 기한·최근순. '기한'은 기한 있는 항목을 먼저(빠른 기한 우선), 기한 없는 항목은 뒤.
+      const order = (this._sort === "due")
+        ? (a, b) => {
+            const ad = a.due_at ? Number(a.due_at) : Infinity, bd = b.due_at ? Number(b.due_at) : Infinity;
+            if (ad !== bd) return ad - bd;
+            return ts(b.created_at) - ts(a.created_at);
+          }
+        : (a, b) => {
+            const ap = a.pin_id ? 1 : 0, bp = b.pin_id ? 1 : 0;
+            if (ap !== bp) return ap - bp;                                  // 구역 단위(핀 없음) 먼저
+            if (ap && pinNo(a) !== pinNo(b)) return pinNo(a) - pinNo(b);    // 핀 번호 순
+            if (ap && String(a.pin_id) !== String(b.pin_id)) return String(a.pin_id) < String(b.pin_id) ? -1 : 1;
+            return ts(a.created_at) - ts(b.created_at);
+          };
       const G = (typeof UI !== "undefined" && UI.groupDecksByParent) ? UI.groupDecksByParent(decks) : { roots: decks, childrenOf: new Map() };
       const nodes = [];
       const walk = (d, depth) => {
@@ -243,18 +280,45 @@
       const items = this._live();
       if (!items.length || deckId == null) return 0;
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
-      return items.filter((n) => n.kind !== "reply" && n.status !== "done" && this.deckIdOf(n, decks) === String(deckId)).length;
+      return items.filter((n) => this._isOpen(n) && this.deckIdOf(n, decks) === String(deckId)).length;
     },
 
     openInbox() {
       this.closePanel();
       const { backdrop, panel } = this._shell("요청함", "right");
       panel.setAttribute("data-req-inbox", "1");
-      const bar = this._el("div", "display:flex;gap:6px;margin:0 0 12px;flex-wrap:wrap");
+      // [WO 20261002-gap 묶음C·3] 탭 [요청·질문][결함 노트]
+      const tabs = this._el("div", "display:flex;gap:6px;margin:0 0 8px");
+      [["reqq", "요청·질문"], ["note", "결함 노트"]].forEach(([k, label]) => {
+        const b = this._btn(label, null, () => { this._tab = k; this._renderInbox(); });
+        b.setAttribute("data-req-tab", k);
+        tabs.appendChild(b);
+      });
+      panel.appendChild(tabs);
+      const bar = this._el("div", "display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap;align-items:center");
       const fOpen = this._btn("미처리만", null, () => { this._filterOpen = true; this._renderInbox(); });
       const fAll = this._btn("전체", null, () => { this._filterOpen = false; this._renderInbox(); });
       fOpen.setAttribute("data-req-filter", "open"); fAll.setAttribute("data-req-filter", "all");
       bar.appendChild(fOpen); bar.appendChild(fAll);
+      // 담당자 필터(자유 텍스트)
+      const aIn = this._el("input", "padding:6px 8px;border-radius:6px;border:1px solid #554;background:#2a2518;color:#ffffff;font-size:12px;width:110px");
+      aIn.type = "text"; aIn.placeholder = "담당자"; aIn.setAttribute("data-req-f-assignee", "1");
+      aIn.addEventListener("input", () => { this._fAssignee = aIn.value; this._renderInbox(); });
+      bar.appendChild(aIn);
+      // 기한 지남만
+      const odLabel = this._el("label", "display:flex;align-items:center;gap:4px;font-size:12px;color:#cbbfa0;cursor:pointer");
+      const odCb = this._el("input"); odCb.type = "checkbox"; odCb.setAttribute("data-req-f-overdue", "1");
+      odCb.addEventListener("change", () => { this._fOverdue = odCb.checked; this._renderInbox(); });
+      odLabel.appendChild(odCb); odLabel.appendChild(this._el("span", "", "기한지남"));
+      bar.appendChild(odLabel);
+      // 정렬
+      const sortBtn = this._btn("정렬: 최근", null, () => {
+        this._sort = this._sort === "due" ? "recent" : "due";
+        sortBtn.textContent = this._sort === "due" ? "정렬: 기한" : "정렬: 최근";
+        this._renderInbox();
+      });
+      sortBtn.setAttribute("data-req-sort", "1");
+      bar.appendChild(sortBtn);
       panel.appendChild(bar);
       const list = this._el("div", "");
       list.setAttribute("data-req-inbox-list", "1");
@@ -269,13 +333,19 @@
       const panel = this._panelEl.querySelector("[data-req-inbox]");
       const list = panel && panel.querySelector("[data-req-inbox-list]");
       if (!list) return;
+      panel.querySelectorAll("[data-req-tab]").forEach((b) => {
+        const on = b.getAttribute("data-req-tab") === this._tab;
+        b.style.background = on ? "#c9962a" : "#2a2518"; b.style.color = on ? "#1a1712" : "#ffffff";
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
       panel.querySelectorAll("[data-req-filter]").forEach((b) => {
         const on = (b.getAttribute("data-req-filter") === "open") === this._filterOpen;
         b.style.background = on ? "#c9962a" : "#2a2518"; b.style.color = on ? "#1a1712" : "#ffffff";
         b.setAttribute("aria-pressed", on ? "true" : "false");
       });
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
-      const g = this.groupByTree(this._live(), decks, this._filterOpen);
+      const filtered = this._applyFilters(this._live());
+      const g = this.groupByTree(filtered, decks, this._filterOpen);
       const h = panel.querySelector("[data-req-title]");
       if (h) h.textContent = "요청함 — 미처리 " + g.open + "건";
       list.innerHTML = "";
@@ -306,6 +376,15 @@
       const head = this._el("div", "display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 6px");
       head.appendChild(this._badge(this.KIND[n.kind] || n.kind, this.KIND_STYLE[n.kind] || this.KIND_STYLE.request));
       head.appendChild(this._badge(this.STATUS[n.status] || n.status, this.STATUS_STYLE[n.status] || this.STATUS_STYLE.open));
+      // [WO 20261002-gap 묶음C] 심각도·기한 배지(결함 노트) — 값이 없으면 그리지 않는다(지어내지 않음).
+      if (n.severity) head.appendChild(this._badge(this.SEVERITY[n.severity] || n.severity, this.SEVERITY_STYLE[n.severity] || this.SEVERITY_STYLE.중));
+      if (n.due_at) {
+        const overdue = this._isOverdue(n);
+        const d = new Date(Number(n.due_at));
+        const label = (overdue ? "지남 " : "기한 ") + (d.getMonth() + 1) + "." + d.getDate();
+        head.appendChild(this._badge(label, overdue ? this.OVERDUE_STYLE : "background:#e5e7eb;color:#1f2937"));
+      }
+      if (n.assignee) head.appendChild(this._el("span", "font-size:11.5px;color:#f7d98a", "담당 " + n.assignee));
       const target = this._btn(n.pin_id ? ("#" + (n.pin_label || "포인트")) : "구역 단위",
         "padding:2px 8px;border-radius:6px;border:1px solid #c9962a;background:transparent;color:#f7d98a;font-size:12px;font-weight:700;cursor:pointer",
         () => this.goTo(n));
@@ -343,6 +422,13 @@
         b.setAttribute("data-req-act", st);
         acts.appendChild(b);
       });
+      // [WO 20261002-gap 묶음C] 🔴 마스터 확정 — '확인'은 소유자·super 만. 서버가 403 으로 강제하므로
+      //   이 버튼은 UX 가림일 뿐(Auth.projectCanManage, SoT = 서버 can_manage_members) — 숨겨도 서버는 별도로 막는다.
+      if (n.kind === "note" && n.status === "done" && typeof Auth !== "undefined" && Auth.projectCanManage) {
+        const vb = this._btn("확인", "padding:7px 12px;border-radius:8px;border:none;background:#6d28d9;color:#ffffff;font-weight:700;font-size:12.5px;cursor:pointer", () => this.setStatus(n, "verified"));
+        vb.setAttribute("data-req-act", "verified");
+        acts.appendChild(vb);
+      }
       card.appendChild(acts);
       card.appendChild(replyBox);
       return card;

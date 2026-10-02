@@ -40,8 +40,11 @@ async function buildWorker(srcOverride) {
     const tmpSrc = path.join(os.tmpdir(), "p104-index-" + process.pid + "-" + Date.now() + ".tsx");
     fs.writeFileSync(tmpSrc, srcOverride, "utf8");
     // [lib] 상대경로 의존(./lib/util 등)을 그대로 쓰려면 원본 디렉터리에 심링크 대신 복사본을 둔다.
+    // 🔴 [WO 20261002-gap] 매번 새로 복사한다 — os.tmpdir() 는 프로세스 간 공유 경로라, 새 lib 파일(예:
+    //   jevSeverity.ts)이 추가돼도 "이미 존재"로 오판해 옛 복사본을 쓰면 esbuild 가 그 파일을 못 찾는다(실사고).
     const libDir = path.join(path.dirname(tmpSrc), "lib");
-    if (!fs.existsSync(libDir)) fs.cpSync(path.join(ROOT, "src/lib"), libDir, { recursive: true });
+    fs.rmSync(libDir, { recursive: true, force: true });
+    fs.cpSync(path.join(ROOT, "src/lib"), libDir, { recursive: true });
     await esbuild.build({
       entryPoints: [tmpSrc], bundle: true, format: "esm", platform: "node", outfile: outFile,
       jsx: "automatic", jsxImportSource: "hono/jsx", logLevel: "silent",
