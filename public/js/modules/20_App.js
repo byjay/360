@@ -722,8 +722,15 @@
       // [마스터: 수동 저장] '저장' 버튼 → 서버 반영. 미저장 변경 시 이탈 경고.
       const sbtn = UI.$("btn-save");
       if (sbtn) sbtn.addEventListener("click", () => this._saveNow({ now: true, withPages: true }));
+      // [WO offline2-R4] 🔴 근본원인: 종전엔 this._dirty(화면상 미저장 편집)만 봤다 — 저장은 끝났어도
+      //   오프라인 op 로그/이미지 업로드 큐(SyncQueue)가 아직 서버에 반영 안 된 상태로 나가면 경고가
+      //   없었다(조용한 유실 위험). 판정은 Offline.updateNetBadge 와 같은 합계(App._pendingSyncCount,
+      //   §G-2-5 공유 — 여기서 따로 재계산하지 않는다)를 쓴다. 온라인에서 저장이 끝나 pending=0이면
+      //   경고하지 않는다(요구사항 그대로).
       window.addEventListener("beforeunload", (e) => {
-        if (this._dirty && State.mode === "designer") { e.preventDefault(); e.returnValue = ""; }
+        if (State.mode !== "designer") return;
+        const pending = this._pendingSyncCount || 0;
+        if (this._dirty || pending > 0) { e.preventDefault(); e.returnValue = ""; }
       });
     },
 
@@ -1117,8 +1124,14 @@
       const sb = $("sidebar");
       if (sb) sb.addEventListener("click", (e) => {
         if (!document.body.classList.contains("sidebar-open")) return;
+        // [WO offline2-R1] 🔴 근본원인: 사이드 트리의 구역/영역 노드(.tree-node-deck/.tree-node-region,
+        //   11_UI.js deckNode())를 탭해 선택(Projects.selectDeck)하거나 이미 열린 구역을 다시 탭해도
+        //   이 목록엔 없어 시트가 안 닫혔다(모바일에서 지도를 계속 가림 — p114 defect P1/P2 재현).
+        //   caret(펼침/접힘)·⋯메뉴 탭은 탐색이 아니므로 그대로 둔다(열림 상태 유지가 맞다).
+        if (e.target.closest(".tree-caret") || e.target.closest(".tree-more")) return;
         const t = e.target.closest("button");
-        if (t && (t.id === "btn-upload-drawing" || t.id === "btn-deploy" || t.classList.contains("deck-name"))) {
+        const navNode = t && t.closest && t.closest(".tree-node-deck, .tree-node-region");
+        if (t && (t.id === "btn-upload-drawing" || t.id === "btn-deploy" || t.classList.contains("deck-name") || navNode)) {
           setTimeout(closeSheet, 120);
         }
       });
@@ -3255,9 +3268,10 @@
       return !!(pin && (pin.imageId || pin.videoUrl || pin.imageUrl || pin.pendingOpId || pin.localPreview));
     },
 
-    /** 핀에 노트/첨부/3D 포인트클라우드가 있는가 */
+    /** 핀에 노트/첨부/3D 포인트클라우드/GPS 가 있는가. [WO offline2-R6] GPS 추가 — 48_GPS.js 가
+     *  채운 pin.gps(lat/lng 있음)도 "정보 있음"으로 쳐서 패널이 뜬다(지어내지 않음·값 없으면 숨김). */
     pinHasInfo(pin) {
-      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length) || pin.has3D || pin.flsLocalId || pin.flsUrl));
+      return !!(pin && (pin.note || (pin.attachments && pin.attachments.length) || pin.has3D || pin.flsLocalId || pin.flsUrl || (pin.gps && pin.gps.lat != null)));
     },
 
     /** 핀에 클릭 시 보여줄 콘텐츠(미디어 또는 정보)가 있는가 */
@@ -3277,6 +3291,17 @@
           <span>${UI.escapeHtml(pin.label)}</span>
           <button class="pano-info-close" id="pano-info-close" title="닫기" aria-label="닫기">✕</button>
         </div>`;
+      // [WO offline2-R6] GPS 표시 — 값 없으면 그리지 않는다(지어내지 않음). 정확도 경고는 그대로
+      //   저장된 값 위에 경고 문구만 덧붙인다(값을 지우거나 바꾸지 않음, §10-no-hardcoding).
+      // 🔴 새 CSS 클래스 0개 — 이미 스타일 적용된 .pano-note-text(이 CSS 는 타 팀 점유 파일) 그대로 재사용.
+      if (typeof GPS !== "undefined" && pin.gps && pin.gps.lat != null) {
+        const gUrl = GPS.mapUrl(pin.gps);
+        const gWarn = GPS.accWarning(pin.gps);
+        const gTxt = UI.escapeHtml(GPS.displayText(pin.gps)) + (gWarn ? " · " + UI.escapeHtml(gWarn) : "");
+        html += `<div class="pano-note-text">` +
+          (gUrl ? `<a href="${UI.escapeHtml(gUrl)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">${gTxt}</a>` : gTxt) +
+          `</div>`;
+      }
       if (pin.note) html += `<div class="pano-note-text">${UI.escapeHtml(pin.note)}</div>`;
       if (pin.attachments && pin.attachments.length) {
         html += `<div class="pano-attach-head">첨부 문서 ${pin.attachments.length}</div>`;
@@ -5221,6 +5246,16 @@
       if (opts.withPages) this._dirtyPages = true;        // 도면 페이지도 다음 저장에 포함
       // 로컬 우선 보관(새로고침/오프라인에도 작업 보존) — 비차단
       this._saveDraftLocal(opts.withPages ? null : null).catch(() => {});
+      // [WO offline2-R5] 🔴 근본원인: 오프라인 구역 열기(loadDeckDrawing)는 IndexedDB의
+      //   bundle:dep:<id> 캐시(32_Offline.js)를 읬는데, 종전엔 이 캐시가 "오프라인 편집일 때만"
+      //   (각 편집 경로 5곳의 `if (!navigator.onLine) persistLocalDeployment()`) 갱신됐다.
+      //   온라인에서 만든 핀/영역/주석은 서버엔 반영돼도 이 로컬 캐시엔 안 남아, 나중에 오프라인으로
+      //   재진입하면 "사라진" 것처럼 보였다(p114 defect P2). _autoSave 는 모든 편집 경로(핀/구역/
+      //   주석/병합)가 공유하는 단일 지점(§G-2-5)이므로 온라인 여부와 무관하게 여기서 한 번만
+      //   캐시를 갱신한다 — 기존 5곳의 오프라인 전용 호출은 중복이지만 무해하므로 그대로 둔다
+      //   (Offline.persistLocalDeployment 는 State 를 그대로 직렬화만 — 삭제/덮어쓰기 없음, LWW·
+      //   tombstone 은 손대지 않는다).
+      try { if (typeof persistLocalDeployment === "function") persistLocalDeployment().catch(() => {}); } catch (e) {}
       this._markDirty();
       this._scheduleAutoSync();
     },
@@ -5538,8 +5573,15 @@
             //   그냥 집었다. 자식 "영역"(크롭)이 먼저 오면 프로젝트 재진입 시 잘린 화면이 뜬다.
             //   공유 지점(§10 SoT) Projects.pickOriginalDeck 으로 루트 구역(parent_id NULL) 중
             //   최신 1개만 고른다 — 사이드바 트리 프로젝트 노드 클릭(openOriginal)과 동일 규칙.
-            const deck = (typeof Projects !== "undefined" && Projects.pickOriginalDeck)
-              ? Projects.pickOriginalDeck(decks, projectForDesigner) : decks.find(d => d.deployment_id);
+            // [WO offline2-R3] 🔴 근본원인: 종전엔 항상 pickOriginalDeck(루트/원본 구역)만 골랐다 —
+            //   재진입(탭 재시작/새로고침·서브도메인 자동진입)이 사용자가 마지막으로 보던 하위
+            //   구역이 아니라 매번 "원본 전체 도면"으로 돌아갔다("마지막 도면으로 돌아가지 않는다").
+            //   Projects.selectDeck()이 기억해 둔 마지막 구역이 지금 목록에 아직 있으면 그걸 우선한다
+            //   (삭제됐으면 조용히 폴백 — 지어내지 않음, 기존 pickOriginalDeck 규칙 그대로 유지).
+            const _lastDeckId = (typeof Projects !== "undefined" && Projects.lastOpenedDeckId) ? Projects.lastOpenedDeckId(projectForDesigner.id) : null;
+            const _remembered = _lastDeckId ? decks.find((dk) => dk && String(dk.id) === String(_lastDeckId) && dk.deployment_id) : null;
+            const deck = _remembered || ((typeof Projects !== "undefined" && Projects.pickOriginalDeck)
+              ? Projects.pickOriginalDeck(decks, projectForDesigner) : decks.find(d => d.deployment_id));
             // [WO 20260930-WP3 · C3] 구역 없는 원본(id 없음) = 프로젝트 단위 도면 → currentDeck 없음(_draftKey 의 nodeck 과 같은 규칙)
             if (deck) { wantId = deck.deployment_id; if (typeof Projects !== "undefined") Projects.currentDeck = deck.id ? deck : null; }
             // 🔴 [WO 20260928-pinloss] 저장 안 한 작업분은 배포본 fetch **전에** 읽는다(형제 loadDeckDrawing 과 같은 이유)

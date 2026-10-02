@@ -95,6 +95,27 @@
     setCurrentProject(p) {
       this.currentProject = p || null;
       this.currentDeck = null;
+      // [WO offline2-R2] 🔴 근본원인: ProjectHub 오프라인 폴백(OfflineLoad.projects())은
+      //   bundle:project:<id> 키만 읽는데, 그 키는 종전엔 [다운로드] 버튼(OfflineBundle.download)을
+      //   눌러야만 생겼다 — 둘러보기만 한 프로젝트는 오프라인 재진입 시 허브가 통째로 비었다
+      //   (p114 대응). 프로젝트를 여는 모든 경로가 거치는 이 SoT 함수에서 write-through로 가볍게
+      //   보관한다(새 키 아님 — OfflineBundle 이 이미 쓰는 같은 키 재사용, 기존 캐시를 지우지 않고
+      //   덮어쓰기만 추가 = 데이터 유실 없음).
+      if (p && p.id && typeof navigator !== "undefined" && navigator.onLine && typeof SyncQueue !== "undefined" && SyncQueue.saveDraft) {
+        try { SyncQueue.saveDraft("bundle:project:" + p.id, p).catch(() => {}); } catch (e) {}
+      }
+      // [WO offline2-R3] 재진입 시 "마지막으로 연 프로젝트"를 기억(로컬 전용, 서버 전송 없음).
+      //   구역(deck) 단위 기억은 selectDeck()이 덧붙인다 — 같은 키 하나(SoT), 새 저장소 금지.
+      try { if (p && p.id) localStorage.setItem(this.LS_LAST_OPEN, JSON.stringify({ projectId: p.id, deckId: null, ts: Date.now() })); } catch (e) {}
+    },
+
+    LS_LAST_OPEN: "wm_last_open",
+    /** [WO offline2-R3] 이 프로젝트에서 마지막으로 연 구역(deck) id — 없으면 null(지어내지 않음). */
+    lastOpenedDeckId(projectId) {
+      try {
+        const v = JSON.parse(localStorage.getItem(this.LS_LAST_OPEN) || "null");
+        return (v && v.projectId === projectId && v.deckId) ? v.deckId : null;
+      } catch (e) { return null; }
     },
 
     async selectProject(id) {
@@ -727,6 +748,12 @@
     async selectDeck(d) {
       this.currentDeck = d;
       this._renderDecks();
+      // [WO offline2-R3] 마지막으로 연 구역 기억(SoT 키는 setCurrentProject와 공유 — LS_LAST_OPEN).
+      try {
+        if (this.currentProject && this.currentProject.id) {
+          localStorage.setItem(this.LS_LAST_OPEN, JSON.stringify({ projectId: this.currentProject.id, deckId: (d && d.id) || null, ts: Date.now() }));
+        }
+      } catch (e) {}
       Prompt.toast && Prompt.toast("구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
       // 연결된 도면이 있으면 로드, 없으면(끊김/미연결) 도면 연결 선택 띄움(디자이너)
       if (d.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {

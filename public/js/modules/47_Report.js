@@ -11,7 +11,11 @@
      "구역"(코드상 deck, Projects.decks) → "영역"(코드상 zone, State.zones) 네이밍은 31_Projects.js/16_Zones.js
      의 기존 사용자 문구(구역 생성=deck, zone-box-del title="영역 삭제")를 그대로 따른다. ══════════════════════════════════════════════════════════════ */
   const Report = {
-    COLUMNS: ["구역", "영역", "모드", "번호", "라벨", "촬영시각", "시각출처", "사진명", "첨부수", "노트수", "미해결수", "작성자", "X%", "Y%"],
+    // [WO offline2-R6] 🔴 14열 계약(p119) 유지 — 끝에 3열(lat,lng,gps_acc)만 추가해 17열로.
+    //   기존 14개 인덱스는 전혀 바뀌지 않는다(§10 SoT — 호출부가 인덱스로 읽는 곳이 깨지지 않게).
+    // [WO offline2-R6] 🔴 14열 계약(p119) 유지 — 끝에 3열(lat,lng,gps_acc)만 추가해 17열로.
+    //   기존 14개 인덱스는 전혀 바뀌지 않는다(§10 SoT — 호출부가 인덱스로 읽는 곳이 깨지지 않게).
+    COLUMNS: ["구역", "영역", "모드", "번호", "라벨", "촬영시각", "시각출처", "사진명", "첨부수", "노트수", "미해결수", "작성자", "X%", "Y%", "lat", "lng", "gps_acc"],
     ACC_WARN_M: 50, // (GPS 모듈과 같은 의미의 상수를 여기선 쓰지 않음 — 참조용 주석만)
 
     _blank(v) { return (v == null || v === "") ? "" : v; },
@@ -74,7 +78,11 @@
           unresolved,
           author,
           (pin && pin.x != null) ? Number(pin.x).toFixed(2) : "",
-          (pin && pin.y != null) ? Number(pin.y).toFixed(2) : ""
+          (pin && pin.y != null) ? Number(pin.y).toFixed(2) : "",
+          // [WO offline2-R6] GPS 3열 — 값 없으면 빈칸(지어내지 않음). 48_GPS.js 가 채운 pin.gps 그대로.
+          (pin && pin.gps && pin.gps.lat != null) ? pin.gps.lat : "",
+          (pin && pin.gps && pin.gps.lng != null) ? pin.gps.lng : "",
+          (pin && pin.gps && pin.gps.acc != null) ? pin.gps.acc : ""
         ];
       });
     },

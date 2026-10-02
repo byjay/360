@@ -31,15 +31,24 @@ function makeReport() {
 }
 
 /* ══════════════════════════════════════════════════════════════
- * ① Report._rows — 14열, 행수=핀수, 구역/영역/모드/번호 매핑, 값 없으면 빈칸
+ * ① Report._rows — 17열(기존 14 + GPS 3: lat/lng/gps_acc), 행수=핀수,
+ *   구역/영역/모드/번호 매핑, 값 없으면 빈칸
+ * [WO offline2-R6] 🔴 G-4⑧ 대조표 — 기존 14열 인덱스(0~13)는 단 하나도 안 바뀌었다(아래 전부 그대로
+ *   재확인). 새로 추가된 건 끝에 붙은 인덱스 14/15/16(lat/lng/gps_acc)뿐.
+ *   | 인덱스 | 이전(p119 14열) | 이후(17열) | 비고 |
+ *   |---|---|---|---|
+ *   | 0~13 | 구역..Y% | 동일 | 불변 |
+ *   | 14   | (없음)   | lat   | 신규 |
+ *   | 15   | (없음)   | lng   | 신규 |
+ *   | 16   | (없음)   | gps_acc | 신규 |
  * ══════════════════════════════════════════════════════════════ */
 function testRowsBasic() {
-  console.log("\n[① Report._rows — 14열/행수/매핑]");
+  console.log("\n[① Report._rows — 17열(14+GPS3)/행수/매핑]");
   const Report = makeReport();
   const decks = [{ id: "d1", name: "Main Deck", page: 1, zones: [{ label: "1번 화물창", pinIds: ["p1"] }] }];
   const pins = [
-    { id: "p1", page: 1, x: 10.5, y: 20.25, label: "P1", checkboard: true, author: "pak@seastar.test", shotAt: 1700000000000, shotSrc: "EXIF DateTimeOriginal", imageName: "img1", attachments: [{ id: "a1" }] },
-    { id: "p2", page: 1, x: 30, y: 40, label: "P2" } // 사진·시각·작성자 전부 없음 — 빈칸 확인
+    { id: "p1", page: 1, x: 10.5, y: 20.25, label: "P1", checkboard: true, author: "pak@seastar.test", shotAt: 1700000000000, shotSrc: "EXIF DateTimeOriginal", imageName: "img1", attachments: [{ id: "a1" }], gps: { lat: 35.1023, lng: 129.0401, acc: 12, src: "device" } },
+    { id: "p2", page: 1, x: 30, y: 40, label: "P2" } // 사진·시각·작성자·GPS 전부 없음 — 빈칸 확인
   ];
   const notes = [
     { pin_id: "p1", status: "open", author: "kim@seastar.test" },
@@ -47,8 +56,8 @@ function testRowsBasic() {
   ];
   const rows = Report._rows(pins, notes, decks, "designer");
   ok(rows.length === pins.length, "행 수 = 핀 수(" + rows.length + "===" + pins.length + ")");
-  ok(rows.every((r) => r.length === 14), "모든 행이 14열 — " + JSON.stringify(rows.map((r) => r.length)));
-  ok(Report.COLUMNS.length === 14, "COLUMNS 헤더도 14개");
+  ok(rows.every((r) => r.length === 17), "모든 행이 17열(14+GPS3) — " + JSON.stringify(rows.map((r) => r.length)));
+  ok(Report.COLUMNS.length === 17, "COLUMNS 헤더도 17개 — " + JSON.stringify(Report.COLUMNS));
   const r1 = rows[0];
   ok(r1[0] === "Main Deck", "구역(deck.name) = Main Deck — " + r1[0]);
   ok(r1[1] === "1번 화물창", "영역(zone.label, pinIds 매칭) = 1번 화물창 — " + r1[1]);
@@ -61,12 +70,14 @@ function testRowsBasic() {
   ok(r1[9] === 2, "노트수 = 2(해당 pin_id만)");
   ok(r1[10] === 1, "미해결수 = 1(status!=='done')");
   ok(r1[11] === "pak@seastar.test", "작성자(designer 역할) = pin.author");
-  ok(r1[12] === "10.50" && r1[13] === "20.25", "X%/Y% 소수점 2자리");
+  ok(r1[12] === "10.50" && r1[13] === "20.25", "X%/Y% 소수점 2자리(불변 인덱스)");
+  ok(r1[14] === 35.1023 && r1[15] === 129.0401 && r1[16] === 12, "GPS 3열(lat/lng/gps_acc) — " + JSON.stringify([r1[14], r1[15], r1[16]]));
   const r2 = rows[1];
   ok(r2[0] === "Main Deck" && r2[1] === "", "핀2: 구역은 페이지 매칭, 영역은 pinIds 미포함 → 빈칸");
   ok(r2[2] === "360", "핀2: checkboard 없음 → 360 계열");
   ok(r2[5] === "" && r2[6] === "" && r2[7] === "" && r2[11] === "", "핀2: 촬영시각/출처/사진명/작성자 전부 빈칸(지어내지 않음) — " + JSON.stringify(r2));
   ok(r2[8] === 0 && r2[9] === 0 && r2[10] === 0, "핀2: 첨부/노트/미해결 = 0(실제 0, 빈칸 아님)");
+  ok(r2[14] === "" && r2[15] === "" && r2[16] === "", "핀2: GPS 없음 → 3열 전부 빈칸(지어내지 않음) — " + JSON.stringify([r2[14], r2[15], r2[16]]));
 }
 
 /* ══════════════════════════════════════════════════════════════
