@@ -9,6 +9,13 @@
       "autoPort": true
     },
     {
+      "name": "360-local",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set TEMP=E:\\code-project\\360\\.tmp&& set TMP=E:\\code-project\\360\\.tmp&& node node_modules/wrangler/bin/wrangler.js pages dev .tmp/localdev/dist --d1=webapp-production --local --persist-to .tmp/localdev-state --ip 127.0.0.1 --port %PORT%"],
+      "port": 8799,
+      "autoPort": true
+    },
+    {
       "name": "landing",
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "4173", "--directory", "public"],
