@@ -5662,6 +5662,17 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
   body:has(#pwa-install-banner.on) #pwa-install-btn {
     bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px + 98px + 8px) !important;
   }
+  /* [WO 20261002-fixmobile2 재발주] 🔴 근본원인(지휘자 R1 p114 재현): .hub-content(허브 카드 스크롤
+     컨테이너, 위 223행 overflow-y:auto)가 배너(.pwa-install-banner, z-index:9560, fixed) 몫의 여백을
+     전혀 모른다 — 배너가 떠 있어도 끝까지 스크롤하면 카드 맨 아래(영역/모드 잎)가 배너 "뒤"에 깔려
+     버튼이 그대로 가려진 채 탭이 배너로 가로채였다(elementFromPoint 가 리프 대신 배너를 반환). 마스터
+     "숨기지 마" — ①(이 규칙): 배너가 떠 있는 동안만 스크롤 하한에 배너 몫(기존 bottom 공식 재사용 +
+     실측 높이 98px, 위 5657행과 동일 리터럴) + 16px 버퍼를 더해, 끝까지 스크롤해도 카드 내용이 배너
+     밑으로 숨지 않고 그 위에서 끝나게 한다. ②(보조, 이미 존재): .pwa-install-x 닫기 버튼으로도
+     배너를 치울 수 있다(38_Install.js _onClose). */
+  body:has(#pwa-install-banner.on) .hub-content {
+    padding-bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px + 98px + 16px) !important;
+  }
   /* [WO 20261001-mobilefast] 같은 함정 — [요청·질문](42_Requests._createViewerBtn)·[?](36_Help._createToggle)·
      [✉](36_Help._createInquiryEntryBtn) FAB 도 bottom:16px 인라인 고정이라 하단 도크와 겹친다. */
   /* [WO 20261002-gap 재수정, 마스터 "숨기지 마"] 🔴 위 calc(도크+12px=70px)는 도크만 피하고

@@ -197,6 +197,20 @@ record(
   `fabOpenBottom=${fabOpenBottom} bannerBottom=${bannerBottom} diff=${fabOpenBottom - bannerBottom}`
 );
 
+// ══════════════════════════════════════════════════════════════
+// R4(재발주): .hub-content(허브 스크롤 컨테이너) 가 배너(.on) 몫의 padding-bottom 을 확보해
+// 끝까지 스크롤해도 카드 맨 아래 내용이 배너 밑에 깔리지 않는지 — p114 "leaf hit=pwa-install-banner" 재현.
+// ══════════════════════════════════════════════════════════════
+const hubPadBottomRaw = findDecl(pwaBlock, "body:has\\(#pwa-install-banner\\.on\\) \\.hub-content", "padding-bottom");
+const hubPadBottom = evalPx(hubPadBottomRaw);
+// 배너가 실제로 차지하는 바닥 몫(화면 y 축) = bottom offset(70) + 실측 높이(98) = 168.
+const bannerFootprint = bannerBottom + BANNER_H;
+record(
+  "R4 body:has(.on) .hub-content 의 padding-bottom 이 배너 몫(bottom+height=168px) 을 완전히 덮는다(여유 ≥0)",
+  hubPadBottom >= bannerFootprint,
+  `hubPadBottom=${hubPadBottom} bannerFootprint=${bannerFootprint}(bottom=${bannerBottom}+h=${BANNER_H}) margin=${hubPadBottom - bannerFootprint}`
+);
+
 for (const r of results) {
   console.log(`[${r.pass ? "PASS" : "FAIL"}] ${r.name} :: ${r.detail}`);
 }
