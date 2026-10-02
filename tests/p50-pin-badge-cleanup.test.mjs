@@ -59,6 +59,11 @@ function makeEl(tag) {
     tagName: tag || "div", style: {}, dataset: {}, title: "", value: "", disabled: false,
     _text: "", _html: "", _children: [], _handlers: {},
     appendChild(c) { this._children.push(c); return c; },
+    // [WO 20261002-allmenu §2 회귀 a61fbf5] 실 DOM(Element) API 보강 — #pin-list 맨 위 선택 도구줄(mountBulkBar)이
+    //   이제 디자이너 모드 전체에서 그려져 list.insertBefore(bar, list.firstChild) 를 부른다(실 브라우저 Element 는 항상 지원).
+    //   assertion 변경 0 — 셸만 브라우저와 같게 맞춘다(G-4⑧ 대조는 커밋 메시지).
+    get firstChild() { return this._children[0] || null; },
+    insertBefore(n, ref) { const i = this._children.indexOf(ref); if (i >= 0) this._children.splice(i, 0, n); else this._children.push(n); return n; },
     setAttribute(k, v) { this.dataset["attr_" + k] = String(v); },
     addEventListener(type, fn) { (this._handlers[type] = this._handlers[type] || []).push(fn); },
     querySelector() { return makeEl(); }, // designer 모드 item.querySelector(".pin-edit"/".pin-del") 용 더미
