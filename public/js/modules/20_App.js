@@ -5070,7 +5070,16 @@
       return pid + "::" + did;
     },
 
-    /** 도면 스냅샷+핀+구역을 로컬(IndexedDB)에 영속 저장 — 오프라인/서버실패에도 절대 소실 안 됨 */
+    // 🔴 [WO offline2 데이터유실 근본수정 2026-10-02] dkey(= projectId::deckId) 별 직렬화 체인.
+    //   근본원인(지휘자 재현 p114 실측): 핀을 빠르게 연속 배치하면 _autoSave()가 매번
+    //   _saveDraftLocal()을 비차단(await 안 함)으로 호출한다. 각 호출은 _snapshotPages()(가변
+    //   시간이 걸리는 비동기 인코딩)를 기다린 뒤 SyncQueue.saveDraft(dkey, payload)로 쓰는데,
+    //   먼저 시작한 호출이 늦게 끝나면(인코딩이 더 오래 걸려서) 그 호출의 **오래된**(더 적은 핀)
+    //   payload 가 나중에 끝난(핀이 더 많이 쌓인) 호출의 쓰기를 덮어써 핀이 통째로 사라진다.
+    //   이 체인은 같은 dkey 의 쓰기를 **호출된 순서대로**만 커밋되게 하고, 커밋 직전에 pins/
+    //   zones/annotations 를 다시 한번 최신값으로 갱신해(아래 refreshLive) 늦게 끝난 쓰기가
+    //   항상 그 시점의 최신 State 를 반영하게 한다(오래된 스냅샷이 새 스냅샷을 덮어쓰지 않음).
+    _draftWriteChains: {},
     async _saveDraftLocal(pages) {
       try {
         if (typeof SyncQueue === "undefined") return false;
@@ -5092,7 +5101,17 @@
         Object.assign(payload, this._draftPinMeta());           // [WO 20260929-bulkdel] 삭제 부활 방지(_draftVsServer)
         Object.assign(payload, await this._draftSrcFields());   // [WO 20260929-lossless] 원본 PDF 연결고리
         const dkey = this._draftKey();
-        await SyncQueue.saveDraft(dkey, payload);
+        const prev = this._draftWriteChains[dkey] || Promise.resolve();
+        const run = prev.then(() => {
+          // 커밋 직전 재갱신 — 이 체인에서 내 차례가 됐을 때의 최신 State(더 늦게 끝났어도
+          // 더 많은 핀을 반영하게). pages 는 비싼 인코딩이라 재생성하지 않고 이미 만든 snap 유지.
+          payload.pins = State.pins || [];
+          payload.zones = (typeof Zones !== "undefined" && State.zones) ? State.zones : [];
+          payload.annotations = State.annotations || [];
+          return SyncQueue.saveDraft(dkey, payload);
+        }, () => SyncQueue.saveDraft(dkey, payload));
+        this._draftWriteChains[dkey] = run.catch(() => {});
+        await run;
         // [B4] 서버 미반영(로컬 전용) 구역 표시 — 저장을 눌렀는지 사용자가 알 수 있게
         this._markDeckUnsaved(this._deckIdOfKey(dkey), true);
         return true;

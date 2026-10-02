@@ -158,18 +158,37 @@
     },
     _newId() { return "op-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8); },
 
+    // 🔴 [WO offline2 데이터유실 근본수정 2026-10-02] depId 별 직렬화 체인(동시성 가드).
+    //   근본원인(지휘자 재현 p114 "360 사진이 서버에 올라가 핀에 연결됨" FAIL, HEAD 추출본 실측):
+    //   record()는 load→push→save 의 읽고-고치고-쓰기(read-modify-write)인데 호출부 다수(특히
+    //   _placeCheckboardPin 의 연속 탭마다 호출, 비await/fire-and-forget)가 **같은 depId 키**에
+    //   동시에 호출한다. 두 호출이 거의 같은 순간 _load()로 같은 옛 배열을 읽으면, 각자 자기
+    //   항목만 push한 뒤 나중에 저장(_save)한 쪽이 앞선 쪽의 기록을 통째로 덮어써 핀 생성 op가
+    //   통째로 사라진다(실측: 오프라인 24개 생성 중 대부분의 op가 유실되어 재연결 후 서버에 거의
+    //   반영 안 됨). 이 체인으로 같은 depId 의 record/clearApplied 를 **항상 순서대로**(한 번에
+    //   하나씩) 실행해 lost-update 를 없앤다 — 데이터 모양·API 변경 없음, 동시 호출만 직렬화.
+    _chains: {},
+    _enqueue(depId, fn) {
+      const prev = this._chains[depId] || Promise.resolve();
+      const run = prev.then(fn, fn);
+      this._chains[depId] = run.catch(() => {});
+      return run;
+    },
+
     /** entity:'pin'|'zone'|'anno', action:'upsert'|'delete' */
     async record(depId, entity, action, id, data) {
       if (!depId || !entity || id == null) return;
-      const arr = await this._load(depId);
-      arr.push({
-        opId: this._newId(),
-        entity, action, id,
-        data: action === "delete" ? null : data,
-        ts: Date.now(),
-        author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
+      return this._enqueue(depId, async () => {
+        const arr = await this._load(depId);
+        arr.push({
+          opId: this._newId(),
+          entity, action, id,
+          data: action === "delete" ? null : data,
+          ts: Date.now(),
+          author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
+        });
+        await this._save(depId, arr);
       });
-      await this._save(depId, arr);
     },
     // 현재 열린 배포본 기준 간편 기록
     async recordCurrent(entity, action, id, data) {
@@ -179,20 +198,35 @@
     async pending(depId) { return await this._load(depId); },
     async clearApplied(depId, appliedOpIds) {
       const set = new Set(appliedOpIds || []);
-      const arr = (await this._load(depId)).filter((o) => !set.has(o.opId));
-      await this._save(depId, arr);
+      return this._enqueue(depId, async () => {
+        const arr = (await this._load(depId)).filter((o) => !set.has(o.opId));
+        await this._save(depId, arr);
+      });
     }
   };
 
+  // 🔴 [WO offline2 데이터유실 근본수정] persistLocalDeployment 도 OpLog.record 와 같은 read-
+  //   modify-write — depId 별 체인(위 OpLog._enqueue 와 별도 맵, 같은 패턴)으로 직렬화해 빠른
+  //   연속 호출(_autoSave 가 핀마다 호출)이 서로를 덮어쓰지 않게 한다.
+  const _persistChains = {};
+  function _persistEnqueue(depId, fn) {
+    const prev = _persistChains[depId] || Promise.resolve();
+    const run = prev.then(fn, fn);
+    _persistChains[depId] = run.catch(() => {});
+    return run;
+  }
   /** 편집 후 로컬 스냅샷(draft)도 갱신 — 새로고침 대비 */
   async function persistLocalDeployment(depId) {
     if (!depId) depId = _curDepId();
     if (!depId) return;
-    const dep = (await SyncQueue.loadDraft("bundle:dep:" + depId)) || { id: depId };
-    dep.pins = JSON.stringify(State.pins || []);
-    dep.zones = JSON.stringify(State.zones || []);
-    dep.annotations = JSON.stringify(State.annotations || []);
-    await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+    return _persistEnqueue(depId, async () => {
+      const dep = (await SyncQueue.loadDraft("bundle:dep:" + depId)) || { id: depId };
+      // 커밋 직전 최신 State 반영(큐 대기 중 더 많은 핀이 쌓였을 수 있음 — OpLog._enqueue 와 동일 이유)
+      dep.pins = JSON.stringify(State.pins || []);
+      dep.zones = JSON.stringify(State.zones || []);
+      dep.annotations = JSON.stringify(State.annotations || []);
+      await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+    });
   }
 
   /* ── 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
