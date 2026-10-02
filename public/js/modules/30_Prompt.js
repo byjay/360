@@ -62,7 +62,9 @@
       requestAnimationFrame(() => t.classList.add("on"));
       arm(t, life);
     },
-    /** opts: { title, sub, placeholder, second } → Promise<string|{value,second}|null> */
+    /** opts: { title, sub, placeholder, second, checkbox, checkboxValue } → Promise<{value,second,checked}|null>
+     *  [WO 20261001-panoshapes] checkbox — 선택적 체크박스(라벨 텍스트). 미지정이면 기존 호출부(수십 곳)
+     *  100% 하위호환(요소가 hidden 유지, r.checked 는 그냥 false). */
     ask(opts) {
       return new Promise((resolve) => {
         this._resolve = resolve;
@@ -77,6 +79,14 @@
         inp2.value = opts.secondValue || "";
         inp2.placeholder = (typeof opts.second === "string") ? opts.second : "";
         inp2.classList.toggle("hidden", !opts.second);
+        const cbWrap = document.getElementById("prompt-modal-checkbox-wrap");
+        const cb = document.getElementById("prompt-modal-checkbox");
+        const cbLabel = document.getElementById("prompt-modal-checkbox-label");
+        if (cbWrap && cb && cbLabel) {
+          const hasCb = typeof opts.checkbox === "string" && opts.checkbox;
+          cbWrap.classList.toggle("hidden", !hasCb);
+          if (hasCb) { cbLabel.textContent = opts.checkbox; cb.checked = !!opts.checkboxValue; }
+        }
         document.getElementById("prompt-modal-error").classList.add("hidden");
         const m = document.getElementById("prompt-modal");
         m.classList.remove("hidden");
@@ -88,10 +98,13 @@
       const inp = document.getElementById("prompt-modal-input");
       const inp2 = document.getElementById("prompt-modal-input2");
       const err = document.getElementById("prompt-modal-error");
+      const cbWrap = document.getElementById("prompt-modal-checkbox-wrap");
+      const cb = document.getElementById("prompt-modal-checkbox");
       const val = inp.type === "password" ? (inp.value || "") : (inp.value || "").trim();   // 비밀번호는 공백도 값이다
       if (!val && !this._allowEmpty) { err.textContent = "값을 입력하세요."; err.classList.remove("hidden"); return; }
       const second = inp2.classList.contains("hidden") ? undefined : (inp2.value || "").trim();
-      this._close({ value: val, second });
+      const checked = (cbWrap && cb && !cbWrap.classList.contains("hidden")) ? !!cb.checked : false;
+      this._close({ value: val, second, checked });
     },
     _close(result) {
       const m = document.getElementById("prompt-modal");

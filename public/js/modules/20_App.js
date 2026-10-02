@@ -1790,6 +1790,7 @@
       window.addEventListener("mouseup",   () => {
         const r = PanoViewer.onPointerUp();
         if (r && r.spotMoved) this._finalizeSpotDrag(r.spotMoved);
+        else if (r && r.shapeDraft) this._finishShapeDraft(r.shapeDraft);
       });
       // [FARO Markers] 마커 위 마우스오버 → 내용 툴팁
       canvas.addEventListener("mousemove", e => this._panoHover(e.clientX, e.clientY));
@@ -1821,6 +1822,8 @@
         const wasTap = PanoViewer.wasTap && PanoViewer.wasTap();
         const r = PanoViewer.onPointerUp();
         if (r && r.spotMoved) { this._finalizeSpotDrag(r.spotMoved); return; }
+        if (r && r.shapeDraft) { this._finishShapeDraft(r.shapeDraft); return; }
+        if (r && r.shapeDraftCancelled) return; // [WO panoshapes] 그리기모드 중 탭만 하면 아무것도 안 함(점 마커 생성 방지)
         // [구면 마커] 탭이면 마커 추가/열기 (changedTouches 좌표 사용)
         if (wasTap && e.changedTouches && e.changedTouches[0]) {
           const t = e.changedTouches[0];
@@ -1864,9 +1867,28 @@
           this.setSpotAddMode(true);
         });
       });
+      // [WO 20261001-panoshapes] 사각형/원 도형 그리기 모드 — 디자이너만, 점 추가 모드와 상호배타.
+      const shapeBtns = { rect: UI.$("btn-pano-shape-rect"), circle: UI.$("btn-pano-shape-circle") };
+      Object.keys(shapeBtns).forEach((type) => {
+        const btn = shapeBtns[type]; if (!btn) return;
+        btn.addEventListener("click", () => {
+          if (!PanoViewer.canEditSpots()) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("디자이너만 도형을 그릴 수 있습니다"); return; }
+          const turningOn = PanoViewer._shapeDraw !== type;
+          this.setSpotAddMode(false); // 점 추가 모드와 상호배타(동시에 두 모드가 캔버스 제스처를 가로채지 않게)
+          PanoViewer.setShapeDrawMode(turningOn ? type : null);
+          Object.keys(shapeBtns).forEach((t) => shapeBtns[t] && shapeBtns[t].classList.toggle("on", turningOn && t === type));
+          if (turningOn && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast((type === "rect" ? "사각형" : "원") + " 도형 — 360 안에서 드래그해 그리세요");
+        });
+      });
+      this._shapeBtns = shapeBtns;
       // [FARO Markers] 마커 목록(테이블) 패널 토글
       UI.$("btn-pano-spotlist") && UI.$("btn-pano-spotlist").addEventListener("click", () => this.toggleSpotList());
       UI.$("pano-spot-list-close") && UI.$("pano-spot-list-close").addEventListener("click", () => { const p = UI.$("pano-spot-list"); if (p) p.classList.add("hidden"); });
+      // [WO 20261001-panoshapes] 장비 설치 위치만 걸러보기
+      UI.$("pano-spot-list-equip-filter") && UI.$("pano-spot-list-equip-filter").addEventListener("change", (e) => {
+        this._spotListEquipOnly = !!e.target.checked;
+        this.renderSpotList();
+      });
       // ISO 4-꼭지점 뷰 전환
       document.querySelectorAll("#pano-iso-views .pano-iso-btn").forEach((b) => {
         b.addEventListener("click", (e) => {
@@ -2613,6 +2635,11 @@
     /* ── [마스터: 구면 안 마커] 360 사진 속 결함/장비 지점 핀 ── */
     setSpotAddMode(on) {
       this._spotAdd = (on == null) ? !this._spotAdd : !!on;
+      // [WO 20261001-panoshapes] 점 추가 모드와 도형 그리기 모드는 상호배타(동시에 캔버스 제스처를 가로채지 않게)
+      if (this._spotAdd && typeof PanoViewer !== "undefined" && PanoViewer.setShapeDrawMode) {
+        PanoViewer.setShapeDrawMode(null);
+        if (this._shapeBtns) Object.keys(this._shapeBtns).forEach((t) => this._shapeBtns[t] && this._shapeBtns[t].classList.remove("on"));
+      }
       if (typeof PanoViewer !== "undefined" && PanoViewer.setSpotAddMode) PanoViewer.setSpotAddMode(this._spotAdd);
       const btn = UI.$("btn-pano-spot"); if (btn) btn.classList.toggle("on", this._spotAdd);
       const bar = UI.$("pano-spot-kinds");
@@ -2629,6 +2656,7 @@
     _onPanoTap(x, y) {
       const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
       if (!pin || !PanoViewer.open) return;
+      if (PanoViewer._shapeDraw) return; // [WO panoshapes] 도형 그리기 모드 중 단순 탭은 무시(드래그만 유효)
       if (this._spotAdd) {
         const ll = PanoViewer.screenToLonLat(x, y); if (!ll) return;
         this._addSpotAt(pin, ll.lon, ll.lat);
@@ -2700,6 +2728,122 @@
       this._saveSpots(pin);
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("마커 위치 저장됨");
     },
+
+    /* ── [WO 20261001-panoshapes] 360 사진 안 도형(사각형·원) + 리더선 + 라벨 + 첨부 ── */
+    /** 그리기 종료(onPointerUp의 shapeDraft) → 너무 작으면 취소, 아니면 이름(필수)·노트·장비표기 폼. */
+    async _finishShapeDraft(draft) {
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      if (!pin || !draft) return;
+      const tooSmall = draft.type === "circle"
+        ? (draft.radiusDeg || 0) < 0.6
+        : (Math.abs((draft.lon2 || 0) - (draft.lon1 || 0)) < 0.6 && Math.abs((draft.lat2 || 0) - (draft.lat1 || 0)) < 0.6);
+      if (tooSmall) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("너무 작습니다 — 더 크게 드래그하세요"); return; }
+      const kind = this._spotKind || "defect";
+      const kn = { defect: "결함", equip: "장비", safety: "안전", note: "메모" }[kind] || "마커";
+      if (typeof Prompt === "undefined" || !Prompt.ask) return;
+      const r = await Prompt.ask({
+        title: (draft.type === "rect" ? "사각형" : "원") + " 도형 추가",
+        sub: "이름(필수)과 노트를 입력하세요 · 종류: " + kn,
+        placeholder: "이름 (예: FW PUMP NO.1)",
+        second: "상세 노트 (선택)",
+        checkbox: "장비 설치 위치로 표기"
+      });
+      if (r == null) return; // 취소 — draft 버림(저장하지 않음)
+      const label = String((r.value) || "").trim();
+      if (!PanoViewer.Shapes.validate({ label })) { if (Prompt.toast) Prompt.toast("이름을 입력해야 합니다"); return; }
+      const shape = Object.assign({
+        id: "sh-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+        kind, label, note: String((r.second) || "").trim(), equipMark: !!r.checked,
+        ts: Date.now(), attachments: []
+      }, draft);
+      if (!Array.isArray(pin.spots)) pin.spots = [];
+      pin.spots.push(shape);
+      PanoViewer.renderSpots(pin.spots);
+      this._saveSpots(pin);
+      if (Prompt.toast) Prompt.toast((draft.type === "rect" ? "사각형" : "원") + " 추가됨 — " + label);
+    },
+    /** 도형 라벨 탭 → 디자이너: 수정/삭제 폼(이름을 비우면 삭제) · 열람자: 읽기전용 보기. */
+    async _openShape(id) {
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      if (!pin) return;
+      const s = (pin.spots || []).find((x) => x.id === id); if (!s) return;
+      if (!PanoViewer.canEditSpots()) { this._viewShapeReadOnly(s); return; }
+      if (typeof Prompt === "undefined" || !Prompt.ask) return;
+      const r = await Prompt.ask({
+        title: (s.type === "rect" ? "사각형" : "원") + " 도형",
+        sub: "내용을 수정하세요 · 이름을 비우고 확인하면 삭제됩니다",
+        placeholder: "이름", value: s.label || "",
+        second: "상세 노트", secondValue: s.note || "",
+        checkbox: "장비 설치 위치로 표기", checkboxValue: !!s.equipMark,
+        allowEmpty: true
+      });
+      if (r == null) return;
+      const label = String((r.value) || "").trim();
+      if (!label) {
+        pin.spots = (pin.spots || []).filter((x) => x.id !== id);
+        PanoViewer.renderSpots(pin.spots); this._saveSpots(pin);
+        if (Prompt.toast) Prompt.toast("도형 삭제됨");
+        return;
+      }
+      s.label = label; s.note = String((r.second) || "").trim(); s.equipMark = !!r.checked;
+      PanoViewer.renderSpots(pin.spots); this._saveSpots(pin);
+      if (Prompt.toast) Prompt.toast("도형 저장됨");
+    },
+    /** 열람자용 읽기전용 — 이름·노트·첨부만 토스트/안내로 보여주고 첨부는 라이트박스로 연다(요청은 열람자 요청 경로). */
+    _viewShapeReadOnly(s) {
+      if (typeof Prompt !== "undefined" && Prompt.toast) {
+        Prompt.toast((s.label || "무제") + (s.note ? " — " + s.note : ""), 3200);
+      }
+    },
+    /** [첨부] 사진/도면 올리기 — 기존 /api/r2/upload(=_uploadToR2) + Auth.r2 토큰 규칙 재사용. 디자이너만. */
+    _pickAttachment(id) {
+      const pin = (typeof PanoViewer !== "undefined") ? PanoViewer._currentPin : null;
+      if (!pin || !PanoViewer.canEditSpots()) return;
+      const s = (pin.spots || []).find((x) => x.id === id); if (!s) return;
+      let inp = document.getElementById("pano-shape-attach-input");
+      if (!inp) {
+        inp = document.createElement("input");
+        inp.type = "file"; inp.id = "pano-shape-attach-input";
+        inp.accept = "image/png,image/jpeg,image/webp,application/pdf";
+        inp.style.display = "none";
+        document.body.appendChild(inp);
+      }
+      inp.value = "";
+      inp.onchange = async () => {
+        const file = inp.files && inp.files[0]; if (!file) return;
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("올리는 중…");
+        const ab = await file.arrayBuffer();
+        const ct = file.type || "application/octet-stream";
+        const url = await this._uploadAttachment(ab, ct);
+        if (!url) { if (Prompt.toast) Prompt.toast("첨부 업로드 실패 — 다시 시도하세요"); return; }
+        if (!Array.isArray(s.attachments)) s.attachments = [];
+        s.attachments.push({ id: "at-" + Date.now().toString(36), url, name: file.name || "", kind: /pdf/i.test(ct) ? "pdf" : "image" });
+        PanoViewer.renderSpots(pin.spots);
+        this._saveSpots(pin);
+        if (Prompt.toast) Prompt.toast("첨부 추가됨 — " + (file.name || ""));
+      };
+      inp.click();
+    },
+    /** 첨부 탭 → 라이트박스(사진=확대 img, PDF=기존 pdf-popup-canvas 팝업 재사용). 보기 전용(열람자 포함 누구나 열람). */
+    _openAttachment(att) {
+      if (!att || !att.url) return;
+      const src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(att.url) : att.url;
+      if (att.kind === "pdf") {
+        if (typeof PdfPopup !== "undefined" && PdfPopup.open) { PdfPopup.open(src); return; }
+      }
+      let box = document.getElementById("pano-shape-lightbox");
+      if (!box) {
+        box = document.createElement("div");
+        box.id = "pano-shape-lightbox";
+        box.className = "pano-shape-lightbox hidden";
+        box.innerHTML = '<img id="pano-shape-lightbox-img" alt="">' +
+          '<button id="pano-shape-lightbox-close" type="button" aria-label="닫기">×</button>';
+        document.body.appendChild(box);
+        box.addEventListener("click", (e) => { if (e.target === box || e.target.id === "pano-shape-lightbox-close") box.classList.add("hidden"); });
+      }
+      document.getElementById("pano-shape-lightbox-img").src = src;
+      box.classList.remove("hidden");
+    },
     /* ── [FARO Markers] 마커 위 마우스오버 → 내용 툴팁 ── */
     _panoHover(x, y) {
       if (typeof PanoViewer === "undefined" || !PanoViewer.open) return;
@@ -2751,25 +2895,32 @@
       const COL = { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd" };
       const HEAD_STYLE = "padding:8px 10px;font-size:11px;font-weight:700;color:#f0b941;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);";
       const EMPTY_STYLE = "padding:14px 10px;text-align:center;color:#9aa6b2;font-size:12px;";
+      // [WO 20261001-panoshapes] 도형 타입 아이콘(●점/▭사각/◯원) + 첨부 수 + 장비 설치 위치만 필터
+      const TYPE_ICON = { rect: "▭", circle: "◯" };
+      const equipOnly = !!this._spotListEquipOnly;
       let rows = "";
       groups.forEach((g) => {
         const label = UI.escapeHtml((g.pin && (g.pin.label || g.pin.id)) || "-");
         const headText = (g.isCurrent ? "현재 사진 · " : "") + label;
-        rows += '<tr><td colspan="4" style="' + HEAD_STYLE + '">' + headText + '</td></tr>';
-        if (!g.spots.length) {
-          rows += '<tr><td colspan="4" style="' + EMPTY_STYLE + '">등록된 마커가 없습니다.</td></tr>';
+        const visSpots = equipOnly ? g.spots.filter((s) => s.equipMark) : g.spots;
+        rows += '<tr><td colspan="5" style="' + HEAD_STYLE + '">' + headText + '</td></tr>';
+        if (!visSpots.length) {
+          rows += '<tr><td colspan="5" style="' + EMPTY_STYLE + '">' + (g.spots.length ? "장비 설치 위치가 없습니다." : "등록된 마커가 없습니다.") + '</td></tr>';
           return;
         }
-        g.spots.forEach((s, i) => {
+        visSpots.forEach((s, i) => {
           const col = COL[s.kind] || "#e0503e";
+          const icon = TYPE_ICON[s.type] || (i + 1);
+          const attCount = Array.isArray(s.attachments) ? s.attachments.length : 0;
           rows += '<tr class="psl-row" data-pin="' + g.pin.id + '" data-id="' + s.id + '">' +
-            '<td><span class="psl-num" style="background:' + col + '">' + (i + 1) + '</span></td>' +
-            '<td>' + (KN[s.kind] || "마커") + '</td>' +
+            '<td><span class="psl-num" style="background:' + col + '">' + icon + '</span></td>' +
+            '<td>' + (KN[s.kind] || "마커") + (s.equipMark ? ' <span class="psl-equip-tag" title="설치 위치">⚙</span>' : '') + '</td>' +
             '<td>' + UI.escapeHtml(s.label || "-") + '</td>' +
-            '<td>' + UI.escapeHtml(s.note || "") + '</td></tr>';
+            '<td>' + UI.escapeHtml(s.note || "") + '</td>' +
+            '<td>' + (attCount ? "📎" + attCount : "") + '</td></tr>';
         });
       });
-      body.innerHTML = '<table class="psl-table"><thead><tr><th>#</th><th>종류</th><th>이름</th><th>노트</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      body.innerHTML = '<table class="psl-table"><thead><tr><th>#</th><th>종류</th><th>이름</th><th>노트</th><th>첨부</th></tr></thead><tbody>' + rows + '</tbody></table>';
       body.querySelectorAll(".psl-row").forEach((r) => {
         r.addEventListener("click", () => {
           const g = groups.find((gr) => gr.pin && gr.pin.id === r.dataset.pin);
@@ -3321,15 +3472,15 @@
        보이는 영역만 다시 그린다. 새 렌더 파이프라인은 만들지 않는다.
        ================================================================== */
 
-    /** 원본 PDF 를 R2 에 1회 업로드 (기존 /api/r2/upload PUT 재사용).
-     *  실패는 치명적이지 않다 -> null 반환 = 스냅샷만 저장(종전 동작 그대로). */
-    async _uploadSourcePdf(ab) {
+    /** [SoT] /api/r2/upload PUT 공통 경로 — 원본 PDF 보관(_uploadSourcePdf)과 360 도형 첨부
+     *  (_uploadAttachment, WO 20261001-panoshapes)가 함께 쓴다. 실패 -> null(호출부가 각자 처리). */
+    async _uploadToR2(ab, contentType) {
       if (!ab || !ab.byteLength) return null;
       try {
-        const blob = new Blob([ab], { type: "application/pdf" });
+        const blob = new Blob([ab], { type: contentType || "application/octet-stream" });
         const r = await fetch("/api/r2/upload", {
           method: "PUT",
-          headers: Object.assign({}, Auth.headers ? Auth.headers() : {}, { "Content-Type": "application/pdf" }),
+          headers: Object.assign({}, Auth.headers ? Auth.headers() : {}, { "Content-Type": contentType || "application/octet-stream" }),
           body: blob
         });
         if (!r.ok) return null;
@@ -3337,6 +3488,12 @@
         return j.url || null;
       } catch (e) { return null; }
     },
+    /** 원본 PDF 를 R2 에 1회 업로드 (기존 /api/r2/upload PUT 재사용).
+     *  실패는 치명적이지 않다 -> null 반환 = 스냅샷만 저장(종전 동작 그대로). */
+    async _uploadSourcePdf(ab) { return this._uploadToR2(ab, "application/pdf"); },
+    /** [WO 20261001-panoshapes] 360 도형(사각형/원) 첨부 사진/도면 업로드 — Auth.r2 토큰 규칙은
+     *  다운로드 측(Auth.r2(url))에서 적용되므로 여기선 업로드만. */
+    async _uploadAttachment(ab, contentType) { return this._uploadToR2(ab, contentType); },
 
     /** 배포본에 남길 source_meta(JSON 문자열) 생성.
      *  · 이미지 도면(PNG/JPG)은 원본이 곧 스냅샷이므로 이 경로를 타지 않는다 -> null.

@@ -424,6 +424,8 @@
       this.renderer.render(this.scene, this.camera);
       // 레이더 부채꼴을 현재 시야(yaw=lon)에 맞춰 회전
       Radar.spin(S.lon, S.fov);
+      // [WO 20261001-panoshapes] 도형 SVG 오버레이 — 매 프레임 화면 좌표 재투영(점은 Sprite가 THREE로 자동 처리)
+      if (this.Shapes && this.Shapes.sync) this.Shapes.sync(this);
     },
 
     /* ── 컨트롤 ── */
@@ -471,6 +473,8 @@
       if (!group) return null;
       if (group.isCurrent) {
         if (!spot) return null;
+        // [WO 20261001-panoshapes] 도형(사각형/원)은 lon/lat 이 아니라 자체 기하 — 중심으로 이동.
+        if (this.Shapes && this.Shapes.isShape(spot)) return this.Shapes.rowAction(spot);
         return { type: "look", lon: spot.lon, lat: spot.lat };
       }
       return { type: "openPano", pin: group.pin };
@@ -538,8 +542,20 @@
       return typeof State !== "undefined" && State.mode === "designer" &&
         (typeof Auth === "undefined" || Auth.isDesigner);
     },
+    /** [WO 20261001-panoshapes] 도형 그리기 모드 on/off. type: null(끔) | "rect" | "circle".
+     *  켜져 있는 동안 onPointerDown이 카메라 드래그 대신 도형 드래그를 시작한다(모바일 2손가락 줌/회전과 분리). */
+    setShapeDrawMode(type) { this._shapeDraw = type || null; return this._shapeDraw; },
     onPointerDown(x, y) {
       this._downX = x; this._downY = y; this._moved = false;
+      // [WO 20261001-panoshapes] 그리기 모드(App.setShapeDrawMode로 켜짐) — 디자이너만, 카메라 드래그 대신 도형 드래그 시작.
+      if (this._shapeDraw && this.canEditSpots()) {
+        const ll0 = this.screenToLonLat(x, y);
+        this._shapeDraft = ll0 ? (this._shapeDraw === "circle"
+          ? { type: "circle", lon: ll0.lon, lat: ll0.lat, radiusDeg: 0.4 }
+          : { type: "rect", lon1: ll0.lon, lat1: ll0.lat, lon2: ll0.lon, lat2: ll0.lat }) : null;
+        this.S.dragging = false; this._dragSpotId = null;
+        return;
+      }
       const hitId = this.canEditSpots() ? this.hitSpotAt(x, y) : null;
       this._dragSpotId = hitId || null;
       if (hitId) {
@@ -555,6 +571,19 @@
       }
     },
     onPointerMove(x, y) {
+      if (this._shapeDraft) {
+        if (!this._moved && Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) this._moved = true;
+        const ll = this.screenToLonLat(x, y);
+        if (ll) {
+          if (this._shapeDraft.type === "circle") {
+            this._shapeDraft.radiusDeg = Math.max(0.5, Math.hypot(ll.lon - this._shapeDraft.lon, ll.lat - this._shapeDraft.lat));
+          } else {
+            this._shapeDraft.lon2 = ll.lon; this._shapeDraft.lat2 = ll.lat;
+          }
+          if (this.Shapes && this.Shapes.renderDraft) this.Shapes.renderDraft(this, this._shapeDraft);
+        }
+        return;
+      }
       if (this._dragSpotId) {
         if (!this._moved && Math.hypot(x - (this._downX || x), y - (this._downY || y)) > 6) {
           this._moved = true;
@@ -579,6 +608,12 @@
     },
     /** 포인터를 뗐을 때: 마커를 실제로 옮겼으면 { spotMoved:id } 반환(호출부가 저장 확정), 아니면 null */
     onPointerUp() {
+      if (this._shapeDraft) {
+        const draft = this._shapeDraft;
+        this._shapeDraft = null;
+        if (this.Shapes && this.Shapes.clearDraft) this.Shapes.clearDraft(this);
+        return this._moved ? { shapeDraft: draft } : { shapeDraftCancelled: true };
+      }
       this.S.dragging = false;
       const draggedId = this._dragSpotId;
       this._dragSpotId = null;
@@ -600,9 +635,15 @@
       if (!this._spotGroup && this.scene) { this._spotGroup = new THREE.Group(); this.scene.add(this._spotGroup); }
       return this._spotGroup;
     },
+    /** [WO 20261001-panoshapes] 구면 방향(단위벡터) — THREE 의존 없는 순수 공식(테스트 가능).
+     *  _spotPos·Shapes.project 공용 SoT — 같은 변환을 두 곳에 베끼지 않는다. */
+    _lonLatToDir(lon, lat) {
+      const phi = (90 - (lat || 0)) * Math.PI / 180, theta = (lon || 0) * Math.PI / 180;
+      return { x: Math.sin(phi) * Math.cos(theta), y: Math.cos(phi), z: Math.sin(phi) * Math.sin(theta) };
+    },
     _spotPos(lon, lat, R) {
-      const phi = THREE.MathUtils.degToRad(90 - lat), theta = THREE.MathUtils.degToRad(lon);
-      return new THREE.Vector3(R * Math.sin(phi) * Math.cos(theta), R * Math.cos(phi), R * Math.sin(phi) * Math.sin(theta));
+      const d = this._lonLatToDir(lon, lat);
+      return new THREE.Vector3(d.x * R, d.y * R, d.z * R);
     },
     // [마스터: 마커 투명화] 채움 알파를 낮춰 뒤 사진이 비치게 하되, 숫자는 검은 헤일로(외곽선)로
     // 감싸 어떤 배경 위에서도 대비를 보장한다(배경 사진 색과 무관 — 헤일로 자체가 로컬 배경 역할).
@@ -619,19 +660,26 @@
       g.fillStyle = "#fff"; g.fillText(label, 64, 70);
       const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
     },
+    /** [WO 20261001-panoshapes] spots[] 안에 type:'rect'|'circle' 도형이 섞여 있으면 스프라이트
+     *  대상(점 마커)에서 제외하고 PanoViewer.Shapes(SVG 오버레이)로 따로 렌더 — 레거시 point 는
+     *  type 이 없으므로 isShape()가 false → 종전과 완전히 동일하게 동작(유실 0). */
     renderSpots(spots) {
-      const grp = this._ensureSpotGroup(); if (!grp) return;
-      while (grp.children.length) { const ch = grp.children.pop(); if (ch.material) { if (ch.material.map) ch.material.map.dispose(); ch.material.dispose(); } }
       this._spots = Array.isArray(spots) ? spots : [];
-      this._spots.forEach((s, i) => {
-        const mat = new THREE.SpriteMaterial({ map: this._spotTexture(s, i), depthTest: false, depthWrite: false, transparent: true });
-        const sp = new THREE.Sprite(mat);
-        sp.position.copy(this._spotPos(s.lon || 0, s.lat || 0, 470));
-        sp.scale.set(34, 34, 1);
-        sp.userData.spotId = s.id;
-        sp.renderOrder = 10;
-        grp.add(sp);
-      });
+      const points = this._spots.filter((s) => !(this.Shapes && this.Shapes.isShape(s)));
+      const grp = this._ensureSpotGroup();
+      if (grp) {
+        while (grp.children.length) { const ch = grp.children.pop(); if (ch.material) { if (ch.material.map) ch.material.map.dispose(); ch.material.dispose(); } }
+        points.forEach((s, i) => {
+          const mat = new THREE.SpriteMaterial({ map: this._spotTexture(s, i), depthTest: false, depthWrite: false, transparent: true });
+          const sp = new THREE.Sprite(mat);
+          sp.position.copy(this._spotPos(s.lon || 0, s.lat || 0, 470));
+          sp.scale.set(34, 34, 1);
+          sp.userData.spotId = s.id;
+          sp.renderOrder = 10;
+          grp.add(sp);
+        });
+      }
+      if (this.Shapes && this.Shapes.render) this.Shapes.render(this, this._spots);
       this._invalidate();
     },
     _ndc(clientX, clientY) {
@@ -708,6 +756,9 @@
       this._currentPin = null;
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
+      this._shapeDraw = null;
+      this._shapeDraft = null;
+      if (this.Shapes && this.Shapes.clearDraft) try { this.Shapes.clearDraft(this); } catch (e) {}
       this._dragSpotId = null;
       this._dragOrigLL = null;
       this._dragArrowActive = false;
@@ -726,6 +777,248 @@
       Radar.hide();
       PanoNav.hide();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     [WO 20261001-panoshapes] 360 사진 안 도형(사각형·원) + 리더선 + 라벨 + 첨부
+     · 저장: pin.spots[] 항목에 type:'rect'|'circle' 추가(기존 point 타입은 type 없음=레거시, 그대로 표시).
+       좌표는 전부 구면(lon,lat) — 화면 좌표 절대 저장 금지(시점 회전에도 제자리 고정).
+         - rect:   { lon1,lat1, lon2,lat2 }  (두 꼭짓점, 축정렬)
+         - circle: { lon,lat, radiusDeg }    (중심 + 각반경)
+         - 공통:   { id, type, kind, label, note, equipMark, ts, labelPos:{lon,lat}, attachments:[{id,url,name,kind}] }
+     · 투영 수학(project/visible/circlePoints/rectCorners/center/defaultLabelPos/validate/rowAction)은
+       순수함수 — DOM·THREE 없이 단위테스트 가능. PanoViewer._lonLatToDir 를 SoT로 재사용(중복 없음).
+     · DOM 렌더(render/sync/renderDraft/clearDraft)는 매 프레임 _renderFrame() 끝에서 위치만 갱신—
+       씬(THREE)에는 아무것도 추가하지 않는 별개 레이어(#pano-shape-svg + #pano-shape-labels).
+  ══════════════════════════════════════════ */
+  PanoViewer.Shapes = {
+    SEG: 28, // 원 둘레 분할 수
+    KIND_COLOR: { defect: "#e0503e", equip: "#e0b14a", safety: "#f2820a", note: "#3a97dd" },
+
+    isShape(s) { return !!s && (s.type === "rect" || s.type === "circle"); },
+
+    /** 방향벡터 d(단위) → 카메라(S.lon,S.lat,S.fov) 기준 화면 픽셀 투영(roll 은 기존 point 마커와
+     *  동일하게 무시 — _spotGroup 도 scene 직속으로 roll 영향을 받지 않음, SoT 일치).
+     *  z<=0(카메라 뒤)이면 null → 호출부가 "화면 뒤쪽 숨김"으로 처리. */
+    project(d, S, W, H) {
+      if (!d || !S || !W || !H) return null;
+      const fwd = PanoViewer._lonLatToDir(S.lon || 0, S.lat || 0);
+      let rx = fwd.y * 0 - fwd.z * 1, ry = fwd.z * 0 - fwd.x * 0, rz = fwd.x * 1 - fwd.y * 0; // cross(fwd, worldUp(0,1,0))
+      const rl = Math.hypot(rx, ry, rz);
+      if (rl < 1e-6) { rx = 1; ry = 0; rz = 0; } else { rx /= rl; ry /= rl; rz /= rl; }
+      const ux = ry * fwd.z - rz * fwd.y, uy = rz * fwd.x - rx * fwd.z, uz = rx * fwd.y - ry * fwd.x; // cross(right, fwd)
+      const z = d.x * fwd.x + d.y * fwd.y + d.z * fwd.z;
+      if (z <= 1e-6) return null;
+      const x = d.x * rx + d.y * ry + d.z * rz;
+      const y = d.x * ux + d.y * uy + d.z * uz;
+      const halfH = Math.tan((S.fov || 75) * Math.PI / 360);
+      const halfW = halfH * (W / H);
+      const ndcX = (x / z) / halfW, ndcY = (y / z) / halfH;
+      return { x: (ndcX + 1) / 2 * W, y: (1 - ndcY) / 2 * H, ndcX, ndcY, z };
+    },
+    /** 화면 범위(약간 여유) 안인지 — project()==null(카메라 뒤)은 이미 숨김이라 별도 처리. */
+    visible(p) { return !!p && p.ndcX >= -1.08 && p.ndcX <= 1.08 && p.ndcY >= -1.08 && p.ndcY <= 1.08; },
+
+    /** 중심(centerLon,centerLat)에서 각반경 radiusDeg 만큼 떨어진 원주 위 점들(대원 목적지 공식). */
+    circlePoints(centerLon, centerLat, radiusDeg, segments) {
+      const n = segments || this.SEG;
+      const lat1 = (centerLat || 0) * Math.PI / 180, lon1 = (centerLon || 0) * Math.PI / 180;
+      const r = Math.max(0.1, radiusDeg || 0.1) * Math.PI / 180;
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const brg = (i / n) * 2 * Math.PI;
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(r) + Math.cos(lat1) * Math.sin(r) * Math.cos(brg));
+        const lon2 = lon1 + Math.atan2(Math.sin(brg) * Math.sin(r) * Math.cos(lat1), Math.cos(r) - Math.sin(lat1) * Math.sin(lat2));
+        pts.push({ lon: lon2 * 180 / Math.PI, lat: lat2 * 180 / Math.PI });
+      }
+      return pts;
+    },
+    /** 사각형 네 꼭짓점(축정렬) — 저장은 두 꼭짓점(lon1/lat1, lon2/lat2)만. */
+    rectCorners(s) {
+      return [
+        { lon: s.lon1, lat: s.lat1 }, { lon: s.lon2, lat: s.lat1 },
+        { lon: s.lon2, lat: s.lat2 }, { lon: s.lon1, lat: s.lat2 }
+      ];
+    },
+    /** 도형 중심(lon,lat) — 라벨 기본 위치·목록 카메라 이동(rowAction) 기준. */
+    center(s) {
+      if (!s) return { lon: 0, lat: 0 };
+      if (s.type === "circle") return { lon: s.lon || 0, lat: s.lat || 0 };
+      return { lon: ((s.lon1 || 0) + (s.lon2 || 0)) / 2, lat: ((s.lat1 || 0) + (s.lat2 || 0)) / 2 };
+    },
+    /** 라벨 기본 위치 — 중심에서 우상단으로 떼어 리더선이 생기게 한다(11_UI.js Leader.defaultCallout과 같은 사상). */
+    defaultLabelPos(s) {
+      const c = this.center(s);
+      const spanDeg = s.type === "circle" ? Math.max(4, s.radiusDeg || 4) : Math.max(4, Math.abs((s.lon2 || 0) - (s.lon1 || 0)) / 2 || 4);
+      const off = Math.max(5, spanDeg * 0.9);
+      return { lon: c.lon + off, lat: c.lat + off * 0.6 };
+    },
+    /** 저장된 labelPos가 있으면 그대로, 없으면 기본값. */
+    labelPosOf(s) { return (s && s.labelPos && isFinite(s.labelPos.lon) && isFinite(s.labelPos.lat)) ? s.labelPos : this.defaultLabelPos(s); },
+    /** 이름(필수) 유효성 — 공백만/빈 문자열이면 false. */
+    validate(data) { return !!(data && String(data.label || "").trim()); },
+    /** 목록 행 탭 → 도형 중심으로 카메라 이동(06_PanoViewer.spotRowAction이 호출). */
+    rowAction(shape) {
+      if (!shape) return null;
+      const c = this.center(shape);
+      return { type: "look", lon: c.lon, lat: c.lat };
+    },
+
+    /* ── DOM(실 브라우저 전용) — 아래부터는 document 가드 뒤에만 동작, 순수함수 테스트엔 영향 없음 ── */
+    _svg() { return (typeof document !== "undefined") ? document.getElementById("pano-shape-svg") : null; },
+    _labelLayer() { return (typeof document !== "undefined") ? document.getElementById("pano-shape-labels") : null; },
+    _svgNS: "http://www.w3.org/2000/svg",
+
+    _outlinePoints(s) {
+      if (s.type === "circle") return this.circlePoints(s.lon, s.lat, s.radiusDeg || 1);
+      return this.rectCorners(s);
+    },
+
+    /** spots[] 중 도형(type:rect/circle)만 걸러 SVG(외곽선+리더선+화살촉) + 라벨(HTML) DOM 을 재구성.
+     *  06_PanoViewer.renderSpots()가 데이터 변경(추가/수정/삭제) 시마다 호출 — 매 프레임은 sync()만. */
+    render(pv, spots) {
+      const svg = this._svg(), layer = this._labelLayer();
+      if (!svg || !layer) return;
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      while (layer.firstChild) layer.removeChild(layer.firstChild);
+      this._shapes = (Array.isArray(spots) ? spots : []).filter((s) => this.isShape(s));
+      this._els = this._shapes.map((s) => this._buildOne(pv, svg, layer, s));
+      this.sync(pv);
+    },
+    _buildOne(pv, svg, layer, s) {
+      const col = this.KIND_COLOR[s.kind] || this.KIND_COLOR.defect;
+      const g = document.createElementNS(this._svgNS, "g");
+      g.setAttribute("class", "pano-shape-g");
+      g.dataset.id = s.id;
+      const outline = document.createElementNS(this._svgNS, "polygon");
+      outline.setAttribute("class", "pano-shape-outline");
+      outline.setAttribute("fill", col); outline.setAttribute("fill-opacity", ".14");
+      outline.setAttribute("stroke", col); outline.setAttribute("stroke-width", "2");
+      outline.setAttribute("vector-effect", "non-scaling-stroke");
+      g.appendChild(outline);
+      const leader = document.createElementNS(this._svgNS, "path");
+      leader.setAttribute("class", "pano-shape-leader");
+      leader.setAttribute("fill", "none"); leader.setAttribute("stroke", "#dc2626");
+      leader.setAttribute("stroke-width", "1.6"); leader.setAttribute("vector-effect", "non-scaling-stroke");
+      g.appendChild(leader);
+      const arrow = document.createElementNS(this._svgNS, "polygon");
+      arrow.setAttribute("class", "pano-shape-arrow"); arrow.setAttribute("fill", "#dc2626");
+      g.appendChild(arrow);
+      svg.appendChild(g);
+
+      const label = document.createElement("div");
+      label.className = "pano-shape-label" + (s.equipMark ? " equip-mark" : "");
+      label.dataset.id = s.id;
+      const noteShort = s.note ? (s.note.length > 42 ? s.note.slice(0, 42) + "…" : s.note) : "";
+      const attCount = Array.isArray(s.attachments) ? s.attachments.length : 0;
+      const canEdit = pv.canEditSpots();
+      label.innerHTML =
+        '<div class="psl-name">' + (s.equipMark ? '<span class="psl-equip-ic" title="설치 위치">⚙</span> ' : "") +
+        this._esc(s.label || "무제") + '</div>' +
+        (noteShort ? '<div class="psl-note-prev">' + this._esc(noteShort) + '</div>' : "") +
+        '<div class="psl-label-actions">' +
+        (attCount ? '<button type="button" class="psl-att-badge" aria-label="첨부 보기">📎' + attCount + '</button>' : "") +
+        (canEdit ? '<button type="button" class="psl-attach-btn" aria-label="첨부 올리기" title="사진/도면 첨부">＋📎</button>' : "") +
+        '</div>';
+      label.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this._dragMoved) { this._dragMoved = false; return; } // 드래그 종료 클릭은 무시
+        if (typeof App !== "undefined" && App._openShape) App._openShape(s.id);
+      });
+      const attBtn = label.querySelector(".psl-attach-btn");
+      if (attBtn) attBtn.addEventListener("click", (e) => { e.stopPropagation(); if (typeof App !== "undefined" && App._pickAttachment) App._pickAttachment(s.id); });
+      const badgeBtn = label.querySelector(".psl-att-badge");
+      if (badgeBtn) badgeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const first = (s.attachments || [])[0];
+        if (first && typeof App !== "undefined" && App._openAttachment) App._openAttachment(first);
+      });
+      this._wireLabelDrag(pv, s, label);
+      layer.appendChild(label);
+      return { g, outline, leader, arrow, label };
+    },
+    _esc(str) { return (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(str) : String(str || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); },
+    /** 라벨 드래그 — PanoViewer가 디자이너 편집 중일 때만, 떨어진 위치를 labelPos(구면)로 저장. */
+    _wireLabelDrag(pv, s, label) {
+      if (!pv.canEditSpots()) return;
+      label.classList.add("draggable");
+      let dragging = false;
+      const onMove = (ev) => {
+        if (!dragging) return;
+        const cx = ev.touches ? ev.touches[0].clientX : ev.clientX;
+        const cy = ev.touches ? ev.touches[0].clientY : ev.clientY;
+        const ll = pv.screenToLonLat(cx, cy);
+        if (ll) { s.labelPos = { lon: ll.lon, lat: ll.lat }; this._dragMoved = true; this.sync(pv); }
+        if (ev.cancelable) ev.preventDefault();
+      };
+      const onUp = () => {
+        dragging = false;
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        if (this._dragMoved && typeof App !== "undefined" && App._saveSpots) App._saveSpots(pv._currentPin);
+      };
+      label.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        dragging = true; this._dragMoved = false;
+        document.addEventListener("pointermove", onMove, { passive: false });
+        document.addEventListener("pointerup", onUp);
+      });
+    },
+    /** 매 프레임 — 이미 만들어진 DOM(outline/leader/arrow/label)의 위치만 갱신(재생성 없음, 성능). */
+    sync(pv) {
+      const svg = this._svg();
+      if (!svg || !this._els || !this._els.length) return;
+      const W = pv.canvas ? pv.canvas.clientWidth || pv.canvas.width : 0;
+      const H = pv.canvas ? pv.canvas.clientHeight || pv.canvas.height : 0;
+      if (!W || !H) return;
+      svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+      this._shapes.forEach((s, i) => {
+        const el = this._els[i]; if (!el) return;
+        const outPts = this._outlinePoints(s).map((p) => this.project(PanoViewer._lonLatToDir(p.lon, p.lat), pv.S, W, H));
+        const anyOutVisible = outPts.some((p) => this.visible(p));
+        const c = this.center(s);
+        const cProj = this.project(PanoViewer._lonLatToDir(c.lon, c.lat), pv.S, W, H);
+        const lp = this.labelPosOf(s);
+        const lProj = this.project(PanoViewer._lonLatToDir(lp.lon, lp.lat), pv.S, W, H);
+        const show = (anyOutVisible || this.visible(cProj)) && this.visible(lProj);
+        el.g.style.display = show ? "" : "none";
+        el.label.style.display = show ? "" : "none";
+        if (!show) return;
+        el.outline.setAttribute("points", outPts.map((p) => p ? (p.x + "," + p.y) : "0,0").join(" "));
+        const dir = (lProj.x >= cProj.x) ? 1 : -1;
+        const landX = lProj.x - dir * 18;
+        el.leader.setAttribute("d", "M " + cProj.x + " " + cProj.y + " L " + landX + " " + lProj.y + " L " + lProj.x + " " + lProj.y);
+        const ang = Math.atan2(lProj.y - cProj.y, landX - cProj.x);
+        const alen = 9, awid = 5.5;
+        const bx = cProj.x - alen * Math.cos(ang), by = cProj.y - alen * Math.sin(ang);
+        const px = -Math.sin(ang) * awid, py = Math.cos(ang) * awid;
+        el.arrow.setAttribute("points", cProj.x + "," + cProj.y + " " + (bx + px) + "," + (by + py) + " " + (bx - px) + "," + (by - py));
+        el.label.style.left = lProj.x + "px"; el.label.style.top = lProj.y + "px";
+      });
+    },
+    /** 그리기 중 미리보기(외곽선만, 라벨/리더 없음) — onPointerMove가 매 이동마다 호출. */
+    renderDraft(pv, draft) {
+      const svg = this._svg(); if (!svg) return;
+      let g = svg.querySelector(".pano-shape-draft");
+      if (!g) {
+        g = document.createElementNS(this._svgNS, "polygon");
+        g.setAttribute("class", "pano-shape-draft pano-shape-outline");
+        g.setAttribute("fill", "#3a97dd"); g.setAttribute("fill-opacity", ".18");
+        g.setAttribute("stroke", "#3a97dd"); g.setAttribute("stroke-width", "2"); g.setAttribute("stroke-dasharray", "6 4");
+        g.setAttribute("vector-effect", "non-scaling-stroke");
+        svg.appendChild(g);
+      }
+      const W = pv.canvas ? pv.canvas.clientWidth || pv.canvas.width : 0;
+      const H = pv.canvas ? pv.canvas.clientHeight || pv.canvas.height : 0;
+      if (!W || !H) return;
+      const pts = this._outlinePoints(draft).map((p) => this.project(PanoViewer._lonLatToDir(p.lon, p.lat), pv.S, W, H));
+      g.setAttribute("points", pts.map((p) => p ? (p.x + "," + p.y) : "0,0").join(" "));
+    },
+    clearDraft(pv) {
+      const svg = this._svg(); if (!svg) return;
+      const g = svg.querySelector(".pano-shape-draft");
+      if (g) g.remove();
     }
   };
 

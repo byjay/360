@@ -1090,6 +1090,10 @@
 
   <canvas id="pano-canvas" class="pano-canvas hidden"></canvas>
 
+  <!-- [WO 20261001-panoshapes] 사각형·원 도형 오버레이(구면 좌표 → 매 프레임 화면 투영, THREE 씬과 별개) -->
+  <svg id="pano-shape-svg" class="pano-shape-svg" aria-hidden="true"></svg>
+  <div id="pano-shape-labels" class="pano-shape-labels"></div>
+
   <!-- 노트 · 첨부 문서 정보 패널 -->
   <div id="pano-info-panel" class="pano-info-panel hidden"></div>
 
@@ -1102,6 +1106,8 @@
       <span class="psl-title">마커 목록</span>
       <button id="pano-spot-list-close" class="psl-close" type="button" aria-label="닫기"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
+    <!-- [WO 20261001-panoshapes] 장비 설치 위치만 걸러보기 -->
+    <label class="psl-filter"><input id="pano-spot-list-equip-filter" type="checkbox" /> 장비 설치 위치만</label>
     <div id="pano-spot-list-body" class="psl-body"></div>
   </div>
 
@@ -1120,6 +1126,15 @@
     <button id="btn-pano-spot"    class="btn-pano-ctrl" title="360 안에 마커 추가 — 종류를 고르고 화면을 탭하세요" aria-label="구면 마커">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 12-9 12s-9-5-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
       <span>마커</span>
+    </button>
+    <!-- [WO 20261001-panoshapes] 사각형·원 도형 그리기(드래그) — 디자이너만(.designer-only) -->
+    <button id="btn-pano-shape-rect" class="btn-pano-ctrl designer-only" title="사각형 도형 — 드래그해서 그리세요" aria-label="사각형 도형">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/></svg>
+      <span>사각형</span>
+    </button>
+    <button id="btn-pano-shape-circle" class="btn-pano-ctrl designer-only" title="원 도형 — 드래그해서 그리세요" aria-label="원 도형">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/></svg>
+      <span>원</span>
     </button>
     <button id="btn-pano-spotlist" class="btn-pano-ctrl" title="이 사진의 마커 목록 보기" aria-label="마커 목록">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
@@ -2161,6 +2176,11 @@
       <p id="prompt-modal-sub" class="admin-gate-sub"></p>
       <input id="prompt-modal-input" class="admin-gate-input" type="text" autocomplete="off" />
       <input id="prompt-modal-input2" class="admin-gate-input hidden" type="text" inputmode="numeric" placeholder="층 번호(선택, 정렬용)" style="margin-top:10px" />
+      <!-- [WO 20261001-panoshapes] 선택적 체크박스(장비 설치 위치 등) — opts.checkbox 미지정 시 hidden 유지, 기존 호출부 영향 0 -->
+      <label id="prompt-modal-checkbox-wrap" class="prompt-modal-checkbox-wrap hidden">
+        <input id="prompt-modal-checkbox" type="checkbox" />
+        <span id="prompt-modal-checkbox-label"></span>
+      </label>
       <div id="prompt-modal-error" class="admin-gate-error hidden"></div>
       <div class="admin-gate-actions">
         <button id="prompt-modal-cancel" class="admin-gate-btn ghost" type="button">취소</button>

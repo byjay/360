@@ -672,6 +672,15 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: border-color .15s;
 }
 .admin-gate-input:focus { border-color: var(--gold); }
+/* [WO 20261001-panoshapes] Prompt.ask 선택적 체크박스(예: "장비 설치 위치로 표기") — 카드가 항상
+   크림 고정 배경(.admin-gate-card color-scheme:light)이라 var(--text) 대신 고정 진한 글자색 사용
+   (다크테마 변수 플립 방지 — .admin-gate-sub 의 var(--text2) 와 달리 안전한 고정값으로 명시). */
+.prompt-modal-checkbox-wrap {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  font-size: 12.5px; color: #2b2820; font-family: var(--font-ui); cursor: pointer;
+}
+.prompt-modal-checkbox-wrap.hidden { display: none; }
+.prompt-modal-checkbox-wrap input { width: 18px; height: 18px; }
 .admin-gate-error {
   color: #f87171; font-size: 11px; font-family: var(--font-ui);
   margin-top: 10px;
@@ -1759,7 +1768,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 /* [FARO Markers] 마커 리스트 패널(테이블) */
 .pano-spot-list {
   position: absolute; top: 64px; right: 18px; z-index: 22;
-  width: 300px; max-width: 86vw; max-height: 60vh; display: flex; flex-direction: column;
+  width: 340px; max-width: 90vw; max-height: 60vh; display: flex; flex-direction: column;
   background: rgba(10,16,32,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border: 1px solid rgba(245,158,11,.28); border-radius: 12px;
   box-shadow: 0 14px 40px rgba(0,0,0,.5); overflow: hidden;
@@ -1777,6 +1786,61 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .psl-row:hover { background: rgba(245,158,11,.13); }
 .psl-num { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; color: #fff; }
 .psl-empty { padding: 24px 14px; text-align: center; color: #9aa6b2; font-size: 12px; line-height: 1.6; }
+/* [WO 20261001-panoshapes] 마커 목록 — 장비 설치 위치 필터 + 장비 태그 */
+.psl-filter { display: flex; align-items: center; gap: 6px; padding: 8px 10px; font-size: 12px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,.08); cursor: pointer; }
+.psl-filter input { width: 16px; height: 16px; }
+.psl-equip-tag { font-size: 11px; }
+
+/* ═══════════════════════════════════════════════════════════
+   [WO 20261001-panoshapes] 360 사진 안 도형(사각형·원) + 리더선 + 라벨 + 첨부
+   · #pano-shape-svg: 매 프레임 재투영되는 외곽선/리더선/화살촉(SVG) — THREE 씬과 별개 레이어.
+   · #pano-shape-labels: 이름·노트·첨부 배지 라벨(HTML, 드래그 가능) — 화면 기준 고정 크기.
+   · 대비: 라벨 배경 rgba(10,16,32,.92) + 글자 #f3ecd9 ≈ 13.8:1(실측 공식) — WCAG AAA.
+═══════════════════════════════════════════════════════════ */
+.pano-shape-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 8; overflow: visible;
+}
+.pano-shape-labels { position: absolute; inset: 0; pointer-events: none; z-index: 9; }
+.pano-shape-label {
+  position: absolute; transform: translate(-6px, -100%);
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 32px; min-height: 32px; max-width: 220px;
+  padding: 6px 9px; border-radius: 9px;
+  background: rgba(10,16,32,.92); color: #f3ecd9;
+  border: 1px solid rgba(245,158,11,.4); box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  font-size: 12px; line-height: 1.4; pointer-events: auto; cursor: pointer;
+}
+.pano-shape-label.draggable { cursor: grab; }
+.pano-shape-label.draggable:active { cursor: grabbing; }
+.pano-shape-label .psl-name { font-weight: 700; word-break: break-word; }
+.pano-shape-label .psl-note-prev { color: #cbd5e1; font-size: 11px; }
+.pano-shape-label .psl-equip-ic { color: #f0b941; }
+.pano-shape-label .psl-label-actions { display: flex; gap: 6px; margin-top: 2px; }
+.pano-shape-label .psl-att-badge,
+.pano-shape-label .psl-attach-btn {
+  min-height: 32px; min-width: 32px; padding: 4px 8px; border-radius: 7px;
+  background: rgba(255,255,255,.1); color: #f3ecd9; border: 1px solid rgba(255,255,255,.18);
+  font-size: 11px; cursor: pointer;
+}
+.pano-shape-label .psl-att-badge:hover,
+.pano-shape-label .psl-attach-btn:hover { background: rgba(255,255,255,.2); }
+/* 라이트박스(첨부 사진 확대) */
+.pano-shape-lightbox {
+  position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+}
+.pano-shape-lightbox.hidden { display: none; }
+.pano-shape-lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 6px; }
+.pano-shape-lightbox button {
+  position: absolute; top: 18px; right: 18px; width: 40px; height: 40px;
+  border-radius: 50%; background: rgba(255,255,255,.12); color: #fff; border: none;
+  font-size: 22px; line-height: 1; cursor: pointer;
+}
+/* 모바일 — 도형 도구 버튼도 다른 .btn-pano-ctrl 과 동일 터치 타깃(기존 CSS가 전체 선택자 커버, 추가 규칙 불필요) */
+@media (max-width: 760px) {
+  .pano-shape-label { max-width: 62vw; }
+}
 /* [도면 연결 복구] 도면 목록 — admin-gate(라이트 카드) 안 */
 .deck-link-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
 .dl-item { display: block; width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
