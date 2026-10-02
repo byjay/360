@@ -24,6 +24,8 @@
           if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
         });
       }
+      // [WO 20261001-gps] 위치 자동 기록 토글 — chk-leader360 행 옆에 런타임 주입(index.html 미수정).
+      if (typeof GPS !== "undefined" && GPS.initToggle) GPS.initToggle();
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
       const bd = document.querySelector('#settings-modal .admin-gate-backdrop');

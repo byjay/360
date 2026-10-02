@@ -22,6 +22,8 @@
       if (reopen) reopen.addEventListener("click", () => this.setCollapsed(false));
       if (csvBtn) csvBtn.addEventListener("click", () => this.exportCsv());
       if (search) search.addEventListener("input", (e) => { this.query = (e.target.value || "").trim().toLowerCase(); this.render(); });
+      // [WO 20261002-gap ★1] 보고서 범위 선택 + 인쇄 버튼을 CSV 버튼 옆에 런타임 주입(index.html 미수정).
+      if (typeof Report !== "undefined" && Report.init) Report.init();
     },
 
     setCollapsed(v) {
@@ -139,7 +141,13 @@
       }
     },
 
+    /** [WO 20261002-gap ★1] 6열/현재페이지뿐이던 내보내기를 Report(14열, 범위선택)로 위임.
+     *  Report 모듈이 없으면(구버전 번들) 예전 6열 CSV로 폴백 — 조용한 실패 금지. */
     exportCsv() {
+      if (typeof Report !== "undefined" && Report.csv) {
+        Report.csv(Report.currentScope ? Report.currentScope() : "page");
+        return;
+      }
       const rows = this._currentPins();
       if (!rows.length) { if (typeof Prompt !== "undefined") Prompt.toast("내보낼 포인트가 없습니다."); return; }
       const head = ["No", "Name", "Page", "X(%)", "Y(%)", "Has360"];

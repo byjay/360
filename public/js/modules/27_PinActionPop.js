@@ -242,6 +242,18 @@
           : ("작성자: " + esc(userMark.author || ""));
         metaHtml += ` <span style="color:${userMark.color};font-weight:700">● ${esc(bandTxt)}</span>`;
       }
+      // [WO 20261001-gps] 좌표 + 지도 링크(탭 시에만 외부로 이동 — 데이터 전송 없음, 판정기준 §4).
+      if (typeof GPS !== "undefined" && pin.gps) {
+        const gpsTxt = GPS.displayText(pin.gps);
+        if (gpsTxt) {
+          const warn = GPS.accWarning(pin.gps);
+          const mapHref = GPS.mapUrl(pin.gps);
+          const warnHtml = warn ? ` <span class="pin-dup-badge" title="GPS 정확도 낮음">${esc(warn)}</span>` : "";
+          metaHtml += mapHref
+            ? ` · <a href="${esc(mapHref)}" target="_blank" rel="noopener" title="지도에서 보기">${esc(gpsTxt)}</a>${warnHtml}`
+            : ` · ${esc(gpsTxt)}${warnHtml}`;
+        }
+      }
       $("pap-meta").innerHTML = metaHtml;
       // 360° 보기 버튼은 미디어 있을 때 강조
       const viewBtn = $("pap-view");
@@ -426,9 +438,12 @@
         let shotAt = null, shotSrc = null;
         if (typeof PhotoBatch !== "undefined" && PhotoBatch._sortRows) {
           try {
-            const exif = PhotoBatch._parseExifDate(await file.slice(0, 262144).arrayBuffer());
+            const _buf = await file.slice(0, 262144).arrayBuffer();
+            const exif = PhotoBatch._parseExifDate(_buf);
             const sorted = PhotoBatch._sortRows([{ file, name: file.name, lastModified: file.lastModified, exif }])[0];
             if (sorted && Number.isFinite(sorted.sortKey)) { shotAt = sorted.sortKey; shotSrc = sorted.timeSource; }
+            // [WO 20261001-gps] 사진 EXIF GPS가 있으면 기기 GPS보다 우선(판정기준 §2) — 같은 버퍼 재사용(이중 읽기 없음).
+            if (typeof GPS !== "undefined" && GPS.applyExifIfAny) GPS.applyExifIfAny(pin, _buf);
           } catch (e) { /* EXIF 실패는 치명적이지 않음 — 아래 등록시각 폴백 */ }
         }
         if (shotAt == null) { shotAt = Date.now(); shotSrc = "등록시각"; }
@@ -444,6 +459,9 @@
         pin.imageId = imageId; pin.imageName = imgName; pin.origKey = null; pin.pendingOpId = null; pin.pendingSync = false;
         // [지휘자 발주 보강 §4] 표시용 메타(있는 것만 — 지어내지 않음).
         pin.origName = file.name; pin.shotAt = shotAt; pin.shotSrc = shotSrc;
+        // [WO 20261001-gps] 사진 등록도 자동 위치 기록 트리거 — EXIF GPS 있으면 위에서 이미 채워졌고(우선),
+        // 없으면 기기 GPS로 보강(비동기·실패해도 등록을 막지 않음).
+        if (typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin);
         if (wantsTheta) pin.is360 = true; // SoT: 20_App.js:2083 과 동일 필드(신규 필드 도입 금지)
         if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
         // [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보관 — 보기용(4096px)과 별도로 R2에 백그라운드 업로드.

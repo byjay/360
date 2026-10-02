@@ -47,4 +47,6 @@
 42_Requests.js
 43_ProjectInfo.js
 46_DeckOutline.js
+47_Report.js
+48_GPS.js
 99_footer.js

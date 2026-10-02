@@ -1638,6 +1638,7 @@
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       State.pins.push(pin);
+      if (typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin); // [WO 20261001-gps] 자동 위치 기록(비동기·저장 안 막음)
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: series === "checkboard" });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks();
@@ -2235,6 +2236,7 @@
       if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache["local:" + pin.id] = localPreview; }
 
       State.pins.push(pin);
+      if (typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin); // [WO 20261001-gps] 자동 위치 기록(비동기·저장 안 막음)
       if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, instant: true });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks();
@@ -2454,6 +2456,7 @@
       }
 
       if (!editing) State.pins.push(pin);   // 편집 시 기존 객체를 그대로 갱신했으므로 push 안 함
+      if (!editing && typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin); // [WO 20261001-gps] 자동 위치 기록(신규만·비동기·저장 안 막음)
       if (typeof Log !== "undefined") Log.push(editing ? "pin.edit" : "pin.add", pin.id, { label: pin.label, page: pin.page });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks(); // 영역-핀 연결 갱신
