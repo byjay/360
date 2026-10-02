@@ -16,6 +16,10 @@
   const Requests = {
     // [WO 20261002-gap 묶음C] kind='note' = 결함 노트(디자이너 전용 이슈, 전역 목록 탭에 추가). 열람자 요청·질문은 그대로.
     KIND: { request: "요청", question: "질문", note: "결함" },
+    // 🔴 [지휘자 재현 2026-10-02] 열람자 작성 폼의 종류 선택은 KIND 전체가 아니라 이 2개만(서버 NOTE_VIEWER_KINDS
+    //   와 같은 SoT) — KIND 에 'note' 를 추가했더니 _viewerForm 이 Object.keys(KIND) 로 3버튼을 그려 p111
+    //   V2(kinds===2) 를 깨뜨렸다(회귀). 열람자는 결함 노트를 쓸 수 없다(서버도 403).
+    VIEWER_KINDS: ["request", "question"],
     STATUS: { open: "접수", progress: "처리중", done: "완료", verified: "확인완료" },
     ROLE: { super: "관리자", designer: "디자이너", viewer: "열람자", guest: "익명" },
     SEVERITY: { 상: "상", 중: "중", 하: "하" },
@@ -564,7 +568,7 @@
         kb[k].style.background = on ? "#c9962a" : "#2a2518"; kb[k].style.color = on ? "#1a1712" : "#ffffff";
         kb[k].setAttribute("aria-pressed", on ? "true" : "false");
       });
-      Object.keys(this.KIND).forEach((k) => {
+      this.VIEWER_KINDS.forEach((k) => {
         kb[k] = this._btn(this.KIND[k], "flex:1;padding:9px;border-radius:8px;border:1px solid #665;font-weight:700;font-size:13px;cursor:pointer;font-family:sans-serif", () => { kind = k; paint(); });
         kb[k].setAttribute("data-req-kind", k);
         kindRow.appendChild(kb[k]);
