@@ -154,6 +154,11 @@
       svg.innerHTML = this._hitRects.map((b) =>
         `<rect data-deck-outline="${esc(String(b.id))}" class="deck-outline-shape" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="0.4"/>`
       ).join("");
+      // [재현 R1/R2 수정] 라벨 anchor = 사각형의 "위쪽" 꼭짓점(top:${b.y}%) — updateLabelScale()이
+      // translateY(-100%)를 더해 라벨을 그 점 바로 위(사각형 바깥)에 앉힌다. top 변 전체가 라벨에
+      // 가려지던 종전 문제(라벨이 top:-1px;left:-1px 상자 안쪽에 얹혀 상단 변·핀 4/5를 덮었다 —
+      // 실측 .tmp/fixoutline2/03-main-with-outline.png)의 근본수정. 공간이 없으면 _placeLabels()가
+      // 사각형 "안쪽 하단"(bottom 변 안쪽)으로 전환한다.
       layer.innerHTML = this._hitRects.map((b) =>
         `<button type="button" class="deck-outline-label" data-deck-outline-label="${esc(String(b.id))}"
             style="left:${b.x}%;top:${b.y}%" title="클릭하면 '${esc(b.name)}'(으)로 이동">${esc(b.name)}</button>`
@@ -162,15 +167,66 @@
         btn.addEventListener("click", (e) => { e.stopPropagation(); this._goto(btn.getAttribute("data-deck-outline-label")); });
       });
       this.updateLabelScale();
+      this._placeLabels();
+      // [견고화] 핀(.pin-marker)이 이 render() 호출과 "같은 리스너 체인"이 아니라 조금 늦게(다른
+      // 비동기 경로로) 자리잡는 경우가 있어(실측: 간헐 FAIL, 겹침값이 항상 같은 크기로 재현 — 최초
+      // 배치 판정 시점에 핀이 아직 없었다는 뜻) 한 틱 늦게 한 번 더 겹침을 재확인한다. render() 가
+      // 그 사이 다시 불려도(최신 _hitRects 기준으로) 무해 — 멱등 재계산일 뿐이다. */
+      clearTimeout(this._placeLabelsRetryT);
+      this._placeLabelsRetryT = setTimeout(() => { try { this._placeLabels(); } catch (e) {} }, 350);
     },
 
-    /** 확대해도 라벨이 흐려지지 않게 역스케일(Zones.updateLabelScale 과 동일 원리). */
+    /** 확대해도 라벨이 흐려지지 않게 역스케일(Zones.updateLabelScale 과 동일 원리) + 라벨을 자기
+     *  앵커점(위 render() 의 top:${b.y}%) 바로 "위"로 띄우는 고정 화면-px 오프셋(translateY(-100%)).
+     *  scale 을 translateY 보다 **앞에** 둬야 한다 — translateY(-100%)는 라벨 자신의 레이아웃
+     *  높이(줌과 무관)를 기준으로 하므로, scale(inv)·상위 #map-transform 의 zoom 이 상쇄되어
+     *  화면상 오프셋이 줌과 무관하게 일정해진다(라벨 자체가 역스케일로 항상 같은 화면 크기인 것과
+     *  동일한 원리). 순서를 바꾸면(translateY 먼저) 줌에 비례해 간격이 늘고 줄어든다. */
     updateLabelScale() {
       const layer = document.getElementById("deck-outline-layer");
       if (!layer) return;
       const zoom = (typeof State !== "undefined" && State.zoom) || 1;
       const inv = (1 / zoom).toFixed(3);
-      layer.querySelectorAll(".deck-outline-label").forEach((el) => { el.style.transform = `scale(${inv})`; });
+      layer.querySelectorAll(".deck-outline-label").forEach((el) => { el.style.transform = `scale(${inv}) translateY(-100%)`; });
+    },
+
+    /** [재현 R2 수정] 라벨 기본 위치 = 사각형 바깥 위쪽(anchor=top, translateY(-100%)로 사각형
+     *  위에 뜸). ① 도면 영역(svg) 바깥으로 넘어가거나(공간 없음) ② 실제 핀 마커(.pin-marker)와
+     *  겹치면 사각형 "안쪽 하단"(anchor=bottom)을 시도해 겹침이 더 작은 쪽을 쓴다 — 숨기지 않고
+     *  항상 보이게 한다(마스터 지시 "숨기지 마"). 레이아웃 실측(getBoundingClientRect)이라 줌/팬과
+     *  무관하다. 핀은 같은 페이지의 "다른" 구역 핀(리더선이 상자 주변을 지나는 경우)도 포함해 겹침을
+     *  0 에 가깝게 만든다 — 이 구역 소속 여부를 가리지 않는다(화면에 보이는 모든 핀 기준, 지휘자
+     *  R2 "핀 마커와 겹침 면적 0" 원문 그대로). */
+    _placeLabels() {
+      const svg = document.getElementById("deck-outline-svg");
+      const layer = document.getElementById("deck-outline-layer");
+      if (!svg || !layer) return;
+      const bound = svg.getBoundingClientRect();
+      const pinRects = Array.from(document.querySelectorAll(".pin-marker")).map((el) => el.getBoundingClientRect());
+      const overlapArea = (a, b) => {
+        const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        return (w > 0 && h > 0) ? w * h : 0;
+      };
+      const pinOverlap = (r) => pinRects.reduce((sum, pr) => sum + overlapArea(r, pr), 0);
+      layer.querySelectorAll(".deck-outline-label").forEach((btn) => {
+        const id = btn.getAttribute("data-deck-outline-label");
+        const box = this._hitRects.find((b) => String(b.id) === String(id));
+        if (!box) return;
+        btn.style.top = box.y + "%"; // 위치 ① 바깥 위쪽(기본)
+        const rAbove = btn.getBoundingClientRect();
+        const aboveOk = rAbove.top >= bound.top - 0.5;
+        const aboveOverlap = aboveOk ? pinOverlap(rAbove) : Infinity;
+        if (aboveOverlap > 0) {
+          btn.style.top = (box.y + box.h) + "%"; // 위치 ② 안쪽 아래쪽
+          const belowOverlap = pinOverlap(btn.getBoundingClientRect());
+          const useBelow = belowOverlap < aboveOverlap;
+          if (!useBelow) btn.style.top = box.y + "%";
+          btn.classList.toggle("deck-outline-label-inside", useBelow);
+        } else {
+          btn.classList.remove("deck-outline-label-inside");
+        }
+      });
     },
 
     /** 그 구역으로 이동 — 기존 트리 진입 경로(Projects.selectDeck)를 그대로 재사용(§G-2-5). */

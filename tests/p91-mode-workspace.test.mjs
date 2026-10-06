@@ -244,7 +244,7 @@ mutation("M5 영역 부모 mode 상속 제거",
 mutation("M6 트리 핀 나열을 모드 계열로 거르지 않음(모드 잎 안에서 전체 핀을 나열)",
   { ui: mutate(uiSrc, "renderScopedPins(mk, modePinsHere);", "renderScopedPins(mk, pins);", "M6") }, "A7");
 mutation("M7 모드 잎(CHECKER/360) 렌더 제거 → 구역 로드돼도 계열 분리 없음",
-  { ui: mutate(uiSrc, "MODES.forEach((m) => {\n              const modePinsHere", "[].forEach((m) => {\n              const modePinsHere", "M7") }, "A7");
+  { ui: mutate(uiSrc, "MODES.forEach((m) => {\n              const modeAll", "[].forEach((m) => {\n              const modeAll", "M7") }, "A7");
 
 /* ══════════════════ Part B — 서버 + 실 D1 ══════════════════ */
 console.log("\n[Part B · 실제 워커(src/index.tsx) + 실제 D1(Miniflare) — decks.mode]");

@@ -5751,7 +5751,12 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 }
 .deck-outline-shape.hot { stroke-width: 3.2px; filter: drop-shadow(0 2px 6px rgba(67,56,202,.55)); }
 .deck-outline-label {
-  position: absolute; top: -1px; left: -1px; transform-origin: 0 0;
+  /* [재현 R1/R2 수정] top/left 는 항상 46_DeckOutline.render()의 inline style(= 앵커점,
+     인라인이라 이 규칙보다 항상 우선)이 정한다 — 여기 하드코딩 값은 없다(죽은 선언 제거, 혼선 방지).
+     앵커점 자체를 사각형 "바깥 위" 또는 "안쪽 아래"로 옮기는 건 46_DeckOutline.updateLabelScale()의
+     translateY(-100%)(§46_DeckOutline.js 주석) — 종전엔 라벨이 사각형의 top 변 전체를 덮어 사각형이
+     "안 보인다"는 오인과 핀 겹침을 동시에 냈다(실측 .tmp/fixoutline2/03-main-with-outline.png). */
+  position: absolute; transform-origin: 0 0;
   background: #4338ca; color: #fff; font: inherit; font-size: 11px; font-weight: 800;
   padding: 3px 10px; border-radius: 4px 0 6px 0; white-space: nowrap;
   max-width: 220px; overflow: hidden; text-overflow: ellipsis;

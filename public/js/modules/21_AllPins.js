@@ -126,10 +126,18 @@
       return { ico: I('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'), cls: "empty", txt: "콘텐츠 없음" };
     },
 
+    /** [WO 46_DeckOutline 수정] 지금 로드된 구역(Projects.currentDeck)이 창(crop) 구역이면 그 크롭
+     *  안의 핀만 — SoT: Projects.pinsForDeck(§31_Projects.js, 트리·필터칩과 같은 함수, §G-2-5). */
+    _scopedPins() {
+      const all = State.pins || [];
+      const deck = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
+      return (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(all, deck) : all;
+    },
+
     /** [WO 20261001-allpins] 현재 탭(계열)의 핀만 — 페이지 구분 없이 전체(탭 = 작업공간). */
     _modePins() {
       const ser = this._currentSeries();
-      return (State.pins || []).filter((p) => p && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === ser));
+      return this._scopedPins().filter((p) => p && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === ser));
     },
 
     /** 검색 필터 적용 전, 현재 정렬 기준(this.sort) 그대로 둔 전체 목록 — 재채번 "목록 순서" 기준이
@@ -164,7 +172,7 @@
       if (!host || typeof PinSeries === "undefined") return;
       const cur = this._currentSeries();
       const counts = { checkboard: 0, content: 0 };
-      (State.pins || []).forEach((p) => { if (p) counts[PinSeries.seriesOf(p)]++; });
+      this._scopedPins().forEach((p) => { if (p) counts[PinSeries.seriesOf(p)]++; });
       host.innerHTML = PinSeries.SERIES.map((ser) => {
         const active = ser === cur;
         return '<button type="button" class="allpins-tab allpins-tab-' + ser + (active ? " active" : "") +

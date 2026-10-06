@@ -994,7 +994,11 @@
             const actMode = (typeof PinSeries !== "undefined" && PinSeries.activeMode) ? PinSeries.activeMode() : null;
             const leafOpen = this._treeModeLeafOpen || (this._treeModeLeafOpen = new Set());
             MODES.forEach((m) => {
-              const modePinsHere = pins.filter((p) => p && PinSeries.inMode(p, m.series));
+              const modeAll = pins.filter((p) => p && PinSeries.inMode(p, m.series));
+              // [WO 46_DeckOutline 수정] 이 노드가 창(crop) 구역이면 그 크롭 안의 핀만 — SoT:
+              // Projects.pinsForDeck(§31_Projects.js). 번호(numMap)·영역 소속(zoneOfPin)은 전체
+              // 핀 기준 그대로 둔다(전역 채번이 깨지지 않게, 이 잎의 표시·집계 범위만 좁힌다).
+              const modePinsHere = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(modeAll, deck) : modeAll;
               const isAct = !!(actMode && actMode.tag === m.tag);
               const leafKey = collapseKey + ":" + m.tag;
               const mw = document.createElement("div");

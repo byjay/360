@@ -595,15 +595,33 @@
       return { src_dep_id: String(src.deployment_id), src_page: Number(page) || 1, src_crop: { x: crop.x, y: crop.y, w: crop.w, h: crop.h } };
     },
 
-    /** 영역(crop %) 안에 있는 그 페이지 핀 수 — 알림용 집계만(핀 배열은 읽기만 한다). 순수 함수. */
-    _pinsInCrop(pins, page, crop) {
-      if (!Array.isArray(pins) || !crop || !(crop.w > 0) || !(crop.h > 0)) return 0;
+    /** 영역(crop %) 안에 있는 그 페이지 핀만 — 순수 함수(배열 반환). 필터링 로직의 단일 SoT —
+     *  _pinsInCrop(카운트)·pinsForDeck(구역 범위 판정)이 모두 이 함수 하나를 재사용한다(§G-2-5).
+     *  crop 이 없으면(페이지 전체) 그대로 돌려준다(필터 없음, 날조 금지). */
+    _pinsWithinCrop(pins, page, crop) {
+      const arr = Array.isArray(pins) ? pins : [];
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) return arr.slice();
       const pg = page || 1, x1 = crop.x + crop.w, y1 = crop.y + crop.h;
-      return pins.filter((p) => {
+      return arr.filter((p) => {
         if (!p || (p.page || 1) !== pg) return false;
         const x = Number(p.x), y = Number(p.y);
         return x >= crop.x && x <= x1 && y >= crop.y && y <= y1;
-      }).length;
+      });
+    },
+
+    /** 영역(crop %) 안에 있는 그 페이지 핀 수 — 알림용 집계만(핀 배열은 읽기만 한다). 순수 함수. */
+    _pinsInCrop(pins, page, crop) {
+      if (!crop || !(crop.w > 0) || !(crop.h > 0)) return 0;
+      return this._pinsWithinCrop(pins, page, crop).length;
+    },
+
+    /** [WO 46_DeckOutline 수정] 주어진 구역(deck)이 "창 방식"(crop, 메인 도면을 공유하는 창)이면 그
+     *  크롭 안의 핀만, 아니면(벡터 복사·루트·crop 없음) 그대로 전체 — 트리(11_UI.renderTree)·필터
+     *  칩(01b_PinSeries.renderChips)·AllPins 탭(21_AllPins)이 공유하는 단일 SoT(§G-2-5, 한 곳만
+     *  고치면 형제가 깨진다). "메인 배포본" 특수 판정 없음 — 46_DeckOutline.js §SoT 와 동일 원칙. */
+    pinsForDeck(pins, deck) {
+      if (!deck || !deck.crop || !(deck.crop.w > 0) || !(deck.crop.h > 0)) return Array.isArray(pins) ? pins : [];
+      return this._pinsWithinCrop(pins, deck.page, deck.crop);
     },
 
     /** [WO 20260928 → 20260929 이음매 수정] "도면이 화면에 로드돼 있는가" 상태 판정.

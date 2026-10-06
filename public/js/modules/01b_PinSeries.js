@@ -774,7 +774,11 @@
       const host = document.getElementById("pin-filter-bar");
       if (!host) return;
       const page = (typeof State !== "undefined" && State.pdfPage) || 1;
-      const pins = (typeof State !== "undefined" && State.pins) || [];
+      const allPins = (typeof State !== "undefined" && State.pins) || [];
+      // [WO 46_DeckOutline 수정] 지금 로드된 구역이 창(crop) 구역이면 그 크롭 안의 핀만 센다 —
+      // SoT: Projects.pinsForDeck(§31_Projects.js, §G-2-5 — 트리·AllPins 탭과 같은 함수 재사용).
+      const curDeck = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
+      const pins = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(allPins, curDeck) : allPins;
       // [WO 20260930-badge] 🔴 카운트는 페이지 전체(두 계열) 기준으로 센다 — modePins()로 먼저
       // 거르면 활성 모드가 아닌 계열은 항상 0으로 계산되고(칩 자체가 못 뜸), 활성 모드 핀이
       // 0개면 c.all 도 0이 되어 칩바 전체가 숨어버린다(재현: 360 모드에서 콘텐츠 핀 0개일 때
