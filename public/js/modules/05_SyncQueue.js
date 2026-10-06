@@ -493,28 +493,67 @@
       return { ok: true, uploaded };
     },
 
+    /* ═══ [WO 20261006-photolink] 동기화 결과 통보 — 조용한 실패 금지 ═══
+       🔴 근본원인(지휘자 재현 2026-10-06, 실 Chrome CDP + grep 전수):
+         ① flush() 가 {offlineAuth:true} 로 멈춰도 _onReconnect 는 **아무 말도 하지 않았다**.
+            Auth._offlineOnly(오프라인 검증자로만 재인증한 현장 상태)는 Auth.refresh() 성공 시에만
+            풀리는데, "online" 리스너 4곳(05_SyncQueue:352 · 20_App:63,4096 · 32_Offline:406) 중
+            refresh() 를 부르는 곳이 **하나도 없다** → 온라인 복귀해도 사진 큐는 영구 차단되고
+            배지는 "동기화 중 N" 만 띄운다. 핀은 _flushDirtyDrafts(이 가드 없음)로 올라가므로
+            사용자 눈에는 "핀은 보이는데 360 사진만 핀에 연결 안 됨" 으로 보인다.
+         ② flush() 의 부분 실패(r.failed>0)와 draft/OpLog/원본 플러시의 예외도 전부 try/catch 로
+            삼켜졌다. App.syncNow() 는 더 나빴다 — 실패해도 "업로드 완료" 토스트를 띄웠다.
+       → 결과 판정·통보를 이 함수 하나로 모은다(§G-2-5). 자동(_onReconnect)·수동(App.syncNow)
+         두 호출부가 같은 판정을 쓴다. 배지(32_Offline.updateNetBadge)는 _lastSyncError 를 읽는다. */
+    _lastSyncError: null,   // 마지막 동기화에서 서버에 못 올린 사유(사람이 읽을 사실 1줄) · null = 실패 없음
+    /** @param {object|null} r flush() 결과  @param {string[]} errs 각 단계에서 잡힌 예외 메시지 */
+    noteSyncResult(r, errs) {
+      const list = (errs || []).filter(Boolean);
+      const failed = (r && r.failed) || 0;
+      if (r && r.offlineAuth) list.unshift(r.reason || "오프라인 인증 상태 — 다시 로그인하면 이어서 올라갑니다");
+      if (failed > 0) list.unshift("360 사진·첨부 " + failed + "건을 올리지 못했습니다 — 대기에 보관됨(자동 재시도)");
+      this._lastSyncError = list.length ? list[0] : null;
+      try {
+        if (typeof Prompt !== "undefined" && Prompt.toast) {
+          if (list.length) Prompt.toast("동기화 실패 — " + list[0], 5000);
+          else if (r && r.uploaded > 0) Prompt.toast("온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
+        }
+      } catch (e) {}
+      this._emit();
+      return this._lastSyncError;
+    },
+
     /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
     async _onReconnect() {
       if (this._reconnecting) return; this._reconnecting = true;
+      const errs = [];
+      const msg = (e) => String((e && e.message) || e || "알 수 없는 오류").slice(0, 120);
       try {
-        const r = await this.flush();
+        let r = await this.flush();
+        // 🔴 오프라인 검증자 상태(_offlineOnly)면 flush 가 업로드를 건너뛴다 — 서버에 신원을
+        //   재검증(Auth.refresh — _offlineOnly 를 푸는 유일한 지점, 22_Auth.js:388)한 뒤 1회 재시도.
+        if (r && r.offlineAuth && typeof Auth !== "undefined" && Auth.refresh) {
+          try { await Auth.refresh(); } catch (e) { errs.push("서버 재인증: " + msg(e)); }
+          if (Auth.canServerWrite && Auth.canServerWrite()) r = await this.flush();
+        }
         // map 이 있으면(0건이어도) 핀의 pendingOpId → 서버 imageId/docId 치환
         // 🔴 [p102 A2] await — 보관 draft 의 pendingOpId→imageId 치환이 아래 draft 업로드보다 먼저 끝나야 한다
-        if (r && r.map && typeof App !== "undefined" && App._onSyncDone) await App._onSyncDone(r);
+        // 🔴 여기서 터지면 사진은 서버에 올라갔는데 핀은 그 id 를 모른다(사진 고아) — 반드시 알린다.
+        if (r && r.map && typeof App !== "undefined" && App._onSyncDone) {
+          try { await App._onSyncDone(r); } catch (e) { errs.push("사진 연결(id 치환): " + msg(e)); }
+        }
         // 오프라인 중 저장된 도면 draft 를 서버에 반영(낙관적 잠금 base_version 포함)
         if (typeof App !== "undefined" && App._flushDirtyDrafts) {
-          try { await App._flushDirtyDrafts(); } catch (e) {}
+          try { await App._flushDirtyDrafts(); } catch (e) { errs.push("도면 저장: " + msg(e)); }
         }
         // [오프라인 작업지시서 ] 오프라인 op 로그 replay(충돌없는 엔티티 병합)
         if (typeof App !== "undefined" && App._flushOpLogs) {
-          try { await App._flushOpLogs(); } catch (e) {}
+          try { await App._flushOpLogs(); } catch (e) { errs.push("오프라인 변경 반영: " + msg(e)); }
         }
         // [WO 20261002-gap 묶음A④] 360 원본 재시도 큐도 재연결마다 비운다.
-        try { await this.flushOriginals(); } catch (e) {}
-        // 재연동 토스트(대기 항목이 실제로 있었을 때만)
-        if (r && (r.uploaded > 0) && typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
-        }
+        try { await this.flushOriginals(); } catch (e) { errs.push("360 원본 보관: " + msg(e)); }
+        // 성공/실패를 반드시 통보한다(조용한 실패 금지 — 공유 판정 1곳)
+        this.noteSyncResult(r, errs);
       } finally { this._reconnecting = false; this._emit(); }
     }
   };

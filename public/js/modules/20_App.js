@@ -2543,21 +2543,65 @@
       for (const k of keys) {
         let d = null;
         try { d = await SyncQueue.loadDraft(k); } catch (e) { continue; }
-        if (!d || !Array.isArray(d.pins)) continue;
+        if (!d) continue;
         let changed = false;
-        d.pins.forEach((pin) => {
-          if (!pin) return;
-          if (pin.pendingOpId && map[pin.pendingOpId]) { pin.imageId = map[pin.pendingOpId]; delete pin.pendingOpId; changed = true; }
-          (pin.attachments || []).forEach((att) => {
-            if (att && att.pendingOpId && map[att.pendingOpId]) { att.docId = map[att.pendingOpId]; delete att.pendingOpId; delete att.pendingSync; changed = true; }
-          });
-          if (pin.pendingSync && !pin.pendingOpId && !(pin.attachments || []).some((a) => a && a.pendingOpId)) { delete pin.pendingSync; changed = true; }
-        });
+        if (Array.isArray(d.pins)) {
+          // 도면 draft(`projectId::deckId`, _saveDraftLocal) — pins 가 배열
+          d.pins.forEach((pin) => { if (this._applyMapToPin(pin, map)) changed = true; });
+          if (changed) d.dirty = true;   // 서버엔 아직 죽은 pendingOpId 가 있을 수 있다 → 다음 업로드 대상
+        } else if (typeof d.pins === "string") {
+          // 🔴 [WO 20261006-photolink] 오프라인 번들 스냅샷(`bundle:dep:<id>`, 32_Offline.js
+          //   persistLocalDeployment)은 **서버 행 모양**이라 pins 가 JSON 문자열이다. 종전엔
+          //   Array.isArray 만 보고 건너뛰어, 동기화가 끝나도 이 스냅샷엔 죽은 pendingOpId 가
+          //   남았다 → 다음 오프라인 재진입(loadDeckDrawing → OfflineLoad.deployment)이 이
+          //   스냅샷으로 핀을 복원해 사진 연결이 사라진다(서버 pano_images 엔 있는데 핀이 안
+          //   가리키는 '사진 고아'). 241e641-R5 가 이 스냅샷을 모든 편집마다 쓰게 바꾼 뒤
+          //   노출 빈도가 올라갔다.
+          let arr = null;
+          try { arr = JSON.parse(d.pins || "[]"); } catch (e) { arr = null; }
+          if (Array.isArray(arr)) {
+            arr.forEach((pin) => { if (this._applyMapToPin(pin, map)) changed = true; });
+            if (changed) d.pins = JSON.stringify(arr);
+          }
+        } else if (Array.isArray(d) && String(k).startsWith("oplog:")) {
+          // 오프라인 op 로그(`oplog:<depId>`) — replay 로 서버에 올라갈 핀 본문에도 같은 치환이 필요하다
+          //   (안 하면 /ops 가 죽은 pendingOpId 를 서버 핀에 그대로 써 넣는다).
+          d.forEach((op) => { if (op && op.entity === "pin" && op.data && this._applyMapToPin(op.data, map)) changed = true; });
+        }
         if (!changed) continue;
-        d.dirty = true;
         try { await SyncQueue.saveDraft(k, d); n++; } catch (e) {}
       }
       return n;
+    },
+
+    /** 🔴 [WO 20261006-photolink] op id → 서버 id 치환 규칙의 **단일 출처**(핀 1개 기준).
+     *  화면(_onSyncDone)과 로컬 보관본 전부(_applySyncMapToDrafts: 도면 draft · bundle:dep ·
+     *  oplog)가 이 함수 하나를 쓴다 — 갈라지면 한쪽만 치환돼 "서버엔 사진이 있는데 핀엔 연결
+     *  안 됨"(사진 고아)이 난다(§G-2-5).
+     *  @param {boolean} [moveCache] true 면 미리보기 캐시 키(op:<opId> → 서버 id)도 이관(화면 경로만). */
+    _applyMapToPin(pin, map, moveCache) {
+      if (!pin || !map) return false;
+      const cache = (moveCache && typeof Cloud !== "undefined") ? (Cloud._cache = Cloud._cache || {}) : null;
+      let changed = false;
+      if (pin.pendingOpId && map[pin.pendingOpId]) {
+        const srvId = map[pin.pendingOpId];
+        if (cache) { const c = cache["op:" + pin.pendingOpId]; if (c) cache[srvId] = c; }
+        pin.imageId = srvId; delete pin.pendingOpId; changed = true;
+      }
+      (pin.attachments || []).forEach((att) => {
+        if (att && att.pendingOpId && map[att.pendingOpId]) {
+          const srvId = map[att.pendingOpId];
+          if (cache) { const c = cache["op:" + att.pendingOpId]; if (c) cache[srvId] = c; }
+          att.docId = srvId; delete att.pendingOpId; delete att.pendingSync; changed = true;
+        }
+      });
+      // [WO 20261002-gap 묶음A①] 사진 교체 이력(pin.timeline, PhotoNaming.pushHistory)에도 pendingOpId 가
+      //   적립된다 — 치환하지 않으면 그 이력 사진은 서버에 올라갔는데도 영영 못 본다.
+      (pin.timeline || []).forEach((t) => {
+        if (t && t.pendingOpId && map[t.pendingOpId]) { t.imageId = map[t.pendingOpId]; delete t.pendingOpId; changed = true; }
+      });
+      if (pin.pendingSync && !pin.pendingOpId && !(pin.attachments || []).some((a) => a && a.pendingOpId)) { delete pin.pendingSync; changed = true; }
+      return changed;
     },
 
     /** 동기화 완료 콜백 — 큐 op id → 서버 imageId/docId 로 치환 후 화면 갱신.
@@ -2565,30 +2609,10 @@
     async _onSyncDone(result) {
       const map = (result && result.map) || {};
       let changed = false;
-      State.pins.forEach(pin => {
-        if (pin.pendingOpId && map[pin.pendingOpId]) {
-          pin.imageId = map[pin.pendingOpId];
-          // 미리보기 캐시 키 이관
-          const cached = Cloud._cache["op:" + pin.pendingOpId];
-          if (cached) Cloud._cache[pin.imageId] = cached;
-          delete pin.pendingOpId; changed = true;
-        }
-        if (pin.attachments) {
-          pin.attachments.forEach(att => {
-            if (att.pendingOpId && map[att.pendingOpId]) {
-              att.docId = map[att.pendingOpId];
-              const c = Cloud._cache["op:" + att.pendingOpId];
-              if (c) Cloud._cache[att.docId] = c;
-              delete att.pendingOpId; delete att.pendingSync; changed = true;
-            }
-          });
-        }
-        // 모든 대기 항목이 해소되면 pendingSync 해제
-        if (pin.pendingSync && !pin.pendingOpId &&
-            !(pin.attachments || []).some(a => a.pendingOpId)) {
-          delete pin.pendingSync; changed = true;
-        }
-      });
+      // 🔴 [WO 20261006-photolink] 치환 규칙은 _applyMapToPin 단일 출처(§G-2-5) — 보관본 경로
+      //   (_applySyncMapToDrafts)와 **같은 함수**를 쓴다. 종전엔 같은 로직이 두 곳에 복제돼 있었고,
+      //   timeline(사진 교체 이력)은 어느 쪽에서도 치환되지 않았다.
+      State.pins.forEach(pin => { if (this._applyMapToPin(pin, map, true)) changed = true; });
       // 보관 draft 치환을 화면 draft 재보관(_autoSave)보다 **먼저** — 늦게 끝난 쪽이 최신 화면 상태를 덮지 않게
       try { await this._applySyncMapToDrafts(map); } catch (e) {}
       if (changed) {
@@ -2676,16 +2700,16 @@
       if (mUp) mUp.disabled = true;
       if (mUpLabel) mUpLabel.textContent = "올리는 중…";
       // [토스트 스팸 제거] sync-badge 가 이미 "올리는 중…" 을 표시한다. 완료/실패 토스트는 아래 유지.
-      let uploaded = 0;
       try {
-        const r = await SyncQueue.flush();
-        if (r && r.map) await this._onSyncDone(r);   // [p102 A2] draft 치환 완료 후 draft 업로드
-        if (r && typeof r.uploaded === "number") uploaded += r.uploaded;
-        if (this._flushDirtyDrafts) { try { await this._flushDirtyDrafts(); } catch (e) {} }
-        if (this._flushOpLogs) { try { await this._flushOpLogs(); } catch (e) {} }
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 완료 — 대기 작업 " + uploaded + "건 서버 반영");
-      } catch (e) {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("업로드 일부 실패 — 잠시 후 다시 시도하세요. (작업은 보관됨)");
+        // 🔴 [WO 20261006-photolink] 수동 동기화도 자동 재연결과 **같은 시퀀스 · 같은 결과 통보**를
+        //   쓴다(SyncQueue._onReconnect → noteSyncResult, §G-2-5). 종전엔 여기서 flush/draft/OpLog 를
+        //   따로 호출하고 각 실패를 try/catch 로 삼킨 뒤 **무조건** "업로드 완료 N건" 토스트를 띄워,
+        //   360 사진이 한 장도 안 올라갔는데도 "완료"로 보고했다(거짓 보고 = 조용한 실패).
+        if (SyncQueue._reconnecting) {
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미 동기화 중입니다 — 잠시만 기다려 주세요");
+        } else {
+          await SyncQueue._onReconnect();
+        }
       } finally {
         this._syncingNow = false;
         if (badge) badge.classList.remove("syncing");

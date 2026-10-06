@@ -326,10 +326,19 @@
       badge.classList.add("show"); badge.classList.remove("syncing");
       if (text) text.textContent = "오프라인"; if (q) q.textContent = pending;
     } else if (pending > 0) {
-      badge.classList.add("show", "syncing");
-      if (text) text.textContent = "동기화 중"; if (q) q.textContent = pending;
+      // 🔴 [WO 20261006-photolink] 조용한 실패 금지 — 마지막 동기화가 실패했으면 "동기화 중"으로
+      //   위장하지 않는다(종전엔 영구히 "동기화 중 N" 이라, 사진이 안 올라간 사실을 알 길이 없었다).
+      //   판정은 SyncQueue.noteSyncResult 가 세운 단일 값(_lastSyncError)만 읽는다(§G-2-5 — 여기서
+      //   따로 재계산하지 않는다). 색은 기존 오프라인 상태와 같은 빨강(syncing 클래스 제거) 재사용.
+      const syncErr = (typeof SyncQueue !== "undefined") ? SyncQueue._lastSyncError : null;
+      badge.classList.add("show");
+      badge.classList.toggle("syncing", !syncErr);
+      if (text) text.textContent = syncErr ? "동기화 실패" : "동기화 중";
+      if (q) q.textContent = pending;
+      badge.setAttribute("title", syncErr ? ("동기화 실패 — " + syncErr) : ("서버 반영 대기 " + pending + "건"));
     } else {
       badge.classList.remove("show", "syncing");
+      badge.removeAttribute("title");
     }
   }
 

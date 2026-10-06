@@ -831,6 +831,16 @@ async function runScenario(P) {
   if (process.env.P114_STOP === "reload") { assertOcclusion(); return; }
 
   /* ── 7. 온라인 복귀 → 자동 동기화 ── */
+  /** 🔴 [지휘자 재현 2026-10-06] 사진 연결 판정의 **단일 규칙** — 아래 루프 탈출 조건과 최종
+   *  단언(photoOk)이 같은 함수를 쓴다(§G-2-5). 종전엔 루프가 `sp.filter(!checkboard).every(...)`
+   *  만 봤는데 **빈 배열의 every() 는 vacuous true** 라, "서버에 사진 핀이 아직 0개" 인 순간에도
+   *  photoDone=true 가 됐다 → 업로드가 끝나기 전(실측: Fast 3G 에서 1.73MB base64 = 21.2s,
+   *  POST /api/sync/batch 200) 1.6s 에 루프를 빠져나와 종료 12.6s 뒤 측정 → "360 사진이 서버에
+   *  올라가 핀에 연결됨" 이 측정 조기 종료 때문에 FAIL 했다(제품은 24.6s 에 연결 완료 — 실측). */
+  const srvPhotoLinked = (pins) => {
+    const ph = pins.filter((p) => !p.checkboard);
+    return ph.length >= 1 && ph.every((p) => (p.imageId || p.imageUrl) && !p.pendingOpId);
+  };
   const apiIdx = P.net.api.length;
   const tOn = Date.now();
   await setNet("fast3g");
@@ -849,7 +859,7 @@ async function runScenario(P) {
     if (lsNow && lsNow.pend === 0) {
       const sp = await P.srvPins();
       const ids = sp.map((p) => String(p.id));
-      const photoDone = sp.filter((p) => !p.checkboard).every((p) => (p.imageId || p.imageUrl) && !p.pendingOpId);
+      const photoDone = srvPhotoLinked(sp);
       if (sp.length === lsNow.pins && lsNow.ids.every((id) => ids.indexOf(id) >= 0) && photoDone) { syncDone = Date.now() - tOn; break; }
     }
     await P.wait(300);
@@ -885,7 +895,7 @@ async function runScenario(P) {
   const pano = await P.db.prepare("SELECT COUNT(*) AS n FROM pano_images").first().catch(() => ({ n: -1 }));
   const r2list = await P.r2.list().catch(() => ({ objects: [] }));
   report.serverAfterSync = { pins: sp.length, photoPins: srvPhoto.map((p) => ({ id: String(p.id), imageId: p.imageId || null, imageUrl: p.imageUrl || null, pendingOpId: p.pendingOpId || null })), panoImagesRows: pano && pano.n, r2Keys: (r2list.objects || []).map((o) => o.key + " " + o.size + "B") };
-  const photoOk = srvPhoto.length >= 1 && srvPhoto.every((p) => (p.imageId || p.imageUrl) && !p.pendingOpId);
+  const photoOk = srvPhotoLinked(sp);   // 루프 탈출 조건과 같은 단일 규칙(§G-2-5)
   ok(photoOk, "360 사진이 서버에 올라가 핀에 연결됨(pendingOpId 해소)", report.serverAfterSync);
   ok(blockSamples.length === 0, "동기화 중 도면 중앙이 다른 UI 로 막히지 않음", blockSamples.slice(0, 5));
   T.coverAfterSyncPct = onSnap.occ && onSnap.occ.pct;

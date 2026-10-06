@@ -31,6 +31,7 @@ import { findHelpToggleBottomRaw } from "./_lib/find-help-toggle-bottom.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
 const appSrc = rd("public/js/modules/20_App.js");
+const syncSrc = rd("public/js/modules/05_SyncQueue.js");
 const indexHtml = rd("public/index.html");
 const styleCssRaw = rd("public/css/style.css");
 const styleCss = styleCssRaw.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -68,28 +69,52 @@ function extractDivBlock(src, openMarker) {
 /* ══════════════════════════════════════════════════════════════════
  * 헬퍼 — App._updateSyncBadge()/syncNow() 를 실제 소스로 로드
  * ══════════════════════════════════════════════════════════════════ */
-function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } = {}) {
+// [WO 20261006-photolink] ④(조용한 실패 0) 는 이제 App.syncNow → SyncQueue._onReconnect →
+//   SyncQueue.noteSyncResult 라는 **공유 판정 1곳**에서 결정된다(§G-2-5). 따라서 SyncQueue 를
+//   손으로 흉내내지 않고 **실제 소스(05_SyncQueue.js)** 를 같은 컨텍스트에 평가해 쓴다(목 축소).
+//   node 에 없는 플랫폼 API(localStorage/fetch/window.indexedDB)만 메모리 대역.
+function makeLS() {
+  const m = new Map();
+  return { get length() { return m.size; }, key: (i) => Array.from(m.keys())[i],
+           getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); },
+           removeItem: (k) => { m.delete(k); } };
+}
+function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true, fetchThrows = false } = {}) {
   const registry = {};
   const el = (id) => (registry[id] = registry[id] || { classList: { add() {}, remove() {}, toggle() {} }, textContent: "", value: "", disabled: false, setAttribute() {} });
   const toastCalls = [];
   const sandbox = {
-    console, JSON, Map, Set, Date, Promise,
+    console, JSON, Map, Set, Date, Math, Promise, setTimeout,
     navigator: { onLine: online },
+    window: {},                                  // indexedDB 없음 → SyncQueue 의 localStorage 폴백
+    localStorage: makeLS(),
+    State: { pins: [], zones: [], annotations: [] },
+    Cloud: { _cache: {} },
+    Auth: { idToken: "tok", _offlineOnly: false, headers: () => ({}), canServerWrite() { return !this._offlineOnly && !!this.idToken; }, async refresh() {}, async classifyWriteFailure() { return null; } },
+    fetch: async (url, init) => {
+      if (fetchThrows) throw new Error("network");
+      const body = JSON.parse((init && init.body) || "{}");
+      const results = (body.ops || []).map((o) => ({ opId: o.opId, ok: true, id: "img_" + o.opId }));
+      return { ok: true, status: 200, json: async () => ({ ok: true, results }) };
+    },
     UI: { $: (id) => el(id) },
-    SyncQueue: { count: async () => sqCount, flush: async () => ({ uploaded: sqCount }) },
     OpLog: { pending: async () => Array.from({ length: opCount }) },
     // Offline.curDepId 가 있어야 opLogCount 분기가 OpLog.pending() 을 실제로 센다(실코드 그대로).
     Offline: { curDepId: () => (opCount > 0 ? "dep-test" : null) },
     Prompt: { toast: (t) => toastCalls.push(t) }
   };
   vm.createContext(sandbox);
-  vm.runInContext(appSource + "\n;globalThis.__App = App;", sandbox);
-  return { App: sandbox.__App, registry, toastCalls };
+  vm.runInContext(syncSrc + "\n" + appSource + "\n;globalThis.__App = App; globalThis.__SQ = SyncQueue;", sandbox);
+  const SQ = sandbox.__SQ;
+  // 실 큐에 대기 op 를 적립(배지 건수는 실 count() 가 센다 — 가짜 숫자 주입 아님)
+  const seeded = (async () => { for (let i = 0; i < sqCount; i++) await SQ.enqueue({ kind: "image", name: "p" + i, image_data: "data:image/jpeg;base64,AAA" }); })();
+  return { App: sandbox.__App, SQ, registry, toastCalls, seeded };
 }
 
 /* ══ ① 대기 0 → 보이고 disabled(+뮤테이션 — mdock-upload 업데이트 블록 제거) ══════ */
 {
-  const { App, registry } = makeAppSandbox(appSrc, { sqCount: 0, opCount: 0, online: true });
+  const { App, registry, seeded } = makeAppSandbox(appSrc, { sqCount: 0, opCount: 0, online: true });
+  await seeded;
   App._updateSyncBadge(); await flush();
   ok(registry["mdock-upload"].disabled === true, "① 대기 0 → #mdock-upload disabled=true, 실제 " + registry["mdock-upload"].disabled);
   ok(/업로드/.test(registry["mdock-upload-label"].textContent), "① 라벨에 '업로드' 글자가 보인다 → " + registry["mdock-upload-label"].textContent);
@@ -105,7 +130,8 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
   const mutated = appSrc.replace(needle, "        /* 제거됨 */");
   if (mutated === appSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { App: AppM, registry: regM } = makeAppSandbox(mutated, { sqCount: 3, opCount: 0, online: true });
+    const { App: AppM, registry: regM, seeded: seededM } = makeAppSandbox(mutated, { sqCount: 3, opCount: 0, online: true });
+    await seededM;
     AppM._updateSyncBadge(); await flush();
     const stillDefault = !regM["mdock-upload"] || regM["mdock-upload"].disabled !== false;
     ok(stillDefault, "뮤테이션 적용 시 대기 3건이어도 버튼 상태가 갱신 안 됨(①②가 깨짐) → " + (regM["mdock-upload"] ? ("disabled=" + regM["mdock-upload"].disabled) : "UI.$ 호출 자체가 없음"));
@@ -114,7 +140,8 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
 
 /* ══ ② 대기 N>0 → 활성 + 건수 표시 ══════════════════════════════════════ */
 {
-  const { App, registry } = makeAppSandbox(appSrc, { sqCount: 2, opCount: 1, online: true });
+  const { App, registry, seeded } = makeAppSandbox(appSrc, { sqCount: 2, opCount: 1, online: true });
+  await seeded;
   App._updateSyncBadge(); await flush();
   ok(registry["mdock-upload"].disabled === false, "② 대기 3건 → disabled=false, 실제 " + registry["mdock-upload"].disabled);
   ok(registry["mdock-upload-label"].textContent === "업로드 3", "② 라벨에 건수 표시 → " + registry["mdock-upload-label"].textContent);
@@ -130,29 +157,25 @@ function makeAppSandbox(appSource, { sqCount = 0, opCount = 0, online = true } =
 
 /* ══ ④ 성공·실패 모두 사용자 알림(조용한 실패 0) — syncNow() 실동작 ══════════════ */
 {
-  const { App, toastCalls } = makeAppSandbox(appSrc, { sqCount: 1, online: true });
+  const { App, toastCalls, seeded } = makeAppSandbox(appSrc, { sqCount: 1, online: true });
+  await seeded;
   await App.syncNow();
   ok(toastCalls.some((t) => /완료/.test(t)), "④a 업로드 성공 시 완료 토스트 → " + JSON.stringify(toastCalls));
 
-  const registryFail = {};
-  const elFail = (id) => (registryFail[id] = registryFail[id] || { classList: { add() {}, remove() {}, toggle() {} }, textContent: "", value: "", disabled: false, setAttribute() {} });
-  const toastCallsFail = [];
-  const sandboxFail = {
-    console, JSON, Map, Set, Date, Promise,
-    navigator: { onLine: true },
-    UI: { $: (id) => elFail(id) },
-    SyncQueue: { count: async () => 1, flush: async () => { throw new Error("network"); } },
-    OpLog: { pending: async () => [] },
-    Offline: { curDepId: () => null },
-    Prompt: { toast: (t) => toastCallsFail.push(t) }
-  };
-  vm.createContext(sandboxFail);
-  vm.runInContext(appSrc + "\n;globalThis.__App = App;", sandboxFail);
-  await sandboxFail.__App.syncNow();
+  // [WO 20261006-photolink] 업로드 실패 = fetch 가 터지는 실제 상황(실 SyncQueue.flush 가
+  //   failed 로 집계 → noteSyncResult 가 통보). 종전엔 SyncQueue 자체를 던지는 목으로 대체해
+  //   "flush 가 throw" 라는, 실제로는 일어나지 않는 경로만 봤다.
+  const { App: AppFail, toastCalls: toastCallsFail, SQ: sqFail, seeded: seededFail } =
+    makeAppSandbox(appSrc, { sqCount: 1, online: true, fetchThrows: true });
+  await seededFail;
+  await AppFail.syncNow();
   ok(toastCallsFail.some((t) => /실패/.test(t)), "④b 업로드 실패 시 실패 토스트(조용한 실패 아님) → " + JSON.stringify(toastCallsFail));
+  ok(!toastCallsFail.some((t) => /완료/.test(t)), "④b-2 실패인데 '완료'로 보고하지 않는다 → " + JSON.stringify(toastCallsFail));
+  ok((await sqFail.count()) === 1, "④b-3 실패분은 큐에 보존(데이터 유실 0) → " + (await sqFail.count()));
 
   // 오프라인 클릭 — syncNow 자체가 이미 안내(기존 경로)
-  const { App: AppOff, toastCalls: toastOff } = makeAppSandbox(appSrc, { sqCount: 1, online: false });
+  const { App: AppOff, toastCalls: toastOff, seeded: seededOff } = makeAppSandbox(appSrc, { sqCount: 1, online: false });
+  await seededOff;
   await AppOff.syncNow();
   ok(toastOff.some((t) => /오프라인/.test(t)), "④c 오프라인에서 클릭해도 조용히 무시되지 않고 안내 → " + JSON.stringify(toastOff));
 }

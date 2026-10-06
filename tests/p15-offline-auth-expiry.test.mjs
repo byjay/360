@@ -61,14 +61,21 @@ function makeClassList() {
   return {
     add: (...c) => c.forEach((x) => x && set.add(x)),
     remove: (...c) => c.forEach((x) => set.delete(x)),
+    // [WO 20261006-photolink] updateNetBadge 가 classList.toggle/setAttribute 를 쓴다 —
+    //   실 DOM 에는 항상 있는 API 라 제품 코드를 방어적으로 감싸지 않고 목을 보강한다
+    //   (c67ce74 "p50 가짜 DOM 에 insertBefore/firstChild 보강" 과 같은 처리).
+    toggle: (c, on) => { if (on === undefined ? !set.has(c) : !!on) set.add(c); else set.delete(c); },
     contains: (c) => set.has(c),
     _set: set
   };
 }
 function makeEl() {
-  const el = { _text: "" };
+  const el = { _text: "", _attrs: {} };
   Object.defineProperty(el, "textContent", { get() { return this._text; }, set(v) { this._text = v == null ? "" : String(v); } });
   el.classList = makeClassList();
+  el.setAttribute = (k, v) => { el._attrs[k] = String(v); };
+  el.getAttribute = (k) => (k in el._attrs ? el._attrs[k] : null);
+  el.removeAttribute = (k) => { delete el._attrs[k]; };
   return el;
 }
 function makeDoc(ids) {
