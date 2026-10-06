@@ -175,13 +175,16 @@ try {
     }
     if (!clickRes.found) continue;
     await waitFor("document.querySelector('#screen-app.active')", 20000);
-    const pinsWait = await waitFor("document.querySelectorAll('.pin-marker').length > 0", 8000);
-    if (pinsWait < 0) continue; // 배경 재진입에 휩쓸림 — 허브로 돌아갔을 수 있다, 다음 attempt 에서 재시도
+    // pins(배포본 자체 필드)와 decks(별도 API — B구역 crop 포함)는 서로 다른 비동기 호출이라
+    // 핀만 먼저 뜨고 구역 목록이 아직이면 DeckOutline._boxesForCurrentPage() 가 빈 배열을 내
+    // 윤곽이 안 그려진다(실측 FAIL) — 둘 다 뜰 때까지 기다린다.
+    const readyWait = await waitFor("document.querySelectorAll('.pin-marker').length > 0 && document.querySelector('#deck-outline-svg rect.deck-outline-shape')", 10000);
+    if (readyWait < 0) continue; // 배경 재진입에 휩쓸림 — 허브로 돌아갔을 수 있다, 다음 attempt 에서 재시도
     await wait(400);
-    const stillIn = await evSafe("document.querySelector('#screen-app.active') && document.querySelectorAll('.pin-marker').length > 0");
+    const stillIn = await evSafe("document.querySelector('#screen-app.active') && document.querySelectorAll('.pin-marker').length > 0 && !!document.querySelector('#deck-outline-svg rect.deck-outline-shape')");
     if (stillIn === true) entered = true;
   }
-  ok(entered, "허브 → 원본(메인 PDF) 열기 → 핀 로딩 완료(배경 재진입 경합 흡수, 최대 3회 재시도)");
+  ok(entered, "허브 → 원본(메인 PDF) 열기 → 핀+윤곽 로딩 완료(배경 재진입 경합 흡수, 최대 3회 재시도)");
   // [견고화] 핀이 막 나타난 시점엔 리더선·맵 핏(zoom/pan) 애니메이션이 아직 안착 중일 수 있어
   // _placeLabels() 의 getBoundingClientRect() 겹침 판정이 과도기 프레임을 잴 수 있다(실측: 간헐
   // FAIL, 겹침 값이 "배치 안 함" 뮤테이션과 동일 크기로 재현 — 과도기 스냅샷 추정). 레이아웃이
