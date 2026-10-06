@@ -52,8 +52,10 @@ ok(offlineSrc.indexOf("App._pendingSyncCount = pending;") !== -1,
 
 /* ── R5: _autoSave(모든 편집의 공유 SoT)가 온라인 여부와 무관하게 bundle:dep: 캐시를 갱신 ── */
 console.log("\n[R5] _autoSave — 온라인 편집도 오프라인 캐시(bundle:dep:) 갱신");
-ok(/_autoSave\(opts\) \{[\s\S]{0,1500}?persistLocalDeployment\(\)\.catch/.test(appSrc),
-  "_autoSave 안에서 (온라인/오프라인 무관) persistLocalDeployment() 호출");
+// [WO 20261006-oplog2] 로컬 보관이 _keepLocal(단일 지점 — 자동저장 OFF 경로 PinActionPop·PhotoBatch 공유)로 옮겨졌다.
+//   검사 의도 불변: _autoSave 가 (온라인/오프라인 무관) 무조건 그 지점을 부르고, 그 지점이 persistLocalDeployment() 를 부른다.
+ok(/_autoSave\(opts\) \{[\s\S]{0,1500}?this\._keepLocal\(\);/.test(appSrc) && /_keepLocal\(\) \{[\s\S]{0,400}?persistLocalDeployment\(\)\.catch/.test(appSrc),
+  "_autoSave 안에서 (온라인/오프라인 무관) persistLocalDeployment() 호출(_keepLocal 경유)");
 // [WO offline2 회귀수정] 🔴 지휘자 재현(p92 "B persistLocalDeployment 1회" FAIL) — 처음엔 기존
 //   5곳(오프라인 전용 .then(persistLocalDeployment)) 을 "무해한 중복"으로 남겼으나, 실제로는
 //   오프라인 편집 1건당 2회 호출(해당 호출부 + _autoSave) 돼 같은 레코드를 중복 기록했다(낭비).

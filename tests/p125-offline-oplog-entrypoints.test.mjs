@@ -32,6 +32,7 @@ const SRC = {
   offline: rd("public/js/modules/32_Offline.js"),
   theta: rd("public/js/modules/33_ThetaIntake.js"),
   photo: rd("public/js/modules/35_PhotoBatch.js"),
+  pap: rd("public/js/modules/27_PinActionPop.js"),
 };
 
 let failed = 0;
@@ -47,11 +48,15 @@ const MUTS = {
   // 스냅샷을 기록 뒤 최신 State 로 찍기(종전 방식) → "기록 도중 들어온 핀도 기록" 단언이 FAIL 해야 한다
   latesnap: ["offline", "dep.pins = nextJ;", "dep.pins = JSON.stringify(State.pins || []);"],
   // ① 사진 연결 경로가 공유 지점을 안 지나게 → PhotoBatch/ThetaIntake 단언이 FAIL 해야 한다
-  nophoto: ["photo", "try { if (typeof persistLocalDeployment === \"function\") persistLocalDeployment().catch(() => {}); } catch (e) {}", "/* 뮤테이션: 스냅샷 갱신 제거 */"],
+  nophoto: ["photo", "try { if (App._keepLocal) App._keepLocal(); } catch (e) {}", "/* 뮤테이션: 스냅샷 갱신 제거 */"],
   // 중복 방지 제거 → "기존 진입점 기록 + 공유 지점 = op 1건" 단언이 FAIL 해야 한다
   nodedupe: ["offline", "if (last.get(String(c.id)) === c.j) return;", "/* 뮤테이션: 중복 방지 제거 */"],
   // ② 덮어쓰기 복원 → "oplog 없는 내 핀도 복귀 후 화면에 남는다" 단언이 FAIL 해야 한다
-  overwrite: ["offline", "App._mergeConflict(j.current);", "State.pins = App._pinsSeen(live(JSON.parse(j.current.pins || \"[]\")));"],
+  overwrite: ["offline", "App._mergeConflict(j.current);", "State.pins = App._pinsSeen(App._live(JSON.parse(j.current.pins || \"[]\"))); State.depVersion = Number(j.current.version) || 0;"],
+  // [oplog2] PinActionPop 라벨 저장을 종전처럼 _markDirty 만 → E8 이 FAIL 해야 한다
+  papdirty: ["pap", "      pin.label = v;\n      PinActionPop._commitLocal();", "      pin.label = v;\n      if (typeof App !== \"undefined\" && App._markDirty) App._markDirty();"],
+  // [oplog2] 주석을 종전처럼 서버본으로 덮어쓰기 → E9 가 FAIL 해야 한다
+  annooverwrite: ["offline", "State.annotations = App._mergeAnnos(JSON.parse(j.current.annotations || \"[]\"), State.annotations || []);", "State.annotations = App._live(JSON.parse(j.current.annotations || \"[]\"));"],
 };
 const MUT = process.env.P125_MUT || "";
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
@@ -67,17 +72,18 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 
 /** 서버 /tables/deployments/:id/ops 의 적용 규칙(src/index.tsx)을 그대로 옮긴 메모리 서버. */
 function makeServer(pins) {
-  const srv = { pins: new Map(), version: 1, opsPosts: 0 };
+  const srv = { pins: new Map(), annos: new Map(), version: 1, opsPosts: 0 };
   pins.forEach((p) => srv.pins.set(String(p.id), clone(p)));
   srv.applyOps = (ops) => {
     const applied = [];
     for (const op of ops) {
-      if (!op || !op.opId || op.entity !== "pin" || op.id == null) { if (op && op.opId) applied.push(op.opId); continue; }
-      const cur = srv.pins.get(String(op.id)); const ts = Number(op.ts || Date.now());
-      if (op.action === "delete") { if (!cur || ts >= Number(cur.ts || 0)) srv.pins.set(String(op.id), { id: op.id, _deleted: true, ts }); }
-      else if (cur && !cur._deleted) srv.pins.set(String(op.id), Object.assign({}, cur, op.data, { id: op.id, ts: Math.max(ts, Number(cur.ts || 0)) }));
+      if (!op || !op.opId || (op.entity !== "pin" && op.entity !== "anno") || op.id == null) { if (op && op.opId) applied.push(op.opId); continue; }
+      const M = op.entity === "anno" ? srv.annos : srv.pins;
+      const cur = M.get(String(op.id)); const ts = Number(op.ts || Date.now());
+      if (op.action === "delete") { if (!cur || ts >= Number(cur.ts || 0)) M.set(String(op.id), { id: op.id, _deleted: true, ts }); }
+      else if (cur && !cur._deleted) M.set(String(op.id), Object.assign({}, cur, op.data, { id: op.id, ts: Math.max(ts, Number(cur.ts || 0)) }));
       else if (cur && cur._deleted && ts < Number(cur.ts || 0)) { /* 최신 삭제 유지 */ }
-      else srv.pins.set(String(op.id), Object.assign({}, op.data, { id: op.id, ts }));
+      else M.set(String(op.id), Object.assign({}, op.data, { id: op.id, ts }));
       applied.push(op.opId);
     }
     srv.version++;
@@ -111,7 +117,7 @@ function boot(opts) {
       server.opsPosts++;
       const body = JSON.parse(init.body);
       const applied = server.applyOps(body.ops || []);
-      const current = { id: "dep1", pins: JSON.stringify(Array.from(server.pins.values())), zones: "[]", annotations: "[]", version: server.version };
+      const current = { id: "dep1", pins: JSON.stringify(Array.from(server.pins.values())), zones: "[]", annotations: JSON.stringify(Array.from(server.annos.values())), version: server.version };
       return { ok: true, status: 200, json: async () => ({ ok: true, applied, version: server.version, current }) };
     }
     return { ok: false, status: 503, json: async () => ({}) };
@@ -125,23 +131,24 @@ function boot(opts) {
     UI: { renderPinList() {}, renderPinsOnMap() {}, $: () => null, text() {}, show() {} },
     Prompt: { toast() {} },
     localStorage: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) },
-    window: { addEventListener() {} }, document: { getElementById: () => null, addEventListener() {}, querySelector: () => null, querySelectorAll: () => [] },
+    window: { addEventListener() {} }, document: { getElementById: (id) => (opts.dom && opts.dom[id]) || null, addEventListener() {}, querySelector: () => null, querySelectorAll: () => [] },
     fetch: fetchImpl, setTimeout, clearTimeout, setInterval: () => 0, Promise, JSON, Date, Math
   };
   vm.createContext(sandbox);
-  vm.runInContext([SRC.series, SRC.app, SRC.offline, SRC.photo, SRC.theta].join("\n;\n")
-    + "\n;globalThis.__X = { App, OpLog, PhotoBatch, ThetaIntake, persistLocalDeployment };", sandbox);
+  vm.runInContext([SRC.series, SRC.app, SRC.offline, SRC.photo, SRC.theta, SRC.pap].join("\n;\n")
+    + "\n;globalThis.__X = { App, OpLog, PhotoBatch, ThetaIntake, PinActionPop, persistLocalDeployment };", sandbox);
   const X = sandbox.__X;
   // DOM 렌더 전용 함수만 무력화(이 테스트의 관심사가 아니다)
   X.App._updateCheckboardQuickStatus = () => {};
-  X.App._saveDraftLocal = async () => true;           // canvas 스냅샷(_snapshotPages) — 도면 draft 는 p121/p124 가 지킨다
+  const calls = { draft: 0 };
+  X.App._saveDraftLocal = async () => { calls.draft++; return true; };           // canvas 스냅샷(_snapshotPages) — 도면 draft 는 p121/p124 가 지킨다
   X.ThetaIntake._flowNext = () => null;
   if (opts.bundle !== false) store["bundle:dep:dep1"] = { id: "dep1", pins: JSON.stringify(opts.pins || []), zones: "[]", annotations: "[]", version: 1 };
   // 🔴 settle 은 persistLocalDeployment 를 직접 부르지 않는다(부르면 진입점이 공유 지점을 안 지나도 가려진다 — 뮤테이션 nophoto 실측)
   const settle = async () => { await wait(30); await (X.OpLog._chains.dep1 || Promise.resolve()); await wait(5); };
   const ops = () => (store["oplog:dep1"] || []);
   const pinOps = (id) => ops().filter((o) => o.entity === "pin" && String(o.id) === String(id));
-  return { X, State, store, server, nav, settle, ops, pinOps };
+  return { X, State, store, server, nav, settle, ops, pinOps, calls };
 }
 
 const P1 = { id: 1001, x: 10, y: 10, page: 1, label: "1", checkboard: true };
@@ -268,6 +275,39 @@ const P1 = { id: 1001, x: 10, y: 10, page: 1, label: "1", checkboard: true };
     ok((T.State.pins.find((p) => p.id === P1.id) || {}).note === "edit", "서버 반영분(op 적용 결과)은 화면에 들어온다", T.State.pins);
     ok(T.State.depVersion === T.server.version, "버전은 서버값으로 갱신", { st: T.State.depVersion, srv: T.server.version });
     ok(JSON.stringify(T.State.pinBaseIds) === JSON.stringify(["1001"]), "병합 기준(pinBaseIds) = 서버가 아는 핀", T.State.pinBaseIds);
+  }
+
+  /* ── E8. PinActionPop 라벨 수정(자동저장 OFF 경로) → draft·번들 스냅샷·oplog ── */
+  console.log("\n[E8] 오프라인 PinActionPop 라벨 수정 → 로컬 보관 + oplog 1건");
+  {
+    const dom = { "pap-label-input": { value: "967" }, "pap-title": { textContent: "" } };
+    const T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"], dom });
+    T.X.PinActionPop._pinId = P1.id;
+    T.X.PinActionPop._saveLabel();
+    await T.settle();
+    const bundlePins = JSON.parse(T.store["bundle:dep:dep1"].pins);
+    ok(T.State.pins[0].label === "967", "전제: 화면 라벨 967", T.State.pins[0].label);
+    ok(T.calls.draft >= 1, "🔴 도면 draft 보관(_saveDraftLocal) 호출", T.calls.draft);
+    ok(bundlePins[0].label === "967", "🔴 번들 스냅샷 라벨 967(오프라인 새로고침 복원원)", bundlePins[0].label);
+    const o = T.pinOps(P1.id);
+    ok(o.length === 1 && o[0].data.label === "967", "oplog upsert 1건(label 967) — 개별 기록 제거 후에도 단일 지점이 기록", o.map((x) => x.data && x.data.label));
+  }
+
+  /* ── E9. 주석 — /ops 응답 반영이 덮어쓰기 아닌 병합(App._mergeAnnos) ── */
+  console.log("\n[E9] 복귀 시 주석 병합 — 응답 대기 중 그린 주석 보존 + 서버 tombstone 반영");
+  {
+    const T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"] });
+    const A = { id: "anA", page: 1, type: "rect", x: 1, y: 1, w: 2, h: 2 }, B = { id: "anB", page: 1, type: "rect", x: 5, y: 5, w: 2, h: 2 }, C = { id: "anC", page: 1, type: "rect", x: 9, y: 9, w: 2, h: 2 };
+    T.server.annos.set("anS", { id: "anS", page: 1, type: "rect", x: 3, y: 3, w: 1, h: 1 });   // 남이 그린 주석
+    T.server.annos.set("anC", { id: "anC", _deleted: true, ts: Date.now() + 1000 });            // 남이 지운 주석
+    T.State.annotations = [A, B, C];
+    T.store["oplog:dep1"] = [{ opId: "o-a", entity: "anno", action: "upsert", id: "anA", data: A, ts: Date.now(), author: "t" }];
+    T.nav.onLine = true;
+    await T.X.App._flushOpLogs();
+    const ids = T.State.annotations.map((a) => a.id).sort();
+    ok(ids.indexOf("anA") >= 0 && ids.indexOf("anB") >= 0, "🔴 oplog 주석 A + oplog 없는 내 주석 B 보존", ids);
+    ok(ids.indexOf("anS") >= 0, "서버에만 있는 남의 주석은 들어온다", ids);
+    ok(ids.indexOf("anC") < 0, "서버 tombstone 주석은 되살리지 않는다", ids);
   }
 
   /* ── M2. 남이 지운 핀(tombstone)은 병합에서 반영된다 — 기존 규칙 불변 ── */

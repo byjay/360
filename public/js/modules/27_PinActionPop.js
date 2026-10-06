@@ -194,6 +194,16 @@
     },
     _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
 
+    /** 🔴 [WO 20261006-oplog2] 편집 확정의 공유 지점(라벨·사진·URL·문서 4곳) — 자동저장 OFF 정책 그대로:
+     *  미저장 표시(App._markDirty) + 로컬 보관(App._keepLocal: 도면 draft · 번들 스냅샷 · 오프라인이면 oplog). 서버 저장 0.
+     *  종전엔 _markDirty 만 불러 오프라인 라벨 수정이 draft·스냅샷에 안 남았다(실측: 새로고침 후 967 → 1).
+     *  oplog 기록도 _keepLocal 의 단일 지점(OpLog.recordPinDelta)이 맡는다 — 라벨 경로의 개별 기록은 제거. */
+    _commitLocal() {
+      if (typeof App === "undefined") return;
+      if (App._markDirty) App._markDirty();
+      if (App._keepLocal) { try { App._keepLocal(); } catch (e) {} }
+    },
+
     /** 편집 권한(번호 수정·사진 등록·노트 작성) = 디자이너만. 뷰어는 보기 전용. */
     _canEdit() {
       if (typeof Auth !== "undefined" && Auth && typeof Auth.isDesigner !== "undefined") return !!Auth.isDesigner;
@@ -332,8 +342,7 @@
       }
       if (pin.checkboard && String(pin.label) !== v) pin.labelManual = true; // [WO 20260930-numdup] 직접 고친 번호 — 동시 생성 재채번 제외
       pin.label = v;
-      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
-      if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }
+      PinActionPop._commitLocal();
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       // 화면 갱신(번호/제목/메타 재계산) — 페이지 재조회 없이 open()의 표시 로직만 재사용
       // [WO 20260929-tree1] 🔴 형제 호출부(§G-2-5) — open() 과 같은 SoT(PinSeries.numbers/formatNo)로 통일.
@@ -466,7 +475,7 @@
         if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
         // [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보관 — 보기용(4096px)과 별도로 R2에 백그라운드 업로드.
         if (wantsTheta && typeof SyncQueue !== "undefined" && SyncQueue.keepOriginal) SyncQueue.keepOriginal(pin, file, imageId);
-        if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+        PinActionPop._commitLocal();
         if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
         if (statusEl) statusEl.textContent = (wantsTheta ? "360° 사진 등록됨" : "사진 등록됨") + " (미저장 — 저장 버튼으로 서버에 반영하세요)";
         this._renderPhoto(pin, true);
@@ -496,7 +505,7 @@
       }
       pin.imageUrl = raw;
       pin.isVideo = PAP_VIDEO_RE.test(raw);
-      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      PinActionPop._commitLocal();
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       if (statusEl) statusEl.textContent = "경로 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";
       this._renderPhoto(pin, true);
@@ -520,7 +529,7 @@
         const docId = await Cloud.uploadDoc(file.name, dataURL);
         if (!Array.isArray(pin.attachments)) pin.attachments = [];
         pin.attachments.push({ id: "d" + Date.now() + Math.random().toString(36).slice(2, 6), name: file.name, size: file.size, docId });
-        if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+        PinActionPop._commitLocal();
         if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); }
         this._renderDocList(pin);
         if (statusEl) statusEl.textContent = "문서 등록됨 (미저장 — 저장 버튼으로 서버에 반영하세요)";

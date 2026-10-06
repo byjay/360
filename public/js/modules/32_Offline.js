@@ -331,9 +331,11 @@
             //   다시 써 영구 유실됐다(실 Chrome 실측: 오프라인 4핀 → 최종 서버 0). 라이브폴·409 와 같은 규칙.
             if (_curDepId() === depId && j.current) {
               try {
-                const live = (arr) => App._live(arr);   // [WP1 · H8] tombstone 필터 SoT(20_App._live)
                 App._mergeConflict(j.current);         // pins/zones 병합 + 기준(pinBaseIds)·버전 갱신 + 렌더
-                State.annotations = live(JSON.parse(j.current.annotations || "[]"));
+                // 🔴 [WO 20261006-oplog2] 주석도 덮어쓰지 않고 병합(App._mergeAnnos — 합집합 + 서버 tombstone 반영).
+                //   종전 덮어쓰기는 /ops 응답 대기 중 그린 주석을 화면·서버에서 지웠다(실 Chrome 실측).
+                State.annotations = App._mergeAnnos(JSON.parse(j.current.annotations || "[]"), State.annotations || []);
+                if (typeof PdfAnno !== "undefined" && PdfAnno.refresh) { try { PdfAnno.refresh(); } catch (e) {} }
               } catch (e) {}
             }
           } else if (res) {

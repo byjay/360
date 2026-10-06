@@ -154,10 +154,9 @@
      *  자동저장 OFF 정책(서버 반영은 '저장' 버튼)은 그대로다. 세 연결 경로(run·시각매칭 적용·자동연결)의 공유 지점. */
     _markUnsaved() {
       try { App._markDirty && App._markDirty(); } catch (e) {}
-      try { if (App._saveDraftLocal) { const p = App._saveDraftLocal(); if (p && p.catch) p.catch(() => {}); } } catch (e) {}
-      // 🔴 [WO 20261006-oplog] 로컬 번들 스냅샷도 갱신 — _autoSave 와 같은 공유 지점(persistLocalDeployment)을 지나야
-      //   오프라인 사진 연결이 oplog 에 기록된다(OpLog.recordPinDelta). 종전엔 이 경로만 빠져 oplog 0건이었다.
-      try { if (typeof persistLocalDeployment === "function") persistLocalDeployment().catch(() => {}); } catch (e) {}
+      // 🔴 [WO 20261006-oplog] 로컬 보관은 App._keepLocal 한 곳(draft + 번들 스냅샷 → 오프라인 oplog 기록, 서버 저장 0).
+      //   종전엔 draft 만 써서 번들 스냅샷·oplog 가 빠졌다(오프라인 사진 연결 oplog 0건 실측).
+      try { if (App._keepLocal) App._keepLocal(); } catch (e) {}
     },
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
     _range: { start: 1, end: 1, series: "content" },

@@ -87,7 +87,7 @@ function readDist(pathname) {
 function exposeForTest(bundle) {
   const idx = bundle.lastIndexOf("})();");
   if (idx === -1) return bundle;
-  return bundle.slice(0, idx) + "\n  try { window.__T = { State, App, SyncQueue, PinSeries, MapCtrl, UI, Auth: (typeof Auth !== \"undefined\" ? Auth : null), OfflineBundle: (typeof OfflineBundle !== \"undefined\" ? OfflineBundle : null), ProjectHub: (typeof ProjectHub !== \"undefined\" ? ProjectHub : null), OpLog: (typeof OpLog !== \"undefined\" ? OpLog : null), PhotoBatch: (typeof PhotoBatch !== \"undefined\" ? PhotoBatch : null) }; } catch (e) { window.__T_err = String(e); }\n" + bundle.slice(idx);
+  return bundle.slice(0, idx) + "\n  try { window.__T = { State, App, SyncQueue, PinSeries, MapCtrl, UI, Auth: (typeof Auth !== \"undefined\" ? Auth : null), OfflineBundle: (typeof OfflineBundle !== \"undefined\" ? OfflineBundle : null), ProjectHub: (typeof ProjectHub !== \"undefined\" ? ProjectHub : null), OpLog: (typeof OpLog !== \"undefined\" ? OpLog : null), PhotoBatch: (typeof PhotoBatch !== \"undefined\" ? PhotoBatch : null), PinActionPop: (typeof PinActionPop !== \"undefined\" ? PinActionPop : null), PdfAnno: (typeof PdfAnno !== \"undefined\" ? PdfAnno : null) }; } catch (e) { window.__T_err = String(e); }\n" + bundle.slice(idx);
 }
 /** 뮤테이션 증명용(P114_MUT) — 단언이 진짜 결함을 잡는지 확인. 대상 문자열이 없으면 EXIT=2. */
 const MUTS = {

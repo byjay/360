@@ -3191,6 +3191,15 @@
       const tomb = this._pinTombstones();
       d.deletedPins.forEach(id => { if (id != null && !tomb[String(id)]) tomb[String(id)] = 1; });
     },
+    /** 🔴 [WO 20261006-oplog2] 주석(ezPDF annotations) 병합 SoT — 핀(_mergePins)과 같은 규칙의 최소판.
+     *  · id 기준 합집합(_mergeById): 서버에만 있는 것 보존 + 내 로컬 항목 보존(같은 id 는 내 편집 우선 — 주석엔 updatedAt 이 없다).
+     *  · 서버 tombstone(/ops 삭제가 남긴 {_deleted}) 은 내 로컬 같은 id 를 되살리지 않는다(_mergePins (a) 와 같은 규칙).
+     *  근본원인(실 Chrome 실측): _flushOpLogs 가 State.annotations 를 서버본으로 덮어 /ops 응답 대기 중 그린 주석이
+     *  화면·서버에서 사라졌다(주석 B 유실). 지우는 규칙(기준 목록 (b))은 넣지 않는다 — 서버 tombstone 만 반영. */
+    _mergeAnnos(srvAnnos, localAnnos) {
+      const tomb = new Set((Array.isArray(srvAnnos) ? srvAnnos : []).filter(a => a && a._deleted && a.id != null).map(a => String(a.id)));
+      return this._mergeById(this._live(srvAnnos), localAnnos).filter(a => !(a && a.id != null && tomb.has(String(a.id))));
+    },
     _mergePins(srvPins, localPins, baseIds, tombIds) {
       // [WP1 · H5] 서버본의 tombstone 은 "누군가 지운 핀" — 내 로컬의 같은 id 가 병합으로 되살리지 못하게 tomb 에 합친다.
       const srvTomb = (Array.isArray(srvPins) ? srvPins : []).filter(p => p && p._deleted && p.id != null).map(p => String(p.id));
@@ -5307,8 +5316,9 @@
       if (State.mode !== "designer") return;
       opts = opts || {};
       if (opts.withPages) this._dirtyPages = true;        // 도면 페이지도 다음 저장에 포함
-      // 로컬 우선 보관(새로고침/오프라인에도 작업 보존) — 비차단
-      this._saveDraftLocal(opts.withPages ? null : null).catch(() => {});
+      // 로컬 우선 보관(새로고침/오프라인에도 작업 보존) — 비차단. 🔴 [WO 20261006-oplog2] 도면 draft + 번들 스냅샷(아래 R5 설명)을
+      //   _keepLocal 한 곳에서 한다 — "자동저장 OFF" 경로(PinActionPop·PhotoBatch)도 같은 지점을 쓴다.
+      this._keepLocal();
       // [WO offline2-R5] 🔴 근본원인: 오프라인 구역 열기(loadDeckDrawing)는 IndexedDB의
       //   bundle:dep:<id> 캐시(32_Offline.js)를 읬는데, 종전엔 이 캐시가 "오프라인 편집일 때만"
       //   (각 편집 경로 5곳의 `if (!navigator.onLine) persistLocalDeployment()`) 갱신됐다.
@@ -5322,9 +5332,18 @@
       //   여기) 호출돼 같은 IndexedDB 레코드를 중복 기록했다(낭비 — 코드로 수정, 테스트 기대 변경
       //   아님). 그 5곳(16_Zones.js×2·20_App.js×2·26_PdfAnno.js·41_RegionMerge.js)의 중복 호출을
       //   제거해 여기 한 곳만 남겼다 — OpLog.recordCurrent(오프라인 replay용 기록)는 그대로 유지.
-      try { if (typeof persistLocalDeployment === "function") persistLocalDeployment().catch(() => {}); } catch (e) {}
       this._markDirty();
       this._scheduleAutoSync();
+    },
+
+    /** 🔴 [WO 20261006-oplog2] 로컬 보관의 **단일 지점**(서버 저장 0): 도면 draft(_saveDraftLocal) + 오프라인 번들
+     *  스냅샷(persistLocalDeployment — 오프라인이면 그 안에서 바뀐 핀을 oplog 에 기록, OpLog.recordPinDelta).
+     *  _autoSave(서버 자동반영 예약 포함)와 자동저장 OFF 경로(PinActionPop._commitLocal · PhotoBatch._markUnsaved)가 공유.
+     *  근본원인(실 Chrome 실측): PinActionPop 라벨 수정은 _markDirty 만 불러 draft·스냅샷이 옛 값("1") 그대로였고
+     *  오프라인 새로고침 시 라벨이 되돌아갔다(수정값 967 → 재진입 1). */
+    _keepLocal() {
+      try { const p = this._saveDraftLocal(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+      try { if (typeof persistLocalDeployment === "function") persistLocalDeployment().catch(() => {}); } catch (e) {}
     },
 
     /** [WO 20261001-mobilefast R5] 온라인 편집 중 "[저장]을 눌러야만 서버에 반영"되던 지연을 없앤다.
