@@ -87,7 +87,7 @@ function readDist(pathname) {
 function exposeForTest(bundle) {
   const idx = bundle.lastIndexOf("})();");
   if (idx === -1) return bundle;
-  return bundle.slice(0, idx) + "\n  try { window.__T = { State, App, SyncQueue, PinSeries, MapCtrl, UI, Auth: (typeof Auth !== \"undefined\" ? Auth : null), OfflineBundle: (typeof OfflineBundle !== \"undefined\" ? OfflineBundle : null), ProjectHub: (typeof ProjectHub !== \"undefined\" ? ProjectHub : null) }; } catch (e) { window.__T_err = String(e); }\n" + bundle.slice(idx);
+  return bundle.slice(0, idx) + "\n  try { window.__T = { State, App, SyncQueue, PinSeries, MapCtrl, UI, Auth: (typeof Auth !== \"undefined\" ? Auth : null), OfflineBundle: (typeof OfflineBundle !== \"undefined\" ? OfflineBundle : null), ProjectHub: (typeof ProjectHub !== \"undefined\" ? ProjectHub : null), OpLog: (typeof OpLog !== \"undefined\" ? OpLog : null), PhotoBatch: (typeof PhotoBatch !== \"undefined\" ? PhotoBatch : null) }; } catch (e) { window.__T_err = String(e); }\n" + bundle.slice(idx);
 }
 /** 뮤테이션 증명용(P114_MUT) — 단언이 진짜 결함을 잡는지 확인. 대상 문자열이 없으면 EXIT=2. */
 const MUTS = {
@@ -652,6 +652,16 @@ async function runScenario(P) {
   const badgeNum = async () => { await P.wait(3500); /* updateNetBadge 3초 주기 */ return evSafe("(function(){ var b = document.getElementById('net-badge'); var t = b ? (b.innerText || '') : ''; var m = t.match(/(\\d+)/); return { text: t.replace(/\\s+/g, ' ').trim(), n: m ? +m[1] : null, visible: b ? __M.visible(b) : false }; })()"); };
   T.badgeAfter20Pins = await badgeNum();
   ok(!!T.badgeAfter20Pins && T.badgeAfter20Pins.n >= 1, "[a7a7bb0] 오프라인 CHECKER 20핀 후 대기 배지 ≥ 1(dirty draft 반영)", T.badgeAfter20Pins);
+  // 🔴 [WO 20261006-oplog] 오프라인 CHECKER 핀마다 oplog upsert — 도면 draft PATCH 가 실패해도 /ops 로 올라가는 두 번째 운반체.
+  //   (HEAD 19daa4a 실측: 4탭 → oplog 0건. 공유 지점 persistLocalDeployment → OpLog.recordPinDelta 로 수정)
+  {
+    const srvNow = (await P.srvPins()).map((p) => String(p.id));
+    T.oplogAfter20Pins = await evSafe("__T.SyncQueue.loadDraft('oplog:' + __T.State.autoSaveDepId).then(function(o){ var ids = {}; (o||[]).forEach(function(x){ if (x && x.entity === 'pin' && x.action === 'upsert') ids[String(x.id)] = 1; }); return { ops: (o||[]).length, pins: __T.State.pins.map(function(p){ return String(p.id); }), opPins: Object.keys(ids) }; })");
+    const o = T.oplogAfter20Pins || {};
+    const offlineIds = (o.pins || []).filter((id) => srvNow.indexOf(id) < 0);
+    const uncovered = offlineIds.filter((id) => (o.opPins || []).indexOf(id) < 0);
+    ok(offlineIds.length >= 20 && uncovered.length === 0, "[WO20261006-oplog] 오프라인 CHECKER 핀 전부 oplog: 기록(핀마다 ≥ 1)", { offline: offlineIds.length, ops: o.ops, uncovered: uncovered.length, sample: uncovered.slice(0, 3) });
+  }
   await snap("offline-after-20pins");
   // 핀 번호(배지)가 다른 핀의 리더선 풍선·마커에 가려 안 보이거나 탭이 엉뚱한 핀으로 가는가(66px 간격 격자)
   T.markerSelfHit = await evSafe("(function(){ var ms = Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ return __M.visible(e); }); var bad = []; ms.forEach(function(m){ var r = m.getBoundingClientRect(); var h = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2); var mine = h && (m.contains(h) || h.closest('.pin-marker') === m); if (!mine) bad.push({ id: m.getAttribute('data-id'), no: m.getAttribute('data-no'), hit: h ? __M.label(h.closest('.pin-leader-bubble,.pin-marker') || h) : null }); }); return { visible: ms.length, coveredOrStolen: bad.length, sample: bad.slice(0, 6) }; })()");

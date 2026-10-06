@@ -161,7 +161,8 @@
     // 🔴 [WO offline2 데이터유실 근본수정 2026-10-02] depId 별 직렬화 체인(동시성 가드).
     //   근본원인(지휘자 재현 p114 "360 사진이 서버에 올라가 핀에 연결됨" FAIL, HEAD 추출본 실측):
     //   record()는 load→push→save 의 읽고-고치고-쓰기(read-modify-write)인데 호출부 다수(특히
-    //   _placeCheckboardPin 의 연속 탭마다 호출, 비await/fire-and-forget)가 **같은 depId 키**에
+    //   _placeCheckboardPin 연속 탭 → _autoSave → persistLocalDeployment → recordPinDelta 처럼 비await/fire-and-forget
+    //   으로 연달아 들어오는 경로)가 **같은 depId 키**에
     //   동시에 호출한다. 두 호출이 거의 같은 순간 _load()로 같은 옛 배열을 읽으면, 각자 자기
     //   항목만 push한 뒤 나중에 저장(_save)한 쪽이 앞선 쪽의 기록을 통째로 덮어써 핀 생성 op가
     //   통째로 사라진다(실측: 오프라인 24개 생성 중 대부분의 op가 유실되어 재연결 후 서버에 거의
@@ -175,19 +176,59 @@
       return run;
     },
 
+    /** op 1건의 모양 — record / recordPinDelta 공유(SoT). */
+    _mkOp(entity, action, id, data) {
+      return {
+        opId: this._newId(),
+        entity, action, id,
+        data: action === "delete" ? null : data,
+        ts: Date.now(),
+        author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
+      };
+    },
+
     /** entity:'pin'|'zone'|'anno', action:'upsert'|'delete' */
     async record(depId, entity, action, id, data) {
       if (!depId || !entity || id == null) return;
       return this._enqueue(depId, async () => {
         const arr = await this._load(depId);
-        arr.push({
-          opId: this._newId(),
-          entity, action, id,
-          data: action === "delete" ? null : data,
-          ts: Date.now(),
-          author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
-        });
+        arr.push(this._mkOp(entity, action, id, data));
         await this._save(depId, arr);
+      });
+    },
+
+    /** 🔴 [WO 20261006-oplog] 오프라인 핀 생성·수정 기록의 **단일 지점**(persistLocalDeployment 가 호출).
+     *  근본원인(실 Chrome p114 EXPLORE 재현, .tmp/xoplog.mjs): 핀 기록이 진입점마다 손으로 박혀 있어
+     *  CHECKER 배치(_placeCheckboardPin)·사진 연결(PhotoBatch._uploadOneRow → ThetaIntake 재사용)·핀 이동·
+     *  시야각 등은 oplog 를 0건 남겼다. 그 핀들의 유일한 운반체는 도면 draft PATCH 인데, 약전파로 그 PATCH 가
+     *  실패하고 작은 /ops POST 만 성공하면 서버엔 그 핀이 없다(실측: 오프라인 4핀 → 서버 0, 최종 6 중 2).
+     *  → 모든 편집이 지나는 로컬 스냅샷 갱신(persistLocalDeployment, _autoSave·PhotoBatch._markUnsaved 공유)에서
+     *  "이전 스냅샷 대비 새로 생기거나 바뀐 핀"을 upsert 로 기록한다. 삭제는 기록하지 않는다(명시 삭제 경로
+     *  App._removePins 가 tombstone 과 함께 기록 — 스냅샷 차이로 서버 핀을 지우는 코드는 넣지 않는다).
+     *  기존 진입점의 개별 기록과 같은 내용이면 건너뛴다(같은 체인 안에서 마지막 op 와 비교 — 중복 0). */
+    async recordPinDelta(depId, prevPins, nextPins) {
+      if (!depId || !Array.isArray(prevPins) || !Array.isArray(nextPins)) return 0;
+      const prevJ = new Map();
+      prevPins.forEach((p) => { if (p && p.id != null) prevJ.set(String(p.id), JSON.stringify(p)); });
+      const changed = [];
+      nextPins.forEach((p) => {
+        if (!p || p.id == null || p._deleted) return;
+        const j = JSON.stringify(p);
+        if (prevJ.get(String(p.id)) !== j) changed.push({ id: p.id, j });
+      });
+      if (!changed.length) return 0;
+      return this._enqueue(depId, async () => {
+        const arr = await this._load(depId);
+        const last = new Map();
+        arr.forEach((o) => { if (o && o.entity === "pin") last.set(String(o.id), o.action === "delete" ? null : JSON.stringify(o.data)); });
+        let n = 0;
+        changed.forEach((c) => {
+          if (last.get(String(c.id)) === c.j) return;
+          arr.push(this._mkOp("pin", "upsert", c.id, JSON.parse(c.j)));
+          n++;
+        });
+        if (n) await this._save(depId, arr);
+        return n;
       });
     },
     // 현재 열린 배포본 기준 간편 기록
@@ -221,8 +262,16 @@
     if (!depId) return;
     return _persistEnqueue(depId, async () => {
       const dep = (await SyncQueue.loadDraft("bundle:dep:" + depId)) || { id: depId };
+      const nextPins = State.pins || [];
+      // 🔴 [WO 20261006-oplog] 오프라인이면 이전 스냅샷 대비 생성·수정된 핀을 oplog 에 기록(단일 지점 — OpLog.recordPinDelta).
+      //   이전 스냅샷이 없으면(기준 모름) 기록하지 않는다 — 서버 핀 전체를 옛 값으로 덮어쓰는 op 를 만들지 않기 위해서다.
+      if (typeof navigator !== "undefined" && !navigator.onLine && typeof dep.pins === "string") {
+        let prev = null;
+        try { prev = JSON.parse(dep.pins); } catch (e) { prev = null; }
+        if (Array.isArray(prev)) { try { await OpLog.recordPinDelta(depId, prev, nextPins); } catch (e) {} }
+      }
       // 커밋 직전 최신 State 반영(큐 대기 중 더 많은 핀이 쌓였을 수 있음 — OpLog._enqueue 와 동일 이유)
-      dep.pins = JSON.stringify(State.pins || []);
+      dep.pins = JSON.stringify(nextPins);
       dep.zones = JSON.stringify(State.zones || []);
       dep.annotations = JSON.stringify(State.annotations || []);
       await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
@@ -273,15 +322,15 @@
             // 서버 최신본을 로컬 번들에 반영(타 작업자 변경 흡수)
             if (j.current) await SyncQueue.saveDraft("bundle:dep:" + depId, j.current);
             // 현재 열려있는 도면이면 화면 갱신(tombstone 제외)
+            // 🔴 [WO 20261006-oplog] 핀·영역은 서버본으로 **덮어쓰지 않고** 병합 SoT(_mergeConflict →
+            //   _mergePins LWW + tombstone + pinBaseIds)로 합친다. 종전 덮어쓰기는 oplog 에 없는 내 미동기화 핀
+            //   (도면 draft PATCH 가 약전파로 실패한 경우)을 화면에서 지웠고, 다음 _autoSave 가 그 화면으로 draft 를
+            //   다시 써 영구 유실됐다(실 Chrome 실측: 오프라인 4핀 → 최종 서버 0). 라이브폴·409 와 같은 규칙.
             if (_curDepId() === depId && j.current) {
               try {
                 const live = (arr) => App._live(arr);   // [WP1 · H8] tombstone 필터 SoT(20_App._live)
-                State.pins = App._pinsSeen(live(JSON.parse(j.current.pins || "[]")));   // [WO 20260930-lww] 수정 감지 기준
-                State.zones = live(JSON.parse(j.current.zones || "[]"));
+                App._mergeConflict(j.current);         // pins/zones 병합 + 기준(pinBaseIds)·버전 갱신 + 렌더
                 State.annotations = live(JSON.parse(j.current.annotations || "[]"));
-                State.depVersion = Number(j.current.version) || 0;
-                if (typeof UI !== "undefined") { UI.renderPinList(); UI.renderPinsOnMap(); }
-                if (typeof Zones !== "undefined" && Zones.render) { Zones.render(); Zones.renderList && Zones.renderList(); }
               } catch (e) {}
             }
           } else if (res) {
