@@ -529,12 +529,15 @@
       const errs = [];
       const msg = (e) => String((e && e.message) || e || "알 수 없는 오류").slice(0, 120);
       try {
-        let r = await this.flush();
+        // 🔴 어떤 단계도 예외를 밖으로 흘리지 않는다 — 흘리면 online 리스너의
+        //   setTimeout 안에서 unhandled rejection 이 되어 그대로 '조용한 실패'가 된다.
+        const tryFlush = async () => { try { return await this.flush(); } catch (e) { errs.push("사진 업로드: " + msg(e)); return null; } };
+        let r = await tryFlush();
         // 🔴 오프라인 검증자 상태(_offlineOnly)면 flush 가 업로드를 건너뛴다 — 서버에 신원을
         //   재검증(Auth.refresh — _offlineOnly 를 푸는 유일한 지점, 22_Auth.js:388)한 뒤 1회 재시도.
         if (r && r.offlineAuth && typeof Auth !== "undefined" && Auth.refresh) {
           try { await Auth.refresh(); } catch (e) { errs.push("서버 재인증: " + msg(e)); }
-          if (Auth.canServerWrite && Auth.canServerWrite()) r = await this.flush();
+          if (Auth.canServerWrite && Auth.canServerWrite()) r = await tryFlush();
         }
         // map 이 있으면(0건이어도) 핀의 pendingOpId → 서버 imageId/docId 치환
         // 🔴 [p102 A2] await — 보관 draft 의 pendingOpId→imageId 치환이 아래 draft 업로드보다 먼저 끝나야 한다
@@ -554,6 +557,9 @@
         try { await this.flushOriginals(); } catch (e) { errs.push("360 원본 보관: " + msg(e)); }
         // 성공/실패를 반드시 통보한다(조용한 실패 금지 — 공유 판정 1곳)
         this.noteSyncResult(r, errs);
+      } catch (e) {
+        // 예상 못 한 예외도 삼키지 않는다(배지·토스트로 사실 노출)
+        try { this.noteSyncResult(null, errs.concat(["동기화 중단: " + msg(e)])); } catch (e2) {}
       } finally { this._reconnecting = false; this._emit(); }
     }
   };
