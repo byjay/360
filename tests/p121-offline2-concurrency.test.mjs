@@ -160,16 +160,10 @@ function mutateOfflineRemoveSerialization(src) {
       if (!depId || !entity || id == null) return;
       return this._enqueue(depId, async () => {
         const arr = await this._load(depId);
-        arr.push({
-          opId: this._newId(),
-          entity, action, id,
-          data: action === "delete" ? null : data,
-          ts: Date.now(),
-          author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
-        });
+        arr.push(this._mkOp(entity, action, id, data));
         await this._save(depId, arr);
       });
-    },`;
+    },`;   // [WO 20261006-oplog] op 모양을 _mkOp(SoT, recordPinDelta 공유)로 뽑아낸 뒤의 본문 — 뮤테이션(아래 recordMut)은 불변
   const recordMut = `    async record(depId, entity, action, id, data) {
       if (!depId || !entity || id == null) return;
       const arr = await this._load(depId);
