@@ -43,7 +43,9 @@ const ok = (cond, label, detail) => {
 /* ── 뮤테이션(고친 부분을 되돌림) — 대상 문자열이 없으면 EXIT=2 ── */
 const MUTS = {
   // ① 공유 지점 기록 제거 → 진입점 oplog 단언 + 복귀 후 서버=로컬 단언이 FAIL 해야 한다
-  nodelta: ["offline", "if (Array.isArray(prev)) { try { await OpLog.recordPinDelta(depId, prev, nextPins); } catch (e) {} }", "/* 뮤테이션: 기록 제거 */"],
+  nodelta: ["offline", "if (Array.isArray(prev)) { try { await OpLog.recordPinDelta(depId, prev, JSON.parse(nextJ)); } catch (e) {} }", "/* 뮤테이션: 기록 제거 */"],
+  // 스냅샷을 기록 뒤 최신 State 로 찍기(종전 방식) → "기록 도중 들어온 핀도 기록" 단언이 FAIL 해야 한다
+  latesnap: ["offline", "dep.pins = nextJ;", "dep.pins = JSON.stringify(State.pins || []);"],
   // ① 사진 연결 경로가 공유 지점을 안 지나게 → PhotoBatch/ThetaIntake 단언이 FAIL 해야 한다
   nophoto: ["photo", "try { if (typeof persistLocalDeployment === \"function\") persistLocalDeployment().catch(() => {}); } catch (e) {}", "/* 뮤테이션: 스냅샷 갱신 제거 */"],
   // 중복 방지 제거 → "기존 진입점 기록 + 공유 지점 = op 1건" 단언이 FAIL 해야 한다
@@ -92,7 +94,7 @@ function boot(opts) {
   const SyncQueue = {
     async allDraftKeys() { return Object.keys(store); },
     async loadDraft(k) { return store[k] !== undefined ? clone(store[k]) : null; },
-    async saveDraft(k, v) { store[k] = clone(v); return true; },
+    async saveDraft(k, v) { store[k] = clone(v); if (opts.onSave) await opts.onSave(k); return true; },
     async enqueue() { return "op" + (++opSeq); },
     async count() { return 0; },
     keepOriginal() {}, _emit() {}, onChange() {}
@@ -213,6 +215,21 @@ const P1 = { id: 1001, x: 10, y: 10, page: 1, label: "1", checkboard: true };
     T.X.App._autoSave();
     await T.settle();
     ok(T.ops().length === 0, "기준 없을 때 oplog 0건", T.ops().length);
+  }
+
+  /* ── E7. oplog 기록을 기다리는 사이에 들어온 탭도 기록된다(스냅샷 = 기록과 같은 시점 사본) ── */
+  console.log("\n[E7] 기록 도중 들어온 CHECKER 탭 → 그 핀도 oplog");
+  {
+    let T = null, fired = false, late = null;
+    T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"], onSave: async (k) => {
+      if (fired || String(k).indexOf("oplog:") !== 0) return;
+      fired = true; await wait(3); late = T.X.App._placeCheckboardPin({ x: 77, y: 77 });   // 첫 op 저장이 끝나기 전에 다음 탭
+    } });
+    const first = T.X.App._placeCheckboardPin({ x: 66, y: 66 });
+    await T.settle(); await T.settle();
+    ok(!!first && !!late && fired, "전제: 기록 도중 두 번째 탭 발생", { first: !!first, late: !!late, fired });
+    ok(!!first && !!late && T.pinOps(first.id).length === 1 && T.pinOps(late.id).length === 1, "🔴 두 핀 모두 oplog 1건씩",
+      { first: first && T.pinOps(first.id).length, late: late && T.pinOps(late.id).length });
   }
 
   /* ── R. 오프라인 → 온라인 복귀(도면 draft PATCH 실패, /ops 만 성공) → 서버 핀 수 = 로컬 핀 수 ── */

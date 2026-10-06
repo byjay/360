@@ -262,16 +262,19 @@
     if (!depId) return;
     return _persistEnqueue(depId, async () => {
       const dep = (await SyncQueue.loadDraft("bundle:dep:" + depId)) || { id: depId };
-      const nextPins = State.pins || [];
+      // 커밋 직전 최신 State 반영(큐 대기 중 더 많은 핀이 쌓였을 수 있음 — OpLog._enqueue 와 동일 이유)
+      // 🔴 [WO 20261006-oplog] 기록과 스냅샷은 **같은 시점의 사본**이어야 한다 — 기록을 기다리는 동안 들어온 핀까지
+      //   스냅샷에 넣으면 다음 차례의 비교 기준에 이미 들어 있어 그 핀은 영영 기록되지 않는다(그 핀의 _autoSave 가
+      //   뒤에 줄 선 persist 로 기록한다).
+      const nextJ = JSON.stringify(State.pins || []);
       // 🔴 [WO 20261006-oplog] 오프라인이면 이전 스냅샷 대비 생성·수정된 핀을 oplog 에 기록(단일 지점 — OpLog.recordPinDelta).
       //   이전 스냅샷이 없으면(기준 모름) 기록하지 않는다 — 서버 핀 전체를 옛 값으로 덮어쓰는 op 를 만들지 않기 위해서다.
       if (typeof navigator !== "undefined" && !navigator.onLine && typeof dep.pins === "string") {
         let prev = null;
         try { prev = JSON.parse(dep.pins); } catch (e) { prev = null; }
-        if (Array.isArray(prev)) { try { await OpLog.recordPinDelta(depId, prev, nextPins); } catch (e) {} }
+        if (Array.isArray(prev)) { try { await OpLog.recordPinDelta(depId, prev, JSON.parse(nextJ)); } catch (e) {} }
       }
-      // 커밋 직전 최신 State 반영(큐 대기 중 더 많은 핀이 쌓였을 수 있음 — OpLog._enqueue 와 동일 이유)
-      dep.pins = JSON.stringify(nextPins);
+      dep.pins = nextJ;
       dep.zones = JSON.stringify(State.zones || []);
       dep.annotations = JSON.stringify(State.annotations || []);
       await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
