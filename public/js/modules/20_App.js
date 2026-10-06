@@ -4611,8 +4611,10 @@
       try {
         // [오프라인 작업지시서 ] 오프라인이면 서버 fetch 대신 번들(IndexedDB)에서 도면 복원
         let dep = null;
+        let depFromBundle = false;   // 🔴 [WO 20261006-pinbase] 아래 pinBaseIds 판정에 쓴다
         if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
           dep = await OfflineLoad.deployment(deploymentId);
+          depFromBundle = !!dep;
           if (!dep) { await this._restoreDraftLocal(); return; }
         } else {
           const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId), { headers: Auth.headers() });
@@ -4636,7 +4638,17 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
         try { State.pins  = this._pinsSeen(this._live(JSON.parse(dep.pins  || "[]"))); } catch { State.pins = []; }
-        State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 이 서버 버전이 병합 기준
+        State.pinTombstones = {};
+        // 🔴 [WO 20261006-pinbase] 병합 기준(pinBaseIds)은 "서버가 아는 핀 목록" 이어야 한다.
+        //   오프라인 번들 스냅샷(bundle:dep:<id>)은 persistLocalDeployment 가 **내 미동기화 핀까지**
+        //   직렬화해 둔 로컬 사본이므로 서버 기준이 아니다. 이를 기준으로 삼으면 다음 서버 병합에서
+        //   _mergePins 의 (b) 규칙(base ∧ ¬srv = "남이 지운 핀")이 내 오프라인 핀을 전부 지운다.
+        //   실측(지휘자 재현 p114 + .tmp/xbase 재현, HEAD 추출본 .tmp/hfC):
+        //     온라인 1핀 저장(base=1) → 오프라인 2핀 추가(3핀, base=1) → 오프라인 새로고침·재진입에서
+        //     base 가 **3** 으로 바뀜 → 온라인 복귀 후 첫 라이브폴 병합에 화면 3핀 → **1핀**
+        //     (서버엔 25핀이 멀쩡히 올라간 상태로 화면만 1핀 — p114 "local:1, server:25").
+        //   서버본을 못 받았으면 기준은 "모름"(null) — _mergePins 가 (b) 판정을 건너뛴다(기존 규칙 재사용).
+        State.pinBaseIds = depFromBundle ? null : this._pinIds(State.pins);
         try { State.zones = this._live(JSON.parse(dep.zones || "[]")); } catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(dep.annotations || "[]")); } catch { State.annotations = []; }
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
@@ -4843,6 +4855,11 @@
       const m = this._draftVsServer(d, State.pins, State.zones, srvVer);
       State.pins = m.pins;
       State.zones = m.zones;
+      // 🔴 [WO 20261006-pinbase] draft 가 기억한 "내가 알던 서버 핀 목록"을 병합 기준으로 되돌린다.
+      //   형제 복원 경로 _restoreDraftLocal 은 이미 그렇게 한다(d.basePinIds) — 이 경로만 빠져 있어
+      //   직전 로더가 넣어 둔 기준(오프라인이면 번들 사본 = 내 미동기화 핀 전부)이 그대로 남았고,
+      //   다음 서버 병합에서 _mergePins (b) 규칙이 그 핀들을 "남이 지운 핀"으로 지웠다(§G-2-5 형제 통일).
+      if (Array.isArray(d.basePinIds)) State.pinBaseIds = d.basePinIds.map(String);
       this._adoptDraftTombstones(d);   // [WO 20260929-bulkdel] 저장 전 지운 핀 기록 유지(다음 409 병합에서도 부활 금지)
       if (Array.isArray(d.annotations)) State.annotations = d.annotations;
       if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
@@ -5593,6 +5610,7 @@
         //   `?d=` 와 동일한 자리에 들어가므로 이후 로직(로드/폴백)은 한 줄도 갈라지지 않는다.
         let wantId = params.get("d") || ((typeof ShareLink !== "undefined" && ShareLink.deploymentId) || null);
         let latest = null;
+        let latestFromBundle = false;   // 🔴 [WO 20261006-pinbase] 오프라인 번들 사본이면 pinBaseIds 를 기준으로 쓸 수 없다
 
         // [N4] 설계자 프로젝트 재진입: 그 프로젝트 deck 의 배포본을 로드(작업 복원)
         if (!wantId && projectForDesigner) {
@@ -5654,6 +5672,7 @@
           // [W8 오프라인] 배포본도 캐시에서 우선 복원. [견고화] 온라인이어도 실패/타임아웃 시 캐시 폴백.
           if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
             latest = await OfflineLoad.deployment(wantId);
+            latestFromBundle = !!latest;   // 🔴 [WO 20261006-pinbase] 형제 로더(loadDeckDrawing)와 같은 판정
           } else {
             try {
               const ctrl = new AbortController();
@@ -5663,7 +5682,7 @@
                 if (r1.ok) latest = await r1.json();
               } finally { clearTimeout(t); }
             } catch (e) {}
-            if (!latest && typeof OfflineLoad !== "undefined") latest = await OfflineLoad.deployment(wantId);
+            if (!latest && typeof OfflineLoad !== "undefined") { latest = await OfflineLoad.deployment(wantId); latestFromBundle = !!latest; }
           }
         }
 
@@ -5708,7 +5727,10 @@
 
         try { State.pins = this._pinsSeen(this._live(JSON.parse(latest.pins || "[]"))); }
         catch { State.pins = []; }
-        State.pinTombstones = {}; State.pinBaseIds = this._pinIds(State.pins);   // [WO 20260929-bulkdel] 형제 로더와 같은 기준
+        State.pinTombstones = {};
+        // [WO 20260929-bulkdel] 형제 로더(loadDeckDrawing)와 같은 기준 — 🔴 [WO 20261006-pinbase]
+        //   오프라인 번들 사본(내 미동기화 핀 포함)은 "서버가 아는 목록"이 아니므로 기준 = null(판정 불가).
+        State.pinBaseIds = latestFromBundle ? null : this._pinIds(State.pins);
         try { State.zones = this._live(JSON.parse(latest.zones || "[]")); }
         catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(latest.annotations || "[]")); }

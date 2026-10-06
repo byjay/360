@@ -216,6 +216,63 @@ async function A4(src) {
   ok(/360 사진/.test(String(el.attrs.title || "")), "사유를 title 로 노출", el.attrs.title);
 }
 
+/* ══ A5. 오프라인 재진입 뒤 첫 서버 병합에서 내 오프라인 핀이 살아남는다 ══
+   [재현] 지휘자 재현 p114 "서버 핀 수 = 로컬 핀 수" FAIL {"local":1,"server":25} +
+     deep-reasoner .tmp/xbase 결정론 재현(실 Chrome CDP · HEAD 추출본 .tmp/hfC):
+       온라인 1핀 저장(pinBaseIds=1) → 오프라인 2핀 추가(3핀, base=1)
+       → 오프라인 새로고침·재진입에서 **base 가 3 으로 바뀜**(loadDeckDrawing 이 번들 사본을
+         "서버가 아는 목록"으로 기록, 20_App.js:4639)
+       → 온라인 복귀 첫 병합(_mergeConflict → _mergePins (b) base∧¬srv)에서 화면 3핀 → **1핀**
+         (서버에는 25핀이 멀쩡히 올라간 상태로 화면만 1핀).
+   근본수정: ① 번들 사본이면 기준 = null(판정 불가) ② _applyDirtyDraft 가 draft 가 기억한
+     진짜 서버 기준(d.basePinIds)을 되돌린다(형제 _restoreDraftLocal 과 통일). */
+function makeMergeApp(src) {
+  const State = { pins: [], zones: [], annotations: [], pinBaseIds: null, pinTombstones: {}, depVersion: 0, autoSaveDepId: "dep1" };
+  const sandbox = { console, State, JSON, Date, Math, Promise, setTimeout,
+                    UI: { renderPinList() {}, renderPinsOnMap() {} }, SyncQueue: { async saveDraft() { return true; } } };
+  vm.createContext(sandbox);
+  vm.runInContext(src + "\n;globalThis.__App = App;", sandbox);
+  const App = sandbox.__App;
+  App._markDirty = () => {};            // DOM 의존 — 이 테스트의 관심사(병합 기준)가 아니다
+  App._markDeckUnsaved = () => {};
+  return { App, State };
+}
+async function A5(src) {
+  console.log("\n[A5] 오프라인 재진입 → 서버 병합에 내 오프라인 핀 유실 0");
+  const P1 = { id: "p1", label: "1" }, P2 = { id: "p2", label: "2" }, P3 = { id: "p3", label: "3" };
+  const { App, State } = makeMergeApp(src);
+
+  // 오프라인 재진입 직후 상태: 번들 사본(내 미동기화 핀 포함)이 화면에 올라오고,
+  //   로더가 그 목록을 병합 기준으로 적어 둔 상황(= 버그 당시 실측값 base=3)
+  State.pins = [P1, P2, P3];
+  State.pinBaseIds = App._pinIds(State.pins);
+  ok(State.pinBaseIds.length === 3, "전제: 로더가 번들 사본 3핀을 기준으로 적어 둔 상태(실측 재현)");
+
+  // draft 는 "내가 알던 서버 핀 목록 = p1" 을 정확히 기억하고 있다
+  const draft = { dirty: true, pages: ["data:,x"], pins: [P1, P2, P3], zones: [], basePinIds: ["p1"], baseVer: 1, deletedPins: [] };
+  App._applyDirtyDraft(draft, "prj1::deck1", 2);
+  ok(JSON.stringify(State.pinBaseIds) === JSON.stringify(["p1"]),
+    "draft 가 기억한 진짜 서버 기준(basePinIds)으로 되돌린다", State.pinBaseIds);
+
+  // 남이 저장해 version 이 올라간 서버본(핀은 여전히 p1 하나) → 라이브폴 1틱과 같은 경로
+  App._mergeConflict({ pins: JSON.stringify([P1]), zones: "[]", version: 3 });
+  ok(State.pins.length === 3, "서버 병합 후에도 내 오프라인 핀 3개 보존(유실 0)", App._pinIds(State.pins));
+  ok(JSON.stringify(App._pinIds(State.pins).sort()) === JSON.stringify(["p1", "p2", "p3"]), "보존된 id 가 그대로", App._pinIds(State.pins));
+}
+
+/* ══ A6. 기준이 '모름'(null)이면 지우지 않고, 진짜 서버목록이면 지운다(규칙 자체는 불변) ══ */
+async function A6(src) {
+  console.log("\n[A6] _mergePins 기준 판정 — null=판정 불가 / 실제 서버목록=삭제 반영");
+  const { App } = makeMergeApp(src);
+  const srv = [{ id: "p1" }], local = [{ id: "p1" }, { id: "p2" }, { id: "p3" }];
+  ok(App._mergePins(srv, local, null, []).length === 3, "기준 null → '남이 지웠다' 판정 생략(내 핀 보존)");
+  ok(App._mergePins(srv, local, ["p1", "p2", "p3"], []).length === 1, "기준이 진짜 서버목록 → 남이 지운 핀은 반영(기존 규칙 불변)");
+  // 형제 로더 2곳 전수 — 번들 사본을 기준으로 쓰지 않는다
+  const guarded = (src.match(/State\.pinBaseIds = (?:dep|latest)FromBundle \? null : this\._pinIds\(State\.pins\);/g) || []).length;
+  const bare = (src.match(/State\.pinBaseIds = this\._pinIds\(State\.pins\);/g) || []).length;
+  ok(guarded === 2 && bare === 0, "로더 2곳 모두 번들 사본 가드 적용(무가드 0건) — guarded=" + guarded + " bare=" + bare);
+}
+
 /* ══ 뮤테이션 — 고친 부분을 되돌리면 해당 단언이 FAIL 해야 한다 ══ */
 function mutSyncRemoveReauth(src) {
   const needle = `        if (r && r.offlineAuth && typeof Auth !== "undefined" && Auth.refresh) {`;
@@ -236,6 +293,16 @@ function mutAppArrayOnly(src) {
         let changed = false;
         if (Array.isArray(d.pins)) {`);
 }
+function mutAppDropBaseRestore(src) {
+  const needle = `      if (Array.isArray(d.basePinIds)) State.pinBaseIds = d.basePinIds.map(String);`;
+  if (src.indexOf(needle) < 0) throw new Error("뮤테이션 대상(_applyDirtyDraft basePinIds 복원) 없음 — 소스 변경?");
+  return src.replace(needle, "      /* 제거됨(뮤테이션) */");
+}
+function mutAppBundleBaseline(src) {
+  const needle = `        State.pinBaseIds = depFromBundle ? null : this._pinIds(State.pins);`;
+  if (src.indexOf(needle) < 0) throw new Error("뮤테이션 대상(번들 가드) 없음 — 소스 변경?");
+  return src.replace(needle, `        State.pinBaseIds = this._pinIds(State.pins);`);
+}
 function mutOfflineBadge(src) {
   const needle = `      if (text) text.textContent = syncErr ? "동기화 실패" : "동기화 중";`;
   if (src.indexOf(needle) < 0) throw new Error("뮤테이션 대상(배지 문구) 없음 — 소스 변경?");
@@ -245,7 +312,9 @@ function mutOfflineBadge(src) {
 (async () => {
   const MUT = process.env.P124_MUT || "";
   const S = MUT === "reauth" ? mutSyncRemoveReauth(syncSrc) : MUT === "notify" ? mutSyncRemoveNotify(syncSrc) : syncSrc;
-  const A = MUT === "arrayonly" ? mutAppArrayOnly(appSrc) : appSrc;
+  const A = MUT === "arrayonly" ? mutAppArrayOnly(appSrc)
+    : MUT === "baserestore" ? mutAppDropBaseRestore(appSrc)
+    : MUT === "bundlebase" ? mutAppBundleBaseline(appSrc) : appSrc;
   const O = MUT === "badge" ? mutOfflineBadge(offlineSrc) : offlineSrc;
   if (MUT) console.log("[뮤테이션] " + MUT + " — 해당 단언이 FAIL 해야 정상");
 
@@ -253,6 +322,8 @@ function mutOfflineBadge(src) {
   await A2(S);
   await A3(A);
   await A4(O);
+  await A5(A);
+  await A6(A);
 
   console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));
   process.exit(failed === 0 ? 0 : 1);
