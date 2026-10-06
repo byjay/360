@@ -63,6 +63,8 @@ const MUTS = {
   // [annodel] 삭제 공유 지점이 tombstone 을 안 남김 → E10/E11/E12 가 FAIL 해야 한다
   notomb: ["anno", "if (tomb) want.forEach(id => { tomb[id] = now; });", "/* 뮤테이션: tombstone 제거 */"],
   // [annodel] 병합이 내 tombstone 을 무시 → E12(라이브폴·409) 가 FAIL 해야 한다
+  // [annodel] 서버 tombstone 항목 재삭제 방지 제거 → E13 이 FAIL 해야 한다
+  redel: ["offline", "if (p && p.id != null && !p._deleted && !nextIds.has(", "if (p && p.id != null && !nextIds.has("],
   mergeignoretomb: ["app", "        .concat((tombIds || []).map(String)));", "        );"],
 };
 const MUT = process.env.P125_MUT || "";
@@ -367,6 +369,18 @@ const P1 = { id: 1001, x: 10, y: 10, page: 1, label: "1", checkboard: true };
     const keep = T.State.annotations.slice();
     T.X.App._mergeConflict({ pins: JSON.stringify([P1]), zones: "[]", version: 6 });   // 주석 필드 없는 부분 응답
     ok(T.State.annotations.length === keep.length, "서버본에 주석 필드가 없으면 건드리지 않는다", T.State.annotations.length);
+  }
+
+  /* ── E13. 스냅샷에 이미 서버 tombstone 으로 있는 주석은 다시 delete 기록하지 않는다 ── */
+  console.log("\n[E13] 이미 서버에서 지워진(†) 주석 → 중복 delete op 0");
+  {
+    const K = { id: "anK", page: 1, type: "rect", x: 2, y: 2, w: 1, h: 1 };
+    const T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"], annos: [K] });
+    T.store["bundle:dep:dep1"].annotations = JSON.stringify([{ id: "anGone", _deleted: true, ts: 1 }, K]);   // /ops 응답이 남긴 스냅샷 모양
+    T.X.App._annoTombstones().anGone = 1;
+    T.X.App._autoSave();
+    await T.settle();
+    ok(T.ops().filter((o) => o.entity === "anno").length === 0, "중복 delete op 0", T.ops());
   }
 
   /* ── M2. 남이 지운 핀(tombstone)은 병합에서 반영된다 — 기존 규칙 불변 ── */

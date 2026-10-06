@@ -227,7 +227,8 @@
       });
       const del = new Set((delIds || []).map(String));
       const gone = [];
-      prevArr.forEach((p) => { if (p && p.id != null && !nextIds.has(String(p.id)) && del.has(String(p.id))) gone.push(p.id); });
+      // 스냅샷에 이미 서버 tombstone({_deleted}, /ops 응답 반영분)으로 있는 항목은 다시 지우지 않는다(중복 delete op 0).
+      prevArr.forEach((p) => { if (p && p.id != null && !p._deleted && !nextIds.has(String(p.id)) && del.has(String(p.id))) gone.push(p.id); });
       if (!changed.length && !gone.length) return 0;
       return this._enqueue(depId, async () => {
         const arr = await this._load(depId);
