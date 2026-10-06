@@ -207,24 +207,41 @@
      *  App._removePins 가 tombstone 과 함께 기록 — 스냅샷 차이로 서버 핀을 지우는 코드는 넣지 않는다).
      *  기존 진입점의 개별 기록과 같은 내용이면 건너뛴다(같은 체인 안에서 마지막 op 와 비교 — 중복 0). */
     async recordPinDelta(depId, prevPins, nextPins) {
-      if (!depId || !Array.isArray(prevPins) || !Array.isArray(nextPins)) return 0;
+      return this.recordDelta("pin", depId, prevPins, nextPins, null);
+    },
+    /** 🔴 [WO 20261006-annodel] 스냅샷 차이 기록의 공용 본체 — 핀(recordPinDelta)·주석(persistLocalDeployment) 공유.
+     *  upsert = 이전 스냅샷 대비 새로 생기거나 바뀐 항목. delete = 이전 스냅샷엔 있고 지금 없으며 **명시 tombstone**
+     *  (delIds — 사용자가 실제로 지운 id, App._annoTombstones)에 든 항목만. 스냅샷 차이만으로는 지우지 않는다
+     *  (추정 삭제 금지 — 서버 삭제는 이 delete op → 서버 /ops tombstone 경로로만). 같은 내용 연속 op 는 건너뛴다. */
+    async recordDelta(entity, depId, prevArr, nextArr, delIds) {
+      if (!depId || !Array.isArray(prevArr) || !Array.isArray(nextArr)) return 0;
       const prevJ = new Map();
-      prevPins.forEach((p) => { if (p && p.id != null) prevJ.set(String(p.id), JSON.stringify(p)); });
+      prevArr.forEach((p) => { if (p && p.id != null) prevJ.set(String(p.id), JSON.stringify(p)); });
       const changed = [];
-      nextPins.forEach((p) => {
+      const nextIds = new Set();
+      nextArr.forEach((p) => {
         if (!p || p.id == null || p._deleted) return;
+        nextIds.add(String(p.id));
         const j = JSON.stringify(p);
         if (prevJ.get(String(p.id)) !== j) changed.push({ id: p.id, j });
       });
-      if (!changed.length) return 0;
+      const del = new Set((delIds || []).map(String));
+      const gone = [];
+      prevArr.forEach((p) => { if (p && p.id != null && !nextIds.has(String(p.id)) && del.has(String(p.id))) gone.push(p.id); });
+      if (!changed.length && !gone.length) return 0;
       return this._enqueue(depId, async () => {
         const arr = await this._load(depId);
         const last = new Map();
-        arr.forEach((o) => { if (o && o.entity === "pin") last.set(String(o.id), o.action === "delete" ? null : JSON.stringify(o.data)); });
+        arr.forEach((o) => { if (o && o.entity === entity) last.set(String(o.id), o.action === "delete" ? null : JSON.stringify(o.data)); });
         let n = 0;
         changed.forEach((c) => {
           if (last.get(String(c.id)) === c.j) return;
-          arr.push(this._mkOp("pin", "upsert", c.id, JSON.parse(c.j)));
+          arr.push(this._mkOp(entity, "upsert", c.id, JSON.parse(c.j)));
+          n++;
+        });
+        gone.forEach((id) => {
+          if (last.has(String(id)) && last.get(String(id)) === null) return;   // 이미 delete 기록됨
+          arr.push(this._mkOp(entity, "delete", id, null));
           n++;
         });
         if (n) await this._save(depId, arr);
@@ -274,9 +291,19 @@
         try { prev = JSON.parse(dep.pins); } catch (e) { prev = null; }
         if (Array.isArray(prev)) { try { await OpLog.recordPinDelta(depId, prev, JSON.parse(nextJ)); } catch (e) {} }
       }
+      // 🔴 [WO 20261006-annodel] 주석도 같은 지점·같은 규칙 — 생성·수정 upsert + **명시 tombstone 된** 삭제만 delete.
+      //   종전엔 PdfAnno._persist 가 남은 주석만 upsert 로 기록해 오프라인 삭제가 0건이었다 → draft PATCH 실패 시
+      //   서버의 같은 주석이 복귀 병합으로 되살아났다(실 Chrome 실측).
+      const annoJ = JSON.stringify(State.annotations || []);
+      if (typeof navigator !== "undefined" && !navigator.onLine && typeof dep.annotations === "string") {
+        let prevA = null;
+        try { prevA = JSON.parse(dep.annotations); } catch (e) { prevA = null; }
+        const tombA = (typeof App !== "undefined" && App._annoTombstones) ? Object.keys(App._annoTombstones()) : [];
+        if (Array.isArray(prevA)) { try { await OpLog.recordDelta("anno", depId, prevA, JSON.parse(annoJ), tombA); } catch (e) {} }
+      }
       dep.pins = nextJ;
       dep.zones = JSON.stringify(State.zones || []);
-      dep.annotations = JSON.stringify(State.annotations || []);
+      dep.annotations = annoJ;
       await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
     });
   }
@@ -332,10 +359,8 @@
             if (_curDepId() === depId && j.current) {
               try {
                 App._mergeConflict(j.current);         // pins/zones 병합 + 기준(pinBaseIds)·버전 갱신 + 렌더
-                // 🔴 [WO 20261006-oplog2] 주석도 덮어쓰지 않고 병합(App._mergeAnnos — 합집합 + 서버 tombstone 반영).
-                //   종전 덮어쓰기는 /ops 응답 대기 중 그린 주석을 화면·서버에서 지웠다(실 Chrome 실측).
-                State.annotations = App._mergeAnnos(JSON.parse(j.current.annotations || "[]"), State.annotations || []);
-                if (typeof PdfAnno !== "undefined" && PdfAnno.refresh) { try { PdfAnno.refresh(); } catch (e) {} }
+                // 🔴 [WO 20261006-oplog2 → annodel] 주석 병합(App._mergeAnnos)은 이제 _mergeConflict 안에서 한다
+                //   (라이브폴·409·여기 공유) — 덮어쓰기 없음.
               } catch (e) {}
             }
           } else if (res) {

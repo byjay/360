@@ -33,6 +33,7 @@ const SRC = {
   theta: rd("public/js/modules/33_ThetaIntake.js"),
   photo: rd("public/js/modules/35_PhotoBatch.js"),
   pap: rd("public/js/modules/27_PinActionPop.js"),
+  anno: rd("public/js/modules/26_PdfAnno.js"),
 };
 
 let failed = 0;
@@ -56,7 +57,13 @@ const MUTS = {
   // [oplog2] PinActionPop 라벨 저장을 종전처럼 _markDirty 만 → E8 이 FAIL 해야 한다
   papdirty: ["pap", "      pin.label = v;\n      PinActionPop._commitLocal();", "      pin.label = v;\n      if (typeof App !== \"undefined\" && App._markDirty) App._markDirty();"],
   // [oplog2] 주석을 종전처럼 서버본으로 덮어쓰기 → E9 가 FAIL 해야 한다
-  annooverwrite: ["offline", "State.annotations = App._mergeAnnos(JSON.parse(j.current.annotations || \"[]\"), State.annotations || []);", "State.annotations = App._live(JSON.parse(j.current.annotations || \"[]\"));"],
+  annooverwrite: ["app", "if (Array.isArray(srvAnnos)) State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()));", "if (Array.isArray(srvAnnos)) State.annotations = this._live(srvAnnos);"],
+  // [annodel] 주석 delete op 기록 제거 → E10/E11 이 FAIL 해야 한다
+  noannodel: ["offline", "if (Array.isArray(prevA)) { try { await OpLog.recordDelta(\"anno\", depId, prevA, JSON.parse(annoJ), tombA); } catch (e) {} }", "/* 뮤테이션: 주석 기록 제거 */"],
+  // [annodel] 삭제 공유 지점이 tombstone 을 안 남김 → E10/E11/E12 가 FAIL 해야 한다
+  notomb: ["anno", "if (tomb) want.forEach(id => { tomb[id] = now; });", "/* 뮤테이션: tombstone 제거 */"],
+  // [annodel] 병합이 내 tombstone 을 무시 → E12(라이브폴·409) 가 FAIL 해야 한다
+  mergeignoretomb: ["app", "        .concat((tombIds || []).map(String)));", "        );"],
 };
 const MUT = process.env.P125_MUT || "";
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
@@ -106,10 +113,11 @@ function boot(opts) {
     keepOriginal() {}, _emit() {}, onChange() {}
   };
   const State = {
-    mode: "designer", pins: clone(opts.pins || []), zones: [], annotations: [], pdfPage: 1, regMode: "checkboard",
+    mode: "designer", pins: clone(opts.pins || []), zones: [], annotations: clone(opts.annos || []), pdfPage: 1, regMode: "checkboard",
     autoSaveDepId: "dep1", pinTombstones: {}, pinBaseIds: opts.baseIds || null, depVersion: 1
   };
   const server = makeServer(opts.serverPins || []);
+  (opts.serverAnnos || []).forEach((a) => server.annos.set(String(a.id), clone(a)));
   const nav = { onLine: false };
   const fetchImpl = async (url, init) => {
     const u = String(url);
@@ -129,21 +137,23 @@ function boot(opts) {
     Projects: { currentProject: { id: "prj1" }, currentDeck: { id: "deck1", deployment_id: "dep1" } },
     Cloud: { _cache: {}, async resizeImage() { return { dataURL: "data:image/jpeg;base64,AAA", width: 2, height: 1 }; } },
     UI: { renderPinList() {}, renderPinsOnMap() {}, $: () => null, text() {}, show() {} },
-    Prompt: { toast() {} },
+    Prompt: { toast() {}, async confirm() { return true; } },
     localStorage: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) },
     window: { addEventListener() {} }, document: { getElementById: (id) => (opts.dom && opts.dom[id]) || null, addEventListener() {}, querySelector: () => null, querySelectorAll: () => [] },
     fetch: fetchImpl, setTimeout, clearTimeout, setInterval: () => 0, Promise, JSON, Date, Math
   };
   vm.createContext(sandbox);
-  vm.runInContext([SRC.series, SRC.app, SRC.offline, SRC.photo, SRC.theta, SRC.pap].join("\n;\n")
-    + "\n;globalThis.__X = { App, OpLog, PhotoBatch, ThetaIntake, PinActionPop, persistLocalDeployment };", sandbox);
+  vm.runInContext([SRC.series, SRC.app, SRC.offline, SRC.photo, SRC.theta, SRC.pap, SRC.anno].join("\n;\n")
+    + "\n;globalThis.__X = { App, OpLog, PhotoBatch, ThetaIntake, PinActionPop, PdfAnno, persistLocalDeployment };", sandbox);
   const X = sandbox.__X;
   // DOM 렌더 전용 함수만 무력화(이 테스트의 관심사가 아니다)
   X.App._updateCheckboardQuickStatus = () => {};
   const calls = { draft: 0 };
   X.App._saveDraftLocal = async () => { calls.draft++; return true; };           // canvas 스냅샷(_snapshotPages) — 도면 draft 는 p121/p124 가 지킨다
   X.ThetaIntake._flowNext = () => null;
-  if (opts.bundle !== false) store["bundle:dep:dep1"] = { id: "dep1", pins: JSON.stringify(opts.pins || []), zones: "[]", annotations: "[]", version: 1 };
+  if (opts.bundle !== false) store["bundle:dep:dep1"] = { id: "dep1", pins: JSON.stringify(opts.pins || []), zones: "[]", annotations: JSON.stringify(opts.annos || []), version: 1 };
+  X.PdfAnno._render = () => {};   // DOM(SVG) 렌더 전용
+  X.PdfAnno.updateToolbar = () => {};
   // 🔴 settle 은 persistLocalDeployment 를 직접 부르지 않는다(부르면 진입점이 공유 지점을 안 지나도 가려진다 — 뮤테이션 nophoto 실측)
   const settle = async () => { await wait(30); await (X.OpLog._chains.dep1 || Promise.resolve()); await wait(5); };
   const ops = () => (store["oplog:dep1"] || []);
@@ -308,6 +318,55 @@ const P1 = { id: 1001, x: 10, y: 10, page: 1, label: "1", checkboard: true };
     ok(ids.indexOf("anA") >= 0 && ids.indexOf("anB") >= 0, "🔴 oplog 주석 A + oplog 없는 내 주석 B 보존", ids);
     ok(ids.indexOf("anS") >= 0, "서버에만 있는 남의 주석은 들어온다", ids);
     ok(ids.indexOf("anC") < 0, "서버 tombstone 주석은 되살리지 않는다", ids);
+  }
+
+  /* ── E10. 오프라인 주석 삭제 3경로(개별·되돌리기·페이지 전체) → oplog "anno delete" ── */
+  console.log("\n[E10] 오프라인 주석 삭제 → oplog anno delete(경로별 1건) · 남은 주석은 기록 0");
+  {
+    const A1 = { id: "a1", page: 1, type: "rect", x: 1, y: 1, w: 1, h: 1 }, A2 = { id: "a2", page: 1, type: "rect", x: 2, y: 2, w: 1, h: 1 };
+    const A3 = { id: "a3", page: 2, type: "rect", x: 3, y: 3, w: 1, h: 1 }, A4 = { id: "a4", page: 2, type: "rect", x: 4, y: 4, w: 1, h: 1 }, A5 = { id: "a5", page: 3, type: "rect", x: 5, y: 5, w: 1, h: 1 };
+    const T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"], annos: [A1, A2, A3, A4, A5], serverAnnos: [A1, A2, A3, A4, A5] });
+    T.X.PdfAnno._removeById("a1");
+    T.State.pdfPage = 2; await T.X.PdfAnno.clearPage();
+    T.State.pdfPage = 3; T.X.PdfAnno.undo();
+    await T.settle();
+    const annoOps = T.ops().filter((o) => o.entity === "anno");
+    const del = annoOps.filter((o) => o.action === "delete").map((o) => o.id).sort();
+    ok(JSON.stringify(del) === JSON.stringify(["a1", "a3", "a4", "a5"]), "🔴 삭제 4건(개별 a1 · 페이지 a3,a4 · 되돌리기 a5) 모두 delete op", del);
+    ok(annoOps.filter((o) => o.action === "upsert").length === 0, "안 바뀐 주석(a2)은 upsert 기록 0", annoOps.map((o) => o.action + ":" + o.id));
+    ok(Object.keys(T.X.App._annoTombstones()).sort().join() === "a1,a3,a4,a5", "삭제 id 는 tombstone 으로 남는다", Object.keys(T.X.App._annoTombstones()));
+  }
+
+  /* ── E11. 오프라인 삭제 → 도면 PATCH 실패 → 복귀(/ops 만) → 주석 부활 0 ── */
+  console.log("\n[E11] 오프라인 주석 삭제 → 복귀(draft PATCH 실패) → 서버·화면 모두 부활 0");
+  {
+    const A = { id: "anDel", page: 1, type: "rect", x: 1, y: 1, w: 1, h: 1 }, K = { id: "anKeep", page: 1, type: "rect", x: 2, y: 2, w: 1, h: 1 };
+    const T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"], annos: [A, K], serverAnnos: [A, K] });
+    T.X.PdfAnno._removeById("anDel");
+    await T.settle();
+    T.nav.onLine = true;
+    await T.X.App._flushOpLogs();
+    const srvLive = Array.from(T.server.annos.values()).filter((a) => !a._deleted).map((a) => a.id);
+    const local = T.State.annotations.map((a) => a.id);
+    ok(srvLive.indexOf("anDel") < 0 && !!(T.server.annos.get("anDel") || {})._deleted, "🔴 서버는 기존 /ops tombstone 경로로 삭제(anDel → {_deleted})", Array.from(T.server.annos.values()));
+    ok(local.indexOf("anDel") < 0, "🔴 복귀 병합 후 화면에 부활 0", local);
+    ok(local.indexOf("anKeep") >= 0 && srvLive.indexOf("anKeep") >= 0, "안 지운 주석은 그대로", { local, srvLive });
+  }
+
+  /* ── E12. 라이브폴·409 병합(_mergeConflict) — 내가 막 지운 주석(아직 미저장)을 서버본이 되살리지 않는다 ── */
+  console.log("\n[E12] _mergeConflict 주석 병합 — 내 tombstone 존중 + 남의 새 주석 반영");
+  {
+    const A = { id: "anMine", page: 1, type: "rect", x: 1, y: 1, w: 1, h: 1 }, S = { id: "anOther", page: 1, type: "rect", x: 7, y: 7, w: 1, h: 1 };
+    const T = boot({ pins: [P1], serverPins: [P1], baseIds: ["1001"], annos: [A], serverAnnos: [A] });
+    T.nav.onLine = true;
+    T.X.PdfAnno._removeById("anMine");                 // 온라인 삭제 — 자동저장 전에 남의 저장이 먼저 도착
+    T.X.App._mergeConflict({ pins: JSON.stringify([P1]), zones: "[]", annotations: JSON.stringify([A, S]), version: 5 });
+    const ids = T.State.annotations.map((a) => a.id).sort();
+    ok(ids.indexOf("anMine") < 0, "🔴 내가 지운 주석은 서버본이 있어도 부활 0", ids);
+    ok(ids.indexOf("anOther") >= 0, "남이 새로 그린 주석은 들어온다(409 재시도가 지우지 않음)", ids);
+    const keep = T.State.annotations.slice();
+    T.X.App._mergeConflict({ pins: JSON.stringify([P1]), zones: "[]", version: 6 });   // 주석 필드 없는 부분 응답
+    ok(T.State.annotations.length === keep.length, "서버본에 주석 필드가 없으면 건드리지 않는다", T.State.annotations.length);
   }
 
   /* ── M2. 남이 지운 핀(tombstone)은 병합에서 반영된다 — 기존 규칙 불변 ── */

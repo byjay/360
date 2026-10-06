@@ -102,16 +102,14 @@
     undo() {
       for (let i = State.annotations.length - 1; i >= 0; i--) {
         if ((State.annotations[i].page || 1) === State.pdfPage) {
-          State.annotations.splice(i, 1);
-          this._render(); this._persist(); return;
+          this._removeAnnos([State.annotations[i].id]); return;
         }
       }
     },
     async clearPage() {
       if (!State.annotations.some(a => (a.page || 1) === State.pdfPage)) return;
       if (!await Prompt.confirm("주석 전체 삭제", "현재 페이지의 모든 주석을 삭제할까요?")) return;
-      State.annotations = State.annotations.filter(a => (a.page || 1) !== State.pdfPage);
-      this._render(); this._persist();
+      this._removeAnnos(State.annotations.filter(a => (a.page || 1) === State.pdfPage).map(a => a.id));
     },
     _renderLive() {
       this._render();
@@ -182,23 +180,28 @@
       });
     },
     _removeById(id) {
-      State.annotations = State.annotations.filter(a => a.id !== id);
+      this._removeAnnos([id]);
+    },
+    /** 🔴 [WO 20261006-annodel] 주석 삭제의 공유 지점(되돌리기·페이지 전체 삭제·개별 삭제 3경로) — 핀 _removePins 와 같은 순서:
+     *  tombstone 기록(App._annoTombstones — 병합 부활 방지 + 오프라인 delete op 근거) → State 제거 → 렌더 → _persist.
+     *  delete op 기록은 _persist → _autoSave → persistLocalDeployment(OpLog.recordDelta) 단일 지점이 한다.
+     *  근본원인(실 Chrome 실측): 종전엔 하드 삭제만 하고 남은 주석만 upsert 기록 → 오프라인 삭제 op 0건 →
+     *  draft PATCH 실패 시 서버의 같은 주석이 복귀 병합으로 되살아났다. */
+    _removeAnnos(ids) {
+      const want = new Set((ids || []).filter(id => id != null).map(String));
+      if (!want.size) return;
+      const tomb = (typeof App !== "undefined" && App._annoTombstones) ? App._annoTombstones() : null;
+      const now = Date.now();
+      if (tomb) want.forEach(id => { tomb[id] = now; });
+      State.annotations = State.annotations.filter(a => !(a && a.id != null && want.has(String(a.id))));
       this._render(); this._persist();
     },
     refresh() { this._render(); this.updateToolbar(); },
     _persist() {
       if (State.mode !== "designer") return;
-      // [오프라인 작업지시서 ] 오프라인이면 현재 주석들을 id 단위 upsert op 로 기록(로컬 스냅샷은
-      //   아래 App._autoSave 가 공유 SoT로 1회만 — [WO offline2 회귀수정] persistLocalDeployment
-      //   중복 호출 제거)
-      if (!navigator.onLine && typeof OpLog !== "undefined") {
-        try {
-          const arr = (State.annotations || []).filter(a => a && a.id != null);
-          (async () => {
-            for (const a of arr) await OpLog.recordCurrent("anno", "upsert", a.id, a);
-          })().catch(() => {});
-        } catch (e) {}
-      }
+      // 🔴 [WO 20261006-annodel] 오프라인 op 기록(생성·수정 upsert + tombstone 된 삭제 delete)은 _autoSave →
+      //   persistLocalDeployment(OpLog.recordDelta) 단일 지점이 한다. 종전 여기의 "남은 주석 전부 upsert" 개별 기록은
+      //   삭제를 못 남겼고 편집 1건마다 주석 수만큼 op 를 쌓았다 — 제거.
       try { if (typeof App !== "undefined" && App._autoSave) App._autoSave({}); } catch (e) {}
     }
   };

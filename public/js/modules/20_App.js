@@ -2124,7 +2124,7 @@
         if (_plan.blocked) { Prompt && Prompt.toast && Prompt.toast(_plan.blocked, 5200); return; }
         // 같은 배포본을 갈아끼우는 교체면 지금 열린 핀·영역을 그대로 이어받는다(State.reset 이 비우기 전에 보관).
         if (_plan.mode === "replace" && _plan.depId && String(_plan.depId) === String(State.currentDeploymentId || "")) {
-          _plan.keep = { pins: State.pins, zones: State.zones, pinTombstones: State.pinTombstones, pinBaseIds: State.pinBaseIds, depVersion: State.depVersion };
+          _plan.keep = { pins: State.pins, zones: State.zones, pinTombstones: State.pinTombstones, annoTombstones: State.annoTombstones, pinBaseIds: State.pinBaseIds, depVersion: State.depVersion };
         }
       }
       this._regPlan = _plan;
@@ -3169,6 +3169,13 @@
       if (!State.pinTombstones || typeof State.pinTombstones !== "object") State.pinTombstones = {};
       return State.pinTombstones;
     },
+    /** 🔴 [WO 20261006-annodel] 주석 tombstone(내가 지운 주석 id → 삭제시각) — 핀(_pinTombstones)과 같은 규칙.
+     *  쓰는 곳: PdfAnno._removeAnnos(삭제 3경로 공유) · 읽는 곳: 오프라인 delete op 기록(persistLocalDeployment)
+     *  과 병합(_mergeAnnos — _mergeConflict 경유: 라이브폴·409·복귀 /ops). 도면 단위 — 로더가 핀과 함께 초기화. */
+    _annoTombstones() {
+      if (!State.annoTombstones || typeof State.annoTombstones !== "object") State.annoTombstones = {};
+      return State.annoTombstones;
+    },
     _pinIds(arr) {
       return (Array.isArray(arr) ? arr : []).filter(p => p && p.id != null).map(p => String(p.id));
     },
@@ -3196,8 +3203,10 @@
      *  · 서버 tombstone(/ops 삭제가 남긴 {_deleted}) 은 내 로컬 같은 id 를 되살리지 않는다(_mergePins (a) 와 같은 규칙).
      *  근본원인(실 Chrome 실측): _flushOpLogs 가 State.annotations 를 서버본으로 덮어 /ops 응답 대기 중 그린 주석이
      *  화면·서버에서 사라졌다(주석 B 유실). 지우는 규칙(기준 목록 (b))은 넣지 않는다 — 서버 tombstone 만 반영. */
-    _mergeAnnos(srvAnnos, localAnnos) {
-      const tomb = new Set((Array.isArray(srvAnnos) ? srvAnnos : []).filter(a => a && a._deleted && a.id != null).map(a => String(a.id)));
+    //  [WO 20261006-annodel] (a) 내 tombstone(tombIds — App._annoTombstones, 내가 지운 주석)도 서버본에서 되살리지 않는다.
+    _mergeAnnos(srvAnnos, localAnnos, tombIds) {
+      const tomb = new Set((Array.isArray(srvAnnos) ? srvAnnos : []).filter(a => a && a._deleted && a.id != null).map(a => String(a.id))
+        .concat((tombIds || []).map(String)));
       return this._mergeById(this._live(srvAnnos), localAnnos).filter(a => !(a && a.id != null && tomb.has(String(a.id))));
     },
     _mergePins(srvPins, localPins, baseIds, tombIds) {
@@ -4077,9 +4086,18 @@
       State.zones = mergedZones;
       State.pinBaseIds = this._pinIds(srvPins);
       State.depVersion = (current.version != null ? Number(current.version) : State.depVersion);
+      // 🔴 [WO 20261006-annodel] 주석도 같은 지점에서 병합(_mergeAnnos — 합집합 + 서버·내 tombstone). 종전엔 라이브폴·409 가
+      //   주석을 안 봤고(409 재시도가 내 목록을 통째로 보내 남이 그린 주석을 지웠다) 복귀 /ops 는 덮어썼다.
+      //   서버본에 주석 필드가 없으면(부분 응답) 건드리지 않는다.
+      if (current.annotations != null) {
+        let srvAnnos = null;
+        try { srvAnnos = JSON.parse(current.annotations || "[]"); } catch (e) { srvAnnos = null; }
+        if (Array.isArray(srvAnnos)) State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()));
+      }
       // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
       try { if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); } } catch (e) {}
+      try { if (typeof PdfAnno !== "undefined" && PdfAnno.refresh) PdfAnno.refresh(); } catch (e) {}
       return { pins: mergedPins, zones: mergedZones, version: State.depVersion };
     },
 
@@ -4434,7 +4452,7 @@
     _restoreKeptState(keep) {
       if (!keep) return;
       State.pins = keep.pins || []; State.zones = keep.zones || [];
-      State.pinTombstones = keep.pinTombstones || {}; State.pinBaseIds = keep.pinBaseIds || null;
+      State.pinTombstones = keep.pinTombstones || {}; State.annoTombstones = keep.annoTombstones || {}; State.pinBaseIds = keep.pinBaseIds || null;
       if (keep.depVersion != null) State.depVersion = keep.depVersion;
       try { UI.renderPinsOnMap(); UI.renderPinList(); if (typeof Zones !== "undefined" && Zones.render) Zones.render(); } catch (e) {}
     },
@@ -4647,7 +4665,7 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
         try { State.pins  = this._pinsSeen(this._live(JSON.parse(dep.pins  || "[]"))); } catch { State.pins = []; }
-        State.pinTombstones = {};
+        State.pinTombstones = {}; State.annoTombstones = {};
         // 🔴 [WO 20261006-pinbase] 병합 기준(pinBaseIds)은 "서버가 아는 핀 목록" 이어야 한다.
         //   오프라인 번들 스냅샷(bundle:dep:<id>)은 persistLocalDeployment 가 **내 미동기화 핀까지**
         //   직렬화해 둔 로컬 사본이므로 서버 기준이 아니다. 이를 기준으로 삼으면 다음 서버 병합에서
@@ -4734,7 +4752,7 @@
         State.pins        = this._pinsSeen(Array.isArray(d.pins)  ? d.pins  : []);
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
-        State.pinTombstones = {}; this._adoptDraftTombstones(d);
+        State.pinTombstones = {}; State.annoTombstones = {}; this._adoptDraftTombstones(d);
         State.pinBaseIds = Array.isArray(d.basePinIds) ? d.basePinIds.map(String) : null;
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
         // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
@@ -5746,7 +5764,7 @@
 
         try { State.pins = this._pinsSeen(this._live(JSON.parse(latest.pins || "[]"))); }
         catch { State.pins = []; }
-        State.pinTombstones = {};
+        State.pinTombstones = {}; State.annoTombstones = {};
         // [WO 20260929-bulkdel] 형제 로더(loadDeckDrawing)와 같은 기준 — 🔴 [WO 20261006-pinbase]
         //   오프라인 번들 사본(내 미동기화 핀 포함)은 "서버가 아는 목록"이 아니므로 기준 = null(판정 불가).
         State.pinBaseIds = latestFromBundle ? null : this._pinIds(State.pins);
