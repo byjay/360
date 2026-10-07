@@ -127,8 +127,9 @@
       let html = '<div class="aiv-box" style="color:' + T.text + ';font-size:12px;">';
       html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
       html += '<button type="button" id="' + esc(hostId) + '-run" class="aiv-run" data-help="ai-analyze" aria-disabled="' + (st.disabled || busy) + '" ' +
-        'style="display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:8px 14px;border-radius:10px;border:1px solid transparent;font-size:13px;font-weight:700;cursor:' + ((st.disabled || busy) ? "not-allowed" : "pointer") + ';' +
-        'background:' + T.btn + ';color:' + T.btnText + ';opacity:' + ((st.disabled || busy) ? ".55" : "1") + ';">' +
+        // 비활성 = 투명도가 아니라 실색(라이트 #475569/#e2e8f0 4.9:1 · 다크 #f1f5f9/rgba(255,255,255,.12) ≈13:1) — 비활성이어도 글자가 읽혀야 사유와 함께 "보인다"
+        'style="display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:8px 14px;border-radius:10px;border:1px solid ' + ((st.disabled || busy) ? T.border : "transparent") + ';font-size:13px;font-weight:700;cursor:' + ((st.disabled || busy) ? "not-allowed" : "pointer") + ';' +
+        'background:' + ((st.disabled || busy) ? T.btn2 : T.btn) + ';color:' + ((st.disabled || busy) ? (h.opts.theme === "dark" ? T.btn2Text : T.muted) : T.btnText) + ';">' +
         '<span aria-hidden="true">🤖</span><span>' + (busy ? "분석 중…" : (res ? "AI 다시 분석" : "AI 분석")) + '</span></button>';
       if (pin && !st.disabled && cmpId && !busy) {
         html += '<button type="button" id="' + esc(hostId) + '-cmp" class="aiv-cmp" style="min-height:40px;padding:8px 12px;border-radius:10px;border:1px solid ' + T.border + ';background:' + T.btn2 + ';color:' + T.btn2Text + ';font-size:12px;font-weight:700;cursor:pointer;">이전 사진과 비교</button>';
