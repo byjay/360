@@ -5,6 +5,7 @@ import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPa
 import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
 import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
 import { askJevSeverity, gateSeverity, SEVERITY_LEVELS } from './lib/jevSeverity'
+import { askVision, visionModelOf, visionCacheKey, pinImageRefs, AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P } from './lib/aiVision'
 
 type Bindings = {
   DB: D1Database
@@ -21,6 +22,9 @@ type Bindings = {
   // [P68] Jev(TypeSafe System One) — 회사명 게이트의 2차 판정. 🔴 시크릿으로만 주입, 프론트 노출 금지.
   //   설정: `wrangler pages secret put OPENROUTER_API_KEY` (없으면 게이트는 규칙 결과=리젝트로 폴백)
   OPENROUTER_API_KEY?: string
+  // [WO 20261007-aivision] 비전 모델 ID 덮어쓰기(선택) — 기본값 src/lib/aiVision.ts AI_VISION_MODEL_DEFAULT(SoT).
+  AI_VISION_MODEL?: string
+  AI_VISION_BASE_URL?: string   // 테스트용 업스트림 대체(fixture 서버). 운영은 미설정 = OpenRouter.
   // [P0-3] 데모 로그인 스위치. 운영 봉인 시 `wrangler pages secret put DEMO_LOGIN` (값 0).
   DEMO_LOGIN?: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
@@ -914,6 +918,164 @@ app.post('/api/ai/chat', async (c) => {
   } catch (e: any) {
     return c.json({ error: 'AI 호출 실패', detail: String(e).slice(0, 200) }, 502)
   }
+})
+
+/* ════════════════════════════════════════════
+   [WO 20261007-aivision] 360 사진 AI 분석 — OpenRouter 비전 Claude(src/lib/aiVision.ts)
+   · GET  /api/ai/vision-status  : 활성 여부·사유·모델·일일 상한/사용량(키 미반환)
+   · POST /api/ai/analyze-photo  : { deployment_id, pin_id, image_id?, compare_image_id? }
+       - 권한: 디자이너 이상 + 그 프로젝트 쓰기 권한(deploymentWriteDenied, 형제 호출부와 같은 게이트) + 테넌트
+       - 🔴 이미지는 서버가 D1(pano_images 축소본) / R2(핀의 imageUrl 이 /api/r2/object/<key> 인 것만) 에서 직접 읽는다.
+         클라이언트가 보낸 image/url 필드는 무시한다(SSRF·위조 차단). image_id 는 "그 핀의 현재/이력 사진" 중 하나여야 한다.
+       - 캐시: ai_vision_results(cache_key=model|image_ref|compare_ref, status='ok') 적중 시 업스트림 호출 0
+       - 상한: 사용자당 최근 24h AI_VISION_DAILY_LIMIT(30) 회 — 초과 429 + 사유
+       - 감사: activity_log 'ai.vision' (토큰·비용·지연·캐시 여부, 키·URL 미포함)
+       - 🔴 AI 는 제안만 — 결함 등록·마커 저장은 클라에서 사람이 확정한다
+════════════════════════════════════════════ */
+/** 비활성 사유(SoT) — 상태 조회와 분석 호출이 같은 함수를 쓴다. "" = 사용 가능. */
+function visionDisabledReason(c: any): string {
+  if (!c.env || !c.env.OPENROUTER_API_KEY) return 'AI 키 미설정 — 관리자가 OPENROUTER_API_KEY 시크릿을 등록해야 합니다'
+  if (!c.env.DB) return 'DB 미구성'
+  return ''
+}
+async function visionUsedCount(c: any, email: string, now: number): Promise<number> {
+  try {
+    const r: any = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM ai_vision_results WHERE created_by = ? AND created_at > ?')
+      .bind(email, now - AI_VISION_WINDOW_MS).first()
+    return Number(r && r.n) || 0
+  } catch { return 0 }   // 테이블 미적용(0037 전) — 집계 불가는 0 으로 두되 분석 시 INSERT 실패가 정직하게 드러난다
+}
+app.get('/api/ai/vision-status', async (c) => {
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized' }, 401)
+  const reason = visionDisabledReason(c)
+  const used = reason ? 0 : await visionUsedCount(c, String(user.email).toLowerCase(), Date.now())
+  return c.json({
+    enabled: !reason,
+    reason: reason || null,
+    model: visionModelOf(c.env),
+    daily_limit: AI_VISION_DAILY_LIMIT,
+    used,
+    remaining: Math.max(0, AI_VISION_DAILY_LIMIT - used),
+    estimate_p: AI_VISION_ESTIMATE_P,
+  })
+})
+
+/** ArrayBuffer → base64 (Workers 에 Buffer 없음, btoa 는 바이너리 문자열 필요 — 청크로 안전하게). */
+function bufToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let s = ''
+  const CH = 0x8000
+  for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CH)) as any)
+  return btoa(s)
+}
+/** 이미지 참조 → data URL. 🔴 D1 축소본 우선(이미 ≤1.4MB JPEG), R2 는 상한(4MB) 초과 시 정직하게 오류. */
+async function loadVisionImage(c: any, ref: { imageId?: string; r2Key?: string }): Promise<{ ok: true; dataUrl: string; bytes: number } | { ok: false; error: string }> {
+  if (ref.imageId) {
+    const row: any = await c.env.DB.prepare('SELECT image_data FROM pano_images WHERE id = ? AND deleted = 0').bind(ref.imageId).first()
+    const d = row && typeof row.image_data === 'string' ? row.image_data : ''
+    if (!d.startsWith('data:image/')) return { ok: false, error: 'image-not-found' }
+    return { ok: true, dataUrl: d, bytes: d.length }
+  }
+  if (ref.r2Key) {
+    if (!c.env.R2) return { ok: false, error: 'r2-unavailable' }
+    const obj = await c.env.R2.get(ref.r2Key)
+    if (!obj) return { ok: false, error: 'image-not-found' }
+    const ct = (obj.httpMetadata && obj.httpMetadata.contentType) || ''
+    if (!/^image\/(jpeg|png|webp)$/i.test(ct)) return { ok: false, error: 'unsupported-type' }
+    if (obj.size > AI_VISION_MAX_IMAGE_BYTES) return { ok: false, error: 'image-too-large' }
+    const buf = await obj.arrayBuffer()
+    return { ok: true, dataUrl: `data:${ct};base64,` + bufToBase64(buf), bytes: buf.byteLength }
+  }
+  return { ok: false, error: 'no-image' }
+}
+
+app.post('/api/ai/analyze-photo', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const reason = visionDisabledReason(c)
+  if (reason) return c.json({ error: reason, enabled: false }, 503)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const depId = typeof body?.deployment_id === 'string' ? body.deployment_id : ''
+  const pinId = body?.pin_id != null ? String(body.pin_id) : ''
+  if (!depId || !pinId) return c.json({ error: 'deployment_id, pin_id required' }, 400)
+  // 🔴 클라가 보낸 이미지/URL 은 어떤 필드명이든 읽지 않는다 — 식별자(image_id/compare_image_id)만 받는다.
+  const wantImage = body?.image_id != null ? String(body.image_id) : ''
+  const wantCompare = body?.compare_image_id != null ? String(body.compare_image_id) : ''
+
+  const dep: any = await c.env.DB.prepare('SELECT id, pins, tenant_id, project_id FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
+  if (!dep) return c.json({ error: 'not found' }, 404)
+  if (!TEMP_OPEN_ALL_TENANTS) {
+    const tid = await tenantOf(c, user)
+    if (tid && (dep.tenant_id || DEFAULT_TENANT) !== tid) return c.json({ error: 'not found' }, 404)
+  }
+  {
+    const denied = await deploymentWriteDenied(c, user, dep.project_id)
+    if (denied) return c.json({ error: denied.error }, denied.status)
+  }
+  let pins: any[] = []
+  try { pins = JSON.parse(dep.pins || '[]') } catch { pins = [] }
+  const pin = Array.isArray(pins) ? pins.find((p) => p && String(p.id) === pinId) : null
+  if (!pin) return c.json({ error: 'pin not found' }, 404)
+  const refs = pinImageRefs(pin)
+  if (!refs.length) return c.json({ error: '이 포인트에는 분석할 사진이 없습니다(서버가 읽을 수 있는 사진 없음)' }, 400)
+  const findRef = (want: string) => refs.find((r) => r.imageId === want || r.r2Key === want || r.ref === want) || null
+  const cur = wantImage ? findRef(wantImage) : (refs.find((r) => r.current) || refs[0])
+  if (!cur) return c.json({ error: 'image_id 가 이 포인트의 사진(현재/이력)이 아닙니다' }, 400)
+  let cmp = wantCompare ? findRef(wantCompare) : null
+  if (wantCompare && !cmp) return c.json({ error: 'compare_image_id 가 이 포인트의 사진(현재/이력)이 아닙니다' }, 400)
+  if (cmp && cmp.ref === cur.ref) cmp = null
+
+  const model = visionModelOf(c.env)
+  const cacheKey = visionCacheKey(cur.ref, cmp ? cmp.ref : null, model)
+  const now = Date.now()
+  const email = String(user.email).toLowerCase()
+  // 캐시 적중 → 업스트림 0회(상한에도 안 셈)
+  const hit: any = await c.env.DB.prepare("SELECT result, created_at, prompt_tokens, completion_tokens, cost_usd FROM ai_vision_results WHERE cache_key = ? AND status = 'ok' ORDER BY created_at DESC LIMIT 1")
+    .bind(cacheKey).first().catch(() => null)
+  if (hit && hit.result) {
+    let result: any = null
+    try { result = JSON.parse(hit.result) } catch {}
+    if (result) {
+      await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: { cached: true, model, deployment_id: depId, compare: !!cmp } })
+      return c.json({ ok: true, cached: true, model, result, analyzed_at: hit.created_at, compare: !!cmp,
+        usage: { prompt_tokens: hit.prompt_tokens, completion_tokens: hit.completion_tokens, cost_usd: hit.cost_usd }, estimate_p: AI_VISION_ESTIMATE_P })
+    }
+  }
+  const used = await visionUsedCount(c, email, now)
+  if (used >= AI_VISION_DAILY_LIMIT) {
+    return c.json({ error: `일일 AI 분석 상한(${AI_VISION_DAILY_LIMIT}회/24h)을 초과했습니다 — 내일 다시 시도하세요`, limit: AI_VISION_DAILY_LIMIT, used }, 429)
+  }
+  const img = await loadVisionImage(c, cur)
+  if (!img.ok) return c.json({ error: '사진을 읽을 수 없습니다: ' + img.error, code: img.error }, img.error === 'image-too-large' ? 413 : 404)
+  let cmpImg: { ok: true; dataUrl: string; bytes: number } | null = null
+  if (cmp) {
+    const r = await loadVisionImage(c, cmp)
+    if (!r.ok) return c.json({ error: '비교 사진을 읽을 수 없습니다: ' + r.error, code: r.error }, r.error === 'image-too-large' ? 413 : 404)
+    cmpImg = r
+  }
+  const probe = await askVision(c.env, { imageDataUrl: img.dataUrl, compareDataUrl: cmpImg ? cmpImg.dataUrl : null, pinLabel: pin.label })
+  const rowId = genId('aiv')
+  if (!probe.ok) {
+    await c.env.DB.prepare(
+      `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, error, ms, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'error', ?, ?, ?, ?)`
+    ).bind(rowId, cacheKey, depId, pinId, cur.ref, cmp ? cmp.ref : null, probe.model, probe.error, probe.ms, email, now).run().catch(() => {})
+    await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: { ok: false, error: probe.error, model: probe.model, ms: probe.ms, deployment_id: depId } })
+    return c.json({ error: 'AI 분석 실패(' + probe.error + ') — 잠시 후 다시 시도하세요', code: probe.error, enabled: true }, 502)
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, result, prompt_tokens, completion_tokens, cost_usd, ms, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(rowId, cacheKey, depId, pinId, cur.ref, cmp ? cmp.ref : null, probe.model, JSON.stringify(probe.value),
+    probe.usage.prompt_tokens, probe.usage.completion_tokens, probe.usage.cost_usd, probe.ms, email, now).run()
+  await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: {
+    ok: true, cached: false, model: probe.model, ms: probe.ms, deployment_id: depId, compare: !!cmp,
+    prompt_tokens: probe.usage.prompt_tokens, completion_tokens: probe.usage.completion_tokens, cost_usd: probe.usage.cost_usd,
+    items: probe.value.items.length, defect: !!probe.value.defect_suggestion,
+  } })
+  return c.json({ ok: true, cached: false, model: probe.model, result: probe.value, analyzed_at: now, compare: !!cmp, usage: probe.usage, estimate_p: AI_VISION_ESTIMATE_P })
 })
 
 /* ════════════════════════════════════════════
