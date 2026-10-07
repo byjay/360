@@ -165,8 +165,11 @@ try {
   // 실측 NAV_LOG 로 매 실행 재현)이 있어, 그 재진입과 경합하면 "진입 직후"에 잰 단언이 허상 FAIL
   // 을 낸다. 클릭→핀 로딩까지 **전체를 최대 3회 재시도**해 경합을 흡수한다(개별 waitFor 늘리기로는
   // 해결 안 됨 — 재진입 자체가 DOM 을 통째로 새로 만든다).
-  let entered = false;
-  for (let attempt = 0; attempt < 3 && !entered; attempt++) {
+  // [견고화] 배경 재진입(§위 주석)이 "클릭 직후"뿐 아니라 설정 루프(아래, 최대 ~1.8+6초) 도중에도
+  // 올 수 있다(실측 FAIL: settleCount=0, rect 사라짐 — 재진입이 DOM을 통째로 새로 만들었다). 진입
+  // +설정 전체를 최대 3회 재시도한다(whole-flow retry — 부분 재시도로는 재진입 타이밍을 못 피한다).
+  let entered = false, settleCount = 0, prevRect = null;
+  for (let attempt = 0; attempt < 3 && !(entered && settleCount >= 3); attempt++) {
     await waitFor("document.querySelector('[data-act=origin-open]')", 15000);
     let clickRes = { found: false };
     for (let i = 0; i < 20 && !clickRes.found; i++) {
@@ -182,20 +185,26 @@ try {
     if (readyWait < 0) continue; // 배경 재진입에 휩쓸림 — 허브로 돌아갔을 수 있다, 다음 attempt 에서 재시도
     await wait(400);
     const stillIn = await evSafe("document.querySelector('#screen-app.active') && document.querySelectorAll('.pin-marker').length > 0 && !!document.querySelector('#deck-outline-svg rect.deck-outline-shape')");
-    if (stillIn === true) entered = true;
+    if (stillIn !== true) continue;
+    entered = true;
+    // [견고화 — 지휘자 재현 R2 2차] 1차 수정은 render() 직후 1회(+350ms 재확인 1회)만 재배치해
+    // "핀이 늦게 자리잡으면" 못 잡았다(라이브 실측: 초기 overlap 0 → 수 초 뒤 핀 자리잡자 overlap
+    // 비0 으로 고정). 46_DeckOutline._settleRePlace() 가 이제 render() 뒤 ~1.6초 동안 매 프레임
+    // 재배치하므로, 측정은 "모든 재배치가 끝난 뒤" — 최소 1.8초 하드 대기 + 라벨 rect 가 연속
+    // 3회(각 250ms) 동일할 때까지 추가 대기(최대 6초)한다. 그사이 배경 재진입으로 라벨이 아예
+    // 사라지면(FAIL 재현 사례) settleCount=0 으로 끝나고, 바깥 for 루프가 다음 attempt 로 전체를
+    // 다시 시도한다.
+    await wait(1800);
+    prevRect = null; settleCount = 0;
+    for (let i = 0; i < 24 && settleCount < 3; i++) {
+      const r = await evSafe("(function(){ var b=document.querySelector('.deck-outline-label'); if(!b) return null; var x=b.getBoundingClientRect(); return [x.x,x.y,x.width,x.height].join(','); })()");
+      if (r && r === prevRect) settleCount++; else settleCount = 0;
+      prevRect = r;
+      await wait(250);
+    }
   }
-  ok(entered, "허브 → 원본(메인 PDF) 열기 → 핀+윤곽 로딩 완료(배경 재진입 경합 흡수, 최대 3회 재시도)");
-  // [견고화] 핀이 막 나타난 시점엔 리더선·맵 핏(zoom/pan) 애니메이션이 아직 안착 중일 수 있어
-  // _placeLabels() 의 getBoundingClientRect() 겹침 판정이 과도기 프레임을 잴 수 있다(실측: 간헐
-  // FAIL, 겹침 값이 "배치 안 함" 뮤테이션과 동일 크기로 재현 — 과도기 스냅샷 추정). 레이아웃이
-  // 안정된 뒤(연속 2회 동일 rect) 측정한다.
-  let prevRect = null, settleCount = 0;
-  for (let i = 0; i < 20 && settleCount < 2; i++) {
-    const r = await evSafe("(function(){ var b=document.querySelector('.deck-outline-label'); if(!b) return null; var x=b.getBoundingClientRect(); return [x.x,x.y,x.width,x.height].join(','); })()");
-    if (r && r === prevRect) settleCount++; else settleCount = 0;
-    prevRect = r;
-    await wait(200);
-  }
+  ok(entered, "허브 → 원본(메인 PDF) 열기 → 핀+윤곽 로딩 완료(배경 재진입 경합 흡수, 전체 최대 3회 재시도)");
+  ok(settleCount >= 3, "라벨 위치 안정화(연속 3회 동일 rect, 재배치 루프 종료 확인)", { settleCount, prevRect });
   await shot("main");
 
   // ── R1: 윤곽 사각형 — 실제 DOM 존재 + 기하(crop% × 도면 px) 일치 ──
@@ -231,6 +240,25 @@ try {
   })()`);
   ok(overlap.labelExists, "R2 — 윤곽 라벨 버튼 존재", overlap);
   ok(overlap.labelExists && overlap.totalOverlap === 0, "R2 — 라벨 × 핀 마커(.pin-marker) 겹침 면적 = 0", overlap);
+
+  // ── R2b(지휘자 지시) — 줌 1단계 후에도 재평가되는지(updateLabelScale → _placeLabels 훅) ──
+  const zoomClick = await evSafe(`(function(){ var b = document.getElementById('btn-zoom-in'); if (!b) return { found: false }; b.click(); return { found: true }; })()`);
+  if (zoomClick.found) {
+    await wait(1200); // MapCtrl 줌 트랜지션 + _settleRePlace 재수렴 대기
+    const overlapAfterZoom = await evSafe(`(function(){
+      var btn = document.querySelector('.deck-outline-label');
+      if (!btn) return { labelExists: false };
+      var r = btn.getBoundingClientRect();
+      var pins = Array.from(document.querySelectorAll('.pin-marker')).map(function(p){ return p.getBoundingClientRect(); });
+      var overlapArea = function(a,b){ var w = Math.min(a.right,b.right)-Math.max(a.left,b.left); var h = Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top); return (w>0&&h>0)?w*h:0; };
+      var total = pins.reduce(function(s,p){ return s+overlapArea(r,p); }, 0);
+      return { labelExists: true, totalOverlap: total };
+    })()`);
+    ok(overlapAfterZoom.labelExists && overlapAfterZoom.totalOverlap === 0, "R2b — 줌 1단계 후 재평가 → 겹침 면적 여전히 0", overlapAfterZoom);
+    await shot("after-zoom");
+  } else {
+    ok(false, "R2b — #btn-zoom-in 버튼 없음(줌 재평가 검증 불가)", zoomClick);
+  }
 
   // ── 메인(크롭 없는 A구역-1영역) 칩 = 5(비크롭 구역은 영향 없음, 회귀 확인) ──
   const mainChip = await evSafe(`(function(){ var el = document.querySelector('#pin-filter-bar .pinfilter-chip.pf-checkboard .zpager-cnt'); return el ? el.textContent : null; })()`);
