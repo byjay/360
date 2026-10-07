@@ -290,6 +290,14 @@
       const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
       const bottom = $("pap-bottom");
       if (bottom) bottom.classList.toggle("hidden", isChecker);
+      // [WO 20261007-aivision] [🤖 AI 분석] — 숨김 금지: 뷰어/사진 없음/오프라인/키·한도 는 비활성 + 사유(AiVision.buttonState SoT).
+      //   CHECKER 계열은 등록 섹션과 같은 정책(마스터: "체커는 사진을 등록하지 않을 거야")으로 자리 자체를 비운다.
+      const aiHost = $("pap-ai");
+      if (aiHost) {
+        aiHost.classList.toggle("hidden", isChecker);
+        if (isChecker) { aiHost.innerHTML = ""; if (typeof AiVision !== "undefined" && AiVision.unmount) AiVision.unmount("pap-ai"); }
+        else if (typeof AiVision !== "undefined" && AiVision.mount) AiVision.mount("pap-ai", pin, { theme: "light", canEdit });
+      }
       if (!isChecker) {
         this._renderPhoto(pin, canEdit);
         this._loadNotes(pin, canEdit);
@@ -310,6 +318,7 @@
       const el = document.getElementById("pin-action-pop");
       if (el) el.classList.add("hidden");
       this._pinId = null;
+      if (typeof AiVision !== "undefined" && AiVision.unmount) AiVision.unmount("pap-ai");
       if (typeof Help !== "undefined" && Help.setVisible) Help.setVisible(true);
     },
     /** [지휘자 발주 2026-09-29 항목4] 제목 = 위치명. 번호(pap-no 배지)와 같은 문자열이면

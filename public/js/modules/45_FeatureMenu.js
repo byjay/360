@@ -134,6 +134,7 @@
       { id: "photo-history-delete", group: "pano", icon: "✕", label: "사진 이력 삭제", perm: "admin", needs: "pano", danger: true, click: "btn-tl-delete", covers: ["btn-tl-delete"] },
       { id: "photo-compare", group: "pano", icon: "◧", label: "전/후 분할 비교", needs: "pano", click: "btn-tl-compare", covers: ["btn-tl-compare", "btn-cmp-close"] },
       { id: "photo-original", group: "pano", icon: "⤓", label: "360 원본 보기·다운로드", desc: "풀해상도 원본", needs: "pano", click: "btn-pano-orig" },
+      { id: "ai-analyze", group: "pano", icon: "🤖", label: "AI 사진 분석", help: "ai-analyze", perm: "designer", needs: "pano", click: "btn-pano-ai", covers: ["btn-pano-ai"] },
       { id: "scan-3d", group: "pano", icon: "◈", label: "3D 스캔 도구(오비트·팬·단면·측정)", desc: "3D 스캔 포인트에서", needs: "pano", click: "btn-cad-orbit",
         covers: ["btn-cad-orbit", "btn-cad-pan", "btn-cad-section", "btn-cad-measure", "btn-fls-reset", "btn-fls-collapse"] },
 

@@ -1033,6 +1033,11 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>원본</span>
         </a>
+        <!-- [WO 20261007-aivision] AI 사진 분석 — 좌상단 #pano-ai-panel 토글. 권한·사진·오프라인·키·한도 사유는 패널 안에서 비활성+사유로 표시(숨김 금지) -->
+        <button id="btn-pano-ai" class="btn-pano-notes" type="button" title="AI 사진 분석 — 장비·결함 후보 태깅 + 이전 사진 대비 변화 요약" aria-label="AI 분석" data-help="ai-analyze">
+          <span aria-hidden="true">🤖</span>
+          <span>AI 분석</span>
+        </button>
       </div>
       <button id="btn-pano-close" class="btn-pano-close" title="뷰어 닫기 (Esc)" aria-label="닫기">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
@@ -1109,6 +1114,8 @@
 
   <!-- 노트 · 첨부 문서 정보 패널 -->
   <div id="pano-info-panel" class="pano-info-panel hidden"></div>
+  <!-- [WO 20261007-aivision] AI 분석 패널(좌상단 — 정보 패널·마커 목록·노트 패널은 모두 우측이라 겹치지 않음). 내용은 49_AiVision.js togglePanoPanel 이 그린다 -->
+  <div id="pano-ai-panel" class="pano-info-panel hidden" style="right:auto;left:16px;width:340px;" aria-label="AI 분석"></div>
 
   <!-- [FARO Markers] 마커 호버 툴팁 -->
   <div id="pano-spot-tip" class="pano-spot-tip hidden"></div>
@@ -1439,6 +1446,8 @@
             </div>
             <div id="pap-label-hint" style="font-size:11px;color:#94a3b8;margin-top:4px;"></div>
           </div>
+          <!-- [WO 20261007-aivision] [🤖 AI 분석] 버튼 + 결과 카드 — 49_AiVision.js mount("pap-ai") 가 채운다 -->
+          <div id="pap-ai" style="margin-top:12px;"></div>
         </div>
 
         <!-- ═══ 하단: 등록(사진/360/문서/노트/동영상/URL) — 탭 1곳으로 통합, 빈 공간 없이 남는 높이를 채운다 ═══ -->

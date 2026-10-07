@@ -663,8 +663,14 @@
     /** [WO 20261001-panoshapes] spots[] 안에 type:'rect'|'circle' 도형이 섞여 있으면 스프라이트
      *  대상(점 마커)에서 제외하고 PanoViewer.Shapes(SVG 오버레이)로 따로 렌더 — 레거시 point 는
      *  type 이 없으므로 isShape()가 false → 종전과 완전히 동일하게 동작(유실 0). */
+    /** [WO 20261007-aivision] AI 임시 마커 레이어(저장 전) — pin.spots 와 분리해 두고 renderSpots 가 합쳐 그린다.
+     *  setAiSpots(null) 로 지움. 같은 핀일 때만 보인다(다른 핀을 열면 _closeImmediate/onPanoOpen 이 비운다). */
+    _aiSpots: null, _aiSpotsPinId: null,
+    setAiSpots(pinId, spots) { this._aiSpots = Array.isArray(spots) && spots.length ? spots : null; this._aiSpotsPinId = this._aiSpots ? pinId : null; },
     renderSpots(spots) {
-      this._spots = Array.isArray(spots) ? spots : [];
+      spots = Array.isArray(spots) ? spots : [];
+      if (this._aiSpots && this._currentPin && String(this._aiSpotsPinId) === String(this._currentPin.id)) spots = spots.concat(this._aiSpots);
+      this._spots = spots;
       const points = this._spots.filter((s) => !(this.Shapes && this.Shapes.isShape(s)));
       const grp = this._ensureSpotGroup();
       if (grp) {
@@ -754,6 +760,8 @@
     _closeImmediate() {
       this.open = false;
       this._currentPin = null;
+      this._aiSpots = null; this._aiSpotsPinId = null;   // [WO 20261007-aivision] 임시 AI 마커는 뷰어와 함께 사라진다(저장 전)
+      if (typeof AiVision !== "undefined" && AiVision.onPanoClose) { try { AiVision.onPanoClose(); } catch (e) {} }
       try { this.renderSpots([]); } catch (e) {}   // 구면 마커 정리
       this._spotAddMode = false;
       this._shapeDraw = null;

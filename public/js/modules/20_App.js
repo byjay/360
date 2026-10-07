@@ -1923,6 +1923,8 @@
       this._shapeBtns = shapeBtns;
       // [FARO Markers] 마커 목록(테이블) 패널 토글
       UI.$("btn-pano-spotlist") && UI.$("btn-pano-spotlist").addEventListener("click", () => this.toggleSpotList());
+      // [WO 20261007-aivision] 360 헤더 [🤖 AI 분석] → 좌상단 AI 패널(버튼 비활성·사유는 패널 안 AiVision.buttonState 가 SoT)
+      UI.$("btn-pano-ai") && UI.$("btn-pano-ai").addEventListener("click", () => { if (typeof AiVision !== "undefined") AiVision.togglePanoPanel(); });
       UI.$("pano-spot-list-close") && UI.$("pano-spot-list-close").addEventListener("click", () => { const p = UI.$("pano-spot-list"); if (p) p.classList.add("hidden"); });
       // [WO 20261001-panoshapes] 장비 설치 위치만 걸러보기
       UI.$("pano-spot-list-equip-filter") && UI.$("pano-spot-list-equip-filter").addEventListener("change", (e) => {
@@ -2774,7 +2776,9 @@
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("노트 추가 — " + (label || "무제"));
     },
     async _openSpot(pin, id) {
-      const s = (pin.spots || []).find((x) => x.id === id); if (!s) return;
+      const s = (pin.spots || []).find((x) => x.id === id);
+      // [WO 20261007-aivision] 임시 AI 마커(저장 전)는 pin.spots 에 없다 — 안내만(편집 폼 없음)
+      if (!s) { if (typeof AiVision !== "undefined" && AiVision.describeSpot) AiVision.describeSpot(id); return; }
       if (typeof Prompt === "undefined" || !Prompt.ask) return;
       // [마스터] 클릭 시 노트 보기/편집 — 이름·노트 모두 비우고 확인하면 삭제
       const r = await Prompt.ask({
@@ -3421,6 +3425,7 @@
       }
       if (typeof Notes !== "undefined") Notes.setPin(pin);  // 이슈/노트 패널 핀 연결
       if (typeof TimeLapse !== "undefined") TimeLapse.setPin(pin);  // 타임랩스 시점 바
+      if (typeof AiVision !== "undefined" && AiVision.onPanoOpen) AiVision.onPanoOpen(pin);  // [WO 20261007-aivision] AI 패널·임시 마커 초기화
 
       // [마스터 요청] 사진 대신 PDF가 등록된 핀 → 내장 PDF 뷰어로 팝업 표시(파노 오버레이 대신).
       if (!this.pinHasMedia(pin) && typeof PdfPopup !== "undefined") {

@@ -9,6 +9,8 @@
 
     // [P40] PWA 설치 유도 배선 — beforeinstallprompt 는 페이지 초기에 발화하므로 먼저 등록한다.
     if (typeof Install !== "undefined" && Install.init) { try { Install.init(); } catch (e) {} }
+    // [WO 20261007-aivision] 온라인/오프라인 전환 시 AI 분석 버튼 사유 재계산
+    if (typeof AiVision !== "undefined" && AiVision.init) { try { AiVision.init(); } catch (e) {} }
     // [P40] 프로젝트 초대 링크(?invite=<token>) — 있으면 이름/비번 설정 모달을 띄운다.
     if (typeof Invite !== "undefined" && Invite.init) { try { Invite.init(); } catch (e) {} }
 
@@ -18,6 +20,7 @@
       Offline, OfflineBundle, OfflineLoad, OpLog, Invite, Install,
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
+      AiVision: (typeof AiVision !== "undefined" ? AiVision : null),
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
       addPin(p) {
