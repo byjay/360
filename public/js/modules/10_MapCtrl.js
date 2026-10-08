@@ -377,6 +377,8 @@
       const layer = document.getElementById("pins-layer");
       if (!layer) return;
       const inv = this.pinScreenScale();
+      // [WO 20261008-pinstyle §2] 화살촉·선 굵기도 같은 inv 로(풍선과 비례 고정) — SVG 좌표라 UI 쪽에서 재계산.
+      if (typeof UI !== "undefined" && UI.refreshLeaders) { try { UI.refreshLeaders(); } catch (e) {} }
       // [WO 20261001-leader] 리더 풍선(.pin-leader-bubble) — 바늘형 핀과 앵커가 다르다(중앙 vs 하단).
       // ISO 여부와 무관하게 항상 평면 중앙 역스케일만 적용해 화면 기준 크기 고정(요구사항 §3).
       for (const m of layer.children) {

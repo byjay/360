@@ -61,6 +61,48 @@
           y: Math.max(0, Math.min(100, py + this.DEFAULT_DY))
         };
       },
+      /** [WO 20261008-pinstyle §1] 🔴 핀 표현 1종 SoT — 이 핀을 리더선(풍선+사선+화살촉)으로 그릴지.
+       *  pin.leader === true/false 가 있으면 그 값(핀별 선택). 없으면(이행 전 레거시) "사용자가 풍선을
+       *  옮긴 기록" = 저장된 callout 이 있을 때만 true. 근거: callout 을 저장하는 곳은 이 파일의 정렬
+       *  (_commitAlign)·풍선 드래그 두 곳뿐이다(전 모듈 grep) — 기본 위치(defaultCallout)는 저장하지 않는다.
+       *  그래서 callout 이 저장된 핀 = 사용자가 정렬·드래그로 리더선을 직접 다룬 핀. 나머지는 핀으로 표시.
+       *  마이그레이션 0 — 렌더 시점 판정이라 데이터는 바뀌지 않는다(사용자가 켜고 끌 때만 pin.leader 기록). */
+      wants(pin) {
+        if (!pin) return false;
+        if (pin.leader === true) return true;
+        if (pin.leader === false) return false;
+        return !!(pin.callout && Number.isFinite(pin.callout.x) && Number.isFinite(pin.callout.y));
+      },
+      /** [WO 20261008-pinstyle §2] 화살촉 화면 크기(풍선 지름 22px 기준 단위) — 풍선과 같은 역스케일을 받는다. */
+      ARROW_LEN_PX: 9, ARROW_HALF_PX: 3.6, LINE_PX: 1.2, LINE_MIN_PX: 1,
+      /** 리더 기하(순수함수) — 페이지 % 좌표계(SVG viewBox 0..100, preserveAspectRatio=none)에서
+       *  x·y 축 배율이 다르므로(natW≠natH) 화살촉을 px 공간에서 계산해 각 축으로 따로 % 환산한다.
+       *  inv = MapCtrl.pinScreenScale()(풍선과 같은 값) → 화살촉 화면 크기 = ARROW_LEN_PX·inv·zoom,
+       *  풍선 화면 지름 = BUBBLE_DIAM_PX·inv·zoom → 두 비율이 줌과 무관하게 일정하다.
+       *  @returns { d, points, strokePx } */
+      geometry(pin, co, natW, natH, inv, zoom) {
+        const W = natW > 0 ? natW : 1000, H = natH > 0 ? natH : 1000;
+        const dir = (co.x >= pin.x) ? 1 : -1;
+        const landX = co.x - dir * 2.2; // % — 풍선 바로 앞 수평 랜딩
+        const d = `M ${pin.x} ${pin.y} L ${landX} ${co.y} L ${co.x} ${co.y}`;
+        // 화살촉 방향 = 첫 선분(대상 → 랜딩 시작점)의 화면 방향(px 공간) — 선 끝 방향과 일치
+        let vx = (landX - pin.x) * W / 100, vy = (co.y - pin.y) * H / 100;
+        if (!vx && !vy) { vx = dir; vy = 0; }
+        const ang = Math.atan2(vy, vx);
+        const k = (inv > 0 ? inv : 1);
+        const alen = this.ARROW_LEN_PX * k, awid = this.ARROW_HALF_PX * k; // 자연(px) 크기 — 부모 scale(zoom)이 곱해진다
+        const tx = pin.x * W / 100, ty = pin.y * H / 100;
+        const bx = tx + alen * Math.cos(ang), by = ty + alen * Math.sin(ang); // 촉은 대상, 밑변은 선 쪽
+        const px = -Math.sin(ang) * awid, py = Math.cos(ang) * awid;
+        const P = (x, y) => (x / W * 100) + "," + (y / H * 100);
+        const points = P(tx, ty) + " " + P(bx + px, by + py) + " " + P(bx - px, by - py);
+        // non-scaling-stroke 는 SVG 내부(viewBox) 배율만 상쇄하고 조상 CSS scale(zoom)은 그대로 곱해진다(1280 400% 실측:
+        //   1.2·inv·zoom 으로 주면 화면 17px — zoom 이 두 번 곱해짐). 그래서 자연 px = LINE_PX·inv → 화면 = LINE_PX·inv·zoom
+        //   (풍선과 같은 비율). 화면 1px 하한은 1/zoom 으로 환산.
+        const z = (zoom > 0 ? zoom : 1);
+        const strokePx = Math.max(this.LINE_MIN_PX / z, this.LINE_PX * k);
+        return { d, points, strokePx };
+      },
       /** 핀의 실제 콜아웃(저장값 우선, 없으면 기본값). */
       calloutOf(pin) {
         if (pin && pin.callout && Number.isFinite(pin.callout.x) && Number.isFinite(pin.callout.y)) {
@@ -155,9 +197,10 @@
        (선택 0 → _alignCandidatePins 가 현재 구역·영역의 CHECKER 핀 전체). 표시 SoT = syncCheckerAlignTools
        (App._syncRegModeButtons 가 모드 전환마다 부른다). */
     ALIGN_TOOLS: [
-      { axis: "v", label: "정렬 ↕", title: "리더선 풍선 세로 정렬 — 선택한 포인트(없으면 이 구역·영역의 CHECKER 포인트 전체)를 클릭 위치 기준 등간격으로" },
-      { axis: "h", label: "정렬 ↔", title: "리더선 풍선 가로 정렬 — 선택한 포인트(없으면 이 구역·영역의 CHECKER 포인트 전체)를 클릭 위치 기준 등간격으로" }
+      { axis: "v", label: "정렬 ↕", title: "리더선 풍선 세로 정렬 — 선택한 리더선 포인트(없으면 이 구역·영역의 리더선 포인트 전체)를 클릭 위치 기준 등간격으로" },
+      { axis: "h", label: "정렬 ↔", title: "리더선 풍선 가로 정렬 — 선택한 리더선 포인트(없으면 이 구역·영역의 리더선 포인트 전체)를 클릭 위치 기준 등간격으로" }
     ],
+    ALIGN_NO_LEADER_MSG: "리더선 핀이 없습니다 — 핀 우클릭 > 리더선으로 표시",
     mountCheckerAlignTools() {
       if (typeof document === "undefined") return;
       const mkBtn = (t, cls) => {
@@ -205,7 +248,11 @@
     /** 정렬 대기중 핀 집합(선택 없으면 현재 구역·영역·페이지의 활성 모드 핀 전체), 번호순 정렬.
      *  [WO 20261002-allmenu §2] 창(crop) 구역·영역을 보고 있으면 그 창 안의 핀만 — 같은 도면을 공유하는
      *  다른 구역의 핀까지 끌려오지 않게 한다(판정 = 지금 보는 deck 의 crop, 페이지 % 상자). */
+    /** [WO 20261008-pinstyle §1] 정렬 대상 = 범위(_alignScopePins) 중 리더선 핀만 — 핀 표현 핀은 풍선이 없다. */
     _alignCandidatePins() {
+      return this._alignScopePins().filter((p) => this.Leader.wants(p));
+    },
+    _alignScopePins() {
       const s = this._pinSel;
       const curPage = State.pdfPage || 1;
       const curSeries = (State.regMode === "checkboard") ? "checkboard" : "content";
@@ -230,7 +277,8 @@
      *  영향을 주지 않는다(공유 파일 미수정). Esc 취소. */
     _startAlign(axis) {
       const pins = this._alignCandidatePins();
-      if (pins.length < 2) { Prompt.toast("정렬할 포인트가 2개 이상 필요합니다"); return; }
+      if (!pins.length) { Prompt.toast(this.ALIGN_NO_LEADER_MSG, 5000); return; }
+      if (pins.length < 2) { Prompt.toast("정렬할 리더선 포인트가 2개 이상 필요합니다"); return; }
       this._cancelAlign(); // 중복 대기 방지
       const vp = this.$("map-viewport") || this.$("map-transform");
       if (!vp) return;
@@ -1343,10 +1391,13 @@
           });
         }
         layer.appendChild(marker);
-        // [WO 20261001-leader §2] CHECKER 는 기본 ON, 360(content)은 설정 토글(State.leader360, 기본 OFF)일 때만.
-        const leaderWanted = isChecker || (!isChecker && !!State.leader360);
-        if (leaderWanted && leaderLayer) {
-          this._renderLeader(leaderLayer, layer, pin, marker, dispLabel, headFill2, txtFill, isChecker);
+        // [WO 20261008-pinstyle §1] 🔴 핀 표현 1종 — 기본은 마커(핀)만. 리더선은 핀별 선택(Leader.wants SoT)일
+        //   때만 그리고, 그때는 마커를 감춘다(두 표현 동시 금지). 마커는 DOM 에 남겨 클릭 배선(풍선 → marker.click)
+        //   과 번호 메타를 그대로 쓴다. 리더를 실제로 그렸을 때만 감춘다(그릴 수 없는 환경에서 핀이 사라지지 않게).
+        if (this.Leader.wants(pin) && leaderLayer
+            && this._renderLeader(leaderLayer, layer, pin, marker, dispLabel, headFill2, txtFill, isChecker)) {
+          marker.classList.add("pin-as-leader");
+          marker.style.display = "none";
         }
       });
       if (typeof Zones !== "undefined") Zones.render();
@@ -1368,35 +1419,24 @@
       // 경량 가짜 document(SVG 네임스페이스 API 無)로 renderPinsOnMap()을 구동한다. 실 브라우저는
       // 항상 createElementNS 를 지원하므로 운영 동작엔 영향 없이, 이 환경에서만 리더(장식)를
       // 생략하고 마커 렌더(이미 검증된 회귀 대상)는 그대로 유지한다.
-      if (typeof document.createElementNS !== "function") return;
+      if (typeof document.createElementNS !== "function") return false;
       const co = this.Leader.calloutOf(pin);
-      const dir = (co.x >= pin.x) ? 1 : -1;
-      const landLen = 2.2; // % 단위 — 풍선 바로 앞 수평 랜딩 길이
-      const landX = co.x - dir * landLen;
       const svgNS = "http://www.w3.org/2000/svg";
       const g = document.createElementNS(svgNS, "g");
       g.setAttribute("class", "pin-leader-g");
       g.dataset.id = pin.id;
       const path = document.createElementNS(svgNS, "path");
       path.setAttribute("class", "pin-leader-line");
-      path.setAttribute("d", `M ${pin.x} ${pin.y} L ${landX} ${co.y} L ${co.x} ${co.y}`);
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", "#dc2626");
-      path.setAttribute("stroke-width", "1.6");
       path.setAttribute("vector-effect", "non-scaling-stroke");
       g.appendChild(path);
-      // 화살촉(대상 쪽, 사선 방향을 향함)
-      const ang = Math.atan2(co.y - pin.y, landX - pin.x);
-      const alen = 1.6, awid = 0.9;
-      const tipX = pin.x, tipY = pin.y;
-      const baseX = tipX - alen * Math.cos(ang), baseY = tipY - alen * Math.sin(ang);
-      const perpX = -Math.sin(ang) * awid, perpY = Math.cos(ang) * awid;
+      // 화살촉(대상 쪽 = 촉, 밑변은 선 쪽) — 기하는 Leader.geometry 한 곳(풍선과 같은 역스케일)
       const arrow = document.createElementNS(svgNS, "polygon");
       arrow.setAttribute("class", "pin-leader-arrow");
-      arrow.setAttribute("points",
-        `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
       arrow.setAttribute("fill", "#dc2626");
       g.appendChild(arrow);
+      this._renderLeaderLineOnly(leaderLayer, pin, g, path, arrow);
       leaderLayer.appendChild(g);
 
       // 풍선(HTML, 고정 px — pin-marker 와 같은 줌 역스케일 반복문(_applyPinBillboard)을 공유)
@@ -1459,21 +1499,50 @@
         });
       }
       pinsLayer.appendChild(bubble);
+      return true;
     },
-    /** 드래그 중 리페인트 없이 선/화살촉만 갱신(성능 — 매 move 마다 전체 renderPinsOnMap 재호출 안 함). */
+    /** 선/화살촉만 갱신 — 드래그 중(리페인트 없이)·줌 변경(MapCtrl._applyPinBillboard → refreshLeaders)이 공유.
+     *  기하 SoT = Leader.geometry(풍선과 같은 역스케일 MapCtrl.pinScreenScale). */
     _renderLeaderLineOnly(leaderLayer, pin, g, path, arrow) {
       const co = this.Leader.calloutOf(pin);
-      const dir = (co.x >= pin.x) ? 1 : -1;
-      const landLen = 2.2;
-      const landX = co.x - dir * landLen;
-      path.setAttribute("d", `M ${pin.x} ${pin.y} L ${landX} ${co.y} L ${co.x} ${co.y}`);
-      const ang = Math.atan2(co.y - pin.y, landX - pin.x);
-      const alen = 1.6, awid = 0.9;
-      const tipX = pin.x, tipY = pin.y;
-      const baseX = tipX - alen * Math.cos(ang), baseY = tipY - alen * Math.sin(ang);
-      const perpX = -Math.sin(ang) * awid, perpY = Math.cos(ang) * awid;
-      arrow.setAttribute("points",
-        `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
+      const t = this.$("map-transform");
+      const inv = (typeof MapCtrl !== "undefined" && MapCtrl.pinScreenScale) ? MapCtrl.pinScreenScale() : 1;
+      const geo = this.Leader.geometry(pin, co, t && t.offsetWidth, t && t.offsetHeight, inv, State.zoom || 1);
+      path.setAttribute("d", geo.d);
+      path.setAttribute("stroke-width", geo.strokePx.toFixed(2));
+      arrow.setAttribute("points", geo.points);
+    },
+    /** [WO 20261008-pinstyle §2] 줌이 바뀌면 화살촉·선 굵기를 풍선과 같은 역스케일로 다시 계산한다
+     *  (풍선은 _applyPinBillboard 가 CSS scale 로, 화살촉은 SVG 좌표라 여기서). DOM 재생성 없음. */
+    refreshLeaders() {
+      const ll = this.$("leader-layer");
+      if (!ll || !ll.children) return;
+      Array.from(ll.children).forEach((g) => {
+        const id = g.dataset && g.dataset.id;
+        const pin = (State.pins || []).find((p) => String(p.id) === String(id));
+        const path = g.querySelector && g.querySelector(".pin-leader-line");
+        const arrow = g.querySelector && g.querySelector(".pin-leader-arrow");
+        if (pin && path && arrow) this._renderLeaderLineOnly(ll, pin, g, path, arrow);
+      });
+    },
+    /** [WO 20261008-pinstyle §1] 핀별 리더선 켜기/끄기 — 데이터는 pin.leader(boolean)만. 저장은 기존 LWW 경로
+     *  (App._markDirty → PinSeries.stampChanged 전체 JSON 비교). 일괄(설정·전체 기능 메뉴)·우클릭 메뉴가 공유.
+     *  @returns 바뀐 핀 수 */
+    setPinsLeader(pins, on) {
+      let n = 0;
+      (pins || []).forEach((p) => { if (p && this.Leader.wants(p) !== !!on) n++; if (p) p.leader = !!on; });
+      if (typeof App !== "undefined" && App._markDirty) App._markDirty();
+      if (typeof App !== "undefined" && App._keepLocal) { try { App._keepLocal(); } catch (e) {} }
+      this.renderPinsOnMap();
+      return n;
+    },
+    /** 일괄 대상 = 정렬과 같은 범위(선택한 핀 · 없으면 지금 보는 구역·영역의 현재 모드 핀) — _alignScopePins SoT. */
+    bulkLeader(on) {
+      const pins = this._alignScopePins();
+      if (!pins.length) { Prompt.toast("대상 포인트가 없습니다 — 포인트를 선택하거나 구역을 여세요"); return 0; }
+      const n = this.setPinsLeader(pins, on);
+      Prompt.toast(pins.length + "개 포인트 " + (on ? "리더선으로 표시" : "핀으로 표시") + (n !== pins.length ? " (변경 " + n + "개)" : ""));
+      return n;
     },
 
     updatePdfPagination() {

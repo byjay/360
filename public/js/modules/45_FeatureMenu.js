@@ -93,9 +93,9 @@
       { id: "pin-quick", group: "checker", icon: "⊕", label: "빠른 포인트(CHECKER 순차 배치)", desc: "번호 핀을 1번부터 연속으로", perm: "designer", needs: "drawing", mode: "checkboard", click: "btn-quickpoint", covers: ["btn-quickpoint"] },
       { id: "pin-edit-mode", group: "checker", icon: "✎", label: "포인트 수정 모드", desc: "켠 뒤 핀을 눌러 수정·이동·삭제", perm: "designer", needs: "drawing", click: "tb-pin-edit", covers: ["tb-pin-edit"] },
       { id: "pin-mark", group: "checker", icon: "M", label: "포인트 마킹", keys: "M", perm: "designer", needs: "drawing", click: "tb-mark", covers: ["tb-mark"] },
-      { id: "align-v", group: "checker", icon: "↕", label: "리더선 정렬 — 세로", desc: "선택(없으면 이 구역·영역 CHECKER 전체) 풍선을 클릭 위치 기준 등간격", perm: "designer", needs: "drawing", mode: "checkboard",
+      { id: "align-v", group: "checker", icon: "↕", label: "리더선 정렬 — 세로", desc: "선택(없으면 이 구역·영역) 리더선 포인트의 풍선을 클릭 위치 기준 등간격 — 리더선 핀만(pinstyle)", perm: "designer", needs: "drawing", mode: "checkboard",
         run: () => UI._startAlign("v") },
-      { id: "align-h", group: "checker", icon: "↔", label: "리더선 정렬 — 가로", desc: "선택(없으면 이 구역·영역 CHECKER 전체) 풍선을 클릭 위치 기준 등간격", perm: "designer", needs: "drawing", mode: "checkboard",
+      { id: "align-h", group: "checker", icon: "↔", label: "리더선 정렬 — 가로", desc: "선택(없으면 이 구역·영역) 리더선 포인트의 풍선을 클릭 위치 기준 등간격 — 리더선 핀만(pinstyle)", perm: "designer", needs: "drawing", mode: "checkboard",
         run: () => UI._startAlign("h") },
       { id: "align-undo", group: "checker", icon: "↶", label: "리더선 정렬 되돌리기", desc: "직전 정렬 1회", perm: "designer", needs: "drawing", run: () => UI.undoAlign() },
       { id: "pin-select", group: "checker", icon: "☑", label: "포인트 여러 개 선택", desc: "정렬·삭제할 포인트를 고릅니다", perm: "designer", needs: "drawing",
@@ -172,7 +172,7 @@
 
       /* ── 설정 ── */
       { id: "settings", group: "settings", icon: "⚙", label: "설정", desc: "로그인·편집 모드·핀 색상·표시 옵션", click: "btn-settings", covers: ["btn-settings", "settings-close"] },
-      { id: "leader360", group: "settings", icon: "↗", label: "360 리더선 표시 켜기/끄기", click: "chk-leader360" },
+      { id: "leader360", group: "settings", icon: "↗", label: "리더선 일괄 켜기/끄기", desc: "선택한 포인트(없으면 이 구역 현재 모드) — 기본은 핀, 좁은 곳만 리더선", click: "chk-leader360" },
       { id: "install-app", group: "settings", icon: "⬇", label: "앱 설치(홈 화면에 추가)", desc: "아이콘으로 바로 열기", mod: "Install",
         why: () => (typeof Install !== "undefined" && Install.alreadyInstalledReason) ? Install.alreadyInstalledReason() : "",
         run: () => Install.showBanner(true), covers: ["pwa-install-accept", "pwa-install-close"] },

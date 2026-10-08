@@ -14,14 +14,19 @@
         this._renderPinColor();
         // [토스트 스팸 제거] 색상 스와치 선택 결과가 핀에 즉시 반영돼 눈에 보인다.
       });
-      // [WO 20261001-leader §2] 360 리더선 토글 — State.leader360 SoT, localStorage 로만 영속(서버 저장 아님).
+      // [WO 20261008-pinstyle §1] 구 전역 토글(State.leader360)을 핀별 선택으로 흡수 — 이 체크는 이제
+      //   "선택한 포인트(없으면 이 구역·영역의 현재 모드 포인트) 모두 리더선 켜기/끄기" 일괄 동작이다.
+      //   데이터 SoT = pin.leader(UI.setPinsLeader). 체크 상태는 열 때마다 대상 전부가 리더선인지로 다시 그린다.
       const chkLeader360 = $("chk-leader360");
       if (chkLeader360) {
-        chkLeader360.checked = !!State.leader360;
         chkLeader360.addEventListener("change", () => {
-          State.leader360 = chkLeader360.checked;
-          try { localStorage.setItem("seastar_leader360", chkLeader360.checked ? "1" : "0"); } catch (e) {}
-          if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap();
+          // 원하는 상태 = "지금 대상 전부가 리더선이 아니면 켜기" — 전체 기능 메뉴가 설정창을 안 연 채(체크 상태가
+          //   오래된 채) .click() 해도 의도대로 동작하게, 체크 표시가 아니라 데이터(pin.leader)에서 판정한다.
+          let pins = [];
+          try { pins = (typeof UI !== "undefined" && UI._alignScopePins) ? UI._alignScopePins() : []; } catch (e) {}
+          const allOn = pins.length > 0 && pins.every((p) => UI.Leader.wants(p));
+          if (typeof UI !== "undefined" && UI.bulkLeader) UI.bulkLeader(!allOn);
+          this._syncLeaderBulk();
         });
       }
       // [WO 20261001-gps] 위치 자동 기록 토글 — chk-leader360 행 옆에 런타임 주입(index.html 미수정).
@@ -108,10 +113,20 @@
         : "도면(구역)을 먼저 불러와야 번호를 일괄 변경할 수 있습니다.";
     },
 
+    /** 일괄 리더선 체크 = 대상(UI._alignScopePins) 전부가 리더선이면 ON. 대상이 없으면 OFF. */
+    _syncLeaderBulk() {
+      const c = document.getElementById("chk-leader360");
+      if (!c || typeof UI === "undefined" || !UI._alignScopePins) return;
+      let pins = [];
+      try { pins = UI._alignScopePins(); } catch (e) {}
+      c.checked = pins.length > 0 && pins.every((p) => UI.Leader.wants(p));
+    },
+
     open() {
       const m = document.getElementById("settings-modal");
       if (!m) return;
       this._isOpen = true;
+      this._syncLeaderBulk();
       this.render();
       this._renderPinColor();
       m.classList.remove("hidden");

@@ -125,12 +125,15 @@ function loadEnv({ owner = true } = {}) {
 {
   const { UI, State, Projects, reg, viewportEl } = loadEnv({ owner: false });
   State.mode = "designer"; State.regMode = "checkboard"; State.pdfPage = 1; State.zoom = 1; State.currentDeploymentId = "dep1";
-  const P = (id, x, y, extra) => Object.assign({ id, x, y, page: 1, checkboard: true, label: String(id) }, extra || {});
+  // [WO 20261008-pinstyle] 정렬 대상 = 리더선 핀만 → 범위 판정(창·모드·페이지)은 모두 리더선 핀으로 검사하고,
+  //   창 안 CHECKER 지만 핀 표현(leader:false)인 7 이 빠지는지도 함께 본다.
+  const P = (id, x, y, extra) => Object.assign({ id, x, y, page: 1, checkboard: true, label: String(id), leader: true }, extra || {});
   const c1 = P(1, 20, 20), c2 = P(2, 30, 30), c3 = P(3, 40, 40);
   const out = P(4, 90, 90);                       // 창(crop) 밖
   const p360 = P(5, 25, 25, { checkboard: false, label: "P1" });   // 360 계열
   const pg2 = P(6, 25, 25, { page: 2 });          // 다른 페이지
-  State.pins = [c1, c2, c3, out, p360, pg2];
+  const plain = P(7, 35, 35, { leader: false });  // 창 안 CHECKER 지만 핀 표현
+  State.pins = [c1, c2, c3, out, p360, pg2, plain];
   Projects.currentDeck = { id: "dk1a", deployment_id: "dep1", crop: { x: 10, y: 10, w: 50, h: 50 }, page: 1 };
   UI.mountCheckerAlignTools();
   ok(UI._pinSel.ids.size === 0 && !UI._pinSel.on, "B0 전제 — 선택 0개, 선택 모드 꺼짐");
@@ -138,7 +141,7 @@ function loadEnv({ owner = true } = {}) {
   ok(!!UI._alignCapture, "B1 도크 [정렬 ↕] → 정렬 대기(도면 클릭 캡처)");
   viewportEl.dispatch("click", { clientX: 500, clientY: 80, stopPropagation() {}, preventDefault() {} });
   const got = State.pins.filter((p) => p.callout).map((p) => p.id).join(",");
-  ok(got === "1,2,3", "B2 정렬 대상 = 창 안 CHECKER 핀 1,2,3 (창 밖·360·다른 페이지 제외) → " + got);
+  ok(got === "1,2,3", "B2 정렬 대상 = 창 안 CHECKER 리더선 핀 1,2,3 (창 밖·360·다른 페이지·핀 표현 제외) → " + got);
   ok(c1.callout.x === 50 && c2.callout.x === 50 && c3.callout.x === 50 && c2.callout.y > c1.callout.y, "B3 세로 등간격(x 동일·번호순)");
   ok(c1.x === 20 && c1.y === 20, "B4 화살촉(대상 x,y) 불변");
   UI.undoAlign();

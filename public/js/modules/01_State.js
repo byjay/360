@@ -8,8 +8,6 @@
     mode:        null,      // 'designer' | 'viewer'
     checkboard:  false,     // 체크보드 모드: 디자이너와 동일하나 핀에 이름 대신 번호만 자동 부여
     editMode:    false,     // [마스터 요청] 포인트 수정 모드: ON이면 핀 클릭 시 수정/이동/삭제 팝업
-    // [WO 20261001-leader] 360(content) 계열도 CAD 리더선+번호풍선으로 표시할지(기본 OFF — CHECKER는 항상 ON).
-    leader360: (() => { try { return localStorage.getItem("seastar_leader360") === "1"; } catch (e) { return false; } })(),
     fileType:    null,      // 'pdf' | 'image'
     fileName:    null,
     imageUrl:    null,      // blob URL (revoke on reset)

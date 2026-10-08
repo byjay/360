@@ -148,14 +148,17 @@ function testPureLeader() {
   // 확인 후 원복 재실행 → EXIT=0 복귀(지휘자 보고 — 이 파일 안에서 재현하지 않음, 가짜 분기 금지).
 }
 
-/* ══ ② 레거시 핀 렌더 — callout 없이도 리더선·풍선이 그려진다(CHECKER 기본 ON) ═══ */
+/* ══ ② 리더선 핀 렌더 — [WO 20261008-pinstyle] 기본은 핀(레거시 CHECKER 도 리더 0), pin.leader=true 일 때만 리더 ═══ */
 function testLegacyRenderChecker() {
   const { UI, State, pinsLayer, leaderLayer } = loadEnv();
   State.mode = "designer"; State.pdfPage = 1;
   State.pins = [{ id: "c1", x: 40, y: 30, page: 1, checkboard: true, label: "1" }];
   UI.renderPinsOnMap();
+  ok(!pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble")) && leaderLayer.children.length === 0, "②0 CHECKER 핀(레거시, callout 없음) → 리더 0(기본 = 핀 1종)");
+  State.pins[0].leader = true;
+  UI.renderPinsOnMap();
   const bubble = pinsLayer.children.find((c) => c.classList.contains("pin-leader-bubble"));
-  ok(!!bubble, "②a CHECKER 핀(레거시, callout 없음) → 풍선 div 생성됨(기본 ON)");
+  ok(!!bubble, "②a CHECKER 핀 leader:true(callout 없음) → 풍선 div 생성됨(기본 위치)");
   ok(bubble && bubble.classList.contains("pin-leader-checker"), "②b 풍선에 pin-leader-checker 클래스");
   ok(leaderLayer.children.length === 1, "②c leader-layer 에 리더 그룹(g) 1개 생성");
   const g = leaderLayer.children[0];
@@ -163,26 +166,24 @@ function testLegacyRenderChecker() {
   ok(!!path && path.getAttribute("vector-effect") === "non-scaling-stroke", "②d 선에 vector-effect=non-scaling-stroke(줌 무관 두께 고정)");
 }
 
-/* ══ ③ 360 토글 — 기본 OFF, 켜면 리더 생성 ══════════════════════════════ */
+/* ══ ③ 360 핀 — 기본 핀, 핀별 leader:true 면 360 풍선([WO 20261008-pinstyle] 전역 State.leader360 → 핀별 흡수) ══ */
 function testToggle360() {
   const { UI, State, pinsLayer } = loadEnv();
   State.mode = "designer"; State.pdfPage = 1;
   State.pins = [{ id: "n1", x: 20, y: 20, page: 1, label: "P1" }]; // non-checkboard = content/360
-  State.leader360 = false;
   UI.renderPinsOnMap();
-  ok(!pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble")), "③a 360 핀 + 토글 OFF(기본) → 풍선 미생성");
-  State.leader360 = true;
+  ok(!pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble")), "③a 360 핀(기본) → 풍선 미생성");
+  State.pins[0].leader = true;
   UI.renderPinsOnMap();
-  ok(pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble") && c.classList.contains("pin-leader-360")), "③b 토글 ON → 360 풍선 생성됨");
-  // [뮤테이션 증명] leaderWanted = isChecker||(...) → 'true' 고정으로 실제 소스를 바꿔 재실행 →
-  // ③a EXIT=1(1건 FAIL) 확인 후 원복 재실행 → EXIT=0 복귀(지휘자 보고).
+  ok(pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble") && c.classList.contains("pin-leader-360")), "③b 핀별 leader:true → 360 풍선 생성됨");
+  // [뮤테이션 증명] P133_MUT=dual(구 'CHECKER 무조건' 복원) → p133 A1·A2 와 이 파일 ②0 이 FAIL.
 }
 
 /* ══ ④ 풍선 드래그 — callout 만 바뀌고 pin.x/y 는 불변 ══════════════════════ */
 function testBubbleDragOnlyMovesCallout() {
   const { UI, State, pinsLayer, dirtyLog, document } = loadEnv();
   State.mode = "designer"; State.pdfPage = 1;
-  const pin = { id: "d1", x: 40, y: 30, page: 1, checkboard: true, label: "1" };
+  const pin = { id: "d1", x: 40, y: 30, page: 1, checkboard: true, label: "1", leader: true };
   State.pins = [pin];
   State.pinEditUnlocked = "d1"; // 마커와 동일한 잠금 해제 규칙
   UI.renderPinsOnMap();
@@ -206,9 +207,10 @@ function testBubbleDragOnlyMovesCallout() {
 function testAlignFlowAndUndo() {
   const { UI, State, pinsLayer, viewportEl, document } = loadEnv();
   State.mode = "designer"; State.pdfPage = 1; State.zoom = 1;
-  const p1 = { id: "a1", x: 10, y: 10, page: 1, checkboard: true, label: "1" };
-  const p2 = { id: "a2", x: 50, y: 50, page: 1, checkboard: true, label: "2" };
-  const p3 = { id: "a3", x: 90, y: 90, page: 1, checkboard: true, label: "3" };
+  // [WO 20261008-pinstyle] 정렬 대상 = 리더선 핀만 → leader:true 로 명시(정렬 로직 단언은 그대로)
+  const p1 = { id: "a1", x: 10, y: 10, page: 1, checkboard: true, label: "1", leader: true };
+  const p2 = { id: "a2", x: 50, y: 50, page: 1, checkboard: true, label: "2", leader: true };
+  const p3 = { id: "a3", x: 90, y: 90, page: 1, checkboard: true, label: "3", leader: true };
   State.pins = [p3, p1, p2]; // 순서를 일부러 섞음 — 정렬은 번호(label) 순을 따라야 함
   UI.renderPinList(); // _pinSel 동기화 경로 확보(renderPinList 가 아니어도 OK, 생략 가능하나 명시적으로)
   UI._pinSel.on = true; UI._pinSel.ids = new Set(["a1", "a2", "a3"]);
