@@ -5516,7 +5516,15 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    min-width:0 필수 — flex 아이템 기본 min-width:auto 는 overflow:hidden 을 무시하고 내용 폭만큼
    늘어나(플렉스박스 알려진 함정) 행 전체가 옆으로 밀려나던 원인이었다. 전체 이름은 head.title
    (11_UI.js deckNode, 네이티브 툴팁)로 항상 확인 가능. */
-.tree-label{flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:break-word;line-height:1.3;}
+/* [WO 20261008-treelabel0] 🔴 근본수정: flex:1(= flex-basis:0%) 인 아이템은 flexbox 오버플로
+   (행 전체 너비 > 컨테이너)일 때 수축 단계에서 "기여분 0"으로 계산돼 항상 0px로 접힌다 —
+   grow 는 여유 공간이 '양수'일 때만 적용되고 오버플로(음수)엔 전혀 관여하지 않는다. 마스터
+   실측(구역 노드에 kindTag+상태태그+srcTag(잘라옴)+zoneCnt+⋯버튼이 모두 붙으면 행이 좁은
+   사이드바(240px)를 넘어 이름이 통째로 사라지고 옆의 .tree-src-tag 만 "잘…"로 짓눌렸다).
+   flex-basis 를 auto 로 바꿔 이름이 실제 내용 크기로 수축 계산에 '정당히' 참여하게 하고,
+   min-width 로 바닥을 줘 완전히 0으로는 못 접히게 한다(§5 SoT — 트리/원본/핀 모든 .tree-label
+   공유, 그래프 전수 grep 확인 — 2026-10-08). */
+.tree-label{flex:1 1 auto;min-width:44px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:break-word;line-height:1.3;}
 .tree-node-deck{font-weight:700;}
 /* [WO 20260921-tree] 마스터 확정 4단(프로젝트>도면>구역>영역) — 각 단을 글자 굵기/크기로 구분한다.
    들여쓰기는 .tree-children(padding-left 12px + margin-left 10px + 좌측 괘선)이 단마다 누적해 준다.
@@ -5884,7 +5892,11 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .tree-more:hover, .tree-more:focus-visible { background: #4b5563; outline: 2px solid #93c5fd; outline-offset: 1px; }
 .tree-src-tag {
   font-size: 9.5px; font-weight: 700; line-height: 1.6; padding: 0 5px; border-radius: 6px; margin-left: 4px;
-  flex: 0 1 auto; min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* [WO 20261008-treelabel0] min-width:0 → 20px — 위 .tree-label 수정으로 이 배지가 더 이상
+     행 오버플로를 전부 혼자 흡수하지 않지만, 바닥을 조금 줘 "잘…" 1글자+줄임표보다는 읽을
+     폭을 보장한다(여전히 ellipsis로 줄어들 수 있음 — 완전 제거 금지, §10 하드코딩 금지와
+     무관한 UI 최소 폭). */
+  flex: 0 1 auto; min-width: 20px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tree-src-crop { color: #3730a3; background: #e0e7ff; border: 1px solid #4338ca; }
 .tree-src-own { color: #166534; background: #dcfce7; border: 1px solid #15803d; }
