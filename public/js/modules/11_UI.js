@@ -622,9 +622,40 @@
       }
       return items;
     },
+    /** [WO 20261008-pinstyle] 팝업 위치 SoT — 트리 ⋯ 메뉴 · 우클릭 앱 메뉴 공용.
+     *  🔴 375 실측(0b4d262): 트리 ⋯ 메뉴(z 520)의 첫 항목을 고정 ?·✉ 버튼(z 9550, 좌하단)이 덮었다.
+     *  버튼을 숨기지 않고 메뉴 위치만 옮긴다 — 아래 → 위 → (둘 다 겹치면) 버튼 윗선까지로 줄여 스크롤.
+     *  화면 밖(상하좌우 8px 여백)도 같은 판정으로 막는다. rect = {left, top, bottom}(앵커 또는 포인터 점). */
+    FLOAT_AVOID_SEL: "[data-help-toggle],[data-help-inquiry-toggle]",
+    placePopup(pop, rect) {
+      // 모바일(≤760px)은 style.css 의 .tree-pop 바텀시트(도크 위·60vh·!important)가 위치 SoT — 여기서 top/max-height 를
+      //   만지면 시트가 줄어 항목이 스크롤 밖으로 숨는다(375 CDP 실측). FAB 는 같은 CSS 의 body:has(.tree-pop) 규칙이 올린다.
+      if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 760px)").matches) return null;
+      const vw = (typeof window !== "undefined" && window.innerWidth) || 1024;
+      const vh = (typeof window !== "undefined" && window.innerHeight) || 768;
+      const M = 8;
+      const w = pop.offsetWidth || 280, h = pop.offsetHeight || 0;
+      const left = Math.max(M, Math.min(rect.left, vw - w - M));
+      const avoid = (document.querySelectorAll ? Array.from(document.querySelectorAll(this.FLOAT_AVOID_SEL)) : [])
+        .map((e) => e.getBoundingClientRect()).filter((a) => a && a.width > 0 && a.height > 0)
+        .filter((a) => a.left < left + w && a.right > left); // 가로로 겹치는 것만
+      const bad = (top) => top < M || top + h > vh - M || avoid.some((a) => a.top < top + h && a.bottom > top);
+      const below = rect.bottom + 4, above = rect.top - 4 - h;
+      let top;
+      if (!bad(below)) top = below;
+      else if (!bad(above)) top = above;
+      else {
+        const floor = Math.min(vh - M, ...avoid.map((a) => a.top - 4));
+        top = Math.max(M, Math.min(below, floor - h));
+        if (top + h > floor) { pop.style.maxHeight = Math.max(80, floor - top) + "px"; pop.style.overflowY = "auto"; }
+      }
+      pop.style.left = Math.round(left) + "px";
+      pop.style.top = Math.round(top) + "px";
+      return { left, top };
+    },
     /** 트리 ⋯ 팝오버(공유 생성기) — items: [{label, run, reason?, desc?, info?, danger?}].
      *  🔴 숨김 금지: reason 이 있으면 비활성(aria-disabled) + 사유를 항목 안에 글자로 보인다. 바깥 클릭·Esc 로 닫힘. */
-    openTreeMenu(anchor, title, items) {
+    openTreeMenu(anchor, title, items, opts) {
       this.closeTreeMenu();
       if (typeof document === "undefined" || !document.body) return null;
       const pop = document.createElement("div");
@@ -656,14 +687,22 @@
       document.body.appendChild(pop);
       try {
         const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
-        const vw = (typeof window !== "undefined" && window.innerWidth) || 1024;
-        if (r) {
-          pop.style.top = Math.round(r.bottom + 4) + "px";
-          pop.style.left = Math.round(Math.max(8, Math.min(r.left, vw - 288))) + "px";
-        }
+        if (r) this.placePopup(pop, r);
       } catch (e) {}
       const onDoc = (e) => { if (!pop.contains || !pop.contains(e.target)) this.closeTreeMenu(); };
-      const onKey = (e) => { if (e.key === "Escape") this.closeTreeMenu(); };
+      // [WO 20261008-pinstyle §3] 키보드 — ↑↓ 로 항목 이동(Home/End), Enter/Space 는 버튼 기본 동작, Esc 닫기.
+      const onKey = (e) => {
+        if (e.key === "Escape") { this.closeTreeMenu(); return; }
+        if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+        const list = pop.querySelectorAll ? Array.from(pop.querySelectorAll(".tree-pop-item")) : [];
+        if (!list.length) return;
+        if (e.preventDefault) e.preventDefault();
+        const i = list.indexOf(document.activeElement);
+        const j = e.key === "Home" ? 0 : e.key === "End" ? list.length - 1
+          : e.key === "ArrowDown" ? (i + 1) % list.length : (i <= 0 ? list.length - 1 : i - 1);
+        try { list[j].focus(); } catch (er) {}
+      };
+      if (opts && opts.focus) { try { const f = pop.querySelector && pop.querySelector(".tree-pop-item"); if (f && f.focus) f.focus(); } catch (e) {} }
       setTimeout(() => { document.addEventListener("click", onDoc, true); }, 0);
       document.addEventListener("keydown", onKey);
       this._treePop = { pop, onDoc, onKey };
@@ -676,6 +715,206 @@
       document.removeEventListener("click", t.onDoc, true);
       document.removeEventListener("keydown", t.onKey);
       if (t.pop && t.pop.parentNode) t.pop.parentNode.removeChild(t.pop);
+    },
+
+    /* ══ [WO 20261008-pinstyle §3] 우클릭 = 앱 메뉴(브라우저 메뉴 대체) ═══════════════════════════════
+       렌더·위치·키보드·닫기 = 트리 ⋯ 팝오버(openTreeMenu/placePopup) 그대로 재사용 — 새 메뉴 위젯 0.
+       항목 정의 재사용: 전체 기능 메뉴(45_FeatureMenu.FEATURES — reasonOf/run) · 트리 ⋯(deckMenuItems/originMenuItems).
+       🔴 숨김 금지: 권한·조건이 안 맞으면 비활성 + 사유. 입력창(input·textarea·contenteditable)은 브라우저 메뉴 유지.
+       대상 판정 SoT = ctxTargetOf(target, x, y) → {kind:"pin"|"tree"|"outline"|"map", ...}. */
+    CTX_LONGPRESS_MS: 600,
+    _fmItem(id, label) {
+      try {
+        if (typeof FeatureMenu === "undefined" || !FeatureMenu._f) return null;
+        const f = FeatureMenu._f(id);
+        if (!f) return null;
+        return { label: label || f.label, reason: FeatureMenu.reasonOf(f), desc: FeatureMenu.modeHint(f) || "", run: () => FeatureMenu.run(f) };
+      } catch (e) { return null; }
+    },
+    _isEditable(t) {
+      return !!(t && t.closest && t.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
+    },
+    ctxTargetOf(target, x, y) {
+      if (!target || !target.closest) return null;
+      const pinEl = target.closest(".pin-marker[data-id], .pin-leader-bubble[data-id], .tree-node-pin[data-pin-id]");
+      if (pinEl) {
+        const id = pinEl.dataset.id || pinEl.dataset.pinId;
+        const pin = (State.pins || []).find((p) => String(p.id) === String(id));
+        if (pin) return { kind: "pin", pin };
+      }
+      const treeNode = target.closest("#side-tree .tree-node, #side-tree .tree-project");
+      if (treeNode) {
+        const more = treeNode.querySelector ? treeNode.querySelector(".tree-more") : null;
+        return more ? { kind: "tree", more } : null;
+      }
+      const vp = this.$("map-viewport");
+      if (!vp || !vp.contains(target)) return null;
+      if (target.closest("button, a, [role=toolbar], [role=dialog]") && !target.closest(".deck-outline-label")) return null;
+      try {
+        if (typeof DeckOutline !== "undefined" && DeckOutline._hitAt) {
+          const lbl = target.closest(".deck-outline-label");
+          const hit = lbl ? { id: lbl.getAttribute("data-deck-outline-label") } : DeckOutline._hitAt(x, y);
+          const deck = hit && (Projects.decks || []).find((d) => String(d.id) === String(hit.id));
+          if (deck) return { kind: "outline", deck };
+        }
+      } catch (e) {}
+      return { kind: "map" };
+    },
+    /** 열람자 허용 = 보기·요청·질문만. 그 외 편집 항목은 같은 사유 문구(permCheck SoT)로 비활성. */
+    pinCtxItems(pin) {
+      const edit = this.permCheck("designer");
+      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : !!pin.checkboard;
+      const leader = this.Leader.wants(pin);
+      const items = [];
+      items.push({ label: "열기", desc: isChecker ? "번호·위치" : "360·사진·노트", run: () => {
+        if (State.mode === "designer" && typeof PinActionPop !== "undefined") { App.setActivePin(pin.id); PinActionPop.open(pin.id); }
+        else if (typeof App !== "undefined" && App.onPinTap) App.onPinTap(pin);
+      } });
+      items.push({ label: "수정(라벨·번호)", reason: edit, run: () => {
+        App.setActivePin(pin.id); PinActionPop.open(pin.id);
+        setTimeout(() => { const i = document.getElementById("pap-label-input"); if (i && i.focus) { i.focus(); if (i.select) i.select(); } }, 60);
+      } });
+      items.push({ label: leader ? "핀으로 표시" : "리더선으로 표시", desc: leader ? "풍선·화살표 대신 핀 하나로" : "좁은 곳 — 번호 풍선 + 화살표로", reason: edit,
+        run: () => { this.setPinsLeader([pin], !leader); Prompt.toast(leader ? "핀으로 표시" : "리더선으로 표시 — 풍선은 [위치 이동] 후 드래그·정렬"); } });
+      const selOk = this._pinSelOk();
+      const sel = this._pinSel.on && this._pinSel.ids.has(String(pin.id));
+      items.push({ label: sel ? "선택에서 빼기" : "선택에 추가(정렬·삭제용)", reason: selOk ? "" : (edit || "편집 화면에서 사용"),
+        run: () => { if (!this._pinSel.on) this.setPinSelectMode(true); this.togglePinSelected(pin.id); } });
+      ["align-v", "align-h"].forEach((id) => {
+        const it = this._fmItem(id);
+        if (!it) return;
+        if (!it.reason && !this._alignCandidatePins().length) it.reason = this.ALIGN_NO_LEADER_MSG;
+        items.push(it);
+      });
+      items.push({ label: "복사(좌표)", desc: "x " + (+pin.x).toFixed(2) + "% · y " + (+pin.y).toFixed(2) + "% · " + (pin.page || 1) + "p", run: () => this.copyPin(pin) });
+      items.push({ label: "QR 위치 태그", reason: (typeof QrPrint === "undefined") ? "준비 중" : "", run: () => QrPrint.printPin(pin) });
+      let aiWhy = "준비 중";
+      try {
+        if (isChecker) aiWhy = "CHECKER 는 사진을 등록하지 않습니다 — 360 포인트에서";
+        else if (typeof AiVision !== "undefined") aiWhy = AiVision.buttonState({ canEdit: AiVision.canEdit(), online: AiVision._online(), pin, status: AiVision._status }).reason;
+      } catch (e) {}
+      items.push({ label: "AI 분석", reason: aiWhy, run: () => {
+        App.setActivePin(pin.id); PinActionPop.open(pin.id);
+        setTimeout(() => { const b = document.querySelector("#pap-ai button:not([disabled])"); if (b) b.click(); }, 120);
+      } });
+      items.push({ label: "삭제", danger: true, reason: edit, run: () => App.deletePin(pin.id) });
+      return items;
+    },
+    mapCtxItems(pct, at) {
+      const edit = this.permCheck("designer");
+      const mode = State.regMode === "photo" ? "360" : "CHECKER";
+      const items = [];
+      items.push({ label: "여기에 핀 추가(" + mode + ")", desc: mode === "360" ? "번호 핀 + 사진 선택" : "번호 핀(사진 없음)",
+        reason: edit || (pct ? "" : "도면 밖입니다"), run: () => this._ctxAddPinAt(at) });
+      const clip = this._pinClip;
+      const clipSeries = clip ? (clip.checkboard ? "checkboard" : "content") : null;
+      const curSeries = State.regMode === "checkboard" ? "checkboard" : "content";
+      items.push({ label: "붙여넣기" + (clip ? " (" + (clip.no || "") + ")" : ""), desc: clip ? "복사한 포인트 모양으로 새 번호 핀" : "",
+        reason: edit || (!clip ? "복사한 포인트가 없습니다 — 핀 우클릭 > 복사" : (clipSeries !== curSeries ? "복사한 포인트는 " + (clipSeries === "checkboard" ? "CHECKER" : "360") + " — 그 모드에서 붙여넣기" : (pct ? "" : "도면 밖입니다"))),
+        run: () => this._ctxAddPinAt(at, clip) });
+      ["align-v", "align-h", "zoom-fit", "coverage"].forEach((id) => {
+        const it = this._fmItem(id, id === "align-v" ? "정렬 시작 ↕" : id === "align-h" ? "정렬 시작 ↔" : null);
+        if (!it) return;
+        if ((id === "align-v" || id === "align-h") && !it.reason && !this._alignCandidatePins().length) it.reason = this.ALIGN_NO_LEADER_MSG;
+        items.push(it);
+      });
+      const req = this._fmItem("request-send");
+      if (req && State.mode !== "designer") items.push(req);
+      items.push({ label: "전체 기능 메뉴 열기", reason: (typeof FeatureMenu === "undefined") ? "준비 중" : "", run: () => FeatureMenu.open() });
+      return items;
+    },
+    copyPin(pin) {
+      const meta = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, pin.page || 1).get(pin.id) : null;
+      const no = meta ? PinSeries.formatNo(meta.no, meta.series) : (pin.label || "");
+      this._pinClip = { checkboard: !!pin.checkboard, icon: pin.icon || null, leader: this.Leader.wants(pin), no };
+      const txt = "#" + no + " x=" + (+pin.x).toFixed(3) + "% y=" + (+pin.y).toFixed(3) + "% page=" + (pin.page || 1);
+      let done = false;
+      try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).catch(() => {}); done = true; } } catch (e) {}
+      Prompt.toast((done ? "복사됨 — " : "복사(앱 안) — ") + txt);
+      return txt;
+    },
+    /** 우클릭 위치(화면 좌표 at)에 핀 — 기존 배치 경로(App._handlePlaceClick) 그대로(채번·360 사진 선택창·자동저장).
+     *  메뉴 항목 클릭(사용자 활성화) 안에서 동기 호출이라 360 선택창도 막히지 않는다. */
+    _ctxAddPinAt(at, clip) {
+      if (!at || typeof App === "undefined" || !App._handlePlaceClick) return;
+      const before = (State.pins || []).length;
+      const was = State.placing;
+      State.placing = true; // _handlePlaceClick 은 배치 중일 때만 동작 — 한 번만 빌리고 원래대로
+      try { App._handlePlaceClick({ clientX: at.x, clientY: at.y }); }
+      finally { if (!was) State.placing = false; }
+      const pin = (State.pins || []).length > before ? State.pins[State.pins.length - 1] : null;
+      if (pin && clip) {
+        if (clip.icon) pin.icon = clip.icon;
+        if (clip.leader) pin.leader = true;
+        if (App._markDirty) App._markDirty();
+        this.renderPinsOnMap();
+      }
+    },
+    openCtxMenu(e) {
+      if (!e || this._isEditable(e.target)) return false; // 입력창 = 브라우저 메뉴(붙여넣기)
+      const x = e.clientX, y = e.clientY;
+      const tg = this.ctxTargetOf(e.target, x, y);
+      if (!tg) return false;
+      if (e.preventDefault) e.preventDefault();
+      this._ctxOpenedAt = Date.now();
+      if (tg.kind === "tree") { tg.more.click(); return true; } // 트리 = 그 노드의 ⋯ 메뉴 그대로
+      const at = { getBoundingClientRect: () => ({ left: x, top: y, bottom: y, right: x, width: 0, height: 0 }) };
+      if (tg.kind === "pin") {
+        const meta = PinSeries.numbers(State.pins, tg.pin.page || 1).get(tg.pin.id);
+        this.openTreeMenu(at, "포인트 " + (meta ? PinSeries.formatNo(meta.no, meta.series) : (tg.pin.label || "")), this.pinCtxItems(tg.pin), { focus: true });
+      } else if (tg.kind === "outline") {
+        const proj = this._treeProject ? this._treeProject() : null;
+        const pick = (Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(Projects.decks || [], proj) : null;
+        this.openTreeMenu(at, "구역 " + (tg.deck.name || ""), this.deckMenuItems(tg.deck, (pick && pick.deployment_id) || null), { focus: true });
+      } else {
+        const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent) ? MapCtrl.viewportToPercent(x, y) : null;
+        const inPage = pct && pct.x >= 0 && pct.x <= 100 && pct.y >= 0 && pct.y <= 100 ? pct : null;
+        this.openTreeMenu(at, "도면", this.mapCtxItems(inPage, { x, y }), { focus: true });
+      }
+      return true;
+    },
+    /** 한 번만 — document 캡처 단계 contextmenu + 지도 길게 누르기(터치). 설계자·관리자·열람자 모두(항목만 다름). */
+    bindCtxMenu() {
+      if (this._ctxBound || typeof document === "undefined" || !document.addEventListener) return;
+      this._ctxBound = true;
+      document.addEventListener("contextmenu", (e) => {
+        if (this._ctxSuppressNative && Date.now() - this._ctxSuppressNative < 1500 && !this._isEditable(e.target)) {
+          if (e.preventDefault) e.preventDefault(); this._ctxSuppressNative = 0; return;
+        }
+        this._ctxSuppressNative = 0;
+        this.openCtxMenu(e);
+      }, true);
+      const vp = this.$("map-viewport");
+      if (!vp) return;
+      // 모바일 길게 누르기(빈 도면) — 핀은 기존 길게 누르기(마커 pointerdown 550ms)가 같은 메뉴를 연다.
+      //   손가락이 10px 넘게 움직이거나 두 손가락(핀치)이 되면 취소 — 팬·핀치와 충돌 없음.
+      let lp = null;
+      const cancel = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
+      vp.addEventListener("touchstart", (e) => {
+        cancel();
+        if (!e.touches || e.touches.length !== 1 || State.placing || State.drawingZone) return;
+        const t0 = e.touches[0], target = e.target;
+        if (State.pinEditUnlocked && target && target.closest && target.closest(".pin-marker, .pin-leader-bubble")) return; // 이동 중
+        lp = { x: t0.clientX, y: t0.clientY, t: setTimeout(() => {
+          const p = lp; lp = null;
+          if (!p) return;
+          if (this._treePop && Date.now() - (this._ctxOpenedAt || 0) < 800) return; // 브라우저 contextmenu 가 이미 열었다
+          this._ctxSuppressNative = Date.now(); // 같은 길게 누르기로 뒤늦게 오는 브라우저 contextmenu 는 삼킨다(중복 방지)
+          if (this.openCtxMenu({ target, clientX: p.x, clientY: p.y, preventDefault() {} })) this._ctxLongFired = Date.now();
+        }, this.CTX_LONGPRESS_MS) };
+      }, { passive: true });
+      // 길게 누르기로 메뉴를 연 직후 손을 떼면 브라우저가 합성 click 을 보내 ① 풍선/핀 클릭(작업 팝업) ② 메뉴 바깥 클릭
+      //   (닫힘)이 연달아 일어난다(375 CDP 실측: 메뉴 0). 그 touchend 의 기본 동작을 막아 합성 click 을 없앤다.
+      vp.addEventListener("touchend", (e) => {
+        if (this._ctxLongFired && Date.now() - this._ctxLongFired < 3000) { this._ctxLongFired = 0; if (e.cancelable) e.preventDefault(); }
+      }, { passive: false, capture: true });
+      vp.addEventListener("touchmove", (e) => {
+        if (!lp) return;
+        const t = e.touches && e.touches[0];
+        if (!t || e.touches.length > 1 || Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 10) cancel();
+      }, { passive: true });
+      vp.addEventListener("touchend", cancel, { passive: true });
+      vp.addEventListener("touchcancel", cancel, { passive: true });
     },
 
     renderTree() {
@@ -874,6 +1113,7 @@
         const n = document.createElement("button");
         const isCheckerPin = !!p.checkboard;
         n.className = "tree-node tree-node-pin tree-node-pin-mode-" + (isCheckerPin ? "checker" : "360") + (State.activePin === p.id ? " active" : "");
+        n.dataset.pinId = String(p.id); // [WO 20261008-pinstyle §3] 우클릭 앱 메뉴 대상 판정(UI.ctxTargetOf)
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
         const meta = numMap ? numMap.get(p.id) : null;
         // [WO 20260930-fixmode] 표시 번호 포맷 SoT = PinSeries.formatNo(CHECKER "1" / 360 "P1") — 핀 패널 헤더(27_PinActionPop)와 같은 표기.
@@ -1348,21 +1588,8 @@
               App.onPinTap(pin);
             }
           });
-          // ── 길게 누르기(롱프레스) → 사진 있는 핀도 작업 팝업(수정/이동/삭제) 진입 ──
-          //   (모바일에서 사진 핀의 편집 경로 확보 · 데스크톱은 우클릭으로도 진입)
-          let _lpTimer = null;
-          const _openMenu = () => {
-            if (State.pinEditUnlocked === pin.id) return;
-            App.setActivePin(pin.id);
-            if (typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
-          };
-          marker.addEventListener("pointerdown", () => {
-            clearTimeout(_lpTimer);
-            _lpTimer = setTimeout(_openMenu, 550);
-          });
-          ["pointerup", "pointerleave", "pointercancel"].forEach(ev =>
-            marker.addEventListener(ev, () => clearTimeout(_lpTimer)));
-          marker.addEventListener("contextmenu", (e) => { e.preventDefault(); _openMenu(); });
+          // [WO 20261008-pinstyle §3] 우클릭·길게 누르기 = 앱 메뉴(UI.openCtxMenu — 첫 항목 [열기] = 종전 작업 팝업).
+          //   배선은 한 곳(UI.bindCtxMenu: document contextmenu 캡처 + 지도 길게 누르기)이다 — 여기 따로 걸면 두 번 열린다.
           // 액션 아이콘 바인딩 (보기/이동/수정/삭제)
           marker.querySelectorAll(".pin-act").forEach(btn => {
             btn.addEventListener("click", ev => {

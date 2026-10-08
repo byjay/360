@@ -1271,6 +1271,8 @@
     /* ── Map ── */
     _bindMap() {
       const vp = UI.$("map-viewport");
+      // [WO 20261008-pinstyle §3] 우클릭·길게 누르기 = 앱 메뉴(한 번만 배선 — UI.bindCtxMenu)
+      if (UI.bindCtxMenu) UI.bindCtxMenu();
 
       vp.addEventListener("wheel", e => { e.preventDefault(); MapCtrl.handleWheel(e); }, { passive: false });
 
@@ -1278,6 +1280,8 @@
         // ── [마스터 요청 #7] 핀(또는 액션버튼) 위를 눌렀으면 배치/그리기보다 핀 클릭을 우선.
         //   (체크보드는 항상 placing 상태라, 양보 없으면 핀 위 클릭 시 새 핀이 찍혀 '핀클릭 안됨'이 됨)
         if (e.target && e.target.closest(".pin-marker")) { return; }
+        // [WO 20261008-pinstyle §3] 오른쪽 버튼 = 앱 메뉴(UI.openCtxMenu) — 배치 중이어도 핀을 찍지 않는다.
+        if (e.button === 2) return;
         if (State.placing) { this._handlePlaceClick(e); return; }
         if (State.drawingZone) { if (Zones.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         MapCtrl.handlePanStart(e);

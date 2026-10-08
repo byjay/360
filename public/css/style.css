@@ -5715,6 +5715,19 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
   body.sidebar-open [data-help-inquiry-toggle] {
     bottom: calc(52vh + 58px + env(safe-area-inset-bottom, 0px) + 8px) !important;
   }
+  /* [WO 20261008-pinstyle] 🔴 실측(0b4d262, 375×812): 트리 ⋯ 메뉴·우클릭(길게 누르기) 앱 메뉴(.tree-pop)는 모바일에서
+     도크 바로 위 바텀시트(아래 .tree-pop 규칙: bottom = 도크+8px, max-height 60vh, z-index 520)인데, 그 자리에
+     ?·✉ FAB(z-index 9550, top 652~692)가 떠 첫 항목('원본 전체 도면 열기') 왼쪽을 덮었다. 숨기지 않고 위치만 —
+     위 sidebar-open 과 같은 방식으로 메뉴가 열린 동안 FAB 를 시트 상한(60vh) 위로 올린다. */
+  /* 특정도: 위 편집화면 규칙 body:has(#screen-app.active)(ID 포함)를 이겨야 하므로 같은 :has(#screen-app.active)를 앞에 붙인다. */
+  body:has(.tree-pop) [data-req-viewer-entry],
+  body:has(.tree-pop) [data-help-toggle],
+  body:has(.tree-pop) [data-help-inquiry-toggle],
+  body:has(#screen-app.active):has(.tree-pop) [data-req-viewer-entry],
+  body:has(#screen-app.active):has(.tree-pop) [data-help-toggle],
+  body:has(#screen-app.active):has(.tree-pop) [data-help-inquiry-toggle] {
+    bottom: calc(60vh + var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 16px) !important;
+  }
 }
 /* [WO 20261001-mobilefast 판정5] 핀 작성 모드(#crosshair-overlay 표시 중)에는 위 FAB 3종을
    반투명·축소해 도면을 덜 가린다 — 누르는 중(:active)은 즉시 원복해 탭 피드백을 보존한다. */
