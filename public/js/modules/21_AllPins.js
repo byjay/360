@@ -243,6 +243,8 @@
       const inTab = new Set(this._modePins().map((p) => p.id));
       Array.from(this.selected).forEach((id) => { if (!inTab.has(id)) this.selected.delete(id); });
       if (countEl) countEl.textContent = this._modePins().length;
+      // [WO 20261007-qrcov] 촬영 현황 요약 한 줄(켜졌을 때만) — 이 구역 범위(_scopedPins = Projects.pinsForDeck SoT)
+      if (typeof Coverage !== "undefined" && Coverage.renderAllPinsSummary) { try { Coverage.renderAllPinsSummary(this._scopedPins()); } catch (e) {} }
       const rows = this._sorted();
       listEl.innerHTML = "";
       if (!rows.length) { emptyEl.classList.remove("hidden"); return; }

@@ -903,6 +903,9 @@
         head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag
           + '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
+        // [WO 20261007-qrcov] 촬영 현황 배지(미촬영·오래됨) — 켜졌고 이 구역 도면이 로드됐을 때만(SoT: Coverage.deckSummary → Projects.pinsForDeck)
+        const covTag = (typeof Coverage !== "undefined" && Coverage.treeBadgeHtml) ? Coverage.treeBadgeHtml(deck) : "";
+        if (covTag) head.insertAdjacentHTML("beforeend", covTag);
         // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
         // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.
@@ -1343,6 +1346,8 @@
       });
       if (typeof Zones !== "undefined") Zones.render();
       if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
+      // [WO 20261007-qrcov] 촬영 현황 — 필터 바 토글·범례 + (켜졌을 때) 핀 링·배지. 숨김 0.
+      if (typeof Coverage !== "undefined" && Coverage.decorate) { try { Coverage.decorate(); } catch (e) {} }
       // ── [마스터 요청] 렌더 직후에도 ISO면 핀을 즉시 수직(빌보드)으로 세움 ──
       if (typeof MapCtrl !== "undefined" && MapCtrl._applyPinBillboard) MapCtrl._applyPinBillboard();
     },

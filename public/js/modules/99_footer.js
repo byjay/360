@@ -11,8 +11,9 @@
     if (typeof Install !== "undefined" && Install.init) { try { Install.init(); } catch (e) {} }
     // [WO 20261007-aivision] 온라인/오프라인 전환 시 AI 분석 버튼 사유 재계산
     if (typeof AiVision !== "undefined" && AiVision.init) { try { AiVision.init(); } catch (e) {} }
-    // [WO 20261007-qrcov] 핀 팝업 [QR] 주입
+    // [WO 20261007-qrcov] 핀 팝업 [QR] 주입 · 촬영 현황(커버리지) 초기화
     if (typeof QrPrint !== "undefined" && QrPrint.init) { try { QrPrint.init(); } catch (e) {} }
+    if (typeof Coverage !== "undefined" && Coverage.init) { try { Coverage.init(); } catch (e) {} }
     // [P40] 프로젝트 초대 링크(?invite=<token>) — 있으면 이름/비번 설정 모달을 띄운다.
     if (typeof Invite !== "undefined" && Invite.init) { try { Invite.init(); } catch (e) {} }
 
@@ -24,6 +25,7 @@
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
       DeepLink: (typeof DeepLink !== "undefined" ? DeepLink : null),
       QrPrint: (typeof QrPrint !== "undefined" ? QrPrint : null),
+      Coverage: (typeof Coverage !== "undefined" ? Coverage : null),
       AiVision: (typeof AiVision !== "undefined" ? AiVision : null),
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),

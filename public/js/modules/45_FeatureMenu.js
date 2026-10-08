@@ -115,6 +115,8 @@
         run: () => ThetaIntake.startFromPending() },
       { id: "theta-intake", group: "pano", icon: "⇩", label: "THETA 360 사진 가져오기", desc: "갤러리의 R* 360 사진 → 도면에 위치 지정", perm: "designer", needs: "drawing", mode: "photo", click: "btn-theta-intake", covers: ["btn-theta-intake", "theta-tray-close"] },
       { id: "photo-batch", group: "pano", icon: "▣", label: "사진 폴더 일괄 매칭", help: "photo-batch", perm: "designer", needs: "drawing", mode: "photo", click: "btn-photobatch", covers: ["btn-photobatch", "mdock-photobatch"] },
+      { id: "coverage", group: "pano", icon: "◔", label: "촬영 현황 보기 켜기/끄기", help: "coverage", needs: "drawing", mod: "Coverage",
+        why: () => Coverage.reason(), run: () => Coverage.toggle() },
       { id: "pano-setdir-map", group: "pano", icon: "⌖", label: "360 시야 방향 보정(도면)", help: "orientation-fix", perm: "designer", needs: "drawing", click: "tb-setdir", covers: ["tb-setdir"] },
       { id: "pano-notes", group: "pano", icon: "✉", label: "이슈·필드노트(360)", desc: "현장 협업 메모", needs: "pano", click: "btn-pano-notes", covers: ["btn-pano-notes"] },
       { id: "pano-spot", group: "pano", icon: "◉", label: "360 안에 마커 추가", perm: "designer", needs: "pano", click: "btn-pano-spot", covers: ["btn-pano-spot"] },
@@ -225,6 +227,7 @@
           case "Requests": return typeof Requests !== "undefined";
           case "Report": return typeof Report !== "undefined";
           case "QrPrint": return typeof QrPrint !== "undefined";
+          case "Coverage": return typeof Coverage !== "undefined";
           case "Install": return typeof Install !== "undefined";
           case "Help": return typeof Help !== "undefined";
           default: return false;

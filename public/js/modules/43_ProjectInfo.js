@@ -30,10 +30,13 @@
     _headers(extra) {
       return (typeof Auth !== "undefined" && Auth.headers) ? Auth.headers(Object.assign({ "Content-Type": "application/json" }, extra || {})) : Object.assign({ "Content-Type": "application/json" }, extra || {});
     },
-    _blank() { return { note: "", schedule: [], updatedAt: null, updatedBy: null }; },
+    _blank() { return { note: "", schedule: [], staleDays: null, updatedAt: null, updatedBy: null }; },
     _normalize(info) {
       const i = info || {};
-      return { note: typeof i.note === "string" ? i.note : "", schedule: Array.isArray(i.schedule) ? i.schedule : [], updatedAt: i.updatedAt || null, updatedBy: i.updatedBy || null };
+      // [WO 20261007-qrcov] staleDays = 촬영 현황 "오래됨" 기준 일수(1~365, 없으면 null → Coverage 기본 14)
+      const sd = Number(i.staleDays);
+      return { note: typeof i.note === "string" ? i.note : "", schedule: Array.isArray(i.schedule) ? i.schedule : [],
+        staleDays: Number.isInteger(sd) && sd >= 1 && sd <= 365 ? sd : null, updatedAt: i.updatedAt || null, updatedBy: i.updatedBy || null };
     },
 
     /** 오늘 이후(완료 제외) 가장 가까운 일정 1건 — 없으면 null. 허브 카드 "다음 일정" 줄과 패널이 공유(SoT). */
@@ -89,6 +92,19 @@
         ? "마지막 수정: " + info.updatedBy + " · " + this._timeTxt(info.updatedAt)
         : "아직 저장된 메모가 없습니다.";
       list.appendChild(this._el("div", "font-size:11.5px;color:#cbbfa0;margin:4px 0 16px", lastLine));
+
+      // ── [WO 20261007-qrcov] 촬영 현황 기준 — N일 초과 = 오래됨(비우면 기본 14일) ──
+      const sdRow = this._el("label", "display:flex;align-items:center;gap:8px;margin:0 0 16px;font-size:12.5px;color:#ffffff");
+      sdRow.appendChild(this._el("span", "font-weight:700;color:#c9962a;font-size:13.5px", "촬영 현황 기준"));
+      const sdIn = this._el("input", "width:72px;padding:6px 8px;border-radius:6px;border:1px solid #554;background:#2a2518;color:#ffffff;font-size:12.5px");
+      sdIn.type = "number"; sdIn.min = "1"; sdIn.max = "365"; sdIn.step = "1";
+      sdIn.value = info.staleDays != null ? String(info.staleDays) : "";
+      sdIn.placeholder = "14";
+      sdIn.setAttribute("data-pinfo-stale", "1");
+      if (!this._editable) sdIn.disabled = true;
+      sdRow.appendChild(sdIn);
+      sdRow.appendChild(this._el("span", "color:#cbbfa0;font-size:11.5px", "일 초과 = 오래됨(비우면 14일)"));
+      list.appendChild(sdRow);
 
       // ── 일정 목록 ──
       const schHead = this._el("div", "display:flex;align-items:center;justify-content:space-between;margin:0 0 8px");
@@ -154,7 +170,10 @@
         content: row.querySelector("[data-pinfo-content]").value || "",
         done: !!row.querySelector("[data-pinfo-done]").checked,
       }));
-      return { note, schedule };
+      const sdEl = panel.querySelector("[data-pinfo-stale]");
+      const sdRaw = sdEl ? String(sdEl.value || "").trim() : "";
+      const sd = sdRaw === "" ? null : Math.round(Number(sdRaw));
+      return { note, schedule, staleDays: Number.isFinite(sd) && sd >= 1 && sd <= 365 ? sd : null };
     },
 
     async save(force) {
@@ -188,6 +207,8 @@
         Prompt.toast && Prompt.toast("프로젝트 정보를 저장했습니다");
         if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree();
         if (typeof ProjectHub !== "undefined" && ProjectHub.refreshIfVisible) ProjectHub.refreshIfVisible();
+        // [WO 20261007-qrcov] 기준 일수가 바뀌었을 수 있다 — 촬영 현황이 켜져 있으면 다시 분류
+        if (typeof Coverage !== "undefined" && Coverage.on && Coverage.refresh) Coverage.refresh();
         this.closePanel();
       } catch (e) {
         Prompt.toast && Prompt.toast("저장 실패(네트워크)");
