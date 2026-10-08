@@ -22,11 +22,11 @@
   <!-- 본문 UI: Pretendard(한글 최적 모던 산세리프) · 수치/좌표: JetBrains Mono(CAD 가독성) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/css/style.css?v=9f5ebf6a6d" />
+  <link rel="stylesheet" href="/css/style.css?v=bddc7aadc7" />
   <!-- SEASTAR 패밀리룩(구조패턴) 헬퍼 — 기존 스타일 위 가산. 컴포넌트가 .fl-* opt-in -->
-  <link rel="stylesheet" href="/css/seastar-family-tokens.css?v=8a62786c77" />
+  <link rel="stylesheet" href="/css/seastar-family-tokens.css?v=e003d4468a" />
   <!-- [마스터] 다크 메탈릭 3D 스킨 — 외형만 가산 오버레이(맨 아래 로드) -->
-  <link rel="stylesheet" href="/css/seastar-3d-skin.css?v=42ec3d5769" />
+  <link rel="stylesheet" href="/css/seastar-3d-skin.css?v=0e68438758" />
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
@@ -200,13 +200,10 @@
     <div id="regmode-seg" class="regmode-seg designer-only" role="group" aria-label="편집 모드 선택">
       <button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="CHECKER — 도면 클릭 시 번호 핀만 생성">CHECKER</button>
       <button id="btn-regmode-photo" class="regmode-btn" type="button" title="360 — 핀 생성 즉시 사진 파일창">360</button>
-      <!-- [WO 20260929 topbar-cleanup] 체크보드/사진등록 모드 전용 인라인 시작번호.
-           표시는 CSS 형제선택자(#btn-regmode-checkboard.active ~, #btn-regmode-photo.active ~)로만
-           결정 — 20_App.js가 이미 토글하는 .active 클래스를 읽기만 한다(새 JS 훅 없음).
-           SoT: App._setCheckboardStart()(20_App.js, 24_Settings.js에서 호출) — 값 자체는 여기서 만들지 않는다. -->
+      <!-- [WO 20261001-startno] 구 `시작 #` 입력 → [번호 대역 ▾] 버튼(누르면 24b_NumBand 시트). 표시 여부는
+           종전대로 CSS 형제선택자(#btn-regmode-*.active ~ #regmode-start-wrap). 문구는 NumBand.render() 가 채운다. -->
       <span id="regmode-start-wrap" class="regmode-start-wrap">
-        <label for="input-regmode-start" class="regmode-start-label">시작 #</label>
-        <input id="input-regmode-start" class="regmode-start-input" type="number" min="1" inputmode="numeric" title="CHECKER/360 다음 번호 시작값 — 세팅 패널과 동기화" disabled />
+        <button id="btn-numband" class="numband-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="번호 대역 — 100번 단위로 사람마다 번호대를 나눠 씁니다(CHECKER·360 공통)"><span id="numband-btn-text">대역 1–100</span><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
       </span>
     </div>
 
@@ -406,6 +403,15 @@
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar">
 
+      <!-- [WO 20261008-layout] 데스크톱 전체 배치 재설계 — 사이드바 접기 버튼. 폭 조절은
+           바깥의 #sidebar-resizer(드래그 핸들)가 담당, 이 버튼은 접기/펼치기만. 모바일은
+           기존 바텀시트(#mnav-menu)가 있으므로 이 버튼은 데스크톱(≥761px)에서만 보인다(CSS). -->
+      <div id="sidebar-head-row" class="sidebar-head-row">
+        <button id="btn-sidebar-collapse" class="sidebar-collapse-btn" type="button" title="사이드바 접기/펼치기" aria-expanded="true" aria-controls="sidebar">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+      </div>
+
       <!-- [WO 20260929-tree1] 🔴 마스터: "트리 구조니 최상단에 프로젝트 이름을 찍고 트리를 일원화" —
            예전엔 여기가 이름 박스 + [다운로드][프로젝트 삭제]를 담은 별도 "박스"였다. 지금은
            트리 최상단(프로젝트 노드, 11_UI.js renderTree)이 그 자리를 대신한다: 프로젝트명은
@@ -450,6 +456,12 @@
         <span>도구</span>
         <span class="stb-caret" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
       </button>
+      <!-- [WO 20261008-layout] 🔴 근본수정: 도구막대(6줄)+트리가 세로로 쌓여 트리 세로공간을
+           271px 잡아먹던 구조 — 데스크톱(≥761px)에서는 이 래퍼가 가로 배치로 바뀌어 도구막대가
+           세로 아이콘 레일(약 46px, 트리 왼쪽)이 되고 트리가 그 위쪽 공간까지 전부 쓴다
+           (CSS: .side-tree-row). 모바일은 기존 그대로(세로 드롭다운, CSS 미변경 — 이 래퍼는
+           기본값 display:flex;flex-direction:column 이라 시각적 변화 0). -->
+      <div id="side-tree-row" class="side-tree-row">
       <div id="side-toolbar" class="side-toolbar designer-only">
         <div class="stb-group" data-g="구역">
           <button class="stb-btn" data-deleg="btn-new-deck" type="button" title="구역 생성" aria-label="구역 생성"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg></button>
@@ -487,6 +499,8 @@
       </div>
       <!-- [트리 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리 -->
       <div id="side-tree" class="side-tree"></div>
+      </div>
+      <!-- /#side-tree-row -->
 
       <!-- Upload — 선택된 구역에 도면(PDF) 등록 (designer only) -->
       <div id="section-upload" class="sidebar-section">
@@ -636,6 +650,11 @@
 
     </aside>
 
+    <!-- [WO 20261008-layout] 사이드바 폭 조절 손잡이 — 데스크톱(≥761px)에서만 보임(CSS 기본 display:none).
+         드래그로 폭 조절(200~480px), 더블클릭 = 기본값(240px) 복귀, 키보드 ←/→. 폭은 localStorage에
+         저장(try/catch, UI.initSidebarResize — 11_UI.js). 모바일은 바텀시트라 해당 없음. -->
+    <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="사이드바 폭 조절" tabindex="0" title="드래그하여 사이드바 폭 조절 (더블클릭: 기본값)"></div>
+
     <!-- Map area -->
     <main id="map-area" class="map-area">
       <!-- 구역 페이저: 전체 도면 + 각 구역(crop-view 페이지) 탭 -->
@@ -680,6 +699,8 @@
           <div id="anno-text-layer" class="anno-text-layer"></div>
           <!-- Pins layer -->
           <div id="pins-layer" class="pins-layer"></div>
+          <!-- [WO 20261001-leader] CAD 리더선(사선+화살촉) SVG — 좌표는 pins-layer 와 동일한 % 기준 -->
+          <svg id="leader-layer" class="leader-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
           <!-- Pending pin pulse -->
           <div id="pending-pin" class="pending-pin hidden"></div>
           <!-- Zone 그리기 중 임시 사각형(레거시) -->
@@ -969,10 +990,12 @@
         <span>전체 포인트</span>
         <span id="allpins-count" class="allpins-count">0</span>
       </div>
+      <button id="allpins-band-btn" class="allpins-band-btn hidden" type="button" title="번호 대역 설정"></button>
       <button id="btn-allpins-close" class="btn-allpins-close" title="닫기 (Esc)" aria-label="닫기">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
       </button>
     </header>
+    <div id="allpins-tabs" class="allpins-tabs" role="tablist" aria-label="모드"></div>
     <div class="allpins-tools">
       <div class="allpins-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
@@ -983,8 +1006,17 @@
         <button class="allpins-sort-btn" data-sort="name" title="이름(가나다)순">이름순</button>
       </div>
     </div>
+    <div id="allpins-selectbar" class="allpins-selectbar hidden">
+      <button id="allpins-select-all" class="allpins-selall-btn" type="button">전체 선택</button>
+      <button id="allpins-select-clear" class="allpins-selall-btn" type="button">선택 해제</button>
+      <span id="allpins-select-count" class="allpins-selcount">0개 선택됨</span>
+    </div>
     <div id="allpins-list" class="allpins-list"></div>
     <div id="allpins-empty" class="allpins-empty hidden">표시할 포인트가 없습니다</div>
+    <div id="allpins-actions" class="allpins-actions hidden">
+      <button id="allpins-btn-delete" class="allpins-action-btn allpins-action-danger hidden" type="button" disabled>선택 삭제</button>
+      <button id="allpins-btn-renumber" class="allpins-action-btn hidden" type="button">번호 다시 매기기</button>
+    </div>
   </aside>
 </div>
 
@@ -1017,6 +1049,16 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <span>이슈</span>
           <span id="pano-notes-count" class="pano-notes-count hidden">0</span>
+        </button>
+        <!-- [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보기/다운로드 — TimeLapse._renderActions가 href·표시를 채운다 -->
+        <a id="btn-pano-orig" class="btn-pano-notes hidden" href="#" target="_blank" rel="noopener" title="360 원본(풀해상도) 보기·다운로드" aria-label="원본 보기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>원본</span>
+        </a>
+        <!-- [WO 20261007-aivision] AI 사진 분석 — 좌상단 #pano-ai-panel 토글. 권한·사진·오프라인·키·한도 사유는 패널 안에서 비활성+사유로 표시(숨김 금지) -->
+        <button id="btn-pano-ai" class="btn-pano-notes" type="button" title="AI 사진 분석 — 장비·결함 후보 태깅 + 이전 사진 대비 변화 요약" aria-label="AI 분석" data-help="ai-analyze">
+          <span aria-hidden="true">🤖</span>
+          <span>AI 분석</span>
         </button>
       </div>
       <button id="btn-pano-close" class="btn-pano-close" title="뷰어 닫기 (Esc)" aria-label="닫기">
@@ -1058,6 +1100,14 @@
           <option value="progress">진행중</option>
           <option value="done">완료</option>
         </select>
+        <!-- [WO 20261002-gap 묶음C] 기한·심각도(선택) — 결함 워크플로. 값 없으면 서버에 안 보냄(지어내지 않음). -->
+        <input id="pnp-due" class="pnp-due" type="date" title="기한(선택)" />
+        <select id="pnp-severity" class="pnp-severity" title="심각도(선택)">
+          <option value="">심각도-</option>
+          <option value="상">상</option>
+          <option value="중">중</option>
+          <option value="하">하</option>
+        </select>
         <button type="submit" id="pnp-submit" class="pnp-submit">등록</button>
       </div>
       <div id="pnp-author-row" class="pnp-author-row hidden">
@@ -1080,8 +1130,14 @@
 
   <canvas id="pano-canvas" class="pano-canvas hidden"></canvas>
 
+  <!-- [WO 20261001-panoshapes] 사각형·원 도형 오버레이(구면 좌표 → 매 프레임 화면 투영, THREE 씬과 별개) -->
+  <svg id="pano-shape-svg" class="pano-shape-svg" aria-hidden="true"></svg>
+  <div id="pano-shape-labels" class="pano-shape-labels"></div>
+
   <!-- 노트 · 첨부 문서 정보 패널 -->
   <div id="pano-info-panel" class="pano-info-panel hidden"></div>
+  <!-- [WO 20261007-aivision] AI 분석 패널(좌상단 — 정보 패널·마커 목록·노트 패널은 모두 우측이라 겹치지 않음). 내용은 49_AiVision.js togglePanoPanel 이 그린다 -->
+  <div id="pano-ai-panel" class="pano-info-panel hidden" style="right:auto;left:16px;width:340px;" aria-label="AI 분석"></div>
 
   <!-- [FARO Markers] 마커 호버 툴팁 -->
   <div id="pano-spot-tip" class="pano-spot-tip hidden"></div>
@@ -1092,6 +1148,8 @@
       <span class="psl-title">마커 목록</span>
       <button id="pano-spot-list-close" class="psl-close" type="button" aria-label="닫기"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
+    <!-- [WO 20261001-panoshapes] 장비 설치 위치만 걸러보기 -->
+    <label class="psl-filter"><input id="pano-spot-list-equip-filter" type="checkbox" /> 장비 설치 위치만</label>
     <div id="pano-spot-list-body" class="psl-body"></div>
   </div>
 
@@ -1110,6 +1168,15 @@
     <button id="btn-pano-spot"    class="btn-pano-ctrl" title="360 안에 마커 추가 — 종류를 고르고 화면을 탭하세요" aria-label="구면 마커">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 12-9 12s-9-5-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
       <span>마커</span>
+    </button>
+    <!-- [WO 20261001-panoshapes] 사각형·원 도형 그리기(드래그) — 디자이너만(.designer-only) -->
+    <button id="btn-pano-shape-rect" class="btn-pano-ctrl designer-only" title="사각형 도형 — 드래그해서 그리세요" aria-label="사각형 도형">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/></svg>
+      <span>사각형</span>
+    </button>
+    <button id="btn-pano-shape-circle" class="btn-pano-ctrl designer-only" title="원 도형 — 드래그해서 그리세요" aria-label="원 도형">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/></svg>
+      <span>원</span>
     </button>
     <button id="btn-pano-spotlist" class="btn-pano-ctrl" title="이 사진의 마커 목록 보기" aria-label="마커 목록">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor"/></svg>
@@ -1217,6 +1284,8 @@
         <span class="tl-ico"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
         <span class="tl-title">타임랩스</span>
         <span id="tl-current" class="tl-current">—</span>
+        <button id="btn-tl-revert" class="tl-compare-btn tl-revert-btn hidden" type="button" title="선택한 시점을 현재로 되돌리기">↺ 되돌리기</button>
+        <button id="btn-tl-delete" class="tl-compare-btn tl-delete-btn hidden" type="button" title="선택한 시점 이력 삭제(관리자)">🗑 삭제</button>
         <button id="btn-tl-compare" class="tl-compare-btn" type="button" title="전/후 분할 비교">⇄ 분할비교</button>
       </div>
       <div id="tl-chips" class="tl-chips"><!-- TimeLapse.render() --></div>
@@ -1226,14 +1295,39 @@
     </button>
   </div>
 
-  <!-- 분할 비교 오버레이 (좌=과거, 우=현재) — 슬라이더로 경계 이동 -->
-  <div id="pano-compare" class="pano-compare hidden" aria-label="전/후 분할 비교">
+  <!-- 분할 비교 오버레이 (좌=과거, 우=현재) — 슬라이더로 경계 이동 (보조 모드: 평면 슬라이더) -->
+  <div id="pano-compare" class="pano-compare hidden" aria-label="전/후 분할 비교(평면 슬라이더)">
     <canvas id="cmp-canvas-a" class="cmp-canvas"></canvas>
     <div id="cmp-clip" class="cmp-clip"><canvas id="cmp-canvas-b" class="cmp-canvas"></canvas></div>
     <div id="cmp-divider" class="cmp-divider"><div class="cmp-handle">⇄</div></div>
     <div class="cmp-label cmp-label-a" id="cmp-label-a">과거</div>
     <div class="cmp-label cmp-label-b" id="cmp-label-b">현재</div>
     <button id="btn-cmp-close" class="cmp-close" type="button" title="분할 비교 닫기">✕ 비교 종료</button>
+  </div>
+
+  <!-- [WO 20261008-comparesync] 360 동기 비교(기본 모드) — 두 뷰어를 나란히, 한쪽을 돌리면 같이 돈다 -->
+  <div id="pano-compare-360" class="pano-compare-360 hidden" aria-label="360 동기 비교">
+    <div class="cmp360-panes">
+      <div class="cmp360-pane">
+        <div class="cmp360-head">
+          <select id="cmp360-sel-a" class="cmp360-sel" aria-label="좌측(상단) 시점 선택"></select>
+          <span class="cmp360-label" id="cmp360-label-a">—</span>
+        </div>
+        <canvas id="cmp360-canvas-a" class="cmp360-canvas"></canvas>
+      </div>
+      <div class="cmp360-pane">
+        <div class="cmp360-head">
+          <select id="cmp360-sel-b" class="cmp360-sel" aria-label="우측(하단) 시점 선택"></select>
+          <span class="cmp360-label" id="cmp360-label-b">—</span>
+        </div>
+        <canvas id="cmp360-canvas-b" class="cmp360-canvas"></canvas>
+      </div>
+    </div>
+    <div class="cmp360-bar">
+      <button id="btn-cmp360-sync" class="cmp360-btn on" type="button" title="한쪽을 돌리면 다른 쪽도 같이 돌게">🔗 동기화 끄기</button>
+      <button id="btn-cmp360-flat" class="cmp360-btn" type="button" title="평면 슬라이더 비교로 전환">◧ 평면 슬라이더</button>
+      <button id="btn-cmp360-close" class="cmp360-btn cmp360-btn-close" type="button" title="360 동기 비교 닫기">✕ 비교 종료</button>
+    </div>
   </div>
 
   <div id="pano-hint" class="pano-hint hidden">
@@ -1313,7 +1407,7 @@
 <!-- Firebase (본인 Google 계정 저장 — 설정 시 자동 활성화) -->
 <script src="/js/firebase-config.js"></script>
 <script type="module" src="/js/firebase-init.js"></script>
-<script src="/js/main.js?v=7d30d48f92"></script>
+<script src="/js/main.js?v=f34e8dfa17"></script>
 <!-- Service Worker 등록 (PWA 오프라인 앱 셸) — 새 버전 자동 감지·즉시 적용 -->
 <script>
   if ('serviceWorker' in navigator) {
@@ -1399,6 +1493,8 @@
             </div>
             <div id="pap-label-hint" style="font-size:11px;color:#94a3b8;margin-top:4px;"></div>
           </div>
+          <!-- [WO 20261007-aivision] [🤖 AI 분석] 버튼 + 결과 카드 — 49_AiVision.js mount("pap-ai") 가 채운다 -->
+          <div id="pap-ai" style="margin-top:12px;"></div>
         </div>
 
         <!-- ═══ 하단: 등록(사진/360/문서/노트/동영상/URL) — 탭 1곳으로 통합, 빈 공간 없이 남는 높이를 채운다 ═══ -->
@@ -1408,14 +1504,14 @@
                [WO 20260929] 노트도 여기 탭 1곳으로 통합(상단 노트 섹션 제거, 중복 표시 제거).
                모바일(≤720px)에서는 사진·노트만 노출(마스터 기존 지시 유지 + 노트는 기능 유실 방지로 추가). -->
           <div id="pap-reg-tools" class="pap-reg-tools" role="group" aria-label="등록 종류" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;"></div>
-          <div id="pap-reg-mobile-hint" class="hidden" style="font-size:11px;color:#94a3b8;margin:-4px 0 10px;">모바일에서는 사진·노트만 등록할 수 있어요. 360·문서·동영상·URL은 PC에서 추가하세요.</div>
+          <div id="pap-reg-mobile-hint" class="hidden" style="font-size:11px;color:#64748b;margin:-4px 0 10px;">모바일에서는 사진·노트만 등록할 수 있어요. 360·문서·동영상·URL은 PC에서 추가하세요.</div>
 
           <div id="pap-reg-title" style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px;">사진</div>
 
           <div id="pap-photo-area">
             <div id="pap-photo-preview" class="hidden">
               <img id="pap-photo-img" alt="360 미리보기" style="width:100%;border-radius:10px;display:block;cursor:pointer;" />
-              <div style="font-size:11px;color:#94a3b8;margin-top:4px;">클릭하면 전체화면으로 열립니다</div>
+              <div style="font-size:11px;color:#64748b;margin-top:4px;">클릭하면 전체화면으로 열립니다</div>
             </div>
 
             <div id="pap-photo-register" class="hidden">
@@ -1523,7 +1619,7 @@
 
       <div class="signin-footer">
         <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
-        Contact Admin (<span class="signin-admin-mail">designssir@gmail.com</span>)
+        Contact Admin (<span class="signin-admin-mail">designsir@seastargo.com</span>)
       </div>
 
       <!-- 하단: 씨스타 로고 (동영상 자리 대체) -->
@@ -2151,6 +2247,11 @@
       <p id="prompt-modal-sub" class="admin-gate-sub"></p>
       <input id="prompt-modal-input" class="admin-gate-input" type="text" autocomplete="off" />
       <input id="prompt-modal-input2" class="admin-gate-input hidden" type="text" inputmode="numeric" placeholder="층 번호(선택, 정렬용)" style="margin-top:10px" />
+      <!-- [WO 20261001-panoshapes] 선택적 체크박스(장비 설치 위치 등) — opts.checkbox 미지정 시 hidden 유지, 기존 호출부 영향 0 -->
+      <label id="prompt-modal-checkbox-wrap" class="prompt-modal-checkbox-wrap hidden">
+        <input id="prompt-modal-checkbox" type="checkbox" />
+        <span id="prompt-modal-checkbox-label"></span>
+      </label>
       <div id="prompt-modal-error" class="admin-gate-error hidden"></div>
       <div class="admin-gate-actions">
         <button id="prompt-modal-cancel" class="admin-gate-btn ghost" type="button">취소</button>
@@ -2255,16 +2356,21 @@
                (style.css 의 #section-checkboard{display:none!important} 로 렌더 고아였음)를 이관.
                기존 App._checkboardStart/_setCheckboardStart/_renumberCheckboard() 정본 재사용, 새 저장 로직 없음. -->
           <div id="settings-checkboard-block" class="settings-checkboard-block">
+            <!-- [WO 20261001-startno] 시작 번호 입력 → 번호 대역 시트(24b_NumBand)로 일원화. 이 버튼은 같은 시트를 연다. -->
             <div class="checkboard-start-row">
-              <label id="settings-checkboard-start-label" for="settings-checkboard-start" class="checkboard-start-label">CHECKER 시작 번호</label>
-              <input id="settings-checkboard-start" class="checkboard-start-input" type="number" min="1" step="1" inputmode="numeric" title="이 구역(페이지)에서 다음에 찍을 번호. 클릭마다 1씩 증가합니다." />
+              <span id="settings-checkboard-start-label" class="checkboard-start-label">번호 대역</span>
+              <button id="btn-settings-numband" class="admin-gate-btn ghost" type="button" aria-haspopup="dialog">대역 1–100</button>
             </div>
             <div class="settings-checkboard-actions">
-              <button id="btn-settings-checkboard-apply" class="admin-gate-btn ghost" type="button">적용</button>
               <button id="btn-settings-checkboard-renumber" class="admin-gate-btn ghost" type="button">전체 번호 일괄 변경</button>
             </div>
             <p id="settings-checkboard-hint" class="settings-note-sm">개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다.</p>
           </div>
+          <!-- [WO 20261008-pinstyle §1] 리더선 일괄 켜기/끄기 — 핀별 선택(pin.leader)을 선택한 포인트(없으면 이 구역 현재 모드)에 한 번에. 기본 = 핀. -->
+          <label class="settings-leader-toggle-row" for="chk-leader360" style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
+            <input id="chk-leader360" type="checkbox" />
+            <span>선택한 포인트를 리더선으로 표시(선택 없으면 이 구역 현재 모드 전체)</span>
+          </label>
         </div>
         <div id="settings-viewer-note" class="settings-note hidden">
           이 계정은 <b>디자이너 권한이 없습니다</b>. 편집하려면 슈퍼관리자에게 디자이너 지정을 요청하세요.

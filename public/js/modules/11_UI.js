@@ -24,6 +24,79 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     },
 
+    /** [WO 20261008-layout] 사이드바 폭 조절(드래그)+접기/펼치기. 데스크톱(≥761px)에서만
+     *  동작 — 모바일은 .sidebar{width:100%!important}(style.css:3988)가 인라인 width 를 항상
+     *  이기므로 가드 없이도 안전하지만, 드래그 리스너 자체는 모바일에서 불필요해 데스크톱일 때만
+     *  건다. 폭/접힘 상태는 localStorage(try/catch, §공통 작업 규율 준수 — 환경값 없으면
+     *  조용히 기본값으로). 호출부: 99_footer.js DOMContentLoaded(다른 모듈 init 과 동일 패턴). */
+    initSidebarResize() {
+      try {
+        const sidebar = this.$("sidebar");
+        const resizer = this.$("sidebar-resizer");
+        const collapseBtn = this.$("btn-sidebar-collapse");
+        if (!sidebar) return;
+        const MIN_W = 200, MAX_W = 480, DEFAULT_W = 300, COLLAPSED_W = 46;
+        const LS_W = "sidebar-w", LS_C = "sidebar-collapsed";
+        const isDesktop = () => window.matchMedia("(min-width: 761px)").matches;
+
+        const loadWidth = () => {
+          try {
+            const v = parseInt(localStorage.getItem(LS_W), 10);
+            return (v >= MIN_W && v <= MAX_W) ? v : DEFAULT_W;
+          } catch (e) { return DEFAULT_W; }
+        };
+        const saveWidth = (w) => { try { localStorage.setItem(LS_W, String(w)); } catch (e) {} };
+        const loadCollapsed = () => { try { return localStorage.getItem(LS_C) === "1"; } catch (e) { return false; } };
+        const saveCollapsed = (c) => { try { localStorage.setItem(LS_C, c ? "1" : "0"); } catch (e) {} };
+
+        let savedWidth = loadWidth();
+        const collapsed0 = loadCollapsed();
+        if (isDesktop()) {
+          sidebar.classList.toggle("collapsed", collapsed0);
+          if (!collapsed0) sidebar.style.width = savedWidth + "px";
+        }
+        if (collapseBtn) collapseBtn.setAttribute("aria-expanded", collapsed0 ? "false" : "true");
+
+        if (collapseBtn) {
+          collapseBtn.addEventListener("click", () => {
+            const nowCollapsed = sidebar.classList.toggle("collapsed");
+            saveCollapsed(nowCollapsed);
+            collapseBtn.setAttribute("aria-expanded", nowCollapsed ? "false" : "true");
+            if (!nowCollapsed) sidebar.style.width = loadWidth() + "px";
+          });
+        }
+
+        if (!resizer) return;
+        let dragging = false, startX = 0, startW = DEFAULT_W;
+        const applyW = (w) => { sidebar.style.width = Math.max(MIN_W, Math.min(MAX_W, w)) + "px"; };
+        const beginDrag = (clientX) => {
+          if (!isDesktop() || sidebar.classList.contains("collapsed")) return;
+          dragging = true; startX = clientX; startW = sidebar.getBoundingClientRect().width;
+          document.body.classList.add("sidebar-resizing");
+        };
+        const moveDrag = (clientX) => { if (dragging) applyW(startW + (clientX - startX)); };
+        const endDrag = () => {
+          if (!dragging) return;
+          dragging = false;
+          document.body.classList.remove("sidebar-resizing");
+          saveWidth(Math.round(sidebar.getBoundingClientRect().width));
+        };
+        resizer.addEventListener("mousedown", (e) => { beginDrag(e.clientX); e.preventDefault(); });
+        window.addEventListener("mousemove", (e) => moveDrag(e.clientX));
+        window.addEventListener("mouseup", endDrag);
+        resizer.addEventListener("touchstart", (e) => { if (e.touches[0]) beginDrag(e.touches[0].clientX); }, { passive: true });
+        window.addEventListener("touchmove", (e) => { if (dragging && e.touches[0]) moveDrag(e.touches[0].clientX); }, { passive: true });
+        window.addEventListener("touchend", endDrag);
+        resizer.addEventListener("dblclick", () => { applyW(DEFAULT_W); saveWidth(DEFAULT_W); });
+        resizer.addEventListener("keydown", (e) => {
+          if (!isDesktop() || sidebar.classList.contains("collapsed")) return;
+          const cur = sidebar.getBoundingClientRect().width;
+          if (e.key === "ArrowLeft") { applyW(cur - 10); saveWidth(Math.round(cur - 10)); }
+          else if (e.key === "ArrowRight") { applyW(cur + 10); saveWidth(Math.round(cur + 10)); }
+        });
+      } catch (e) { /* 실패해도 기본 CSS 폭(240px)으로 정상 동작 — 조용한 실패 허용 범위(레이아웃 보조기능) */ }
+    },
+
     /** [항목3] 포인트 목록 펼침/접힘 토글 (아이콘 헤더/닫기 버튼 공용) */
     togglePinList(force) {
       const wrap = this.$("section-pin-list");

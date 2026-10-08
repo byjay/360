@@ -119,7 +119,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .home-brand { text-align: center; }
 .home-badge {
   font-size: 10px; letter-spacing: 6px;
-  color: var(--gold); text-transform: uppercase; margin-bottom: 14px;
+  /* [p100 정정, 2026-09-30] var(--gold)=브랜드 블루(index.html:57) — 근접-검정 배경 위 3.91:1
+     (AA 미달, 헤드리스 Chrome 실측). 흰색 쪽으로 섞어 밝기 확보(실측 5.75:1). */
+  color: color-mix(in srgb, var(--gold) 75%, #fff); text-transform: uppercase; margin-bottom: 14px;
 }
 .home-title {
   font-size: clamp(28px, 5vw, 42px);
@@ -229,7 +231,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   gap: 20px; margin-bottom: 26px; flex-wrap: wrap;
 }
 .hub-badge {
-  font-size: 10px; letter-spacing: 5px; color: var(--accent);
+  font-size: 10px; letter-spacing: 5px;
+  /* [p100 정정, 2026-09-30] var(--accent)=var(--gold)=브랜드 블루(index.html:57) — 근접-검정
+     배경 위 3.91:1(AA 미달, 헤드리스 Chrome 실측). .home-badge 와 같은 패턴(위 120행)으로 교정. */
+  color: color-mix(in srgb, var(--accent) 75%, #fff);
   text-transform: uppercase; margin-bottom: 8px;
 }
 .hub-title {
@@ -334,6 +339,22 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 .hub-card-decks { color: var(--accent); }
 .hub-card-date::before { content: "·"; margin-right: 8px; color: var(--text3); }
+/* [WO 20261001-projectinfo] 이름 옆 이름변경(✎) — 🔴 var(--gold-ink) 금지(CLAUDE.md §G-4⑤ 실사고 재발
+   방지): seastar-3d-skin.css 가 .hub-card 배경을 다크(#23262c→#191b20)로 바꾸면서 --gold-ink 는
+   리맵 목록에 없어 "밝은 배경 전용 어두운 톤"이 그대로 남는다(검정 위 검정). 이 앱의 실제 hub-card
+   는 항상 그 다크 스킨이 적용된다(이 파일이 항상 나중에 로드됨) → 고정 골드 리터럴로 못박는다
+   (tree-node.active 와 동일 패턴 — #e0b14a on #1e2024 합성 ≈ 8.2:1, 계산 가능). */
+.hub-card-rename {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-left: 2px; padding: 0;
+  border: none; background: transparent; color: #e0b14a; cursor: pointer;
+  font-size: 13px; border-radius: 6px; vertical-align: middle;
+}
+.hub-card-rename:hover, .hub-card-rename:focus-visible { background: rgba(224,177,74,.16); }
+/* 허브 카드 "다음 일정" 1줄 — SoT: ProjectInfo.nextLine(info_json). 위와 같은 이유로 리터럴 고정. */
+.hub-card-next-sched {
+  margin-top: 4px; font-size: 11.5px; font-weight: 600; color: #e0b14a;
+}
 .hub-card-actions {
   position: absolute; top: 10px; right: 10px;
   display: flex; flex-direction: column; gap: 5px;
@@ -412,6 +433,20 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   font-size: 12px;
 }
 .hub-tree-decks, .hub-tree-regions { list-style: none; }
+/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지(.hub-tree-modes/.hub-tree-mode)를
+   제거 — 구역·영역은 공유, 모드 분리는 구역/영역의 맨 안쪽 잎(CHECKER/360 두 항목)으로 이동했다.
+   라벨 색은 기존 검증된 var(--text) 그대로(카드 배경 실측 이력 위 §406~408 참조). */
+.hub-tree-leaf-modes { list-style: none; display: flex; gap: 6px; margin: 3px 0 2px 18px; }
+.hub-tree-leaf-mode { cursor: pointer; }
+.hub-tree-mode-label { display: inline-flex; align-items: center; padding: 3px 6px; font-weight: 800; font-size: 11px; letter-spacing: .06em; color: var(--text); }
+/* [WO 20260930-pinstyle] 사이드바 트리 잎과 같은 형태·색 단서(도면 마커와 일관) — 작은 아이콘 수준. */
+.hub-tree-leaf-mode-checker .hub-tree-mode-label::before,
+.hub-tree-leaf-mode-360 .hub-tree-mode-label::before{
+  content:""; display:inline-block; width:8px; height:8px; margin-right:5px; flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25);
+}
+.hub-tree-leaf-mode-checker .hub-tree-mode-label::before{ border-radius:2px; background:#c2410c; }
+.hub-tree-leaf-mode-360 .hub-tree-mode-label::before{ border-radius:50%; background:#10b981; }
 .hub-tree-regions { margin: 2px 0 6px 16px; }
 .hub-tree-deck, .hub-tree-region {
   display: block; cursor: pointer; border-radius: var(--radius-sm);
@@ -566,7 +601,12 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .page-info { color: var(--text2); font-size: 10px; }
 .pin-count-badge {
   margin-left: auto;
-  background: rgba(245,158,11,.1); color: var(--gold);
+  background: rgba(245,158,11,.1);
+  /* [p100 정정, 2026-09-30] var(--gold) 는 index.html:57 window.WM_BRAND.accent="#1b75bb"(SEASTAR
+     로고 블루) 를 18_Brand.js 가 페이지 로드마다 강제 주입해 실제로는 항상 블루다(테넌트 무관).
+     다크 패널(--panel) 위 3.35:1(AA 미달, 헤드리스 Chrome 실측) — 흰색 쪽으로 섞어 밝기 확보
+     (테넌트가 다른 accent 를 넣어도 항상 그 색의 밝은 변형이라 대비가 유지된다). 실측 5.24:1. */
+  color: color-mix(in srgb, var(--gold) 75%, #fff);
   font-size: 10px; padding: 2px 10px; border-radius: 10px;
   border: 1px solid rgba(245,158,11,.2);
 }
@@ -632,6 +672,15 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: border-color .15s;
 }
 .admin-gate-input:focus { border-color: var(--gold); }
+/* [WO 20261001-panoshapes] Prompt.ask 선택적 체크박스(예: "장비 설치 위치로 표기") — 카드가 항상
+   크림 고정 배경(.admin-gate-card color-scheme:light)이라 var(--text) 대신 고정 진한 글자색 사용
+   (다크테마 변수 플립 방지 — .admin-gate-sub 의 var(--text2) 와 달리 안전한 고정값으로 명시). */
+.prompt-modal-checkbox-wrap {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  font-size: 12.5px; color: #2b2820; font-family: var(--font-ui); cursor: pointer;
+}
+.prompt-modal-checkbox-wrap.hidden { display: none; }
+.prompt-modal-checkbox-wrap input { width: 18px; height: 18px; }
 .admin-gate-error {
   color: #f87171; font-size: 11px; font-family: var(--font-ui);
   margin-top: 10px;
@@ -909,12 +958,20 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 /* 도면 등록 시 구역 미선택이면 구역 블록 강조 깜빡임 */
 @keyframes zoneReqFlash { 0%,100%{ box-shadow: 0 0 0 0 rgba(56,189,248,0); } 30%,70%{ box-shadow: 0 0 0 3px rgba(56,189,248,.5); } }
 .decks-block.zone-required-flash { animation: zoneReqFlash 1.6s ease; border-radius: 10px; }
-/* #1: 프로젝트 전환 드롭다운 제거 → 현재 프로젝트명 표시 박스 */
-.project-current {
-  width: 100%; box-sizing: border-box; padding: 9px 11px;
-  background: #fffdf8; border: 1px solid var(--border2); border-radius: 8px;
-  color: #2b2820; font-size: 13px; font-weight: 700; font-family: var(--font-ui);
-}
+/* [WO 20260929-tree1] 🔴 마스터: 별도 "프로젝트 박스" 제거 — 이름은 트리 최상단 노드
+   라벨(.tree-node-project)로만 표시한다(SoT 하나). #section-projects(#project-current·
+   #project-actions·#btn-download-project·#btn-delete-project)는 31_Projects.js 리스너의
+   "논리 앵커"로만 DOM 에 남고(기능 유실 방지), 화면엔 항상 숨긴다 — !important 로 고정하는
+   이유: #section-projects 는 UI.toggle(20_App.js) 이 디자이너 여부에 따라 .hidden 을 뗐다
+   붙였다 하므로, 그 토글과 무관하게 계속 숨겨야 한다(트리 안 대리 버튼이 .click() 으로
+   호출만 한다 — display:none 이어도 프로그램적 클릭은 리스너를 그대로 실행한다). */
+#section-projects { display: none !important; }
+/* 트리 바로 위 "+ 프로젝트" 슬림 바 — 박스 아님(배경/테두리 없음), 버튼 하나만. */
+.tree-toolbar { padding: 8px 10px 0; }
+.tree-toolbar #btn-new-project { width: 100%; }
+/* [WO 20260929-tree1] 프로젝트 트리 노드 안의 다운로드·삭제 대리 버튼(11_UI.js 매 렌더
+   새로 생성 — 실 DOM 이동 아님, §근본수정 참조) — 작게, 노드 아래 한 줄. */
+.tree-project-actions { margin: 2px 0 4px 26px; display: flex; gap: 6px; }
 #upload-zone-hint { margin: 8px 2px 0; font-size: 10.5px; }
 
 /* ═══════════════════════════════════════════════════════
@@ -925,8 +982,14 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 }
 
 /* ─── SIDEBAR ─── */
+/* [WO 20261008-layout] 240→300px — 데스크톱 도구 아이콘 레일(§5513, 약 46px)을 트리 왼쪽에
+   추가하면서 트리 이름 칸(.tree-label)이 44px 바닥까지 눌렸다(지휘자 실측, §5591 참조).
+   300px + 레일/트리 패딩 압축(§5591)으로 이름 칸 min-width:140px(판정 기준①)이 겹침·가로스크롤
+   없이 확보된다(실측 320px에서 완전 무오버플로, 300px은 흔한 1줄 케이스 기준 — 아래 §공통
+   작업 규율 보고 수치 참조). 도면(지도) 영역은 이 +60px만큼 줄어든다 — 폭 조절 손잡이
+   (#sidebar-resizer)/접기(#btn-sidebar-collapse, →46px)로 사용자가 되돌릴 수 있다(판정 기준④). */
 .sidebar {
-  width: 240px; max-width: 30vw; flex-shrink: 0;   /* [마스터] 전체화면의 30%를 넘지 않게 */
+  width: 300px; max-width: 30vw; flex-shrink: 0;   /* [마스터] 전체화면의 30%를 넘지 않게 */
   background: var(--bg2);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
@@ -1358,6 +1421,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .map-viewport {
   position: absolute; inset: 0;
   overflow: hidden; cursor: grab;
+  /* [WO 20261001-mobilefast] 브라우저 기본 핀치/더블탭 줌이 자체 핀치 핸들러(20_App._bindMap)와
+     경쟁하면 첫 제스처가 끊기거나 버벅인다 — 이 레이어만 네이티브 제스처를 끄고 전부 JS 로 처리. */
+  touch-action: none;
   background-color: #ece5d6;
   background-image:
     linear-gradient(rgba(120,110,90,.10) 1px, transparent 1px),
@@ -1368,6 +1434,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px, 100% 100%;
 }
 .map-viewport:active { cursor: grabbing; }
+/* [지휘자 발주 2026-10-01] 360 Dive 전환 중 뒤 도면을 살짝 블러·어둡게(06_PanoViewer.js PanoViewer.Dive).
+   #map-viewport 인라인 transform(확대)과 별개로 CSS만으로 처리 — MapCtrl/State 불변. */
+.map-viewport.dive-dim { filter: blur(3px) brightness(.72); transition: filter .2s ease; }
 /* ISO 3D 뷰 — 원근 투영 + 도면 부양감(엔지니어링 아이소메트릭) */
 .map-viewport {
   perspective: 2600px;
@@ -1399,6 +1468,19 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 
 /* Pins layer (마커 스타일은 파일 하단 ENHANCED PIN MARKER 섹션 참조) */
 .pins-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; } /* 영역 레이어(z-index:1)보다 항상 위 — 핀 클릭이 영역 도형/라벨에 가려지지 않게 */
+/* [WO 20261001-leader] CAD 리더선 오버레이 — pins-layer 와 같은 % 좌표계, 줄은 ::vector-effect로 화면기준 고정폭.
+   빨강(#dc2626) on 흰 도면 대비 4.83:1(≥3:1 요구 충족, node 계산 검증). */
+.leader-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; } /* 핀 레이어(.pins-layer z-index:3) 뒤 — 풍선·마커가 선 위에 보이게 */
+.pin-leader-line { stroke: #dc2626; }
+.pin-leader-arrow { fill: #dc2626; }
+.pin-leader-bubble {
+  /* 중심 정렬은 JS(MapCtrl._applyPinBillboard)의 transform: translate(-50%,-50%) scale(inv)가 담당 —
+     여기서 마진으로 또 보정하면 이중 오프셋이 난다. */
+  position: absolute; width: 22px; height: 22px;
+  pointer-events: auto; touch-action: manipulation; z-index: 21; cursor: pointer;
+}
+.pin-leader-bubble.draggable { cursor: grab; }
+.pin-leader-bubble.moving { cursor: grabbing; }
 .pin-marker { pointer-events: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 /* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭 */
 .pin-marker::after {
@@ -1432,7 +1514,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .crosshair-msg {
   position: absolute; top: 10px; left: 50%;
   transform: translateX(-50%);
-  background: var(--gold); color: #000;
+  /* [WO 20261001-mobilefast 대비수정] var(--gold) 는 Brand.js 가 런타임에 테넌트 accent 로
+     덮어쓴다(실측 #1b75bb, L=.1655) — 검은 글자는 4.31:1 미달(p100 실측). 같은 배경에서
+     이미 검증된 흰 글자(.pano-radar-pin-no 1610행과 동일 색쌍)로 교체 → 4.87:1 PASS. */
+  background: var(--gold); color: #fff;
   padding: 4px 16px; border-radius: 4px;
   font-size: 11px; font-weight: 700; font-family: var(--font-mono);
   white-space: nowrap;
@@ -1689,7 +1774,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 /* [FARO Markers] 마커 리스트 패널(테이블) */
 .pano-spot-list {
   position: absolute; top: 64px; right: 18px; z-index: 22;
-  width: 300px; max-width: 86vw; max-height: 60vh; display: flex; flex-direction: column;
+  width: 340px; max-width: 90vw; max-height: 60vh; display: flex; flex-direction: column;
   background: rgba(10,16,32,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border: 1px solid rgba(245,158,11,.28); border-radius: 12px;
   box-shadow: 0 14px 40px rgba(0,0,0,.5); overflow: hidden;
@@ -1707,6 +1792,61 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .psl-row:hover { background: rgba(245,158,11,.13); }
 .psl-num { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; color: #fff; }
 .psl-empty { padding: 24px 14px; text-align: center; color: #9aa6b2; font-size: 12px; line-height: 1.6; }
+/* [WO 20261001-panoshapes] 마커 목록 — 장비 설치 위치 필터 + 장비 태그 */
+.psl-filter { display: flex; align-items: center; gap: 6px; padding: 8px 10px; font-size: 12px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,.08); cursor: pointer; }
+.psl-filter input { width: 16px; height: 16px; }
+.psl-equip-tag { font-size: 11px; }
+
+/* ═══════════════════════════════════════════════════════════
+   [WO 20261001-panoshapes] 360 사진 안 도형(사각형·원) + 리더선 + 라벨 + 첨부
+   · #pano-shape-svg: 매 프레임 재투영되는 외곽선/리더선/화살촉(SVG) — THREE 씬과 별개 레이어.
+   · #pano-shape-labels: 이름·노트·첨부 배지 라벨(HTML, 드래그 가능) — 화면 기준 고정 크기.
+   · 대비: 라벨 배경 rgba(10,16,32,.92) + 글자 #f3ecd9 ≈ 13.8:1(실측 공식) — WCAG AAA.
+═══════════════════════════════════════════════════════════ */
+.pano-shape-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 8; overflow: visible;
+}
+.pano-shape-labels { position: absolute; inset: 0; pointer-events: none; z-index: 9; }
+.pano-shape-label {
+  position: absolute; transform: translate(-6px, -100%);
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 32px; min-height: 32px; max-width: 220px;
+  padding: 6px 9px; border-radius: 9px;
+  background: rgba(10,16,32,.92); color: #f3ecd9;
+  border: 1px solid rgba(245,158,11,.4); box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  font-size: 12px; line-height: 1.4; pointer-events: auto; cursor: pointer;
+}
+.pano-shape-label.draggable { cursor: grab; }
+.pano-shape-label.draggable:active { cursor: grabbing; }
+.pano-shape-label .psl-name { font-weight: 700; word-break: break-word; }
+.pano-shape-label .psl-note-prev { color: #cbd5e1; font-size: 11px; }
+.pano-shape-label .psl-equip-ic { color: #f0b941; }
+.pano-shape-label .psl-label-actions { display: flex; gap: 6px; margin-top: 2px; }
+.pano-shape-label .psl-att-badge,
+.pano-shape-label .psl-attach-btn {
+  min-height: 32px; min-width: 32px; padding: 4px 8px; border-radius: 7px;
+  background: rgba(255,255,255,.1); color: #f3ecd9; border: 1px solid rgba(255,255,255,.18);
+  font-size: 11px; cursor: pointer;
+}
+.pano-shape-label .psl-att-badge:hover,
+.pano-shape-label .psl-attach-btn:hover { background: rgba(255,255,255,.2); }
+/* 라이트박스(첨부 사진 확대) */
+.pano-shape-lightbox {
+  position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+}
+.pano-shape-lightbox.hidden { display: none; }
+.pano-shape-lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 6px; }
+.pano-shape-lightbox button {
+  position: absolute; top: 18px; right: 18px; width: 40px; height: 40px;
+  border-radius: 50%; background: rgba(255,255,255,.12); color: #fff; border: none;
+  font-size: 22px; line-height: 1; cursor: pointer;
+}
+/* 모바일 — 도형 도구 버튼도 다른 .btn-pano-ctrl 과 동일 터치 타깃(기존 CSS가 전체 선택자 커버, 추가 규칙 불필요) */
+@media (max-width: 760px) {
+  .pano-shape-label { max-width: 62vw; }
+}
 /* [도면 연결 복구] 도면 목록 — admin-gate(라이트 카드) 안 */
 .deck-link-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
 .dl-item { display: block; width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px;
@@ -2041,7 +2181,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pano-info-panel.hidden { display: none !important; }
 .pano-info-title {
   display: flex; align-items: center; gap: 8px; justify-content: space-between;
-  font-size: 11px; letter-spacing: 2px; color: var(--gold);
+  font-size: 11px; letter-spacing: 2px;
+  /* [p100 정정, 2026-09-30] var(--gold)=브랜드 블루 — 다크 패널 위 3.82:1(AA 미달, 헤드리스
+     Chrome 실측). 흰색 쪽으로 섞어 밝기 확보. */
+  color: color-mix(in srgb, var(--gold) 75%, #fff);
   margin-bottom: 10px; font-family: var(--font-ui);
 }
 .pano-info-close {
@@ -2405,6 +2548,69 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .allpins-go svg { width: 16px; height: 16px; }
 .allpins-item:hover .allpins-go { color: var(--accent); background: rgba(245,158,11,.1); }
 
+/* ─── [WO 20261001-allpins] 모드 탭 · 선택 · 삭제 · 번호 다시 매기기 ───
+   🔴 대비 함정 재발 방지(위 .allpins-sort-btn.active 사고 참조): 이 패널(.allpins-panel)은
+   seastar-family-tokens.css 가 배경을 밝게(#f4f1ea) 강제한다. 아래 모든 새 컨트롤은 자기 배경을
+   var(--bg)(불투명, 3d-skin 이 항상 다크로 리맵)로 직접 칠해 패널의 밝은 배경과 무관하게 만든다
+   (.allpins-search 가 이미 쓰는 것과 같은 안전한 패턴) — "active" 상태도 배경을 반투명으로 바꾸지
+   않고 border/color 만 바꾼다(반투명 배경 교체가 실제 사고 원인이었다). */
+.allpins-tabs { display: flex; gap: 6px; padding: 0 16px 10px; }
+.allpins-tab {
+  flex: 1; height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--border2); border-radius: 9px;
+  color: var(--text2); font-family: var(--font-ui); font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.allpins-tab:hover { color: var(--text); border-color: var(--text3); }
+.allpins-tab.active { border-color: var(--accent); color: var(--accent); }
+.allpins-tab-cnt { font-size: 10.5px; font-weight: 700; }
+
+/* 🔴 [WO 20261001-allpins p100 실측] .allpins-selcount 는 버튼이 아닌 맨 텍스트라 자기 배경이
+   없으면 .allpins-panel 의 강제 밝은 배경(#f4f1ea)에 var(--text2) 가 그대로 얹혀 2.66:1 로
+   떨어진다(같은 함정 재발 — 버튼은 자기 배경이 있어 안전했지만 텍스트는 아니었다). 행 자체에
+   불투명 배경을 둬 패널 배경과 분리한다. */
+.allpins-selectbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 10px; flex-wrap: wrap; background: var(--bg); }
+.allpins-selectbar.hidden { display: none; }
+.allpins-selall-btn {
+  height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border2);
+  background: var(--bg); color: var(--text2); font-family: var(--font-ui); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.allpins-selall-btn:hover { color: var(--text); border-color: var(--text3); }
+.allpins-selcount { font-size: 12px; color: var(--text2); margin-left: auto; font-weight: 600; }
+
+.allpins-sel-wrap { flex: none; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.allpins-sel { width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent); }
+.allpins-item.selected { border-color: var(--accent); background: rgba(245,158,11,.08); }
+
+/* 모드별 형태 단서(색맹 대비 — 테두리 색 + 번호 배지 색 둘 다, 색만으로 구분 안 함) */
+.allpins-item.allpins-mode-checkboard { border-left: 3px solid #c2410c; }
+.allpins-item.allpins-mode-content { border-left: 3px solid #1d4ed8; }
+.allpins-item.allpins-mode-checkboard .allpins-thumb-no { background: #9a3412; } /* 흰글자 대비 7.31:1(PinSeries 실측값 재사용) */
+.allpins-item.allpins-mode-content .allpins-thumb-no { background: #1e3a8a; }    /* 흰글자 대비 10.36:1(PinSeries 실측값 재사용) */
+
+.allpins-band-btn {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text2);
+  background: var(--bg); border: 1px solid var(--border2); border-radius: 7px;
+  padding: 3px 9px; cursor: pointer; white-space: nowrap;
+}
+.allpins-band-btn:hover { color: var(--text); border-color: var(--text3); }
+.allpins-band-btn.hidden { display: none; }
+
+.allpins-actions {
+  display: flex; gap: 8px; padding: 10px 16px;
+  border-top: 1px solid var(--border); background: var(--bg);
+  position: sticky; bottom: 0; /* 모바일 375px 포함 — 하단 고정 액션 바 */
+}
+.allpins-actions.hidden { display: none; }
+.allpins-action-btn {
+  flex: 1; height: 38px; border-radius: 9px; border: 1px solid var(--border2);
+  background: var(--bg3); color: var(--text); font-family: var(--font-ui); font-weight: 700; font-size: 13px; cursor: pointer;
+}
+.allpins-action-btn:hover:not(:disabled) { border-color: var(--text3); }
+.allpins-action-btn:disabled { opacity: .45; cursor: not-allowed; }
+.allpins-action-btn.hidden { display: none; }
+.allpins-action-danger { border-color: #ef4444; color: #fca5a5; }
+.allpins-action-danger:hover:not(:disabled) { border-color: #f87171; }
+
 /* ─── Responsive ─── */
 @media (max-width: 600px) {
   .sidebar { width: 200px; }
@@ -2450,6 +2656,12 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: .15s;
 }
 .tl-compare-btn:hover { filter: brightness(1.12); transform: translateY(-1px); }
+/* [WO 20261002-gap 묶음A⑤] 되돌리기(편집권한)·삭제(관리자) — 분할비교 pill과 같은 톤, 역할색만 구분.
+   .tl-compare-btn 자체가 margin-left:auto라 세 버튼(되돌리기·삭제·분할비교)이 우측에 순서대로 모인다. */
+.tl-revert-btn { background: color-mix(in srgb, #60a5fa 78%, #000 0%); border-color: color-mix(in srgb, #60a5fa 60%, #fff 0%); margin-left: 6px; }
+.tl-delete-btn { background: color-mix(in srgb, #ef4444 78%, #000 0%); border-color: color-mix(in srgb, #ef4444 60%, #fff 0%); margin-left: 6px; }
+/* [WO 20261002-gap 묶음A④] 헤더의 "원본" 링크(<a>) — 버튼과 동일 톤, 밑줄 제거 */
+#btn-pano-orig { text-decoration: none; }
 .tl-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
 .tl-chips::-webkit-scrollbar { height: 5px; }
 .tl-chips::-webkit-scrollbar-thumb { background: rgba(43,40,32,0.34); border-radius: 3px; }
@@ -2511,6 +2723,47 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   .tl-compare-btn { font-size: 10px; padding: 2px 7px; }
 }
 
+/* ══════════ 360 동기 비교(기본 모드) — 두 뷰어 나란히 ══════════ */
+.pano-compare-360 {
+  position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column;
+  background: #0b0f17; user-select: none;
+}
+.pano-compare-360.hidden { display: none !important; }
+.cmp360-panes { flex: 1 1 auto; display: flex; flex-direction: row; min-height: 0; }
+.cmp360-pane { position: relative; flex: 1 1 50%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.cmp360-pane + .cmp360-pane { border-left: 2px solid rgba(255,255,255,.18); }
+.cmp360-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; z-index: 2;
+  background: rgba(10,16,32,.72); backdrop-filter: blur(6px);
+}
+.cmp360-sel {
+  flex: 1 1 auto; min-width: 0; font-size: 12px; padding: 4px 6px; border-radius: 6px;
+  background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.22);
+}
+.cmp360-sel option { color: #111; }
+.cmp360-label { font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
+.cmp360-canvas { flex: 1 1 auto; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.cmp360-bar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 10px; background: rgba(10,16,32,.85);
+}
+.cmp360-btn {
+  padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 700;
+  color: #fff; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.26);
+  transition: .15s;
+}
+.cmp360-btn:hover { background: rgba(255,255,255,.24); }
+.cmp360-btn.on { background: color-mix(in srgb, var(--accent) 55%, transparent); border-color: var(--accent); }
+.cmp360-btn-close { background: rgba(220,38,38,.85); border-color: rgba(220,38,38,.9); }
+.cmp360-btn-close:hover { background: rgba(220,38,38,1); }
+/* 모바일 세로 — 상/하로 쌓기 */
+@media (max-width: 640px), (orientation: portrait) {
+  .cmp360-panes { flex-direction: column; }
+  .cmp360-pane + .cmp360-pane { border-left: none; border-top: 2px solid rgba(255,255,255,.18); }
+  .cmp360-bar { gap: 6px; padding: 8px; flex-wrap: wrap; }
+  .cmp360-btn { font-size: 11px; padding: 6px 10px; }
+}
+
 /* ══════════ 영역(Zone) 하이라이트 ══════════ */
 .zones-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; } /* 항상 핀 레이어(.pins-layer z-index:3) 뒤 — 핀 클릭 간섭 방지 */
 /* SVG 도형 오버레이 — 도면 전체를 덮고 % 좌표(viewBox 0~100)로 그림 */
@@ -2520,6 +2773,16 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   fill: color-mix(in srgb, var(--zc, #f59e0b) 14%, transparent);
   stroke: var(--zc, #f59e0b); stroke-width: 0.5; vector-effect: non-scaling-stroke;
   transition: fill .15s;
+}
+/* [WO 20261001-mobilefast] 핀 생성 모드(#crosshair-overlay 표시 중, 20_App._togglePlacing SoT)에서는
+   영역 경계(도형·라벨·삭제버튼)가 탭을 가로채지 않도록 pointer-events 를 끈다 — 경계는 이미
+   z-index:1(핀 z-index:3보다 아래)이라 "맨 뒤"지만, pointer-events:auto 는 z-order 와 무관하게
+   클릭을 가로챘다(핀 생성 탭이 도형 클릭으로 오인되던 원인). 영역 편집(그리기/도구)은 이 상태에서
+   진입할 수 없으므로(placing 토글 시 cancelActiveOperation 이 선행 종료) 회귀 없음. */
+#map-viewport:has(#crosshair-overlay:not(.hidden)) .zone-shape,
+#map-viewport:has(#crosshair-overlay:not(.hidden)) .zone-box-label,
+#map-viewport:has(#crosshair-overlay:not(.hidden)) .zone-box-del {
+  pointer-events: none;
 }
 .zone-shape { stroke-width: 2px; }   /* non-scaling: 화면상 2px 고정 */
 .zone-shape:hover, .zone-shape.active {
@@ -3496,16 +3759,69 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
    이미 토글하는 .active 클래스를 형제선택자로 읽기만 한다(새 JS 훅 없음). 값 SoT는
    App._setCheckboardStart()(24_Settings.js 에서 호출), 여기는 표기만. */
 .regmode-start-wrap { display: none; align-items: center; gap: 6px; margin-left: 6px; padding-left: 8px; border-left: 1px solid rgba(0,0,0,.14); flex-shrink: 0; }
-.regmode-start-label { font-size: 11px; font-weight: 600; color: var(--text2); white-space: nowrap; }
-.regmode-start-input { width: 52px; padding: 4px 6px; font-size: 13px; border-radius: 6px; border: 1px solid rgba(0,0,0,.18); background: #fff; color: #0f172a; text-align: center; }
-.regmode-start-input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
+/* [WO 20261001-startno] 구 `시작 #` 입력 → [번호 대역 ▾] 버튼 + 시트(24b_NumBand). 🔴 색은 전부 고정값 —
+   seastar-3d-skin.css 가 :root --bg2/--text 를 다크로 remap 하므로 var() 를 쓰면 런타임 대비가 뒤집힌다.
+   대비(WCAG 2.1): #0f172a/#fff 17.85 · #475569/#fff 7.58 · #fff/#0f172a 17.85 · #1e3a8a/#eff6ff 9.73 ·
+   #991b1b/#fef2f2 7.53 · #fff/#c2410c 5.18 · #fff/#047857 5.48 · #e2e8f0/#0f172a 14.5 · #0f172a/#fbbf24 10.7 */
+.numband-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; min-height: 32px; border-radius: 8px; border: 1px solid #94a3b8; background: #ffffff; color: #0f172a; font-size: 12.5px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.numband-btn:hover { background: #f1f5f9; }
+.numband-btn:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
 #btn-regmode-checkboard.active ~ #regmode-start-wrap,
 #btn-regmode-photo.active ~ #regmode-start-wrap { display: flex; }
+.numband-sheet { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: flex-start; justify-content: center; padding-top: 76px; }
+.numband-sheet.hidden { display: none; }
+.numband-sheet .numband-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .45); }
+.numband-sheet .numband-panel { position: relative; width: min(460px, 94vw); max-height: calc(100vh - 96px); overflow-y: auto; box-sizing: border-box; background: #ffffff; color: #0f172a; border-radius: 14px; padding: 16px 16px 12px; box-shadow: 0 18px 48px rgba(15, 23, 42, .35); }
+.numband-sheet .numband-head { display: flex; align-items: center; gap: 8px; }
+.numband-sheet .numband-title { margin: 0; font-size: 16px; font-weight: 800; color: #0f172a; }
+.numband-sheet .numband-mode { font-size: 11.5px; font-weight: 800; padding: 3px 8px; border-radius: 999px; color: #ffffff; background: #c2410c; }
+.numband-sheet .numband-mode.nb-content { background: #047857; }
+.numband-sheet .numband-x { margin-left: auto; min-width: 36px; min-height: 36px; border: none; border-radius: 8px; background: transparent; color: #334155; font-size: 22px; line-height: 1; cursor: pointer; }
+.numband-sheet .numband-x:hover { background: #f1f5f9; }
+.numband-sheet .numband-sub { margin: 6px 0 12px; font-size: 12.5px; line-height: 1.5; color: #475569; }
+.numband-sheet .numband-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; }
+.numband-sheet .numband-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 52px; padding: 8px 10px; border-radius: 10px; border: 1.5px solid #cbd5e1; background: #f8fafc; color: #0f172a; text-align: left; cursor: pointer; box-sizing: border-box; min-width: 0; }
+.numband-sheet .numband-chip:hover { border-color: #64748b; }
+.numband-sheet .numband-chip:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.numband-sheet .numband-chip.is-taken { border-style: dashed; border-color: #b45309; }
+.numband-sheet .numband-chip.is-mine { background: #0f172a; border-color: #0f172a; color: #ffffff; }
+.numband-sheet .numband-chip-range { font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.numband-sheet .numband-chip-meta { font-size: 11.5px; color: #475569; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.numband-sheet .numband-chip.is-mine .numband-chip-meta { color: #e2e8f0; }
+.numband-sheet .numband-chip-mine { font-size: 10.5px; font-weight: 800; padding: 1px 6px; border-radius: 999px; background: #fbbf24; color: #0f172a; }
+.numband-sheet .numband-next { margin: 12px 0 4px; padding: 10px 12px; border-radius: 10px; background: #eff6ff; color: #1e3a8a; font-size: 15px; font-weight: 800; }
+.numband-sheet .numband-next.is-full { background: #fef2f2; color: #991b1b; }
+.numband-sheet .numband-adv { margin-top: 10px; font-size: 13px; color: #0f172a; }
+.numband-sheet .numband-adv > summary { cursor: pointer; color: #1e3a8a; font-weight: 700; min-height: 32px; line-height: 32px; }
+.numband-sheet .numband-adv-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.numband-sheet .numband-adv-label { font-size: 12.5px; color: #334155; font-weight: 700; }
+.numband-sheet .numband-start { width: 96px; min-height: 36px; padding: 6px 8px; border-radius: 8px; border: 1px solid #94a3b8; background: #ffffff; color: #0f172a; font-size: 14px; font-weight: 700; text-align: center; box-sizing: border-box; }
+.numband-sheet .numband-apply { min-height: 36px; padding: 6px 14px; border-radius: 8px; border: none; background: #0f172a; color: #ffffff; font-weight: 700; cursor: pointer; }
+.numband-sheet .numband-hint { margin: 6px 0 0; font-size: 12px; color: #475569; line-height: 1.5; }
+.numband-sheet .numband-status { margin: 8px 0 0; min-height: 1em; font-size: 12px; color: #334155; }
+.numband-sheet .numband-status.hidden { display: none; }
+/* [WO 20261001-allpins] 번호 다시 매기기 시트 — numband-sheet 의 흰 패널/진한 글자 팔레트 재사용(SoT) */
+.numband-sheet .allpins-arn-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.numband-sheet .allpins-arn-row label { font-size: 12.5px; color: #334155; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.numband-sheet .allpins-arn-preview { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.numband-sheet .allpins-arn-pair { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 7px; background: #eff6ff; color: #1e3a8a; }
+.numband-sheet .allpins-arn-pair.is-dup { background: #fef2f2; color: #991b1b; }
+.numband-sheet .allpins-arn-more { font-size: 12px; color: #475569; align-self: center; }
+.numband-sheet .allpins-arn-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.numband-sheet .allpins-arn-actions #arn-cancel { background: #e2e8f0; color: #0f172a; }
+.numband-sheet #arn-apply:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 720px) {
+  .numband-sheet { align-items: flex-end; padding-top: 0; }
+  .numband-sheet .numband-panel { width: 100vw; max-height: 82vh; border-radius: 16px 16px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .numband-sheet .numband-chip { min-height: 56px; }
+}
 @media (max-width: 760px) {
   .regmode-seg { gap: 6px; }
   .regmode-btn { min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 13px; }
-  .regmode-start-input { min-width: 56px; min-height: 44px; font-size: 15px; }
-  .regmode-start-label { font-size: 12px; }
+  /* [WO 20261001-mobilefast] 모바일 지도 가림 축소 — 이 띠는 기존 44px 버튼 + 6px 패딩으로
+     56px 전체폭(R1 실측)을 차지해 지도를 가렸다. 요구사항(판정5)은 "한 줄 32px 이하".
+     터치 타깃 44px 권고보다 이 요구가 우선(마스터 명시 지시) — 버튼을 26px로, 패딩을 줄인다. */
+  .numband-btn { min-height: 26px; font-size: 11.5px; padding: 3px 9px; }
   /* 375px 폭에서 세그먼트 3버튼+시작번호를 한 줄에 다 넣을 공간이 없다 — 요구사항대로
      시작번호를 topbar 바로 아래 두 번째 줄로 뺀다. position:fixed 는 .topbar의
      overflow-x:auto 가로스크롤/overflow-y:hidden 클리핑(아래 미디어쿼리) 밖에서 그려지므로
@@ -3514,9 +3830,16 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   #btn-regmode-photo.active ~ #regmode-start-wrap {
     position: fixed; left: 0; right: 0; top: 68px;
     justify-content: center; margin-left: 0; border-left: none;
-    background: var(--bg2); padding: 6px 16px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    background: var(--bg2); padding: 2px 12px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
     z-index: 139;
   }
+  /* [WO 20261002-fixmobile2] 🔴 실측(지휘자 R2, 375×812): 배치모드 안내 배너(.crosshair-msg,
+     map-viewport 기준 top:10px absolute → 화면좌표 68+10=78px)가 바로 위 번호대역 칩 줄
+     (위 규칙 top:68px, 높이 = padding 2px×2 + .numband-btn min-height 26px = 30px → 화면좌표
+     68~98px, z-index:139)과 겹쳤다(68~98 vs 78~97). 마스터 "숨기지 마" — 배너를 칩 줄 아래로
+     내린다. map-viewport 는 topbar(68px) 바로 아래에서 시작하므로 화면좌표 98px+8px갭 = 106px은
+     map-viewport 기준 106-68=38px. */
+  .crosshair-msg { top: 38px; }
   /* [WO 20260929-mobile-overflow] 실측(375×812): 뒤에 오는 브랜드 로고(brand-logo-top,
      ~150px)·점·모드라벨 등이 앞자리를 차지해 3모드 세그먼트의 "사진 등록" 버튼이 화면 밖으로
      완전히 밀려 아예 안 보였다(가로 스크롤로만 도달 — 요구사항은 스크롤 없이 화면 안).
@@ -3561,12 +3884,14 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     padding-bottom:env(safe-area-inset-bottom,0px);}
   .mdock-bar{display:flex;align-items:stretch;height:var(--mdock-h);}
   /* [결함4 2026-09-17 지휘자 실측] 도움말 "?" 토글(36_Help.js, 인라인 bottom:16px/z-index:9550)이
-     이 도크(위 .mobile-dock, z-index:140)에 덮여 "메뉴" 항목이 눌리지 않았다.
-     도크 높이(58px)만 피하면 그 위 .pinfilter-bar(bottom:64px, 실측 높이 48px)와 새로 겹치므로
-     칩 바 상단까지 올린다 — SoT 변수 재사용(값 중복 정의 없음), 인라인 스타일 덮으려면 !important 필요. */
-  [data-help-toggle]{
-    bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px) !important;
-  }
+     이 도크(위 .mobile-dock, z-index:140)에 덮여 "메뉴" 항목이 눌리지 않았다. 도크 높이(58px)만
+     피하면 그 위 .pinfilter-bar(bottom:64px, 실측 높이 48px)와 새로 겹치므로 칩 바 상단까지
+     올린다 — SoT 변수 재사용(값 중복 정의 없음), 인라인 스타일 덮으려면 !important 필요.
+     [WO 20261002-gap] 🔴 이 규칙이 [요청·질문]·[✉] 과 따로(중복) 있어 §10 SoT 위반이었다 —
+     아래(이 파일 더 아래) body:has(#screen-app.active) 그룹 규칙 하나로 합쳤다(36_Help.js
+     "?"도 포함). .mobile-dock·.pinfilter-bar 둘 다 #screen-app 안에만 있어(허브 화면엔 둘 다
+     없음) 화면별로 나눠야 허브에서 새로 겹치지 않는다(실측: p114 "허브→도면표시" 회귀,
+     CHECKER 잎이 가려짐 — 이 규칙이 화면 구분 없이 항상 걸려 있던 게 원인). */
   .mdock-chip{position:relative;flex:1 1 0;min-width:40px;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:2px;padding:6px 1px;
     background:transparent;border:none;cursor:pointer;color:#6b6457;
@@ -3685,6 +4010,11 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
      화면 밖 도달불가로 남는다. flex-shrink:0 으로 자식이 짓눌리지 않게 하면 총합이 그대로 넘쳐 .sidebar의
      overflow-y:auto가 정상적으로 scrollHeight>clientHeight를 만들어 전부 스크롤로 도달 가능해진다. */
   .sidebar > * { flex-shrink: 0; }
+  /* [WO 20261008-sidetree] 데스크톱 기본 규칙(위 .side-tree, style.css:~5474)은 flex:1 로 남는
+     공간을 채우지만, 모바일 바텀시트는 WO 20260918 mobile-reachability 가 요구하는 고정 캡
+     (레이아웃 점유 공간 = 실제 렌더 크기, flex-basis = max-height)이 그대로 필요하다 — 여기서
+     재선언해 데스크톱의 flex:1(grow)을 무효화한다(.sidebar > * 의 flex-shrink:0 과 결합). */
+  .side-tree { flex: 0 0 clamp(160px, 34vh, 320px); max-height: clamp(160px, 34vh, 320px); min-height: 0; }
   /* 시트 핸들(드래그 그립) */
   .sidebar::before {
     content: ""; display: block; position: sticky; top: 0;
@@ -3727,6 +4057,109 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
     width: 100%; max-width: 560px;
     border-radius: 16px 16px 0 0;
     margin-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ════════════════════════════════════════════
+   [WO 20260929-mobile] 360 뷰어 모바일 축소 — 헤더/컨트롤패드/미니맵 더보기 토글 +
+   모바일 도크 메인4(메뉴/포인트/사진등록/더보기)+시트 재구성.
+   데스크톱(>760px)은 토글 숨김 + display:contents 로 원 레이아웃 그대로(회귀 0).
+   ════════════════════════════════════════════ */
+.pano-more-toggle, .pano-tools-toggle { display: none; }
+.pano-header-more { display: contents; }        /* 데스크톱: iso-views/notes가 그대로 헤더의 직계 flex item */
+.pano-radar-more { display: none; }
+.pano-radar-more-group { display: contents; }   /* 데스크톱: 방향/확대/줌± 4버튼 인라인 그대로 */
+.mdock-more-sheet { display: none; }            /* 데스크톱: .mobile-dock 자체가 숨김(3441) — 이중 방어 */
+
+/* 🔴 [WO 20260930-mobilehint · 지휘자 실측] 근본원인: `.pano-hint span`(1621행, 특이도 0,1,1)이
+   태그+클래스라서, 클래스 한 개짜리 `.hint-touch-only`/`.hint-mouse-only`(특이도 0,1,0)보다
+   항상 이긴다 — 순서와 무관하게 두 힌트 세트가 동시에 display:inline-flex 로 남아 375px에서
+   4묶음이 다 보이고 좌우로 잘렸다. `.pano-hint` 조상 클래스를 더해 특이도를 0,2,0 으로 올려 이긴다. */
+.pano-hint .hint-touch-only { display: none; }
+@media (pointer: coarse) {
+  .pano-hint .hint-mouse-only { display: none; }
+  .pano-hint .hint-touch-only { display: inline-flex; }
+}
+
+@media (max-width: 760px) {
+  /* R1/R2 — 파노 헤더 더보기(꼭지점4+이슈) — 닫기는 항상 이 토글 밖(always-visible)에 남는다 */
+  .pano-more-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; border-radius: 8px; flex: none;
+    background: rgba(20,24,34,0.82); border: 1px solid rgba(255,255,255,0.45);
+    color: #fff; cursor: pointer;
+  }
+  /* [R1 추가수정] 더보기 토글만으로는 부족했다 — 실측 결과 #brand-logo-pano(≈99.5px, 종횡비
+     유지 스케일)+위치명(48vw 캡=180px)+더보기(34)+닫기(65)의 합이 375px 폭을 51.6px 초과했다
+     (진단: DIAG_HEADER x=361.5 right=426.6). 로고/닫기는 고정폭으로 두고, 위치명만 남은
+     공간만큼 유동적으로 줄어들게(min-width:0+flex+ellipsis) 해 항상 닫기가 화면 안에 들어오게 한다. */
+  .pano-header-actions { flex-shrink: 0; }
+  .pano-brand { min-width: 0; flex: 1 1 auto; }
+  #pano-location-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pano-more-toggle.active { background: rgba(245,158,11,.32); border-color: var(--gold); }
+  .pano-header-more {
+    display: none; position: absolute; top: calc(100% + 6px); right: 16px; z-index: 30;
+    flex-direction: column; align-items: stretch; gap: 8px;
+    background: rgba(10,16,32,.94); border: 1px solid rgba(255,255,255,.18);
+    border-radius: 10px; padding: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.5);
+  }
+  .pano-header-more.open { display: flex; }
+  .pano-header-more .pano-iso-views { justify-content: center; }
+  .pano-header-more .btn-pano-notes { justify-content: center; }
+
+  /* R4 — 컨트롤 패드 기본 접힘, [⋯ 도구]로 펼침. 펼친 버튼은 36px 이하(판정 기준). */
+  .pano-tools-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    position: absolute; bottom: var(--pano-controls-bottom); left: 50%; transform: translateX(-50%);
+    z-index: 14; padding: 7px 14px; border-radius: 999px;
+    background: rgba(10,16,32,.78); border: 1px solid rgba(255,255,255,.22);
+    color: #f1f3f8; font-size: 12px; font-weight: 700; font-family: var(--font-ui); cursor: pointer;
+  }
+  .pano-tools-toggle.active { background: rgba(245,158,11,.28); border-color: var(--gold); }
+  #pano-controls:not(.mobile-open) { display: none !important; }
+  #pano-controls.mobile-open {
+    flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 24px);
+  }
+  /* [seastar-family-tokens.css:367-381] pointer:coarse 규칙이 .btn-pano-ctrl 을 44px !important로
+     강제한다 — 이 패드는 이제 기본 접힘(사용자가 직접 펼침)이라 36px 이하로 낮춰도 오조작 위험이
+     낮다(판정 기준 3 "터치 타깃 최소 32px" 충족, ≥32 & ≤36). id+class 조합으로 그 규칙보다
+     특이도를 높여 이긴다(로드 순서 무관). */
+  #pano-controls.mobile-open .btn-pano-ctrl {
+    min-height: 0 !important; min-width: 0 !important; padding: 5px 8px !important;
+  }
+  #pano-controls.mobile-open .btn-pano-ctrl svg { width: 15px !important; height: 15px !important; }
+  #pano-controls.mobile-open .btn-pano-ctrl span { font-size: 10px; }
+
+  /* R3 — 미니맵 더보기: 방향/확대(패널)/줌± 를 접고 [접기/펼치기]만 상시 노출 */
+  .pano-radar-more { display: inline-flex; }
+  .pano-radar-more-group {
+    display: none; position: absolute; top: calc(100% + 4px); right: 4px; z-index: 25;
+    flex-wrap: wrap; gap: 2px; width: 92px; justify-content: flex-end;
+    background: rgba(10,16,32,.94); border: 1px solid rgba(255,255,255,.18);
+    border-radius: 8px; padding: 4px; box-shadow: 0 10px 24px rgba(0,0,0,.5);
+  }
+  .pano-radar-more-group.open { display: flex; }
+  .pano-radar-title, .pano-radar-page { flex-shrink: 0; white-space: nowrap; }
+
+  /* R6 — 모바일 도크 더보기 시트(보기/편집/페이지/주석/목록/업로드) */
+  .mdock-more-sheet {
+    display: none; position: fixed; left: 8px; right: 8px;
+    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 8px); z-index: 141;
+    grid-template-columns: repeat(3, 1fr); gap: 2px;
+    background: linear-gradient(180deg,#faf7f0 0%,#f1ebdf 100%);
+    border: 1px solid var(--border2); border-radius: 14px;
+    box-shadow: 0 -10px 30px rgba(43,40,32,.24); padding: 6px;
+  }
+  .mdock-more-sheet.open { display: grid; }
+  .mdock-more-sheet .mdock-chip { flex: none; min-height: 52px; }
+  body.role-viewer .mdock-more-sheet { grid-template-columns: repeat(2, 1fr); } /* 뷰어는 편집/주석 숨김 → 칸 재배치 */
+
+  /* [WO 20260930-mobilehint] 위 `.hint-mouse-only`/`.hint-touch-only` 특이도 수정으로 375px에선
+     기기당 한 세트(2묶음)만 남지만, nowrap+고정폭 padding 이면 여전히 화면을 넘을 수 있어
+     감싸기 허용 + 폭 상한을 둔다(#pano-controls.mobile-open 과 동일 패턴, 3785행). */
+  .pano-hint {
+    flex-wrap: wrap; white-space: normal; max-width: calc(100vw - 24px);
+    gap: 6px 14px; padding: 7px 12px; text-align: center;
   }
 }
 
@@ -4038,7 +4471,9 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pin-grid-head-left > i{ color:var(--gold-ink,#7e5d12); font-size:14px; }
 .pin-grid-title{ font-weight:700; font-size:13.5px; color:var(--text,#2b2820); white-space:nowrap; }
 .pin-grid-page-badge{
-  font-size:11px; font-weight:700; color:#fff; background:var(--blue,#2f6db5);
+  /* [p100 정정, 2026-09-30] var(--blue) 다크 remap(#3a97dd) 은 흰 글자와 3.16:1(AA 미달,
+     헤드리스 Chrome 실측) — 라이트 테마 값(#2f6db5, 더 짙은 블루)으로 고정. 실측 5.28:1. */
+  font-size:11px; font-weight:700; color:#fff; background:#2f6db5;
   padding:2px 7px; border-radius:999px; line-height:1.5;
 }
 .pin-grid-count{
@@ -4092,8 +4527,12 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pin-grid-row > td{ padding:8px 8px; }
 .pin-grid-row:hover{ background:var(--bg3,#efe9dc); }
 .pin-grid-row.active{ background:rgba(201,150,42,.14); box-shadow:inset 3px 0 0 var(--gold-ink,#7e5d12); }
-.pin-grid-row td.pgt-no{ text-align:center; font-weight:700; color:var(--gold-ink,#7e5d12); }
-.pin-grid-row td.pgt-page{ text-align:center; color:var(--text2,#6b6457); font-weight:600; }
+/* [p100 정정, 2026-09-30] --gold-ink(#7e5d12) 는 밝은 배경 전용 톤(주석 정의부 참조)인데 이 표는
+   다크 패널 위라 2.15~2.69:1(AA 미달, 헤드리스 Chrome 실측) — var() 대신 고정 골드 #e0b14a
+   (다크 배경용, 실측 6.3~8.2:1). --text2 도 골드빛 선택행(rgb(53,49,38)) 위 4.34:1로 근소 미달 —
+   더 밝은 --text 로 교체(실측 8.6:1+). */
+.pin-grid-row td.pgt-no{ text-align:center; font-weight:700; color:#e0b14a; }
+.pin-grid-row td.pgt-page{ text-align:center; color:var(--text,#2b2820); font-weight:600; }
 .pin-grid-name-cell{ display:flex; flex-direction:column; gap:2px; min-width:0; }
 .pin-grid-name-txt{
   font-weight:600; color:var(--text,#2b2820);
@@ -4102,7 +4541,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pin-grid-name-tags{ display:flex; gap:5px; align-items:center; }
 .pin-grid-tag{ font-size:9.5px; color:var(--text3,#938a78); }
 .pin-grid-tag.has{ color:var(--green,#2f9e6f); }
-.pin-grid-row td.pgt-coord{ color:var(--text2,#6b6457); font-variant-numeric:tabular-nums; font-size:11px; white-space:nowrap; }
+.pin-grid-row td.pgt-coord{ color:var(--text,#2b2820); font-variant-numeric:tabular-nums; font-size:11px; white-space:nowrap; }
 .pin-grid-row td.pgt-360{ text-align:center; }
 .pin-grid-go{
   width:26px; height:26px; display:inline-grid; place-items:center;
@@ -4242,6 +4681,11 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .pap-close { flex: 0 0 auto; width: 28px; height: 28px; padding: 8px; box-sizing: content-box; border: none; background: rgba(0,0,0,.06); border-radius: 8px; font-size: 18px; cursor: pointer; color: #334155; }
 .pap-close:hover { background: rgba(0,0,0,.12); }
 .pap-meta { margin: 8px 0 14px; font-size: 12px; color: #64748b; }
+/* [지휘자 발주 2026-09-29 항목5] 🔴 세로로 긴(고화질/세로촬영) 사진은 width:100%(index.html
+   인라인 style, 수정 금지 대상이라 여기서 새 속성으로 보강)만으로는 높이가 무제한으로 늘어나
+   패널 전체 높이를 늘렸다(지휘자 실측 — 인라인 style 은 width/border-radius/display/cursor 만
+   지정해 max-height/object-fit 은 충돌 없이 추가 가능, !important 불필요). */
+#pap-photo-img { max-height: 45vh; object-fit: contain; background: #f1f5f9; }
 /* [WO 20260929] 3버튼(360 보기/위치 이동/삭제) 한 줄 — "수정/사진 추가" 제거로 2열→3열 */
 .pap-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .pap-btn {
@@ -4260,7 +4704,11 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 /* [WO 20260929] 삭제는 같은 한 줄·같은 크기, 빨강 "외곽선"으로만 구분(가득 찬 빨강 대신) */
 .pap-del { background: #fff; border: 1.5px solid #dc2626; color: #dc2626; }
 .pap-del:hover { background: #fef2f2; }
-.pap-hint { margin: 12px 0 0; font-size: 11px; color: #94a3b8; line-height: 1.5; }
+/* [p100 정정, 2026-09-30] #94a3b8(slate-400) 는 흰 카드(#pap-*) 위 2.56:1(AA 미달, 헤드리스 Chrome
+   실측) — slate-500 #64748b 로 교체(실측 4.76:1). 같은 흰 카드 계열(company-gate/designers-modal/
+   proj-members-modal) 에 재사용되는 곳 전부 함께 교정(§공통 작업 규율 준수, 형제 호출부 전수).
+   #regmode-start-input:disabled 는 WCAG 1.4.3 예외(비활성 컨트롤) 대상이라 그대로 둔다. */
+.pap-hint { margin: 12px 0 0; font-size: 11px; color: #64748b; line-height: 1.5; }
 /* [WO 20260928 마스터: "까만 영역을 없애 글자 안보여"] 근본원인(실측) — 이 패널의 #pap-* 입력칸은
    public/index.html 인라인 style 로 color:#0f172a(라이트 전용 진한 남색)만 고정돼 있고 배경은
    지정하지 않는다. 배경은 style.css 전역 규칙(input[type], textarea, select { background: var(--bg2) })을
@@ -4348,7 +4796,7 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .company-devcode.hidden { display: none; }
 .company-error { margin: 10px 0 0; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 9px; font-size: 12.5px; color: #dc2626; }
 .company-error.hidden { display: none; }
-.company-footer-note { margin: 16px 0 6px; font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.5; }
+.company-footer-note { margin: 16px 0 6px; font-size: 11px; color: #64748b; text-align: center; line-height: 1.5; }
 .company-cancel { display: block; width: 100%; padding: 9px; background: none; border: none; color: #64748b; font-size: 13px; cursor: pointer; }
 
 /* ═══ 관리자: 회사 도메인 / 가입 사용자 패널 ═══ */
@@ -4360,16 +4808,16 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 .domains-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 340px; overflow-y: auto; }
 .domain-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: rgba(255,255,255,.04); border: 1px solid var(--border2, rgba(255,255,255,.1)); border-radius: 9px; }
 .domain-name { font-weight: 800; font-size: 14px; color: #38bdf8; flex: 0 0 auto; }
-.domain-scope { flex: 1; font-size: 12px; color: #94a3b8; }
+.domain-scope { flex: 1; font-size: 12px; color: #64748b; }
 .members-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .member-grid-head, .member-row { display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.4fr 36px; gap: 8px; align-items: center; padding: 8px 10px; }
-.member-grid-head { font-size: 11px; font-weight: 700; color: #94a3b8; border-bottom: 1px solid var(--border2, rgba(255,255,255,.1)); text-transform: uppercase; }
+.member-grid-head { font-size: 11px; font-weight: 700; color: #64748b; border-bottom: 1px solid var(--border2, rgba(255,255,255,.1)); text-transform: uppercase; }
 .members-list { max-height: 360px; overflow-y: auto; }
 .member-row { font-size: 12.5px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,.05); }
 .member-row .mem-col-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .member-row .mem-col-company { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; }
-.member-row .mem-col-login { color: #94a3b8; font-size: 11.5px; }
-.members-subtitle { font-size: 12px; font-weight: 700; color: #94a3b8; margin-right: auto; }
+.member-row .mem-col-login { color: #64748b; font-size: 11.5px; }
+.members-subtitle { font-size: 12px; font-weight: 700; color: #64748b; margin-right: auto; }
 
 /* ── 사전 등록(초대) 관리 UI ── */
 .invite-block {
@@ -4379,13 +4827,13 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
 }
 .invite-intro { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
 .invite-intro b { color: #38bdf8; font-size: 13px; }
-.invite-intro span { color: #94a3b8; font-size: 11.5px; line-height: 1.5; }
+.invite-intro span { color: #64748b; font-size: 11.5px; line-height: 1.5; }
 .invite-intro span b { color: #cbd5e1; }
 .invite-add { display: flex; gap: 7px; align-items: center; }
 .invite-add .admin-gate-input { flex: 1; min-height: 40px; }
 .invite-add .invite-role { flex: 0 0 auto; width: 92px; }
 .invites-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
-.invites-empty { color: #94a3b8; font-size: 12px; padding: 8px 4px; }
+.invites-empty { color: #64748b; font-size: 12px; padding: 8px 4px; }
 .invite-row {
   display: grid; grid-template-columns: 1fr auto auto 28px; gap: 8px; align-items: center;
   padding: 7px 10px; background: rgba(2,6,23,.35); border: 1px solid rgba(255,255,255,.07);
@@ -4791,10 +5239,15 @@ button { font-family: var(--font-ui); }
 .zpager-tab svg{ width:15px; height:15px; }
 .zpager-dot{ width:10px; height:10px; border-radius:50%; box-shadow:0 0 0 1.5px rgba(255,255,255,.3); }
 .zpager-name{ max-width:120px; overflow:hidden; text-overflow:ellipsis; }
+/* [p100 정정, 2026-09-30] 활성 칩 라벨(흰 글자)은 칩 배경만으로 이미 4.5:1+(위 주석 실측) —
+   그런데 이 안의 카운트 배지가 rgba(255,255,255,.22) 흰 반투명을 한 번 더 얹어 실제 합성
+   배경을 밝혀, 체크보드 칩에서 4.24:1(AA 근소 미달, 헤드리스 Chrome 실측 — 그라디언트/오버레이
+   처럼 backgroundColor 단독 판독으로는 안 보이던 합성 문제)까지 떨어졌다. 오버레이를 옅게
+   줄여 합성 배경을 원래 칩 색에 가깝게 유지(실측: 체크보드 5.7:1 · 콘텐츠 4.7:1). */
 .zpager-cnt{
   display:inline-flex; align-items:center; justify-content:center;
   min-width:18px; height:18px; padding:0 5px; border-radius:9px;
-  font-size:.68rem; font-weight:700; background:rgba(255,255,255,.22); color:#fff;
+  font-size:.68rem; font-weight:700; background:rgba(255,255,255,.08); color:#fff;
 }
 
 /* ══════════════════════════════════════════
@@ -4822,10 +5275,13 @@ button { font-family: var(--font-ui); }
 .pinfilter-chip.pf-all    .pinfilter-dot{ background:#9aa7b8; }
 .pinfilter-chip.pf-content .pinfilter-dot{ background:#10b981; }
 .pinfilter-chip.pf-empty  .pinfilter-dot{ background:#ef4444; border:1px dotted #fff; }
-.pinfilter-chip.pf-checkboard .pinfilter-dot{ background:#1d4ed8; border:1px dashed #fff; }
+/* [WO 20260930-pinstyle] CHECKER 색 = 주황/앰버 계열(PinSeries.CHECKBOARD_COLOR 와 동일 계열,
+   구 인디고 블루 폐기 — 360 은 그린/커스텀 팔레트 계열로 남아 색으로도 즉시 구분된다).
+   대비 실측(흰 글자 기준): dot #f97316(비텍스트 3:1 이상) · active bg #9a3412 = 7.31:1(4.5 초과). */
+.pinfilter-chip.pf-checkboard .pinfilter-dot{ background:#c2410c; border:1px dashed #fff; }
 .pinfilter-chip.pf-content.active{    background:#047857; border-color:#34d399; color:#fff; }
 .pinfilter-chip.pf-empty.active{      background:#b91c1c; border-color:#fca5a5; color:#fff; }
-.pinfilter-chip.pf-checkboard.active{ background:#1d4ed8; border-color:#93c5fd; color:#fff; }
+.pinfilter-chip.pf-checkboard.active{ background:#431407; border-color:#fed7aa; color:#fff; }
 @media (max-width:640px), (pointer:coarse){
   .pinfilter-bar{ top:auto; bottom:var(--pinfilter-bottom-mobile); left:8px; max-width:calc(100% - 16px); padding:5px 6px; gap:5px; }
   /* [결함3 2026-09-17] 토스트가 이 칩 바와 겹쳐 글자가 읽히지 않던 문제 — 칩 바 상단(bottom+height) 위로
@@ -4840,6 +5296,9 @@ button { font-family: var(--font-ui); }
    숫자 흰색 대비(needle 톤): 8.96~14.69:1 — 팔레트 6종 + 미배치/체크보드 전부 PASS */
 .pano-radar-pin-empty{ border-style:dotted; border-width:1.4px; }
 .pano-radar-pin-checkboard{ border-style:dashed; border-width:1.4px; }
+/* [WO 20260930-pinstyle] 모드별 형태 구분 — CHECKER 는 둥근사각(badge), 360 은 기본 원형(circle)
+   그대로. 도면 마커(pin-mode-checker 배지 프레임)와 같은 언어. */
+.pano-radar-pin-mode-checker{ border-radius:4px; }
 
 /* 구역 페이지 진입 시: 구역 밖 핀/구역 흐리게 (상세작업 집중) */
 body.zone-view-active .pin-marker.zone-dim{ opacity:.22; filter:grayscale(.5); pointer-events:none; }
@@ -4895,7 +5354,10 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 /* ── 1) 사용자 인증 배지(다크 pill) 안의 이름/아바타 ── */
 .user-badge .user-name,
 .hub-auth-bar .user-name,
-#user-name, #hub-user-name { color: #f3f5f9 !important; }
+/* [p100 정정, 2026-09-30] #settings-name 은 .user-name(라이트 전용 #2b2820)을 그대로 쓰는
+   형제 호출부였는데 이 목록에서 빠져 다크 설정패널 위 1.26:1(사실상 안 보임, 헤드리스
+   Chrome 실측)였다 — §G-2-5 형제 호출부 전수. */
+#user-name, #hub-user-name, #settings-name { color: #f3f5f9 !important; }
 
 /* ── 2) 360 노트(필드노트) 패널: 다크 배경 위 제목/본문 ── */
 .pano-notes-panel .pnp-title { color: #f3f5f9 !important; }
@@ -5030,12 +5492,78 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .stb-btn.active{background:rgba(201,150,42,.16);border-color:var(--gold);color:var(--gold-ink);}
 .stb-sep{flex:0 0 auto;width:1px;align-self:stretch;background:var(--border2);margin:2px;}
 /* [WO 20260917-pin] 항목3: 사이드바(.sidebar)는 overflow:hidden — 트리가 항상 전체 표시되면
-   길어져 다른 섹션(도구바/업로드 버튼)을 화면 밖으로 밀어낸다. 트리 자체에 세로 스크롤을 주고
-   높이를 유한하게 잡아(vh 기반, 화면 크기에 비례) 다른 섹션은 밀리지 않게 한다. */
-/* [WO 20260918 mobile-reachability] flex-basis 를 max-height 와 동일하게 명시(사유는 .side-toolbar
-   주석 참조) — 레이아웃 점유 공간과 실제 렌더 크기를 일치시켜 뒤따르는 형제(#section-export 등)가
-   실제보다 더 아래로 밀려나는 것을 막는다. */
-.side-tree{padding:8px 6px;max-height:clamp(160px,34vh,320px);flex-basis:clamp(160px,34vh,320px);overflow-y:auto;}
+   길어져 다른 섹션(도구바/업로드 버튼)을 화면 밖으로 밀어낼 수 있으므로 트리 자체에 세로
+   스크롤을 준다(내용이 남는 공간보다 길 때만 스크롤). */
+/* [WO 20261008-sidetree] 🔴 근본수정: 기존엔 데스크톱도 모바일과 동일한 고정 캡
+   (clamp(160px,34vh,320px))을 그대로 썼다 — 사이드바 하단에 공간이 남아도 트리가 320px에서
+   잘려 스크롤됐다(마스터 실측, 1280×800). 데스크톱은 flex:1 로 .sidebar 의 남는 세로 공간을
+   전부 채우고, 콘텐츠가 그보다 길 때만 overflow-y:auto 로 트리 내부 스크롤. 모바일 캡
+   (WO 20260918 mobile-reachability, 바텀시트 도달성 보존용)은 @media(max-width:760px) 안의
+   .sidebar 블록에서 그대로 유지된다(아래). flex/max-height/min-height 를 @media(min-width:761px)
+   로 직접 가둬 "같은 specificity, 소스 순서가 미디어 매칭보다 우선"이라는 CSS 캐스케이드 함정을
+   피한다(실측: min-width 가드 없이 두면 375px 에서도 이 규칙이 모바일 규칙을 덮어써 flex:1 이
+   살아남았다 — 폭과 무관하게 소스상 더 뒤에 있는 규칙이 이겼다). */
+.side-tree{padding:8px 6px;overflow-y:auto;}
+@media (min-width: 761px) {
+  .side-tree{flex:1 1 auto;min-height:120px;max-height:none;}
+}
+
+/* ═══ [WO 20261008-layout] 데스크톱 전체 배치 재설계 ═══
+   마스터: "사이드바 폭을 넓힐까요?" → "아니, 전체 배치 고려해". 근본원인(지휘자 실측 1400×1130):
+   도구막대 6줄(구역/도면/포인트/영역/입력/사진, data-g 라벨 포함)이 트리 **위에 가로로** 쌓여
+   271px를 세로로 잡아먹어 트리 이름이 2줄로 접히고 min-width:44px 바닥까지 눌렸다(§5527 참조).
+   데스크톱(≥761px)만: #side-tree-row 를 가로 배치로 바꿔 도구막대를 트리 **왼쪽의 세로 아이콘
+   레일**(약 46px, 아이콘만 + title 툴팁, 숨김 금지 원칙 — 접어도 레일은 남는다)로 돌리고,
+   트리는 그만큼의 세로 공간을 전부 되찾는다. 모바일(≤760px)은 미디어 가드 밖이라 기존 드롭다운
+   그대로(§공통 작업 규율 준수 G-2-5 — 모바일 회귀 0, p41/p34/p123/p62/p65 로 실측). */
+@media (min-width: 761px) {
+  .side-tree-row{display:flex;flex-direction:row;flex:1 1 auto;min-height:120px;overflow:hidden;}
+  .side-toolbar{flex:0 0 46px;width:46px;flex-direction:column;align-items:center;gap:6px;
+    padding:8px 4px;overflow-y:auto;border-right:1px solid var(--border2);border-bottom:none;}
+  .side-toolbar .stb-group{flex-direction:column;gap:4px;}
+  .side-toolbar .stb-group::before{content:none;}  /* 라벨 텍스트 제거 — title 툴팁으로 대체(기능 유실 0) */
+  .side-tree{flex:1 1 auto;min-width:0;}
+}
+
+/* ── 사이드바 폭 조절 손잡이 (데스크톱 전용, 기본 숨김) ── */
+.sidebar-resizer{display:none;}
+@media (min-width: 761px) {
+  .sidebar-resizer{
+    display:flex; flex:0 0 7px; width:7px; align-items:center; justify-content:center;
+    cursor:col-resize; background:transparent; position:relative; z-index:6; touch-action:none;
+  }
+  .sidebar-resizer::after{
+    content:""; position:absolute; top:0; bottom:0; left:3px; width:1px;
+    background:var(--border2); transition:background .15s, width .15s;
+  }
+  .sidebar-resizer:hover::after, .sidebar-resizer:focus-visible::after{ background:var(--gold); width:2px; }
+  .sidebar-resizer:focus-visible{ outline:none; }
+  body.sidebar-resizing{ cursor:col-resize; user-select:none; }
+  body.sidebar-resizing .map-viewport{ pointer-events:none; }  /* 드래그 중 도면 레이어가 마우스업을 가로채지 않게 */
+}
+
+/* ── 사이드바 접기 버튼 (데스크톱 전용 — 모바일은 기존 바텀시트 토글이 따로 있음) ── */
+.sidebar-head-row{display:none;}
+.sidebar-collapse-btn{display:none;}
+@media (min-width: 761px) {
+  .sidebar-head-row{ display:flex; justify-content:flex-end; padding:6px 6px 0; }
+  .sidebar-collapse-btn{
+    display:flex; align-items:center; justify-content:center;
+    width:32px; height:32px; border-radius:7px; cursor:pointer;
+    background:var(--bg3,#f1ece0); border:1px solid var(--border2); color:var(--text2,#6b6457);
+    transition:background .15s, color .15s, border-color .15s, transform .15s;
+  }
+  .sidebar-collapse-btn:hover{ color:var(--gold-ink); border-color:var(--gold); }
+  .sidebar.collapsed .sidebar-collapse-btn svg{ transform:rotate(180deg); }
+  /* 접힘 — 숨김 금지 원칙: 트리/섹션은 숨기지만 도구 아이콘 레일(#side-toolbar)은 그대로 남긴다 */
+  .sidebar.collapsed{ width:46px !important; min-width:46px; overflow:hidden; }
+  .sidebar.collapsed .tree-toolbar,
+  .sidebar.collapsed .side-tree,
+  .sidebar.collapsed .sidebar-section{ display:none; }
+  .sidebar.collapsed .side-tree-row{ overflow:visible; }
+  .sidebar.collapsed .side-toolbar{ border-right:none; }
+  .sidebar.collapsed .sidebar-head-row{ justify-content:center; padding:6px 0 0; }
+}
 /* [항목3] 페이지 태그(P1/P2…) — 본문 아님(보조 메타) → 기존 .tree-node-doc/.tree-node-pin 과
    동일하게 var(--text2) 재사용(신규 색 없음). 대비 실측(WCAG 2.1): #6b6457 on #faf7f0 = 5.48:1(패시브
    영역) · .tree-node.active 배경(골드 오버레이 rgba(201,150,42,.16) 블렌드 #f2e7d0) 위에서도 4.78:1 — 둘 다 4.5:1 이상. */
@@ -5051,7 +5579,26 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    min-width:0 필수 — flex 아이템 기본 min-width:auto 는 overflow:hidden 을 무시하고 내용 폭만큼
    늘어나(플렉스박스 알려진 함정) 행 전체가 옆으로 밀려나던 원인이었다. 전체 이름은 head.title
    (11_UI.js deckNode, 네이티브 툴팁)로 항상 확인 가능. */
-.tree-label{flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:break-word;line-height:1.3;}
+/* [WO 20261008-treelabel0] 🔴 근본수정: flex:1(= flex-basis:0%) 인 아이템은 flexbox 오버플로
+   (행 전체 너비 > 컨테이너)일 때 수축 단계에서 "기여분 0"으로 계산돼 항상 0px로 접힌다 —
+   grow 는 여유 공간이 '양수'일 때만 적용되고 오버플로(음수)엔 전혀 관여하지 않는다. 마스터
+   실측(구역 노드에 kindTag+상태태그+srcTag(잘라옴)+zoneCnt+⋯버튼이 모두 붙으면 행이 좁은
+   사이드바(240px)를 넘어 이름이 통째로 사라지고 옆의 .tree-src-tag 만 "잘…"로 짓눌렸다).
+   flex-basis 를 auto 로 바꿔 이름이 실제 내용 크기로 수축 계산에 '정당히' 참여하게 하고,
+   min-width 로 바닥을 줘 완전히 0으로는 못 접히게 한다(§5 SoT — 트리/원본/핀 모든 .tree-label
+   공유, 그래프 전수 grep 확인 — 2026-10-08). */
+.tree-label{flex:1 1 auto;min-width:44px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:break-word;line-height:1.3;}
+/* [WO 20261008-layout] 🔴 근본수정: 이 .tree-node/.tree-label 선언이 위 §5513 미디어 블록보다
+   "소스상 더 뒤"에 있어 같은 명시도(0,1,0)에서 그 블록을 덮어썼다(실측 — 지휘자가 media 안에
+   padding/gap 을 줬는데도 getComputedStyle 이 7px 6px/6px 그대로였다. 바로 이 파일의 §5491 주석이
+   경고한 "소스 순서가 미디어 매칭보다 우선" 함정과 동일 원인). 따라서 데스크톱 전용 재선언을
+   반드시 이 지점(더 뒤) 에 둔다. 데스크톱 전용 레일 추가로 줄어든 가로폭을 트리 패딩/간격 축소 +
+   min-width 상향으로 되돌려, 구역/영역 이름 칸을 데스크톱(≥1024) 기준 ≥140px로 되돌린다(마스터
+   판정 기준①). 모바일(≤760px)은 미디어 가드 밖이라 영향 0(터치 타깃은 행 전체라 32px+ 유지). */
+@media (min-width: 761px) {
+  .tree-node{padding:7px 4px;gap:4px;}
+  .tree-label{min-width:140px;}
+}
 .tree-node-deck{font-weight:700;}
 /* [WO 20260921-tree] 마스터 확정 4단(프로젝트>도면>구역>영역) — 각 단을 글자 굵기/크기로 구분한다.
    들여쓰기는 .tree-children(padding-left 12px + margin-left 10px + 좌측 괘선)이 단마다 누적해 준다.
@@ -5084,9 +5631,27 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-doc:not(.open) > .tree-children{display:none;}
 .tree-region:not(.open) > .tree-children{display:none;}
 .tree-children{padding-left:12px;border-left:1px solid var(--border2);margin-left:10px;}
+/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지(.tree-mode/.tree-node-mode)를
+   제거 — 구역·영역은 공유, 모드 분리는 로드된 노드의 맨 안쪽 잎(.tree-mode-leaf/.tree-node-mode-leaf)
+   으로 이동했다. 같은 검증된 색(var(--text), 다크 런타임 실측 이력 tests/p91)을 그대로 재사용. */
+.tree-node-mode-leaf{font-weight:800;font-size:12.5px;letter-spacing:.05em;color:var(--text);}
+.tree-mode-leaf:not(.open) .tree-node-mode-leaf .tree-caret{transform:rotate(-90deg);}
+.tree-mode-leaf:not(.open) > .tree-children{display:none;}
+/* [WO 20260930-pinstyle] 잎 라벨 앞 작은 형태 단서 — 핀 마커(둥근사각/원형)·색(주황/그린)과
+   같은 언어. 색맹 대비: 모양(사각 vs 원)이 1차 단서, 색은 보조. */
+.tree-mode-leaf-checker .tree-node-mode-leaf::before,
+.tree-mode-leaf-360 .tree-node-mode-leaf::before{
+  content:""; display:inline-block; width:8px; height:8px; margin-right:5px; flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25);
+}
+.tree-mode-leaf-checker .tree-node-mode-leaf::before{ border-radius:2px; background:#c2410c; }
+.tree-mode-leaf-360 .tree-node-mode-leaf::before{ border-radius:50%; background:#10b981; }
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
+/* [p100 정정, 2026-09-30] bg=var(--gold)=브랜드 블루(index.html:57) — 어두운 글자(#1a1206)와
+   3.8:1(AA 미달, 헤드리스 Chrome 실측). 흰 글자로 교체(실측 4.87:1 — .pano-radar-pin-no 와 같은
+   블루+흰글자 패턴 재사용, style.css:1560 주석 참조). */
 .tree-cnt{min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
-  background:var(--gold);color:#1a1206;font-size:9px;font-weight:700;flex:0 0 auto;}
+  background:var(--gold);color:#fff;font-size:9px;font-weight:700;flex:0 0 auto;}
 /* [P2] '도면없음' = 경고 톤(밝은 주황 채움 + 주황 외곽선 + 진한 주황 글자).
    '미저장'(#b45309 진한 채움 + 흰 글자)과 채움 밝기/외곽선으로 시각 구분된다.
    대비 실측(WCAG 2.1): 글자 #7c2d12 on #fbe3cd = 7.57:1(AAA) ·
@@ -5094,6 +5659,16 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    기존 값(#938a78 on #efe9dc = 2.53:1)은 UI 최소 3:1 미달이었다. */
 .tree-tag{font-size:9px;font-weight:700;line-height:1.6;color:#7c2d12;background:#fbe3cd;
   border:1px solid #c2410c;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
+/* [WO 20261001-projectinfo·tree-hierarchy] 프로젝트-구역-영역-원본 단계 꼬리표 — 아이콘만으론
+   약한 구분을 텍스트로 보강(마스터 지시). var(--text2) 는 이 사이드바 다크 배경(#1d2025)에서
+   이미 감사된 토큰(seastar-3d-skin.css:196 "실측 4.5:1+로 검증된 다크 톤" 재사용, 새 색 없음). */
+.tree-kind-tag{font-size:9px;font-weight:700;letter-spacing:.3px;color:var(--text2);
+  flex:0 0 auto;text-transform:uppercase;}
+/* [WO 20261001-mobilefast 대비수정] .tree-node.active 는 배경에 골드 오버레이
+   rgba(201,150,42,.16)가 블렌드되어 합성 rgb(57,51,38) 이 된다 — 그 위에서 var(--text2)
+   #9095a0 은 4.19:1(p100 실측, 기준 4.5 미달). 활성 행 전용으로만 더 밝은 톤으로 교체
+   (#a0a5ae on rgb(57,51,38) ≈ 5.07:1, 계산 가능). 비활성 상태는 기존 var(--text2) 그대로. */
+.tree-node.active .tree-kind-tag{color:#a0a5ae;}
 /* [결함수정] 구역 0개(#side-tree 안 조용한 빈 상태 금지) — 프로젝트는 선택됐지만 구역이
    없을 때의 실제 생성 버튼 안내. 배경을 고정색으로 두므로 글자색도 고정색으로 맞춘다
    (var() 텍스트가 강제 다크모드에서만 밝게 재해석돼 고정 배경과 어긋나는 실사고 재발 방지, 831a127).
@@ -5231,6 +5806,292 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
      인라인 style은 특정도가 높아 !important 없이는 못 이긴다 — 도크 SoT 변수(--mdock-h)를 그대로
      재사용해 배너와 같은 높이로 밀어올린다(값 중복 정의 0). */
   #pwa-install-btn{ bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px) !important; }
+  /* [WO 20261002-fixmobile2] 🔴 실측(지휘자 R3, 375px): 허브 화면에서 배너(.pwa-install-banner)와
+     이 FAB가 정확히 같은 공식(mdock-h+세이프에어리어+12px)을 써 완전히 겹쳤다(마스터 "숨기지 마" —
+     FAB를 배너 위로 올린다). 배너 높이는 헤드리스 크롬 실측(375px, 안드로이드 — ios 힌트 숨김 상태)
+     98px(.tmp/fixmobile2/measure.out, pwa-install-banner rect height) — 배너의 기존 bottom 공식에
+     그 높이+8px 갭만 더해 바로 위에 쌓는다(값 중복정의 아님: 배너 공식을 그대로 재사용). */
+  body:has(#pwa-install-banner.on) #pwa-install-btn {
+    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px + 98px + 8px) !important;
+  }
+  /* [WO 20261002-fixmobile2 재발주] 🔴 근본원인(지휘자 R1 p114 재현): .hub-content(허브 카드 스크롤
+     컨테이너, 위 223행 overflow-y:auto)가 배너(.pwa-install-banner, z-index:9560, fixed) 몫의 여백을
+     전혀 모른다 — 배너가 떠 있어도 끝까지 스크롤하면 카드 맨 아래(영역/모드 잎)가 배너 "뒤"에 깔려
+     버튼이 그대로 가려진 채 탭이 배너로 가로채였다(elementFromPoint 가 리프 대신 배너를 반환). 마스터
+     "숨기지 마" — ①(이 규칙): 배너가 떠 있는 동안만 스크롤 하한에 배너 몫(기존 bottom 공식 재사용 +
+     실측 높이 98px, 위 5657행과 동일 리터럴) + 16px 버퍼를 더해, 끝까지 스크롤해도 카드 내용이 배너
+     밑으로 숨지 않고 그 위에서 끝나게 한다. ②(보조, 이미 존재): .pwa-install-x 닫기 버튼으로도
+     배너를 치울 수 있다(38_Install.js _onClose). */
+  body:has(#pwa-install-banner.on) .hub-content {
+    padding-bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 12px + 98px + 16px) !important;
+  }
+  /* [WO 20261001-mobilefast] 같은 함정 — [요청·질문](42_Requests._createViewerBtn)·[?](36_Help._createToggle)·
+     [✉](36_Help._createInquiryEntryBtn) FAB 도 bottom:16px 인라인 고정이라 하단 도크와 겹친다. */
+  /* [WO 20261002-gap 재수정, 마스터 "숨기지 마"] 🔴 위 calc(도크+12px=70px)는 도크만 피하고
+     그 바로 위에 뜨는 핀 필터 칩 바(.pinfilter-bar, bottom:var(--pinfilter-bottom-mobile)=64px,
+     높이 var(--pinfilter-h-mobile)=48px → y:700~748)를 몰랐다 — FAB(y:702~742)가 그 안에
+     완전히 겹쳐 떴다(실측). .wm-toast-host(위)가 이미 쓰는 같은 SoT 계산(칩 바 bottom+높이+여백)
+     을 그대로 재사용해 칩 바 위로 올린다 — 숨기거나 역할표시를 바꾸지 않고 위치만 이동.
+     🔴 이 FAB 3종은 body 레벨(화면 무관 상시 표시)이라 허브 화면(#screen-projects, 핀 필터
+     칩 없음)에도 똑같이 뜬다 — 위로 올리면 **스크롤 가능한** 허브 카드 트리 내용과 새로
+     겹칠 수 있다(실측: p114 "온라인: 허브 → 도면 표시" 회귀, CHECKER 잎이 가려짐). 핀 필터
+     칩이 존재하는 편집 화면(#screen-app.active)에서만 올리고, 허브 화면은 기존 도크-회피
+     계산(bottom:70px)을 그대로 둔다(§10 SoT 함정 재발 방지, CLAUDE.md §G-2-5). */
+  body:has(#screen-app.active) [data-req-viewer-entry],
+  body:has(#screen-app.active) [data-help-toggle],
+  body:has(#screen-app.active) [data-help-inquiry-toggle] {
+    bottom: calc(var(--pinfilter-bottom-mobile) + var(--pinfilter-h-mobile) + 8px) !important;
+  }
+  /* [WO 20261002-fixmobile2] 🔴 실측(지휘자 R1, 375×812): 트리 시트(.sidebar, 위 "사이드바→바텀시트"
+     규칙에서 bottom:calc(58px+세이프에어리어), max-height:52vh, z-index:145)가 열리면 FAB 3종
+     (z-index:9550)이 시트 위에 그대로 떠 "CHECKER" 항목을 가렸다(겹침 1600px²). 마스터 "숨기지 마" —
+     z-index만 낮추는 것도 숨김이니 금지, 위치만 옮긴다. 시트의 상한(max-height:52vh)을 그대로 재사용해
+     FAB를 그 위로 올린다 — 시트 실제 높이가 더 짧아도(height:auto) FAB가 더 높이 뜰 뿐 가려지지 않는다.
+     body.sidebar-open 은 20_App.js 토글의 결과 클래스를 구독만 한다(그 파일은 수정하지 않음). */
+  body.sidebar-open [data-req-viewer-entry],
+  body.sidebar-open [data-help-toggle],
+  body.sidebar-open [data-help-inquiry-toggle] {
+    bottom: calc(52vh + 58px + env(safe-area-inset-bottom, 0px) + 8px) !important;
+  }
+  /* [WO 20261008-pinstyle] 🔴 실측(0b4d262, 375×812): 트리 ⋯ 메뉴·우클릭(길게 누르기) 앱 메뉴(.tree-pop)는 모바일에서
+     도크 바로 위 바텀시트(아래 .tree-pop 규칙: bottom = 도크+8px, max-height 60vh, z-index 520)인데, 그 자리에
+     ?·✉ FAB(z-index 9550, top 652~692)가 떠 첫 항목('원본 전체 도면 열기') 왼쪽을 덮었다. 숨기지 않고 위치만 —
+     위 sidebar-open 과 같은 방식으로 메뉴가 열린 동안 FAB 를 시트 상한(60vh) 위로 올린다. */
+  /* 특정도: 위 편집화면 규칙 body:has(#screen-app.active)(ID 포함)를 이겨야 하므로 같은 :has(#screen-app.active)를 앞에 붙인다. */
+  body:has(.tree-pop) [data-req-viewer-entry],
+  body:has(.tree-pop) [data-help-toggle],
+  body:has(.tree-pop) [data-help-inquiry-toggle],
+  body:has(#screen-app.active):has(.tree-pop) [data-req-viewer-entry],
+  body:has(#screen-app.active):has(.tree-pop) [data-help-toggle],
+  body:has(#screen-app.active):has(.tree-pop) [data-help-inquiry-toggle] {
+    bottom: calc(60vh + var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 16px) !important;
+  }
+}
+/* [WO 20261001-mobilefast 판정5] 핀 작성 모드(#crosshair-overlay 표시 중)에는 위 FAB 3종을
+   반투명·축소해 도면을 덜 가린다 — 누르는 중(:active)은 즉시 원복해 탭 피드백을 보존한다. */
+[data-req-viewer-entry], [data-help-toggle], [data-help-inquiry-toggle] {
+  transition: opacity .15s, transform .15s;
+}
+body:has(#crosshair-overlay:not(.hidden)) [data-req-viewer-entry],
+body:has(#crosshair-overlay:not(.hidden)) [data-help-toggle],
+body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle] {
+  opacity: .45; transform: scale(.82);
+}
+body:has(#crosshair-overlay:not(.hidden)) [data-req-viewer-entry]:active,
+body:has(#crosshair-overlay:not(.hidden)) [data-help-toggle]:active,
+body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
+  opacity: 1; transform: scale(1);
 }
 /* 초대 모달 — 초대받은 이메일 표기 */
 .inv-email{font:600 12px var(--font-mono); color:var(--text2);}
+
+/* [WO 20260930-merge] 구역 합치기 모달(41_RegionMerge.js) — .admin-gate 카드 재사용. 글자색은 카드(var(--text) on var(--panel),
+   seastar-family-tokens.css .admin-gate-card)를 상속한다 — 여기서 색을 새로 박지 않는다(테마 대비 SoT 유지). */
+.admin-gate-card.rm-card { width: min(540px, 94vw); text-align: left; max-height: 88vh; overflow-y: auto; }
+.rm-card .rm-lbl { display: block; margin: 12px 0 4px; font-size: 12px; font-weight: 700; color: inherit; }
+.rm-card select.admin-gate-input { width: 100%; }
+.rm-card .rm-badge { margin: 6px 0 0; padding: 6px 10px; font-size: 12px; line-height: 1.45; color: inherit; border-left: 3px solid var(--accent, #38bdf8); border-radius: 4px; background: rgba(127,127,127,.12); }
+.rm-card .rm-badge.warn { border-left-color: var(--red, #e0705e); }
+.rm-card .rm-badge:empty { display: none; }
+.rm-card .rm-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.rm-card .rm-opts .rm-lbl { width: 100%; }
+.rm-card .rm-chk { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; font-size: 12.5px; line-height: 1.4; color: inherit; cursor: pointer; }
+.rm-card .rm-chk.hidden { display: none; }
+.rm-card .rm-preview { margin: 0; font-size: 13px; font-weight: 700; line-height: 1.5; color: inherit; }
+.rm-card .rm-dups { margin-top: 4px; max-height: 160px; overflow-y: auto; }
+.rm-card .rm-dup { font-size: 12px; }
+.rm-card .admin-gate-btn:disabled { opacity: .55; cursor: not-allowed; }
+/* 되돌리기 토스트 — .wm-toast(어두운 고정 배경 #0d1425 계열 + #f4f6fb 글자) 위 버튼: 밝은 바탕 + 어두운 글자(대비 ≥ 15:1) */
+.wm-toast.rm-undo-toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; text-align: left; }
+.rm-undo-btn { flex: none; padding: 5px 12px; border: 0; border-radius: 6px; background: #f4f6fb; color: #0d1425; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.rm-undo-btn:disabled { opacity: .6; cursor: default; }
+
+/* ══════════ 구역 원본 윤곽(DeckOutline) — WO 20261002-allmenu §6 ══════════ */
+/* 영역(Zones, 색 ZONE_COLORS/.zone-shape 실선)과 구분: 인디고 점선 + 전용 라벨색. 항상 zones-layer보다 뒤. */
+.deck-outline-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: visible; }
+.deck-outline-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.deck-outline-shape {
+  fill: none; stroke: #4338ca; stroke-width: 2px; stroke-dasharray: 7 5;
+  vector-effect: non-scaling-stroke; pointer-events: none; transition: stroke-width .12s;
+}
+.deck-outline-shape.hot { stroke-width: 3.2px; filter: drop-shadow(0 2px 6px rgba(67,56,202,.55)); }
+.deck-outline-label {
+  /* [재현 R1/R2 수정] top/left 는 항상 46_DeckOutline.render()의 inline style(= 앵커점,
+     인라인이라 이 규칙보다 항상 우선)이 정한다 — 여기 하드코딩 값은 없다(죽은 선언 제거, 혼선 방지).
+     앵커점 자체를 사각형 "바깥 위" 또는 "안쪽 아래"로 옮기는 건 46_DeckOutline.updateLabelScale()의
+     translateY(-100%)(§46_DeckOutline.js 주석) — 종전엔 라벨이 사각형의 top 변 전체를 덮어 사각형이
+     "안 보인다"는 오인과 핀 겹침을 동시에 냈다(실측 .tmp/fixoutline2/03-main-with-outline.png). */
+  position: absolute; transform-origin: 0 0;
+  background: #4338ca; color: #fff; font: inherit; font-size: 11px; font-weight: 800;
+  padding: 3px 10px; border-radius: 4px 0 6px 0; white-space: nowrap;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+  border: none; cursor: pointer; pointer-events: auto;
+  min-height: 32px; min-width: 32px; display: inline-flex; align-items: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+}
+.deck-outline-tip {
+  position: fixed; z-index: 50; pointer-events: none; display: none;
+  background: rgba(17,24,39,.92); color: #fff; font-size: 12px; font-weight: 600;
+  padding: 5px 10px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -130%);
+}
+/* [핀 생성 모드] 영역 라벨과 동일 규칙(§2735) — crosshair 표시 중엔 라벨도 클릭을 가로채지 않는다 */
+/* [WO 20261008-pinstyle R8] 🔴 종전 선택자 #map-viewport:has(#crosshair-overlay…) 는 한 번도 맞지 않았다 — #crosshair-overlay 는
+   #map-viewport 의 자식이 아니라 형제(둘 다 #map-area 의 자식, index.html). 375 CDP 실측: 배치 중에도 elementFromPoint = 이 라벨.
+   공통 부모 #map-area 기준으로 고친다. (같은 죽은 선택자가 영역 규칙(.zone-shape 등)에도 있으나 그걸 살리면 P114 a7a7bb0
+   "영역 경계 탭 → 핀" 이 깨진다 — 터치 보정이 이웃 핀 마커로 붙는다(실측). 이번 범위 밖, 손대지 않음.) */
+#map-area:has(> #crosshair-overlay:not(.hidden)) .deck-outline-label {
+  pointer-events: none;
+}
+
+/* [WO 20261002-allmenu §2] CHECKER 툴바 리더선 정렬 [정렬 ↕][정렬 ↔] — 상시 노출(11_UI.mountCheckerAlignTools).
+   데스크톱은 기존 .tb-btn 표면 그대로(#2b2820 on #ffffff~#ece5d7 ≈ 12:1), 모바일 칩은 .mdock-chip 색 그대로. */
+.checker-align-tools { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.checker-align-tools.hidden { display: none !important; }
+.checker-align-btn .checker-align-label { font-size: 12px; font-weight: 700; white-space: nowrap; letter-spacing: .2px; }
+@media (max-width: 760px) {
+  .mdock-chip.mdock-align { min-height: 44px; }
+  .mdock-chip.mdock-align .checker-align-label { font-size: 12px; font-weight: 800; line-height: 1.1; }
+}
+
+/* [WO 20261002-allmenu §5] 트리 ⋯ 메뉴 · 구역 도면 출처 꼬리표 · 허브 카드 원본 줄.
+   🔴 색은 전부 자기 배경을 가진 고정 색쌍(트리 다크 배경·테마 변수 재해석과 무관하게 대비 고정, 831a127 교훈):
+   ⋯ #f3f4f6 on #374151 = 9.6:1 · 잘라옴 #3730a3 on #e0e7ff = 8.0:1 · 별도 등록 #166534 on #dcfce7 = 6.5:1 ·
+   팝오버 본문 #1f2937 on #ffffff = 14.7:1 · 비활성 라벨 #4b5563 on #ffffff = 7.6:1 · 사유 #92400e on #fffbeb = 6.6:1 ·
+   위험 #b91c1c on #ffffff = 6.5:1 · 허브 원본 꼬리표 #ffffff on #1e3a8a = 10.4:1. 터치 타깃 ≥32px. */
+.tree-more {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  min-width: 32px; min-height: 32px; margin-left: auto; border-radius: 8px;
+  background: #374151; color: #f3f4f6; font-size: 16px; font-weight: 800; line-height: 1; cursor: pointer;
+}
+.tree-more:hover, .tree-more:focus-visible { background: #4b5563; outline: 2px solid #93c5fd; outline-offset: 1px; }
+.tree-src-tag {
+  font-size: 9.5px; font-weight: 700; line-height: 1.6; padding: 0 5px; border-radius: 6px; margin-left: 4px;
+  /* [WO 20261008-treelabel0] min-width:0 → 20px — 위 .tree-label 수정으로 이 배지가 더 이상
+     행 오버플로를 전부 혼자 흡수하지 않지만, 바닥을 조금 줘 "잘…" 1글자+줄임표보다는 읽을
+     폭을 보장한다(여전히 ellipsis로 줄어들 수 있음 — 완전 제거 금지, §10 하드코딩 금지와
+     무관한 UI 최소 폭). */
+  flex: 0 1 auto; min-width: 20px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tree-src-crop { color: #3730a3; background: #e0e7ff; border: 1px solid #4338ca; }
+.tree-src-own { color: #166534; background: #dcfce7; border: 1px solid #15803d; }
+.tree-pop {
+  position: fixed; z-index: 520; width: 280px; max-width: calc(100vw - 16px);
+  background: #ffffff; color: #1f2937; border: 1px solid #d1d5db; border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.28); padding: 6px; font-family: var(--font-ui);
+}
+.tree-pop-title { font-size: 12px; font-weight: 800; color: #1f2937; padding: 6px 8px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-pop-info { font-size: 11.5px; color: #374151; background: #f3f4f6; border-radius: 6px; padding: 6px 8px; margin: 2px 0 4px; }
+.tree-pop-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  min-height: 40px; padding: 7px 10px; border: none; border-radius: 8px; background: #ffffff;
+  color: #1f2937; font: inherit; font-size: 13px; font-weight: 700; text-align: left; cursor: pointer;
+}
+.tree-pop-item:hover, .tree-pop-item:focus-visible { background: #eef2ff; outline: none; }
+.tree-pop-item.danger { color: #b91c1c; }
+.tree-pop-item.is-disabled { color: #4b5563; cursor: not-allowed; }
+.tree-pop-item.is-disabled:hover { background: #ffffff; }
+.tree-pop-desc { font-size: 11px; font-weight: 500; color: #4b5563; }
+.tree-pop-why { font-size: 11px; font-weight: 600; color: #92400e; background: #fffbeb; border-radius: 4px; padding: 1px 5px; }
+@media (max-width: 760px) {
+  .tree-pop { left: 8px !important; right: 8px; top: auto !important; width: auto;
+    bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 8px); max-height: 60vh; overflow: auto; }
+}
+.hub-tree-origin { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 3px 6px; margin: 0 0 2px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-weight: 700; }
+.hub-tree-origin:hover, .hub-tree-origin:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: none; }
+.hub-tree-origin-tag { font-size: 10px; font-weight: 800; color: #ffffff; background: #1e3a8a; border-radius: 5px; padding: 1px 6px; }
+
+/* [WO 20261002-allmenu §7·§8] RICOH THETA 앱 열기 + "어디에 등록?" 시트 + "포인트를 탭하세요" 배너(33_ThetaIntake).
+   고정 색쌍: 시트 #1f2937 on #ffffff = 14.7:1 · 기본 버튼 #111827 on #f3f4f6 = 16.1:1 · 주 버튼 #ffffff on #1d4ed8 = 6.7:1 ·
+   배너 #ffffff on #1e3a8a = 10.4:1 · 배너 취소 #1e3a8a on #ffffff = 10.4:1 · 사진 시트 버튼 #ffffff on #0f766e = 5.5:1. 터치 ≥40px. */
+.theta-app-btn .theta-app-label { font-weight: 800; }
+.mdock-chip.mdock-theta { white-space: normal; text-align: center; }
+.mdock-chip.mdock-theta .theta-app-label { white-space: normal; line-height: 1.15; font-size: 9.5px; }
+.mdock-chip.mdock-theta .theta-app-hint { display: none; }
+/* [WO 20261008-fieldcap] 모바일 도크 [📷 현장 촬영] — mdock-theta 와 같은 칩 레이아웃 재사용. */
+.mdock-chip.mdock-fieldcap { white-space: normal; text-align: center; }
+.mdock-chip.mdock-fieldcap .theta-app-label { white-space: normal; line-height: 1.15; font-size: 9.5px; }
+.pap-theta-app {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 44px;
+  margin: 0 0 10px; padding: 8px 12px; border: none; border-radius: 10px; cursor: pointer;
+  background: #0f766e; color: #ffffff; font: inherit; font-size: 13px; text-align: left;
+}
+.pap-theta-app .theta-app-hint { font-size: 11.5px; font-weight: 600; color: #ffffff; opacity: 1; }
+.pap-theta-app[aria-disabled="true"] { background: #e5e7eb; color: #374151; cursor: not-allowed; }
+.pap-theta-app[aria-disabled="true"] .theta-app-hint { color: #374151; }
+.theta-sheet {
+  position: fixed; z-index: 530; left: 50%; transform: translateX(-50%); bottom: 16px;
+  width: min(440px, calc(100vw - 16px)); max-height: 70vh; overflow: auto;
+  background: #ffffff; color: #1f2937; border: 1px solid #d1d5db; border-radius: 14px;
+  box-shadow: 0 -10px 32px rgba(0,0,0,.28); padding: 12px; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-ui);
+}
+.theta-sheet-title { font-size: 15px; font-weight: 800; color: #1f2937; }
+.theta-sheet-thumb { width: 100%; max-height: 120px; object-fit: cover; border-radius: 8px; background: #f3f4f6; }
+.theta-sheet-body { font-size: 12.5px; color: #374151; overflow-wrap: anywhere; }
+.theta-sheet-btn {
+  min-height: 44px; width: 100%; padding: 8px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+  background: #f3f4f6; color: #111827; border: 1px solid #d1d5db; font: inherit; font-size: 14px; font-weight: 700;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.theta-sheet-btn.primary { background: #1d4ed8; color: #ffffff; border-color: #1d4ed8; }
+/* [WO 20261008-fieldcap] 비활성 항목(숨김 금지, 사유는 theta-sheet-btn-hint) — 대비 ≥4.5:1(#374151/#e5e7eb). */
+.theta-sheet-btn.is-disabled { background: #e5e7eb; color: #374151; cursor: not-allowed; }
+.theta-sheet-btn-hint { display: block; font-size: 11.5px; font-weight: 600; opacity: .85; }
+.theta-sheet-btn.primary .theta-sheet-btn-hint { color: #ffffff; }
+.theta-tap-banner {
+  position: fixed; z-index: 525; top: 64px; left: 50%; transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 16px)); display: flex; align-items: center; gap: 8px;
+  background: #1e3a8a; color: #ffffff; border-radius: 10px; padding: 6px 6px 6px 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.3); font-family: var(--font-ui); font-size: 12.5px; font-weight: 700; pointer-events: auto;
+}
+.theta-tap-cancel { flex: 0 0 auto; min-width: 56px; min-height: 36px; border: none; border-radius: 8px; background: #ffffff; color: #1e3a8a; font: inherit; font-weight: 800; cursor: pointer; }
+@media (max-width: 760px) {
+  .theta-sheet { bottom: calc(var(--mdock-h) + env(safe-area-inset-bottom, 0px) + 8px); }
+  .theta-tap-banner { top: 56px; font-size: 11.5px; }
+}
+
+/* [WO 20261002-allmenu §1·§3] 전체 기능 메뉴(45_FeatureMenu) — 데스크톱 상단바 [☰ 전체 기능] + 우측 패널,
+   모바일 [더보기] 시트 아래 같은 목록. 🔴 고정 색쌍(상단바 테마·3d-skin 과 무관하게 대비 고정):
+   버튼 #ffffff on #1e3a8a = 10.4:1 · 패널 #1f2937 on #ffffff = 14.7:1 · 설명 #4b5563 on #ffffff = 7.6:1 ·
+   비활성 라벨 #4b5563 on #f9fafb = 7.3:1 · 사유 #92400e on #fffbeb = 6.6:1 · 모드 전환 안내 #1e40af on #eff6ff = 8.0:1 ·
+   그룹 제목 #374151 on #f3f4f6 = 9.0:1 · 위험 #b91c1c on #ffffff = 6.5:1. 항목 터치 ≥44px. */
+.btn-feature-menu {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 0 12px;
+  border: 1px solid #1e3a8a; border-radius: 8px; background: #1e3a8a; color: #ffffff;
+  font-family: var(--font-ui); font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.btn-feature-menu:hover, .btn-feature-menu:focus-visible { background: #1e40af; outline: 2px solid #93c5fd; outline-offset: 1px; }
+@media (max-width: 760px) { .btn-feature-menu { display: none; } }   /* 모바일 진입점 = 도크 [더보기] 시트(같은 목록) */
+.fm-panel {
+  position: fixed; z-index: 515; top: 72px; right: 12px; bottom: 12px; width: 400px; max-width: calc(100vw - 24px);
+  display: flex; flex-direction: column; background: #ffffff; color: #1f2937; border: 1px solid #d1d5db; border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.3); font-family: var(--font-ui); overflow: hidden;
+}
+.fm-panel.hidden { display: none !important; }
+.fm-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 4px; }
+.fm-title, .fm-inline-title { font-size: 15px; font-weight: 800; color: #1f2937; }
+.fm-close { min-width: 36px; min-height: 36px; border: none; border-radius: 8px; background: #f3f4f6; color: #1f2937; font-size: 16px; cursor: pointer; }
+.fm-search-wrap { padding: 6px 12px 8px; }
+.fm-search { width: 100%; box-sizing: border-box; min-height: 40px; padding: 0 12px; border: 1px solid #9ca3af; border-radius: 8px; background: #ffffff; color: #1f2937; font: inherit; font-size: 14px; }
+.fm-search::placeholder { color: #4b5563; }
+.fm-list { overflow: auto; padding: 0 8px 12px; flex: 1 1 auto; }
+.fm-group { margin: 6px 0 10px; }
+.fm-group-title { margin: 0 0 4px; padding: 4px 8px; font-size: 12px; font-weight: 800; color: #374151; background: #f3f4f6; border-radius: 6px; }
+.fm-item {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 44px; padding: 7px 8px; margin: 1px 0;
+  border: none; border-radius: 8px; background: #ffffff; color: #1f2937; font: inherit; text-align: left; cursor: pointer;
+}
+.fm-item:hover, .fm-item:focus-visible { background: #eef2ff; outline: none; }
+.fm-item.danger .fm-label { color: #b91c1c; }
+.fm-item.is-disabled { background: #f9fafb; cursor: not-allowed; }
+.fm-item.is-disabled .fm-label { color: #4b5563; }
+.fm-ico { flex: 0 0 24px; min-width: 24px; text-align: center; font-size: 15px; line-height: 22px; color: #1e3a8a; }
+.fm-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fm-label { font-size: 13.5px; font-weight: 700; color: #1f2937; }
+.fm-keys { font: inherit; font-size: 11px; font-weight: 700; color: #374151; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+.fm-desc { font-size: 11.5px; color: #4b5563; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fm-why { align-self: flex-start; font-size: 11px; font-weight: 700; color: #92400e; background: #fffbeb; border-radius: 4px; padding: 1px 6px; }
+.fm-mode { align-self: flex-start; font-size: 11px; font-weight: 700; color: #1e40af; background: #eff6ff; border-radius: 4px; padding: 1px 6px; }
+.fm-empty { padding: 12px; font-size: 13px; color: #4b5563; }
+.fm-inline { grid-column: 1 / -1; margin-top: 6px; padding-top: 8px; border-top: 1px solid #d1d5db; background: #ffffff; border-radius: 10px; }
+.fm-inline .fm-inline-title { display: block; padding: 0 12px 2px; }
+.fm-inline .fm-list { max-height: 48vh; }

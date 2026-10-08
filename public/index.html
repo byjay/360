@@ -403,6 +403,15 @@
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar">
 
+      <!-- [WO 20261008-layout] 데스크톱 전체 배치 재설계 — 사이드바 접기 버튼. 폭 조절은
+           바깥의 #sidebar-resizer(드래그 핸들)가 담당, 이 버튼은 접기/펼치기만. 모바일은
+           기존 바텀시트(#mnav-menu)가 있으므로 이 버튼은 데스크톱(≥761px)에서만 보인다(CSS). -->
+      <div id="sidebar-head-row" class="sidebar-head-row">
+        <button id="btn-sidebar-collapse" class="sidebar-collapse-btn" type="button" title="사이드바 접기/펼치기" aria-expanded="true" aria-controls="sidebar">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+      </div>
+
       <!-- [WO 20260929-tree1] 🔴 마스터: "트리 구조니 최상단에 프로젝트 이름을 찍고 트리를 일원화" —
            예전엔 여기가 이름 박스 + [다운로드][프로젝트 삭제]를 담은 별도 "박스"였다. 지금은
            트리 최상단(프로젝트 노드, 11_UI.js renderTree)이 그 자리를 대신한다: 프로젝트명은
@@ -447,6 +456,12 @@
         <span>도구</span>
         <span class="stb-caret" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
       </button>
+      <!-- [WO 20261008-layout] 🔴 근본수정: 도구막대(6줄)+트리가 세로로 쌓여 트리 세로공간을
+           271px 잡아먹던 구조 — 데스크톱(≥761px)에서는 이 래퍼가 가로 배치로 바뀌어 도구막대가
+           세로 아이콘 레일(약 46px, 트리 왼쪽)이 되고 트리가 그 위쪽 공간까지 전부 쓴다
+           (CSS: .side-tree-row). 모바일은 기존 그대로(세로 드롭다운, CSS 미변경 — 이 래퍼는
+           기본값 display:flex;flex-direction:column 이라 시각적 변화 0). -->
+      <div id="side-tree-row" class="side-tree-row">
       <div id="side-toolbar" class="side-toolbar designer-only">
         <div class="stb-group" data-g="구역">
           <button class="stb-btn" data-deleg="btn-new-deck" type="button" title="구역 생성" aria-label="구역 생성"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg></button>
@@ -484,6 +499,8 @@
       </div>
       <!-- [트리 재구성] 구역 > 도면 > 영역 > 포인트 통합 트리 -->
       <div id="side-tree" class="side-tree"></div>
+      </div>
+      <!-- /#side-tree-row -->
 
       <!-- Upload — 선택된 구역에 도면(PDF) 등록 (designer only) -->
       <div id="section-upload" class="sidebar-section">
@@ -632,6 +649,11 @@
       </div>
 
     </aside>
+
+    <!-- [WO 20261008-layout] 사이드바 폭 조절 손잡이 — 데스크톱(≥761px)에서만 보임(CSS 기본 display:none).
+         드래그로 폭 조절(200~480px), 더블클릭 = 기본값(240px) 복귀, 키보드 ←/→. 폭은 localStorage에
+         저장(try/catch, UI.initSidebarResize — 11_UI.js). 모바일은 바텀시트라 해당 없음. -->
+    <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="사이드바 폭 조절" tabindex="0" title="드래그하여 사이드바 폭 조절 (더블클릭: 기본값)"></div>
 
     <!-- Map area -->
     <main id="map-area" class="map-area">

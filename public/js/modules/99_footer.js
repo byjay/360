@@ -4,6 +4,10 @@
     // 여기서도 await해 ProjectHub.open() 등 하위 로직이 로그인 완료 후 실행되게 한다.
     await App.init();
 
+    // [WO 20261008-layout] 사이드바 폭 조절/접기 — 데스크톱 전체 배치 재설계. 다른 모듈과
+    // 동일 패턴(try/catch, 있으면 실행)으로 배선해 충돌 지점을 늘리지 않는다.
+    if (typeof UI !== "undefined" && UI.initSidebarResize) { try { UI.initSidebarResize(); } catch (e) {} }
+
     // [오프라인 작업지시서 ] 오프라인 상태 배지/네트워크 이벤트 연결
     if (typeof Offline !== "undefined" && Offline.init) { try { Offline.init(); } catch (e) {} }
 
