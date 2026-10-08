@@ -5,7 +5,8 @@ import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPa
 import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
 import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
 import { askJevSeverity, gateSeverity, SEVERITY_LEVELS } from './lib/jevSeverity'
-import { askVision, visionModelOf, visionCacheKey, pinImageRefs, AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P } from './lib/aiVision'
+import { askVision, visionModelOf, visionRunnerOf, visionCacheKey, pinImageRefs, visionQuotaExhausted, visionDayStartUtc,
+  AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P, AI_VISION_GLOBAL_NEURON_CAP, AI_VISION_FREE_NEURONS_PER_DAY, AI_VISION_PROVIDER } from './lib/aiVision'
 
 type Bindings = {
   DB: D1Database
@@ -22,9 +23,10 @@ type Bindings = {
   // [P68] Jev(TypeSafe System One) — 회사명 게이트의 2차 판정. 🔴 시크릿으로만 주입, 프론트 노출 금지.
   //   설정: `wrangler pages secret put OPENROUTER_API_KEY` (없으면 게이트는 규칙 결과=리젝트로 폴백)
   OPENROUTER_API_KEY?: string
-  // [WO 20261007-aivision] 비전 모델 ID 덮어쓰기(선택) — 기본값 src/lib/aiVision.ts AI_VISION_MODEL_DEFAULT(SoT).
+  // [WO 20261007-aivision · 무료] Workers AI 바인딩(wrangler.jsonc ai.binding=AI) — 360 사진 AI 분석. 유료 API 경로 없음.
+  AI?: any
+  // 비전 모델 ID 덮어쓰기(선택) — 🔴 src/lib/aiVision.ts AI_VISION_FREE_MODELS 허용 목록 밖이면 기능 비활성(유료 폴백 금지).
   AI_VISION_MODEL?: string
-  AI_VISION_BASE_URL?: string   // 테스트용 업스트림 대체(fixture 서버). 운영은 미설정 = OpenRouter.
   // [P0-3] 데모 로그인 스위치. 운영 봉인 시 `wrangler pages secret put DEMO_LOGIN` (값 0).
   DEMO_LOGIN?: string
   ASSETS: { fetch: (req: Request) => Promise<Response> }
@@ -921,8 +923,9 @@ app.post('/api/ai/chat', async (c) => {
 })
 
 /* ════════════════════════════════════════════
-   [WO 20261007-aivision] 360 사진 AI 분석 — OpenRouter 비전 Claude(src/lib/aiVision.ts)
-   · GET  /api/ai/vision-status  : 활성 여부·사유·모델·일일 상한/사용량(키 미반환)
+   [WO 20261007-aivision] 360 사진 AI 분석 — 🔴 Cloudflare Workers AI 무료 할당량만(src/lib/aiVision.ts, 유료 폴백 없음)
+   · GET  /api/ai/vision-status  : 활성 여부·사유·모델·사용자 상한/사용량·전체 무료 할당 사용량(Neurons)
+   · 전체 일일 상한: SUM(neurons) UTC 당일 ≥ AI_VISION_GLOBAL_NEURON_CAP(7,000 < 무료 10,000) → 비활성 "오늘 무료 사용량 소진 — 내일 다시"
    · POST /api/ai/analyze-photo  : { deployment_id, pin_id, image_id?, compare_image_id? }
        - 권한: 디자이너 이상 + 그 프로젝트 쓰기 권한(deploymentWriteDenied, 형제 호출부와 같은 게이트) + 테넌트
        - 🔴 이미지는 서버가 D1(pano_images 축소본) / R2(핀의 imageUrl 이 /api/r2/object/<key> 인 것만) 에서 직접 읽는다.
@@ -933,8 +936,11 @@ app.post('/api/ai/chat', async (c) => {
        - 🔴 AI 는 제안만 — 결함 등록·마커 저장은 클라에서 사람이 확정한다
 ════════════════════════════════════════════ */
 /** 비활성 사유(SoT) — 상태 조회와 분석 호출이 같은 함수를 쓴다. "" = 사용 가능. */
+const VISION_EXHAUSTED_REASON = '오늘 무료 사용량 소진 — 내일 다시 사용할 수 있습니다'
+/** 비활성 사유(SoT) — 상태 조회와 분석 호출이 같은 함수를 쓴다. "" = 사용 가능. (전체 무료 할당 소진은 visionExhausted 가 별도 판정) */
 function visionDisabledReason(c: any): string {
-  if (!c.env || !c.env.OPENROUTER_API_KEY) return 'AI 키 미설정 — 관리자가 OPENROUTER_API_KEY 시크릿을 등록해야 합니다'
+  if (!c.env || !visionRunnerOf(c.env)) return 'AI 바인딩 미구성 — wrangler.jsonc ai.binding=AI(또는 Pages 설정 > 바인딩 > Workers AI)'
+  if (!visionModelOf(c.env)) return 'AI_VISION_MODEL 이 무료 Workers AI 허용 목록 밖 — 유료 모델은 쓰지 않습니다'
   if (!c.env.DB) return 'DB 미구성'
   return ''
 }
@@ -945,18 +951,35 @@ async function visionUsedCount(c: any, email: string, now: number): Promise<numb
     return Number(r && r.n) || 0
   } catch { return 0 }   // 테이블 미적용(0037 전) — 집계 불가는 0 으로 두되 분석 시 INSERT 실패가 정직하게 드러난다
 }
+/** 전체(계정) 당일 Neurons 사용량 — UTC 자정부터 SUM(neurons). 테이블/컬럼 미적용이면 상한(=소진)으로 간주해 과금 가능성을 0 으로 막는다. */
+async function visionNeuronsToday(c: any, now: number): Promise<number> {
+  try {
+    const r: any = await c.env.DB.prepare('SELECT COALESCE(SUM(neurons), 0) AS n FROM ai_vision_results WHERE created_at >= ?')
+      .bind(visionDayStartUtc(now)).first()
+    return Number(r && r.n) || 0
+  } catch { return AI_VISION_GLOBAL_NEURON_CAP }
+}
 app.get('/api/ai/vision-status', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'unauthorized' }, 401)
-  const reason = visionDisabledReason(c)
-  const used = reason ? 0 : await visionUsedCount(c, String(user.email).toLowerCase(), Date.now())
+  const now = Date.now()
+  let reason = visionDisabledReason(c)
+  const neurons = reason ? 0 : await visionNeuronsToday(c, now)
+  const exhausted = !reason && visionQuotaExhausted(neurons)
+  if (exhausted) reason = VISION_EXHAUSTED_REASON
+  const used = reason ? 0 : await visionUsedCount(c, String(user.email).toLowerCase(), now)
   return c.json({
     enabled: !reason,
     reason: reason || null,
+    exhausted,
+    provider: AI_VISION_PROVIDER,
     model: visionModelOf(c.env),
     daily_limit: AI_VISION_DAILY_LIMIT,
     used,
     remaining: Math.max(0, AI_VISION_DAILY_LIMIT - used),
+    neurons_used_today: neurons,
+    neuron_cap: AI_VISION_GLOBAL_NEURON_CAP,
+    free_neurons_per_day: AI_VISION_FREE_NEURONS_PER_DAY,
     estimate_p: AI_VISION_ESTIMATE_P,
   })
 })
@@ -1027,21 +1050,26 @@ app.post('/api/ai/analyze-photo', async (c) => {
   if (wantCompare && !cmp) return c.json({ error: 'compare_image_id 가 이 포인트의 사진(현재/이력)이 아닙니다' }, 400)
   if (cmp && cmp.ref === cur.ref) cmp = null
 
-  const model = visionModelOf(c.env)
+  const model = visionModelOf(c.env) as string   // visionDisabledReason 이 null 을 이미 걸렀다
   const cacheKey = visionCacheKey(cur.ref, cmp ? cmp.ref : null, model)
   const now = Date.now()
   const email = String(user.email).toLowerCase()
-  // 캐시 적중 → 업스트림 0회(상한에도 안 셈)
-  const hit: any = await c.env.DB.prepare("SELECT result, created_at, prompt_tokens, completion_tokens, cost_usd FROM ai_vision_results WHERE cache_key = ? AND status = 'ok' ORDER BY created_at DESC LIMIT 1")
+  // 캐시 적중 → 업스트림 0회(상한·Neurons 에도 안 셈)
+  const hit: any = await c.env.DB.prepare("SELECT result, created_at, prompt_tokens, completion_tokens, neurons FROM ai_vision_results WHERE cache_key = ? AND status = 'ok' ORDER BY created_at DESC LIMIT 1")
     .bind(cacheKey).first().catch(() => null)
   if (hit && hit.result) {
     let result: any = null
     try { result = JSON.parse(hit.result) } catch {}
     if (result) {
       await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: { cached: true, model, deployment_id: depId, compare: !!cmp } })
-      return c.json({ ok: true, cached: true, model, result, analyzed_at: hit.created_at, compare: !!cmp,
-        usage: { prompt_tokens: hit.prompt_tokens, completion_tokens: hit.completion_tokens, cost_usd: hit.cost_usd }, estimate_p: AI_VISION_ESTIMATE_P })
+      return c.json({ ok: true, cached: true, model, provider: AI_VISION_PROVIDER, result, analyzed_at: hit.created_at, compare: !!cmp,
+        usage: { prompt_tokens: hit.prompt_tokens, completion_tokens: hit.completion_tokens, neurons: hit.neurons, cost_usd: 0 }, estimate_p: AI_VISION_ESTIMATE_P })
     }
+  }
+  // 🔴 전체 무료 할당(Neurons) 소진 → 비활성(유료 폴백 없음). 사용자 상한보다 먼저 본다.
+  const neuronsToday = await visionNeuronsToday(c, now)
+  if (visionQuotaExhausted(neuronsToday)) {
+    return c.json({ error: VISION_EXHAUSTED_REASON, exhausted: true, neurons_used_today: neuronsToday, neuron_cap: AI_VISION_GLOBAL_NEURON_CAP }, 429)
   }
   const used = await visionUsedCount(c, email, now)
   if (used >= AI_VISION_DAILY_LIMIT) {
@@ -1058,24 +1086,25 @@ app.post('/api/ai/analyze-photo', async (c) => {
   const probe = await askVision(c.env, { imageDataUrl: img.dataUrl, compareDataUrl: cmpImg ? cmpImg.dataUrl : null, pinLabel: pin.label })
   const rowId = genId('aiv')
   if (!probe.ok) {
+    // 실패여도 모델이 돌았으면 Neurons 는 소모됐다 — 집계에 넣는다(usage 없으면 보수적 고정값)
     await c.env.DB.prepare(
-      `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, error, ms, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'error', ?, ?, ?, ?)`
-    ).bind(rowId, cacheKey, depId, pinId, cur.ref, cmp ? cmp.ref : null, probe.model, probe.error, probe.ms, email, now).run().catch(() => {})
-    await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: { ok: false, error: probe.error, model: probe.model, ms: probe.ms, deployment_id: depId } })
+      `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, error, prompt_tokens, completion_tokens, neurons, cost_usd, ms, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'error', ?, ?, ?, ?, 0, ?, ?, ?)`
+    ).bind(rowId, cacheKey, depId, pinId, cur.ref, cmp ? cmp.ref : null, probe.model, probe.error, probe.usage.prompt_tokens, probe.usage.completion_tokens, probe.usage.neurons, probe.ms, email, now).run().catch(() => {})
+    await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: { ok: false, error: probe.error, model: probe.model, provider: AI_VISION_PROVIDER, neurons: probe.usage.neurons, ms: probe.ms, deployment_id: depId } })
     return c.json({ error: 'AI 분석 실패(' + probe.error + ') — 잠시 후 다시 시도하세요', code: probe.error, enabled: true }, 502)
   }
   await c.env.DB.prepare(
-    `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, result, prompt_tokens, completion_tokens, cost_usd, ms, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, result, prompt_tokens, completion_tokens, neurons, cost_usd, ms, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?, 0, ?, ?, ?)`
   ).bind(rowId, cacheKey, depId, pinId, cur.ref, cmp ? cmp.ref : null, probe.model, JSON.stringify(probe.value),
-    probe.usage.prompt_tokens, probe.usage.completion_tokens, probe.usage.cost_usd, probe.ms, email, now).run()
+    probe.usage.prompt_tokens, probe.usage.completion_tokens, probe.usage.neurons, probe.ms, email, now).run()
   await logActivity(c, 'ai.vision', { actor: user, targetType: 'pin', targetId: pinId, detail: {
-    ok: true, cached: false, model: probe.model, ms: probe.ms, deployment_id: depId, compare: !!cmp,
-    prompt_tokens: probe.usage.prompt_tokens, completion_tokens: probe.usage.completion_tokens, cost_usd: probe.usage.cost_usd,
+    ok: true, cached: false, model: probe.model, provider: AI_VISION_PROVIDER, ms: probe.ms, deployment_id: depId, compare: !!cmp,
+    prompt_tokens: probe.usage.prompt_tokens, completion_tokens: probe.usage.completion_tokens, neurons: probe.usage.neurons, neurons_estimated: probe.usage.neurons_estimated, cost_usd: 0,
     items: probe.value.items.length, defect: !!probe.value.defect_suggestion,
   } })
-  return c.json({ ok: true, cached: false, model: probe.model, result: probe.value, analyzed_at: now, compare: !!cmp, usage: probe.usage, estimate_p: AI_VISION_ESTIMATE_P })
+  return c.json({ ok: true, cached: false, model: probe.model, provider: AI_VISION_PROVIDER, result: probe.value, analyzed_at: now, compare: !!cmp, usage: probe.usage, estimate_p: AI_VISION_ESTIMATE_P })
 })
 
 /* ════════════════════════════════════════════
@@ -1987,17 +2016,23 @@ function mapProject(r: any) {
 }
 /** [WO 20261001-projectinfo] 🔴 SoT — projects.info_json(TEXT) 파싱. 깨진/구버전 값은 조용히 삼키지 않고
  *  빈 기본값으로 안전 폴백(파싱 실패로 500 나던 사고 방지). PATCH 핸들러와 이 함수가 유일한 지점. */
-function parseProjectInfo(raw: any): { note: string, schedule: any[], updatedAt: number | null, updatedBy: string | null } {
-  if (!raw) return { note: '', schedule: [], updatedAt: null, updatedBy: null }
+function parseProjectInfo(raw: any): { note: string, schedule: any[], staleDays: number | null, updatedAt: number | null, updatedBy: string | null } {
+  if (!raw) return { note: '', schedule: [], staleDays: null, updatedAt: null, updatedBy: null }
   try {
     const o = JSON.parse(raw)
     return {
       note: typeof o.note === 'string' ? o.note : '',
       schedule: Array.isArray(o.schedule) ? o.schedule : [],
+      staleDays: parseStaleDays(o.staleDays),
       updatedAt: Number.isFinite(o.updatedAt) ? o.updatedAt : null,
       updatedBy: typeof o.updatedBy === 'string' ? o.updatedBy : null,
     }
-  } catch { return { note: '', schedule: [], updatedAt: null, updatedBy: null } }
+  } catch { return { note: '', schedule: [], staleDays: null, updatedAt: null, updatedBy: null } }
+}
+/** [WO 20261007-qrcov] 촬영 현황 "오래됨" 기준 일수 — 1~365 정수만, 그 외 null(클라이언트 기본 14). */
+function parseStaleDays(v: any): number | null {
+  const n = Number(v)
+  return Number.isInteger(n) && n >= 1 && n <= 365 ? n : null
 }
 /** [P61] 비멤버 응답에서 공유 열쇠를 제거한다 — "남의 프로젝트 주소를 유추/열거 불가" 요구의 강제점.
  *  (뷰어는 배포된 프로젝트를 잠금 카드로 "보긴" 하지만, 그 주소를 손에 넣어선 안 된다) */
@@ -2412,6 +2447,7 @@ app.patch('/api/projects/:id', async (c) => {
         content: (s && typeof s.content === 'string') ? s.content.slice(0, 500) : '',
         done: !!(s && s.done),
       })) : [],
+      staleDays: parseStaleDays(incoming.staleDays),
       updatedAt: now, updatedBy: user.email || '',
     }
     sets.push('info_json = ?'); binds.push(JSON.stringify(next))

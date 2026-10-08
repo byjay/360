@@ -1,23 +1,22 @@
 /**
- * p126 — [WO 20261007-aivision] 360 사진 AI 분석 서버 — 스키마 검증·권한·캐시·일일 상한·키 없음·클라 URL 무시
+ * p126 — [WO 20261007-aivision · 무료 전환] 360 사진 AI 분석 서버 — Workers AI 무료 할당량만(유료 폴백 0)
+ *        스키마 검증·권한·캐시·사용자 일일 상한·전체 무료 할당(Neurons) 소진 시 비활성·바인딩 없음·허용 목록 밖 모델 비활성·클라 URL 무시
  * 프레임워크 0 · 실행: node tests/p126-ai-vision.test.mjs
  *
- * [재현: 해당없음 — 신규 기능] 지휘자 R1: `git grep -n -i -E 'ai/analyze|vision' HEAD -- src/index.tsx public/js/modules | wc -l` → 1(무관).
+ * [재현] 지휘자 R1(2026-10-07, 869ba0e): `git show HEAD:src/lib/aiVision.ts | grep -n -i -E "claude|openrouter|model"` → 유료 모델
+ *   anthropic/claude-sonnet-5.5 ($2/M in · $10/M out) → FAIL(마스터 "돈 안 드는 걸로").
  *
- * L = src/lib/aiVision.ts 순수 함수 — fetch 스텁(OpenRouter 외부 호출만 대체, 로직은 실 소스).
- * S = 서버 src/index.tsx 실 번들 → Miniflare(workerd) + 실 D1(migrations 전부, 0037 포함) + 실 R2.
- *     🔴 업스트림(OpenRouter)만 기록 응답(fixture) HTTP 서버로 대체한다 — 실제 과금 호출 금지(발주서 §검증).
- *     AI_VISION_BASE_URL 바인딩이 그 fixture 서버를 가리킨다(운영은 미설정 = openrouter.ai).
+ * L = src/lib/aiVision.ts 순수 함수 — runner 주입(Workers AI 바인딩 대체). 🔴 정적 가드: 소스에 유료 제공자·인증 헤더·전역 fetch( 가 없어야 한다.
+ * S = 서버 src/index.tsx 실 번들 → Miniflare(workerd) + 실 D1(migrations 전부, 0037·0038 포함) + 실 R2.
+ *     🔴 Workers AI 바인딩(env.AI)은 Miniflare serviceBindings 의 fixture 로 대체한다(실 호출 0, 과금 0).
  * 뮤테이션: P126_MUT=<이름> → 소스를 바꿔 실행 → EXIT=1 이어야 한다(대상 문자열 못 찾으면 EXIT=2).
  */
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import esbuild from "esbuild";
 import { Miniflare } from "miniflare";
-import { listenSafePort } from "./_lib/safe-listen.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -32,10 +31,17 @@ const MUTS = {
     "  }\n  let pins: any[] = []"],
   "cache-off": ["S", "  if (hit && hit.result) {", "  if (false) {"],
   "limit-off": ["S", "  if (used >= AI_VISION_DAILY_LIMIT) {", "  if (false) {"],
+  "cap-off": ["S", "  if (visionQuotaExhausted(neuronsToday)) {", "  if (false) {"],
+  "exhausted-status": ["S", "  if (exhausted) reason = VISION_EXHAUSTED_REASON", "  if (false) reason = VISION_EXHAUSTED_REASON"],
+  "nobinding-open": ["S", "  if (!c.env || !visionRunnerOf(c.env)) return 'AI 바인딩 미구성", "  if (false) return 'AI 바인딩 미구성"],
   "client-url": ["S", "  const img = await loadVisionImage(c, cur)", "  const img = (body.image_url ? { ok: true, dataUrl: String(body.image_url), bytes: 0 } : await loadVisionImage(c, cur))"],
-  "nokey-open": ["S", "  if (!c.env || !c.env.OPENROUTER_API_KEY) return 'AI 키 미설정", "  if (false) return 'AI 키 미설정"],
   "image-owner": ["S", "  if (!cur) return c.json({ error: 'image_id 가 이 포인트의 사진(현재/이력)이 아닙니다' }, 400)", "  if (!cur) return c.json({ error: 'x' }, 200)"],
-  // 라이브러리
+  // 라이브러리 — 🔴 유료 가드
+  "paid-model-default": ["L", "export const AI_VISION_MODEL_DEFAULT = '@cf/meta/llama-4-scout-17b-16e-instruct'", "export const AI_VISION_MODEL_DEFAULT = 'anthropic/claude-sonnet-5.5'"],
+  "allowlist-off": ["L", "  return isFreeModel(model) ? model : null", "  return model"],
+  "paid-endpoint": ["L", "  let out: any\n  try {\n    out = await run(model, input)",
+    "  let out: any\n  try {\n    out = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer paid' }, body: JSON.stringify(input) }).then((r) => r.json())"],
+  "neuron-undercount": ["L", "  if (!rate || pt == null || ct == null) return { neurons: AI_VISION_NEURONS_FALLBACK_PER_CALL, estimated: true }", "  if (!rate || pt == null || ct == null) return { neurons: 0, estimated: true }"],
   "schema-enum": ["L", "if (!(VISION_KINDS as readonly string[]).includes(it.kind)) return", "if (false) return"],
   "schema-summary": ["L", "if (typeof raw.summary !== 'string' || !raw.summary.trim()) return", "if (false) return"],
   "refs-external": ["L", "const m = url.match(/^\\/api\\/r2\\/object\\/([^?#]+)/)", "const m = url.match(/^(?:\\/api\\/r2\\/object\\/|https?:\\/\\/)(.+)/)"],
@@ -64,6 +70,7 @@ const libPlugin = {
 };
 
 const PNG1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const SCOUT = "@cf/meta/llama-4-scout-17b-16e-instruct";
 const GOOD = {
   summary: "기관실 통로. 좌측에 펌프 2기, 우측 배관 플랜지에 녹 흔적.",
   items: [
@@ -74,17 +81,29 @@ const GOOD = {
   change_summary: null,
   defect_suggestion: { title: "배관 플랜지 부식", detail: "우측 플랜지 볼트 주변 녹 — 확인 필요", severity: "mid", confidence: 0.6 },
 };
-const completion = (obj, extra) => ({ id: "gen-x", model: "anthropic/claude-sonnet-5.5", choices: [{ message: { role: "assistant", content: JSON.stringify(obj) } }],
-  usage: { prompt_tokens: 1700, completion_tokens: 260, cost: 0.0062, ...(extra || {}) } });
+const USAGE = { prompt_tokens: 2100, completion_tokens: 300, total_tokens: 2400 };
+const NEURONS_GOOD = Math.ceil((2100 * 24545 + 300 * 77273) / 1e6 * 100) / 100;   // 74.73
+const wa = (obj, usage) => ({ response: JSON.stringify(obj), usage: usage === undefined ? USAGE : usage });
 
-/* ══ ① src/lib/aiVision.ts — 순수 ══ */
-console.log("\n[① src/lib/aiVision.ts — 스키마 검증·파싱·이미지 참조·호출 어댑터(fetch 스텁)]");
+/* ══ ① src/lib/aiVision.ts — 순수 + 🔴 유료 가드(정적) ══ */
+console.log("\n[① src/lib/aiVision.ts — 무료 제공자 가드·스키마 검증·Neuron 환산·runner 어댑터]");
 {
+  ok(!/openrouter|anthropic|api\.openai|groq|Authorization/i.test(LIB), "① 🔴 정적 가드: 소스에 유료 제공자 이름·인증 헤더 0");
+  ok(!/(?<![\w.])fetch\(/.test(LIB), "① 🔴 정적 가드: 전역 fetch( 0(외부 엔드포인트 호출 경로 없음)");
   const out = path.join(os.tmpdir(), "p126-lib-" + process.pid + ".mjs");
   await esbuild.build({ stdin: { contents: LIB, resolveDir: path.join(ROOT, "src/lib"), sourcefile: "aiVision.ts", loader: "ts" }, bundle: true, format: "esm", platform: "neutral", outfile: out, logLevel: "silent" });
   const L = await import(pathToFileURL(out).href);
-  ok(L.AI_VISION_MODEL_DEFAULT === "anthropic/claude-sonnet-5.5", "① 모델 ID SoT = anthropic/claude-sonnet-5.5(OpenRouter /models 라이브 확인값)");
-  ok(L.visionModelOf({ AI_VISION_MODEL: " x/y " }) === "x/y" && L.visionModelOf({}) === L.AI_VISION_MODEL_DEFAULT, "① AI_VISION_MODEL 시크릿으로 덮어쓰기, 없으면 기본값");
+  ok(L.AI_VISION_PROVIDER === "workers-ai" && L.isFreeModel(L.AI_VISION_MODEL_DEFAULT) && /^@cf\//.test(L.AI_VISION_MODEL_DEFAULT), "① 기본 모델이 무료 Workers AI 허용 목록 안(@cf/…) — " + L.AI_VISION_MODEL_DEFAULT);
+  ok(Object.keys(L.AI_VISION_FREE_MODELS).every((m) => /^@cf\//.test(m)), "① 허용 목록 전부 @cf/ (Workers AI)");
+  ok(L.visionModelOf({}) === L.AI_VISION_MODEL_DEFAULT && L.visionModelOf({ AI_VISION_MODEL: "@cf/meta/llama-3.2-11b-vision-instruct" }) === "@cf/meta/llama-3.2-11b-vision-instruct", "① AI_VISION_MODEL 로 목록 안 모델 선택 가능");
+  ok(L.visionModelOf({ AI_VISION_MODEL: "anthropic/claude-sonnet-5.5" }) === null && L.visionModelOf({ AI_VISION_MODEL: "@cf/moonshotai/kimi-k2.7-code" }) === null, "① 🔴 허용 목록 밖(유료·require_workers_paid) → null(비활성, 폴백 없음)");
+  ok(L.AI_VISION_GLOBAL_NEURON_CAP < L.AI_VISION_FREE_NEURONS_PER_DAY && L.AI_VISION_FREE_NEURONS_PER_DAY === 10000, "① 전체 상한(" + L.AI_VISION_GLOBAL_NEURON_CAP + ") < 무료 할당 10,000 Neurons/일");
+  const nn = L.neuronsOf(SCOUT, USAGE);
+  ok(nn.neurons === NEURONS_GOOD && nn.estimated === false, "① Neuron 환산(Scout 24545/77273 per M) — " + nn.neurons);
+  const nf = L.neuronsOf(SCOUT, null);
+  ok(nf.neurons === L.AI_VISION_NEURONS_FALLBACK_PER_CALL && nf.estimated === true, "① usage 없음 → 보수적 고정값(과소집계 금지) — " + nf.neurons);
+  ok(L.visionQuotaExhausted(L.AI_VISION_GLOBAL_NEURON_CAP - L.AI_VISION_NEURONS_FALLBACK_PER_CALL - 1) === false && L.visionQuotaExhausted(L.AI_VISION_GLOBAL_NEURON_CAP - L.AI_VISION_NEURONS_FALLBACK_PER_CALL + 1) === true, "① 소진 판정 = 사용량 + 다음 1회 추정 > 상한");
+  ok(L.visionDayStartUtc(Date.UTC(2026, 9, 7, 13, 5)) === Date.UTC(2026, 9, 7), "① 집계 창 = UTC 자정");
 
   const v = L.validateVisionResult(GOOD);
   ok(v.ok && v.value.items.length === 3 && v.value.items[2].yaw === undefined && v.value.defect_suggestion.severity === "mid" && !("change_summary" in v.value), "① 정상 응답 통과(yaw/pitch null → 미기재, change_summary null → 생략)");
@@ -98,40 +117,48 @@ console.log("\n[① src/lib/aiVision.ts — 스키마 검증·파싱·이미지 
   ok(!L.validateVisionResult({ summary: "x", items: [{ kind: "other", label: "a", confidence: 0.5, yaw: 400, pitch: 0 }] }).ok, "① yaw 범위 밖 → ok:false");
   const long = L.validateVisionResult({ summary: "s".repeat(5000), items: [{ kind: "other", label: "l".repeat(500), confidence: 0.5 }] });
   ok(long.ok && long.value.summary.length === 2000 && long.value.items[0].label.length === 120, "① 문자열 길이 상한(summary 2000 · label 120) — 모델 출력은 데이터로만");
-  ok(L.parseModelJson("```json\n{\"a\":1}\n```").a === 1 && L.parseModelJson([{ type: "text", text: "{\"b\":2}" }]).b === 2 && L.parseModelJson("nope") === null, "① parseModelJson — 펜스·parts 배열·실패 null");
+  ok(L.parseModelJson("```json\n{\"a\":1}\n```").a === 1 && L.parseModelJson({ b: 2 }).b === 2 && L.parseModelJson("nope") === null, "① parseModelJson — 펜스·객체(JSON 모드)·실패 null");
 
   const refs = L.pinImageRefs({ imageId: "img9", timeline: [{ imageId: "img7", shotAt: 1 }, { imageUrl: "/api/r2/object/assets/a.jpg?t=tok", at: 2 }, { imageUrl: "https://evil.example/x.jpg" }] });
   ok(refs.length === 3 && refs[0].ref === "img:img9" && refs[0].current && refs[1].ref === "r2:assets/a.jpg" && refs[2].ref === "img:img7", "① pinImageRefs — 현재 + 이력(최근순), R2 키 추출(?t= 제거), 외부 URL 제외(SSRF)");
   ok(L.pinImageRefs({ imageUrl: "https://cdn.example/p.jpg" }).length === 0, "① 외부 URL 만 있는 핀 → 참조 0(서버가 읽지 않음)");
   ok(L.visionCacheKey("img:a", null, "m") === "m|img:a|" && L.visionCacheKey("img:a", "img:b", "m") !== L.visionCacheKey("img:a", null, "m"), "① 캐시 키 = 모델|현재|비교");
 
-  // 호출 어댑터 — fetch 스텁
+  // 호출 어댑터 — runner 스텁(Workers AI 바인딩 대체)
   let calls = [];
-  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-  const stub = (fn) => { calls = []; return async (url, init) => { calls.push({ url, init }); return fn(url, init, calls.length); }; };
-  const noKey = await L.askVision({}, { imageDataUrl: PNG1 }, stub(() => json(200, completion(GOOD))));
-  ok(!noKey.ok && noKey.error === "no-key" && calls.length === 0, "① 키 없음 → no-key(호출 0)");
-  const good = await L.askVision({ OPENROUTER_API_KEY: "k" }, { imageDataUrl: PNG1, compareDataUrl: PNG1, pinLabel: "P1" }, stub(() => json(200, completion(GOOD))));
-  ok(good.ok && good.usage.cost_usd === 0.0062 && good.usage.prompt_tokens === 1700 && good.value.items.length === 3, "① 200 fixture → ok + usage(토큰·비용 그대로)");
-  const sent = JSON.parse(calls[0].init.body);
-  ok(sent.model === L.AI_VISION_MODEL_DEFAULT && sent.response_format && sent.response_format.type === "json_schema" && sent.response_format.json_schema.strict === true, "① 요청: 모델 ID + response_format json_schema(strict)");
-  ok(sent.messages[1].content.filter((p) => p.type === "image_url").length === 2 && sent.usage && sent.usage.include === true, "① 요청: 이미지 2장(현재+비교) + usage.include");
-  ok(calls[0].url.startsWith("https://openrouter.ai/api/v1/") && calls[0].init.headers.Authorization === "Bearer k", "① 기본 업스트림 = openrouter.ai, 키는 헤더에만");
-  const bad = await L.askVision({ OPENROUTER_API_KEY: "k" }, { imageDataUrl: PNG1 }, stub(() => json(200, completion({ summary: "x", items: [{ kind: "banana", label: "a", confidence: 0.5 }] }))));
-  ok(!bad.ok && bad.error === "schema:item[0]-kind", "① 스키마 불합격 응답 → ok:false(schema:…) — 지어내지 않음");
-  const h429 = await L.askVision({ OPENROUTER_API_KEY: "k" }, { imageDataUrl: PNG1 }, stub(() => json(429, { error: "rate" })));
-  ok(!h429.ok && h429.error === "http-429" && h429.status === 429, "① 업스트림 429 → http-429(값으로)");
-  const nojson = await L.askVision({ OPENROUTER_API_KEY: "k" }, { imageDataUrl: PNG1 }, stub(() => json(200, { choices: [{ message: { content: "그냥 산문" } }] })));
+  const stub = (fn) => { calls = []; return async (model, input) => { calls.push({ model, input }); return fn(model, input, calls.length); }; };
+  const noBind = await L.askVision({}, { imageDataUrl: PNG1 }, null);
+  ok(!noBind.ok && noBind.error === "no-ai-binding" && noBind.usage.neurons === 0, "① 바인딩 없음 → no-ai-binding(호출 0, Neurons 0)");
+  const paid = await L.askVision({ AI_VISION_MODEL: "anthropic/claude-sonnet-5.5" }, { imageDataUrl: PNG1 }, stub(() => wa(GOOD)));
+  ok(!paid.ok && paid.error === "model-not-free" && calls.length === 0, "① 🔴 유료 모델 지정 → model-not-free(runner 호출 0 — 폴백 없음)");
+  const good = await L.askVision({}, { imageDataUrl: PNG1, compareDataUrl: PNG1, pinLabel: "P1" }, stub(() => wa(GOOD)));
+  ok(good.ok && good.usage.neurons === NEURONS_GOOD && good.usage.cost_usd === 0 && good.usage.prompt_tokens === 2100 && good.value.items.length === 3 && good.model === SCOUT, "① fixture → ok + usage(토큰·Neurons·비용 0)");
+  const sent = calls[0].input;
+  ok(calls[0].model === SCOUT && sent.response_format && sent.response_format.type === "json_schema" && sent.response_format.json_schema && sent.response_format.json_schema.type === "object", "① 요청: 모델 ID + response_format json_schema(Workers AI JSON 모드)");
+  const parts = sent.messages[1].content;
+  ok(parts.filter((p) => p.type === "image_url").length === 2 && parts.every((p) => p.type !== "image_url" || /^data:image\//.test(p.image_url.url)) && parts[0].type === "text", "① 요청: 이미지 2장(현재+비교) data URL(Workers AI 는 HTTP URL 불가) + 텍스트");
+  const l32 = await L.askVision({ AI_VISION_MODEL: "@cf/meta/llama-3.2-11b-vision-instruct" }, { imageDataUrl: PNG1 }, stub(() => wa(GOOD)));
+  ok(l32.ok && !calls[0].input.response_format && l32.usage.neurons === Math.ceil((2100 * 4410 + 300 * 61493) / 1e6 * 100) / 100, "① llama-3.2-vision(JSON 모드 없음) → response_format 미전송 + 그 모델 환산율");
+  const objResp = await L.askVision({}, { imageDataUrl: PNG1 }, stub(() => ({ response: GOOD, usage: USAGE })));
+  ok(objResp.ok && objResp.value.items.length === 3, "① JSON 모드가 객체로 돌려줘도 통과");
+  const bad = await L.askVision({}, { imageDataUrl: PNG1 }, stub(() => wa({ summary: "x", items: [{ kind: "banana", label: "a", confidence: 0.5 }] })));
+  ok(!bad.ok && bad.error === "schema:item[0]-kind" && bad.usage.neurons === NEURONS_GOOD, "① 스키마 불합격 → ok:false(schema:…) + Neurons 는 집계(모델은 돌았다)");
+  const thrown = await L.askVision({}, { imageDataUrl: PNG1 }, stub(() => { throw new Error("JSON Mode couldn't be met"); }));
+  ok(!thrown.ok && thrown.error === "json-mode-unmet" && thrown.usage.neurons === L.AI_VISION_NEURONS_FALLBACK_PER_CALL, "① 'JSON Mode couldn't be met' → json-mode-unmet + 보수적 Neurons");
+  const nousage = await L.askVision({}, { imageDataUrl: PNG1 }, stub(() => wa(GOOD, null)));
+  ok(nousage.ok && nousage.usage.neurons === L.AI_VISION_NEURONS_FALLBACK_PER_CALL && nousage.usage.neurons_estimated === true, "① usage 없으면 보수적 고정값(지어내지 않고 과대집계)");
+  const nojson = await L.askVision({}, { imageDataUrl: PNG1 }, stub(() => ({ response: "그냥 산문", usage: USAGE })));
   ok(!nojson.ok && nojson.error === "no-json-content", "① JSON 아닌 본문 → no-json-content");
-  const nocost = await L.askVision({ OPENROUTER_API_KEY: "k" }, { imageDataUrl: PNG1 }, stub(() => json(200, { choices: [{ message: { content: JSON.stringify(GOOD) } }] })));
-  ok(nocost.ok && nocost.usage.cost_usd === null && nocost.usage.prompt_tokens === null, "① usage 없으면 null(비용 지어내지 않음)");
+  // runner 어댑터 — .run 우선, .fetch(fixture) 폴백
+  let ran = 0;
+  ok(typeof L.visionRunnerOf({ AI: { run: async () => { ran++; return wa(GOOD); } } }) === "function" && L.visionRunnerOf({}) === null, "① visionRunnerOf — env.AI.run 어댑터 / 없으면 null");
 }
 
-/* ══ ② 서버 — Miniflare + 실 D1(0037) + 실 R2 + fixture 업스트림 ══ */
-console.log("\n[② 서버 /api/ai/analyze-photo — Miniflare + 실 D1 + fixture 업스트림(실 과금 호출 0)]");
+/* ══ ② 서버 — Miniflare + 실 D1(0037·0038) + 실 R2 + serviceBindings AI fixture ══ */
+console.log("\n[② 서버 /api/ai/analyze-photo — Miniflare + 실 D1 + Workers AI fixture(실 호출 0·과금 0)]");
 const MIG_DIR = path.join(ROOT, "migrations");
 const MIGS = fs.readdirSync(MIG_DIR).filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
-ok(MIGS.includes("0037_ai_vision.sql"), "② 마이그레이션 0037_ai_vision.sql 존재");
+ok(MIGS.includes("0037_ai_vision.sql") && MIGS.includes("0038_ai_vision_neurons.sql"), "② 마이그레이션 0037·0038 존재");
 const stmtsOf = (file) => fs.readFileSync(path.join(MIG_DIR, file), "utf8").replace(/--[^\n]*/g, "").split(";").map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean);
 const workerOut = path.join(os.tmpdir(), "p126-worker-" + process.pid + ".mjs");
 await esbuild.build({
@@ -140,29 +167,21 @@ await esbuild.build({
   conditions: ["workerd", "worker", "browser"], plugins: [libPlugin],
 });
 
-// fixture 업스트림 — 요청 본문을 기록하고 지정된 응답을 돌려준다(과금 0)
-const upstream = { calls: [], reply: () => completion(GOOD) };
-const fx = http.createServer((req, res) => {
-  let buf = "";
-  req.on("data", (d) => { buf += d; });
-  req.on("end", () => {
-    let body = null; try { body = JSON.parse(buf); } catch {}
-    upstream.calls.push({ url: req.url, auth: req.headers.authorization || "", body });
-    const r = upstream.reply(body);
-    res.writeHead(r.status || 200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(r.status ? r.body : r));
-  });
-});
-await listenSafePort(fx, "127.0.0.1");
-const FX_BASE = "http://127.0.0.1:" + fx.address().port + "/v1";
-const FAKE_KEY = "sk-or-p126-fake-" + Date.now();
-
-const mkMf = (bindings) => new Miniflare({
+// Workers AI fixture — env.AI(serviceBindings) 로 들어온 /run/<model> 요청을 기록하고 지정 응답을 돌려준다(과금 0)
+const upstream = { calls: [], reply: () => wa(GOOD) };
+const aiFixture = async (req) => {
+  const url = new URL(req.url);
+  let body = null; try { body = await req.json(); } catch {}
+  upstream.calls.push({ model: decodeURIComponent(url.pathname.replace(/^\/run\//, "")), body });
+  return new Response(JSON.stringify(upstream.reply(body)), { headers: { "Content-Type": "application/json" } });
+};
+const mkMf = (bindings, withAI) => new Miniflare({
   modules: true, scriptPath: workerOut, d1Databases: { DB: "p126-" + Date.now() + Math.random().toString(36).slice(2) }, r2Buckets: { R2: "p126r2-" + Date.now() },
-  bindings: { DEMO_LOGIN: "0", ...bindings }, compatibilityDate: "2025-01-01",
+  bindings: { DEMO_LOGIN: "0", ...bindings }, compatibilityDate: "2025-01-01", ...(withAI ? { serviceBindings: { AI: aiFixture } } : {}),
 });
-const mf = mkMf({ OPENROUTER_API_KEY: FAKE_KEY, AI_VISION_BASE_URL: FX_BASE });
-const mfNoKey = mkMf({});
+const mf = mkMf({}, true);
+const mfNoAI = mkMf({}, false);
+const mfPaid = mkMf({ AI_VISION_MODEL: "anthropic/claude-sonnet-5.5" }, true);
 const BASE = "http://p126.test";
 try {
   const db = await mf.getD1Database("DB");
@@ -194,11 +213,9 @@ try {
 
   await run("INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted) VALUES ('prj_V', 'AI 프로젝트', '', ?, ?, ?, 0)", [U.o, now0, now0]);
   await A("o", "POST", "/api/projects/prj_V/members", { email: U.d, role: "designer" });
-  // pano_images 2건(현재 img_cur · 이력 img_old) — D1 축소본(data URL)
   for (const id of ["img_cur", "img_old", "img_lim"]) {
     await run("INSERT INTO pano_images (id, name, image_data, width, height, created_at, updated_at, deleted, tenant_id) VALUES (?, ?, ?, 1, 1, ?, ?, 0, 'tnt_default')", [id, id, PNG1, now0, now0]);
   }
-  // R2 원본(핀 p2 는 imageUrl 로만 참조) + 4MB 초과(핀 p3)
   const r2 = await mf.getR2Bucket("R2");
   await r2.put("assets/p126-small.jpg", new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), { httpMetadata: { contentType: "image/jpeg" } });
   await r2.put("assets/p126-big.jpg", new Uint8Array(4 * 1024 * 1024 + 1), { httpMetadata: { contentType: "image/jpeg" } });
@@ -215,17 +232,15 @@ try {
 
   // 상태 조회
   const stV = await A("v", "GET", "/api/ai/vision-status");
-  ok(stV.status === 200 && stV.j.enabled === true && stV.j.model === "anthropic/claude-sonnet-5.5" && stV.j.daily_limit === 30 && stV.j.used === 0, "② vision-status(키 있음) → enabled:true, 모델·상한·사용량, 키 미반환 — " + JSON.stringify(stV.j).slice(0, 120));
-  ok(!JSON.stringify(stV.j).includes(FAKE_KEY), "② 상태 응답에 키 값 없음");
-  const stNone = await A(null, "GET", "/api/ai/vision-status");
-  ok(stNone.status === 401, "② 비로그인 상태 조회 → 401");
+  ok(stV.status === 200 && stV.j.enabled === true && stV.j.provider === "workers-ai" && stV.j.model === SCOUT && stV.j.daily_limit === 30 && stV.j.used === 0, "② vision-status → enabled, provider workers-ai, 모델·상한 — " + JSON.stringify(stV.j).slice(0, 160));
+  ok(stV.j.neurons_used_today === 0 && stV.j.neuron_cap === 7000 && stV.j.free_neurons_per_day === 10000 && stV.j.exhausted === false, "② 상태에 전체 무료 할당 사용량/상한(Neurons) 동봉");
+  ok((await A(null, "GET", "/api/ai/vision-status")).status === 401, "② 비로그인 상태 조회 → 401");
 
   // 권한
   const vr = await A("v", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1" });
-  ok(vr.status === 403 && upstream.calls.length === 0, "② 열람자 → 403(업스트림 0) — " + vr.status);
+  ok(vr.status === 403 && upstream.calls.length === 0, "② 열람자 → 403(모델 호출 0) — " + vr.status);
   const xr = await A("x", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1" });
   ok(xr.status === 403 && upstream.calls.length === 0, "② 프로젝트 멤버 아닌 디자이너 → 403(deploymentWriteDenied 공유 게이트) — " + xr.status);
-  // 디자이너 아닌 소유자(designers 미등록) — 프로젝트 게이트는 통과하지만 requireDesigner 가 막아야 한다
   await addUser(db, "w", false);
   await run("INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted) VALUES ('prj_W', '소유자만', '', ?, ?, ?, 0)", [U.w, now0, now0]);
   await run("INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, created_at, updated_at, deleted, project_id, tenant_id) VALUES ('dep_W', 'W', 'W.pdf', '', '[]', ?, ?, ?, 0, 'prj_W', 'tnt_default')",
@@ -233,97 +248,118 @@ try {
   const wr = await A("w", "POST", "/api/ai/analyze-photo", { deployment_id: "dep_W", pin_id: "w1" });
   ok(wr.status === 403 && upstream.calls.length === 0, "② 디자이너 권한 없는 소유자 → 403(requireDesigner — 디자이너 이상만) — " + wr.status);
 
-  // 디자이너 200 — 클라가 보낸 image_url 은 무시(서버가 D1 에서 읽은 data URL 만 업스트림으로)
+  // 디자이너 200 — 클라가 보낸 image_url 은 무시(서버가 D1 에서 읽은 data URL 만 모델로)
   const r1 = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1", image_url: "https://evil.example/injected.jpg", image: "data:image/png;base64,AAAA" });
   ok(r1.status === 200 && r1.j.ok === true && r1.j.cached === false && r1.j.result && r1.j.result.items.length === 3, "② 디자이너 → 200 + 구조화 결과(items 3) — " + r1.status);
-  ok(upstream.calls.length === 1 && upstream.calls[0].auth === "Bearer " + FAKE_KEY && upstream.calls[0].url.endsWith("/chat/completions"), "② 업스트림 1회, 키는 서버→업스트림 헤더로만");
+  ok(upstream.calls.length === 1 && upstream.calls[0].model === SCOUT, "② Workers AI 바인딩 1회, 모델 = " + (upstream.calls[0] && upstream.calls[0].model));
   const sentImgs = (upstream.calls[0].body.messages[1].content || []).filter((p) => p.type === "image_url").map((p) => p.image_url.url);
-  ok(sentImgs.length === 1 && sentImgs[0] === PNG1, "② 🔴 업스트림이 받은 이미지 = 서버가 D1 에서 읽은 것(클라 image_url/image 필드 무시)");
-  ok(!JSON.stringify(upstream.calls[0].body).includes("evil.example"), "② 클라가 보낸 URL 이 업스트림 요청 어디에도 없음");
-  ok(r1.j.usage && r1.j.usage.cost_usd === 0.0062 && r1.j.usage.prompt_tokens === 1700 && r1.j.model === "anthropic/claude-sonnet-5.5", "② 응답에 토큰·비용(fixture 값) + 모델");
-  ok(!JSON.stringify(r1.j).includes(FAKE_KEY) && !JSON.stringify(r1.j).includes("data:image"), "② 응답에 키·이미지 데이터 없음");
+  ok(sentImgs.length === 1 && sentImgs[0] === PNG1, "② 🔴 모델이 받은 이미지 = 서버가 D1 에서 읽은 것(클라 image_url/image 필드 무시)");
+  ok(!JSON.stringify(upstream.calls[0].body).includes("evil.example"), "② 클라가 보낸 URL 이 모델 요청 어디에도 없음");
+  ok(r1.j.usage && r1.j.usage.cost_usd === 0 && r1.j.usage.neurons === NEURONS_GOOD && r1.j.usage.prompt_tokens === 2100 && r1.j.provider === "workers-ai", "② 응답에 토큰·Neurons·비용 0 + provider");
+  ok(!JSON.stringify(r1.j).includes("data:image"), "② 응답에 이미지 데이터 없음");
   ok(r1.j.estimate_p === 0.7 && r1.j.result.defect_suggestion && r1.j.result.defect_suggestion.severity === "mid", "② 「추정」 기준(0.7) + 결함 제안 동봉(서버는 등록하지 않음)");
   const noteCnt = await db.prepare("SELECT COUNT(*) AS n FROM pin_notes").first();
   ok(Number(noteCnt.n) === 0, "② 🔴 AI 가 결함 노트를 자동 등록하지 않음(pin_notes 0)");
+  const row1 = await db.prepare("SELECT neurons, cost_usd, status FROM ai_vision_results WHERE pin_id = 'p1'").first();
+  ok(row1 && row1.neurons === NEURONS_GOOD && row1.cost_usd === 0 && row1.status === "ok", "② D1 행에 neurons 기록(0038) · cost_usd 0 — " + JSON.stringify(row1));
 
-  // 캐시 적중 — 업스트림 0회
+  // 캐시 적중 — 모델 호출 0회
   const r1b = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1" });
-  ok(r1b.status === 200 && r1b.j.cached === true && upstream.calls.length === 1, "② 같은 사진 재요청 → cached:true, 업스트림 여전히 1회");
+  ok(r1b.status === 200 && r1b.j.cached === true && r1b.j.usage.neurons === NEURONS_GOOD && upstream.calls.length === 1, "② 같은 사진 재요청 → cached:true, 모델 호출 여전히 1회");
   const r1c = await A("o", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1", image_id: "img_cur" });
-  ok(r1c.status === 200 && r1c.j.cached === true && upstream.calls.length === 1, "② 다른 사용자(소유자)도 같은 사진 → 캐시 적중(업스트림 1회 유지)");
+  ok(r1c.status === 200 && r1c.j.cached === true && upstream.calls.length === 1, "② 다른 사용자(소유자)도 같은 사진 → 캐시 적중");
 
-  // 비교(이전 사진) — 다른 캐시 키 → 업스트림 2회, 이미지 2장
-  upstream.reply = () => completion({ ...GOOD, change_summary: "좌측 펌프 커버가 새로 설치됨" });
+  // 비교(이전 사진)
+  upstream.reply = () => wa({ ...GOOD, change_summary: "좌측 펌프 커버가 새로 설치됨" });
   const r2c = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1", compare_image_id: "img_old" });
   ok(r2c.status === 200 && r2c.j.cached === false && r2c.j.compare === true && r2c.j.result.change_summary === "좌측 펌프 커버가 새로 설치됨", "② compare_image_id(이력) → 변화 요약 동봉 — " + r2c.status);
   const sent2 = (upstream.calls[1].body.messages[1].content || []).filter((p) => p.type === "image_url").length;
-  ok(upstream.calls.length === 2 && sent2 === 2, "② 비교 요청은 이미지 2장(현재+이전) 전송, 업스트림 2회");
+  ok(upstream.calls.length === 2 && sent2 === 2, "② 비교 요청은 이미지 2장(현재+이전) 전송, 모델 2회");
 
-  // 식별자 검증 — 이 핀 사진이 아닌 id
   const badImg = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1", image_id: "img_lim" });
-  ok(badImg.status === 400 && upstream.calls.length === 2, "② 다른 핀의 image_id → 400(업스트림 0)");
-  const badCmp = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1", compare_image_id: "nope" });
-  ok(badCmp.status === 400, "② 핀 소유 아닌 compare_image_id → 400");
+  ok(badImg.status === 400 && upstream.calls.length === 2, "② 다른 핀의 image_id → 400(모델 호출 0)");
+  ok((await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1", compare_image_id: "nope" })).status === 400, "② 핀 소유 아닌 compare_image_id → 400");
   ok((await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "zzz" })).status === 404, "② 없는 핀 → 404");
   ok((await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: "nope", pin_id: "p1" })).status === 404, "② 없는 배포본 → 404");
   ok((await A("d", "POST", "/api/ai/analyze-photo", { pin_id: "p1" })).status === 400, "② deployment_id 누락 → 400");
 
-  // R2 경로 — 핀 imageUrl(/api/r2/object/<key>) → 서버가 R2 직접 읽음
-  upstream.reply = () => completion(GOOD);
+  // R2 경로
+  upstream.reply = () => wa(GOOD);
   const rr2 = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p2" });
   const sent3 = (upstream.calls[2] && upstream.calls[2].body.messages[1].content || []).filter((p) => p.type === "image_url").map((p) => p.image_url.url);
   ok(rr2.status === 200 && upstream.calls.length === 3 && sent3.length === 1 && sent3[0].startsWith("data:image/jpeg;base64,"), "② R2 원본(imageUrl 키) → 서버가 R2 에서 읽어 data URL 로 전송 — " + rr2.status);
   const rr3 = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p3" });
-  ok(rr3.status === 413 && rr3.j.code === "image-too-large" && upstream.calls.length === 3, "② 4MB 초과 원본 → 413 정직한 오류(업스트림 0) — " + rr3.status);
-  const rr4 = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p4" });
-  ok(rr4.status === 400 && upstream.calls.length === 3, "② 외부 URL 만 있는 핀 → 400(서버는 외부 URL 을 가져오지 않음, SSRF 차단)");
+  ok(rr3.status === 413 && rr3.j.code === "image-too-large" && upstream.calls.length === 3, "② 4MB 초과 원본 → 413 정직한 오류(모델 호출 0) — " + rr3.status);
+  ok((await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p4" })).status === 400 && upstream.calls.length === 3, "② 외부 URL 만 있는 핀 → 400(SSRF 차단)");
   ok((await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p5" })).status === 400, "② 사진 없는 핀 → 400");
 
-  // 스키마 불합격 업스트림 → 502 + error 행 기록(캐시 아님)
-  upstream.reply = () => completion({ summary: "x", items: [{ kind: "banana", label: "a", confidence: 0.5 }] });
+  // 스키마 불합격 → 502 + error 행(Neurons 는 집계)
+  upstream.reply = () => wa({ summary: "x", items: [{ kind: "banana", label: "a", confidence: 0.5 }] });
   const bad = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p6" });
-  ok(bad.status === 502 && String(bad.j.code).startsWith("schema:") && bad.j.enabled === true, "② 스키마 불합격 응답 → 502(code schema:…) 지어내지 않음 — " + bad.status);
-  const errRow = await db.prepare("SELECT status, error FROM ai_vision_results WHERE pin_id = 'p6'").first();
-  ok(errRow && errRow.status === "error" && String(errRow.error).startsWith("schema:"), "② 실패도 기록(status=error) — 재시도 폭주 상한에 포함");
-  upstream.reply = () => completion(GOOD);
+  ok(bad.status === 502 && String(bad.j.code).startsWith("schema:") && bad.j.enabled === true, "② 스키마 불합격 → 502(code schema:…) 지어내지 않음 — " + bad.status);
+  const errRow = await db.prepare("SELECT status, error, neurons FROM ai_vision_results WHERE pin_id = 'p6'").first();
+  ok(errRow && errRow.status === "error" && String(errRow.error).startsWith("schema:") && errRow.neurons === NEURONS_GOOD, "② 실패도 기록(status=error) + Neurons 집계(모델은 돌았다)");
+  upstream.reply = () => wa(GOOD, null);   // usage 없는 응답
   const again = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p6" });
-  ok(again.status === 200 && again.j.cached === false && upstream.calls.length === 5, "② 실패 행은 캐시로 쓰이지 않음 → 재요청 시 업스트림 재호출(200)");
+  const againRow = await db.prepare("SELECT neurons FROM ai_vision_results WHERE pin_id = 'p6' AND status = 'ok'").first();
+  ok(again.status === 200 && again.j.cached === false && upstream.calls.length === 5 && againRow && againRow.neurons === 200, "② 실패 행은 캐시 아님 → 재호출 200 · usage 없는 응답은 보수적 200 Neurons 기록");
+  upstream.reply = () => wa(GOOD);
 
   // 감사 로그
   const logs = await db.prepare("SELECT action, actor_email, detail FROM activity_log WHERE action = 'ai.vision' ORDER BY ts").all();
   const lrows = logs.results || [];
   const d0 = JSON.parse(lrows[0].detail);
-  ok(lrows.length >= 6 && d0.cost_usd === 0.0062 && d0.prompt_tokens === 1700 && d0.cached === false && lrows[0].actor_email === U.d, "② activity_log 'ai.vision' — 토큰·비용·캐시 여부 기록(" + lrows.length + "건)");
-  ok(!lrows.some((r) => String(r.detail).includes(FAKE_KEY) || String(r.detail).includes("data:image")), "② 로그에 키·이미지 데이터 없음");
+  ok(lrows.length >= 6 && d0.neurons === NEURONS_GOOD && d0.cost_usd === 0 && d0.provider === "workers-ai" && d0.cached === false && lrows[0].actor_email === U.d, "② activity_log 'ai.vision' — Neurons·비용 0·제공자·캐시 여부(" + lrows.length + "건)");
+  ok(!lrows.some((r) => String(r.detail).includes("data:image")), "② 로그에 이미지 데이터 없음");
 
-  // 일일 상한 — 사용자 d 의 최근 24h 행을 30개로 채운 뒤 새 사진 요청 → 429
+  // 사용자 일일 상한(30회/24h)
   const usedNow = await db.prepare("SELECT COUNT(*) AS n FROM ai_vision_results WHERE created_by = ?").bind(U.d).first();
   for (let i = Number(usedNow.n); i < 30; i++) {
-    await run("INSERT INTO ai_vision_results (id, cache_key, image_ref, model, status, error, created_by, created_at) VALUES (?, ?, 'img:fill', 'm', 'error', 'fill', ?, ?)", ["fill" + i, "m|img:fill" + i + "|", U.d, now0]);
+    await run("INSERT INTO ai_vision_results (id, cache_key, image_ref, model, status, error, neurons, created_by, created_at) VALUES (?, ?, 'img:fill', 'm', 'error', 'fill', 0, ?, ?)", ["fill" + i, "m|img:fill" + i + "|", U.d, now0]);
   }
   const st2 = await A("d", "GET", "/api/ai/vision-status");
-  ok(st2.j.used === 30 && st2.j.remaining === 0, "② vision-status used=30 remaining=0 — " + JSON.stringify({ used: st2.j.used, remaining: st2.j.remaining }));
-  await run("UPDATE deployments SET pins = ? WHERE id = ?", [JSON.stringify(pins.concat([{ id: "p7", page: 1, x: 70, y: 10, label: "P7", imageId: "img_old" }])), dep]);
+  ok(st2.j.used === 30 && st2.j.remaining === 0 && st2.j.enabled === true, "② vision-status used=30 remaining=0(전체 할당은 아직 여유) — " + JSON.stringify({ used: st2.j.used, remaining: st2.j.remaining }));
+  await run("UPDATE deployments SET pins = ? WHERE id = ?", [JSON.stringify(pins.concat([{ id: "p7", page: 1, x: 70, y: 10, label: "P7", imageId: "img_old" }, { id: "p8", page: 1, x: 80, y: 10, label: "P8", imageId: "img_lim", timeline: [{ imageId: "img_old" }] }])), dep]);
   const lim = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p7" });
-  ok(lim.status === 429 && lim.j.limit === 30 && upstream.calls.length === 5, "② 일일 상한 초과 → 429 + 사유(업스트림 0) — " + lim.status + " " + (lim.j && lim.j.error));
-  const limCached = await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1" });
-  ok(limCached.status === 200 && limCached.j.cached === true, "② 상한 초과여도 캐시 적중은 200(비용 0)");
+  ok(lim.status === 429 && lim.j.limit === 30 && upstream.calls.length === 5, "② 사용자 일일 상한 초과 → 429 + 사유(모델 호출 0) — " + lim.status);
+  ok((await A("d", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1" })).j.cached === true, "② 상한 초과여도 캐시 적중은 200(비용 0)");
   const other = await A("o", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p7" });
-  ok(other.status === 200 && upstream.calls.length === 6, "② 상한은 사용자별 — 다른 사용자는 정상 호출");
+  ok(other.status === 200 && upstream.calls.length === 6, "② 사용자 상한은 사용자별 — 다른 사용자는 정상 호출");
 
-  // 키 없음 — 비활성 + 사유, 분석 503
-  const db2 = await mfNoKey.getD1Database("DB");
+  // 🔴 전체 무료 할당(Neurons) 소진 → 비활성 + "오늘 무료 사용량 소진 — 내일 다시", 유료 폴백 없음
+  await run("INSERT INTO ai_vision_results (id, cache_key, image_ref, model, status, neurons, created_by, created_at) VALUES ('capfill', 'm|cap|', 'img:cap', 'm', 'error', ?, ?, ?)", [6900, U.o, now0]);
+  const stCap = await A("o", "GET", "/api/ai/vision-status");
+  ok(stCap.j.enabled === false && stCap.j.exhausted === true && /오늘 무료 사용량 소진/.test(stCap.j.reason || "") && stCap.j.neurons_used_today > 6900, "② 할당 소진 → vision-status enabled:false + exhausted + 사유 — " + (stCap.j && stCap.j.reason));
+  const capR = await A("o", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p8", compare_image_id: "img_old" });
+  ok(capR.status === 429 && capR.j.exhausted === true && /오늘 무료 사용량 소진/.test(capR.j.error) && upstream.calls.length === 6, "② 할당 소진 분석 → 429 exhausted(모델 호출 0 — 유료 폴백 없음) — " + capR.status);
+  ok((await A("o", "POST", "/api/ai/analyze-photo", { deployment_id: dep, pin_id: "p1" })).j.cached === true, "② 할당 소진 중에도 캐시 적중은 200(비용 0)");
+  await run("UPDATE ai_vision_results SET created_at = ? WHERE id = 'capfill'", [now0 - 2 * 86400000]);   // 어제(UTC 창 밖) → 다시 열림
+  const stBack = await A("o", "GET", "/api/ai/vision-status");
+  ok(stBack.j.enabled === true && stBack.j.exhausted === false, "② 날짜가 바뀌면(UTC 창 밖) 다시 활성 — '내일 다시'");
+
+  // AI 바인딩 없음 — 비활성 + 사유, 분석 503(모델 호출 0)
+  const db2 = await mfNoAI.getD1Database("DB");
   for (const f of MIGS) for (const st of stmtsOf(f)) await db2.exec(st);
   await addUser(db2, "o", true);
-  const stN = await api(mfNoKey, "o", "GET", "/api/ai/vision-status");
-  ok(stN.status === 200 && stN.j.enabled === false && /OPENROUTER_API_KEY/.test(stN.j.reason || ""), "② 키 없음 → enabled:false + 사유(시크릿 이름) — " + (stN.j && stN.j.reason));
-  const anN = await api(mfNoKey, "o", "POST", "/api/ai/analyze-photo", { deployment_id: "x", pin_id: "p1" });
-  ok(anN.status === 503 && anN.j.enabled === false && upstream.calls.length === 6, "② 키 없음 분석 → 503(조용한 실패 금지, 업스트림 0) — " + anN.status);
+  const stN = await api(mfNoAI, "o", "GET", "/api/ai/vision-status");
+  ok(stN.status === 200 && stN.j.enabled === false && /AI 바인딩/.test(stN.j.reason || ""), "② 바인딩 없음 → enabled:false + 사유 — " + (stN.j && stN.j.reason));
+  const anN = await api(mfNoAI, "o", "POST", "/api/ai/analyze-photo", { deployment_id: "x", pin_id: "p1" });
+  ok(anN.status === 503 && anN.j.enabled === false, "② 바인딩 없음 분석 → 503(조용한 실패 금지) — " + anN.status);
+
+  // 🔴 유료 모델 ID 를 시크릿으로 지정 — 허용 목록 밖 → 비활성(모델 호출 0)
+  const db3 = await mfPaid.getD1Database("DB");
+  for (const f of MIGS) for (const st of stmtsOf(f)) await db3.exec(st);
+  await addUser(db3, "o", true);
+  const before = upstream.calls.length;
+  const stP = await api(mfPaid, "o", "GET", "/api/ai/vision-status");
+  ok(stP.j.enabled === false && /허용 목록/.test(stP.j.reason || "") && stP.j.model === null, "② 🔴 AI_VISION_MODEL=유료 → enabled:false + '허용 목록 밖' 사유 — " + (stP.j && stP.j.reason));
+  const anP = await api(mfPaid, "o", "POST", "/api/ai/analyze-photo", { deployment_id: "x", pin_id: "p1" });
+  ok(anP.status === 503 && upstream.calls.length === before, "② 🔴 유료 모델 지정 분석 → 503(모델 호출 0, 유료 폴백 없음) — " + anP.status);
 } finally {
   clearTimeout(watchdog);
   await mf.dispose().catch(() => {});
-  await mfNoKey.dispose().catch(() => {});
-  fx.close();
+  await mfNoAI.dispose().catch(() => {});
+  await mfPaid.dispose().catch(() => {});
   try { fs.unlinkSync(workerOut); } catch {}
 }
 

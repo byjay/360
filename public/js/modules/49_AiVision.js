@@ -136,7 +136,12 @@
       }
       html += '</div>';
       if (st.disabled) html += '<div class="aiv-reason" style="margin-top:6px;color:' + T.muted + ';">' + esc(st.reason) + '</div>';
-      else if (this._status && typeof this._status.remaining === "number") html += '<div class="aiv-quota" style="margin-top:6px;color:' + T.muted + ';">오늘 남은 횟수 ' + esc(this._status.remaining) + '/' + esc(this._status.daily_limit) + ' · 같은 사진은 다시 과금되지 않습니다(캐시)</div>';
+      else if (this._status && typeof this._status.remaining === "number") {
+        // 무료 할당(Workers AI Neurons) 잔여도 함께 — 소진되면 서버가 enabled:false + "오늘 무료 사용량 소진" 사유를 준다(위 분기)
+        const st0 = this._status;
+        const quota = (typeof st0.neurons_used_today === "number" && typeof st0.neuron_cap === "number") ? ' · 무료 할당 ' + esc(Math.round(st0.neurons_used_today)) + '/' + esc(st0.neuron_cap) + ' Neurons' : "";
+        html += '<div class="aiv-quota" style="margin-top:6px;color:' + T.muted + ';">오늘 남은 횟수 ' + esc(st0.remaining) + '/' + esc(st0.daily_limit) + quota + ' · 비용 $0(무료) · 같은 사진은 캐시</div>';
+      }
       if (h.error) html += '<div class="aiv-error" style="margin-top:8px;color:' + (h.opts.theme === "dark" ? "#fca5a5" : "#b91c1c") + ';">' + esc(h.error) + '</div>';
       if (res && res.result) html += this._card(res, pin, T, hostId);
       html += '</div>';
@@ -195,8 +200,9 @@
           '</div>';
       }
       const u = res.usage || {};
-      const cost = (typeof u.cost_usd === "number") ? ("$" + u.cost_usd.toFixed(4)) : "비용 미보고";
-      html += '<div class="aiv-meta" style="margin-top:8px;color:' + T.muted + ';font-size:11px;">' + esc(res.model || "") + ' · 토큰 ' + esc(u.prompt_tokens != null ? u.prompt_tokens : "?") + '/' + esc(u.completion_tokens != null ? u.completion_tokens : "?") + ' · ' + esc(cost) +
+      // 비용은 Workers AI 무료 할당 안 = $0. Neurons 는 서버가 usage 로 환산한 값(없으면 보수적 추정값이 온다 — 미보고로 지어내지 않음)
+      const neu = (typeof u.neurons === "number") ? (u.neurons + " Neurons") : "Neurons 미보고";
+      html += '<div class="aiv-meta" style="margin-top:8px;color:' + T.muted + ';font-size:11px;">' + esc(res.model || "") + ' · 토큰 ' + esc(u.prompt_tokens != null ? u.prompt_tokens : "?") + '/' + esc(u.completion_tokens != null ? u.completion_tokens : "?") + ' · ' + esc(neu) + ' · 비용 $0(무료 할당)' +
         (res.analyzed_at ? ' · ' + esc(new Date(res.analyzed_at).toLocaleString()) : "") + ' · 신뢰도 ' + Math.round(P * 100) + '% 미만은 「추정」</div>';
       html += '</div>';
       return html;

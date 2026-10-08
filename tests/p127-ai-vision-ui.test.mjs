@@ -89,7 +89,7 @@ function load(o) {
   const calls = { fetch: [], toast: [], oplog: [], setAiSpots: [], renderSpots: [], saveSpots: [], openPano: [], notesOpen: 0, notesPin: null };
   const fetchImpl = async (url, init) => {
     calls.fetch.push({ url, init });
-    if (url === "/api/ai/vision-status") return { status: 200, json: async () => (o.status || { enabled: true, reason: null, model: "anthropic/claude-sonnet-5.5", daily_limit: 30, used: 3, remaining: 27, estimate_p: 0.7 }) };
+    if (url === "/api/ai/vision-status") return { status: 200, json: async () => (o.status || { enabled: true, reason: null, provider: "workers-ai", model: "@cf/meta/llama-4-scout-17b-16e-instruct", daily_limit: 30, used: 3, remaining: 27, neurons_used_today: 412.5, neuron_cap: 7000, free_neurons_per_day: 10000, exhausted: false, estimate_p: 0.7 }) };
     if (url === "/api/ai/analyze-photo") { const r = o.analyze ? o.analyze(JSON.parse(init.body)) : null; return { ok: !!(r && r.ok), status: r && r.status || 200, json: async () => r }; }
     return { ok: false, status: 404, json: async () => ({}) };
   };
@@ -115,8 +115,8 @@ function load(o) {
 }
 
 const PIN = () => ({ id: "p1", label: "기관실", imageId: "img_cur", timeline: [{ imageId: "img_old", shotAt: 1 }], spots: [] });
-const RESULT = (extra) => ({ ok: true, cached: false, model: "anthropic/claude-sonnet-5.5", analyzed_at: 1700000000000, estimate_p: 0.7, compare: false,
-  usage: { prompt_tokens: 1700, completion_tokens: 260, cost_usd: 0.0062 },
+const RESULT = (extra) => ({ ok: true, cached: false, model: "@cf/meta/llama-4-scout-17b-16e-instruct", provider: "workers-ai", analyzed_at: 1700000000000, estimate_p: 0.7, compare: false,
+  usage: { prompt_tokens: 2100, completion_tokens: 300, neurons: 74.73, neurons_estimated: false, cost_usd: 0 },
   result: { summary: "기관실 통로 <b>요약</b>", items: [
     { kind: "equipment", label: "FW PUMP", confidence: 0.92, yaw: 80, pitch: -5 },
     { kind: "defect", label: "<script>alert(1)</script>플랜지 부식", confidence: 0.55, yaw: 250, pitch: -12 },
@@ -145,6 +145,8 @@ console.log("\n[A. buttonState(순수) — 권한 → 온라인 → 사진 → �
   ok(nk.disabled && /OPENROUTER_API_KEY/.test(nk.reason), "A 키 없음 → 비활성 + 서버 사유 그대로");
   const lim = A.buttonState({ pin: PIN(), online: true, status: { enabled: true, remaining: 0, daily_limit: 30 }, canEdit: true });
   ok(lim.disabled && /한도 소진/.test(lim.reason), "A 한도 0 → 비활성 + '한도 소진'");
+  const exh = A.buttonState({ pin: PIN(), online: true, status: { enabled: false, exhausted: true, reason: "오늘 무료 사용량 소진 — 내일 다시 사용할 수 있습니다", remaining: 10, daily_limit: 30 }, canEdit: true });
+  ok(exh.disabled && /오늘 무료 사용량 소진 — 내일 다시/.test(exh.reason), "A 🔴 전체 무료 할당 소진(서버 exhausted) → 비활성 + '오늘 무료 사용량 소진 — 내일 다시'(개인 잔여가 있어도)");
   ok(A.compareIdOf(PIN()) === "img_old" && A.compareIdOf({ id: "z" }) === null, "A compareIdOf — 이력 최근 사진 / 없으면 null");
 }
 
@@ -163,6 +165,20 @@ console.log("\n[B. 렌더 — 숨김 금지]");
   const { A, document } = load({ online: false });
   A.mount("pap-ai", PIN(), { theme: "light", canEdit: true });
   ok(/온라인에서 사용/.test(document.getElementById("pap-ai").innerHTML), "B 오프라인: '온라인에서 사용' 사유 표시");
+}
+{
+  const { A, document } = load({ status: { enabled: false, exhausted: true, reason: "오늘 무료 사용량 소진 — 내일 다시 사용할 수 있습니다", remaining: 10, daily_limit: 30 } });
+  A.mount("pap-ai", PIN(), { theme: "light", canEdit: true });
+  await A.fetchStatus(true); A.render("pap-ai");
+  const h = document.getElementById("pap-ai").innerHTML;
+  ok(/aria-disabled="true"/.test(h) && /오늘 무료 사용량 소진 — 내일 다시/.test(h), "B 🔴 무료 할당 소진: 버튼 보이되 비활성 + 사유 렌더");
+}
+{
+  const { A, document } = load();
+  A.mount("pap-ai", PIN(), { theme: "light", canEdit: true });
+  await A.fetchStatus(true); A.render("pap-ai");
+  const h = document.getElementById("pap-ai").innerHTML;
+  ok(/무료 할당 413\/7000 Neurons/.test(h) && /비용 \$0\(무료\)/.test(h), "B 활성: 남은 횟수 + 무료 할당 Neurons + 비용 $0 안내");
 }
 
 /* ══ C. 분석 — 요청 본문·결과 카드·「추정」·이스케이프 ══ */
@@ -188,7 +204,8 @@ console.log("\n[C. 분석 호출 + 결과 카드]");
   ok(/data-kind="equipment"/.test(html) && /data-kind="defect"/.test(html) && /data-kind="hazard"/.test(html) && /장비/.test(html) && /결함/.test(html) && /위험/.test(html), "C 종류별 아이콘·라벨(장비/결함/위험)");
   ok(/id="pap-ai-defect"/.test(html) && /결함으로 등록/.test(html) && /사람이 \[등록\]을 눌러야/.test(html), "C [결함으로 등록(폼 채우기)] 버튼 + '사람이 등록' 안내");
   ok(/id="pap-ai-mark"/.test(html) && /마커 보기\(2\)/.test(html), "C 위치 있는 항목 2건 → [360 안에 마커 보기(2)]");
-  ok(/\$0\.0062/.test(html) && /1700\/260/.test(html) && /claude-sonnet-5\.5/.test(html), "C 모델·토큰·비용 메타");
+  ok(/74\.73 Neurons/.test(html) && /비용 \$0\(무료 할당\)/.test(html) && /2100\/300/.test(html) && /llama-4-scout/.test(html), "C 모델·토큰·Neurons·비용 $0 메타(유료 비용 표기 없음)");
+  ok(!/\$0\.\d/.test(html), "C 카드에 달러 과금액 표기 0");
   ok(/id="pap-ai-cmp"/.test(html) && /이전 사진과 비교/.test(html), "C 이력이 있으면 [이전 사진과 비교] 버튼");
   // 비교 호출
   document.getElementById("pap-ai-cmp").click();
