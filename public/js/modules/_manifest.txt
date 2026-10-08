@@ -50,5 +50,6 @@
 46_DeckOutline.js
 47_Report.js
 48_GPS.js
+50_QrLink.js
 49_AiVision.js
 99_footer.js

@@ -208,10 +208,18 @@
       const rows = this._rows(pins, notes, decks, role);
       const title = "SEASTAR 점검 보고서 — " + new Date().toISOString().slice(0, 10);
       const html = this._printHtml(rows, pins, title);
-      const w = window.open("", "_blank");
-      if (!w) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("팝업이 차단되었습니다 — 팝업 허용 후 다시 시도하세요."); return; }
-      w.document.open(); w.document.write(html); w.document.close();
+      const w = this.openPrintWindow();
+      if (!w) return;
+      this.writePrint(w, html);
     },
+
+    /** 인쇄 창 열기(공유 지점) — 보고서·QR 위치 태그(50_QrLink) 인쇄가 같은 방식을 쓴다. 차단되면 안내 후 null. */
+    openPrintWindow() {
+      const w = window.open("", "_blank");
+      if (!w) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("팝업이 차단되었습니다 — 팝업 허용 후 다시 시도하세요."); return null; }
+      return w;
+    },
+    writePrint(w, html) { w.document.open(); w.document.write(html); w.document.close(); },
 
     /** 진입점 버튼 주입 — public/index.html(타 팀 점유)을 건드리지 않고, 이미 있는
      *  #pin-grid-csv(엑셀 CSV 버튼) 옆에 범위 선택 + 인쇄 버튼을 런타임에 추가한다. */

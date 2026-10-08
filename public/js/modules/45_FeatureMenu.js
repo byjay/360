@@ -153,6 +153,8 @@
         run: () => Report.print(Report.currentScope ? Report.currentScope() : undefined) },
       { id: "report-csv", group: "report", icon: "⇩", label: "보고서 CSV", desc: "지금 범위의 포인트 표", needs: "project", mod: "Report",
         run: () => Report.csv(Report.currentScope ? Report.currentScope() : undefined) },
+      { id: "qr-deck", group: "report", icon: "▣", label: "이 구역 QR 위치 태그 일괄 인쇄", help: "qr-tag", needs: "deck", mod: "QrPrint",
+        why: () => QrPrint.deckReason(Projects.currentDeck), run: () => QrPrint.printDeck(Projects.currentDeck) },
       { id: "pin-csv", group: "report", icon: "⇩", label: "포인트 CSV 내보내기", needs: "drawing", click: "pin-grid-csv", covers: ["pin-grid-csv"] },
       { id: "deploy-viewer", group: "report", icon: "⇗", label: "뷰어로 배포(열람 링크)", help: "deploy-viewer", perm: "designer", needs: "drawing", click: "btn-deploy", covers: ["btn-deploy"] },
       { id: "json-export", group: "report", icon: "{}", label: "JSON 내보내기", perm: "designer", needs: "drawing", click: "btn-export-json", covers: ["btn-export-json"] },
@@ -222,6 +224,7 @@
           case "ThetaIntake": return typeof ThetaIntake !== "undefined";
           case "Requests": return typeof Requests !== "undefined";
           case "Report": return typeof Report !== "undefined";
+          case "QrPrint": return typeof QrPrint !== "undefined";
           case "Install": return typeof Install !== "undefined";
           case "Help": return typeof Help !== "undefined";
           default: return false;
@@ -241,6 +244,8 @@
       if (f.needs === "drawing" && !(typeof State !== "undefined" && State.fileType)) return "도면을 먼저 여세요";
       if (f.needs === "pano" && !this._panoOpen()) return "360 뷰어에서 사용 — 포인트를 눌러 360 을 여세요";
       if (f.click && typeof document !== "undefined" && !document.getElementById(f.click)) return "이 화면에서는 사용할 수 없습니다";
+      // [WO 20261007-qrcov] 기능 자신의 사유 함수(정본은 그 모듈) — 숨김 금지, 비활성 + 사유
+      if (typeof f.why === "function") { try { const w = f.why(); if (w) return w; } catch (e) { return "준비 중"; } }
       return "";
     },
     modeHint(f) {

@@ -11,6 +11,8 @@
     if (typeof Install !== "undefined" && Install.init) { try { Install.init(); } catch (e) {} }
     // [WO 20261007-aivision] 온라인/오프라인 전환 시 AI 분석 버튼 사유 재계산
     if (typeof AiVision !== "undefined" && AiVision.init) { try { AiVision.init(); } catch (e) {} }
+    // [WO 20261007-qrcov] 핀 팝업 [QR] 주입
+    if (typeof QrPrint !== "undefined" && QrPrint.init) { try { QrPrint.init(); } catch (e) {} }
     // [P40] 프로젝트 초대 링크(?invite=<token>) — 있으면 이름/비번 설정 모달을 띄운다.
     if (typeof Invite !== "undefined" && Invite.init) { try { Invite.init(); } catch (e) {} }
 
@@ -20,6 +22,8 @@
       Offline, OfflineBundle, OfflineLoad, OpLog, Invite, Install,
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
+      DeepLink: (typeof DeepLink !== "undefined" ? DeepLink : null),
+      QrPrint: (typeof QrPrint !== "undefined" ? QrPrint : null),
       AiVision: (typeof AiVision !== "undefined" ? AiVision : null),
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
@@ -60,6 +64,10 @@
         if (typeof ShareGate !== "undefined") await ShareGate.ensure({ d: depId });
         App.openApp("viewer");
       })();
+    } else if (typeof DeepLink !== "undefined" && DeepLink.parse(location.search)) {
+      // [WO 20261007-qrcov] QR 위치 태그 딥링크(?qp=&qk=&qpin=) — 위의 열람·공유 링크 분기보다 **뒤**에 둔다
+      //   (d·공유 토큰이 있으면 그 게이트가 정본, DeepLink.parse 도 d/invite 가 있으면 null). 권한 = 기존 게이트 그대로.
+      DeepLink.boot();
     } else if (urlMode === "designer") {
       // 설계자 직접 진입 — 로그인+디자이너 권한 필요, 통과 시 프로젝트 허브로
       Auth.requireDesigner(() => ProjectHub.open());

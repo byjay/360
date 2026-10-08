@@ -562,6 +562,11 @@
       items.push({ label, desc: "PDF·이미지 — 메인 PDF 는 바뀌지 않습니다",
         reason: why || (src.kind === "main" ? "메인 도면 — 원본 ⋯ → [메인 도면 교체](소유자·관리자)" : ""),
         run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "deck", deck }); } });
+      // [WO 20261007-qrcov] QR 위치 태그 일괄 인쇄 — 숨김 금지: 미로드 구역은 비활성 + 사유(QrPrint.deckReason SoT)
+      if (typeof QrPrint !== "undefined") {
+        items.push({ label: "이 구역 QR 일괄 인쇄", desc: "구역·포인트마다 QR — A4 한 장에 " + QrPrint.PER_PAGE + "칸",
+          reason: QrPrint.deckReason(deck), run: () => QrPrint.printDeck(deck) });
+      }
       return items;
     },
     /** 트리 ⋯ 팝오버(공유 생성기) — items: [{label, run, reason?, desc?, info?, danger?}].
