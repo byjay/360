@@ -41,6 +41,8 @@
         run: () => ProjectHub.openMembers(Projects.currentProject) },
       { id: "project-delete", group: "project", icon: "✕", label: "프로젝트 삭제", desc: "프로젝트와 모든 구역을 삭제(확인창)", perm: "owner", needs: "project", danger: true,
         click: "btn-delete-project", covers: ["btn-delete-project"] },
+      { id: "pin-purge", group: "project", icon: "✕", label: "모든 핀 삭제", desc: "프로젝트 전체 구역·도면의 핀(미리보기 → 이름 입력 → 본인 확인, 10분 되돌리기)", needs: "project", danger: true, mod: "PinPurge",
+        why: () => PinPurge.reason(), run: () => PinPurge.start() },
       { id: "edit-mode", group: "project", icon: "✎", label: "편집 모드로 전환", desc: "디자이너 권한이 있을 때 편집 화면으로", perm: "login",
         click: "btn-enter-edit", covers: ["btn-enter-edit", "btn-go-edit", "btn-exit-edit"] },
       { id: "mode-checker", group: "project", icon: "#", label: "CHECKER 모드", help: "checkerboard", perm: "designer", needs: "drawing",
@@ -230,6 +232,7 @@
           case "Coverage": return typeof Coverage !== "undefined";
           case "Install": return typeof Install !== "undefined";
           case "Help": return typeof Help !== "undefined";
+          case "PinPurge": return typeof PinPurge !== "undefined";
           default: return false;
         }
       } catch (e) { return false; }   // 선언 전(TDZ) 접근도 "미로드"로

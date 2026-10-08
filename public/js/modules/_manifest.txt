@@ -53,4 +53,5 @@
 50_QrLink.js
 51_Coverage.js
 49_AiVision.js
+53_PinPurge.js
 99_footer.js

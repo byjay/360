@@ -552,6 +552,11 @@
         items.push({ label: "지금 열린 도면을 원본으로 지정", reason: ownerWhy || ((typeof State !== "undefined" && State.currentDeploymentId) ? "" : "먼저 도면을 열어야 합니다"),
           run: () => { if (typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent(); } });
       }
+      // [WO 20261008-pinpurge] 프로젝트 모든 핀 삭제 — 숨김 금지: 비활성 사유 SoT = PinPurge.reason()
+      if (typeof PinPurge !== "undefined") {
+        items.push({ label: "모든 핀 삭제", danger: true, desc: "프로젝트 전체 구역·도면의 핀(미리보기 → 이름 입력 → 본인 확인, 10분 되돌리기)",
+          reason: PinPurge.reason(), run: () => PinPurge.start() });
+      }
       return items;
     },
     deckMenuItems(deck, mainDepId) {

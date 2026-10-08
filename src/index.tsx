@@ -2406,6 +2406,166 @@ app.delete('/api/projects/:id', async (c) => {
   return c.json({ success: true })
 })
 
+/* ══ [WO 20261008-pinpurge] 프로젝트 모든 핀 삭제 — 소유자·super 전용 ═══════════════════════════════
+ *  GET  /api/projects/:id/pins/purge              미리보기(구역 수 · 배포본별 핀/CHECKER/360/사진 연결 · version)
+ *  POST /api/projects/:id/pins/purge              실행 — X-Reauth(재인증) + confirm_name(프로젝트 이름) + base_versions
+ *  POST /api/projects/:id/pins/purge/:batch/undo  되돌리기 — PIN_PURGE_UNDO_MS 안에서만
+ *  삭제 = 기존 /ops delete 와 같은 tombstone({id,_deleted:true,ts}) — 하드 삭제 0, R2 원본·zones·annotations·pin_notes 불변.
+ *  배포본마다 낙관적 락(base_version) — 어긋난 배포본만 409 로 보고하고 나머지는 진행(부분 성공을 배포본별로 정직하게).
+ *  복원 원본 = pin_bulk_deletes 스냅샷(tombstone 은 다음 전체 저장 PATCH 에 사라질 수 있다 — 거기에 기대지 않는다). */
+const PIN_PURGE_UNDO_MS = 10 * 60 * 1000
+/** 살아있는 핀(서버 tombstone·id 없는 항목 제외) — 미리보기와 실행이 같은 판정을 쓴다(SoT). */
+function purgeLivePins(pinsJson: any): { all: any[], live: any[] } {
+  let all: any[] = []
+  try { const a = JSON.parse(pinsJson || '[]'); all = Array.isArray(a) ? a : [] } catch { all = [] }
+  return { all, live: all.filter((p) => p && p.id != null && !p._deleted) }
+}
+/** 핀 집계 — CHECKER = checkboard(PinSeries.seriesOf 와 같은 규칙), 사진 연결 = 현재 사진·이력 참조가 있는 핀. */
+function purgePinStats(live: any[]) {
+  let checker = 0, photos = 0
+  for (const p of live) {
+    if (p.checkboard) checker++
+    if (pinImageRefs(p).length > 0 || (typeof p.imageUrl === 'string' && p.imageUrl)) photos++
+  }
+  return { pins: live.length, checker, pano: live.length - checker, photos }
+}
+/** 이 프로젝트의 배포본 — project_id 귀속 + (레거시 NULL 이면) 구역 연결·원본 지정. 다른 프로젝트 귀속 배포본은 제외. */
+async function purgeDeploymentsOf(c: any, pid: string): Promise<any[]> {
+  const r: any = await c.env.DB.prepare(
+    `SELECT id, title, file_name, pins, version FROM deployments WHERE deleted = 0 AND (project_id = ?
+       OR (project_id IS NULL AND (id IN (SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL)
+                                   OR id = (SELECT original_deployment_id FROM projects WHERE id = ?))))
+     ORDER BY created_at`
+  ).bind(pid, pid, pid).all()
+  return r.results || []
+}
+/** 공통 게이트: 디자이너 로그인 + 프로젝트 존재 + 소유자·super. 반환 {user, proj} 또는 {res}. */
+async function purgeGate(c: any): Promise<{ user?: any, proj?: any, res?: Response }> {
+  const user = await requireDesigner(c)
+  if (!user || user._readonly) return { res: c.json({ error: 'forbidden — designer login required' }, 403) }
+  const pid = c.req.param('id')
+  const proj: any = await c.env.DB.prepare('SELECT id, name, owner FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
+  if (!proj) return { res: c.json({ error: 'not found' }, 404) }
+  if (!canManageMembersOf(c, user, proj.owner)) return { res: c.json({ error: 'forbidden — 소유자·관리자 전용(project owner or super admin only)' }, 403) }
+  return { user, proj }
+}
+async function purgeTableReady(c: any): Promise<boolean> {
+  try { await c.env.DB.prepare('SELECT batch_id FROM pin_bulk_deletes LIMIT 1').first(); return true } catch { return false }
+}
+
+app.get('/api/projects/:id/pins/purge', async (c) => {
+  const g = await purgeGate(c)
+  if (g.res) return g.res
+  const pid = String(g.proj.id)
+  const deckRow: any = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM decks WHERE project_id = ? AND deleted = 0').bind(pid).first()
+  const deps = (await purgeDeploymentsOf(c, pid)).map((d: any) => Object.assign(
+    { id: d.id, title: d.title || d.file_name || '', version: d.version != null ? Number(d.version) : 0 },
+    purgePinStats(purgeLivePins(d.pins).live)))
+  const totals = deps.reduce((t: any, d: any) => ({ pins: t.pins + d.pins, checker: t.checker + d.checker, pano: t.pano + d.pano, photos: t.photos + d.photos }),
+    { pins: 0, checker: 0, pano: 0, photos: 0 })
+  return c.json({ project: { id: pid, name: g.proj.name }, decks: Number((deckRow && deckRow.n) || 0), deployments: deps, totals,
+    undo_window_ms: PIN_PURGE_UNDO_MS, ready: await purgeTableReady(c) })
+})
+
+app.post('/api/projects/:id/pins/purge', async (c) => {
+  const g = await purgeGate(c)
+  if (g.res) return g.res
+  const user = g.user, proj = g.proj, pid = String(proj.id)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  // 확인 3단계 중 서버가 강제하는 2개 — 하나라도 실패하면 아무것도 쓰지 않는다(아래 쓰기보다 먼저).
+  if (String((body && body.confirm_name) || '').trim() !== String(proj.name || '').trim()) {
+    return c.json({ error: 'name_mismatch — 프로젝트 이름이 일치하지 않습니다', name_mismatch: true }, 400)
+  }
+  const rx = c.req.header('X-Reauth')
+  if (!rx || !(await reauthTokenValid(c, rx, user.email))) return c.json({ error: 'reauth required — expired or invalid', reauth_required: true }, 403)
+  if (!(await purgeTableReady(c))) return c.json({ error: 'migration 0039_pin_bulk_deletes 미적용 — 삭제하지 않았습니다' }, 503)
+  const baseVersions = (body && body.base_versions && typeof body.base_versions === 'object') ? body.base_versions : {}
+  const batch = genId('pbd')
+  const now = Date.now()
+  const results: any[] = []
+  for (const d of await purgeDeploymentsOf(c, pid)) {
+    const title = d.title || d.file_name || ''
+    const cur = d.version != null ? Number(d.version) : 0
+    if (!Object.prototype.hasOwnProperty.call(baseVersions, d.id)) {
+      results.push({ id: d.id, title, ok: false, status: 409, deleted: 0, reason: '미리보기 이후 생긴 배포본 — 다시 미리보기 후 실행하세요' }); continue
+    }
+    if (Number(baseVersions[d.id]) !== cur) {
+      results.push({ id: d.id, title, ok: false, status: 409, deleted: 0, reason: '다른 사용자가 먼저 저장했습니다(버전 ' + baseVersions[d.id] + '→' + cur + ') — 다시 미리보기 후 실행하세요' }); continue
+    }
+    const { all, live } = purgeLivePins(d.pins)
+    if (!live.length) { results.push({ id: d.id, title, ok: true, status: 200, deleted: 0 }); continue }
+    const dead = new Set(live.map((p) => String(p.id)))
+    const next = all.map((p) => (p && p.id != null && dead.has(String(p.id))) ? { id: p.id, _deleted: true, ts: now } : p)
+    // 스냅샷 INSERT 와 tombstone UPDATE 를 한 트랜잭션(batch)으로 — 둘 다 같은 version 조건이라 경합이면 둘 다 0건.
+    const out: any = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO pin_bulk_deletes (batch_id, deployment_id, project_id, actor_email, pins, pin_count, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)`
+      ).bind(batch, d.id, pid, user.email, JSON.stringify(live), live.length, now, d.id, cur),
+      c.env.DB.prepare('UPDATE deployments SET pins = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
+        .bind(JSON.stringify(next), now, cur + 1, d.id, cur),
+    ])
+    const changed = Number((out && out[1] && out[1].meta && out[1].meta.changes) || 0)
+    if (!changed) { results.push({ id: d.id, title, ok: false, status: 409, deleted: 0, reason: '저장 경합(동시 저장) — 다시 미리보기 후 실행하세요' }); continue }
+    results.push({ id: d.id, title, ok: true, status: 200, deleted: live.length, version: cur + 1 })
+  }
+  const deleted = results.reduce((n, r) => n + (r.deleted || 0), 0)
+  const failed = results.filter((r) => !r.ok).length
+  await logActivity(c, 'pins.purge', { actor: user, targetType: 'project', targetId: pid,
+    detail: { batch, undo: false, deleted, failed, deployments: results.map((r) => ({ id: r.id, ok: r.ok, status: r.status, deleted: r.deleted, reason: r.reason || null })) } })
+  const anyOk = results.some((r) => r.ok)
+  return c.json({ ok: failed === 0, partial: failed > 0 && anyOk, batch: deleted ? batch : null, deleted, failed,
+    undo_until: deleted ? now + PIN_PURGE_UNDO_MS : null, results }, (!anyOk && failed) ? 409 : 200)
+})
+
+app.post('/api/projects/:id/pins/purge/:batch/undo', async (c) => {
+  const g = await purgeGate(c)
+  if (g.res) return g.res
+  const user = g.user, pid = String(g.proj.id), batch = c.req.param('batch')
+  if (!(await purgeTableReady(c))) return c.json({ error: 'migration 0039_pin_bulk_deletes 미적용' }, 503)
+  const rows: any[] = ((await c.env.DB.prepare('SELECT * FROM pin_bulk_deletes WHERE batch_id = ? AND project_id = ?').bind(batch, pid).all()).results || [])
+  if (!rows.length) return c.json({ error: 'not found' }, 404)
+  const now = Date.now()
+  if (rows.some((r) => now - Number(r.created_at) > PIN_PURGE_UNDO_MS)) return c.json({ error: '되돌리기 시간(10분)이 지났습니다', expired: true }, 410)
+  const results: any[] = []
+  for (const row of rows) {
+    if (row.restored_at != null) { results.push({ id: row.deployment_id, ok: true, restored: 0, already: true }); continue }
+    let snap: any[] = []
+    try { const a = JSON.parse(row.pins || '[]'); snap = Array.isArray(a) ? a : [] } catch { snap = [] }
+    let res: any = null
+    for (let attempt = 0; attempt < 3 && !res; attempt++) {
+      const dep: any = await c.env.DB.prepare('SELECT pins, version FROM deployments WHERE id = ? AND deleted = 0').bind(row.deployment_id).first()
+      if (!dep) { res = { id: row.deployment_id, ok: false, restored: 0, reason: '배포본이 삭제됨' }; break }
+      const cur = dep.version != null ? Number(dep.version) : 0
+      const { all } = purgeLivePins(dep.pins)
+      const byId = new Map(all.filter((p) => p && p.id != null).map((p) => [String(p.id), p]))
+      const put = new Map<string, any>()
+      let skipped = 0
+      for (const sp of snap) {
+        const k = String(sp.id), now2 = byId.get(k)
+        // 살아있는 같은 id 가 이미 있으면 그대로 둔다 / 이 일괄삭제 뒤에 다른 경로로 다시 지워진 것(더 새 tombstone)은 되살리지 않는다.
+        if (!now2 || (now2._deleted && Number(now2.ts || 0) <= Number(row.created_at))) put.set(k, sp)
+        else skipped++
+      }
+      const next = all.map((p) => (p && p.id != null && put.has(String(p.id))) ? put.get(String(p.id)) : p)
+      for (const [k, sp] of put) if (!byId.has(k)) next.push(sp)
+      const up: any = await c.env.DB.prepare('UPDATE deployments SET pins = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
+        .bind(JSON.stringify(next), now, cur + 1, row.deployment_id, cur).run()
+      if (!Number((up && up.meta && up.meta.changes) || 0)) continue   // 경합 → 다시 읽고 재시도
+      await c.env.DB.prepare('UPDATE pin_bulk_deletes SET restored_at = ?, restored_by = ?, restored_count = ? WHERE batch_id = ? AND deployment_id = ? AND restored_at IS NULL')
+        .bind(now, user.email, put.size, batch, row.deployment_id).run()
+      res = { id: row.deployment_id, ok: true, restored: put.size, skipped, version: cur + 1 }
+    }
+    results.push(res || { id: row.deployment_id, ok: false, restored: 0, reason: '저장 경합이 계속됨 — 다시 시도하세요' })
+  }
+  const restored = results.reduce((n, r) => n + (r.restored || 0), 0)
+  const failed = results.filter((r) => !r.ok).length
+  await logActivity(c, 'pins.purge.undo', { actor: user, targetType: 'project', targetId: pid,
+    detail: { batch, undo: true, restored, failed, deployments: results } })
+  return c.json({ ok: failed === 0, restored, failed, results }, failed && !results.some((r) => r.ok) ? 409 : 200)
+})
+
 /** [WO 20261001-projectinfo] 🔴 단일 PATCH 지점(§G-2-5) — 이름 변경·원본 지정·정보메모 셋이 공유한다.
  *  필드별 권한을 각자 확인: name/original_deployment_id = 소유자·super(canManageMembersOf),
  *  info_json = 디자이너 이상(canManageProject, 멤버 포함). info_json 은 LWW + 충돌 경고
