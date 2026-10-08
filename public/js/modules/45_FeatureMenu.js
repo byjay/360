@@ -86,7 +86,7 @@
       { id: "anno-text", group: "drawing", icon: "T", label: "주석 — 텍스트 메모", perm: "designer", needs: "drawing", click: "tb-anno-text", covers: ["tb-anno-text"] },
       { id: "anno-undo", group: "drawing", icon: "↶", label: "주석 — 실행취소", perm: "designer", needs: "drawing", click: "tb-anno-undo", covers: ["tb-anno-undo"] },
       { id: "anno-clear", group: "drawing", icon: "⌫", label: "주석 — 이 페이지 모두 삭제", perm: "designer", needs: "drawing", danger: true, click: "tb-anno-clear", covers: ["tb-anno-clear"] },
-      { id: "sidebar", group: "drawing", icon: "☰", label: "사이드바(트리) 열기/닫기", desc: "프로젝트 → 원본 → 구역 → 영역 → 포인트", click: "tq-menu", covers: ["tq-menu", "stb-toggle"] },
+      { id: "sidebar", group: "drawing", icon: "☰", label: "사이드바(트리) 열기/닫기", desc: "프로젝트 → 원본 → 구역 → 영역 → 포인트", click: "tq-menu", covers: ["tq-menu", "stb-toggle", "btn-sidebar-collapse"] },
 
       /* ── 포인트 (CHECKER) ── */
       { id: "pin-add", group: "checker", icon: "⊕", label: "포인트 추가", help: "pin-place", perm: "designer", needs: "drawing", click: "btn-place", covers: ["btn-place", "tq-place", "btn-next-point"] },
