@@ -3476,7 +3476,22 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
   padding: 6px 10px; font-size: 12px; font-weight: 600; border-radius: 8px; cursor: pointer;
   border: 1px solid rgba(0,0,0,.14); background: #f8fafc; color: #334155; white-space: nowrap;
 }
-.regmode-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+/* [WO 20261008-fixmodetoggle] 🔴 활성=어두운 남색, 비활성=흰색이던 구 규칙이
+   실제로는 반대로 읽혔다(마스터 "체크를 눌러도 전환이 안 되나") — 어두운 상단바 위에서
+   활성(남색)이 꺼진 것처럼 보이고 비활성(흰색)이 선택된 것처럼 보였다(지휘자 R1 실측).
+   모드 정체색을 그대로 쓴다: CHECKER=주황(PinSeries.CHECKBOARD_COLOR 계열, public/js/main.js
+   CHECKBOARD_COLOR.head #c2410c 재사용) · 360=파랑(콘텐츠 핀 계열, main.js 해당 head #1d4ed8
+   보다 살짝 밝혀 다크 상단바 경계 대비 3:1을 맞춤). 색만으로 구분하지 않도록 ✓ 표시 + 굵은 글자도 병행.
+   🔴 고정값 유지(numband-btn 주석과 동일 사유) — seastar-3d-skin.css 가 테마변수를 다크로
+   remap하므로 var() 를 쓰면 런타임 대비가 다시 뒤집힌다.
+   실측(WCAG 2.1, .tmp/contrast.mjs):
+     흰글자/주황(#c2410c) 5.18:1 · 흰글자/파랑(#2563eb) 5.17:1 (≥4.5 충족)
+     주황 vs 다크상단바(#1d2025) 3.15:1 · 파랑 vs 다크상단바 3.16:1
+     주황 vs 라이트상단바(#efe9dc) 4.28:1 · 파랑 vs 라이트상단바 4.27:1 (경계 ≥3 충족, 라이트/다크 공통) */
+.regmode-btn.active { color: #fff; font-weight: 800; box-shadow: 0 0 0 1px rgba(0,0,0,.25), 0 2px 6px rgba(0,0,0,.3); }
+.regmode-btn.active::before { content: "\2713\00a0"; }
+#btn-regmode-checkboard.active { background: #c2410c; border-color: #c2410c; }
+#btn-regmode-photo.active { background: #2563eb; border-color: #2563eb; }
 /* [WO 20260929 topbar-cleanup] 체크보드/사진등록 모드 전용 인라인 시작번호 — 표시는 20_App.js가
    이미 토글하는 .active 클래스를 형제선택자로 읽기만 한다(새 JS 훅 없음). 값 SoT는
    App._setCheckboardStart()(24_Settings.js 에서 호출), 여기는 표기만. */
