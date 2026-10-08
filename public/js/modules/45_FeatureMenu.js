@@ -173,7 +173,9 @@
       /* ── 설정 ── */
       { id: "settings", group: "settings", icon: "⚙", label: "설정", desc: "로그인·편집 모드·핀 색상·표시 옵션", click: "btn-settings", covers: ["btn-settings", "settings-close"] },
       { id: "leader360", group: "settings", icon: "↗", label: "360 리더선 표시 켜기/끄기", click: "chk-leader360" },
-      { id: "install-app", group: "settings", icon: "⬇", label: "앱 설치(홈 화면에 추가)", desc: "아이콘으로 바로 열기", mod: "Install", run: () => Install.showBanner(true), covers: ["pwa-install-accept", "pwa-install-close"] },
+      { id: "install-app", group: "settings", icon: "⬇", label: "앱 설치(홈 화면에 추가)", desc: "아이콘으로 바로 열기", mod: "Install",
+        why: () => (typeof Install !== "undefined" && Install.alreadyInstalledReason) ? Install.alreadyInstalledReason() : "",
+        run: () => Install.showBanner(true), covers: ["pwa-install-accept", "pwa-install-close"] },
       { id: "signout", group: "settings", icon: "⎋", label: "로그아웃", perm: "login", click: "btn-settings-signout", covers: ["btn-settings-signout", "btn-signout", "hub-btn-signout"] },
 
       /* ── 관리자 ── */

@@ -22,8 +22,16 @@
     /** 🔴 SoT: 값 = 스누즈 만료 시각(ms, Date.now() 기준). 없거나 지났으면 다시 노출(영구 금지). */
     DISMISS_KEY: "wm_install_snooze_until",
     SNOOZE_MS: 7 * 24 * 60 * 60 * 1000, // 7일
+    /* [WO 20261008-pwadesktop] 🔴 라이브 CDP 실측(Page.getInstallabilityErrors=[]): manifest·SW는
+       이미 설치 가능 조건을 전부 만족한다 — "beforeinstallprompt 가 안 온다"는 코드 결함이 아니라
+       Chrome/Edge 가 내부적으로 엔진 조건(참여도·이전 거절 쿨다운)을 더 걸기 때문. 근본 수정은
+       "안 오면 영원히 대기"를 없애는 것 — N초 뒤 타임아웃으로 브라우저별 수동 설치 안내로 전환한다. */
+    PROMPT_TIMEOUT_MS: 5000,
     _deferred: null,
     _booted: false,
+    _promptTimedOut: false,
+    _promptTimer: null,
+    _relatedInstalled: false, // navigator.getInstalledRelatedApps() best-effort(아래 _checkRelatedApps 참조)
 
     init() {
       try {
@@ -31,6 +39,7 @@
           e.preventDefault();          // 브라우저 기본 미니바 차단 → 우리 배너/버튼으로 시점 제어
           this._deferred = e;
           this._onDeferredReady();     // 이미 열려 있는 배너가 있으면 그 순간 활성화
+          if (this._promptTimer) { clearTimeout(this._promptTimer); this._promptTimer = null; }
         });
         window.addEventListener("appinstalled", () => {
           this._deferred = null;
@@ -50,6 +59,25 @@
         if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
       } catch (e) {}
       return !!(window.navigator && window.navigator.standalone);   // iOS Safari
+    },
+
+    /** [WO 20261008-pwadesktop] 이미 설치됨(= 지금 탭이 standalone 이 아니어도) — best-effort.
+     *  getInstalledRelatedApps 는 manifest 의 related_applications 에 자기참조 항목이 있어야
+     *  실제로 뭔가를 돌려준다(이 프로젝트는 그 항목을 두지 않음 — 배포 도메인을 manifest.webmanifest
+     *  에 하드코딩하지 않기 위한 선택, CLAUDE.md §10). 그래서 지금은 항상 빈 배열 → isStandalone() 이
+     *  사실상 유일한 판정 기준이고, 이 메서드는 브라우저가 향후 자기참조 없이도 알려주는 경우를 위한
+     *  방어적 best-effort 훅으로만 둔다(없다고 거짓으로 "있다"고 하지 않음 — 정직한 실패).
+     */
+    isInstalled() { return this.isStandalone() || !!this._relatedInstalled; },
+    async _checkRelatedApps() {
+      try {
+        if (!(navigator && typeof navigator.getInstalledRelatedApps === "function")) return;
+        const apps = await navigator.getInstalledRelatedApps();
+        if (apps && apps.length) {
+          this._relatedInstalled = true;
+          this._applyScreenVisibility();
+        }
+      } catch (e) {}
     },
 
     /** iOS 계열(iPadOS 13+ 는 MacIntel + 터치로 보고된다) */
@@ -80,6 +108,22 @@
       } catch (e) { return false; }
     },
 
+    /** [WO 20261008-pwadesktop] FeatureMenu 의 "앱 설치" 항목용 — 이미 설치됐으면 비활성 사유를
+     *  돌려준다(기존 reasonOf() 의 동적 why 패턴 재사용, 새 렌더 경로를 만들지 않음). */
+    alreadyInstalledReason() { return this.isInstalled() ? "이미 설치됨" : ""; },
+
+    /** [WO 20261008-pwadesktop] beforeinstallprompt 가 끝내 오지 않을 때(이미 설치됨도 아니고,
+     *  엔진이 그냥 안 주는 경우) 보여줄 브라우저별 수동 설치 안내 — UA 추정이라 실패할 수 있으므로
+     *  모르면 가장 보편적인 Chromium 계열 안내로 폴백(지어내지 않고 "일반적으로"로 표현). */
+    browserGuideText() {
+      const ua = String((window.navigator && window.navigator.userAgent) || "");
+      if (/Edg\//.test(ua)) return "주소창 오른쪽의 설치 아이콘(⊕) 또는 ⋯ 메뉴 → 앱 → “이 사이트를 앱으로 설치”를 선택하세요.";
+      if (/Firefox\//.test(ua)) return "Firefox는 이 사이트 설치를 지원하지 않습니다. 메뉴 → “페이지를 북마크”로 추가해 바로가기를 만드세요.";
+      if (/Safari\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua)) return "공유 버튼(⬆) → “Dock에 추가”를 선택하세요.";
+      // Chrome·기타 Chromium 계열(Opera·Brave 등) 폴백
+      return "주소창 오른쪽의 설치 아이콘(⊕) 또는 ⋮ 메뉴 → 앱 설치(“홈 화면에 추가”)를 선택하세요.";
+    },
+
     /** 7일 스누즈 — 영구 저장 금지(닫아도 일주일 뒤 다시 노출). */
     _dismissed() {
       try {
@@ -93,9 +137,18 @@
       if (this._booted) return;
       this._booted = true;
       if (this.isStandalone()) return;
+      this._checkRelatedApps(); // best-effort, 비동기(결과 오면 _applyScreenVisibility 재호출)
       this._ensureButton();
       this._watchScreen();
       this._applyScreenVisibility();
+      // [WO 20261008-pwadesktop] beforeinstallprompt 가 PROMPT_TIMEOUT_MS 안에 안 오면
+      // "준비 중" 무한 대기를 끝내고 브라우저별 수동 안내로 전환한다(iOS는 처음부터 안내 전용).
+      if (!this.isIOS()) {
+        this._promptTimer = setTimeout(() => {
+          this._promptTimer = null;
+          if (!this._deferred) { this._promptTimedOut = true; this._applyScreenVisibility(); }
+        }, this.PROMPT_TIMEOUT_MS);
+      }
     },
 
     /** [WO 20260929-회귀수정] #screen-app 의 class 변화(허브↔편집화면 전환)를 관찰해 그때마다
@@ -113,7 +166,7 @@
     /** 화면 상태에 따라 배너/상시버튼 노출을 단일 지점에서 재계산(SoT) — 편집 화면에서는
      *  둘 다 완전히 숨겨 겹침을 구조적으로 0 으로 만든다(부분 배치·칩 축소보다 안전). */
     _applyScreenVisibility() {
-      if (this.isStandalone()) { this._hideButton(); this.hide(); return; }
+      if (this.isInstalled()) { this._hideButton(); this.hide(); return; }
       const editing = this.isEditorScreenActive();
       const btn = document.getElementById("pwa-install-btn");
       if (btn) btn.style.display = editing ? "none" : "inline-flex";
@@ -152,18 +205,23 @@
       if (b) b.style.display = "none";
     },
 
-    /** 상시 버튼 클릭 — 조용한 무반응 금지: 상황별로 항상 반응을 준다. */
+    /** 상시 버튼 클릭 — 조용한 무반응 금지: 상황별로 항상 반응을 준다.
+     *  [WO 20261008-pwadesktop] 🔴 SoT 단일화 — 데스크톱에서 토스트로 따로 안내하던 것을 없애고
+     *  배너와 똑같이 showBanner(true) 하나로 합쳤다(배너는 "준비 중", 버튼은 "앱 설치"로 서로 다른
+     *  문구를 보이던 분기 제거). deferred 가 이미 와 있으면 그대로 즉시 설치창을 띄운다(한 클릭 유지). */
     _onButtonClick() {
       if (this.isEditorScreenActive()) return; // 방어적 가드(버튼 자체가 이 화면에서 숨겨져 있음)
       if (this._deferred) { this.accept(); return; }
-      if (this.isIOS() || this.isMobile()) { this.showBanner(true); return; } // 직접 클릭은 스누즈 무시
-      if (window.Prompt && Prompt.toast) Prompt.toast('브라우저 메뉴 → "홈 화면에 추가/설치"를 이용하세요.', 4000);
+      this.showBanner(true); // 직접 클릭은 스누즈 무시 — iOS/모바일/데스크톱 모두 배너가 상태에 맞게 표시
     },
 
     /** 배너 노출 — 첫 화면(로그인 전)에서도 호출 가능. force=true 면 7일 스누즈를 무시(버튼 직접 클릭).
-     *  🔴 편집 화면(#screen-app.active)에서는 force 여부와 무관하게 절대 띄우지 않는다(겹침 0 보장). */
+     *  🔴 편집 화면(#screen-app.active)에서는 force 여부와 무관하게 절대 띄우지 않는다(겹침 0 보장).
+     *  [WO 20261008-pwadesktop] "설치 준비 중" 무한 대기 제거 — PROMPT_TIMEOUT_MS 안에 prompt 가 안
+     *  오면(_promptTimedOut) iOS와 동일하게 "안내 전용" 모드로 전환해 설치 버튼을 숨기고 브라우저별
+     *  수동 설치 방법을 보여준다(조용히 숨기지 않음 — 문구만 바뀜). */
     showBanner(force) {
-      if (this.isStandalone()) return false;
+      if (this.isInstalled()) return false;
       if (this.isEditorScreenActive()) return false;
       if (!force && this._dismissed()) return false;
       const b = document.getElementById("pwa-install-banner");
@@ -173,10 +231,11 @@
       const btn = $("pwa-install-accept");
       const sub = $("pwa-install-sub");
       const isIosNow = this.isIOS();
+      const guideMode = !isIosNow && !this._deferred && this._promptTimedOut; // iOS 는 처음부터 안내 전용
       if (ios) ios.classList.toggle("hidden", !isIosNow);
       if (btn) {
-        btn.classList.toggle("hidden", isIosNow);
-        if (!isIosNow) {
+        btn.classList.toggle("hidden", isIosNow || guideMode);
+        if (!isIosNow && !guideMode) {
           const ready = !!this._deferred;
           btn.disabled = !ready;
           btn.textContent = ready ? "설치" : "설치 준비 중";
@@ -187,7 +246,9 @@
         if (!isIosNow) {
           sub.textContent = this._deferred
             ? "앱처럼 열리고 오프라인에서도 작업할 수 있습니다."
-            : "브라우저가 설치를 준비하는 중입니다 — 준비되면 자동으로 활성화돼요.";
+            : guideMode
+              ? this.browserGuideText()
+              : "브라우저가 설치를 준비하는 중입니다 — 준비되면 자동으로 활성화돼요.";
         }
       }
       b.classList.remove("hidden");
