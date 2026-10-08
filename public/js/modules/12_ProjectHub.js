@@ -805,6 +805,17 @@
         const p = await r.json();
         if (!r.ok) { alert(p.error || "생성 실패(권한 필요)"); return; }
         await this.load();
+        // [마스터 2026-10-08 ①] "프로젝트를 만들면 바로 그 프로젝트로 들어가 도면 등록 화면을 띄울까요?" → ok.
+        //  🔴 생성 직후 그 프로젝트로 바로 진입(기존 openProject — _enterAsDesigner 재사용, 새 진입 로직 0).
+        //  신규 프로젝트는 구역이 0개가 보장되므로(방금 서버가 만든 것) Projects.decks 로드 race 를 기다릴
+        //  필요 없이 기존 [도면 등록] 버튼(#btn-upload-drawing)을 그대로 눌러 파일 선택창을 띄운다.
+        //  실패(생성 자체가 실패)는 위 r.ok 가드에서 이미 허브에 머물며 alert 로 알린다(변경 없음).
+        try {
+          await this.openProject(p);
+          Prompt.toast && Prompt.toast("프로젝트 '" + (p.name || "") + "' 생성됨 — 도면을 선택하세요", 4000);
+          const up = document.getElementById("btn-upload-drawing");
+          if (up) up.click();
+        } catch (e) {}
       } catch (e) { alert("네트워크 오류"); }
     },
 

@@ -5933,6 +5933,9 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .mdock-chip.mdock-theta { white-space: normal; text-align: center; }
 .mdock-chip.mdock-theta .theta-app-label { white-space: normal; line-height: 1.15; font-size: 9.5px; }
 .mdock-chip.mdock-theta .theta-app-hint { display: none; }
+/* [WO 20261008-fieldcap] 모바일 도크 [📷 현장 촬영] — mdock-theta 와 같은 칩 레이아웃 재사용. */
+.mdock-chip.mdock-fieldcap { white-space: normal; text-align: center; }
+.mdock-chip.mdock-fieldcap .theta-app-label { white-space: normal; line-height: 1.15; font-size: 9.5px; }
 .pap-theta-app {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 44px;
   margin: 0 0 10px; padding: 8px 12px; border: none; border-radius: 10px; cursor: pointer;
@@ -5953,8 +5956,13 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .theta-sheet-btn {
   min-height: 44px; width: 100%; padding: 8px 12px; border-radius: 10px; cursor: pointer; text-align: left;
   background: #f3f4f6; color: #111827; border: 1px solid #d1d5db; font: inherit; font-size: 14px; font-weight: 700;
+  display: flex; flex-direction: column; gap: 2px;
 }
 .theta-sheet-btn.primary { background: #1d4ed8; color: #ffffff; border-color: #1d4ed8; }
+/* [WO 20261008-fieldcap] 비활성 항목(숨김 금지, 사유는 theta-sheet-btn-hint) — 대비 ≥4.5:1(#374151/#e5e7eb). */
+.theta-sheet-btn.is-disabled { background: #e5e7eb; color: #374151; cursor: not-allowed; }
+.theta-sheet-btn-hint { display: block; font-size: 11.5px; font-weight: 600; opacity: .85; }
+.theta-sheet-btn.primary .theta-sheet-btn-hint { color: #ffffff; }
 .theta-tap-banner {
   position: fixed; z-index: 525; top: 64px; left: 50%; transform: translateX(-50%);
   max-width: min(560px, calc(100vw - 16px)); display: flex; align-items: center; gap: 8px;

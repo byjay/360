@@ -30,6 +30,7 @@
       AiVision: (typeof AiVision !== "undefined" ? AiVision : null),
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
+      FieldCapture: (typeof FieldCapture !== "undefined" ? FieldCapture : null),
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

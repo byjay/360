@@ -28,6 +28,7 @@
       Designers.init();
       if (typeof UserMgmt !== "undefined") UserMgmt.init();
       if (typeof ThetaIntake !== "undefined") ThetaIntake.init();
+      if (typeof FieldCapture !== "undefined") { try { FieldCapture.init(); } catch (e) {} }   // [WO 20261008-fieldcap] 현장 촬영
       if (typeof PdfPopup !== "undefined") PdfPopup.init();
       if (typeof FeatureMenu !== "undefined") { try { FeatureMenu.init(); } catch (e) {} }   // [WO 20261002-allmenu §1] 전체 기능 메뉴
       // [고아 방지] 35_PhotoBatch 는 자체 init() 안에서만 버튼을 바인딩한다 —
@@ -841,6 +842,8 @@
       if (UI.syncCheckerAlignTools) { try { UI.syncCheckerAlignTools(); } catch (e) {} }
       // [WO 20261002-allmenu §7] 360 모드 모바일 도크 [RICOH THETA 앱 열기] — 같은 렌더 지점에서 동기화.
       if (typeof ThetaIntake !== "undefined" && ThetaIntake.syncAppButtons) { try { ThetaIntake.syncAppButtons(); } catch (e) {} }
+      // [WO 20261008-fieldcap] 360 모드 모바일 도크 [📷 현장 촬영] — 같은 렌더 지점에서 동기화.
+      if (typeof FieldCapture !== "undefined" && FieldCapture.syncDockButton) { try { FieldCapture.syncDockButton(); } catch (e) {} }
     },
 
     _togglePlacing() {

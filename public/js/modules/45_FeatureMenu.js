@@ -116,6 +116,10 @@
       { id: "theta-received", group: "pano", icon: "⇩", label: "받은 사진 등록", desc: "THETA 에서 공유받아 보관된 360 사진 → 어디에 등록? → 포인트 탭", perm: "designer", needs: "drawing", mod: "ThetaIntake",
         run: () => ThetaIntake.startFromPending() },
       { id: "theta-intake", group: "pano", icon: "⇩", label: "THETA 360 사진 가져오기", desc: "갤러리의 R* 360 사진 → 도면에 위치 지정", perm: "designer", needs: "drawing", mode: "photo", click: "btn-theta-intake", covers: ["btn-theta-intake", "theta-tray-close"] },
+      { id: "field-capture", group: "pano", icon: "📷", label: "현장 촬영", desc: "사진을 바로 찍어 도면에 위치 등록(THETA 공유·갤러리·카메라·안드로이드 앱 중 선택)", perm: "designer", needs: "drawing", mode: "photo", mod: "FieldCapture",
+        run: () => FieldCapture.open(), covers: ["mdock-field-capture"] },
+      { id: "field-capture-method", group: "pano", icon: "⇄", label: "현장 촬영 방식 변경", desc: "THETA 공유·갤러리·카메라·안드로이드 앱 중 다시 고릅니다", perm: "designer", needs: "drawing", mod: "FieldCapture",
+        run: () => FieldCapture.open(true) },
       { id: "photo-batch", group: "pano", icon: "▣", label: "사진 폴더 일괄 매칭", help: "photo-batch", perm: "designer", needs: "drawing", mode: "photo", click: "btn-photobatch", covers: ["btn-photobatch", "mdock-photobatch"] },
       { id: "coverage", group: "pano", icon: "◔", label: "촬영 현황 보기 켜기/끄기", help: "coverage", needs: "drawing", mod: "Coverage",
         why: () => Coverage.reason(), run: () => Coverage.toggle() },
@@ -235,6 +239,7 @@
           case "Install": return typeof Install !== "undefined";
           case "Help": return typeof Help !== "undefined";
           case "PinPurge": return typeof PinPurge !== "undefined";
+          case "FieldCapture": return typeof FieldCapture !== "undefined";
           default: return false;
         }
       } catch (e) { return false; }   // 선언 전(TDZ) 접근도 "미로드"로

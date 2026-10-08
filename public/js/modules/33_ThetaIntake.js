@@ -286,11 +286,15 @@
       } else {
         this._toast("등록 실패: " + (r.reason || "알 수 없음") + " — 사진은 트레이에 남아 있습니다");
       }
+      // [WO 20261008-fieldcap] 🔴 선택적 훅(새 상태 0) — 44_FieldCapture 가 단일 사진 등록 뒤
+      //   "다음 사진" 시트를 띄우는 데 쓴다. row.onDone 이 없으면(기존 THETA 흐름) 동작 변화 0.
+      if (typeof row.onDone === "function") { try { row.onDone(r); } catch (e) {} }
       if (this._flow) this._flow.queue.shift();
       this._flowNext();
       return r;
     },
-    /** 하단 시트(공유 생성기) — 버튼 ≥40px, 고정 색쌍(CSS .theta-sheet*). */
+    /** 하단 시트(공유 생성기) — 버튼 ≥40px, 고정 색쌍(CSS .theta-sheet*).
+     *  action.disabled = 누를 수 없음(사유는 action.hint, 숨기지 않는다) · action.hint = 보조 1줄. */
     _sheet(spec) {
       this._closeSheet();
       const s = document.createElement("div");
@@ -306,9 +310,22 @@
       (spec.actions || []).forEach((a) => {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "theta-sheet-btn" + (a.primary ? " primary" : "");
+        b.className = "theta-sheet-btn" + (a.primary ? " primary" : "") + (a.disabled ? " is-disabled" : "");
+        // 🔴 기존 호환 — b.textContent = a.label 그대로(기존 호출부가 버튼을 .textContent 로 찾는다).
+        //   hint 는 별도 자식 span 으로만 덧붙인다(innerHTML 치환 금지 — 기존 동작 변화 0).
         b.textContent = a.label;
-        b.addEventListener("click", (e) => { if (e && e.stopPropagation) e.stopPropagation(); this._closeSheet(); a.run && a.run(); });
+        if (a.hint) {
+          const hintEl = document.createElement("span");
+          hintEl.className = "theta-sheet-btn-hint";
+          hintEl.textContent = a.hint;
+          b.appendChild(hintEl);
+        }
+        if (a.disabled) b.setAttribute("aria-disabled", "true");
+        b.addEventListener("click", (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          if (a.disabled) { this._toast(a.hint || (a.label + " — 사용할 수 없습니다")); return; }
+          this._closeSheet(); a.run && a.run();
+        });
         s.appendChild(b);
       });
       document.body.appendChild(s);
