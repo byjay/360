@@ -136,7 +136,7 @@
         covers: ["pano-radar-expand", "pano-radar-zoom-in", "pano-radar-zoom-out", "pano-radar-toggle", "pano-radar-more"] },
       { id: "photo-history", group: "pano", icon: "◷", label: "사진 이력(재방선)", desc: "같은 포인트의 이전 사진 · 되돌리기", needs: "pano", click: "btn-tl-prev", covers: ["btn-tl-prev", "btn-tl-next", "btn-tl-revert"] },
       { id: "photo-history-delete", group: "pano", icon: "✕", label: "사진 이력 삭제", perm: "admin", needs: "pano", danger: true, click: "btn-tl-delete", covers: ["btn-tl-delete"] },
-      { id: "photo-compare", group: "pano", icon: "◧", label: "전/후 분할 비교", needs: "pano", click: "btn-tl-compare", covers: ["btn-tl-compare", "btn-cmp-close"] },
+      { id: "photo-compare", group: "pano", icon: "◧", label: "전/후 분할 비교(360 동기)", desc: "두 시점 360을 나란히, 한쪽을 돌리면 같이 돈다. 평면 슬라이더 보조 모드 포함", needs: "pano", click: "btn-tl-compare", covers: ["btn-tl-compare", "btn-cmp-close", "btn-cmp360-close", "btn-cmp360-sync", "btn-cmp360-flat"] },
       { id: "photo-original", group: "pano", icon: "⤓", label: "360 원본 보기·다운로드", desc: "풀해상도 원본", needs: "pano", click: "btn-pano-orig" },
       { id: "ai-analyze", group: "pano", icon: "🤖", label: "AI 사진 분석", help: "ai-analyze", perm: "designer", needs: "pano", click: "btn-pano-ai", covers: ["btn-pano-ai"] },
       { id: "scan-3d", group: "pano", icon: "◈", label: "3D 스캔 도구(오비트·팬·단면·측정)", desc: "3D 스캔 포인트에서", needs: "pano", click: "btn-cad-orbit",

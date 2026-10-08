@@ -1,11 +1,24 @@
   const Compare = {
     _a: null, _b: null, _ratio: 0.5, _dragging: false, _busy: false,
 
+    /** [WO 20261008-comparesync] 기본 모드 = 360 동기 비교(두 뷰어를 나란히, 한쪽을 돌리면 같이 돈다).
+     *  CompareSync/THREE 가 없거나 시점이 영상/1개뿐이면 기존 평면 슬라이더로 자동 대체(기능 유지). */
     async open() {
       if (this._busy) return;
+      if (typeof CompareSync !== "undefined" && CompareSync.open) {
+        const ok360 = await CompareSync.open();
+        if (ok360) return;
+      }
+      return this.openFlat();
+    },
+
+    /** 기존 "평면 슬라이더" 비교(등장방형 이미지를 canvas 에 cover 로 그려 클립 경계 이동) — 보조 모드.
+     *  CompareSync 의 [평면 슬라이더] 버튼이 호출하거나, 360 로드가 불가능할 때 open()이 대체 호출한다. */
+    async openFlat(aShot, bShot) {
+      if (this._busy) return;
       if (!TimeLapse.hasMultiple()) { return; }
-      const a = TimeLapse.currentShot();      // 선택 시점(과거)
-      const b = TimeLapse.latestShot();       // 최신
+      const a = aShot || TimeLapse.currentShot();      // 선택 시점(과거)
+      const b = bShot || TimeLapse.latestShot();       // 최신
       if (!a || !b) return;
       this._busy = true;
       try {
@@ -88,10 +101,13 @@
       div.style.left = pct;
     },
 
+    /** 둘 다 닫는다(360 동기 + 평면 슬라이더) — 06_PanoViewer._closeImmediate()가 Compare.close()
+     *  1개만 호출하므로(grep 확인됨), 여기서 분기 없이 둘 다 정리해야 WebGL 컨텍스트 누수가 없다. */
     close() {
       const ov = document.getElementById("pano-compare");
       if (ov) ov.classList.add("hidden");
       this._a = this._b = null;
+      if (typeof CompareSync !== "undefined" && CompareSync.close) CompareSync.close();
     },
 
     _toast(msg) {

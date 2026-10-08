@@ -24,6 +24,7 @@
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
       DeepLink: (typeof DeepLink !== "undefined" ? DeepLink : null),
+      CompareSync: (typeof CompareSync !== "undefined" ? CompareSync : null),
       QrPrint: (typeof QrPrint !== "undefined" ? QrPrint : null),
       Coverage: (typeof Coverage !== "undefined" ? Coverage : null),
       AiVision: (typeof AiVision !== "undefined" ? AiVision : null),

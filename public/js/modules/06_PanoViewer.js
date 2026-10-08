@@ -7,6 +7,124 @@
 
     init(canvas) { this.canvas = canvas; },
 
+    /** [WO 20261008-comparesync] 메인 뷰어(위 싱글턴)와 완전히 독립된 360 뷰어 인스턴스를 만든다.
+     *  15_Compare.js(360 동기 비교)가 좌/우 2개를 각각 생성해 쓴다 — 씬/카메라/텍스처가 서로 분리되어
+     *  한쪽을 조작해도 다른 쪽(또는 메인 싱글턴)의 renderer/texture 에는 전혀 영향을 주지 않는다.
+     *  기존 메인 뷰어 코드(load/_renderFrame/onPointerDown 등)는 이 함수가 전혀 건드리지 않는다
+     *  (grep 확인: createViewerCore 는 이 파일에 신규 추가되는 이름 — 기존 호출부 0건).
+     *  카메라/구체 설정은 _ensureGL/_renderFrame 과 동일값(SphereGeometry(500,60,40) 내부뷰,
+     *  PerspectiveCamera(75,ar,0.1,1100))을 그대로 복제해 "기존 Three.js 설정 재사용" 요건을 지킨다. */
+    createViewerCore(canvas) {
+      if (typeof window === "undefined" || !window.THREE || !canvas) return null;
+      const core = {
+        S: { lon: 0, lat: 0, fov: 75, roll: 0 },
+        canvas, renderer: null, scene: null, camera: null, mesh: null, texture: null,
+        rafId: null, _dirty: true, open: false,
+
+        _init() {
+          try {
+            this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+            this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            this.scene = new THREE.Scene();
+            this.camera = new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 1100);
+            const geo = new THREE.SphereGeometry(500, 60, 40);
+            geo.scale(-1, 1, 1); // 구 내부에서 보기(메인 뷰어와 동일)
+            this.mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x000000 }));
+            this.scene.add(this.mesh);
+            return true;
+          } catch (e) { this.renderer = null; return false; }
+        },
+
+        /** 정적 equirectangular 이미지 로드(동영상은 호출측에서 이미 걸러짐). */
+        loadImage(src) {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            if (/^https?:\/\//i.test(src) && !src.startsWith(location.origin)) img.crossOrigin = "anonymous";
+            img.onload = () => {
+              if (this.texture) { try { this.texture.dispose(); } catch (e) {} }
+              this.texture = new THREE.Texture(img);
+              this.texture.needsUpdate = true;
+              this.texture.minFilter = THREE.LinearFilter;
+              if (this.mesh && this.mesh.material) { try { this.mesh.material.dispose(); } catch (e) {} }
+              if (this.mesh) this.mesh.material = new THREE.MeshBasicMaterial({ map: this.texture });
+              this.resize();
+              this._dirty = true;
+              resolve();
+            };
+            img.onerror = () => reject(new Error("image load failed: " + String(src).slice(0, 80)));
+            img.src = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src;
+          });
+        },
+
+        resize() {
+          if (!this.renderer || !this.canvas) return;
+          const r = this.canvas.getBoundingClientRect ? this.canvas.getBoundingClientRect() : { width: 0, height: 0 };
+          const W = Math.max(1, Math.round(r.width) || this.canvas.clientWidth || 640);
+          const H = Math.max(1, Math.round(r.height) || this.canvas.clientHeight || 360);
+          this.renderer.setSize(W, H, false);
+          this.camera.aspect = W / H;
+          this.camera.updateProjectionMatrix();
+          this._dirty = true;
+        },
+
+        /** 메인 싱글턴 PanoViewer.onPointerMove 와 동일한 드래그 감도 공식(fov 비례) — 복제본. */
+        applyDrag(lx, ly, x, y) {
+          const k = this.S.fov / 500;
+          this.S.lon += (lx - x) * k;
+          this.S.lat = Math.max(-85, Math.min(85, this.S.lat + (y - ly) * k));
+          this._dirty = true;
+        },
+        setFov(delta) { this.S.fov = Math.max(30, Math.min(110, this.S.fov + delta)); this._dirty = true; },
+        setState(partial) {
+          if (!partial) return;
+          if (partial.lon != null) this.S.lon = partial.lon;
+          if (partial.lat != null) this.S.lat = Math.max(-85, Math.min(85, partial.lat));
+          if (partial.fov != null) this.S.fov = Math.max(30, Math.min(110, partial.fov));
+          this._dirty = true;
+        },
+
+        _renderFrame() {
+          if (!this.renderer || !this.camera || !this.scene) return;
+          const S = this.S;
+          const lat = Math.max(-85, Math.min(85, S.lat));
+          const phi = THREE.MathUtils.degToRad(90 - lat);
+          const theta = THREE.MathUtils.degToRad(S.lon);
+          const t = new THREE.Vector3(
+            500 * Math.sin(phi) * Math.cos(theta),
+            500 * Math.cos(phi),
+            500 * Math.sin(phi) * Math.sin(theta)
+          );
+          this.camera.lookAt(t);
+          this.camera.fov = S.fov;
+          this.camera.updateProjectionMatrix();
+          this.renderer.render(this.scene, this.camera);
+        },
+
+        start() {
+          this.open = true;
+          const loop = () => {
+            if (!this.open) return;
+            if (this._dirty) { this._renderFrame(); this._dirty = false; }
+            if (typeof requestAnimationFrame === "function") this.rafId = requestAnimationFrame(loop);
+          };
+          loop();
+        },
+
+        /** WebGL 컨텍스트·텍스처·렌더러를 전부 해제(모바일 메모리 — 누수 0 요건). */
+        dispose() {
+          this.open = false;
+          if (this.rafId && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.rafId);
+          this.rafId = null;
+          if (this.texture) { try { this.texture.dispose(); } catch (e) {} this.texture = null; }
+          if (this.mesh && this.mesh.material) { try { this.mesh.material.dispose(); } catch (e) {} }
+          if (this.mesh && this.mesh.geometry) { try { this.mesh.geometry.dispose(); } catch (e) {} }
+          if (this.renderer) { try { this.renderer.dispose(); } catch (e) {} this.renderer = null; }
+          this.scene = null; this.camera = null; this.mesh = null;
+        }
+      };
+      return core._init() ? core : null;
+    },
+
     /* ══════════════════════════════════════════
        [지휘자 발주 2026-10-01] "사진으로 빨려 들어가는" 전환 효과 — Dive
        핀 탭(및 트리/핀패널의 모든 진입점) → 도면 줌인 → 원형 개방 → 화각 펼침(총 ~800ms).

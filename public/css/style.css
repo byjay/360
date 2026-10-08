@@ -2717,6 +2717,47 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   .tl-compare-btn { font-size: 10px; padding: 2px 7px; }
 }
 
+/* ══════════ 360 동기 비교(기본 모드) — 두 뷰어 나란히 ══════════ */
+.pano-compare-360 {
+  position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column;
+  background: #0b0f17; user-select: none;
+}
+.pano-compare-360.hidden { display: none !important; }
+.cmp360-panes { flex: 1 1 auto; display: flex; flex-direction: row; min-height: 0; }
+.cmp360-pane { position: relative; flex: 1 1 50%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.cmp360-pane + .cmp360-pane { border-left: 2px solid rgba(255,255,255,.18); }
+.cmp360-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; z-index: 2;
+  background: rgba(10,16,32,.72); backdrop-filter: blur(6px);
+}
+.cmp360-sel {
+  flex: 1 1 auto; min-width: 0; font-size: 12px; padding: 4px 6px; border-radius: 6px;
+  background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.22);
+}
+.cmp360-sel option { color: #111; }
+.cmp360-label { font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
+.cmp360-canvas { flex: 1 1 auto; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.cmp360-bar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 10px; background: rgba(10,16,32,.85);
+}
+.cmp360-btn {
+  padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 700;
+  color: #fff; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.26);
+  transition: .15s;
+}
+.cmp360-btn:hover { background: rgba(255,255,255,.24); }
+.cmp360-btn.on { background: color-mix(in srgb, var(--accent) 55%, transparent); border-color: var(--accent); }
+.cmp360-btn-close { background: rgba(220,38,38,.85); border-color: rgba(220,38,38,.9); }
+.cmp360-btn-close:hover { background: rgba(220,38,38,1); }
+/* 모바일 세로 — 상/하로 쌓기 */
+@media (max-width: 640px), (orientation: portrait) {
+  .cmp360-panes { flex-direction: column; }
+  .cmp360-pane + .cmp360-pane { border-left: none; border-top: 2px solid rgba(255,255,255,.18); }
+  .cmp360-bar { gap: 6px; padding: 8px; flex-wrap: wrap; }
+  .cmp360-btn { font-size: 11px; padding: 6px 10px; }
+}
+
 /* ══════════ 영역(Zone) 하이라이트 ══════════ */
 .zones-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; } /* 항상 핀 레이어(.pins-layer z-index:3) 뒤 — 핀 클릭 간섭 방지 */
 /* SVG 도형 오버레이 — 도면 전체를 덮고 % 좌표(viewBox 0~100)로 그림 */

@@ -215,12 +215,18 @@ async function main() {
   }
 
   // 핀: CHECKER 5개(checkboard=true) + 360 2개(imageId 참조, checkboard 필드 생략)
+  //   [WO 20261008-comparesync] 핀 1번은 timeline(과거 시점 1개)을 추가해 TimeLapse._shots.length===2 →
+  //   p131 CDP 테스트가 "⇄ 분할비교" → 360 동기 비교를 실측할 수 있게 한다(idempotent, prod 미사용).
   const pins = [];
   for (let n = 1; n <= 5; n++) {
     pins.push({ id: now + n, createdAt: now + n, x: 10 + n * 8, y: 15 + n * 6, page: 1, label: String(n), checkboard: true, author: DESIGNER_EMAIL });
   }
   for (let n = 1; n <= 2; n++) {
-    pins.push({ id: now + 100 + n, createdAt: now + 100 + n, x: 60 + n * 8, y: 70, page: 1, label: String(n), imageId: panoIds[n - 1], author: DESIGNER_EMAIL });
+    const pin = { id: now + 100 + n, createdAt: now + 100 + n, x: 60 + n * 8, y: 70, page: 1, label: String(n), imageId: panoIds[n - 1], shotAt: now, author: DESIGNER_EMAIL };
+    if (n === 1) {
+      pin.timeline = [{ id: 'tl_localseed_1', imageId: panoIds[1], shotAt: now - 2 * 86400000, label: '이전 촬영' }];
+    }
+    pins.push(pin);
   }
   const pinsJson = esc(JSON.stringify(pins));
 
