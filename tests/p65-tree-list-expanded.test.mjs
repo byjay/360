@@ -284,7 +284,13 @@ if (!puppeteer) {
 } else {
   const shotDir = process.env.SHOT_DIR || path.join(os.tmpdir(), "p65-tree-shots");
   fs.mkdirSync(shotDir, { recursive: true });
+  // [WO 20261008-sidetree 재조사] 🔴 근본원인: 이 하네스에 viewport meta 가 없으면 Chrome이
+  // mobile:true emulation 에서 실제 요청한 width(375)를 무시하고 고전 "데스크톱 동등" 기본
+  // 레이아웃 뷰포트(980px)로 되돌린다(meta 없는 모바일 브라우저의 표준 동작) — 실측: innerWidth
+  // 요청375 → 실제981. 운영 index.html(public/index.html:5)엔 이 meta가 있어 실 서비스는 영향 없음.
+  // 기존엔 #side-tree 캡이 폭 무관 전역 적용이라 이 결함이 가려져 있었다(§공통 작업 규율 준수 G-2-5).
   const HARNESS = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="/css/style.css">
 <style>body{background:#161514;margin:0}.sidebar{width:320px}</style>
 </head><body>

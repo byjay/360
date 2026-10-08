@@ -490,9 +490,16 @@ if (!deck1 || !deck1.crop) { ok(false, "⑦ 선행 ④가 실패해 좌표 검�
  * ══════════════════════════════════════════════════════════════════════ */
 console.log("\n[⑧ 모바일 375×812 안내 레이아웃]");
 {
+  // [WO 20261008-sidetree 재조사] .side-tree 가 이제 세 선언(공통 overflow-y:auto / 모바일
+  // max-width:760px 캡 / 데스크톱 min-width:761px flex:1)으로 나뉜다(데스크톱이 남는 세로 공간을
+  // 채우도록 고정 캡을 폭별로 분리한 근본수정). 첫 매치만 보던 기존 방식은 소스상 먼저 오는
+  // 모바일 전용 블록만 잡아 overflow-y:auto 를 놓쳤다 — 전체 매치를 합쳐 동일 선택자의 모든
+  // 선언을 함께 본다(기존 불변식 "스크롤 컨테이너 + max-height 존재"는 그대로 유지, 약화 없음).
   const rule = (sel) => {
-    const m = styleCss.match(new RegExp(sel.replace(/[.#*]/g, "\\$&") + "\\s*\\{([^}]*)\\}"));
-    return m ? m[1] : "";
+    const re = new RegExp(sel.replace(/[.#*]/g, "\\$&") + "\\s*\\{([^}]*)\\}", "g");
+    let out = "", m;
+    while ((m = re.exec(styleCss))) out += m[1] + ";";
+    return out;
   };
   const sideTree = rule(".side-tree");
   ok(/overflow-y\s*:\s*auto/.test(sideTree), `⑧ .side-tree 가 스크롤 컨테이너 → 안내/CTA 스크롤 도달 (실제 "${sideTree.trim()}")`);

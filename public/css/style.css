@@ -3948,6 +3948,11 @@ body.role-viewer #btn-checkboard-enter { display: none !important; }
      화면 밖 도달불가로 남는다. flex-shrink:0 으로 자식이 짓눌리지 않게 하면 총합이 그대로 넘쳐 .sidebar의
      overflow-y:auto가 정상적으로 scrollHeight>clientHeight를 만들어 전부 스크롤로 도달 가능해진다. */
   .sidebar > * { flex-shrink: 0; }
+  /* [WO 20261008-sidetree] 데스크톱 기본 규칙(위 .side-tree, style.css:~5474)은 flex:1 로 남는
+     공간을 채우지만, 모바일 바텀시트는 WO 20260918 mobile-reachability 가 요구하는 고정 캡
+     (레이아웃 점유 공간 = 실제 렌더 크기, flex-basis = max-height)이 그대로 필요하다 — 여기서
+     재선언해 데스크톱의 flex:1(grow)을 무효화한다(.sidebar > * 의 flex-shrink:0 과 결합). */
+  .side-tree { flex: 0 0 clamp(160px, 34vh, 320px); max-height: clamp(160px, 34vh, 320px); min-height: 0; }
   /* 시트 핸들(드래그 그립) */
   .sidebar::before {
     content: ""; display: block; position: sticky; top: 0;
@@ -5425,12 +5430,21 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .stb-btn.active{background:rgba(201,150,42,.16);border-color:var(--gold);color:var(--gold-ink);}
 .stb-sep{flex:0 0 auto;width:1px;align-self:stretch;background:var(--border2);margin:2px;}
 /* [WO 20260917-pin] 항목3: 사이드바(.sidebar)는 overflow:hidden — 트리가 항상 전체 표시되면
-   길어져 다른 섹션(도구바/업로드 버튼)을 화면 밖으로 밀어낸다. 트리 자체에 세로 스크롤을 주고
-   높이를 유한하게 잡아(vh 기반, 화면 크기에 비례) 다른 섹션은 밀리지 않게 한다. */
-/* [WO 20260918 mobile-reachability] flex-basis 를 max-height 와 동일하게 명시(사유는 .side-toolbar
-   주석 참조) — 레이아웃 점유 공간과 실제 렌더 크기를 일치시켜 뒤따르는 형제(#section-export 등)가
-   실제보다 더 아래로 밀려나는 것을 막는다. */
-.side-tree{padding:8px 6px;max-height:clamp(160px,34vh,320px);flex-basis:clamp(160px,34vh,320px);overflow-y:auto;}
+   길어져 다른 섹션(도구바/업로드 버튼)을 화면 밖으로 밀어낼 수 있으므로 트리 자체에 세로
+   스크롤을 준다(내용이 남는 공간보다 길 때만 스크롤). */
+/* [WO 20261008-sidetree] 🔴 근본수정: 기존엔 데스크톱도 모바일과 동일한 고정 캡
+   (clamp(160px,34vh,320px))을 그대로 썼다 — 사이드바 하단에 공간이 남아도 트리가 320px에서
+   잘려 스크롤됐다(마스터 실측, 1280×800). 데스크톱은 flex:1 로 .sidebar 의 남는 세로 공간을
+   전부 채우고, 콘텐츠가 그보다 길 때만 overflow-y:auto 로 트리 내부 스크롤. 모바일 캡
+   (WO 20260918 mobile-reachability, 바텀시트 도달성 보존용)은 @media(max-width:760px) 안의
+   .sidebar 블록에서 그대로 유지된다(아래). flex/max-height/min-height 를 @media(min-width:761px)
+   로 직접 가둬 "같은 specificity, 소스 순서가 미디어 매칭보다 우선"이라는 CSS 캐스케이드 함정을
+   피한다(실측: min-width 가드 없이 두면 375px 에서도 이 규칙이 모바일 규칙을 덮어써 flex:1 이
+   살아남았다 — 폭과 무관하게 소스상 더 뒤에 있는 규칙이 이겼다). */
+.side-tree{padding:8px 6px;overflow-y:auto;}
+@media (min-width: 761px) {
+  .side-tree{flex:1 1 auto;min-height:120px;max-height:none;}
+}
 /* [항목3] 페이지 태그(P1/P2…) — 본문 아님(보조 메타) → 기존 .tree-node-doc/.tree-node-pin 과
    동일하게 var(--text2) 재사용(신규 색 없음). 대비 실측(WCAG 2.1): #6b6457 on #faf7f0 = 5.48:1(패시브
    영역) · .tree-node.active 배경(골드 오버레이 rgba(201,150,42,.16) 블렌드 #f2e7d0) 위에서도 4.78:1 — 둘 다 4.5:1 이상. */
