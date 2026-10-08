@@ -34,7 +34,12 @@
       const id = (typeof window !== "undefined" && window.WM_GOOGLE_CLIENT_ID) || "";
       return id && id !== "GOOGLE_CLIENT_ID" ? id : "";
     },
-    get isDesigner() { return this.role === "super" || this.role === "admin" || this.role === "designer"; },
+    /** 편집 권한 SoT. [WO 20261008-pinstyle R7] 🔴 근본원인(0b4d262 CDP 재현): 전역 role 만 봤다 — 전역 viewer 인데
+     *  이 프로젝트의 designer 멤버(서버 deploymentWriteDenied 는 쓰기 허용: 소유자·super·멤버 designer)는 편집 화면에
+     *  못 들어가고(State.mode null) 전체 기능·트리·핀 메뉴 51개가 "디자이너(편집) 전용"으로 막혔다. 열려 있는 프로젝트의
+     *  실효 역할(/api/projects my_role — 서버가 멤버행 > 소유자·전역디자이너·super 로 계산)이 designer 면 편집 가능.
+     *  허브(프로젝트 밖)에서는 projectRole 이 null 로 돌아가 전역 판정만 남는다(ProjectHub.open). */
+    get isDesigner() { return this.role === "super" || this.role === "admin" || this.role === "designer" || this.projectRole === "designer"; },
     get isSuper() { return this.role === "super"; },
     // [역할모델] 관리자 = 슈퍼관리자(마스터) 또는 일반관리자. 관리자 패널/모드 접근 기준. 디자이너는 관리자 아님.
     get isAdmin() { return this.role === "super" || this.role === "admin"; },

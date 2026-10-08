@@ -230,8 +230,10 @@
       if (placeHint) placeHint.textContent = isPhoto
         ? "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다"
         : isCheckboard
-        ? "도면 위를 클릭하면 번호가 자동으로 매겨집니다"
+        ? this.CHECKER_PHOTO_NOTE + " — 도면 위를 클릭하면 번호가 자동으로 매겨집니다"
         : "도면 위 원하는 위치를 클릭하세요";
+      // [WO 20261008-pinstyle R4] 지도 위 배너(.crosshair-msg)도 모드 문구로 — 종전엔 정적 "도면 위 원하는 위치를 클릭하세요".
+      this._syncPlacingUi();
       // [WO 20260929] 3모드 세그먼트(보기/체크보드/사진등록) 활성 표시 동기화 — 신규 진입점.
       this._syncRegModeButtons();
 
@@ -579,7 +581,8 @@
       });
 
       // 포인트 배치 모드 토글
-      UI.$("btn-place").addEventListener("click", () => this._togglePlacing());
+      // [WO 20261008-pinstyle R5] 사용자 버튼은 _onPlaceButton(자동 시작 상태를 끄지 않는다) — 내부 호출은 _togglePlacing 그대로.
+      UI.$("btn-place").addEventListener("click", () => this._onPlaceButton());
 
       // [WO 20260929 2모드 전환] CHECKER 진입 — 두 버튼 공용 핸들러. 과거엔 이미 체크보드일 때
       // "view"(보기)로 되돌리는 토글이었으나, [보기] 세그먼트 제거로 그 경로는 디자이너 UI에서
@@ -754,8 +757,55 @@
       if (next !== "view") {
         // [WO 20260929 마스터 정정] 체크보드/사진등록은 클릭 즉시 동작하는 도구 — 진입과 동시에
         //   배치모드를 자동 시작한다(기존 체크보드 진입 패턴 그대로 재사용).
-        setTimeout(() => { if (!State.placing) this._togglePlacing(); }, 60);
+        setTimeout(() => this._autoStartPlacing(), 60);
       }
+    },
+
+    /** [WO 20261008-pinstyle R5] 🔴 근본원인(0b4d262 CDP 재현): 모드 전환이 배치를 "자동으로" 켠 뒤 사용자가
+     *  [포인트]를 누르면 그 버튼이 토글이라 배치가 꺼졌다 → 도면을 탭해도 핀·사진 선택창이 안 떴다
+     *  (375·1280 둘 다 chooser=false, placing=false). 허브 트리 잎으로 들어오면 아예 자동 시작이 안 됐다
+     *  (_setRegMode 가 같은 모드면 건너뜀). 자동 시작은 이 함수 하나로 모으고 표시(State._placingAuto)를 남겨,
+     *  사용자의 첫 [포인트] 누름은 "켜기 확인"으로 받는다(_onPlaceButton). 두 번째 누름부터는 종전대로 끈다. */
+    _autoStartPlacing() {
+      if (State.mode !== "designer") return;
+      if (State.regMode !== "checkboard" && State.regMode !== "photo") return;
+      if (!State.placing) this._togglePlacing();
+      if (State.placing) State._placingAuto = true;
+    },
+    /** 사용자의 [포인트] 버튼(#btn-place · 모바일 FAB · 사이드 #btn-quickpoint 가 모두 여기로 위임). */
+    _onPlaceButton() {
+      if (State.placing && State._placingAuto) {
+        State._placingAuto = false; // 자동으로 켜져 있던 것을 사용자가 "켜기"로 확인 — 끄지 않는다
+        this._syncPlacingUi();
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(this._placeBannerText(), 3000);
+        return;
+      }
+      this._togglePlacing();
+    },
+    /** 포인트 모드 안내문 SoT — 지도 위 배너(.crosshair-msg)와 사이드 #place-hint 가 같은 문장을 쓴다.
+     *  [WO 20261008-pinstyle R4] CHECKER 는 사진을 등록하지 않는다(마스터 2026-10-01) — 숨기지 말고 문장으로 보인다. */
+    CHECKER_PHOTO_NOTE: "CHECKER: 번호만 · 사진은 360 모드에서",
+    _placeBannerText() {
+      // 배너는 nowrap(style.css .crosshair-msg) — 375px 폭 안에 들도록 짧게 둔다(실측 대상).
+      if (State.regMode === "checkboard") return this.CHECKER_PHOTO_NOTE;
+      if (State.regMode === "photo") return "360: 클릭 = 번호 핀 + 사진 선택";
+      return "도면 위 원하는 위치를 클릭하세요";
+    },
+    /** 배치 상태 표시 SoT — 모든 [포인트] 버튼의 활성 표시 + 배너 문구/표시를 State.placing 에서 파생한다
+     *  (종전엔 모바일 FAB 가 자기 클릭 때만 active 를 바꿔, 자동 시작된 배치가 "꺼진 것처럼" 보였다). */
+    _syncPlacingUi() {
+      const on = !!State.placing;
+      const bp = UI.$("btn-place"); if (bp) bp.classList.toggle("active", on);
+      const qp = UI.$("btn-quickpoint"); if (qp) { qp.classList.toggle("active", on); qp.setAttribute && qp.setAttribute("aria-pressed", String(on)); }
+      try {
+        const fab = document.querySelector && document.querySelector('#mobile-dock [data-act="place"]');
+        if (fab) { fab.classList.toggle("active", on); fab.setAttribute && fab.setAttribute("aria-pressed", String(on)); }
+        const msg = document.querySelector && document.querySelector("#crosshair-overlay .crosshair-msg");
+        if (msg) msg.textContent = this._placeBannerText();
+      } catch (e) {}
+      const ph = UI.$("place-hint"); if (ph) ph.classList.toggle("hidden", !on);
+      const ch = UI.$("crosshair-overlay"); if (ch) ch.classList.toggle("hidden", !on);
+      const mv = UI.$("map-viewport"); if (mv) mv.style.cursor = on ? "crosshair" : "grab";
     },
 
     /** 2모드 세그먼트 버튼(#btn-regmode-checkboard/photo) 활성 표시 동기화.
@@ -811,8 +861,18 @@
         this.cancelActiveOperation({ silent: true });
         State.placing = wasPlacing;        // 토글 직전 원복
       }
+      State._placingAuto = false; // 명시적 토글 = 자동 시작 표시 해제(_autoStartPlacing 이 필요하면 다시 세운다)
       State.placing = !State.placing;
       if (State.placing) {
+        // [WO 20261008-pinstyle R9] 모바일(≤760)에서 포인트 리스트 패널이 열려 있으면 도면 약 2/3 를 덮어 배치 탭이
+        //   패널로 들어간다(지휘자 관찰) — 숨기지 않고 접기만(다시 열기 버튼 그대로).
+        try {
+          if (typeof PinGrid !== "undefined" && !PinGrid.collapsed && PinGrid.setCollapsed
+              && typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 760px)").matches) {
+            PinGrid.setCollapsed(true);
+            if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("포인트 모드 — 리스트 패널을 접었습니다(다시 열기 버튼)", 2500);
+          }
+        } catch (e) {}
         State.pending = null;
         State.editingPinId = null;
         this._closePinForm();         // 편집 폼이 떠 있으면 닫고 새 배치 모드
@@ -824,10 +884,7 @@
           if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("정확한 핀 배치를 위해 평면 보기로 전환했습니다 (배치 후 ISO 다시 켜기 가능)");
         }
       }
-      UI.$("btn-place").classList.toggle("active", State.placing);
-      UI.$("place-hint").classList.toggle("hidden", !State.placing);
-      UI.$("crosshair-overlay").classList.toggle("hidden", !State.placing);
-      UI.$("map-viewport").style.cursor = State.placing ? "crosshair" : "grab";
+      this._syncPlacingUi();
     },
 
     /** ── [마스터 요청 #5·#6] 현재 실행 중인 "도구/명령"을 모두 즉시 종료 ──
@@ -846,10 +903,8 @@
       // 2) 핀 배치(placing) 모드 → 종료
       if (State.placing) {
         State.placing = false;
-        const bp = UI.$("btn-place"); if (bp) bp.classList.remove("active");
-        UI.hide && UI.hide("place-hint");
-        const ch = UI.$("crosshair-overlay"); if (ch) ch.classList.add("hidden");
-        const mv = UI.$("map-viewport"); if (mv) mv.style.cursor = "grab";
+        State._placingAuto = false;
+        this._syncPlacingUi();
         did = true;
       }
       // 3) 핀 이동 잠금해제 상태 → 다시 잠금
@@ -1255,6 +1310,8 @@
         if (e.touches.length === 2) {
           // 핀치 시작 — 팬 종료, 두 손가락 거리/중점 기록
           lastTouch = null;
+          this._placeTouch = null; // [WO 20261008-pinstyle] 두 번째 손가락 = 배치 탭 아님
+
           const mid = touchMid(e.touches[0], e.touches[1]);
           pinch = { dist: touchDist(e.touches[0], e.touches[1]), cx: mid.x, cy: mid.y };
           e.preventDefault();
@@ -1266,7 +1323,11 @@
           const inPinchCooldown = (Date.now() - pinchEndedAt) < PINCH_TAP_COOLDOWN_MS;
           // 핀(또는 액션버튼) 위 터치는 배치보다 핀 클릭을 우선 (체크보드 핀 클릭 보장)
           if (e.target && e.target.closest(".pin-marker")) { return; }
-          if (State.placing) { if (!inPinchCooldown) this._handlePlaceTouch(e); return; }
+          // [WO 20261008-pinstyle R4] 🔴 근본원인(CDP 375 재현): 배치를 touchstart 에서 했다 — touchstart 는
+          //   브라우저 "사용자 활성화" 이벤트가 아니라서(활성화 = touchend/click/keydown) 360 모드의 사진
+          //   선택창(input.click())이 직전 5초 안에 다른 탭이 없으면 막혔다(핀만 생기고 선택창 0).
+          //   위치만 기억하고 실제 배치는 touchend(_placeTouchEnd)에서 — 핀치·드래그와 구분도 된다.
+          if (State.placing) { if (!inPinchCooldown) this._placeTouchStart(e); return; }
           // [버그복원] 모바일 영역 그리기 — 데스크톱 mousedown 과 동일하게 터치에서도 onDrawStart
           if (!inPinchCooldown && State.drawingZone && typeof Zones !== "undefined") {
             if (Zones.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
@@ -1308,6 +1369,8 @@
       }, { passive: false });
 
       vp.addEventListener("touchend", e => {
+        // [WO 20261008-pinstyle R4] 배치 탭 확정(사용자 활성화 안에서 → 360 사진 선택창이 열린다)
+        if (this._placeTouchEnd(e)) return;
         // 핀치 종료(손가락이 2개 미만이 되면)
         const wasPinching = !!pinch;
         if (pinch && (!e.touches || e.touches.length < 2)) pinch = null;
@@ -1736,12 +1799,12 @@
         ? (avail
             ? ("도면 위를 클릭하면 번호 핀과 함께 대기 중인 360 사진 " + avail + "장 중 가장 가까운 시각이 자동 연결됩니다")
             : "도면 위를 클릭하면 번호 핀과 함께 사진 선택창이 열립니다")
-        : "도면 위를 클릭하면 번호가 자동으로 매겨집니다";
+        : this.CHECKER_PHOTO_NOTE + " — 도면 위를 클릭하면 번호가 자동으로 매겨집니다";
       // [WO 20261001-startno] "다음" = 내 대역 안 다음 번호(정본 nextInBand) — 페이지 전체 최댓값+1 은 남의 대역일 수 있다.
       const nx = PinSeries.nextInBand(State.pins, pg, series, this._numBand(), this._checkboardStart(pg, series));
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ("대역 " + PinSeries.bandLabel(nx.band) + " · " + cnt + "개 찍음 · " + (nx.full ? "대역 가득" : ("다음 " + PinSeries.formatNo(nx.no, series) + "번")) + " (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
+          ? ((series === "checkboard" ? this.CHECKER_PHOTO_NOTE + " · " : "") + "대역 " + PinSeries.bandLabel(nx.band) + " · " + cnt + "개 찍음 · " + (nx.full ? "대역 가득" : ("다음 " + PinSeries.formatNo(nx.no, series) + "번")) + " (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
           : emptyHint;
       }
       // [WO 20260930-autophoto] "사진 다시 선택" 버튼 — 360 모드에서 대기 사진이 있을 때만 노출.
@@ -1814,10 +1877,26 @@
       if (addr && !addr.classList.contains("hidden")) UI.$("input-pin-label").focus();
     },
 
-    _handlePlaceTouch(e) {
+    /** [WO 20261008-pinstyle R4] 배치 터치 = touchstart 에 위치 기억 → touchend 에 배치(_handlePlaceClick).
+     *  touchend 는 사용자 활성화 이벤트라 그 안에서 연 파일 선택창이 막히지 않는다. 손가락이 12px 넘게
+     *  움직였거나 두 손가락이 되면 탭이 아니다(배치 안 함). preventDefault 로 합성 click 중복 배치 방지. */
+    PLACE_TAP_SLOP_PX: 12,
+    _placeTouchStart(e) {
       e.preventDefault();
       const t = e.touches[0];
-      this._handlePlaceClick({ clientX: t.clientX, clientY: t.clientY });
+      this._placeTouch = { x: t.clientX, y: t.clientY };
+    },
+    _placeTouchEnd(e) {
+      const p = this._placeTouch;
+      if (!p) return false;
+      if (e.touches && e.touches.length) return true; // 아직 다른 손가락이 있음 — 대기
+      this._placeTouch = null;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (e.cancelable) e.preventDefault();
+      if (State.placing && t && Math.hypot(t.clientX - p.x, t.clientY - p.y) < this.PLACE_TAP_SLOP_PX) {
+        this._handlePlaceClick({ clientX: p.x, clientY: p.y });
+      }
+      return true;
     },
 
     /* ── Pano ── */

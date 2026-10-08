@@ -354,6 +354,8 @@
     /** 화면 진입 시 호출 — 목록 로드 + 렌더 */
     async open() {
       UI.showScreen("screen-projects");
+      // [WO 20261008-pinstyle R7] 허브 = 프로젝트 밖 — 프로젝트 역할(편집 권한 SoT Auth.isDesigner 의 한 축)을 비운다.
+      if (Auth.setProjectContext) Auth.setProjectContext(null);
       Auth._applyUi();          // 인증바 상태 동기화 (hub 슬롯 포함)
       Auth._renderHubSignin();  // 미로그인 시 hub 로그인 버튼 렌더
       await this.load();
@@ -758,10 +760,14 @@
       try {
         // [WO 20260930-fixmode] 모드 전환 SoT = App._setRegMode(상단 세그먼트·사이드바 트리와 같은 함수)
         if (regMode && typeof App !== "undefined" && App._setRegMode && State.regMode !== regMode) App._setRegMode(regMode);
-        if (deckId == null) return;
-        await Projects.loadDecks();
-        const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
-        if (deck && Projects.selectDeck) await Projects.selectDeck(deck);
+        if (deckId != null) {
+          await Projects.loadDecks();
+          const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
+          if (deck && Projects.selectDeck) await Projects.selectDeck(deck);
+        }
+        // [WO 20261008-pinstyle R5] 잎(CHECKER/360)으로 들어오면 그 모드 배치를 시작한다 — 이미 같은 모드면
+        //   _setRegMode 를 건너뛰어 배치가 꺼진 채 "클릭하면 사진 선택창" 안내만 떠 있었다(0b4d262 재현: placing=false).
+        if (regMode && typeof App !== "undefined" && App._autoStartPlacing) App._autoStartPlacing();
       } catch (e) {}
     },
     closeModeSelect() {

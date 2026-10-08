@@ -5784,7 +5784,11 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
   padding: 5px 10px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -130%);
 }
 /* [핀 생성 모드] 영역 라벨과 동일 규칙(§2735) — crosshair 표시 중엔 라벨도 클릭을 가로채지 않는다 */
-#map-viewport:has(#crosshair-overlay:not(.hidden)) .deck-outline-label {
+/* [WO 20261008-pinstyle R8] 🔴 종전 선택자 #map-viewport:has(#crosshair-overlay…) 는 한 번도 맞지 않았다 — #crosshair-overlay 는
+   #map-viewport 의 자식이 아니라 형제(둘 다 #map-area 의 자식, index.html). 375 CDP 실측: 배치 중에도 elementFromPoint = 이 라벨.
+   공통 부모 #map-area 기준으로 고친다. (같은 죽은 선택자가 영역 규칙(.zone-shape 등)에도 있으나 그걸 살리면 P114 a7a7bb0
+   "영역 경계 탭 → 핀" 이 깨진다 — 터치 보정이 이웃 핀 마커로 붙는다(실측). 이번 범위 밖, 손대지 않음.) */
+#map-area:has(> #crosshair-overlay:not(.hidden)) .deck-outline-label {
   pointer-events: none;
 }
 

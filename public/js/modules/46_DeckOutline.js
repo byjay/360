@@ -167,7 +167,10 @@
             style="left:${b.x}%;top:${b.y}%" title="클릭하면 '${esc(b.name)}'(으)로 이동">${esc(b.name)}</button>`
       ).join("");
       layer.querySelectorAll("[data-deck-outline-label]").forEach((btn) => {
-        btn.addEventListener("click", (e) => { e.stopPropagation(); this._goto(btn.getAttribute("data-deck-outline-label")); });
+        // [WO 20261008-pinstyle R8] 편집 도구(배치·영역 그리기·주석·정렬 캡처)가 켜져 있으면 라벨은 통과 —
+        //   CSS(#crosshair-overlay 표시 중 pointer-events:none)만으론 crosshair 가 없는 도구·상태 어긋남에서 라벨이
+        //   탭을 삼켰다(지휘자 실측 R8). 판정 SoT = _editActive(). 이동·전파 차단 없이 지도(배치) 핸들러로 보낸다.
+        btn.addEventListener("click", (e) => { if (this._editActive()) return; e.stopPropagation(); this._goto(btn.getAttribute("data-deck-outline-label")); });
       });
       this._placeLabels();
       // [재현 R2 2차 — 지휘자 실측] 핀(.pin-marker)이 이 render() 호출과 같은 틱에 최종 좌표에
