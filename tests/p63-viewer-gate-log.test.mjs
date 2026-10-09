@@ -229,7 +229,8 @@ async function scenario(w = worker, opts = {}) {
   const pub = await J(await call("POST", `/api/projects/${PID}/publish`, { token: SUP, body: {} }));
   const shareToken = pub.project.share_token;
   const made = await J(await call("POST", `/api/projects/${PID}/share-codes`, { token: SUP, body: { label: "대한중공업 배관팀" } }));
-  const mint = await J(await call("POST", "/api/auth/auto-entry", { body: { kind: "viewer" } }));
+  // [WO 20261009-readacl] 열람 토큰은 열람 링크(?d=)로만 발급 — 클라이언트와 같은 호출
+  const mint = await J(await call("POST", "/api/auth/auto-entry", { body: { kind: "viewer", d: DEP } }));
   return { st, call, shareToken, made, viewer: mint.token };
 }
 
@@ -447,11 +448,16 @@ console.log("\n[뮤테이션ⓓ] 게이트 통과에 쓰기를 허용하면 ⑦�
   }
 }
 
-console.log("\n[뮤테이션ⓐ] 서버 게이트 가드를 제거하면 ①이 실패해야 함");
+// [WO 20261009-readacl] 게이트 판정이 2겹이 됐다 — 읽기 미들웨어 + 읽기 SoT(readScopeOf, 목록 경로까지 덮는다).
+//   한 겹만 걷어내면 다른 겹이 막으므로(심층 방어) 뮤테이션은 **두 겹 모두** 제거해야 ①이 깨진다.
+console.log("\n[뮤테이션ⓐ] 서버 게이트 가드(미들웨어 + 읽기 SoT)를 제거하면 ①이 실패해야 함");
 {
   const w = await buildWorker([{ file: "index.tsx",
     from: "  if (!GATED_READ_PREFIXES.some((x) => p.startsWith(x))) return next()",
-    to:   "  if (true) return next()" }]);
+    to:   "  if (true) return next()" },
+  { file: "index.tsx",
+    from: "      if (await shareGateLockedPid(c, user, [String(pid)])) continue",
+    to:   "" }]);
   if (w) {
     const s2 = await scenario(w);
     const r = await s2.call("GET", "/tables/deployments/" + DEP, { token: s2.viewer });

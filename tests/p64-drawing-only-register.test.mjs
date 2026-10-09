@@ -113,6 +113,7 @@ function makeDB(st) {
               return null;
             },
             async all() {
+              if (like(q, "FROM projects WHERE deleted = 0")) return { results: [PID_NEW, PID_OLD].map((id) => ({ id, owner: "designer@example.com", published: 0 })) };   // [WO 20261009-readacl] 읽기 SoT — 소유 프로젝트
               if (like(q, "FROM decks WHERE project_id = ? AND deleted = 0") || like(q, "FROM decks d LEFT JOIN deployments"))
                 return { results: st.decks.filter((d) => d.project_id === a[0] && !d.deleted).map((d) => {
                   const dp = d.deployment_id ? st.deployments[d.deployment_id] : null;
@@ -152,7 +153,8 @@ function makeDB(st) {
           };
         },
         async first() { return null; },
-        async all() { return { results: [] }; },
+        async all() { if (like(q, "FROM projects WHERE deleted = 0")) return { results: [PID_NEW, PID_OLD].map((id) => ({ id, owner: "designer@example.com", published: 0 })) };   // [WO 20261009-readacl] 읽기 SoT — 소유 프로젝트
+          return { results: [] }; },
         async run() { return { success: true }; },
       };
     },

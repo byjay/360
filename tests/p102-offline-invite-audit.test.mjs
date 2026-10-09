@@ -757,7 +757,9 @@ const listed = async (k) => ((await api(k, "GET", "/api/projects")).j.data || []
   const m8 = await api("auto", "POST", "/api/projects/prj_I/members", { email: "stranger@seastar.test", role: "designer" });
   console.log("   측정(B8): 익명 auto-entry=" + ae.status + " kind=" + (ae.j && ae.j.kind) + " · 남의 프로젝트 배포본 PATCH=" + w8 + " · 남의 프로젝트에 멤버 초대=" + m8.status);
   // [WO 20261001-invite · 마스터 확정 ④] 전체개방 종료 — 공용석 designer 발급 0 · 쓰기 0 · 초대 0
-  ok("B8", ae.j && ae.j.kind === "viewer" && ae.j.readonly === true && w8 === 403 && m8.status === 403, "로그인 없는 공용석: designer 발급 거부(viewer) · PATCH " + w8 + " · 초대 " + m8.status);
+  // [WO 20261009-readacl] 열람 토큰도 열람 링크가 있어야 발급 → 링크 없는 designer 요청 = 401(토큰 0) — 종전 "viewer 강등 발급"보다 강하다.
+  const noTok = ae.status === 401 && !(ae.j && ae.j.token);
+  ok("B8", (noTok || (ae.j && ae.j.kind === "viewer" && ae.j.readonly === true)) && w8 === 403 && m8.status === 403, "로그인 없는 공용석: designer 발급 거부(" + (noTok ? "401 토큰 없음" : "viewer") + ") · PATCH " + w8 + " · 초대 " + m8.status);
   const legacy = await api("auto-designer-entry-360", "PATCH", "/tables/deployments/" + depI, { pins: "[]" });
   ok("B8", legacy.status === 403, "레거시 고정 문자열 토큰 쓰기 거부 — " + legacy.status);
   // 공용석(auto.designer) 소유 프로젝트: 익명 열람 토큰이 '소유자'로 둔갑하지 않음 · super 는 관리 가능

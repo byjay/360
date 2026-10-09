@@ -77,6 +77,9 @@ const TOK = (k) => "local-p93-" + k;
   }
   for (const pid of ["prj_A", "prj_B", "prj_C"]) {
     await run("INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, 0)", [pid, pid, "", USERS.a, now, now]);
+    // [WO 20261009-readacl] 읽기 SoT = 소유·멤버 프로젝트만 → 같은 도면을 동시 편집하는 동료 디자이너 b·c 는 designer 멤버여야 한다
+    //   (종전엔 전역 디자이너면 남의 프로젝트도 읽혔다 — 감사 H1 결함). 외부인 거부는 B5(bob·carol)가 따로 검증한다.
+    for (const k of ["b", "c"]) await run("INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, 'designer', ?, ?)", [pid, USERS[k], USERS.a, now]);
   }
 }
 const H = (k) => ({ Authorization: "Bearer " + TOK(k), "Content-Type": "application/json" });

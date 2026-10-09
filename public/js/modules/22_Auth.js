@@ -113,6 +113,13 @@
       try {
         const saved = sessionStorage.getItem("wm_id_token") || localStorage.getItem("wm_local_token");
         if (saved) { this.idToken = saved; }
+        // [WO 20261009-readacl] 🔴 열람 토큰(ae1.)은 발급받은 **그 링크**에만 유효하다(서버가 범위를 서명).
+        //   같은 탭에서 다른 링크로 들어오면 옛 토큰을 버리고 새 링크로 다시 받는다(그대로 쓰면 403).
+        const vk = this._viewLinkKey();
+        if (vk && this.idToken && /^ae1./.test(this.idToken) && sessionStorage.getItem("wm_view_link") !== vk) {
+          this.idToken = null;
+          sessionStorage.removeItem("wm_id_token");
+        }
       } catch (e) {}
 
       this._initGsi();
@@ -142,6 +149,22 @@
     _isViewLink() {
       try { if (new URLSearchParams(location.search).get("d")) return true; } catch (e) {}
       return typeof ShareLink !== "undefined" && !!ShareLink.token();
+    },
+
+    /** [WO 20261009-readacl] 현재 열람 링크의 식별자 — 서버 auto-entry 에 보내는 값({d}|{t})과 토큰-링크 짝 기록의 단일 소스.
+     *  링크가 아니면 null. 판정 기준은 _isViewLink 와 같은 두 가지(?d= · /srview 토큰). */
+    _viewLinkParams() {
+      try { const d = new URLSearchParams(location.search).get("d"); if (d) return { d }; } catch (e) {}
+      const t = (typeof ShareLink !== "undefined") ? ShareLink.token() : null;
+      return t ? { t } : null;
+    },
+    _viewLinkKey() {
+      const p = this._viewLinkParams();
+      return p ? (p.d ? "d:" + p.d : "t:" + p.t) : null;
+    },
+    /** 열람 토큰을 이 링크와 짝지어 기록(다음 진입 때 다른 링크면 버린다). */
+    _bindViewToken() {
+      try { sessionStorage.setItem("wm_view_link", this._viewLinkKey() || ""); } catch (e) {}
     },
 
     /** 서버(/api/auth/config)에서 Google Client ID 를 받아 GIS 재초기화.
@@ -654,7 +677,8 @@
       const headers = { "Content-Type": "application/json" };
       if (akey) headers["X-Auto-Entry-Key"] = akey;
       try {
-        const r = await fetch("/api/auth/auto-entry", { method: "POST", headers, body: JSON.stringify({ kind }) });
+        // [WO 20261009-readacl] 열람 토큰은 링크가 있어야 발급된다 — 서버가 링크로 범위(프로젝트)를 정해 서명한다.
+        const r = await fetch("/api/auth/auto-entry", { method: "POST", headers, body: JSON.stringify(Object.assign({ kind }, this._viewLinkParams() || {})) });
         if (!r.ok) return null;
         const j = await r.json();
         return (j && typeof j.token === "string" && j.token) || null;
@@ -677,6 +701,7 @@
       if (typeof ShareLink !== "undefined" && ShareLink.token()) kind = "viewer";
       this.idToken = await this._mintAutoEntryToken(kind) || AUTO_DESIGNER_TOKEN;
       try { sessionStorage.setItem("wm_id_token", this.idToken); } catch (e) {}
+      this._bindViewToken();
       await this.refresh();                              // 서버가 전용 토큰을 검증해 role='designer' 세팅
       if (!this.user) {                                  // 서버 스위치 off/네트워크 실패 → 정직하게 로그인 게이트
         this.idToken = null;

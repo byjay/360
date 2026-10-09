@@ -31,7 +31,7 @@ const MUTS = {
   "edit-key":      ["srv", "if (key && note.author_key_hash && (await sha256Hex(key)) === String(note.author_key_hash)) return 'author'", "if (note.author_key_hash) return 'author'"],
   "author-status": ["srv", "if (right === 'author' && String(note.kind || 'note') !== 'note' && (typeof body.status === 'string' || typeof body.assignee === 'string')) {", "if (false) {"],
   "deck-geo":      ["srv", "if (area < bestArea || (area === bestArea && best && !best.parent_id && d.parent_id)) { best = d; bestArea = area }", "if (!best) { best = d; bestArea = area }"],
-  "contact-leak":  ["srv", "data: (results || []).map((r: any) => mapNote(r, actor.designer))", "data: (results || []).map((r: any) => mapNote(r, true))"],
+  "contact-leak":  ["srv", "data: (results || []).map((r: any) => mapNote(r, actor.designer, actor.designer ? undefined : actor.email))", "data: (results || []).map((r: any) => mapNote(r, true, actor.designer ? undefined : actor.email))"],
   "summary-reply": ["srv", "WHERE deleted = 0 AND deployment_id = ? AND kind != 'reply'", "WHERE deleted = 0 AND deployment_id = ?"],
   "inbox-perm":    ["srv", "const denied = await deploymentWriteDenied(c, a.user, pid)\n  if (denied) return c.json({ error: denied.error }, denied.status)\n  const { results } = await c.env.DB.prepare(\n    `SELECT n.* FROM pin_notes n", "const denied = null\n  const { results } = await c.env.DB.prepare(\n    `SELECT n.* FROM pin_notes n"],
   "post-gate":     ["srv", "if (locked) return c.json({ error: 'gate required — invite code', gate_required: true, project_id: locked }, 403)", ""],
@@ -145,10 +145,6 @@ try {
     let j = null; try { j = await r.json(); } catch {}
     return { status: r.status, j };
   };
-  // 공유/배포 링크 열람자 = 서버 서명 열람전용 토큰(두 사람 — 같은 공용 계정 이메일을 쓴다)
-  const anon1 = (await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer" })).j.token;
-  const anon2 = (await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer" })).j.token;
-  ok(typeof anon1 === "string" && anon1.startsWith("ae1.") && anon1 !== anon2, "전제: 공유 링크 열람전용 토큰 2개 발급");
 
   // 멤버: d = designer, v1·v2 = viewer
   await api("o", "POST", "/api/projects/prj_R/members", { email: U.d, role: "designer" });
@@ -164,6 +160,13 @@ try {
   const deckA1 = (await api("o", "POST", "/api/projects/prj_R/decks", { name: "영역A1", deployment_id: dep1, page: 1, crop: { x: 60, y: 60, w: 30, h: 30 }, parent_id: deckA.id })).j;
   const deckB = (await api("o", "POST", "/api/projects/prj_R/decks", { name: "구역B", deployment_id: dep2, page: 1 })).j;
   ok(!!(dep1 && dep2 && deckA.id && deckA1.id && deckB.id && deckA1.parent_id === deckA.id), "전제: 배포본 2 · 구역 A/B · 영역 A1(부모 A)");
+  // 공유/배포 링크 열람자 = 서버 서명 열람전용 토큰(두 사람 — 같은 공용 계정 이메일을 쓴다)
+  // [WO 20261009-readacl] 열람 토큰은 **배포된 프로젝트의 열람 링크(?d=)** 로만 발급된다 → 배포 후 dep1 링크로 발급.
+  const pub = await api("o", "POST", "/api/projects/prj_R/publish", {});
+  ok(pub.status === 200, "전제: 프로젝트 배포(열람 링크 활성) — " + pub.status);
+  const anon1 = (await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer", d: dep1 })).j.token;
+  const anon2 = (await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer", d: dep1 })).j.token;
+  ok(typeof anon1 === "string" && anon1.startsWith("ae1.") && anon1 !== anon2, "전제: 공유 링크 열람전용 토큰 2개 발급");
 
   console.log("\n[S1 viewer 멤버 — 요청 POST 200 · 핀 편집 403]");
   const r1 = await api("v1", "POST", "/api/notes", { deployment_id: dep1, pin_id: "p1", pin_label: "1", kind: "request", body: "<b>1번 사진</b> 다시 찍어주세요", status: "done", assignee: "x" });

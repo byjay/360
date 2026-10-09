@@ -50,6 +50,12 @@ fs.unlinkSync(outFile);
 const DEP_ID = "dep_test_001";
 function makeDB(state) {
   const like = (sql, s) => sql.replace(/\s+/g, " ").indexOf(s) >= 0;
+  // [WO 20261009-readacl] 읽기 SoT(readScopeOf) 가 보는 살아있는 프로젝트·구역 — 저장소 내용 그대로
+  const allOf = (q) => {
+    if (like(q, "FROM projects WHERE deleted = 0")) return { results: Object.entries(state.projects).filter(([, p]) => !p.deleted).map(([id, p]) => ({ id, ...p })) };
+    if (like(q, "FROM decks WHERE deleted = 0 AND deployment_id IS NOT NULL")) return { results: state.decks.filter((d) => !d.deleted) };
+    return { results: [] };
+  };
   return {
     prepare(sql) {
       const q = sql.replace(/\s+/g, " ").trim();
@@ -75,7 +81,7 @@ function makeDB(state) {
               if (like(q, "FROM tenant_members WHERE email = ?")) return null;
               return null;
             },
-            async all() { return { results: [] }; },
+            async all() { return allOf(q); },
             async run() {
               if (like(q, "INSERT INTO app_settings")) {
                 // ON CONFLICT DO NOTHING — 이미 있으면 유지
@@ -90,7 +96,7 @@ function makeDB(state) {
           };
         },
         async first() { return null; },
-        async all() { return { results: [] }; },
+        async all() { return allOf(q); },
         async run() { return { success: true }; },
       };
     },
@@ -111,7 +117,9 @@ function freshState() {
     designers: new Set(["invited.designer@example.com"]),   // 마스터가 초대해 배정한 designer
     deployments: { [DEP_ID]: { id: DEP_ID, project_id: "prj1", pins: "[]", zones: "[]", annotations: "[]", version: 3, deleted: 0, tenant_id: null, name: "T", created_at: 1, updated_at: 1 } },
     // [WP3] prj1 = 마스터 소유, 초대 designer 는 prj1 의 designer 멤버(초대 = project_members 배정)
-    projects: { prj1: { owner: "designssir@gmail.com", deleted: 0 } },
+    // [WO 20261009-readacl] 열람 링크는 배포된(published) 프로젝트의 구역 배포본이어야 토큰이 발급된다
+    projects: { prj1: { owner: "designssir@gmail.com", deleted: 0, published: 1 } },
+    decks: [{ id: "dk1", project_id: "prj1", deployment_id: DEP_ID, deleted: 0 }],
     members: { "prj1|invited.designer@example.com": "designer" },
     writes: [],
   };
@@ -129,9 +137,10 @@ const call = async (method, p, opts) => {
   return await worker.fetch(req(method, p, opts), ENV, { waitUntil() {}, passThroughOnException() {} });
 };
 
-/** 자동입장 토큰 발급 — 클라이언트(22_Auth._mintAutoEntryToken)와 동일한 실제 호출 */
+/** 자동입장 토큰 발급 — 클라이언트(22_Auth._mintAutoEntryToken)와 동일한 실제 호출.
+ *  [WO 20261009-readacl] 클라이언트는 열람 링크 식별자(?d=)를 함께 보낸다 — 링크 없는 발급은 401(아래 ①0). */
 async function mint(kind) {
-  const r = await call("POST", "/api/auth/auto-entry", { body: { kind } });
+  const r = await call("POST", "/api/auth/auto-entry", { body: { kind, d: DEP_ID } });
   const j = await r.json();
   return j;
 }
@@ -140,6 +149,10 @@ const LEGACY = "auto-designer-entry-360";
 
 /* ══════════════════════════════════════════════════════════════════════ */
 console.log("\n[① `?d=` 배포 링크 세션(kind=viewer) → 쓰기 거부]");
+{
+  const noLink = await call("POST", "/api/auth/auto-entry", { body: { kind: "viewer" } });
+  ok(noLink.status === 401, "①0 [WO 20261009-readacl] 링크 없는 열람 토큰 발급 → 401 (실제 " + noLink.status + ")");
+}
 const viewer = await mint("viewer");
 ok(viewer.kind === "viewer" && viewer.readonly === true, "① 발급 토큰이 열람전용으로 표시됨: kind=" + viewer.kind + " readonly=" + viewer.readonly);
 ok(typeof viewer.token === "string" && viewer.token.startsWith("ae1."), "① 고정 문자열이 아니라 서버 서명 토큰: " + String(viewer.token).slice(0, 12) + "…");

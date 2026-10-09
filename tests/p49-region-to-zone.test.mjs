@@ -103,11 +103,13 @@ function makeDB(st) {
               if (like(q, "FROM local_users WHERE email = ?")) return st.localUsers[String(a[0]).toLowerCase()] || null;
               if (like(q, "FROM designers WHERE email = ?")) return st.designers.has(String(a[0]).toLowerCase()) ? { email: a[0], deleted: 0 } : null;
               if (like(q, "FROM decks WHERE id = ?")) return st.decks.find((d) => d.id === a[0]) || null;
+              if (like(q, "FROM projects WHERE id = ?")) return [PID].includes(a[0]) ? { owner: "designer@example.com", deleted: 0 } : null;   // [WO 20261009-readacl] canManageProject
               if (like(q, "FROM deployments WHERE id = ?")) return st.deployments[a[0]] || null;
               if (like(q, "FROM tenant_members")) return null;
               return null;
             },
             async all() {
+              if (like(q, "FROM projects WHERE deleted = 0")) return { results: [PID].map((id) => ({ id, owner: "designer@example.com", published: 0 })) };   // [WO 20261009-readacl] 읽기 SoT — 소유 프로젝트
               // [WO 20260921-tree] GET /api/projects/:id/decks 는 이제 deployments 를 LEFT JOIN 해
               //   도면 파일명을 함께 돌려준다(필드 추가). 가짜 D1 도 그 JOIN 을 그대로 흉내낸다.
               if (like(q, "FROM decks WHERE project_id = ? AND deleted = 0") || like(q, "FROM decks d LEFT JOIN deployments"))
@@ -143,7 +145,8 @@ function makeDB(st) {
           };
         },
         async first() { return null; },
-        async all() { return { results: [] }; },
+        async all() { if (like(q, "FROM projects WHERE deleted = 0")) return { results: [PID].map((id) => ({ id, owner: "designer@example.com", published: 0 })) };   // [WO 20261009-readacl] 읽기 SoT — 소유 프로젝트
+          return { results: [] }; },
         async run() { return { success: true }; },
       };
     },

@@ -41,6 +41,8 @@
       if (!token || typeof Auth === "undefined") return;
       Auth.idToken = token;
       try { sessionStorage.setItem("wm_id_token", token); } catch (e) {}
+      // [WO 20261009-readacl] 통행증도 이 링크 전용 — 토큰-링크 짝 기록(22_Auth 와 같은 키)
+      if (typeof Auth !== "undefined" && Auth._bindViewToken) Auth._bindViewToken();
     },
 
     /** 게이트 상태 조회. 반환 null = 링크 자체가 유효하지 않음. */

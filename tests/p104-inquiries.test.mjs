@@ -63,6 +63,12 @@ async function buildWorker(srcOverride) {
 
 function makeDB(state) {
   const like = (sql, s) => sql.replace(/\s+/g, " ").indexOf(s) >= 0;
+  // [WO 20261009-readacl] 열람 토큰 발급은 배포 프로젝트의 구역 배포본 링크가 있어야 한다 — 살아있는 프로젝트·구역
+  const linkAll = (q) => {
+    if (like(q, "FROM projects WHERE deleted = 0")) return { results: state.projects || [] };
+    if (like(q, "FROM decks WHERE deleted = 0 AND deployment_id IS NOT NULL")) return { results: state.decks || [] };
+    return { results: [] };
+  };
   return {
     prepare(sql) {
       const q = sql.replace(/\s+/g, " ").trim();
@@ -80,6 +86,8 @@ function makeDB(state) {
               if (like(q, "FROM local_sessions WHERE token = ?")) return state.sessions[a[0]] || null;
               if (like(q, "FROM local_users WHERE email = ?")) return state.localUsers[String(a[0]).toLowerCase()] || null;
               if (like(q, "FROM designers WHERE email = ?")) return null;
+              // [WO 20261009-readacl] 열람 링크(?d=) 해석 — 배포본 행
+              if (like(q, "FROM deployments WHERE id = ?")) return state.deployments[a[0]] || null;
               return null;
             },
             async all() {
@@ -87,7 +95,7 @@ function makeDB(state) {
                 const limit = a[0];
                 return { results: state.inquiries.filter((r) => !r.deleted).sort((x, y) => y.created_at - x.created_at).slice(0, limit) };
               }
-              return { results: [] };
+              return linkAll(q);
             },
             async run() {
               if (like(q, "INSERT INTO app_settings")) {
@@ -109,7 +117,7 @@ function makeDB(state) {
           };
         },
         async first() { return null; },
-        async all() { return { results: [] }; },
+        async all() { return linkAll(q); },
         async run() { return { success: true }; },
       };
     },
@@ -118,7 +126,11 @@ function makeDB(state) {
 }
 
 function freshState() {
-  return { settings: {}, sessions: {}, localUsers: {}, inquiries: [], writes: [], forceInsertFail: false };
+  return { settings: {}, sessions: {}, localUsers: {}, inquiries: [], writes: [], forceInsertFail: false,
+    // [WO 20261009-readacl] 공유/배포 링크(?d=dep_p104) 대상 — 배포된 프로젝트의 구역
+    deployments: { dep_p104: { id: "dep_p104", project_id: "prj_p104", deleted: 0 } },
+    projects: [{ id: "prj_p104", owner: "owner@seastar.test", published: 1 }],
+    decks: [{ deployment_id: "dep_p104", project_id: "prj_p104", deleted: 0 }] };
 }
 
 const resendCalls = [];
@@ -162,7 +174,7 @@ console.log("\n[① 비로그인 POST /api/inquiries]");
 /* ══ ② 열람전용 세션도 POST 가능(403 아님) ══ */
 console.log("\n[② 공유/배포 링크 열람전용 세션도 문의 제출 가능]");
 {
-  const mint = await call("POST", "/api/auth/auto-entry", { ip: "9.9.9.9", body: { kind: "viewer" } });
+  const mint = await call("POST", "/api/auth/auto-entry", { ip: "9.9.9.9", body: { kind: "viewer", d: "dep_p104" } });
   const mj = await mint.json();
   ok(mj.readonly === true, "② 발급 토큰 readonly=true (사전조건)");
   const r = await call("POST", "/api/inquiries", { ip: "9.9.9.9", token: mj.token, body: { title: "핀이 안 눌려요", body: "360 핀을 눌러도 반응이 없습니다." } });

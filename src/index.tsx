@@ -180,13 +180,19 @@ async function hmacB64u(secret: string, msg: string): Promise<string> {
  *  [P63] gatePid 를 주면 그 프로젝트의 **초대코드 게이트를 통과했다**는 클레임(g)이 실린다.
  *    🔴 게이트 통과는 열람 자격일 뿐이다 — kind 는 언제나 'viewer'(열람 전용)로 강제한다.
  *    서명이 붙으므로 클라이언트가 g 를 위조할 수 없다(기존 HMAC 경로 재사용 = SoT). */
-async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string): Promise<{ token: string, exp: number } | null> {
+async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string }): Promise<{ token: string, exp: number } | null> {
   const secret = await autoEntrySecret(c)
   if (!secret) return null
   if (gatePid) kind = 'viewer'   // [불변식] 게이트 통과가 쓰기 권한이 되는 경로를 원천 차단
   const exp = Date.now() + (gatePid ? SHARE_GATE_TTL_MS : AUTO_ENTRY_TTL_MS)
   const body: any = { k: kind, exp, n: randToken('') }
   if (gatePid) body.g = String(gatePid)
+  // [WO 20261009-readacl] 열람 범위(서명됨) — p=프로젝트, d=링크 배포본, th=공유 주소 지문. 검증은 요청마다(readScopeOf).
+  if (scope) {
+    body.p = scope.p.map(String)
+    if (scope.d) body.d = String(scope.d)
+    if (scope.th) body.th = String(scope.th)
+  }
   const payload = b64u(JSON.stringify(body))
   return { token: AUTO_ENTRY_PREFIX + payload + '.' + (await hmacB64u(secret, payload)), exp }
 }
@@ -212,8 +218,16 @@ async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
   if (p.k !== 'designer' && p.k !== 'viewer') return null
   // [WO 20261001-invite] 공용석이 닫히면 이미 발급된 편집 토큰도 즉시 무효(열람 전용 토큰은 유지)
   if (p.k === 'designer' && !AUTO_DESIGNER_TOKEN_ENABLED) return null
+  // [WO 20261009-readacl] 🔴 열람 토큰은 서명된 링크 범위가 있어야 유효하다. 범위 없는 구 토큰(링크 없이 발급 = 감사 H1 의
+  //   전 프로젝트 통행증)은 즉시 무효 → 클라이언트가 링크로 새 토큰을 받는다. 초대코드 통행증(g)은 그 프로젝트로 한정.
+  let scope: any = null
+  if (p.k === 'viewer') {
+    const ps = Array.isArray(p.p) ? p.p.map(String).filter(Boolean) : ((typeof p.g === 'string' && p.g) ? [p.g] : [])
+    if (!ps.length) return null
+    scope = { p: ps, d: (typeof p.d === 'string' && p.d) ? p.d : null, th: (typeof p.th === 'string' && p.th) ? p.th : null }
+  }
   // [P63] _gate = 초대코드를 통과한 프로젝트 id(없으면 null). 🔴 쓰기 권한과 무관하다.
-  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null }
+  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null, _scope: scope }
 }
 
 function superAdmin(c: any): string {
@@ -775,7 +789,14 @@ app.post('/api/auth/auto-entry', async (c) => {
     const need = c.env && (c.env as any).AUTO_ENTRY_DESIGNER_KEY
     if (typeof need === 'string' && need.length > 0 && c.req.header('X-Auto-Entry-Key') !== need) kind = 'viewer'
   }
-  const minted = await mintAutoEntryToken(c, kind)
+  // [WO 20261009-readacl] 🔴 열람 토큰은 유효한 **배포 중** 열람 링크(?d= · /srview 토큰)가 있을 때만. 링크 없는 호출 = 401.
+  let scope: { p: string[], d?: string, th?: string } | undefined
+  if (kind === 'viewer') {
+    const sc = await viewLinkScope(c, body)
+    if (!sc) return c.json({ error: 'view link required — 유효한 열람 링크로만 열람할 수 있습니다.' }, 401)
+    scope = sc
+  }
+  const minted = await mintAutoEntryToken(c, kind, undefined, scope)
   if (!minted) return c.json({ error: 'auto entry unavailable' }, 503)
   return c.json({ token: minted.token, kind, exp: minted.exp, readonly: kind !== 'designer' })
 })
@@ -2246,6 +2267,233 @@ async function deploymentWriteDenied(c: any, user: any, projectId: any): Promise
   return { status: 403, error: 'forbidden — not a designer of this project' }
 }
 
+/* ══ [WO 20261009-readacl] 🔴 읽기 권한 단일 판정(SoT) ═══════════════════════════════════
+ * 근본원인(감사 2026-10-09 H1·H2): 읽기 라우트가 **테넌트만** 보고 프로젝트 멤버십·배포 상태·링크 범위를 보지 않았다.
+ *   링크 없이 발급된 익명 열람 토큰(공용 예약 이메일)이 tenantOf 에서 기본 테넌트로 떨어져 운영 전체 배포본을 받았고,
+ *   초대코드 게이트는 프로젝트를 특정할 수 없는 목록 경로를 통과시켰다.
+ * 규칙(역할 × 범위) — 모든 읽기 경로(배포본 목록·단건·R2·파노·노트·요청·프로젝트 목록·decks)가 이 블록만 부른다:
+ *   super               → 전부
+ *   디자이너·관리자     → 소유 + 멤버 프로젝트 + 프로젝트 귀속 없는 레거시 배포본은 자기 테넌트만
+ *   로그인 열람자       → 멤버 프로젝트만
+ *   익명 열람 토큰(ae1) → 토큰에 **서명된** 링크의 프로젝트(배포 중 · 링크 유효 · 초대코드 게이트 통과)의 구역/원본 배포본만.
+ *                          배포 취소·링크 폐기는 요청마다 다시 확인하므로 이미 발급된 토큰도 즉시 막힌다.
+ * 요청당 1회 메모(c.set) — 한 요청에서 여러 번 불러도 D1 조회는 한 번. */
+type ReadScope = { all: boolean, pids: Set<string>, linkOnly: boolean, designer: boolean, unattachedTenant: string | null | false, mask: boolean, email: string }
+
+/** 살아있는(deleted=0) 프로젝트 전부 — id → {owner, published, share_token, original_deployment_id}. */
+async function liveProjectsOf(c: any): Promise<Map<string, any>> {
+  const memo = c.get('__liveProjects')
+  if (memo) return memo
+  const m = new Map<string, any>()
+  try {
+    const r: any = await c.env.DB.prepare('SELECT id, owner, published, share_token, original_deployment_id FROM projects WHERE deleted = 0').all()
+    for (const p of (r.results || [])) if (p && p.id) m.set(String(p.id), p)
+  } catch {}
+  c.set('__liveProjects', m)
+  return m
+}
+
+/** depId → 그 배포본을 가리키는 살아있는 프로젝트 id(살아있는 구역 deck · 프로젝트 원본). */
+async function depRefIndexOf(c: any): Promise<Map<string, Set<string>>> {
+  const memo = c.get('__depRefs')
+  if (memo) return memo
+  const idx = new Map<string, Set<string>>()
+  const projects = await liveProjectsOf(c)
+  const add = (dep: any, pid: any) => {
+    if (!dep || !pid || !projects.has(String(pid))) return
+    const k = String(dep)
+    if (!idx.has(k)) idx.set(k, new Set())
+    idx.get(k)!.add(String(pid))
+  }
+  try {
+    const r: any = await c.env.DB.prepare('SELECT deployment_id, project_id FROM decks WHERE deleted = 0 AND deployment_id IS NOT NULL').all()
+    for (const d of (r.results || [])) add(d.deployment_id, d.project_id)
+  } catch {}
+  for (const p of projects.values()) if (p.original_deployment_id) add(p.original_deployment_id, p.id)
+  c.set('__depRefs', idx)
+  return idx
+}
+
+/** 공유 토큰 → 열람 토큰에 싣는 지문(원문을 토큰에 넣지 않는다). 공유 토큰이 바뀌거나 지워지면 불일치 = 링크 폐기. */
+async function shareTokenHash(t: string): Promise<string> {
+  return (await sha256Hex('share-link:' + String(t))).slice(0, 24)
+}
+
+/** 열람 링크(`?d=<배포본>` · `/srview/<이름>-<토큰>`) → 서명할 범위. 유효한 **배포 중** 링크가 아니면 null(→ 401).
+ *  🔴 클라이언트가 보낸 값은 "어느 링크인가"만 쓰고, 범위(프로젝트)는 서버가 DB 로 정한다. */
+async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: string, th?: string } | null> {
+  let t = typeof body?.t === 'string' ? body.t.trim() : ''
+  let d = typeof body?.d === 'string' ? body.d.trim() : ''
+  // 하위호환: 링크 식별자를 안 보내는 구버전 클라이언트(캐시된 옛 main.js)는 같은 출처 Referer 의 링크로 해석한다.
+  //   본문의 d/t 와 신뢰 수준이 같다(둘 다 "어느 링크인가"일 뿐 — 범위·배포 상태는 아래에서 서버가 DB 로 판정).
+  if (!t && !d) {
+    try {
+      const ref = new URL(c.req.header('Referer') || '')
+      if (ref.host === new URL(c.req.url).host) {
+        d = String(ref.searchParams.get('d') || '').trim()
+        const m = ref.pathname.match(/^\/srview\/([^/]+)\/?$/)
+        if (!d && m) t = shareTokenFromSegment(decodeURIComponent(m[1])) || ''
+      }
+    } catch {}
+  }
+  if (t) {
+    const row = await projectByShareToken(c, t)   // 미배포·삭제·형식불량 = null
+    return row ? { p: [String(row.id)], th: await shareTokenHash(t) } : null
+  }
+  if (!d) return null
+  const dep: any = await c.env.DB.prepare('SELECT id, project_id FROM deployments WHERE id = ? AND deleted = 0').bind(d).first()
+  if (!dep) return null
+  const refs = (await depRefIndexOf(c)).get(d) || new Set<string>()
+  const projects = await liveProjectsOf(c)
+  const bound = dep.project_id ? [String(dep.project_id)] : Array.from(refs)
+  const p = bound.filter((pid) => refs.has(pid) && projects.has(pid) && Number(projects.get(pid).published))
+  return p.length ? { p, d } : null
+}
+
+async function readScopeOf(c: any, user: any): Promise<ReadScope> {
+  const memo = c.get('__rscope')
+  if (memo && memo.u === user) return memo.s
+  const s = await computeReadScope(c, user)
+  c.set('__rscope', { u: user, s })
+  return s
+}
+
+async function computeReadScope(c: any, user: any): Promise<ReadScope> {
+  const none: ReadScope = { all: false, pids: new Set(), linkOnly: false, designer: false, unattachedTenant: false, mask: true, email: '' }
+  if (!user) return none
+  const email = String(user.email || '').trim().toLowerCase()
+  // ── 익명 열람 토큰: 서명된 링크 범위 안에서, 지금도 유효한 것만 ──
+  if (user._auto && user._readonly) {
+    const sc = user._scope || { p: [], d: null, th: null }
+    const projects = await liveProjectsOf(c)
+    const refs = sc.d ? (await depRefIndexOf(c)).get(String(sc.d)) : null
+    const pids = new Set<string>()
+    for (const pid of (sc.p || [])) {
+      const p = projects.get(String(pid))
+      if (!p || !Number(p.published)) continue                                       // 배포 취소·삭제 → 즉시 무효
+      if (sc.d && !(refs && refs.has(String(pid)))) continue                         // 링크 배포본이 그 프로젝트에서 빠짐 = 링크 폐기
+      if (sc.th && (!p.share_token || (await shareTokenHash(String(p.share_token))) !== sc.th)) continue   // 공유 주소 교체·해제
+      if (await shareGateLockedPid(c, user, [String(pid)])) continue                // 초대코드 게이트 미통과(목록 경로 포함 — H2)
+      pids.add(String(pid))
+    }
+    return { ...none, pids, linkOnly: true }
+  }
+  if (isSuperAdmin(c, email)) return { ...none, all: true, mask: false, email }
+  const designer = await isDesigner(c, email)
+  const projects = await liveProjectsOf(c)
+  const roles = new Map<string, string>()
+  if (email) {
+    try {
+      const r: any = await c.env.DB.prepare('SELECT project_id, role FROM project_members WHERE lower(email) = ?').bind(email).all()
+      for (const m of (r.results || [])) roles.set(String(m.project_id), String(m.role))
+    } catch {}
+  }
+  const pids = new Set<string>()
+  for (const p of projects.values()) {
+    const id = String(p.id)
+    if (isProjectOwner(p.owner, email)) { pids.add(id); continue }
+    const role = roles.get(id)
+    if (role == null) continue
+    pids.add(id)   // 멤버(역할 무관) — 소유자/관리자가 명시적으로 배정한 프로젝트
+  }
+  const unattachedTenant: string | null | false = designer ? await tenantOf(c, user) : false
+  return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email }
+}
+
+/** 판정 본체(동기) — 배포본 행(id·project_id·tenant_id)이 이 범위에서 읽히는가.
+ *  배포본의 project_id 가 있으면 그것이 정본(다른 프로젝트 deck 이 가리켜도 그 프로젝트 권한이 되지 않는다).
+ *  없으면(레거시) 그 배포본을 가리키는 구역/원본의 프로젝트. 어디에도 귀속이 없으면 디자이너의 자기 테넌트만. */
+function canReadDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
+  if (!dep) return false
+  if (s.all) return true
+  const refs = refsIdx.get(String(dep.id)) || new Set<string>()
+  const bound = dep.project_id ? [String(dep.project_id)] : Array.from(refs)
+  if (s.linkOnly) return bound.some((p) => s.pids.has(p) && refs.has(p))   // 링크 = 그 프로젝트의 구역/원본 배포본만
+  if (!bound.length) {
+    if (s.unattachedTenant === false) return false
+    return s.unattachedTenant === null || String(dep.tenant_id || DEFAULT_TENANT) === s.unattachedTenant
+  }
+  return bound.some((p) => s.pids.has(p))
+}
+
+async function canReadDeployment(c: any, user: any, dep: any): Promise<boolean> {
+  const s = await readScopeOf(c, user)
+  if (s.all) return true
+  const row = typeof dep === 'string'
+    ? await c.env.DB.prepare('SELECT id, project_id, tenant_id FROM deployments WHERE id = ? AND deleted = 0').bind(dep).first()
+    : dep
+  return canReadDepRow(s, await depRefIndexOf(c), row)
+}
+
+/** 읽을 수 있는 배포본 id(최신순). null = 전부(super). */
+async function readableDeploymentIds(c: any, user: any): Promise<string[] | null> {
+  const s = await readScopeOf(c, user)
+  if (s.all) return null
+  if (!s.pids.size && s.unattachedTenant === false) return []
+  const idx = await depRefIndexOf(c)
+  const r: any = await c.env.DB.prepare('SELECT id, project_id, tenant_id FROM deployments WHERE deleted = 0 ORDER BY created_at DESC').all()
+  return (r.results || []).filter((d: any) => canReadDepRow(s, idx, d)).map((d: any) => String(d.id))
+}
+
+function canReadProjectId(s: ReadScope, pid: any): boolean {
+  return s.all || s.pids.has(String(pid))
+}
+
+/** 주어진 배포본들 중 하나라도 needle(R2 키 · 파노 id)을 참조하는가. wide=false 면 핀만 본다. */
+async function depsMention(c: any, ids: string[] | null, needle: string, wide: boolean): Promise<boolean> {
+  const cols = wide ? ['pins', 'source_meta', 'pages_data', 'zones', 'annotations', 'drawing_data'] : ['pins']
+  const cond = '(' + cols.map((k) => `instr(COALESCE(${k}, ''), ?) > 0`).join(' OR ') + ')'
+  const needles = cols.map(() => needle)
+  if (ids === null) {
+    const row = await c.env.DB.prepare(`SELECT 1 AS x FROM deployments WHERE deleted = 0 AND ${cond} LIMIT 1`).bind(...needles).first()
+    return !!row
+  }
+  for (let i = 0; i < ids.length; i += 50) {
+    const part = ids.slice(i, i + 50)
+    const row = await c.env.DB.prepare(
+      `SELECT 1 AS x FROM deployments WHERE deleted = 0 AND id IN (${part.map(() => '?').join(',')}) AND ${cond} LIMIT 1`
+    ).bind(...part, ...needles).first()
+    if (row) return true
+  }
+  return false
+}
+
+/** R2 객체 읽기 — 읽을 수 있는 배포본(직접 참조 또는 파노 행 경유)이 참조하는 키만.
+ *  디자이너: 본인 업로드(저장 전 미리보기) · 어디에도 연결 안 된 객체(레거시)는 종전대로 허용 — 남의 프로젝트에 연결된 키는 막힌다. */
+async function canReadR2Key(c: any, user: any, key: string, obj: any): Promise<boolean> {
+  if (!user) return false
+  const s = await readScopeOf(c, user)
+  if (s.all) return true
+  const by = obj && obj.customMetadata && obj.customMetadata.by
+  if (by && !user._readonly && s.email && String(by).toLowerCase() === s.email) return true
+  const ids = await readableDeploymentIds(c, user) || []
+  if (ids.length && await depsMention(c, ids, key, true)) return true
+  let panoIds: string[] = []
+  try {
+    const pr: any = await c.env.DB.prepare("SELECT id FROM pano_images WHERE deleted = 0 AND instr(substr(COALESCE(image_data, ''), 1, 400), ?) > 0 LIMIT 20").bind(key).all()
+    panoIds = (pr.results || []).map((r: any) => String(r.id))
+  } catch {}
+  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '"' + pid + '"', false)) return true
+  if (s.designer && !user._readonly && !panoIds.length && !(await depsMention(c, null, key, true))) return true
+  return false
+}
+
+/** 파노 행 읽기 — super/디자이너는 종전 테넌트 규칙(호출부), 그 외는 읽을 수 있는 배포본의 핀이 그 id 를 참조할 때만. */
+async function canReadPanoAsViewer(c: any, user: any, imgId: string): Promise<boolean> {
+  const ids = await readableDeploymentIds(c, user) || []
+  return ids.length > 0 && await depsMention(c, ids, '"' + imgId + '"', false)
+}
+
+/** 열람자(익명·로그인 비디자이너) 응답의 이메일 마스킹 — 첫 글자만 남긴다(`d***`). 문자열 안의 이메일 전부. */
+const EMAIL_IN_TEXT_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+function maskEmailsIn(v: any): any {
+  return typeof v === 'string' ? v.replace(EMAIL_IN_TEXT_RE, (m) => m.charAt(0) + '***') : v
+}
+function maskProjectEmails(o: any): any {
+  return { ...o, owner: maskEmailsIn(o.owner), published_by: maskEmailsIn(o.published_by),
+    info_json: o.info_json ? { ...o.info_json, updatedBy: maskEmailsIn(o.info_json.updatedBy) } : o.info_json }
+}
+
 /* ── [P40] 초대/세션 상수 — 값의 단일 진실 소스(매직넘버 중복 금지) ── */
 const LOCAL_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000   // 로컬 세션 유효기간(기존 값 그대로: 30일)
 const INVITE_TTL_MS        = 14 * 24 * 60 * 60 * 1000   // 초대 링크 유효기간: 14일
@@ -2331,35 +2579,34 @@ async function lookupInvite(c: any, rawToken: string): Promise<any | null> {
 
 app.get('/api/projects', async (c) => {
   const user = await getUser(c)
-  const email = user?.email || ''
-  const isSuperUser = !!(user && isSuperAdmin(c, user.email))
+  // [WO 20261009-readacl] 🔴 로그인 게이트 정책(전체개방 스위치 false) — 토큰 없는 목록 = 401(감사 시나리오 8: 소유자 이메일 노출).
+  if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
+  const email = String(user.email || '').trim().toLowerCase()
+  const s = await readScopeOf(c, user)   // 읽기 SoT — 멤버/소유/링크 범위
+  const isSuperUser = isSuperAdmin(c, email)
   const { results } = await c.env.DB.prepare('SELECT * FROM projects WHERE deleted = 0 ORDER BY created_at DESC').all()
-  // 멤버십 + 신청 상태 맵 구성
+  // 멤버십 + 신청 상태 맵 구성(링크 세션은 공용 예약 이메일이라 신원이 아니다 → 조회하지 않는다)
   const myRole = new Map<string, string>()
   const myReqStatus = new Map<string, string>()
-  let globalDesigner = false
-  if (email) {
+  if (email && !s.linkOnly) {
     const [mr, rr]: any[] = await Promise.all([
       c.env.DB.prepare('SELECT project_id, role FROM project_members WHERE email = ?').bind(email).all(),
       c.env.DB.prepare('SELECT project_id, status FROM project_access_requests WHERE email = ?').bind(email).all(),
     ])
     for (const r of (mr.results || [])) myRole.set(String(r.project_id), String(r.role))
     for (const r of (rr.results || [])) myReqStatus.set(String(r.project_id), String(r.status))
-    globalDesigner = await isDesigner(c, email)
   }
-  const list = TEMP_OPEN_ALL_TENANTS ? (results || []) : (results || []).filter((p: any) => {
-    if (isSuperUser) return true
-    const isOwner = isProjectOwner(p.owner, email)
-    if (globalDesigner || isOwner || myRole.has(p.id)) return true
-    return !!p.published  // 비멤버도 배포된 프로젝트는 보임(잠금 상태로)
-  })
+  // 읽기 범위 안 = 열람 가능 카드. 범위 밖이라도 배포된 프로젝트는 로그인 사용자에게 잠금 카드(접근 신청용)로 보인다.
+  //   🔴 링크 세션은 자기 링크의 프로젝트만 — 다른 배포 프로젝트 이름 열거 차단.
+  const list = (results || []).filter((p: any) => canReadProjectId(s, p.id) || (!s.linkOnly && !!p.published))
   return c.json({ data: list.map((p: any) => {
     const isOwner = isProjectOwner(p.owner, email)
-    const isMember =!!(isSuperUser || globalDesigner || isOwner || myRole.has(p.id))
-    // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/전역디자이너/슈퍼 > 없음)
-    const effRole = myRole.get(p.id) || ((isSuperUser || globalDesigner || isOwner) ? 'designer' : null)
-    const base = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null,
+    const isMember = !s.linkOnly && canReadProjectId(s, p.id)
+    // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/슈퍼 > 없음)
+    const effRole = myRole.get(p.id) || ((isSuperUser || isOwner) ? 'designer' : null)
+    let base: any = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null,
       can_manage_members: canManageMembersOf(c, user, p.owner) }   // [WO 20261001-bulkreauth] 소유자·super — 일괄삭제 노출 SoT
+    if (s.mask) base = maskProjectEmails(base)   // 열람자(익명·로그인)에게 소유자·배포자 이메일 미노출
     // [P61] 🔴 공유 토큰은 멤버(설계자/소유자/배정멤버/슈퍼)에게만. 비멤버에게 주면 열거 차단이 무의미해진다.
     return isMember ? base : stripShareKey(base)
   }) })
@@ -2972,7 +3219,9 @@ app.post('/api/share/verify', async (c) => {
         SUPPORT_CONTACT_EMAIL + ' 으로 링크를 다시 요청하세요.',
     }, 403)
   }
-  const pass = await mintAutoEntryToken(c, 'viewer', String(proj.id))
+  // [WO 20261009-readacl] 통행증도 이 링크·이 프로젝트로 범위를 서명한다(배포 취소·링크 폐기 시 즉시 무효).
+  const pass = await mintAutoEntryToken(c, 'viewer', String(proj.id),
+    t ? { p: [String(proj.id)], th: await shareTokenHash(t) } : { p: [String(proj.id)], d })
   if (!pass) return c.json({ error: 'gate unavailable', ok: false, contact: SUPPORT_CONTACT_EMAIL, message: '일시적인 오류입니다. 잠시 후 다시 시도하세요.' }, 503)
   await c.env.DB.prepare('UPDATE project_share_codes SET use_count = use_count + 1, last_used_at = ? WHERE id = ?')
     .bind(now, row.id).run().catch(() => {})
@@ -3630,8 +3879,11 @@ app.post('/api/projects/:id/unpublish', async (c) => {
 
 // 데크 목록 (프로젝트별, 로그인 사용자)
 app.get('/api/projects/:id/decks', async (c) => {
-  if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)  // [보안] 무인증 프로젝트 구조 열람 차단
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized' }, 401)  // [보안] 무인증 프로젝트 구조 열람 차단
   const pid = c.req.param('id')
+  // [WO 20261009-readacl] 읽기 SoT — 멤버/소유/링크 범위 밖 프로젝트 구조 열람 차단
+  if (!canReadProjectId(await readScopeOf(c, user), pid)) return c.json({ error: 'forbidden' }, 403)
   // [WO 20260921] 트리의 '도면' 단을 그리려면 deployment 의 파일명이 필요하다 → LEFT JOIN 으로 동봉.
   //   d.* 로 기존 컬럼은 전부 그대로 나가고, 별칭 2개만 추가된다(응답 필드 추가 전용).
   const { results } = await c.env.DB.prepare(
@@ -3649,6 +3901,8 @@ app.post('/api/projects/:id/decks', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden' }, 403)
   const pid = c.req.param('id')
+  // [WO 20261009-readacl] 🔴 남의 프로젝트에 구역 추가 차단 — 프로젝트 관리 권한(슈퍼·소유자·designer 멤버) SoT
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden — not a designer of this project' }, 403)
   let body: any
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const name = String(body.name || '').trim()
@@ -3691,6 +3945,8 @@ app.put('/api/decks/:id', async (c) => {
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const row: any = await c.env.DB.prepare('SELECT * FROM decks WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
+  // [WO 20261009-readacl] 형제(POST decks)와 같은 프로젝트 관리 권한 SoT
+  if (!(await canManageProject(c, user, row.project_id))) return c.json({ error: 'forbidden — not a designer of this project' }, 403)
   const name = body.name !== undefined ? String(body.name) : row.name
   const level = body.level_no !== undefined ? body.level_no : row.level_no
   const dep = body.deployment_id !== undefined ? body.deployment_id : row.deployment_id
@@ -3744,6 +4000,10 @@ app.delete('/api/decks/:id', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden' }, 403)
   const id = c.req.param('id')
+  // [WO 20261009-readacl] 형제(POST/PUT decks)와 같은 프로젝트 관리 권한 SoT
+  const row: any = await c.env.DB.prepare('SELECT project_id FROM decks WHERE id = ?').bind(id).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  if (!(await canManageProject(c, user, row.project_id))) return c.json({ error: 'forbidden — not a designer of this project' }, 403)
   await c.env.DB.prepare('UPDATE decks SET deleted = 1, updated_at = ? WHERE id = ?').bind(Date.now(), id).run()
   return c.json({ success: true })
 })
@@ -3767,6 +4027,14 @@ function mapImage(r: any) {
     updated_at: r.updated_at,
     deleted: !!r.deleted
   }
+}
+
+/** [WO 20261009-readacl] 열람자 응답 = 핀·구역·주석 JSON 안의 작성자 이메일 마스킹. */
+function mapDeploymentFor(r: any, mask: boolean) {
+  const o: any = mapDeployment(r)
+  if (!mask) return o
+  for (const k of ['title', 'pins', 'zones', 'annotations', 'checkboard_start']) o[k] = maskEmailsIn(o[k])
+  return o
 }
 
 function mapDeployment(r: any) {
@@ -3801,6 +4069,8 @@ function mapDeployment(r: any) {
 app.get('/tables/pano_images', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'unauthorized' }, 401)   // [보안 H4] 360 이미지 무인증 열거 차단
+  // [WO 20261009-readacl] 열거는 super·디자이너만(종전 테넌트 규칙). 열람자는 핀이 가리키는 단건만 읽는다(아래 단건 라우트).
+  { const s = await readScopeOf(c, user); if (!s.all && !s.designer) return c.json({ error: 'forbidden' }, 403) }
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
   // [Tenant 격리] 자신의 테넌트 360만 열거(슈퍼/마이그레이션전은 전체). NULL 구행은 기본테넌트 귀속.
   //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 필터 생략 — 전체 열거(deleted=0 유지).
@@ -3836,6 +4106,11 @@ app.get('/tables/pano_images/:id', async (c) => {
   const id = c.req.param('id')
   const row = await c.env.DB.prepare('SELECT * FROM pano_images WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
+  // [WO 20261009-readacl] 열람자(익명 링크·로그인 비디자이너)는 읽을 수 있는 배포본의 핀이 참조하는 파노만
+  {
+    const s = await readScopeOf(c, user)
+    if (!s.all && !s.designer && !(await canReadPanoAsViewer(c, user, id))) return c.json({ error: 'forbidden' }, 403)
+  }
   // [Tenant 격리] 타 테넌트 360 조회 차단. NULL 구행은 기본테넌트로 간주(하위호환).
   //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 체크 생략.
   if (!TEMP_OPEN_ALL_TENANTS) {
@@ -3909,7 +4184,8 @@ app.put('/api/r2/upload', async (c) => {
     : ct.includes('webp') ? 'webp' : ct.includes('pdf') ? 'pdf' : 'bin'
   const key = `assets/${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${ext}`
   const body = await c.req.arrayBuffer()
-  await c.env.R2.put(key, body, { httpMetadata: { contentType: ct } })
+  // [WO 20261009-readacl] 업로더 기록 — 저장 전(배포본 미참조) 미리보기는 본인만 읽는다(canReadR2Key)
+  await c.env.R2.put(key, body, { httpMetadata: { contentType: ct }, customMetadata: { by: String(user.email || '').toLowerCase() } })
   return c.json({ key, url: `/api/r2/object/${key}`, size: body.byteLength, contentType: ct })
 })
 
@@ -3923,6 +4199,8 @@ app.get('/api/r2/object/*', async (c) => {
   const key = c.req.path.replace('/api/r2/object/', '')
   const obj = await c.env.R2.get(key)
   if (!obj) return c.notFound()
+  // [WO 20261009-readacl] 🔴 로그인 여부만 보던 구멍(감사: 익명 토큰으로 비공개 프로젝트 원본 200) — 읽기 SoT
+  if (!(await canReadR2Key(c, user, key, obj))) return c.json({ error: 'forbidden' }, 403)
   const headers = new Headers()
   headers.set('Content-Type', obj.httpMetadata?.contentType || 'application/octet-stream')
   // private: 인증된 콘텐츠가 공유 엣지캐시에 남지 않도록(브라우저 캐시는 유지)
@@ -3950,32 +4228,23 @@ app.get('/tables/deployments', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'unauthorized — login required' }, 401)
   const limit = Math.min(Number(c.req.query('limit') || 100), 1000)
-  // [PART 0 · Tenant 격리] 자신의 테넌트 배포본만 열거(슈퍼/마이그레이션전은 전체)
-  //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 필터 생략 — 전체 열거(deleted=0 유지).
+  // [WO 20261009-readacl] 🔴 읽기 SoT — 테넌트가 아니라 프로젝트 멤버십·링크 범위·게이트로 거른다(감사 H1·H2).
+  const s = await readScopeOf(c, user)
   let results: any[] = []
-  if (TEMP_OPEN_ALL_TENANTS) {
-    const r = await c.env.DB.prepare(
-      'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
-    ).bind(limit).all()
+  if (s.all) {
+    const r = await c.env.DB.prepare('SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?').bind(limit).all()
     results = r.results || []
   } else {
-    const tid = await tenantOf(c, user)
-    if (tid) {
-      // tenant_id 가 NULL 인 구버전 행도 기본 테넌트 사용자에게는 함께 보이도록(하위호환)
-      const includeNull = (tid === DEFAULT_TENANT)
-      const sql = includeNull
-        ? 'SELECT * FROM deployments WHERE deleted = 0 AND (tenant_id = ? OR tenant_id IS NULL) ORDER BY created_at DESC LIMIT ?'
-        : 'SELECT * FROM deployments WHERE deleted = 0 AND tenant_id = ? ORDER BY created_at DESC LIMIT ?'
-      const r = await c.env.DB.prepare(sql).bind(tid, limit).all()
-      results = r.results || []
-    } else {
-      const r = await c.env.DB.prepare(
-        'SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?'
-      ).bind(limit).all()
-      results = r.results || []
+    const ids = ((await readableDeploymentIds(c, user)) || []).slice(0, limit)
+    const byId = new Map<string, any>()
+    for (let i = 0; i < ids.length; i += 50) {
+      const part = ids.slice(i, i + 50)
+      const r: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE deleted = 0 AND id IN (' + part.map(() => '?').join(',') + ')').bind(...part).all()
+      for (const row of (r.results || [])) byId.set(String(row.id), row)
     }
+    results = ids.map((id) => byId.get(id)).filter(Boolean)
   }
-  return c.json({ data: results.map(mapDeployment), total: results.length })
+  return c.json({ data: results.map((r: any) => mapDeploymentFor(r, s.mask)), total: results.length })
 })
 
 // 단건 조회 (특정 배포본 고정 공유 — B1)
@@ -3989,24 +4258,18 @@ app.get('/tables/deployments/:id', async (c) => {
   //   권한 가드(로그인·테넌트)는 아래 그대로 공유한다 — 별도 라우트를 만들지 않는다.
   const light = c.req.query('fields') === 'version'
   const row = await c.env.DB.prepare(light
-    ? 'SELECT id, version, deleted, tenant_id FROM deployments WHERE id = ?'
+    ? 'SELECT id, version, deleted, tenant_id, project_id FROM deployments WHERE id = ?'
     : 'SELECT * FROM deployments WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
-  // [PART 0 · Tenant 격리] 타 테넌트 자원 접근 차단(슈퍼/마이그레이션전 제외).
-  //   tenant_id NULL 구행은 기본 테넌트로 간주(하위호환).
-  //   [TEMP_OPEN_ALL_TENANTS] true면 테넌트 체크 생략.
-  if (!TEMP_OPEN_ALL_TENANTS) {
-    const tid = await tenantOf(c, user)
-    if (tid) {
-      const rowTenant = (row as any).tenant_id || DEFAULT_TENANT
-      if (rowTenant !== tid) return c.json({ error: 'not found' }, 404)
-    }
-  }
+  // [WO 20261009-readacl] 🔴 읽기 SoT — 다른 프로젝트·범위 밖 링크·미배포 = 403(감사 H1: 익명 토큰으로 비공개 B 200)
+  const scope = await readScopeOf(c, user)
+  if (!canReadDepRow(scope, await depRefIndexOf(c), row)) return c.json({ error: 'forbidden' }, 403)
+  //   (종전 테넌트 검사는 canReadDepRow 가 대체 — 귀속 없는 레거시 배포본은 거기서 디자이너 자기 테넌트로 한정)
   if (light) {
     const r = row as any
     return c.json({ id: r.id, version: (r.version != null ? r.version : 0), deleted: !!r.deleted })
   }
-  return c.json(mapDeployment(row))
+  return c.json(mapDeploymentFor(row, scope.mask))
 })
 
 // 생성 (배포) — 디자이너 이상
@@ -4391,8 +4654,15 @@ const VALID_STATUS = ['open', 'progress', 'done']
  *  생성 시점(VALID_STATUS)엔 포함하지 않는다 — 확인은 완료 뒤 검토 행위라 처음부터 고를 값이 아니다. */
 const VALID_STATUS_PATCH = ['open', 'progress', 'done', 'verified']
 
-/** withContact = 디자이너 응답에만 익명 회신 이메일(author_contact)을 싣는다(열람자끼리 노출 금지). */
-function mapNote(r: any, withContact = false) {
+/** withContact = 디자이너 응답에만 익명 회신 이메일(author_contact)을 싣는다(열람자끼리 노출 금지).
+ *  [WO 20261009-readacl] maskFor !== undefined = 열람자 응답 — 남의 작성자 이메일 제거·마스킹. 값 = 요청자 본인 이메일(본인 글 판정용, 없으면 null). */
+function mapNote(r: any, withContact = false, maskFor?: string | null) {
+  const out = mapNoteRaw(r, withContact)
+  if (maskFor === undefined) return out
+  const own = !!maskFor && String(r.author_email || '').toLowerCase() === maskFor
+  return { ...out, author_email: own ? out.author_email : null, author: own ? out.author : maskEmailsIn(out.author), assignee: maskEmailsIn(out.assignee) }
+}
+function mapNoteRaw(r: any, withContact = false) {
   return {
     ...(withContact ? { author_contact: r.author_contact ?? null } : {}),
     kind: r.kind || 'note',
@@ -4492,6 +4762,8 @@ app.get('/api/notes', async (c) => {
   if (!actor.user) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2] 노트(이슈)는 로그인 사용자만
   const dep = c.req.query('deployment_id')
   if (!dep) return c.json({ error: 'deployment_id required' }, 400)
+  // [WO 20261009-readacl] 읽기 SoT — 범위 밖 배포본의 노트 = 403
+  if (!(await canReadDeployment(c, actor.user, dep))) return c.json({ error: 'forbidden' }, 403)
   const pin = c.req.query('pin_id')
   const status = c.req.query('status')
   const limit = Math.min(Number(c.req.query('limit') || 500), 2000)
@@ -4502,14 +4774,16 @@ app.get('/api/notes', async (c) => {
   sql += ' ORDER BY created_at ASC LIMIT ?'
   args.push(limit)
   const { results } = await c.env.DB.prepare(sql).bind(...args).all()
-  return c.json({ data: (results || []).map((r: any) => mapNote(r, actor.designer)), total: (results || []).length })
+  return c.json({ data: (results || []).map((r: any) => mapNote(r, actor.designer, actor.designer ? undefined : actor.email)), total: (results || []).length })
 })
 
 // 배포 단위 노트 요약(핀별 카운트/상태) — 도면 위 뱃지 표시용
 app.get('/api/notes/summary', async (c) => {
-  if (!(await getUser(c))) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2]
+  const user = await getUser(c)
+  if (!user) return c.json({ error: 'unauthorized' }, 401)   // [보안 M2]
   const dep = c.req.query('deployment_id')
   if (!dep) return c.json({ error: 'deployment_id required' }, 400)
+  if (!(await canReadDeployment(c, user, dep))) return c.json({ error: 'forbidden' }, 403)   // [WO 20261009-readacl]
   const { results } = await c.env.DB.prepare(
     `SELECT pin_id,
             COUNT(*) AS total,
@@ -4569,6 +4843,9 @@ app.post('/api/notes', async (c) => {
   } else {
     author = a.user.name || a.user.email
   }
+  // [WO 20261009-readacl] 🔴 읽을 수 없는 배포본에는 쓰지도 못한다(감사: 로그인 viewer 가 비멤버 비공개 B 에 요청 작성 200).
+  //   게이트 판정(위, gate_required — 클라가 코드 입력 화면을 띄우는 신호) 뒤에 둔다.
+  if (!(await canReadDeployment(c, a.user, deployment_id))) return c.json({ error: 'forbidden — no access to this deployment' }, 403)
   // 남용 방지 — 열람자(익명·viewer)만 IP 당 분당 N건. 디자이너 작성·답변은 ip 를 남기지 않아 집계에서 빠진다.
   const limiterKey = a.designer ? null : rateLimitKey(c)
   if (limiterKey && await overRateLimit(c, 'pin_notes', limiterKey, NOTE_REQUEST_RATE_LIMIT_PER_MIN)) {
@@ -4603,7 +4880,7 @@ app.post('/api/notes', async (c) => {
     row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.due_at, row.severity, row.author, row.author_email, row.author_role,
     row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey
   ).run()
-  return c.json({ ...mapNote(row, a.designer || a.role === 'guest'), ...(editKey ? { edit_key: editKey } : {}) })
+  return c.json({ ...mapNote(row, a.designer || a.role === 'guest', a.designer ? undefined : a.email), ...(editKey ? { edit_key: editKey } : {}) })
 })
 
 /** 노트 수정 권한 — 'designer'(내용·상태·담당자) · 'author'(자기 글) · null.
@@ -4673,7 +4950,7 @@ app.patch('/api/notes/:id', async (c) => {
   args.push(id)
   await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ?`).bind(...args).run()
   const updated = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ?').bind(id).first()
-  return c.json(mapNote(updated, right === 'designer'))
+  return c.json(mapNote(updated, right === 'designer', right === 'designer' ? undefined : (await noteActor(c)).email))
 })
 
 // 노트 삭제(soft) — 원 요청을 지우면 그 답변도 함께(고아 답변 0)

@@ -149,6 +149,8 @@ function makeDB(state) {
         },
         async all() {
           if (like(q, "FROM projects WHERE deleted = 0")) return { results: Object.values(state.projects).filter((p) => !p.deleted) };
+          // [WO 20261009-readacl] 읽기 SoT(depRefIndexOf) — 살아있는 구역의 배포본 참조
+          if (like(q, "FROM decks WHERE deleted = 0 AND deployment_id IS NOT NULL")) return { results: state.decks.filter((d) => !d.deleted && d.deployment_id) };
           return { results: [] };
         },
         async run() {
@@ -255,9 +257,15 @@ const TOK_A = STATE.projects.prj_a.share_token;
   const b2 = await (await call("GET", "/srview/aaaaaaaaaaaaaaaa")).text();
   ok(b1 === b2, "② 존재/미존재 404 본문이 동일 — 어떤 힌트도 주지 않는다");
   // 🔴 비멤버(익명)에게는 API 응답에서 토큰 자체를 주지 않는다
-  const anon = await (await call("GET", "/api/projects")).json();
+  // [WO 20261009-readacl · 마스터 지시] 토큰 없는 /api/projects = 401(로그인 게이트 정책 — 종전 "익명도 이름을 본다"는 폐기).
+  const anonR = await call("GET", "/api/projects");
+  const anonT = await anonR.text();
+  ok(anonR.status === 401 && !anonT.includes(TOK_A) && !anonT.includes("선각"), "② 토큰 없는 /api/projects → 401 · 이름·토큰 0 (실제 " + anonR.status + ")");
+  // 비멤버 = 열람 링크(?d=) 세션: 자기 링크 프로젝트는 보되 공유 열쇠는 받지 못한다
+  const vt = (await (await call("POST", "/api/auth/auto-entry", { body: { kind: "viewer", d: DEP_ID } })).json()).token;
+  const anon = await (await call("GET", "/api/projects", { token: vt })).json();
   const row = (anon.data || []).find((p) => p.id === "prj_a");
-  ok(!!row && row.published === true, "② 익명도 배포 프로젝트의 존재/이름은 본다(기존 동작 유지)");
+  ok(!!row && row.published === true, "② 링크 열람 세션은 자기 링크의 배포 프로젝트를 본다");
   ok(!!row && row.share_token === null && row.share_path === null, "② 🔴 비멤버 응답에는 share_token/share_path 가 없다 → " + JSON.stringify([row && row.share_token, row && row.share_path]));
   const mine = await (await call("GET", "/api/projects", { token: SUP })).json();
   const row2 = (mine.data || []).find((p) => p.id === "prj_a");
@@ -353,7 +361,8 @@ console.log("\n[④ 🔴 기존 `?d=` 링크 계속 동작 — 이미 공유된 
 {
   const r = await call("GET", "/?d=" + DEP_ID);
   ok(r.status === 200, "④a 루트 + ?d= → 앱 셸 200 (실제 " + r.status + ")");
-  const mint = await (await call("POST", "/api/auth/auto-entry", { body: { kind: "viewer" } })).json();
+  // [WO 20261009-readacl] 클라이언트는 열람 링크 식별자(?d=)를 함께 보낸다 — 서버가 그 링크로 범위를 서명
+  const mint = await (await call("POST", "/api/auth/auto-entry", { body: { kind: "viewer", d: DEP_ID } })).json();
   const dep = await call("GET", "/tables/deployments/" + DEP_ID, { token: mint.token });
   ok(dep.status === 200, "④b 열람전용 세션이 배포본을 계속 읽는다 → " + dep.status);
   const footer = rd("public/js/modules/99_footer.js");
@@ -460,7 +469,8 @@ console.log("\n[⑧ 🔴 새 경로에서도 쓰기 403 — p48 보안 회귀 �
   const S = freshState(); const c5 = makeCaller(worker, S);
   addProject(S, "prj_a", "선각 A동");
   const p = await publish(c5, "prj_a");
-  const mint = await (await c5("POST", "/api/auth/auto-entry", { body: { kind: "viewer" } })).json();
+  // [WO 20261009-readacl] 공유 주소(/srview) 세션 = 공유 토큰(t)으로 발급
+  const mint = await (await c5("POST", "/api/auth/auto-entry", { body: { kind: "viewer", t: p.project.share_token } })).json();
   const before = S.writes.length;
   const w1 = await c5("PATCH", "/tables/deployments/" + DEP_ID, { token: mint.token, body: { pins: [{ id: "hack" }] } });
   ok(w1.status === 403, "⑧d 공유 링크 세션 PATCH /tables/deployments → 403 (실제 " + w1.status + ")");
