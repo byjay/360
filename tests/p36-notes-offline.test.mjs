@@ -90,16 +90,19 @@ function makeFakeDB(state) {
               } else if (sql.indexOf("INSERT INTO pin_notes") >= 0) {
                 const [id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at] = args;
                 state.pinNotes.push({ id, deployment_id, pin_id, pin_label, body, status, assignee, author, author_email, author_role, created_at, updated_at, resolved_at, deleted: 0 });
-              } else if (sql.indexOf("UPDATE pin_notes SET deleted = 1") >= 0) {
-                const [updated_at, id] = args;
-                const n = state.pinNotes.find((n) => n.id === id);
-                if (n) { n.deleted = 1; n.updated_at = updated_at; }
               } else if (sql.indexOf("UPDATE pin_notes SET") >= 0) {
+                // [2026-10-10] WHERE 절의 "col = ?" 를 전부 해석한다(종전: 마지막 인자 = id 가정).
+                //   서버가 노트 쓰기를 URL 배포본 소속으로 한정(AND deployment_id = ?)하면서 인자 순서가 늘었다 — 가짜 DB 도 같은 조건으로 거른다.
+                //   SET 의 리터럴(deleted = 1)과 자리표시자(col = ?)를 구분해 인자를 순서대로 소비한다.
                 const setPart = sql.slice(sql.indexOf("SET") + 3, sql.indexOf("WHERE")).trim();
-                const cols = setPart.split(",").map((s) => s.trim().split("=")[0].trim());
-                const id = args[args.length - 1];
-                const n = state.pinNotes.find((n) => n.id === id && !n.deleted);
-                if (n) cols.forEach((col, i) => { n[col] = args[i]; });
+                const sets = setPart.split(",").map((s) => { const [k, v] = s.split("=").map((x) => x.trim()); return { k, v }; });
+                let ai = 0;
+                const assign = sets.map(({ k, v }) => ({ k, val: v === "?" ? args[ai++] : Number(v) }));
+                const whereCols = Array.from(sql.slice(sql.indexOf("WHERE")).matchAll(/(\w+) = \?/g)).map((m) => m[1]);
+                const whereArgs = args.slice(ai);
+                const alive = sql.indexOf("deleted = 0") >= 0;
+                const n = state.pinNotes.find((n) => whereCols.every((c, i) => n[c] === whereArgs[i]) && (!alive || !n.deleted));
+                if (n) assign.forEach(({ k, val }) => { n[k] = val; });
               } else if (sql.indexOf("UPDATE deployments SET pins=") >= 0) {
                 const [pins, zones, annotations, updated_at, version, id] = args;
                 const d = state.deployments.find((d) => d.id === id);

@@ -456,7 +456,8 @@ console.log("\n[뮤테이션ⓐ] 서버 게이트 가드(미들웨어 + 읽기 S
     from: "  if (!GATED_READ_PREFIXES.some((x) => p.startsWith(x))) return next()",
     to:   "  if (true) return next()" },
   { file: "index.tsx",
-    from: "      if (await shareGateLockedPid(c, user, [String(pid)])) continue",
+    // [2026-10-10] 판정 본체가 validLinkPids(익명 토큰·로그인 링크 공유)로 이동 — 들여쓰기 4칸
+    from: "    if (await shareGateLockedPid(c, user, [String(pid)])) continue",
     to:   "" }]);
   if (w) {
     const s2 = await scenario(w);
