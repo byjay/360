@@ -15,6 +15,9 @@
     disable(id)    { this.$(id).disabled = true; },
 
     showScreen(name) {
+      // [지휘자 2026-10-08 재현] 화면 전환 = 모든 라우트 변경의 공유 지점 — 열린 Prompt 모달을
+      // 여기 한 곳에서 취소로 닫는다(다른 화면/프로젝트까지 떠 있던 결함, §G-2-5 공유 함수 1곳).
+      if (typeof Prompt !== "undefined" && Prompt.closeAll) Prompt.closeAll();
       document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
       this.$(name).classList.add("active");
     },

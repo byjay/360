@@ -118,6 +118,19 @@
       const r = this._resolve; this._resolve = null;
       if (r) r(result);
     },
+    /** [지휘자 2026-10-08 재현] 화면 전환(UI.showScreen — 공유 지점 한 곳) 시 열려 있는 모달을
+     *  취소로 닫는다. ask() 가 이름 검증 실패 등으로 열린 채 남아 있다가 뒤로가기로 다른
+     *  프로젝트/화면까지 떠 있던 결함 — 전환 시점에 한 번 정리하면 모든 진입 경로가 같이 고쳐진다. */
+    closeAll() {
+      try {
+        const m = document.getElementById("prompt-modal");
+        if (m && !m.classList.contains("hidden")) this._close(null);
+      } catch (e) {}
+      try {
+        const c = document.getElementById("wm-confirm-modal");
+        if (c && c.classList.contains("on")) { const cancel = document.getElementById("wm-confirm-cancel"); if (cancel) cancel.click(); }
+      } catch (e) {}
+    },
 
     /** [WO 20260921 publish-fix] 커스텀 확인 모달 — Promise<boolean>.
      *  근본원인: window.confirm()/alert()/prompt()는 PWA 독립실행모드(display:standalone,
