@@ -596,5 +596,6 @@
     { key: "fls3d",       label: "3D 포인트 클라우드(FLS)",   desc: "FLS/E57/LAS 첨부·듀얼뷰" },
     { key: "ai",          label: "AI 도우미",                 desc: "에러·사용 가이드 LLM(키 설정 시)" },
     { key: "timelapse",   label: "타임랩스 비교",             desc: "동일 위치 시점 비교" },
-    { key: "export",      label: "내보내기/배포",             desc: "JSON 내보내기·뷰어 배포" }
+    { key: "export",      label: "내보내기/배포",             desc: "JSON 내보내기·뷰어 배포" },
+    { key: "install-required", label: "모바일 앱 설치 필수",  desc: "로그인한 모바일 사용자는 앱 설치 전까지 사용할 수 없습니다(공유 열람 링크는 예외)" }
   ];

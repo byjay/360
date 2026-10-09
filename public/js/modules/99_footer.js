@@ -13,6 +13,9 @@
 
     // [P40] PWA 설치 유도 배선 — beforeinstallprompt 는 페이지 초기에 발화하므로 먼저 등록한다.
     if (typeof Install !== "undefined" && Install.init) { try { Install.init(); } catch (e) {} }
+    // [WO 20261009-installgate] 모바일 강제 설치 게이트 — Install.init() 다음(같은 beforeinstallprompt
+    // 캡처를 공유하므로 순서 중요: Install이 먼저 리스너를 걸어야 _deferred가 채워진다).
+    if (typeof InstallGate !== "undefined" && InstallGate.init) { try { InstallGate.init(); } catch (e) {} }
     // [WO 20261007-aivision] 온라인/오프라인 전환 시 AI 분석 버튼 사유 재계산
     if (typeof AiVision !== "undefined" && AiVision.init) { try { AiVision.init(); } catch (e) {} }
     // [WO 20261007-qrcov] 핀 팝업 [QR] 주입 · 촬영 현황(커버리지) 초기화
@@ -24,7 +27,7 @@
     // ── E2E 테스트 훅 (프로덕션 무해): 핀을 직접 주입해 UI 워크플로우 없이 검증 ──
     window.__wm = {
       State, App, AllPins, UI, MapCtrl, Auth, Settings, PinPrefs, PinSeries, PinIcons, Designers, Projects, ProjectHub, Prompt, PanoViewer, Radar, PanoNav, Brand, Notes, TimeLapse, Compare, Zones, Inspector, PinGrid, SyncQueue, Cloud, PDF, FLS, PinActionPop, CompanyAuth, PdfAnno, AdminPanels,
-      Offline, OfflineBundle, OfflineLoad, OpLog, Invite, Install,
+      Offline, OfflineBundle, OfflineLoad, OpLog, Invite, Install, InstallGate,
       UserMgmt: (typeof UserMgmt !== "undefined" ? UserMgmt : null),
       ThetaIntake: (typeof ThetaIntake !== "undefined" ? ThetaIntake : null),
       DeepLink: (typeof DeepLink !== "undefined" ? DeepLink : null),

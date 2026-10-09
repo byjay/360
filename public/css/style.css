@@ -3200,6 +3200,42 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .signin-cancel:hover { color: #3a352b; }
 
 /* ════════════════════════════════════════════════════════════
+   INSTALL GATE — 모바일 강제 설치 게이트 (WO 20261009)
+   🔴 position/inset/z-index는 38b_InstallGate.js가 인라인으로 고정한다(캐스케이드 우회,
+   CLAUDE.md G-4⑤ — family-tokens.css가 ID 선택자로 base z-index를 이긴 전례가 있어
+   여기 CSS는 색·레이아웃만 담당하고 구조값은 신뢰하지 않는다).
+════════════════════════════════════════════════════════════ */
+.install-gate {
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: radial-gradient(120% 120% at 50% 0%, rgba(15,23,42,.92), rgba(8,12,24,.97));
+  backdrop-filter: blur(6px);
+}
+.install-gate-card {
+  width: min(380px, 92vw); text-align: center;
+  background: linear-gradient(180deg, #faf7f0 0%, #f2ece0 100%);
+  border-radius: 20px; padding: 30px 26px 24px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(43,40,32,0.034) inset;
+}
+.install-gate-icon { width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 14px; display: block; }
+.install-gate-card h2 { color: #2b2820; font-size: 18px; font-weight: 800; margin: 0 0 8px; line-height: 1.35; }
+.install-gate-sub { color: #6b645a; font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+.install-gate-ios, .install-gate-guide {
+  color: #2b2820; font-size: 13px; line-height: 1.55; text-align: left;
+  background: rgba(27,117,187,.09); border: 1px solid rgba(27,117,187,.28);
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
+}
+.install-gate-btn {
+  width: 100%; padding: 13px; border: none; border-radius: 12px; cursor: pointer;
+  background: #1b75bb; color: #fff; font: 700 15px/1 var(--sea-font-ui,system-ui,sans-serif);
+}
+.install-gate-btn:disabled { opacity: .55; cursor: default; }
+.install-gate-done {
+  color: #14532d; font-size: 13px; line-height: 1.55;
+  background: rgba(34,197,94,.14); border: 1px solid rgba(34,197,94,.38);
+  border-radius: 12px; padding: 12px 14px;
+}
+
+/* ════════════════════════════════════════════════════════════
    ACCESS GATE — 권한 없음 / 사용 신청(Request Access) — Genspark 모방
 ════════════════════════════════════════════════════════════ */
 .access-gate {

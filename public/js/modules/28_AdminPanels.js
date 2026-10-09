@@ -22,6 +22,9 @@
       FEATURE_DEFS.forEach((f) => {
         document.body.classList.toggle("feat-off-" + f.key, !this.isEnabled(f.key));
       });
+      // [WO 20261009-installgate] 기능 플래그가 켜진 뒤(최초 로드 fetch 완료) 또는 관리자가
+      // 저장으로 끈 직후에도 게이트 상태를 즉시 재평가 — 새 관찰 지점을 만들지 않고 기존 SoT 재사용.
+      if (typeof InstallGate !== "undefined" && InstallGate.recheck) { try { InstallGate.recheck(); } catch (e) {} }
     },
 
     /* ── 기능·메뉴 관장 모달 ── */
