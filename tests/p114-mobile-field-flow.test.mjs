@@ -283,6 +283,22 @@ await send("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, devi
 await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
 await send("Emulation.setUserAgentOverride", { userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36", platform: "Android" });
 await send("Emulation.setCPUThrottlingRate", { rate: 4 });
+// [WO 20261009-installgate 정비] 현장 사용자의 실제 환경 = "설치된 앱(standalone)". CDP에는
+// display-mode 를 직접 바꾸는 공식 Emulation 커맨드가 없다(Emulation.setEmulatedMedia 의
+// features 는 prefers-color-scheme 류만 지원 — 실측: display-mode 지정 시 무시되고 matchMedia
+// 는 그대로 false, --app= 런치 플래그도 헤드리스에서는 반영 안 됨, 2026-10-09 지휘자 지시로 실측).
+// 그래서 38_Install.js/38b_InstallGate.js 가 실제로 읽는 신호(window.matchMedia
+// '(display-mode: standalone)')를 새 문서마다(새로고침 포함) 패치한다 — 기능 플래그를 꺼서
+// 피하지 않고, 앱이 보는 신호 자체를 "설치됨"으로 만든다(기존 UA·뷰포트 오버라이드와 동일 성격).
+await send("Page.addScriptToEvaluateOnNewDocument", { source: String.raw`(function(){
+  var realMM = window.matchMedia.bind(window);
+  window.matchMedia = function (q) {
+    if (typeof q === "string" && q.indexOf("display-mode: standalone") >= 0) {
+      return { matches: true, media: q, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; } };
+    }
+    return realMM(q);
+  };
+})();` });
 await send("Page.setInterceptFileChooserDialog", { enabled: true });
 
 export { };

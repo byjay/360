@@ -99,6 +99,17 @@ try {
   const waitFor = async (cond, timeout = 20000) => { const t0 = Date.now(); while (Date.now() - t0 < timeout) { const v = await evSafe("(function(){try{return !!(" + cond + ")}catch(e){return false}})()"); if (v === true) return Date.now() - t0; await wait(150); } return -1; };
   const setVp = async (w, h, mobile) => { vp = w; await send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: mobile ? 2 : 1, mobile }); };
   await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable");
+  // [WO 20261009-installgate 정비] 현장 실제 환경 = 설치된 앱(standalone). CDP 공식 Emulation
+  // 커맨드로는 display-mode 를 바꿀 수 없어(p114 실측과 동일 근거) 신호 자체를 패치한다.
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: String.raw`(function(){
+    var realMM = window.matchMedia.bind(window);
+    window.matchMedia = function (q) {
+      if (typeof q === "string" && q.indexOf("display-mode: standalone") >= 0) {
+        return { matches: true, media: q, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; } };
+      }
+      return realMM(q);
+    };
+  })();` });
 
   const accPath = path.join(TMP, "local-test-accounts.json");
   const PW = JSON.parse(fs.readFileSync(accPath, "utf8")).accounts.find((a) => a.role === "designer").password;

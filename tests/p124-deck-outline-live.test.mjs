@@ -145,6 +145,17 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, deviceScaleFactor: 2, mobile: true });
+  // [WO 20261009-installgate 정비] 현장 실제 환경 = 설치된 앱(standalone). CDP에 display-mode
+  // 전용 공식 Emulation 커맨드가 없어(실측, p114와 동일 근거) 앱이 읽는 신호를 직접 패치한다.
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: String.raw`(function(){
+    var realMM = window.matchMedia.bind(window);
+    window.matchMedia = function (q) {
+      if (typeof q === "string" && q.indexOf("display-mode: standalone") >= 0) {
+        return { matches: true, media: q, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; } };
+      }
+      return realMM(q);
+    };
+  })();` });
 
   // ── 로그인(로컬 세션, designer) ──
   const accPath = path.join(TMP, "local-test-accounts.json");

@@ -87,6 +87,17 @@ try {
   for (let i = 0; i < 40 && !pageWs; i++) { try { const l = await getJson("http://127.0.0.1:" + port + "/json/list"); const pg = l.find((t) => t.type === "page"); if (pg) pageWs = pg.webSocketDebuggerUrl; } catch (e) {} if (!pageWs) await wait(250); }
   const P = await connect(pageWs);
   await P.send("Page.enable"); await P.send("Runtime.enable");
+  // [WO 20261009-installgate 정비] 현장 실제 환경 = 설치된 앱(standalone). CDP 공식 Emulation
+  // 커맨드로는 display-mode 를 바꿀 수 없어(p114 실측과 동일 근거) 신호 자체를 패치한다.
+  await P.send("Page.addScriptToEvaluateOnNewDocument", { source: String.raw`(function(){
+    var realMM = window.matchMedia.bind(window);
+    window.matchMedia = function (q) {
+      if (typeof q === "string" && q.indexOf("display-mode: standalone") >= 0) {
+        return { matches: true, media: q, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; } };
+      }
+      return realMM(q);
+    };
+  })();` });
   await viewport(P, 375, 812, true);
 
   const acc = JSON.parse(fs.readFileSync(path.join(TMP, "local-test-accounts.json"), "utf8")).accounts;
