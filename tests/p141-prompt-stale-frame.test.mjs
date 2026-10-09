@@ -10,7 +10,7 @@
  *
  * 환경: 실 Chrome 헤드리스(CDP) + 실 30_Prompt.js. 프레임 시점만 테스트가 쥔다(requestAnimationFrame 을 큐로 바꿔
  *   "닫힘 뒤에 프레임"을 결정적으로 만든다 — 실측에서 우연히 나던 순서를 매번 재현). DOM·포커스·타이머는 실물.
- * 뮤테이션: P141_MUT=ask|confirm → 해당 수정만 되돌린 사본으로 실행, EXIT=1 기대.
+ * 뮤테이션: P141_MUT=ask|focus|confirm → 해당 수정만 되돌린 사본으로 실행, EXIT=1 기대.
  */
 import { spawn } from "node:child_process";
 import http from "node:http";
@@ -31,6 +31,7 @@ const watchdog = setTimeout(() => { console.log("WATCHDOG 90s → FAIL"); proces
 let src = fs.readFileSync(path.join(ROOT, "public/js/modules/30_Prompt.js"), "utf8").replace(/\r\n/g, "\n");
 const MUTS = {
   ask: ["requestAnimationFrame(() => { if (this._resolve === resolve) m.classList.add(\"on\"); });", "requestAnimationFrame(() => m.classList.add(\"on\"));"],
+  focus: ["setTimeout(() => { if (this._resolve === resolve) inp.focus(); }, 60);", "setTimeout(() => inp.focus(), 60);"],
   confirm: ["requestAnimationFrame(() => { if (!closed) modal.classList.add(\"on\"); });", "requestAnimationFrame(() => modal.classList.add(\"on\"));"],
 };
 const MUT = process.env.P141_MUT || "";
@@ -93,6 +94,22 @@ try {
     ok(r.focused === "prompt-modal-input" && r.value === "pw", "A0 입력칸 포커스·값 반환(정상 흐름)", r);
     ok(r.st.hidden && !r.st.on, "A1 🔴 닫힌 뒤 늦은 프레임이 와도 모달은 숨김(종전: 'on' 재부착 → 열린 채 잔류)", r.st);
     ok(!r.st.focusIn, "A2 🔴 닫힌 모달 안에 포커스 없음(_liveEditingNow 오판 방지)", r.st);
+  }
+
+  console.log("\n[A' ask — 포커스 타이머(60ms) 전에 확인]");
+  {
+    const r = await ev(`(async function(){
+      var done = Prompt.ask({ title: '본인 확인', password: true });
+      document.getElementById('prompt-modal-input').value = 'pw';
+      Prompt._submit();                                            // 프레임·포커스 타이머 둘 다 전에 제출
+      await done;
+      await ${sleep(100)};                                         // 늦은 포커스 타이머 경과(아직 숨김 전 — 지연 숨김 200ms)
+      var mid = ${S("prompt-modal")};
+      __flush(); await ${sleep(300)};
+      return { mid: mid, end: ${S("prompt-modal")} };
+    })()`);
+    ok(!r.mid.focusIn, "A'1 🔴 닫힌 뒤 늦은 포커스 타이머가 입력칸을 다시 잡지 않음(_liveEditingNow 고착 방지)", r.mid);
+    ok(r.end.hidden && !r.end.on && !r.end.focusIn, "A'2 최종 숨김·포커스 없음", r.end);
   }
 
   console.log("\n[B ask 정상·연속(5eea645 가드 유지)]");
