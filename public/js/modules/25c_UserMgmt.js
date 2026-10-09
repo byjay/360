@@ -20,9 +20,10 @@
     _busy: false,
     _selected: null,       // Set<email>
 
+    /** 보호(명단 비노출·선택 불가) = 서버가 판정한 슈퍼관리자 행(is_super) + 내가 super 면 나 자신.
+     *  [R1 2026-10-10] 이메일 하드코딩·이메일 비교 금지 — 서버 판정(행 is_super · Auth.role)만 쓴다. */
     _protected() {
-      const s = new Set(["designssir@gmail.com"]);
-      if (Auth.superAdmin) s.add(String(Auth.superAdmin).toLowerCase());
+      const s = new Set(this._superSet || []);
       if (Auth.isSuper && Auth.user && Auth.user.email) s.add(String(Auth.user.email).toLowerCase());
       return s;
     },
@@ -66,6 +67,7 @@
         safe("/api/designers"), safe("/api/local-users"), safe("/api/access-requests"), safe("/api/projects"),
       ]);
       const dset = new Set(designers.map((d) => String(d.email || "").toLowerCase()));
+      this._superSet = new Set([].concat(designers, members, requests).filter((r) => r && r.is_super).map((r) => String(r.email || "").toLowerCase()));
       this._designerSet = dset;
       // 호선수: owner 이메일별 프로젝트 수
       const pcount = new Map();

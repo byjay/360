@@ -161,7 +161,7 @@
           paste.value = JSON.stringify(cfg, null, 2);
         }
         const em = document.getElementById("fb-owner-email");
-        if (em) em.value = window.FIREBASE_OWNER_EMAIL && !String(window.FIREBASE_OWNER_EMAIL).includes("designssir") ? window.FIREBASE_OWNER_EMAIL : (window.FIREBASE_OWNER_EMAIL || "");
+        if (em) em.value = window.FIREBASE_OWNER_EMAIL || "";   // [R1] 이메일 문자열 비교 제거(두 분기 결과가 같았다)
       } catch (e) {}
       m.classList.remove("hidden"); requestAnimationFrame(() => m.classList.add("on"));
     },

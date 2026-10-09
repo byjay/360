@@ -21,7 +21,7 @@
     idToken: null,
     user: null,           // { email, name, picture, role }
     role: "viewer",       // 'super' | 'designer' | 'viewer'
-    superAdmin: "designssir@gmail.com",
+    superAdmin: null,     // [R1] 서버가 super 본인에게만 내려준다(/api/auth/me super_admin) — 하드코딩 금지
     _pendingDesigner: null,
     _gsiInited: false,
     _suppressDemoBadge: false,

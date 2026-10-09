@@ -245,6 +245,10 @@ function superAdminList(c: any): string[] {
   if (typeof multi === 'string') multi.split(',').map((s: string) => s.trim().toLowerCase()).filter((e: string) => e.includes('@')).forEach((e: string) => out.add(e))
   return Array.from(out)
 }
+/** [R1 2026-10-10] 사용자 관리 목록 행에 서버 판정(is_super)을 싣는다 — 클라는 이메일을 비교하지 않고 이 플래그만 본다(하드코딩 0). */
+function withSuperFlag(c: any, rows: any[]): any[] {
+  return rows.map((r: any) => ({ ...r, is_super: isSuperAdmin(c, r && r.email) }))
+}
 function isSuperAdmin(c: any, email: string): boolean {
   const e = String(email || '').trim().toLowerCase()
   if (e === AUTO_DESIGNER_EMAIL) return false   // [불변식①] 자동입장 예약계정은 슈퍼관리자가 될 수 없다
@@ -1448,7 +1452,7 @@ app.get('/api/local-users', async (c) => {
   ).all()
   // [S3] 슈퍼관리자 계정은 관리 대상이 아니다 — 종전엔 클라가 /api/auth/me 의 super_admin 으로 가렸다(그 값은 이제 super 본인만 받는다) → 서버가 가린다.
   const rows = isSuperAdmin(c, su.email) ? (results || []) : (results || []).filter((r: any) => !isSuperAdmin(c, r.email))
-  return c.json({ data: rows })
+  return c.json({ data: withSuperFlag(c, rows) })
 })
 
 /* ── 사전 등록(초대) 이메일 관리(슈퍼관리자 전용) ──
@@ -1633,7 +1637,7 @@ app.get('/api/designers', async (c) => {
   const { results } = await c.env.DB.prepare(
     'SELECT email, name, added_by, created_at FROM designers WHERE deleted = 0 ORDER BY created_at DESC'
   ).all()
-  return c.json({ data: results || [], super_admin: superAdmin(c) })
+  return c.json({ data: withSuperFlag(c, results || []), super_admin: superAdmin(c) })
 })
 
 app.post('/api/designers', async (c) => {
@@ -1732,7 +1736,7 @@ app.get('/api/access-requests', async (c) => {
     : 'SELECT * FROM access_requests WHERE deleted = 0 ORDER BY created_at DESC'
   const stmt = status ? c.env.DB.prepare(sql).bind(status) : c.env.DB.prepare(sql)
   const { results } = await stmt.all()
-  return c.json({ data: (results || []).map(mapRequest) })
+  return c.json({ data: withSuperFlag(c, (results || []).map(mapRequest)) })
 })
 
 // 신청 승인 → designers 등록 (슈퍼관리자 전용)
@@ -2421,11 +2425,29 @@ async function validLinkPids(c: any, user: any, sc: { p: string[], d: string | n
 /** 판정 본체(동기) — 배포본 행(id·project_id·tenant_id)이 이 범위에서 읽히는가.
  *  배포본의 project_id 가 있으면 그것이 정본(다른 프로젝트 deck 이 가리켜도 그 프로젝트 권한이 되지 않는다).
  *  없으면(레거시) 그 배포본을 가리키는 구역/원본의 프로젝트. 어디에도 귀속이 없으면 디자이너의 자기 테넌트만. */
+/** 배포본이 귀속된 프로젝트 — project_id 가 정본, 없으면(레거시) 그 배포본을 가리키는 구역/원본의 프로젝트. */
+function boundPidsOf(refsIdx: Map<string, Set<string>>, dep: any): string[] {
+  const refs = refsIdx.get(String(dep.id)) || new Set<string>()
+  return dep.project_id ? [String(dep.project_id)] : Array.from(refs)
+}
+
+/** [R2 2026-10-10] 🔴 이메일 마스킹 판정의 단일 지점 — 이 프로젝트들(pids)에 대한 응답에서 이메일을 가리는가.
+ *  범위의 mask(익명·로그인 비디자이너) 그대로 + **멤버십 없이 열람 링크(linkPids)로만 읽는 프로젝트**면 디자이너라도 가린다
+ *  (종전: mask = !designer 하나라 링크로 들어온 비멤버 디자이너에게 남의 프로젝트 이메일이 나갔다). */
+function maskFor(s: ReadScope, pids: string[]): boolean {
+  if (s.mask) return true
+  if (s.all) return false
+  return pids.some((p) => s.linkPids.has(p)) && !pids.some((p) => s.pids.has(p))
+}
+function maskForDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
+  return maskFor(s, dep ? boundPidsOf(refsIdx, dep) : [])
+}
+
 function canReadDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
   if (!dep) return false
   if (s.all) return true
   const refs = refsIdx.get(String(dep.id)) || new Set<string>()
-  const bound = dep.project_id ? [String(dep.project_id)] : Array.from(refs)
+  const bound = boundPidsOf(refsIdx, dep)
   if (s.linkOnly) return bound.some((p) => s.pids.has(p) && refs.has(p))   // 링크 = 그 프로젝트의 구역/원본 배포본만
   if (!bound.length) {
     if (s.unattachedTenant === false) return false
@@ -2628,7 +2650,7 @@ app.get('/api/projects', async (c) => {
     const effRole = myRole.get(p.id) || ((isSuperUser || isOwner) ? 'designer' : null)
     let base: any = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null,
       can_manage_members: canManageMembersOf(c, user, p.owner) }   // [WO 20261001-bulkreauth] 소유자·super — 일괄삭제 노출 SoT
-    if (s.mask) base = maskProjectEmails(base)   // 열람자(익명·로그인)에게 소유자·배포자 이메일 미노출
+    if (maskFor(s, [String(p.id)])) base = maskProjectEmails(base)   // 열람자(익명·로그인)·링크로만 읽는 비멤버에게 소유자·배포자 이메일 미노출(R2)
     // [P61] 🔴 공유 토큰은 멤버(설계자/소유자/배정멤버/슈퍼)에게만. 비멤버에게 주면 열거 차단이 무의미해진다.
     return isMember ? base : stripShareKey(base)
   }) })
@@ -4266,7 +4288,8 @@ app.get('/tables/deployments', async (c) => {
     }
     results = ids.map((id) => byId.get(id)).filter(Boolean)
   }
-  return c.json({ data: results.map((r: any) => mapDeploymentFor(r, s.mask)), total: results.length })
+  const midx = await depRefIndexOf(c)
+  return c.json({ data: results.map((r: any) => mapDeploymentFor(r, maskForDepRow(s, midx, r))), total: results.length })
 })
 
 // 단건 조회 (특정 배포본 고정 공유 — B1)
@@ -4291,7 +4314,7 @@ app.get('/tables/deployments/:id', async (c) => {
     const r = row as any
     return c.json({ id: r.id, version: (r.version != null ? r.version : 0), deleted: !!r.deleted })
   }
-  return c.json(mapDeploymentFor(row, scope.mask))
+  return c.json(mapDeploymentFor(row, maskForDepRow(scope, await depRefIndexOf(c), row)))
 })
 
 // 생성 (배포) — 디자이너 이상
@@ -4797,7 +4820,10 @@ app.get('/api/notes', async (c) => {
   sql += ' ORDER BY created_at ASC LIMIT ?'
   args.push(limit)
   const { results } = await c.env.DB.prepare(sql).bind(...args).all()
-  return c.json({ data: (results || []).map((r: any) => mapNote(r, actor.designer, actor.designer ? undefined : actor.email)), total: (results || []).length })
+  // [R2] 디자이너라도 링크로만 읽는 비멤버 배포본이면 열람자처럼 가린다(마스킹 SoT = maskFor)
+  const full = actor.designer && !maskForDepRow(await readScopeOf(c, actor.user), await depRefIndexOf(c),
+    await c.env.DB.prepare('SELECT id, project_id FROM deployments WHERE id = ?').bind(dep).first())
+  return c.json({ data: (results || []).map((r: any) => mapNote(r, full, full ? undefined : actor.email)), total: (results || []).length })
 })
 
 // 배포 단위 노트 요약(핀별 카운트/상태) — 도면 위 뱃지 표시용

@@ -97,8 +97,11 @@
         document.getElementById("prompt-modal-error").classList.add("hidden");
         const m = document.getElementById("prompt-modal");
         m.classList.remove("hidden");
-        requestAnimationFrame(() => m.classList.add("on"));
-        setTimeout(() => inp.focus(), 60);
+        // [R3 2026-10-10] 🔴 이 ask 가 아직 열려 있을 때만 "on" — 프레임 전에 닫히면(빠른 Enter·비번 자동제출·느린 기기)
+        //   늦게 온 프레임이 닫힌 모달에 "on" 을 다시 붙여 _close() 의 지연 숨김이 건너뛰어졌다 → 모달이 열린 채 입력칸 포커스 유지
+        //   → App._liveEditingNow() 가 계속 "편집 중" → 핀 전체삭제 후 화면 병합이 영영 안 됨(p132 4 화면 FAIL 근본원인).
+        requestAnimationFrame(() => { if (this._resolve === resolve) m.classList.add("on"); });
+        setTimeout(() => { if (this._resolve === resolve) inp.focus(); }, 60);
       });
     },
     _submit() {
@@ -180,7 +183,9 @@
         //   200ms 지연 숨김 타이머가 새 창에 "hidden" 을 붙여 두 번째 창이 사라지고 약속이 영원히 대기했다.
         //   열 때 앞 타이머를 취소하고, 닫힐 때는 그 사이 다시 열리지 않았을 때만 숨긴다.
         clearTimeout(modal._hideTimer);
+        let closed = false;   // [R3] 형제 지점(ask 와 같은 결함) — 프레임 전에 닫힌 창에 늦은 "on" 금지
         const close = (result) => {
+          closed = true;
           modal.classList.remove("on");
           modal._hideTimer = setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);
           okBtn.removeEventListener("click", onOk);
@@ -194,7 +199,7 @@
         cancelBtn.addEventListener("click", onCancel);
         backdrop.addEventListener("click", onCancel);
         modal.classList.remove("hidden");
-        requestAnimationFrame(() => modal.classList.add("on"));
+        requestAnimationFrame(() => { if (!closed) modal.classList.add("on"); });
       });
     }
   };

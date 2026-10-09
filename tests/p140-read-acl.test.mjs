@@ -21,6 +21,8 @@
  *  T15 [S1] 로그인 비멤버 + 공개 링크(같은 출처 Referer ?d= · /srview) → 링크 범위만 200 · 범위 밖 403 · 멤버 승격 없음
  *  T16 [S2] 노트 쓰기 = 읽기 SoT + 프로젝트 쓰기 권한(PATCH·DELETE·severity·POST 등급·ops entity:'note')
  *  T17 [S3] /api/auth/me super_admin 은 super 본인만 · 사용자 관리 super 보호를 서버로 대체
+ *  T19 [R1] 공개 소스 super 이메일 0건 · 사용자 관리 보호 = 서버 is_super(실 25c vm + 실 워커) · 클라 뮤테이션 P140_UMMUT=superSet
+ *  T20 [R2] 로그인 디자이너가 링크로만 읽는 비멤버 프로젝트 → 배포본·목록·프로젝트·노트 이메일 마스킹(maskFor 단일 지점)
  *  T18 [S4] 업로더·연결 없는 R2 객체 → 디자이너 403 · 본인 업로드 직후 200 · 연결 후 200
  *
  * 뮤테이션: MUT=<이름> 이면 src 사본에 치환을 적용해 빌드한다(치환 실패 = EXIT 3). 각 뮤테이션은 EXIT=1 이어야 한다.
@@ -68,6 +70,9 @@ const MUTS = {
   s3list:   ["  const rows = isSuperAdmin(c, su.email) ? (results || []) : (results || []).filter((r: any) => !isSuperAdmin(c, r.email))", "  const rows = results || []"],
   s3del:    ["  if (isSuperAdmin(c, email)) return c.json({ error: 'forbidden — super admin account is protected' }, 403)\n", "\n"],
   s4r2:     ["  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '\"' + pid + '\"', false)) return true\n  return false", "  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '\"' + pid + '\"', false)) return true\n  if (s.designer && !user._readonly && !panoIds.length && !(await depsMention(c, null, key, true))) return true\n  return false"],
+  r1flag:   ["  return rows.map((r: any) => ({ ...r, is_super: isSuperAdmin(c, r && r.email) }))", "  return rows.map((r: any) => ({ ...r, is_super: false }))"],
+  r2mask:   ["  return pids.some((p) => s.linkPids.has(p)) && !pids.some((p) => s.pids.has(p))", "  return false"],
+  r2notes:  ["  const full = actor.designer && !maskForDepRow(", "  const full = actor.designer || !maskForDepRow("],
 };
 const MUT = process.env.MUT || "";
 const SRC_DIR = process.env.P140_SRC ? path.resolve(process.env.P140_SRC) : path.join(ROOT, "src");
@@ -549,6 +554,73 @@ console.log("\n[T18 S4 R2 — 어디에도 연결 안 된 객체]");
   const ll = await api(TOK.d, "PUT", "/tables/deployments/" + D.l, { pins: JSON.stringify([{ id: 9, x: 1, y: 1, page: 1, imageUrl: "/api/r2/object/" + ORPH }]) });
   const after = await api(TOK.d, "GET", "/api/r2/object/" + ORPH);
   ok(ll.status === 200 && after.status === 200, "T18f 자기 배포본에 연결하면 → 200(연결 기준)", [ll.status, after.status]);
+}
+
+console.log("\n[T19 R1 클라이언트 슈퍼관리자 이메일 하드코딩 0 · 사용자 관리 보호 = 서버 판정(is_super)]");
+{
+  // (a) 정적: 서버 설정의 슈퍼관리자 이메일(wrangler.jsonc · SUPER_ADMIN_FALLBACK)이 공개 소스에 없어야 한다
+  const supers = new Set();
+  for (const m of rd("wrangler.jsonc").matchAll(/"SUPER_ADMIN_EMAILS?"\s*:\s*"([^"]+)"/g)) m[1].split(",").forEach((e) => e.includes("@") && supers.add(e.trim().toLowerCase()));
+  const fb = rd("src/index.tsx").match(/const SUPER_ADMIN_FALLBACK = '([^']+)'/);
+  if (fb) supers.add(fb[1].toLowerCase());
+  const pub = ["public/index.html", "public/js/firebase-config.js", "public/js/firebase-init.js",
+    ...fs.readdirSync(path.join(ROOT, "public/js/modules")).filter((f) => f.endsWith(".js")).map((f) => "public/js/modules/" + f)];
+  const hits = [];
+  for (const f of pub) { if (!fs.existsSync(path.join(ROOT, f))) continue; const t = rd(f).toLowerCase(); for (const e of supers) if (t.includes(e)) hits.push(f + ":" + e); }
+  ok(supers.size > 0 && hits.length === 0, "T19a 🔴 공개 클라이언트 소스(index.html·modules·firebase-*.js)에 슈퍼관리자 이메일 0건", hits);
+  // (b) 실 25c_UserMgmt.js(vm) + 실 워커: 일반관리자 o2 화면에서 super 계정은 서버 플래그로 숨는다
+  const now = Date.now();
+  await run("INSERT INTO access_requests (id, email, name, company, status, created_at, updated_at, deleted) VALUES ('ar_p140_sup', ?, 'sup', 'x', 'pending', ?, ?, 0)", [SUPER, now, now]);
+  await run("INSERT INTO access_requests (id, email, name, company, status, created_at, updated_at, deleted) VALUES ('ar_p140_x', 'someone@client.test', 'x', 'x', 'pending', ?, ?, 0)", [now, now]);
+  const vm = await import("node:vm");
+  const loadUM = async (tok, isSuper, email) => {
+    const sandbox = {
+      console, Promise, JSON, Date, Math, Object, String, Number, Array, Set, Map,
+      document: { getElementById: () => null, querySelectorAll: () => [] },
+      Auth: { headers: () => ({ Authorization: "Bearer " + tok }), isSuper, user: { email }, superAdmin: null },
+      fetch: async (u, o) => mf.dispatchFetch(BASE + u, o),
+    };
+    vm.createContext(sandbox);
+    let umSrc = rd("public/js/modules/25c_UserMgmt.js");
+    if (process.env.P140_UMMUT === "superSet") {   // 클라 뮤테이션: 서버 플래그 수집 제거 → T19b·c FAIL 기대
+      const needle = umSrc.match(/\n\s*this\._superSet = [^\n]*/);
+      if (!needle) { console.log("P140_UMMUT 치환 대상 없음"); process.exit(3); }
+      umSrc = umSrc.replace(needle[0], "");
+    }
+    vm.runInContext(umSrc + "\n;globalThis.__U = UserMgmt;", sandbox);
+    const U2 = sandbox.__U; U2._selected = new Set(); U2.render = () => {}; U2._updateCounts = () => {}; U2._syncFilterUI = () => {};
+    await U2.load();
+    return U2._all.map((u) => u.email);
+  };
+  const adm = await loadUM(TOK.o2, false, U.o2);
+  ok(!adm.includes(SUPER) && adm.includes("someone@client.test"), "T19b 🔴 일반관리자 사용자 관리: super(신청 행 포함) 숨김 · 다른 신청자 표시", adm);
+  const sup = await loadUM(TOK.s, true, SUPER);
+  ok(!sup.includes(SUPER) && sup.includes(U.o), "T19c super 본인 화면: super 행 숨김(서버 is_super) · 다른 사용자 표시", sup);
+  const lj = await api(TOK.s, "GET", "/api/local-users");
+  const srow = ((lj.j && lj.j.data) || []).find((r) => r.email === SUPER);
+  ok(srow && srow.is_super === true && ((lj.j && lj.j.data) || []).filter((r) => r.is_super).length === 1, "T19d /api/local-users 행 is_super = 서버 판정(super 1행만 true)", srow);
+}
+
+console.log("\n[T20 R2 로그인 디자이너가 링크로만 읽는 비멤버 프로젝트 — 이메일 마스킹]");
+{
+  const now = Date.now();
+  await run("INSERT INTO pin_notes (id, deployment_id, pin_id, pin_label, body, status, author, author_email, author_role, assignee, created_at, updated_at, deleted, kind) VALUES ('note_p140_c', ?, '1', '1', 'C노트', 'open', ?, ?, 'designer', ?, ?, ?, 0, 'note')", [D.c, U.o2, U.o2, U.o2, now, now]);
+  const refC = { Referer: BASE + "/?mode=viewer&d=" + D.c };
+  const one = await api(TOK.d, "GET", "/tables/deployments/" + D.c, null, refC);
+  ok(one.status === 200 && emailsIn(one.text).length === 0, "T20a 🔴 디자이너 D(C 비멤버)+링크 C → 배포본 단건 이메일 0건", emailsIn(one.text));
+  const lst = await api(TOK.d, "GET", "/tables/deployments", null, refC);
+  const cRow = ((lst.j && lst.j.data) || []).find((d) => d.id === D.c);
+  ok(cRow && emailsIn(JSON.stringify(cRow)).length === 0, "T20b 목록의 C 행 이메일 0건", cRow && emailsIn(JSON.stringify(cRow)));
+  const pr = await api(TOK.d, "GET", "/api/projects", null, refC);
+  const pc = ((pr.j && pr.j.data) || []).find((p) => p.id === P.c);
+  ok(pc && emailsIn(JSON.stringify(pc)).length === 0, "T20c /api/projects 의 C 카드 소유자·배포자 이메일 마스킹", pc && emailsIn(JSON.stringify(pc)));
+  const nt = await api(TOK.d, "GET", "/api/notes?deployment_id=" + D.c, null, refC);
+  ok(nt.status === 200 && (nt.j.data || []).some((n) => n.id === "note_p140_c") && emailsIn(nt.text).length === 0, "T20d C 노트 목록 작성자·담당자 이메일 0건", emailsIn(nt.text));
+  const mo = await api(TOK.o2, "GET", "/tables/deployments/" + D.c);
+  const mn = await api(TOK.o2, "GET", "/api/notes?deployment_id=" + D.c);
+  ok(mo.text.includes(U.o2) && mn.text.includes(U.o2), "T20e 멤버(소유자 o2)는 이메일 유지(편집 흐름)");
+  const dl = await api(TOK.d, "GET", "/tables/deployments/" + D.l);
+  ok(dl.status === 200 && JSON.stringify(dl.j).length > 0 && (await api(TOK.s, "GET", "/tables/deployments/" + D.c)).text.includes(U.o2), "T20f 디자이너 자기 레거시·super 응답은 종전 그대로");
 }
 
 await mf.dispose();

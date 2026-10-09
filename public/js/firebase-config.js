@@ -42,8 +42,8 @@ var __FB_DEFAULT = {
 
   window.FIREBASE_CONFIG = (saved && saved.apiKey) ? saved : __FB_DEFAULT;
 
-  /* 본인 Google 계정 이메일 (super-admin) — 설정값 > 기본값 */
-  window.FIREBASE_OWNER_EMAIL = savedEmail || "designssir@gmail.com";
+  /* 본인 Google 계정 이메일 (super-admin) — 설정값만. [R1 2026-10-10] 기본값 하드코딩 금지(없으면 빈 값 = 미설정) */
+  window.FIREBASE_OWNER_EMAIL = savedEmail || "";
 
   /* Firebase 사용 여부 자동 판정 (placeholder 가 남아있으면 비활성) */
   window.FIREBASE_ENABLED =

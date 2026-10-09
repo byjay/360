@@ -356,7 +356,7 @@
     async open() {
       if (!Auth.isSuper) return;
       const sa = document.getElementById("super-admin-email");
-      if (sa) sa.textContent = Auth.user ? Auth.user.email : (Auth.superAdmin || "designssir@gmail.com");
+      if (sa) sa.textContent = (Auth.user && Auth.user.email) || Auth.superAdmin || "";
       document.getElementById("designers-modal").classList.remove("hidden");
       requestAnimationFrame(() => document.getElementById("designers-modal").classList.add("on"));
       this.switchTab(this._tab);
