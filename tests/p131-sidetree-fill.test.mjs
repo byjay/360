@@ -19,6 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import { fileURLToPath } from "node:url";
+import { FIND_SEED_ORIGIN } from "./_lib/seed-origin.mjs";   // [2026-10-10] 시드 카드 스코프(누적 D1 의 빈 프로젝트 오클릭 방지)
 
 if (process.env.P131 !== "1") {
   console.log("[SKIP] p131 은 P131=1 일 때만 실행(실 Chrome+워커 실측)");
@@ -159,11 +160,11 @@ try {
     await wait(600);
     let entered = false;
     for (let attempt = 0; attempt < 3 && !entered; attempt++) {
-      await waitFor("document.querySelector('[data-act=origin-open]')", 15000);
+      await waitFor(FIND_SEED_ORIGIN, 15000);
       let clickRes = { found: false };
       for (let i = 0; i < 20 && !clickRes.found; i++) {
         await wait(300);
-        clickRes = await evSafe(`(function(){ var e = document.querySelector('[data-act=origin-open]'); if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`);
+        clickRes = await evSafe(`(function(){ var e = ${FIND_SEED_ORIGIN}; if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`);
       }
       if (!clickRes.found) continue;
       const readyWait = await waitFor("document.querySelector('#screen-app.active') && document.getElementById('side-tree')", 20000);

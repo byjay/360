@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import { fileURLToPath } from "node:url";
+import { FIND_SEED_ORIGIN } from "./_lib/seed-origin.mjs";   // [2026-10-10] 시드 카드 스코프(누적 D1 의 빈 프로젝트 오클릭 방지)
 
 if (process.env.P127 !== "1") { console.log("[SKIP] p127-cdp 는 P127=1 일 때만 실행"); process.exit(0); }
 
@@ -127,9 +128,9 @@ try {
     await wait(600);
     let entered = false;
     for (let attempt = 0; attempt < 3 && !entered; attempt++) {
-      await waitFor("document.querySelector('[data-act=origin-open]')", 15000);
+      await waitFor(FIND_SEED_ORIGIN, 15000);
       let c = { found: false };
-      for (let i = 0; i < 20 && !c.found; i++) { await wait(300); c = await evSafe(`(function(){ var e = document.querySelector('[data-act=origin-open]'); if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`); }
+      for (let i = 0; i < 20 && !c.found; i++) { await wait(300); c = await evSafe(`(function(){ var e = ${FIND_SEED_ORIGIN}; if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`); }
       if (!c.found) continue;
       await waitFor("document.querySelector('#screen-app.active')", 20000);
       if ((await waitFor("document.querySelectorAll('.pin-marker').length > 0 && window.__wm && __wm.State.pins.some(function(p){return !!p.imageId})", 12000)) < 0) continue;

@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import { fileURLToPath } from "node:url";
+import { FIND_SEED_ORIGIN } from "./_lib/seed-origin.mjs";   // [2026-10-10] 시드 카드 스코프(누적 D1 의 빈 프로젝트 오클릭 방지)
 
 if (process.env.P132 !== "1") { console.log("[SKIP] p132-cdp 는 P132=1 일 때만 실행"); process.exit(0); }
 
@@ -136,8 +137,8 @@ try {
     await P.send("Page.navigate", { url: BASE + "/" });
     await P.waitFor("document.querySelector('.hub-card-thumb') || document.querySelector('#screen-app.active')", 30000);
     for (let attempt = 0; attempt < 3; attempt++) {
-      await P.waitFor("document.querySelector('[data-act=origin-open]')", 15000);
-      await P.evS(`(function(){var e=document.querySelector('[data-act=origin-open]'); if(!e) return 0; e.scrollIntoView({block:'center'}); e.click(); return 1})()`);
+      await P.waitFor(FIND_SEED_ORIGIN, 15000);
+      await P.evS(`(function(){var e=${FIND_SEED_ORIGIN}; if(!e) return 0; e.scrollIntoView({block:'center'}); e.click(); return 1})()`);
       await P.waitFor("document.querySelector('#screen-app.active')", 20000);
       if ((await P.waitFor("window.__wm && __wm.State.pins.length > 0 && document.querySelector('.tree-node-origin .tree-more')", 15000)) >= 0) { await wait(1200); return true; }
     }

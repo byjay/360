@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import { fileURLToPath } from "node:url";
+import { FIND_SEED_ORIGIN } from "./_lib/seed-origin.mjs";   // [2026-10-10] 시드 카드 스코프(누적 D1 의 빈 프로젝트 오클릭 방지)
 
 if (process.env.P135 !== "1") { console.log("[SKIP] p135 는 P135=1 일 때만 실행(실 Chrome+워커 실측)"); process.exit(0); }
 
@@ -118,7 +119,7 @@ try {
     await wait(600);
 
     let clickRes = { found: false };
-    for (let i = 0; i < 20 && !clickRes.found; i++) { await wait(300); clickRes = await evSafe(`(function(){ var e = document.querySelector('[data-act=origin-open]'); if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`); }
+    for (let i = 0; i < 20 && !clickRes.found; i++) { await wait(300); clickRes = await evSafe(`(function(){ var e = ${FIND_SEED_ORIGIN}; if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`); }
     ok(clickRes.found, tag + " 원본 도면 진입 클릭 성공", clickRes);
     const regUp = await waitFor("document.getElementById('btn-regmode-photo') && document.getElementById('btn-regmode-checkboard')", 20000);
     ok(regUp >= 0, tag + " 모드 세그먼트 DOM 등장", regUp);

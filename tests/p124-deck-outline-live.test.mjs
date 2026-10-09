@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import { fileURLToPath } from "node:url";
+import { FIND_SEED_ORIGIN } from "./_lib/seed-origin.mjs";
 
 if (process.env.P124 !== "1") {
   console.log("[SKIP] p124 는 P124=1 일 때만 실행(실 Chrome+워커 실측, 수십 초 소요)");
@@ -179,13 +180,17 @@ try {
   // [견고화] 배경 재진입(§위 주석)이 "클릭 직후"뿐 아니라 설정 루프(아래, 최대 ~1.8+6초) 도중에도
   // 올 수 있다(실측 FAIL: settleCount=0, rect 사라짐 — 재진입이 DOM을 통째로 새로 만들었다). 진입
   // +설정 전체를 최대 3회 재시도한다(whole-flow retry — 부분 재시도로는 재진입 타이밍을 못 피한다).
+  // [2026-10-10 R5] 시드 프로젝트 카드로 스코프 — 공유 D1 에 누적된 빈 프로젝트를 여는 상태 의존 제거(tests/_lib/seed-origin.mjs).
+  //   뮤테이션: P124_MUT=unscoped → 종전 전역 선택자(누적 상태에서 11 FAIL 재현 기대).
+  const ORIGIN = process.env.P124_MUT === "unscoped" ? "document.querySelector('[data-act=origin-open]')" : FIND_SEED_ORIGIN;
+  if (process.env.P124_MUT) console.log("[P124_MUT=" + process.env.P124_MUT + "]");
   let entered = false, settleCount = 0, prevRect = null;
   for (let attempt = 0; attempt < 3 && !(entered && settleCount >= 3); attempt++) {
-    await waitFor("document.querySelector('[data-act=origin-open]')", 15000);
+    await waitFor(ORIGIN, 15000);
     let clickRes = { found: false };
     for (let i = 0; i < 20 && !clickRes.found; i++) {
       await wait(300);
-      clickRes = await evSafe(`(function(){ var e = document.querySelector('[data-act=origin-open]'); if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`);
+      clickRes = await evSafe(`(function(){ var e = ${ORIGIN}; if (!e) return {found:false}; e.scrollIntoView({block:'center'}); e.click(); return {found:true}; })()`);
     }
     if (!clickRes.found) continue;
     await waitFor("document.querySelector('#screen-app.active')", 20000);
