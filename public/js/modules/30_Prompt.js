@@ -68,6 +68,13 @@
     ask(opts) {
       return new Promise((resolve) => {
         this._resolve = resolve;
+        // [지휘자 2026-10-09 재현 — WO 20261008-pinpurge 3/3 재인증] 🔴 연속 ask() 충돌 가드.
+        // _close() 의 지연 숨김 타이머(아래)가 아직 안 끝났는데 바로 다음 ask()가 같은 #prompt-modal
+        // 을 다시 열면, 그 타이머가 나중에 발동해 방금 연 모달을 도로 숨긴다(PinPurge 2/3→3/3 연쇄
+        // 호출에서 100% 재현 — 핀 일괄삭제 재인증도 같은 경로를 쓴다). Prompt.confirm()(아래, 기존
+        // 정상 동작)과 같은 가드를 연다(open) 시점에도 건다 — 닫을 때 가드만으론 "닫는 중 다시 열기"
+        // 경합을 못 막는다.
+        clearTimeout(this._hideTimer);
         document.getElementById("prompt-modal-title").textContent = opts.title || "입력";
         document.getElementById("prompt-modal-sub").textContent = opts.sub || "";
         const inp = document.getElementById("prompt-modal-input");
@@ -109,7 +116,12 @@
     _close(result) {
       const m = document.getElementById("prompt-modal");
       m.classList.remove("on");
-      setTimeout(() => m.classList.add("hidden"), 200);
+      // [지휘자 2026-10-09 재현] Prompt.confirm()의 close()(아래)와 같은 가드 — 이 타이머가 발동할
+      // 때 모달이 그 사이 다시 열려 있으면("on" 복귀) 숨기지 않는다. clearTimeout 은 이 함수가 짧은
+      // 간격으로 두 번 불릴 때를 막고, 콜백의 "on" 재확인은 ask() 가 그 사이 다시 열었을 때를 막는다
+      // (이중 가드 — 어느 한쪽만으로는 경합 창이 남는다).
+      clearTimeout(this._hideTimer);
+      this._hideTimer = setTimeout(() => { if (!m.classList.contains("on")) m.classList.add("hidden"); }, 200);
       // [버그수정] 에러 텍스트 잔류 정리 — 다음 ask 모달에 이전 오류가 깜빡이지 않게
       const err = document.getElementById("prompt-modal-error"); if (err) { err.textContent = ""; err.classList.add("hidden"); }
       // [WO 20261001-bulkreauth] 비밀번호 입력값을 DOM 에 남기지 않는다
