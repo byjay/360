@@ -18,6 +18,10 @@
  *  T11 배포 취소: 이미 발급된 토큰 403 · 옛 링크 재발급 401 / 링크 폐기(구역 삭제): 그 링크 토큰 403
  *  T12 범위 없는 구 열람 토큰(감사 통행증) → 무효(auth/me unauthenticated · 목록 401)
  *  T13 공유 주소(/srview 토큰) 링크 → A 200 · C 403
+ *  T15 [S1] 로그인 비멤버 + 공개 링크(같은 출처 Referer ?d= · /srview) → 링크 범위만 200 · 범위 밖 403 · 멤버 승격 없음
+ *  T16 [S2] 노트 쓰기 = 읽기 SoT + 프로젝트 쓰기 권한(PATCH·DELETE·severity·POST 등급·ops entity:'note')
+ *  T17 [S3] /api/auth/me super_admin 은 super 본인만 · 사용자 관리 super 보호를 서버로 대체
+ *  T18 [S4] 업로더·연결 없는 R2 객체 → 디자이너 403 · 본인 업로드 직후 200 · 연결 후 200
  *
  * 뮤테이션: MUT=<이름> 이면 src 사본에 치환을 적용해 빌드한다(치환 실패 = EXIT 3). 각 뮤테이션은 EXIT=1 이어야 한다.
  * 재현: P140_SRC=<디렉터리> 면 그 디렉터리의 index.tsx 로 빌드(HEAD 추출본으로 결함 재현용).
@@ -52,6 +56,18 @@ const MUTS = {
   legacyTok:["    if (!ps.length) return null\n", "\n"],
   linkGone: ["if (sc.d && !(refs && refs.has(String(pid)))) continue", ""],
   pano:     ["if (!s.all && !s.designer && !(await canReadPanoAsViewer(c, user, id))) return c.json({ error: 'forbidden' }, 403)", ""],
+  // ── 2026-10-10 S1~S4 ──
+  s1link:   ["    if (sc) linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null })\n", "\n"],
+  s1member: ["    const isMember = isMemberInScope(s, p.id)", "    const isMember = !s.linkOnly && canReadProjectId(s, p.id)"],
+  s2read:   ["  if (!(await canReadDeployment(c, a.user, String(note.deployment_id)))) return null\n", "\n"],
+  s2edit:   ["  if (a.designer && await canModerateNotesOf(c, a.user, String(note.deployment_id))) return 'designer'", "  if (a.designer) return 'designer'"],
+  s2post:   ["  const mod = a.designer && (!deployment_id || await canModerateNotesOf(c, a.user, deployment_id))", "  const mod = a.designer"],
+  s2opsDel: ["WHERE id = ? AND deployment_id = ?')\n            .bind(opTsNote, realId, id)", "WHERE id = ?')\n            .bind(opTsNote, realId)"],
+  s2opsUpd: ["            args.push(realId, id)", "            args.push(realId)"],
+  s3me:     ["...(role === 'super' ? { super_admin: superAdmin(c) } : {})", "super_admin: superAdmin(c)"],
+  s3list:   ["  const rows = isSuperAdmin(c, su.email) ? (results || []) : (results || []).filter((r: any) => !isSuperAdmin(c, r.email))", "  const rows = results || []"],
+  s3del:    ["  if (isSuperAdmin(c, email)) return c.json({ error: 'forbidden — super admin account is protected' }, 403)\n", "\n"],
+  s4r2:     ["  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '\"' + pid + '\"', false)) return true\n  return false", "  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '\"' + pid + '\"', false)) return true\n  if (s.designer && !user._readonly && !panoIds.length && !(await depsMention(c, null, key, true))) return true\n  return false"],
 };
 const MUT = process.env.MUT || "";
 const SRC_DIR = process.env.P140_SRC ? path.resolve(process.env.P140_SRC) : path.join(ROOT, "src");
@@ -81,7 +97,7 @@ await esbuild.build({
 });
 const mf = new Miniflare({
   modules: true, scriptPath: workerOut, d1Databases: { DB: "p140-" + Date.now() }, r2Buckets: { R2: "p140r2-" + Date.now() },
-  bindings: { DEMO_LOGIN: "0", AUTO_ENTRY_SECRET: SECRET, SUPER_ADMIN_EMAIL: SUPER, SUPER_ADMIN_EMAILS: SUPER },
+  bindings: { DEMO_LOGIN: "0", AUTO_ENTRY_SECRET: SECRET, SUPER_ADMIN_EMAIL: SUPER, SUPER_ADMIN_EMAILS: SUPER, ADMIN_EMAILS: "owner2@seastar.test" },   // o2 = 일반관리자(T17 사용자 관리)
   compatibilityDate: "2025-01-01",
 });
 const BASE = "http://p140.test";
@@ -415,6 +431,124 @@ console.log("\n[T14 클라이언트 재발급 경로 — 실 22_Auth.js + 01c_Sh
     ok(A.idToken && A.idToken !== aTok && (await api(A.idToken, "GET", "/tables/deployments/" + D.c)).status === 200,
       "T14ⓒ 다른 링크(C)로 진입 → A 토큰 폐기·C 토큰 재발급 → C 200");
   }
+}
+
+console.log("\n[T15 S1 로그인 비멤버 + 공개 열람 링크(Referer) — 링크 범위 안만]");
+{
+  const refC = { Referer: BASE + "/?mode=viewer&d=" + D.c };
+  const vc = await api(TOK.v, "GET", "/tables/deployments/" + D.c, null, refC);
+  ok(vc.status === 200 && vc.j && vc.j.id === D.c, "T15a 🔴 로그인 열람자 V(C 비멤버) + 링크 ?d=C → C 200(로그아웃 불필요)", vc.status);
+  const dc = await api(TOK.d, "GET", "/tables/deployments/" + D.c, null, refC);
+  ok(dc.status === 200, "T15b 로그인 디자이너 D(C 비멤버) + 링크 ?d=C → 200", dc.status);
+  const vb = await api(TOK.v, "GET", "/tables/deployments/" + D.b, null, refC);
+  ok(vb.status === 403, "T15c 링크 C 로는 범위 밖 B → 403", vb.status);
+  const vbl = await api(TOK.v, "GET", "/tables/deployments/" + D.b, null, { Referer: BASE + "/?d=" + D.b });
+  ok(vbl.status === 403, "T15d 비공개(미배포) B 링크 → 403", vbl.status);
+  const vx = await api(TOK.v, "GET", "/tables/deployments/" + D.c, null, { Referer: "http://evil.test/?d=" + D.c });
+  ok(vx.status === 403, "T15e 다른 출처 Referer → 무시(403)", vx.status);
+  const rc = await api(TOK.v, "GET", "/api/r2/object/" + K.c, null, refC);
+  ok(rc.status === 200 && rc.text === "PNG-SECRET-c", "T15f 링크 C 범위 R2 키 → 200", rc.status);
+  const nc = await api(TOK.d, "GET", "/api/notes?deployment_id=" + D.c, null, refC);
+  ok(nc.status === 200, "T15g 링크 C 범위 노트 목록 → 200", nc.status);
+  const pr = await api(TOK.v, "GET", "/api/projects", null, refC);
+  const pc = ((pr.j && pr.j.data) || []).find((p) => p.id === P.c);
+  ok(pc && pc.is_member === false && !pc.share_token, "T15h 링크로 읽어도 멤버로 승격되지 않음(공유 토큰 미노출)", pc);
+  await api(TOK.o2, "POST", "/api/projects/" + P.c + "/publish", {});   // 공유 토큰 발급(시드는 토큰 없이 published=1)
+  const crow = await db.prepare("SELECT share_token FROM projects WHERE id = ?").bind(P.c).first();
+  ok(!!(crow && crow.share_token), "T15i0 C 공유 토큰 발급됨");
+  const sv = await api(TOK.v, "GET", "/tables/deployments/" + D.c, null, { Referer: BASE + "/srview/p140c-" + crow.share_token });
+  ok(sv.status === 200, "T15i 공유 주소(/srview) 링크 Referer → C 200", sv.status);
+  const rl = await api(TOK.d, "GET", "/tables/deployments/" + D.a, null, refC);
+  ok(rl.status === 403, "T15j 디자이너 D 링크 C 로 A → 403(범위 밖 유지)", rl.status);
+}
+
+console.log("\n[T16 S2 노트 쓰기 — 읽기 SoT 대칭 + 프로젝트 쓰기 권한]");
+{
+  const now = Date.now();
+  const DV = "member.viewer.designer@seastar.test";
+  await run("INSERT INTO designers (email, name, added_by, created_at, updated_at, deleted) VALUES (?, 'dv', 'seed', ?, ?, 0)", [DV, now, now]);
+  await run("INSERT INTO local_users (email, name, domain, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted) VALUES (?, 'dv', 'x', 'h', 's', 1, ?, ?, 0)", [DV, now, now]);
+  const TDV = "local-p140-dv-" + crypto.randomBytes(6).toString("hex");
+  await run("INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)", [TDV, DV, now, now + 8.64e7]);
+  await run("INSERT INTO project_members (project_id, email, role, granted_by, created_at) VALUES (?, ?, 'viewer', ?, ?)", [P.a, DV, U.o, now]);
+  const body0 = async () => (await db.prepare("SELECT body, deleted FROM pin_notes WHERE id = 'note_p140_a'").first());
+  const pd = await api(TOK.d, "PATCH", "/api/notes/note_p140_a", { body: "탈취", status: "done" });
+  ok(pd.status === 403 && (await body0()).body === "누수", "T16a 🔴 비멤버 디자이너 D → 다른 프로젝트 노트 PATCH 403(본문 불변)", pd.status);
+  const dd = await api(TOK.d, "DELETE", "/api/notes/note_p140_a");
+  ok(dd.status === 403 && Number((await body0()).deleted) === 0, "T16b 🔴 비멤버 디자이너 D → DELETE 403", dd.status);
+  const sd = await api(TOK.d, "POST", "/api/notes/note_p140_a/severity-suggest", {});
+  ok(sd.status === 403, "T16c 비멤버 디자이너 D → severity-suggest 403", sd.status);
+  const pv = await api(TDV, "PATCH", "/api/notes/note_p140_a", { status: "done" });
+  ok(pv.status === 403, "T16d 🔴 A 열람 멤버인 디자이너(읽기 가능·쓰기 권한 없음) → 남의 노트 PATCH 403", pv.status);
+  const nv = await api(TDV, "POST", "/api/notes", { deployment_id: D.a, pin_id: "1", body: "결함 지정", kind: "note", status: "progress" });
+  ok(nv.status === 403, "T16e A 열람 멤버 디자이너 → 디자이너 전용 노트(kind=note) 작성 403", nv.status);
+  const rv = await api(TDV, "POST", "/api/notes", { deployment_id: D.a, body: "요청", kind: "request", status: "done" });
+  ok(rv.status === 200 && rv.j && rv.j.status === "open", "T16f 같은 사용자 요청 작성은 열람자 등급으로 200(status 무시)", [rv.status, rv.j && rv.j.status]);
+  const ro = await api(TDV, "PATCH", "/api/notes/" + (rv.j && rv.j.id), { body: "요청(수정)" });
+  ok(ro.status === 200, "T16g 본인 글 내용 수정 → 200(작성자 권한 유지)", ro.status);
+  // 읽기 대칭: 작성자라도 지금 읽을 수 없는 배포본(B — 멤버십 회수·비공개 전환)의 글은 못 고친다
+  await run("INSERT INTO pin_notes (id, deployment_id, pin_id, pin_label, body, status, author, author_email, author_role, created_at, updated_at, deleted, kind) VALUES ('note_p140_vb', ?, '', '', 'V옛글', 'open', 'v', ?, 'viewer', ?, ?, 0, 'request')", [D.b, U.v, now, now]);
+  const vb = await api(TOK.v, "PATCH", "/api/notes/note_p140_vb", { body: "수정" });
+  const vbd = await api(TOK.v, "DELETE", "/api/notes/note_p140_vb");
+  ok(vb.status === 403 && vbd.status === 403, "T16g2 🔴 작성자 V 라도 읽을 수 없는 B 의 자기 글 PATCH/DELETE → 403", [vb.status, vbd.status]);
+  const po = await api(TOK.o, "PATCH", "/api/notes/note_p140_a", { status: "progress" });
+  ok(po.status === 200 && po.j && po.j.status === "progress", "T16h 소유자 O → 자기 프로젝트 노트 PATCH 200(정상 흐름)", po.status);
+  const ps = await api(TOK.s, "PATCH", "/api/notes/note_p140_b", { status: "progress" });
+  ok(ps.status === 200, "T16i super → 200", ps.status);
+  // 형제 쓰기 경로: 오프라인 ops(entity:'note') — D 는 레거시 배포본 L 에 쓰기 가능하지만 A 의 노트 id 를 끼워 넣으면 안 된다
+  const op1 = await api(TOK.d, "POST", "/tables/deployments/" + D.l + "/ops", { ops: [
+    { opId: "op-p140-n1-" + now, entity: "note", action: "upsert", id: "note_p140_a", data: { body: "ops탈취" }, ts: now },
+    { opId: "op-p140-n2-" + now, entity: "note", action: "delete", id: "note_p140_b", ts: now } ] });
+  const nb = await db.prepare("SELECT deleted FROM pin_notes WHERE id = 'note_p140_b'").first();
+  ok((await body0()).body === "누수" && Number(nb.deleted) === 0, "T16j 🔴 ops 경유 다른 배포본 노트 수정·삭제 불가(행 불변)", [op1.status, (await body0()).body, nb.deleted]);
+  const ln = await api(TOK.d, "POST", "/tables/deployments/" + D.l + "/ops", { ops: [
+    { opId: "op-p140-n3-" + now, entity: "note", action: "upsert", id: "tmp-note-p140", data: { body: "레거시 노트", pin_id: "1" }, ts: now } ] });
+  const lid = ln.j && ln.j.noteIdMap && ln.j.noteIdMap["tmp-note-p140"];
+  const ln2 = await api(TOK.d, "POST", "/tables/deployments/" + D.l + "/ops", { ops: [
+    { opId: "op-p140-n4-" + now, entity: "note", action: "upsert", id: lid, data: { body: "레거시 노트(수정)" }, ts: now + 1 } ] });
+  const lrow = lid ? await db.prepare("SELECT body FROM pin_notes WHERE id = ?").bind(lid).first() : null;
+  ok(ln.status === 200 && ln2.status === 200 && lrow && lrow.body === "레거시 노트(수정)", "T16k ops 자기 배포본 노트 생성·수정 → 정상(오프라인 흐름)", [ln.status, ln2.status, lrow]);
+}
+
+console.log("\n[T17 S3 /api/auth/me — super 이메일은 super 본인에게만]");
+{
+  for (const k of ["v", "d", "o"]) {
+    const me = await api(TOK[k], "GET", "/api/auth/me");
+    ok(me.status === 200 && me.j && me.j.authenticated && !("super_admin" in me.j) && !me.text.includes(SUPER), "T17 " + k + " → super_admin 키·이메일 없음", me.j && me.j.super_admin);
+  }
+  const ms = await api(TOK.s, "GET", "/api/auth/me");
+  ok(ms.j && ms.j.role === "super" && ms.j.super_admin === SUPER, "T17s super 본인 → super_admin 유지", ms.j && ms.j.super_admin);
+  const ma = await api(ANON, "GET", "/api/auth/me");
+  ok(ma.j && !ma.text.includes(SUPER), "T17a 익명 링크 토큰 → super 이메일 없음", ma.j && ma.j.super_admin);
+  // 클라 소비처 대체: 사용자 관리(_protected)가 super_admin 으로 가리던 super 계정 → 서버가 가리고 지키는지
+  const me2 = await api(TOK.o2, "GET", "/api/auth/me");
+  ok(me2.j && me2.j.role === "admin" && !me2.text.includes(SUPER), "T17b 일반관리자 o2 → role admin · super 이메일 없음", me2.j && me2.j.role);
+  const lu = await api(TOK.o2, "GET", "/api/local-users");
+  ok(lu.status === 200 && !lu.text.includes(SUPER) && lu.text.includes(U.o), "T17c 일반관리자 사용자 목록 → super 계정 제외(다른 계정은 유지)", lu.status);
+  const ls = await api(TOK.s, "GET", "/api/local-users");
+  ok(ls.status === 200 && ls.text.includes(SUPER), "T17d super 본인 목록 → 유지", ls.status);
+  const del = await api(TOK.o2, "DELETE", "/api/local-users/" + encodeURIComponent(SUPER));
+  const srow = await db.prepare("SELECT deleted FROM local_users WHERE email = ?").bind(SUPER).first();
+  ok(del.status === 403 && Number(srow.deleted) === 0, "T17e 🔴 일반관리자 → super 계정 삭제 403(행 불변)", [del.status, srow.deleted]);
+}
+
+console.log("\n[T18 S4 R2 — 어디에도 연결 안 된 객체]");
+{
+  const ORPH = "assets/p140-orphan.png";
+  await r2.put(ORPH, "PNG-ORPHAN");
+  const d = await api(TOK.d, "GET", "/api/r2/object/" + ORPH);
+  ok(d.status === 403 && !d.text.includes("ORPHAN"), "T18a 🔴 디자이너 D → 미연결·업로더 아님 객체 403", d.status);
+  const o = await api(TOK.o, "GET", "/api/r2/object/" + ORPH);
+  ok(o.status === 403, "T18b 다른 디자이너(소유자 O) → 403", o.status);
+  const s = await api(TOK.s, "GET", "/api/r2/object/" + ORPH);
+  ok(s.status === 200, "T18c super → 200", s.status);
+  const up = await mf.dispatchFetch(BASE + "/api/r2/upload", { method: "PUT", headers: { Authorization: "Bearer " + TOK.o, "Content-Type": "image/png" }, body: "o-upload" });
+  const uj = await up.json();
+  ok((await api(TOK.o, "GET", uj.url)).status === 200, "T18d 업로드 직후 미연결 본인 파일 → 200(오프라인 업로드 흐름)");
+  ok((await api(TOK.d, "GET", uj.url)).status === 403, "T18e 남의 미연결 업로드 → 403");
+  const ll = await api(TOK.d, "PUT", "/tables/deployments/" + D.l, { pins: JSON.stringify([{ id: 9, x: 1, y: 1, page: 1, imageUrl: "/api/r2/object/" + ORPH }]) });
+  const after = await api(TOK.d, "GET", "/api/r2/object/" + ORPH);
+  ok(ll.status === 200 && after.status === 200, "T18f 자기 배포본에 연결하면 → 200(연결 기준)", [ll.status, after.status]);
 }
 
 await mf.dispose();

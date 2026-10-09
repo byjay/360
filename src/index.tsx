@@ -856,7 +856,8 @@ app.get('/api/auth/me', async (c) => {
   // 실제 로그인(데모/자동입장 제외)만 로그 기록 — 자동입장은 방문마다 발생해 로그를 오염시킨다
   if (!user._demo && !user._auto) await logActivity(c, 'auth.login', { actor: user, targetType: 'auth', detail: { role, local: !!user._local } })
   // [P48] readonly=true 면 서버가 모든 쓰기를 거부한다 — 클라가 UI 를 정직하게 열람 전용으로 표시하도록 동봉.
-  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, auto: !!user._auto, readonly: !!user._readonly, request_status, super_admin: superAdmin(c) })
+  // [S3] super_admin(슈퍼관리자 이메일)은 super 본인에게만 — 클라 소비처(관리 모달·보호 목록)는 전부 super 전용 화면이다.
+  return c.json({ authenticated: true, email: user.email, name: user.name, picture: user.picture, role, demo: !!user._demo, local: !!user._local, auto: !!user._auto, readonly: !!user._readonly, request_status, ...(role === 'super' ? { super_admin: superAdmin(c) } : {}) })
 })
 
 /* ── 클라이언트 인증 설정(공개 가능 값만) ──
@@ -1445,7 +1446,9 @@ app.get('/api/local-users', async (c) => {
   const { results } = await c.env.DB.prepare(
     'SELECT email, name, domain, company, created_at, last_login_at FROM local_users WHERE deleted = 0 ORDER BY created_at DESC'
   ).all()
-  return c.json({ data: results || [] })
+  // [S3] 슈퍼관리자 계정은 관리 대상이 아니다 — 종전엔 클라가 /api/auth/me 의 super_admin 으로 가렸다(그 값은 이제 super 본인만 받는다) → 서버가 가린다.
+  const rows = isSuperAdmin(c, su.email) ? (results || []) : (results || []).filter((r: any) => !isSuperAdmin(c, r.email))
+  return c.json({ data: rows })
 })
 
 /* ── 사전 등록(초대) 이메일 관리(슈퍼관리자 전용) ──
@@ -1556,6 +1559,8 @@ app.delete('/api/local-users/:email', async (c) => {
   const su = await requireAdmin(c)
   if (!su) return c.json({ error: 'forbidden' }, 403)
   const email = decodeURIComponent(c.req.param('email')).toLowerCase()
+  // [S3] 슈퍼관리자 계정 삭제 금지 — 종전 클라 보호 목록(_protected)의 서버 측 대체(우회 불가)
+  if (isSuperAdmin(c, email)) return c.json({ error: 'forbidden — super admin account is protected' }, 403)
   await c.env.DB.prepare('UPDATE local_users SET deleted = 1, updated_at = ? WHERE email = ?').bind(Date.now(), email).run()
   await c.env.DB.prepare('UPDATE local_sessions SET revoked = 1 WHERE email = ?').bind(email).run().catch(() => {})
   await logActivity(c, 'local_user.delete', { actor: su, targetType: 'local_user', targetId: email })
@@ -2278,7 +2283,7 @@ async function deploymentWriteDenied(c: any, user: any, projectId: any): Promise
  *   익명 열람 토큰(ae1) → 토큰에 **서명된** 링크의 프로젝트(배포 중 · 링크 유효 · 초대코드 게이트 통과)의 구역/원본 배포본만.
  *                          배포 취소·링크 폐기는 요청마다 다시 확인하므로 이미 발급된 토큰도 즉시 막힌다.
  * 요청당 1회 메모(c.set) — 한 요청에서 여러 번 불러도 D1 조회는 한 번. */
-type ReadScope = { all: boolean, pids: Set<string>, linkOnly: boolean, designer: boolean, unattachedTenant: string | null | false, mask: boolean, email: string }
+type ReadScope = { all: boolean, pids: Set<string>, linkOnly: boolean, designer: boolean, unattachedTenant: string | null | false, mask: boolean, email: string, linkPids: Set<string> }
 
 /** 살아있는(deleted=0) 프로젝트 전부 — id → {owner, published, share_token, original_deployment_id}. */
 async function liveProjectsOf(c: any): Promise<Map<string, any>> {
@@ -2359,24 +2364,12 @@ async function readScopeOf(c: any, user: any): Promise<ReadScope> {
 }
 
 async function computeReadScope(c: any, user: any): Promise<ReadScope> {
-  const none: ReadScope = { all: false, pids: new Set(), linkOnly: false, designer: false, unattachedTenant: false, mask: true, email: '' }
+  const none: ReadScope = { all: false, pids: new Set(), linkOnly: false, designer: false, unattachedTenant: false, mask: true, email: '', linkPids: new Set() }
   if (!user) return none
   const email = String(user.email || '').trim().toLowerCase()
   // ── 익명 열람 토큰: 서명된 링크 범위 안에서, 지금도 유효한 것만 ──
   if (user._auto && user._readonly) {
-    const sc = user._scope || { p: [], d: null, th: null }
-    const projects = await liveProjectsOf(c)
-    const refs = sc.d ? (await depRefIndexOf(c)).get(String(sc.d)) : null
-    const pids = new Set<string>()
-    for (const pid of (sc.p || [])) {
-      const p = projects.get(String(pid))
-      if (!p || !Number(p.published)) continue                                       // 배포 취소·삭제 → 즉시 무효
-      if (sc.d && !(refs && refs.has(String(pid)))) continue                         // 링크 배포본이 그 프로젝트에서 빠짐 = 링크 폐기
-      if (sc.th && (!p.share_token || (await shareTokenHash(String(p.share_token))) !== sc.th)) continue   // 공유 주소 교체·해제
-      if (await shareGateLockedPid(c, user, [String(pid)])) continue                // 초대코드 게이트 미통과(목록 경로 포함 — H2)
-      pids.add(String(pid))
-    }
-    return { ...none, pids, linkOnly: true }
+    return { ...none, pids: await validLinkPids(c, user, user._scope || { p: [], d: null, th: null }), linkOnly: true }
   }
   if (isSuperAdmin(c, email)) return { ...none, all: true, mask: false, email }
   const designer = await isDesigner(c, email)
@@ -2397,7 +2390,32 @@ async function computeReadScope(c: any, user: any): Promise<ReadScope> {
     pids.add(id)   // 멤버(역할 무관) — 소유자/관리자가 명시적으로 배정한 프로젝트
   }
   const unattachedTenant: string | null | false = designer ? await tenantOf(c, user) : false
-  return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email }
+  // [S1] 로그인 사용자가 공개 열람 링크(?d= · /srview)로 들어온 요청 — 익명 링크 토큰과 **같은 범위·같은 유효성 판정**을 더한다.
+  //   링크 식별은 같은 출처 Referer(auto-entry 의 하위호환 경로와 같은 신뢰 수준 — 익명이 같은 링크로 받을 수 있는 범위 이상은 아니다).
+  //   멤버십(pids)과 분리해 둔다 → 링크로 읽었다고 멤버(공유 토큰·관리 권한)로 승격되지 않는다.
+  let linkPids = new Set<string>()
+  if (!user._auto && !user._readonly) {
+    const sc = await viewLinkScope(c, {})
+    if (sc) linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null })
+    for (const pid of pids) linkPids.delete(pid)
+  }
+  return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email, linkPids }
+}
+
+/** 링크 범위(서명 토큰의 _scope 또는 요청의 링크) → 지금도 유효한 프로젝트 id. 익명 토큰·로그인 링크 열람이 공유하는 단일 판정. */
+async function validLinkPids(c: any, user: any, sc: { p: string[], d: string | null, th: string | null }): Promise<Set<string>> {
+  const projects = await liveProjectsOf(c)
+  const refs = sc.d ? (await depRefIndexOf(c)).get(String(sc.d)) : null
+  const pids = new Set<string>()
+  for (const pid of (sc.p || [])) {
+    const p = projects.get(String(pid))
+    if (!p || !Number(p.published)) continue                                       // 배포 취소·삭제 → 즉시 무효
+    if (sc.d && !(refs && refs.has(String(pid)))) continue                         // 링크 배포본이 그 프로젝트에서 빠짐 = 링크 폐기
+    if (sc.th && (!p.share_token || (await shareTokenHash(String(p.share_token))) !== sc.th)) continue   // 공유 주소 교체·해제
+    if (await shareGateLockedPid(c, user, [String(pid)])) continue                // 초대코드 게이트 미통과(목록 경로 포함 — H2)
+    pids.add(String(pid))
+  }
+  return pids
 }
 
 /** 판정 본체(동기) — 배포본 행(id·project_id·tenant_id)이 이 범위에서 읽히는가.
@@ -2413,7 +2431,8 @@ function canReadDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any
     if (s.unattachedTenant === false) return false
     return s.unattachedTenant === null || String(dep.tenant_id || DEFAULT_TENANT) === s.unattachedTenant
   }
-  return bound.some((p) => s.pids.has(p))
+  if (bound.some((p) => s.pids.has(p))) return true
+  return bound.some((p) => s.linkPids.has(p) && refs.has(p))   // [S1] 로그인 + 열람 링크 = 익명 링크와 같은 범위(구역/원본 배포본만)
 }
 
 async function canReadDeployment(c: any, user: any, dep: any): Promise<boolean> {
@@ -2429,14 +2448,18 @@ async function canReadDeployment(c: any, user: any, dep: any): Promise<boolean> 
 async function readableDeploymentIds(c: any, user: any): Promise<string[] | null> {
   const s = await readScopeOf(c, user)
   if (s.all) return null
-  if (!s.pids.size && s.unattachedTenant === false) return []
+  if (!s.pids.size && !s.linkPids.size && s.unattachedTenant === false) return []
   const idx = await depRefIndexOf(c)
   const r: any = await c.env.DB.prepare('SELECT id, project_id, tenant_id FROM deployments WHERE deleted = 0 ORDER BY created_at DESC').all()
   return (r.results || []).filter((d: any) => canReadDepRow(s, idx, d)).map((d: any) => String(d.id))
 }
 
 function canReadProjectId(s: ReadScope, pid: any): boolean {
-  return s.all || s.pids.has(String(pid))
+  return s.all || s.pids.has(String(pid)) || s.linkPids.has(String(pid))
+}
+/** 멤버(소유·배정·super) 판정 — 링크로 읽을 수 있는 것(linkPids)과 구분. 공유 토큰·멤버 표시는 이것만 본다. */
+function isMemberInScope(s: ReadScope, pid: any): boolean {
+  return !s.linkOnly && (s.all || s.pids.has(String(pid)))
 }
 
 /** 주어진 배포본들 중 하나라도 needle(R2 키 · 파노 id)을 참조하는가. wide=false 면 핀만 본다. */
@@ -2458,8 +2481,8 @@ async function depsMention(c: any, ids: string[] | null, needle: string, wide: b
   return false
 }
 
-/** R2 객체 읽기 — 읽을 수 있는 배포본(직접 참조 또는 파노 행 경유)이 참조하는 키만.
- *  디자이너: 본인 업로드(저장 전 미리보기) · 어디에도 연결 안 된 객체(레거시)는 종전대로 허용 — 남의 프로젝트에 연결된 키는 막힌다. */
+/** R2 객체 읽기 — 읽을 수 있는 배포본(직접 참조 또는 파노 행 경유)이 참조하는 키만 + 본인 업로드(저장 전 미리보기·오프라인 업로드 직후).
+ *  [S4] 종전의 "디자이너는 어디에도 연결 안 된 객체 허용" 분기 제거 — 업로더도 연결도 없는 객체는 super 만 읽는다. */
 async function canReadR2Key(c: any, user: any, key: string, obj: any): Promise<boolean> {
   if (!user) return false
   const s = await readScopeOf(c, user)
@@ -2474,7 +2497,6 @@ async function canReadR2Key(c: any, user: any, key: string, obj: any): Promise<b
     panoIds = (pr.results || []).map((r: any) => String(r.id))
   } catch {}
   for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '"' + pid + '"', false)) return true
-  if (s.designer && !user._readonly && !panoIds.length && !(await depsMention(c, null, key, true))) return true
   return false
 }
 
@@ -2601,7 +2623,7 @@ app.get('/api/projects', async (c) => {
   const list = (results || []).filter((p: any) => canReadProjectId(s, p.id) || (!s.linkOnly && !!p.published))
   return c.json({ data: list.map((p: any) => {
     const isOwner = isProjectOwner(p.owner, email)
-    const isMember = !s.linkOnly && canReadProjectId(s, p.id)
+    const isMember = isMemberInScope(s, p.id)
     // [P40] 배지용 — 이 프로젝트에서의 내 실효 역할(멤버행 > 소유자/슈퍼 > 없음)
     const effRole = myRole.get(p.id) || ((isSuperUser || isOwner) ? 'designer' : null)
     let base: any = { ...mapProject(p), is_member: isMember, my_role: effRole, my_request: myReqStatus.get(p.id) || null,
@@ -4470,8 +4492,9 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       const isTemp = realId.indexOf('tmp-note-') === 0
       if (op.action === 'delete') {
         if (!isTemp) {
-          await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ?')
-            .bind(opTsNote, realId).run()
+          // [S2] 🔴 쓰기 권한은 URL 의 배포본(id)으로만 검사했다 → 노트도 그 배포본 소속만(다른 프로젝트 노트 id 를 끼워 넣는 IDOR 차단)
+          await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ? AND deployment_id = ?')
+            .bind(opTsNote, realId, id).run()
         }
         // isTemp(한 번도 서버에 생성된 적 없는 노트) → 삭제할 행이 없으므로 no-op
       } else { // upsert
@@ -4515,8 +4538,8 @@ app.post('/tables/deployments/:id/ops', async (c) => {
           }
           if (fields.length) {
             fields.push('updated_at = ?'); args.push(opTsNote)
-            args.push(realId)
-            await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ? AND deleted = 0`).bind(...args).run()
+            args.push(realId, id)   // [S2] 그 배포본 소속 노트만(위 delete 와 같은 경계)
+            await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ? AND deployment_id = ? AND deleted = 0`).bind(...args).run()
           }
         }
       }
@@ -4812,8 +4835,8 @@ app.post('/api/notes', async (c) => {
   let pin_id = String(body.pin_id ?? '').trim()
   const text = String(body.body || '').trim()
   // [WO 20261001-viewreq] 종류 — 디자이너 기본 note(종전), 열람자 기본 request. 열람자는 request|question 만.
-  let kind = String(body.kind || (a.designer ? 'note' : 'request'))
-  if (!NOTE_KINDS.includes(kind)) return c.json({ error: 'invalid kind' }, 400)
+  let kind = String(body.kind || '')
+  if (kind && !NOTE_KINDS.includes(kind)) return c.json({ error: 'invalid kind' }, 400)
   const parentId = String(body.parent_id || '').trim()
   let parent: any = null
   if (kind === 'reply' || parentId) {   // 답변 권한은 아래 단일 판정(열람자 = request|question 만)이 끊는다
@@ -4822,7 +4845,11 @@ app.post('/api/notes', async (c) => {
     if (!parent) return c.json({ error: 'parent not found' }, 404)
     kind = 'reply'; deployment_id = String(parent.deployment_id); pin_id = String(parent.pin_id || '')   // 답변은 원 요청 위치를 그대로 따른다
   }
-  if (!a.designer && !NOTE_VIEWER_KINDS.includes(kind)) return c.json({ error: 'forbidden — viewers can only send request or question' }, 403)
+  // [S2] 🔴 디자이너 등급(이슈 노트·답변·상태·담당자·기한·심각도)은 이 배포본 프로젝트의 쓰기 권한이 있을 때만(PATCH/DELETE 와 같은 판정).
+  //   전역 디자이너라도 그 프로젝트의 열람자면 열람자 등급(request|question)으로 쓴다. deployment_id 누락은 아래 400 이 판정.
+  const mod = a.designer && (!deployment_id || await canModerateNotesOf(c, a.user, deployment_id))
+  if (!kind) kind = mod ? 'note' : 'request'
+  if (!mod && !NOTE_VIEWER_KINDS.includes(kind)) return c.json({ error: 'forbidden — viewers can only send request or question' }, 403)
   // 핀 없는(도면/구역 단위) 글은 요청·질문·답변만 — 종전 이슈 노트(kind=note)는 핀 필수 그대로
   if (!deployment_id || (!pin_id && kind === 'note')) return c.json({ error: 'deployment_id, pin_id required' }, 400)
   if (!text) return c.json({ error: 'body required' }, 400)
@@ -4847,16 +4874,16 @@ app.post('/api/notes', async (c) => {
   //   게이트 판정(위, gate_required — 클라가 코드 입력 화면을 띄우는 신호) 뒤에 둔다.
   if (!(await canReadDeployment(c, a.user, deployment_id))) return c.json({ error: 'forbidden — no access to this deployment' }, 403)
   // 남용 방지 — 열람자(익명·viewer)만 IP 당 분당 N건. 디자이너 작성·답변은 ip 를 남기지 않아 집계에서 빠진다.
-  const limiterKey = a.designer ? null : rateLimitKey(c)
+  const limiterKey = mod ? null : rateLimitKey(c)
   if (limiterKey && await overRateLimit(c, 'pin_notes', limiterKey, NOTE_REQUEST_RATE_LIMIT_PER_MIN)) {
     return c.json({ error: '요청이 너무 자주 접수되었습니다. 잠시 후 다시 시도해 주세요.' }, 429)
   }
-  let status = a.designer ? String(body.status || 'open') : 'open'
+  let status = mod ? String(body.status || 'open') : 'open'
   if (!VALID_STATUS.includes(status)) status = 'open'
-  const assignee = a.designer ? (String(body.assignee || '') || null) : null
+  const assignee = mod ? (String(body.assignee || '') || null) : null
   // [WO 20261002-gap 묶음C] 기한·심각도 — 생성 시점은 디자이너만, '확인' 단계는 생성 시 불가(VALID_STATUS 에 verified 없음).
-  const due_at = (a.designer && body.due_at != null && Number.isFinite(Number(body.due_at))) ? Number(body.due_at) : null
-  let severity: string | null = a.designer && typeof body.severity === 'string' ? body.severity : null
+  const due_at = (mod && body.due_at != null && Number.isFinite(Number(body.due_at))) ? Number(body.due_at) : null
+  let severity: string | null = mod && typeof body.severity === 'string' ? body.severity : null
   if (severity && !SEVERITY_LEVELS.includes(severity as any)) severity = null
   const deck_id = parent ? (parent.deck_id ?? null) : await resolveNoteDeck(c, deployment_id, pin_id, String(body.deck_id || ''))
   const pin_label = parent ? String(parent.pin_label || '') : String(body.pin_label || '').slice(0, 200)
@@ -4880,14 +4907,31 @@ app.post('/api/notes', async (c) => {
     row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.due_at, row.severity, row.author, row.author_email, row.author_role,
     row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey
   ).run()
-  return c.json({ ...mapNote(row, a.designer || a.role === 'guest', a.designer ? undefined : a.email), ...(editKey ? { edit_key: editKey } : {}) })
+  return c.json({ ...mapNote(row, mod || a.role === 'guest', mod ? undefined : a.email), ...(editKey ? { edit_key: editKey } : {}) })
 })
+
+/** [S2] 노트 관리(디자이너 등급) 권한 — 노트가 속한 배포본의 프로젝트 쓰기 권한(deploymentWriteDenied, 배포본 쓰기와 같은 SoT).
+ *  배포본 project_id 가 정본, 없으면(레거시) 그 배포본을 가리키는 구역의 프로젝트 중 하나라도 쓰기 가능하면 허용.
+ *  어디에도 귀속이 없으면 deploymentWriteDenied 의 레거시 규칙(허용) — 읽기 SoT(canReadDeployment)가 자기 테넌트로 이미 한정한다. */
+async function canModerateNotesOf(c: any, user: any, depId: string): Promise<boolean> {
+  if (!user || user._readonly) return false
+  const dep: any = await c.env.DB.prepare('SELECT project_id FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
+  if (!dep) return false
+  const pids = dep.project_id ? [String(dep.project_id)] : await projectIdsOfDeployment(c, depId)
+  if (!pids.length) return !(await deploymentWriteDenied(c, user, null))
+  for (const pid of pids) if (!(await deploymentWriteDenied(c, user, pid))) return true
+  return false
+}
 
 /** 노트 수정 권한 — 'designer'(내용·상태·담당자) · 'author'(자기 글) · null.
  *  🔴 열람전용 세션은 공용 계정 이메일이라 이메일 일치로 본인을 판정하면 남의 익명 글까지 고친다 → 수정키(X-Note-Key)만 인정. */
 async function noteEditRight(c: any, note: any): Promise<'designer' | 'author' | null> {
   const a = await noteActor(c)
-  if (a.designer) return 'designer'
+  // [S2] 🔴 읽기 SoT 대칭 — 읽을 수 없는 배포본의 노트는 누구도 고치지 못한다(수정키·작성자 포함).
+  if (!(await canReadDeployment(c, a.user, String(note.deployment_id)))) return null
+  // [S2] 🔴 디자이너 등급(남의 글·상태·담당자)은 그 프로젝트 쓰기 권한(deploymentWriteDenied SoT)이 있을 때만.
+  //   종전: 전역 디자이너면 프로젝트를 보지 않고 'designer' → 다른 프로젝트 노트 PATCH/DELETE 가능(IDOR).
+  if (a.designer && await canModerateNotesOf(c, a.user, String(note.deployment_id))) return 'designer'
   const key = c.req.header('X-Note-Key') || ''
   if (key && note.author_key_hash && (await sha256Hex(key)) === String(note.author_key_hash)) return 'author'
   if (a.email && note.author_email && String(note.author_email).toLowerCase() === a.email) return 'author'
