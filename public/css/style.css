@@ -6131,3 +6131,8 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .fm-inline { grid-column: 1 / -1; margin-top: 6px; padding-top: 8px; border-top: 1px solid #d1d5db; background: #ffffff; border-radius: 10px; }
 .fm-inline .fm-inline-title { display: block; padding: 0 12px 2px; }
 .fm-inline .fm-list { max-height: 48vh; }
+
+/* [WO 20261010-backctx] 길게 누르기 = 앱 메뉴(11_UI.bindCtxMenu) — iOS 의 이미지·링크 기본 길게누르기 메뉴(저장·공유·미리보기)를 끈다.
+   입력창은 대상 밖(붙여넣기 메뉴 유지). 안드로이드는 contextmenu preventDefault 로 같은 결과. */
+img, a, .hub-card, .tree-node, #pano-overlay, #map-viewport { -webkit-touch-callout: none; }
+.tree-pop-foot { margin: 6px 0 0; font-size: 11px; text-align: center; }

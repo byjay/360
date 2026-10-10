@@ -153,7 +153,7 @@
      *  실패한다(iOS 홈화면 추가 앱의 알려진 WebKit 제약). 배포 버튼이 "아무 일도 하지 않던" 원인이
      *  이것 — confirm()이 무음으로 false를 반환해 즉시 return된 것으로, 자체 DOM 모달은 이 제약을
      *  받지 않는다. #prompt-modal(admin-gate) 과 동일한 CSS를 재사용해 신규 스타일 불필요. */
-    confirm(title, message) {
+    confirm(title, message, opts) {
       return new Promise((resolve) => {
         let modal = document.getElementById("wm-confirm-modal");
         if (!modal) {
@@ -178,6 +178,12 @@
         document.getElementById("wm-confirm-msg").textContent = message || "";
         const okBtn = document.getElementById("wm-confirm-ok");
         const cancelBtn = document.getElementById("wm-confirm-cancel");
+        // [WO 20261010-backctx] opts — 버튼 글자·기본 포커스(이탈 확인 [머무르기][나가기]). 미지정 = 종전 "취소/확인"(같은 창을
+        //   재사용하므로 매번 다시 쓴다 — 앞 호출의 글자가 남지 않게). 기존 2-인자 호출부 전부 하위호환.
+        const o = opts || {};
+        okBtn.textContent = o.okText || "확인";
+        cancelBtn.textContent = o.cancelText || "취소";
+        modal.setAttribute("data-confirm-kind", o.kind || "");
         const backdrop = modal.querySelector(".admin-gate-backdrop");
         // 🔴 [WO 20260928-copy · 라이브 실측] 확인창을 연달아 띄우면(닫자마자 다음 confirm) 앞 창의
         //   200ms 지연 숨김 타이머가 새 창에 "hidden" 을 붙여 두 번째 창이 사라지고 약속이 영원히 대기했다.
@@ -200,6 +206,7 @@
         backdrop.addEventListener("click", onCancel);
         modal.classList.remove("hidden");
         requestAnimationFrame(() => { if (!closed) modal.classList.add("on"); });
+        if (o.focus === "cancel" || o.focus === "ok") { try { (o.focus === "ok" ? okBtn : cancelBtn).focus(); } catch (e) {} }
       });
     }
   };

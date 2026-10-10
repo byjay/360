@@ -31,6 +31,9 @@
        · click(기존 버튼 id 로 위임) 또는 run() · covers(이 기능의 기존 진입점 버튼 id — 전수 검사용) */
     FEATURES: [
       /* ── 프로젝트 ── */
+      // [WO 20261010-backctx] 뒤로 = 브라우저·안드로이드 뒤로와 같은 처리(58_BackGuard.handleBack — 허브에선 나가기 확인)
+      { id: "nav-back", group: "project", icon: "←", label: "뒤로(이전 화면)", desc: "앱 안 이전 화면으로 — 처음 화면에서는 나가기 확인", keys: "Alt+←", mod: "BackGuard",
+        run: () => BackGuard.handleBack() },
       { id: "project-hub", group: "project", icon: "⌂", label: "프로젝트 목록(홈)", desc: "모든 프로젝트 카드로 돌아갑니다", click: "btn-back", covers: ["btn-back"] },
       { id: "project-new", group: "project", icon: "+", label: "새 프로젝트", desc: "프로젝트를 만듭니다(디자이너)", perm: "designer", click: "btn-new-project", covers: ["btn-new-project", "hub-btn-new"] },
       { id: "project-info", group: "project", icon: "ⓘ", label: "프로젝트 정보", desc: "메모·일정 보기/편집", needs: "project",
@@ -217,6 +220,18 @@
       { re: "^mdock-more-toggle$", why: "이 메뉴를 여는 버튼 자체" }
     ],
 
+    /* [WO 20261010-backctx] 우클릭 메뉴 = 위 FEATURES 에서 컨텍스트로 거른 부분집합(새 정의 0 — 11_UI.openCtxMenu 가 쓴다).
+       hub = 프로젝트 목록 빈 곳 · page = 상단바·사이드 패널·빈 배경·모달 · pano = 360 뷰어. 사유·실행 = reasonOf/run 그대로(숨김 금지). */
+    CTX: {
+      hub: ["nav-back", "project-new", "settings", "install-app", "help-viewer", "help-inquiry"],
+      page: ["nav-back", "project-hub", "zoom-fit", "all-pins", "requests-inbox", "request-send", "report-print", "settings", "help-mode", "help-viewer", "help-inquiry"],
+      pano: ["nav-back", "pano-spot", "pano-shape-rect", "pano-shape-circle", "ai-analyze", "photo-history", "photo-compare", "photo-original", "pano-full", "pano-notes", "pano-reset"]
+    },
+    ctxItems(kind) {
+      return (this.CTX[kind] || []).map((id) => this._f(id)).filter(Boolean)
+        .map((f) => ({ label: f.label, reason: this.reasonOf(f), desc: this.modeHint(f) || "", danger: !!f.danger, run: () => this.run(f) }));
+    },
+
     /* ─── 판정 ─── */
     _f(id) { return this.FEATURES.find((f) => f.id === id) || null; },
     /** 설명 1줄 — help 키가 있으면 36_Help.CONTENT 의 첫 문장(— 뒤) 을 SoT 로 쓴다. */
@@ -254,6 +269,7 @@
           case "PinPurge": return typeof PinPurge !== "undefined";
           case "FieldCapture": return typeof FieldCapture !== "undefined";
           case "Revision": return typeof Revision !== "undefined";
+          case "BackGuard": return typeof BackGuard !== "undefined";
           case "Delivery": return typeof Delivery !== "undefined" && typeof ZipStore !== "undefined";
           default: return false;
         }

@@ -384,7 +384,19 @@ const reasonOf = (items, re) => { const it = items.find((i) => re.test(i.label))
   ok(D.UI.openCtxMenu({ target: mapT, clientX: 100, clientY: 80, preventDefault() { prevented++; } }) === true && prevented === 1 && D.UI._treePop.pop.children.some((c) => /여기에 핀 추가/.test(c.innerHTML)), "G14 빈 도면 우클릭 → 도면 메뉴");
   const other = { closest: () => null };
   prevented = 0; D.UI.closeTreeMenu();
-  ok(D.UI.openCtxMenu({ target: other, clientX: 1, clientY: 1, preventDefault() { prevented++; } }) === false && prevented === 0, "G15 도면·핀·트리 밖은 브라우저 메뉴 유지");
+  // [WO 20261010-backctx] 마스터 "오른쪽 마우스는 브라우저 속성이 아니라 앱 자체 기능이" — G15 를 뒤집었다(종전: 밖 = 브라우저 메뉴).
+  ok(D.UI.openCtxMenu({ target: other, clientX: 1, clientY: 1, preventDefault() { prevented++; } }) === true && prevented === 1
+    && D.UI._treePop.pop.children.some((c) => /뒤로\(이전 화면\)/.test(c.innerHTML)) && D.UI._treePop.pop.children.some((c) => /Shift\+우클릭/.test(c.textContent || c.innerHTML || "")),
+    "G15 도면·핀·트리 밖도 앱 메뉴(전체 기능 SoT 부분집합 + [뒤로] + 하단 'Shift+우클릭' 안내)");
+  prevented = 0; D.UI.closeTreeMenu();
+  ok(D.UI.openCtxMenu({ target: other, shiftKey: true, clientX: 1, clientY: 1, preventDefault() { prevented++; } }) === false && prevented === 0 && !D.UI._treePop, "G15b Shift+우클릭 → 브라우저 메뉴(탈출구)");
+  const card = { classList: { contains: (c) => c === "hub-card-locked" ? false : false }, querySelector: (s) => (/data-act="(info|dl|members|del)"/.test(s) ? { click() {} } : null), closest: () => null };
+  card.closest = (s) => (/hub-card/.test(s) ? card : null);
+  prevented = 0;
+  ok(D.UI.openCtxMenu({ target: card, clientX: 9, clientY: 9, preventDefault() { prevented++; } }) === true && prevented === 1, "G15c 허브 카드 우클릭 → 앱 메뉴");
+  const hi = D.UI.hubCardCtxItems(card);
+  ok(["열기", "프로젝트 정보", "프로젝트 이름 변경", "멤버 관리", "오프라인 보관(다운로드)", "공유 주소 복사", "QR 위치 태그", "프로젝트 삭제"].every((w) => labels(hi).includes(w))
+    && reasonOf(hi, /^멤버 관리/) === "" && /소유자·관리자 전용/.test(reasonOf(hi, /^프로젝트 이름 변경/)), "G15d 허브 카드 항목 = 카드 버튼 위임 · 버튼 없으면 비활성+사유(숨김 0)");
 }
 {
   // 팝업 위치(데스크톱 경로 — 모바일 ≤760 은 CSS 바텀시트가 SoT) — 좌하단 FAB(?·✉ 16·64,652 40×40, 0b4d262 실측 좌표)

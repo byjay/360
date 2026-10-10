@@ -834,11 +834,17 @@
       const treeNode = target.closest("#side-tree .tree-node, #side-tree .tree-project");
       if (treeNode) {
         const more = treeNode.querySelector ? treeNode.querySelector(".tree-more") : null;
-        return more ? { kind: "tree", more } : null;
+        return more ? { kind: "tree", more } : { kind: "page" };
       }
+      // [WO 20261010-backctx] 마스터 "오른쪽 마우스는 브라우저 속성이 아니라 앱 자체 기능이" — 도면 밖도 전부 앱 메뉴.
+      const hubCard = target.closest("#hub-grid .hub-card");
+      if (hubCard) return { kind: "hubcard", card: hubCard };
+      const reqItem = target.closest("[data-req-item]");
+      if (reqItem) return { kind: "request", item: reqItem };
+      if (target.closest("#pano-overlay")) return { kind: "pano" };
       const vp = this.$("map-viewport");
-      if (!vp || !vp.contains(target)) return null;
-      if (target.closest("button, a, [role=toolbar], [role=dialog]") && !target.closest(".deck-outline-label")) return null;
+      if (!vp || !vp.contains(target)) return { kind: "page" };
+      if (target.closest("button, a, [role=toolbar], [role=dialog]") && !target.closest(".deck-outline-label")) return { kind: "page" };
       try {
         if (typeof DeckOutline !== "undefined" && DeckOutline._hitAt) {
           const lbl = target.closest(".deck-outline-label");
@@ -912,6 +918,65 @@
       items.push({ label: "전체 기능 메뉴 열기", reason: (typeof FeatureMenu === "undefined") ? "준비 중" : "", run: () => FeatureMenu.open() });
       return items;
     },
+    /** [WO 20261010-backctx] 컨텍스트별 항목 = 45_FeatureMenu.CTX(SoT)에서 거른 부분집합 + 끝에 [전체 기능 메뉴 열기]. */
+    _fmCtx(kind) {
+      const items = (typeof FeatureMenu !== "undefined" && FeatureMenu.ctxItems) ? FeatureMenu.ctxItems(kind) : [];
+      items.push({ label: "전체 기능 메뉴 열기", reason: (typeof FeatureMenu === "undefined") ? "준비 중" : "", run: () => FeatureMenu.open() });
+      return items;
+    },
+    /** 허브 카드 — 카드 자신의 버튼(12_ProjectHub 배선 = 정본)에 위임. 버튼이 없으면(권한·상태) 비활성 + 사유(숨김 금지). */
+    hubCardCtxItems(card) {
+      const q = (s) => (card && card.querySelector) ? card.querySelector(s) : null;
+      const act = (a) => q('[data-act="' + a + '"]');
+      const locked = !!(card && card.classList && card.classList.contains("hub-card-locked"));
+      const lab = (id, fb) => { try { const f = FeatureMenu._f(id); return f ? f.label : fb; } catch (e) { return fb; } };
+      const owner = "이 프로젝트의 소유자·관리자 전용";
+      const it = (label, a, why, danger) => ({ label, danger: !!danger, reason: locked ? "멤버가 아닙니다 — [접근 신청]으로 요청하세요" : (act(a) ? "" : why),
+        run: () => { const b = act(a); if (b) b.click(); } });
+      return [
+        { label: locked ? "접근 신청" : "열기", desc: locked ? "" : "이 프로젝트로 들어갑니다", run: () => { if (card && card.click) card.click(); } },
+        it(lab("project-info", "프로젝트 정보"), "info", "이 카드에서는 사용할 수 없습니다"),
+        it(lab("project-rename", "프로젝트 이름 변경"), "rename", owner),
+        it(lab("project-members", "멤버 관리"), "members", owner),
+        it(lab("offline-download", "오프라인 보관(다운로드)"), "dl", "디자이너 전용"),
+        it("배포 / 배포 취소", "pub", "디자이너 전용"),
+        it("공유 주소 복사", "url-copy", "배포되지 않아 공유 주소가 없습니다"),
+        { label: "QR 위치 태그", reason: "구역을 연 뒤 [이 구역 QR 위치 태그 일괄 인쇄](전체 기능)에서", run() {} },
+        it(lab("project-delete", "프로젝트 삭제"), "del", owner, true)
+      ];
+    },
+    /** 요청함·결함 목록 행 — 행 자신의 버튼(42_Requests._itemCard 배선 = 정본)에 위임. */
+    requestCtxItems(item) {
+      const q = (s) => (item && item.querySelector) ? item.querySelector(s) : null;
+      const it = (label, sel, why) => ({ label, reason: q(sel) ? "" : why, run: () => { const b = q(sel); if (b) b.click(); } });
+      return [
+        it("열기(위치로 이동)", "[data-req-goto]", "이동할 위치가 없습니다"),
+        it("답변", '[data-req-act="reply"]', "답변할 수 없습니다"),
+        it("상태 → 처리중", '[data-req-act="progress"]', "이미 처리중입니다"),
+        it("상태 → 완료", '[data-req-act="done"]', "이미 완료입니다"),
+        it("상태 → 접수로", '[data-req-act="open"]', "이미 접수 상태입니다"),
+        it("확인(검수)", '[data-req-act="verified"]', "완료된 결함 노트만 · 소유자·관리자 전용"),
+        { label: "담당자 변경", reason: "담당자는 결함 노트를 만들 때 지정합니다(변경 기능 없음)", run() {} }
+      ];
+    },
+    /** 브라우저 기본 메뉴를 남기는 경우 — 입력창(붙여넣기) · 선택한 글자(복사) · Shift+우클릭(개발·접근성 탈출구). */
+    _ctxNative(e) {
+      if (!e || e.shiftKey || this._isEditable(e.target)) return true;
+      try {
+        const sel = (typeof window !== "undefined" && window.getSelection) ? window.getSelection() : null;
+        if (sel && !sel.isCollapsed && String(sel).trim()) return true;
+      } catch (er) {}
+      return false;
+    },
+    CTX_FOOTER: "브라우저 메뉴는 Shift+우클릭",
+    _ctxFooter() {
+      const t = this._treePop;
+      if (!t || !t.pop || typeof document === "undefined" || !document.createElement) return;
+      const p = document.createElement("div");
+      p.className = "tree-pop-info tree-pop-foot";
+      p.textContent = this.CTX_FOOTER;
+      t.pop.appendChild(p);
+    },
     copyPin(pin) {
       const meta = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, pin.page || 1).get(pin.id) : null;
       const no = meta ? PinSeries.formatNo(meta.no, meta.series) : (pin.label || "");
@@ -940,15 +1005,27 @@
       }
     },
     openCtxMenu(e) {
-      if (!e || this._isEditable(e.target)) return false; // 입력창 = 브라우저 메뉴(붙여넣기)
+      if (this._ctxNative(e)) return false; // 입력창·선택 글자·Shift = 브라우저 메뉴
       const x = e.clientX, y = e.clientY;
       const tg = this.ctxTargetOf(e.target, x, y);
       if (!tg) return false;
       if (e.preventDefault) e.preventDefault();
       this._ctxOpenedAt = Date.now();
-      if (tg.kind === "tree") { tg.more.click(); return true; } // 트리 = 그 노드의 ⋯ 메뉴 그대로
+      if (tg.kind === "tree") { tg.more.click(); this._ctxFooter(); return true; } // 트리 = 그 노드의 ⋯ 메뉴 그대로
       const at = { getBoundingClientRect: () => ({ left: x, top: y, bottom: y, right: x, width: 0, height: 0 }) };
-      if (tg.kind === "pin") {
+      if (tg.kind === "hubcard") {
+        const nm = tg.card.querySelector ? tg.card.querySelector(".hub-card-name") : null;
+        if (tg.card.classList && tg.card.classList.contains("hub-card-add")) this.openTreeMenu(at, "새 프로젝트", this._fmCtx("hub"), { focus: true });
+        else this.openTreeMenu(at, "프로젝트 " + ((nm && nm.textContent) || "").replace(/✎/g, "").trim(), this.hubCardCtxItems(tg.card), { focus: true });
+      } else if (tg.kind === "request") {
+        this.openTreeMenu(at, "요청·결함", this.requestCtxItems(tg.item), { focus: true });
+      } else if (tg.kind === "pano") {
+        this.openTreeMenu(at, "360 뷰어", this._fmCtx("pano"), { focus: true });
+      } else if (tg.kind === "page") {
+        const hub = this.$("screen-projects");
+        const onHub = !!(hub && hub.classList && hub.classList.contains("active"));
+        this.openTreeMenu(at, onHub ? "프로젝트 목록" : "SEASTAR 360", this._fmCtx(onHub ? "hub" : "page"), { focus: true });
+      } else if (tg.kind === "pin") {
         const meta = PinSeries.numbers(State.pins, tg.pin.page || 1).get(tg.pin.id);
         this.openTreeMenu(at, "포인트 " + (meta ? PinSeries.formatNo(meta.no, meta.series) : (tg.pin.label || "")), this.pinCtxItems(tg.pin), { focus: true });
       } else if (tg.kind === "outline") {
@@ -960,6 +1037,7 @@
         const inPage = pct && pct.x >= 0 && pct.x <= 100 && pct.y >= 0 && pct.y <= 100 ? pct : null;
         this.openTreeMenu(at, "도면", this.mapCtxItems(inPage, { x, y }), { focus: true });
       }
+      this._ctxFooter();
       return true;
     },
     /** 한 번만 — document 캡처 단계 contextmenu + 지도 길게 누르기(터치). 설계자·관리자·열람자 모두(항목만 다름). */
@@ -973,6 +1051,40 @@
         this._ctxSuppressNative = 0;
         this.openCtxMenu(e);
       }, true);
+      // [WO 20261010-backctx] 도면 밖 길게 누르기(터치) — 안드로이드는 위 contextmenu 가 같은 규칙으로 처리하지만 iOS 는
+      //   contextmenu 를 보내지 않는다 → 같은 메뉴를 직접 연다(입력창·선택 글자 제외 = _ctxNative). 이미지·링크의 기본 길게누르기
+      //   메뉴(저장·공유)는 CSS -webkit-touch-callout:none(style.css) 으로 끈다. 도면 안은 아래 지도 전용 배선이 맡는다.
+      {
+        let gp = null;
+        const gCancel = () => { if (gp) { clearTimeout(gp.t); gp = null; } };
+        const vpEl = () => this.$("map-viewport");
+        document.addEventListener("touchstart", (e) => {
+          gCancel();
+          const v = vpEl();
+          if (!e.touches || e.touches.length !== 1 || (v && v.contains(e.target))) return;
+          const t0 = e.touches[0], target = e.target;
+          if (this._ctxNative({ target })) return;
+          gp = { x: t0.clientX, y: t0.clientY, t: setTimeout(() => {
+            const p = gp; gp = null;
+            if (!p) return;
+            if (this._treePop && Date.now() - (this._ctxOpenedAt || 0) < 800) return; // 브라우저 contextmenu 가 이미 열었다
+            this._ctxSuppressNative = Date.now();
+            if (this.openCtxMenu({ target, clientX: p.x, clientY: p.y, preventDefault() {} })) this._ctxLongFired = Date.now();
+          }, this.CTX_LONGPRESS_MS) };
+        }, { passive: true, capture: true });
+        document.addEventListener("touchmove", (e) => {
+          if (!gp) return;
+          const t = e.touches && e.touches[0];
+          if (!t || e.touches.length > 1 || Math.hypot(t.clientX - gp.x, t.clientY - gp.y) > 10) gCancel();
+        }, { passive: true, capture: true });
+        document.addEventListener("touchend", (e) => {
+          gCancel();
+          const v = vpEl();
+          if (v && v.contains(e.target)) return;   // 도면 안 = 아래 지도 배선
+          if (this._ctxLongFired && Date.now() - this._ctxLongFired < 3000) { this._ctxLongFired = 0; if (e.cancelable) e.preventDefault(); }
+        }, { passive: false, capture: true });
+        document.addEventListener("touchcancel", gCancel, { passive: true, capture: true });
+      }
       const vp = this.$("map-viewport");
       if (!vp) return;
       // 모바일 길게 누르기(빈 도면) — 핀은 기존 길게 누르기(마커 pointerdown 550ms)가 같은 메뉴를 연다.

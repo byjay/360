@@ -44,9 +44,14 @@ ok(appSrc.indexOf("_lastDeckId") !== -1 && appSrc.indexOf("_remembered || ") !==
   "loadLatestDeployment()이 pickOriginalDeck 보다 _remembered(기억된 구역)를 우선");
 
 /* ── R4: beforeunload — _dirty 뿐 아니라 대기(_pendingSyncCount)도 경고 조건 ── */
-console.log("\n[R4] beforeunload — dirty || pending>0 일 때만 경고");
-ok(/beforeunload[\s\S]{0,300}?this\._dirty \|\| pending > 0/.test(appSrc),
-  "beforeunload 핸들러가 (_dirty || pending>0) 조건으로 경고");
+// [WO 20261010-backctx] 마스터 "절대 바로 빠져나가지 않게" — beforeunload 는 58_BackGuard 한 곳(SoT)으로 옮겨 항상 확인.
+//   offline2-R4 의 판정(미저장 _dirty + 서버 대기 _pendingSyncCount)은 BackGuard.unsavedInfo() 가 확인 문구에 그대로 싣는다.
+console.log("\n[R4] beforeunload — SoT 58_BackGuard · 미저장(_dirty)+대기(_pendingSyncCount) 정보 유지");
+const bgSrc = rd("public/js/modules/58_BackGuard.js");
+ok(!/addEventListener\("beforeunload"/.test(appSrc), "20_App 에 beforeunload 두 벌 없음(SoT = 58_BackGuard)");
+ok(/addEventListener\("beforeunload"[\s\S]{0,80}_onBeforeUnload/.test(bgSrc) && /_onBeforeUnload\(e\)[\s\S]{0,400}unsavedInfo\(\)/.test(bgSrc)
+  && /dirty = !!App\._dirty;\s*pending = App\._pendingSyncCount \|\| 0;/.test(bgSrc) && /if \(pending > 0\) parts\.push/.test(bgSrc),
+  "BackGuard beforeunload 가 unsavedInfo(_dirty · _pendingSyncCount) 문구로 경고");
 ok(offlineSrc.indexOf("App._pendingSyncCount = pending;") !== -1,
   "32_Offline.js updateNetBadge가 App._pendingSyncCount 캐시를 매 주기 갱신");
 

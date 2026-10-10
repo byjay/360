@@ -726,16 +726,9 @@
       // [마스터: 수동 저장] '저장' 버튼 → 서버 반영. 미저장 변경 시 이탈 경고.
       const sbtn = UI.$("btn-save");
       if (sbtn) sbtn.addEventListener("click", () => this._saveNow({ now: true, withPages: true }));
-      // [WO offline2-R4] 🔴 근본원인: 종전엔 this._dirty(화면상 미저장 편집)만 봤다 — 저장은 끝났어도
-      //   오프라인 op 로그/이미지 업로드 큐(SyncQueue)가 아직 서버에 반영 안 된 상태로 나가면 경고가
-      //   없었다(조용한 유실 위험). 판정은 Offline.updateNetBadge 와 같은 합계(App._pendingSyncCount,
-      //   §G-2-5 공유 — 여기서 따로 재계산하지 않는다)를 쓴다. 온라인에서 저장이 끝나 pending=0이면
-      //   경고하지 않는다(요구사항 그대로).
-      window.addEventListener("beforeunload", (e) => {
-        if (State.mode !== "designer") return;
-        const pending = this._pendingSyncCount || 0;
-        if (this._dirty || pending > 0) { e.preventDefault(); e.returnValue = ""; }
-      });
+      // [WO 20261010-backctx] 이탈 경고(beforeunload)는 58_BackGuard 한 곳(SoT)으로 옮겼다 — 마스터 "절대 바로 빠져나가지
+      //   않게" 로 조건부(미저장일 때만) → 항상 확인 + 미저장(_dirty)·서버 대기(_pendingSyncCount) 정보는 BackGuard.unsavedInfo()
+      //   가 확인 문구에 그대로 싣는다(offline2-R4 판정 이관). 여기서 다시 등록하면 두 벌이 된다.
     },
 
     /** [WO 20260929 2모드 전환] 편집화면 SoT — CHECKER(checkboard)/360(photo) 2모드.
