@@ -10,7 +10,8 @@
         ② 받은 파일 1장을 PhotoBatch.buildAutoRows([file]) 로 THETA 와 같은 "row" 형식으로 만들어
            ThetaIntake.showWhereSheet(row, 1) 에 그대로 넘긴다. 등록 완료는 row.onDone 훅
            (33_ThetaIntake.js _register, 1줄 추가)으로 받아 [다음 사진] 시트를 띄운다.
-     방식 (d) 안드로이드 전용 앱은 아직 없다 — 숨기지 않고 "준비 중 + 사유"로 노출한다(§5 숨김 금지).
+     방식 (d) 안드로이드 전용 앱 — [WO 20261010-apk] 활성화. 브라우저에서 고르면 APK 설치 안내(38c ApkInstall.open),
+        이미 APK 안이면 앱이 공유를 직접 받으므로 (a) THETA 공유 안내로 연결. iOS·PC 는 숨기지 않고 비활성 + 사유(§5).
      진입점: 360 모드 모바일 도크(#mdock-field-capture) + 전체 기능 메뉴(45_FeatureMenu "pano" 그룹).
   ══════════════════════════════════════════════════════════════ */
   const FieldCapture = {
@@ -19,7 +20,7 @@
       { id: "theta-share", icon: "📡", label: "THETA 앱에서 공유로 받기", hint: "THETA 앱 사진 → 공유 → SEASTAR" },
       { id: "gallery", icon: "🖼", label: "갤러리에서 고르기", accept: "image/*" },
       { id: "camera", icon: "📷", label: "휴대폰 카메라로 바로 찍기", accept: "image/*", capture: "environment" },
-      { id: "android-app", icon: "📱", label: "안드로이드 전용 앱(완전 자동)", disabled: true, reason: "별도 앱 개발 필요 — 현재 미제공" }
+      { id: "android-app", icon: "📱", label: "안드로이드 전용 앱(SEASTAR 360 앱)", hint: "앱을 설치하면 THETA·갤러리 공유를 앱이 직접 받습니다" }
     ],
 
     init() {
@@ -67,6 +68,16 @@
     _getMethod() { try { return localStorage.getItem(this.LS_METHOD) || null; } catch (e) { return null; } },
     _setMethod(id) { try { localStorage.setItem(this.LS_METHOD, id); } catch (e) {} },
     _methodOf(id) { return this.METHODS.find((m) => m.id === id) || null; },
+    /** 방식별 비활성 사유("" = 사용 가능) — 정적 disabled 대신 기기에 따라 판정(SoT: ApkInstall.availabilityReason). */
+    _reasonOf(m) {
+      if (!m) return "";
+      if (m.id === "android-app") {
+        if (typeof ApkInstall === "undefined") return "준비 중";
+        if (ApkInstall.isNative()) return ""; // 앱 안 = 사용 가능(공유 안내로 연결)
+        return ApkInstall.availabilityReason();
+      }
+      return m.disabled ? (m.reason || "준비 중") : "";
+    },
 
     /** 진입점(도크·전체 기능 메뉴 공용). force=true 면 기억된 방식을 무시하고 항상 선택 시트를 띄운다
      *  (전체 기능 메뉴 [현장 촬영 방식 변경]이 이 경로로 들어온다). */
@@ -79,12 +90,12 @@
     },
 
     _openMethodPicker() {
-      const actions = this.METHODS.map((m) => ({
+      const actions = this.METHODS.map((m) => { const why = this._reasonOf(m); return {
         label: m.icon + " " + m.label,
-        hint: m.disabled ? m.reason : m.hint,
-        disabled: !!m.disabled,
+        hint: why || m.hint,
+        disabled: !!why,
         run: () => { this._setMethod(m.id); this._run(m.id); }
-      }));
+      }; });
       actions.push({ label: "취소", run: () => {} });
       ThetaIntake._sheet({
         id: "fieldcap-method-sheet",
@@ -97,8 +108,14 @@
     _run(methodId) {
       const m = this._methodOf(methodId);
       if (!m) { this._openMethodPicker(); return; }
-      if (m.disabled) { this._toast(m.reason); return; }
+      const why = this._reasonOf(m);
+      if (why) { this._toast(why); return; }
       if (m.id === "theta-share") { this._showThetaShareSheet(); return; }
+      if (m.id === "android-app") {
+        if (ApkInstall.isNative()) this._showThetaShareSheet(); // 앱 안: 공유를 앱이 직접 받는다
+        else ApkInstall.open();
+        return;
+      }
       const inp = document.getElementById("input-field-capture");
       if (!inp) return;
       inp.accept = m.accept || "image/*";

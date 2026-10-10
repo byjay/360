@@ -190,6 +190,8 @@
       { id: "install-app", group: "settings", icon: "⬇", label: "앱 설치(홈 화면에 추가)", desc: "아이콘으로 바로 열기", mod: "Install",
         why: () => (typeof Install !== "undefined" && Install.alreadyInstalledReason) ? Install.alreadyInstalledReason() : "",
         run: () => Install.showBanner(true), covers: ["pwa-install-accept", "pwa-install-close"] },
+      { id: "apk-install", group: "settings", icon: "📱", label: "안드로이드 앱 설치(APK)", help: "apk-install", mod: "ApkInstall",
+        why: () => ApkInstall.availabilityReason(), run: () => ApkInstall.open(), covers: ["install-gate-apk"] },
       { id: "signout", group: "settings", icon: "⎋", label: "로그아웃", perm: "login", click: "btn-settings-signout", covers: ["btn-settings-signout", "btn-signout", "hub-btn-signout"] },
 
       /* ── 관리자 ── */
@@ -247,6 +249,7 @@
           case "QrPrint": return typeof QrPrint !== "undefined";
           case "Coverage": return typeof Coverage !== "undefined";
           case "Install": return typeof Install !== "undefined";
+          case "ApkInstall": return typeof ApkInstall !== "undefined";
           case "Help": return typeof Help !== "undefined";
           case "PinPurge": return typeof PinPurge !== "undefined";
           case "FieldCapture": return typeof FieldCapture !== "undefined";

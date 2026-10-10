@@ -180,6 +180,11 @@ self.addEventListener('fetch', (e) => {
 
   if (req.method !== 'GET') return; // 그 외 쓰기 요청은 패스(네트워크 직행)
 
+  // [WO 20261010-apk] /download/(APK·메타 JSON)는 SW 가 손대지 않는다 — 네트워크 직행.
+  //   ① 아래 navigate 분기가 APK 응답을 'index.html' 로 캐시해 오프라인 셸을 APK 바이너리로 덮어쓰던 경로 차단
+  //   ② 기본 stale-while-revalidate 가 메타(버전·SHA-256)를 옛 값으로 돌려주면 지문이 실제 파일과 어긋난다.
+  if (url.origin === self.location.origin && url.pathname.startsWith('/download/')) return;
+
   // ── [오프라인 모바일 핵심] 네비게이션 요청은 항상 앱 셸로 폴백 ──
   //   모바일 PWA를 오프라인으로 처음 열거나, /projects 등 라우트로 진입할 때
   //   navigation 요청(mode:'navigate')이 네트워크 실패하면 캐시된 index.html을 돌려준다.
@@ -187,7 +192,9 @@ self.addEventListener('fetch', (e) => {
   if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req).then((res) => {
-        if (res && res.status === 200) {
+        // [WO 20261010-apk] HTML 응답만 셸로 저장 — 다른 형식(파일 다운로드 등)이 'index.html' 을 덮어쓰지 않게.
+        const ct = (res && res.headers && res.headers.get('content-type')) || '';
+        if (res && res.status === 200 && ct.indexOf('text/html') !== -1) {
           const clone = res.clone();
           caches.open(CACHE).then((c) => c.put('index.html', clone)).catch(() => {});
         }

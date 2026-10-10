@@ -1,0 +1,93 @@
+apply plugin: 'com.android.application'
+
+import groovy.json.JsonSlurper
+import java.util.Properties
+
+// ── 버전 SoT: android-app/package.json 의 "version"(x.y.z) 하나. versionCode = x*10000 + y*100 + z ──
+//    (업데이트 설치는 versionCode 가 커야 한다 - 버전을 올릴 땐 package.json 만 고친다.)
+def seaPkg = new JsonSlurper().parse(rootProject.file('../package.json'))
+def seaVer = String.valueOf(seaPkg.version)
+def seaParts = seaVer.tokenize('.').collect { it as int }
+def seaVersionCode = seaParts[0] * 10000 + seaParts[1] * 100 + seaParts[2]
+
+// ── 서명: 비밀번호/키스토어는 저장소 밖(E:\code-project\_keystores\)에만 둔다(창고 레시피 함정 #6 #7) ──
+//    경로 = 환경변수 SEASTAR360_KEYSTORE_PROPERTIES, 없으면 레포 기준 ../_keystores/seastar360.keystore.properties
+def seaKsPropsFile = System.getenv("SEASTAR360_KEYSTORE_PROPERTIES") ?
+        file(System.getenv("SEASTAR360_KEYSTORE_PROPERTIES")) :
+        rootProject.file('../../../_keystores/seastar360.keystore.properties')
+def seaKsProps = new Properties()
+def seaHasSigning = seaKsPropsFile.exists()
+if (seaHasSigning) {
+    seaKsPropsFile.withInputStream { seaKsProps.load(it) }
+}
+
+android {
+    namespace "work.seastar.scan360"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "work.seastar.scan360"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode seaVersionCode
+        versionName seaVer
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        if (seaHasSigning) {
+            release {
+                storeFile file(seaKsProps['storeFile'])   // properties 안 경로는 '/' 만(함정 #7)
+                storePassword seaKsProps['storePassword']
+                keyAlias seaKsProps['keyAlias']
+                keyPassword seaKsProps['keyPassword']     // PKCS12: storePassword 와 같은 값(함정 #6)
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (seaHasSigning) { signingConfig signingConfigs.release }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+// 서명 설정 없이 릴리스를 만들면 "설치 안 되는 미서명 APK"가 조용히 나온다 → 즉시 실패시킨다(조용한 실패 금지).
+gradle.taskGraph.whenReady { graph ->
+    if (!seaHasSigning && graph.allTasks.any { it.name ==~ /(assemble|bundle|package)Release/ }) {
+        throw new GradleException("릴리스 서명 설정 없음: " + seaKsPropsFile + " (README: android-app/README.md 서명 절)")
+    }
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

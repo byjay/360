@@ -1,0 +1,14 @@
+{
+  "appId": "work.seastar.scan360",
+  "appName": "SEASTAR 360",
+  "webDir": "www",
+  "server": {
+    "url": "https://scan.seastar.work",
+    "cleartext": false,
+    "errorPath": "offline.html"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "appendUserAgent": "SEASTAR360App"
+  }
+}

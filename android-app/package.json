@@ -1,0 +1,16 @@
+{
+  "name": "seastar360-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SEASTAR 360 Android APK — Capacitor 7 원격 URL 래퍼(창고 13-misc-app-parts/capacitor-local-bundle-android 재사용)",
+  "dependencies": {
+    "@capacitor/android": "7.6.9",
+    "@capacitor/app": "7.1.2",
+    "@capacitor/core": "7.6.9",
+    "@capacitor/filesystem": "7.1.9",
+    "@capacitor/share": "7.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.6.9"
+  }
+}

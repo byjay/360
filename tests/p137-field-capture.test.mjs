@@ -39,6 +39,9 @@ const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "
 const hubSrc = rd("public/js/modules/12_ProjectHub.js");
 const tiSrc = rd("public/js/modules/33_ThetaIntake.js");
 const fcSrc = rd("public/js/modules/54_FieldCapture.js");
+// [WO 20261010-apk] (d) 안드로이드 앱 활성화 — 판정 SoT(38 Install.isNativeApp · 38c ApkInstall.availabilityReason) 실소스 로드
+const installSrc = rd("public/js/modules/38_Install.js");
+const apkSrc = rd("public/js/modules/38c_ApkInstall.js");
 
 let failed = 0;
 const ok = (cond, label) => { console.log((cond ? "  PASS " : "  FAIL ") + label); if (!cond) failed++; };
@@ -138,7 +141,7 @@ function makeEl(tag) {
   return el;
 }
 
-function loadFC({ ua = "Mozilla/5.0 (Linux; Android 14) Chrome/129 Mobile", pins = [], buildRows = null, tiSource = tiSrc, fcSource = fcSrc } = {}) {
+function loadFC({ ua = "Mozilla/5.0 (Linux; Android 14) Chrome/129 Mobile", pins = [], buildRows = null, tiSource = tiSrc, fcSource = fcSrc, withApk = false, apkSource = apkSrc, capacitor = null } = {}) {
   const reg = new Map();
   const body = makeEl("body");
   const bar = makeEl("div");
@@ -184,12 +187,14 @@ function loadFC({ ua = "Mozilla/5.0 (Linux; Android 14) Chrome/129 Mobile", pins
     SyncQueue: { saveDraft: async () => {}, loadDraft: async () => null }
   };
   sandbox.window = sandbox;
+  if (capacitor) sandbox.Capacitor = capacitor;
   vm.createContext(sandbox);
-  vm.runInContext(tiSource + "\n" + fcSource + "\n;globalThis.__TI = ThetaIntake; globalThis.__FC = FieldCapture;", sandbox);
+  vm.runInContext((withApk ? installSrc + "\n" + apkSource + "\n" : "") + tiSource + "\n" + fcSource + "\n;globalThis.__TI = ThetaIntake; globalThis.__FC = FieldCapture;" +
+    (withApk ? "globalThis.__APK = ApkInstall;" : ""), sandbox);
   const TI = sandbox.__TI; const FC = sandbox.__FC;
   TI._is360 = async () => true;
   TI._go = (u) => calls.go.push(u);
-  return { TI, FC, State, calls, document, body, bar, store, sandbox };
+  return { TI, FC, State, calls, document, body, bar, store, sandbox, APK: sandbox.__APK || null };
 }
 
 {
@@ -209,15 +214,44 @@ function loadFC({ ua = "Mozilla/5.0 (Linux; Android 14) Chrome/129 Mobile", pins
   ok(!!sheet1, "B5 처음 — 기억된 방식 없음 → 방식 선택 시트");
   const androidBtn = sheet1.children.find((c) => /안드로이드 전용 앱/.test(c.textContent));
   const androidHint = androidBtn && androidBtn.children[0] && androidBtn.children[0].textContent;
-  ok(!!androidBtn && androidBtn.attrs["aria-disabled"] === "true" && /별도 앱 개발 필요 — 현재 미제공/.test(androidHint), "B6 (d) 안드로이드 앱 = 숨기지 않고 비활성 + 사유 노출");
+  // [WO 20261010-apk] 이전: "별도 앱 개발 필요 — 현재 미제공" 고정 비활성. 지금: 판정 모듈(38c)이 없으면 "준비 중" 비활성(숨김 금지).
+  ok(!!androidBtn && androidBtn.attrs["aria-disabled"] === "true" && /준비 중/.test(androidHint), "B6 (d) 안드로이드 앱 — 판정 모듈 미로드 시 숨기지 않고 비활성 + 사유");
   androidBtn.click();
-  ok(F.calls.toast.some((t) => /별도 앱 개발 필요/.test(t)) && F.body.children.includes(sheet1), "B7 비활성 항목 탭 → 실행 0(시트 유지) + 사유 토스트");
+  ok(F.calls.toast.some((t) => /준비 중/.test(t)) && F.body.children.includes(sheet1), "B7 비활성 항목 탭 → 실행 0(시트 유지) + 사유 토스트");
 
   const galleryBtn = sheet1.children.find((c) => /갤러리에서 고르기/.test(c.textContent));
   galleryBtn.click();
   ok(F.store.get("field_capture_method_v1") === "gallery", "B8 선택한 방식을 기억(localStorage)");
   ok(inp.accept === "image/*" && inp.getAttribute("capture") == null, "B9 (b) 갤러리 — accept=image/*, capture 속성 없음");
   ok(inp._clicked === 1, "B10 파일 선택창을 바로 띄움");
+}
+
+{
+  // [WO 20261010-apk] B6a~c — 38_Install + 38c_ApkInstall 실소스 로드(판정 SoT). open 만 기록용으로 감싼다(렌더는 p145 CDP 가 실측).
+  const IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148";
+  const findAndroid = (F) => F.body.children.find((c) => c.id === "fieldcap-method-sheet").children.find((c) => /안드로이드 전용 앱/.test(c.textContent));
+  {
+    const F = loadFC({ withApk: true, ua: IOS });
+    F.FC.init(); F.FC.open();
+    const b = findAndroid(F);
+    ok(!!b && b.attrs["aria-disabled"] === "true" && /안드로이드 휴대폰 전용/.test(b.children[0].textContent), "B6a iPhone — (d) 숨기지 않고 비활성 + '안드로이드 휴대폰 전용'");
+  }
+  {
+    const F = loadFC({ withApk: true });
+    const opened = []; F.APK.open = (o) => { opened.push(o || {}); return true; };
+    F.FC.init(); F.FC.open();
+    const b = findAndroid(F);
+    ok(!!b && b.attrs["aria-disabled"] !== "true", "B6b 안드로이드 브라우저 — (d) 활성");
+    b.click();
+    ok(opened.length === 1 && F.store.get("field_capture_method_v1") === "android-app", "B6b' (d) 탭 → APK 설치 안내(ApkInstall.open) + 방식 기억");
+  }
+  {
+    const F = loadFC({ withApk: true, capacitor: { isNativePlatform: () => true } });
+    const opened = []; F.APK.open = () => { opened.push(1); return true; };
+    F.FC.init(); F.FC._run("android-app");
+    const sh = F.body.children.find((c) => c.id === "fieldcap-theta-sheet");
+    ok(!!sh && opened.length === 0, "B6c APK 앱 안(Capacitor) — (d) 는 설치 안내가 아니라 THETA 공유 안내로");
+  }
 }
 
 {

@@ -89,6 +89,11 @@
             '<div id="install-gate-ios" class="install-gate-ios hidden">공유 버튼(⬆)을 누른 뒤 “홈 화면에 추가”를 선택하세요.</div>' +
             '<div id="install-gate-guide" class="install-gate-guide hidden"></div>' +
             '<button id="install-gate-btn" type="button" class="install-gate-btn">설치 준비 중…</button>' +
+            // [WO 20261010-apk] 안드로이드는 "웹 앱(PWA) 설치 또는 APK 설치" 중 선택 — 렌더는 _render() 가 결정.
+            '<div id="install-gate-apk-box" class="hidden" style="margin-top:14px;">' +
+              '<div style="font:500 15px/1.5 system-ui,sans-serif;color:inherit;margin-bottom:8px;">또는 안드로이드 앱(APK)을 직접 설치할 수 있습니다(사내 배포 — 설치 중 보안 경고가 뜹니다).</div>' +
+              '<button id="install-gate-apk" type="button" style="font:700 17px/1.2 system-ui,sans-serif;padding:14px 18px;border-radius:12px;border:2px solid #1b75bb;background:#ffffff;color:#1b75bb;cursor:pointer;width:100%;">안드로이드 앱(APK)으로 설치</button>' +
+            "</div>" +
             '<div id="install-gate-done" class="install-gate-done hidden">설치되었습니다 — 홈 화면의 SEASTAR 아이콘으로 열어 주세요.</div>' +
           "</div>";
         document.body.appendChild(d);
@@ -96,6 +101,8 @@
       this._gateEl = d;
       const btn = document.getElementById("install-gate-btn");
       if (btn && !btn._igBound) { btn._igBound = true; btn.addEventListener("click", () => this._onInstallClick()); }
+      const apkBtn = document.getElementById("install-gate-apk");
+      if (apkBtn && !apkBtn._igBound) { apkBtn._igBound = true; apkBtn.addEventListener("click", () => { if (typeof ApkInstall !== "undefined") ApkInstall.open(); }); }
       return d;
     },
 
@@ -113,7 +120,8 @@
     /** body 의 다른 모든 직계 자식을 inert — 포인터·키보드·포커스 네이티브 차단(요구 3). */
     _lockBackground() {
       Array.prototype.forEach.call(document.body.children, (el) => {
-        if (el === this._gateEl || el.hasAttribute("inert")) return;
+        // [WO 20261010-apk] data-installgate-allow = 게이트 위에서 열리는 설치 안내(38c ApkInstall) — 잠그면 안내를 못 누른다.
+        if (el === this._gateEl || el.hasAttribute("inert") || el.hasAttribute("data-installgate-allow")) return;
         el.setAttribute("data-installgate-inert", "1");
         el.setAttribute("inert", "");
       });
@@ -149,6 +157,12 @@
       const guideBox = document.getElementById("install-gate-guide");
       const doneBox = document.getElementById("install-gate-done");
       if (!btn || !iosBox || !guideBox || !doneBox) return;
+      // [WO 20261010-apk] APK 선택지 — 안드로이드(iOS 아님)·ApkInstall 로드됨·설치 완료 전일 때만.
+      const apkBox = document.getElementById("install-gate-apk-box");
+      if (apkBox) {
+        const apkOk = !this._justInstalled && typeof ApkInstall !== "undefined" && ApkInstall.isAndroid && ApkInstall.isAndroid();
+        apkBox.classList.toggle("hidden", !apkOk);
+      }
       if (this._justInstalled) {
         btn.classList.add("hidden"); iosBox.classList.add("hidden"); guideBox.classList.add("hidden");
         doneBox.classList.remove("hidden");

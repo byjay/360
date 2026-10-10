@@ -53,8 +53,23 @@
       this._boot();
     },
 
-    /** 이미 앱으로 설치돼 실행 중인가 */
+    /** [WO 20261010-apk] 안드로이드 APK(Capacitor WebView) 안에서 실행 중인가 — 판정 SoT 1곳.
+     *  ① Capacitor 네이티브 브리지(원격 URL 모드에서도 Capacitor 가 페이지에 주입) ② 브리지 주입 전·실패 대비
+     *  UA 표식(android-app/capacitor.config.json android.appendUserAgent = "SEASTAR360App"). */
+    NATIVE_UA_MARK: "SEASTAR360App",
+    isNativeApp() {
+      try {
+        const cap = window.Capacitor;
+        if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform()) return true;
+      } catch (e) {}
+      const ua = String((window.navigator && window.navigator.userAgent) || "");
+      return ua.indexOf(this.NATIVE_UA_MARK) !== -1;
+    },
+
+    /** 이미 앱으로 설치돼 실행 중인가 — PWA standalone · iOS 홈 화면 · 안드로이드 APK(WO 20261010-apk) 모두 "설치됨".
+     *  🔴 공유 판정점: InstallGate.shouldGate·배너·"앱 설치" 메뉴 비활성 사유가 전부 이 함수 하나를 본다. */
     isStandalone() {
+      if (this.isNativeApp()) return true;
       try {
         if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
       } catch (e) {}
