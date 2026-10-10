@@ -7,6 +7,8 @@ import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
 import { askJevSeverity, gateSeverity, SEVERITY_LEVELS } from './lib/jevSeverity'
 import { askVision, visionModelOf, visionRunnerOf, visionCacheKey, pinImageRefs, visionQuotaExhausted, visionDayStartUtc,
   AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P, AI_VISION_GLOBAL_NEURON_CAP, AI_VISION_FREE_NEURONS_PER_DAY, AI_VISION_PROVIDER } from './lib/aiVision'
+import { normalizeRevLabel, revLabelKey, nextRevLabel, IDENTITY as REV_IDENTITY, isIdentity as revIsIdentity, affSane, solveCarry, autoCarry,
+  carryPins, carryZones, carryAnnos, carryCrop, diffPins, revertPinsMerge, revertShapesMerge, invertAff } from './lib/revCore'
 
 type Bindings = {
   DB: D1Database
@@ -2515,6 +2517,7 @@ async function canReadR2Key(c: any, user: any, key: string, obj: any): Promise<b
   if (by && !user._readonly && s.email && String(by).toLowerCase() === s.email) return true
   const ids = await readableDeploymentIds(c, user) || []
   if (ids.length && await depsMention(c, ids, key, true)) return true
+  if (ids.length && await revsMention(c, ids, key)) return true   // [WO 20261010-revision] 보관된 이전 개정·제안 도면(같은 배포본 읽기 범위)
   let panoIds: string[] = []
   try {
     const pr: any = await c.env.DB.prepare("SELECT id FROM pano_images WHERE deleted = 0 AND instr(substr(COALESCE(image_data, ''), 1, 400), ?) > 0 LIMIT 20").bind(key).all()
@@ -2857,6 +2860,315 @@ app.post('/api/projects/:id/pins/purge/:batch/undo', async (c) => {
   await logActivity(c, 'pins.purge.undo', { actor: user, targetType: 'project', targetId: pid,
     detail: { batch, undo: true, restored, failed, deployments: results } })
   return c.json({ ok: failed === 0, restored, failed, results }, failed && !results.some((r) => r.ok) ? 409 : 200)
+})
+
+/* ══ [WO 20261010-revision] 도면 개정(Rev) 관리 ═══════════════════════════════════════════════
+ *  GET  /api/deployments/:id/revisions             이력 · 현재/다음 개정 번호 · 권한 · 검토 필요 핀 수 (읽기 SoT)
+ *  GET  /api/deployments/:id/revisions/:rid        한 개정 — 이전/새 도면 · 이전 핀 · 변환 · 핀 diff(added/removed/moved) (읽기 SoT)
+ *  POST /api/deployments/:id/revisions/preview     기준점 → 변환 계산 + 핀 이월 미리보기(쓰기 0, 그 프로젝트 디자이너)
+ *  POST /api/deployments/:id/revisions             적용(소유자·super, base_version 필수) / 제안(propose:true, 그 프로젝트 디자이너)
+ *  POST /api/deployments/:id/revisions/:rid/undo   되돌리기(소유자·super, REV_UNDO_MS 안, 가장 최근 적용분만)
+ *  🔴 안전: 적용 직전 배포본 스냅샷(prev_snapshot) INSERT · 구역 윤곽 · 배포본 UPDATE 를 한 batch 로, 전부 같은 version 조건
+ *     (경합이면 전부 0건 → 409). 이전 도면 R2 객체는 지우지 않는다(참조를 prev_snapshot 에 보관 → canReadR2Key 가 이력 참조도 인정).
+ *  계산(아핀·이월·diff·개정 표기)은 전부 src/lib/revCore.ts 한 곳 — 클라이언트는 미리보기도 이 서버에 맡긴다. */
+const REV_UNDO_MS = 10 * 60 * 1000
+async function revTableReady(c: any): Promise<boolean> {
+  try { await c.env.DB.prepare('SELECT id FROM drawing_revisions LIMIT 1').first(); return true } catch { return false }
+}
+const revJson = (s: any, dflt: any) => { if (s == null || s === '') return dflt; if (typeof s !== 'string') return s; try { const v = JSON.parse(s); return v == null ? dflt : v } catch { return dflt } }
+const revLive = (o: any) => !!o && o.id != null && !o._deleted
+/** 페이지 지문 — R2 URL 의 질의(?t= 열람 토큰 등)는 같은 객체이므로 떼고 비교한다. 페이지가 없으면 "". */
+async function revPagesHash(pagesData: any): Promise<string> {
+  const arr = revJson(pagesData, [])
+  const key = (Array.isArray(arr) ? arr : []).map((p: any) => String(p || '').split('?')[0]).join('\n')
+  return key ? (await sha256Hex('pages:' + key)).slice(0, 32) : ''
+}
+/** 공통 게이트 — mode: read(읽기 SoT) · propose(그 프로젝트 쓰기 권한 = 디자이너 멤버) · apply(소유자·super).
+ *  can_apply / can_propose 는 같은 판정을 응답에도 싣는다(클라 버튼 활성·사유의 근거). */
+async function revGate(c: any, mode: 'read' | 'propose' | 'apply'): Promise<{ user?: any, dep?: any, canApply?: boolean, canPropose?: boolean, mask?: boolean, res?: Response }> {
+  const user = await getUser(c)
+  if (!user) return { res: c.json({ error: 'unauthorized — login required' }, 401) }
+  const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(c.req.param('id')).first()
+  if (!dep) return { res: c.json({ error: 'not found' }, 404) }
+  const scope = await readScopeOf(c, user)
+  const idx = await depRefIndexOf(c)
+  if (!canReadDepRow(scope, idx, dep)) return { res: c.json({ error: 'forbidden' }, 403) }
+  let canPropose = false, canApply = false
+  if (!user._readonly && (await requireDesigner(c))) {
+    canPropose = !(await deploymentWriteDenied(c, user, dep.project_id))
+    if (canPropose) {
+      if (isSuperAdmin(c, user.email)) canApply = true
+      else for (const pid of boundPidsOf(idx, dep)) { if (await canManageMembers(c, user, pid)) { canApply = true; break } }
+    }
+  }
+  if (mode === 'propose' && !canPropose) return { res: c.json({ error: 'forbidden — 이 프로젝트 디자이너만(designer of this project only)' }, 403) }
+  if (mode === 'apply' && !canApply) return { res: c.json({ error: 'forbidden — 소유자·관리자 전용(project owner or super admin only)' }, 403) }
+  return { user, dep, canApply, canPropose, mask: maskForDepRow(scope, idx, dep) }
+}
+async function revRowsOf(c: any, depId: string): Promise<any[]> {
+  const r: any = await c.env.DB.prepare(
+    `SELECT id, kind, status, rev_label, prev_label, rev_date, memo, author_email, file_name, transform, created_at, applied_at, applied_by,
+            reverted_at, reverted_by, ref_id, dep_version_before, dep_version_after
+       FROM drawing_revisions WHERE deployment_id = ? ORDER BY created_at, rowid`).bind(depId).all()
+  return r.results || []
+}
+const revApplied = (rows: any[]) => rows.filter((r) => r.kind === 'revision' && r.status === 'applied')
+/** 기준 개정(이력 첫 개정 적용 직전 도면)의 번호 — 첫 revision 행의 prev_label. 없으면 null. */
+const revBaseLabel = (rows: any[]) => { const f = rows.find((r) => r.kind === 'revision'); return f ? (f.prev_label || null) : null }
+function revMeta(r: any, mask: boolean) {
+  const em = (v: any) => (mask ? maskEmailsIn(v) : v)
+  return { id: r.id, kind: r.kind, status: r.status, rev_label: r.rev_label, prev_label: r.prev_label, rev_date: r.rev_date, memo: r.memo,
+    author: em(r.author_email), file_name: r.file_name, created_at: r.created_at, applied_at: r.applied_at, applied_by: em(r.applied_by),
+    reverted_at: r.reverted_at, reverted_by: em(r.reverted_by), ref_id: r.ref_id, transform: revJson(r.transform, null) }
+}
+/** 개정 이력이 참조하는 R2 키(보관된 이전 도면·제안 도면) — 그 배포본을 읽을 수 있는 사람만(canReadR2Key 가 부른다). */
+async function revsMention(c: any, ids: string[], needle: string): Promise<boolean> {
+  try {
+    for (let i = 0; i < ids.length; i += 50) {
+      const part = ids.slice(i, i + 50)
+      const row = await c.env.DB.prepare(
+        `SELECT 1 AS x FROM drawing_revisions WHERE deployment_id IN (${part.map(() => '?').join(',')})
+           AND (instr(COALESCE(pages_data, ''), ?) > 0 OR instr(COALESCE(source_meta, ''), ?) > 0 OR instr(COALESCE(prev_snapshot, ''), ?) > 0) LIMIT 1`
+      ).bind(...part, needle, needle, needle).first()
+      if (row) return true
+    }
+  } catch {}
+  return false
+}
+/** 구역 윤곽 이월 대상 — 이 배포본을 잘라 쓰는 창(crop) 구역 · 이 배포본을 원본상자(src_crop)로 가리키는 벡터 복사 구역. */
+async function revDeckRows(c: any, depId: string): Promise<any[]> {
+  const r: any = await c.env.DB.prepare(
+    'SELECT id, deployment_id, crop, src_dep_id, src_crop FROM decks WHERE deleted = 0 AND ((deployment_id = ? AND crop IS NOT NULL) OR src_dep_id = ?)'
+  ).bind(depId, depId).all()
+  return r.results || []
+}
+
+app.get('/api/deployments/:id/revisions', async (c) => {
+  const g = await revGate(c, 'read')
+  if (g.res) return g.res
+  const dep = g.dep, ready = await revTableReady(c)
+  const rows = ready ? await revRowsOf(c, String(dep.id)) : []
+  const applied = revApplied(rows)
+  const base = revBaseLabel(rows)
+  const cur = applied.length ? applied[applied.length - 1] : null
+  const now = Date.now()
+  const reviewPins = (revJson(dep.pins, []) as any[]).filter((p) => revLive(p) && p.revReview).length
+  const visible = rows.filter((r) => r.kind !== 'proposal' || g.canPropose)   // 제안은 디자이너 이상에게만
+  return c.json({
+    ready, deployment: { id: dep.id, version: dep.version != null ? Number(dep.version) : 0, file_name: dep.file_name, title: dep.title, project_id: dep.project_id || null },
+    can_apply: !!g.canApply, can_propose: !!g.canPropose, undo_window_ms: REV_UNDO_MS,
+    base_label: base, current_label: cur ? cur.rev_label : base, next_label: nextRevLabel(cur ? cur.rev_label : base),
+    review_pins: reviewPins,
+    revisions: visible.map((r) => Object.assign(revMeta(r, !!g.mask), {
+      current: !!cur && r.id === cur.id,
+      undo_until: (cur && r.id === cur.id && r.applied_at && now - Number(r.applied_at) <= REV_UNDO_MS) ? Number(r.applied_at) + REV_UNDO_MS : null,
+    })),
+  })
+})
+
+app.post('/api/deployments/:id/revisions/preview', async (c) => {
+  const g = await revGate(c, 'propose')
+  if (g.res) return g.res
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const sol = body && body.mode === 'auto' ? autoCarry(body.src_dims, body.dst_dims) : solveCarry(body && body.src_dims, body && body.dst_dims, (body && body.src_pts) || [], (body && body.dst_pts) || [])
+  if (!sol.ok) return c.json({ error: sol.error }, 400)
+  const dep = g.dep
+  const pins = (revJson(dep.pins, []) as any[])
+  const moved = carryPins(pins, sol.t, null)
+  const list: any[] = []
+  pins.forEach((p, i) => {
+    if (!revLive(p) || typeof p.x !== 'number' || typeof p.y !== 'number') return
+    const q = moved[i]
+    list.push({ id: p.id, label: p.label != null ? String(p.label) : '', page: Number(p.page || 1), checkboard: !!p.checkboard, x: p.x, y: p.y, nx: q.x, ny: q.y,
+      out: q.x < 0 || q.x > 100 || q.y < 0 || q.y > 100 })
+  })
+  const decks = (await revDeckRows(c, String(dep.id))).length
+  return c.json({ transform: sol.t, kind: sol.kind, rms: sol.rms, max_err: sol.maxErr, identity: revIsIdentity(sol.t), pins: list,
+    summary: { pins: list.length, out: list.filter((p) => p.out).length, zones: (revJson(dep.zones, []) as any[]).filter(revLive).length,
+      annotations: (revJson(dep.annotations, []) as any[]).filter(revLive).length, decks } })
+})
+
+app.get('/api/deployments/:id/revisions/:rid', async (c) => {
+  const g = await revGate(c, 'read')
+  if (g.res) return g.res
+  if (!(await revTableReady(c))) return c.json({ error: 'migration 0040_drawing_revisions 미적용' }, 503)
+  const dep = g.dep
+  const row: any = await c.env.DB.prepare('SELECT rowid AS rn, * FROM drawing_revisions WHERE id = ? AND deployment_id = ?').bind(c.req.param('rid'), dep.id).first()
+  if (!row || (row.kind === 'proposal' && !g.canPropose)) return c.json({ error: 'not found' }, 404)
+  const t = revJson(row.transform, null) || { ...REV_IDENTITY }
+  // 이전(기준) 쪽: 적용·보관 행은 적용 직전 스냅샷, 제안은 지금 배포본
+  const prev = row.kind === 'proposal' ? dep : (revJson(row.prev_snapshot, {}) || {})
+  const prevPins = revJson(prev.pins, []) as any[]
+  // 새 쪽 핀: 적용 중인 개정 = 다음 적용 개정 직전 스냅샷(없으면 지금 배포본), 그 외(되돌림·제안·보관) = 이전 핀을 이월한 값
+  let afterPins: any[]
+  if (row.kind === 'revision' && row.status === 'applied') {
+    const later: any = await c.env.DB.prepare(
+      `SELECT prev_snapshot FROM drawing_revisions WHERE deployment_id = ? AND kind = 'revision' AND status = 'applied'
+         AND (created_at > ? OR (created_at = ? AND rowid > ?)) ORDER BY created_at, rowid LIMIT 1`).bind(dep.id, row.created_at, row.created_at, row.rn).first()
+    afterPins = later ? (revJson((revJson(later.prev_snapshot, {}) || {}).pins, []) as any[]) : (revJson(dep.pins, []) as any[])
+  } else afterPins = carryPins(prevPins, t, null)
+  const diff = diffPins(carryPins(prevPins, t, null), afterPins)
+  const m = (v: any) => (g.mask ? maskEmailsIn(v) : v)
+  const asStr = (v: any, d: string) => (typeof v === 'string' ? v : JSON.stringify(v == null ? JSON.parse(d) : v))
+  return c.json({
+    revision: revMeta(row, !!g.mask), transform: t,
+    prev: { label: row.kind === 'proposal' ? null : row.prev_label, file_name: prev.file_name || '', pages_data: prev.pages_data || null, source_meta: prev.source_meta || null,
+      pins: m(asStr(prev.pins, '[]')), zones: m(asStr(prev.zones, '[]')), annotations: m(asStr(prev.annotations, '[]')) },
+    next: row.kind === 'replaced' ? null : { label: row.rev_label, file_name: row.file_name || '', pages_data: row.pages_data || null, source_meta: row.source_meta || null },
+    diff,
+  })
+})
+
+app.post('/api/deployments/:id/revisions', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  body = body || {}
+  const propose = body.propose === true
+  const g = await revGate(c, propose ? 'propose' : 'apply')
+  if (g.res) return g.res
+  if (!(await revTableReady(c))) return c.json({ error: 'migration 0040_drawing_revisions 미적용 — 개정을 저장하지 않았습니다' }, 503)
+  const dep = g.dep, user = g.user, now = Date.now(), depId = String(dep.id)
+  const rows = await revRowsOf(c, depId)
+  // 도면·변환의 출처 — 제안 적용이면 그 제안 행(번호·일자·메모는 본문 값이 있으면 그것)
+  let src: any = body, proposal: any = null
+  if (!propose && body.from_proposal) {
+    proposal = await c.env.DB.prepare("SELECT * FROM drawing_revisions WHERE id = ? AND deployment_id = ? AND kind = 'proposal'").bind(String(body.from_proposal), depId).first()
+    if (!proposal) return c.json({ error: '제안을 찾을 수 없습니다' }, 404)
+    if (proposal.status !== 'proposed') return c.json({ error: '이미 처리된 제안입니다', status: proposal.status }, 409)
+    src = { rev_label: proposal.rev_label, prev_label: proposal.prev_label, rev_date: proposal.rev_date, memo: proposal.memo, file_name: proposal.file_name,
+      drawing_data: proposal.drawing_data, pages_data: proposal.pages_data, source_meta: proposal.source_meta, transform: revJson(proposal.transform, null) }
+  }
+  const pick = (k: string) => (body[k] != null && body[k] !== '' ? body[k] : src[k])
+  const label = normalizeRevLabel(pick('rev_label'))
+  if (!label) return c.json({ error: '개정 번호를 입력하세요(예: Rev.B · Rev.1)' }, 400)
+  const pagesArr = revJson(src.pages_data, null)
+  if (!Array.isArray(pagesArr) || !pagesArr.length || !pagesArr.every((p: any) => typeof p === 'string' && p)) return c.json({ error: '새 개정 도면(pages_data)이 없습니다' }, 400)
+  const t = src.transform == null ? { ...REV_IDENTITY } : revJson(src.transform, null)
+  const why = affSane(t)
+  if (why) return c.json({ error: why }, 400)
+  const applied = revApplied(rows)
+  const base = revBaseLabel(rows)
+  const curLabel = applied.length ? applied[applied.length - 1].rev_label : base
+  const prevLabel = curLabel || normalizeRevLabel(pick('prev_label')) || 'Rev.0'
+  const used = new Set([prevLabel, base].concat(applied.map((r) => r.rev_label)).filter(Boolean).map(revLabelKey))
+  if (used.has(revLabelKey(label))) return c.json({ error: '이미 있는 개정 번호입니다: ' + label, duplicate_label: true }, 409)
+  const dIn = String(pick('rev_date') || '').slice(0, 10)
+  const revDate = /^\d{4}-\d{2}-\d{2}$/.test(dIn) ? dIn : new Date(now).toISOString().slice(0, 10)
+  const memo = String(pick('memo') == null ? '' : pick('memo')).slice(0, 2000)
+  const fileName = String(src.file_name || '').slice(0, 300)
+  const drawingData = typeof src.drawing_data === 'string' && src.drawing_data ? src.drawing_data : pagesArr[0]
+  const pagesJson = JSON.stringify(pagesArr)
+  const sourceMeta = typeof src.source_meta === 'string' && src.source_meta ? src.source_meta : null   // 이미지 개정 = 원본 PDF 없음(이전 PDF 를 남기면 뷰어가 옛 원본을 그린다)
+  const id = genId('rev')
+  const cur = dep.version != null ? Number(dep.version) : 0
+
+  if (propose) {
+    await c.env.DB.prepare(
+      `INSERT INTO drawing_revisions (id, deployment_id, project_id, kind, status, rev_label, prev_label, rev_date, memo, author_email, file_name,
+         drawing_data, pages_data, source_meta, transform, dep_version_before, created_at)
+       VALUES (?, ?, ?, 'proposal', 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, depId, dep.project_id || null, label, prevLabel, revDate, memo, user.email, fileName, drawingData, pagesJson, sourceMeta, JSON.stringify(t), cur, now).run()
+    await logActivity(c, 'drawing.revision.propose', { actor: user, targetType: 'deployment', targetId: depId, detail: { id, rev_label: label, prev_label: prevLabel } })
+    return c.json({ ok: true, proposed: true, id, rev_label: label })
+  }
+
+  if (body.base_version == null || Number(body.base_version) !== cur) {
+    return c.json({ error: 'conflict', message: '다른 사용자가 먼저 저장했습니다 — 최신본을 다시 불러온 뒤 개정을 적용하세요', version: cur }, 409)
+  }
+  const flag = { rev: id, at: now }
+  const pinsArr = revJson(dep.pins, []) as any[]
+  const nextPins = carryPins(pinsArr, t, flag), nextZones = carryZones(revJson(dep.zones, []), t), nextAnnos = carryAnnos(revJson(dep.annotations, []), t)
+  const deckSnap: any[] = [], deckStmts: any[] = []
+  for (const d of await revDeckRows(c, depId)) {
+    const s: any = { id: d.id }
+    let crop = d.crop, srcCrop = d.src_crop, changed = false
+    if (String(d.deployment_id || '') === depId && d.crop) { s.crop = d.crop; const nc = carryCrop(revJson(d.crop, null), t); if (nc) { crop = JSON.stringify(nc); changed = true } }
+    if (String(d.src_dep_id || '') === depId && d.src_crop) { s.src_crop = d.src_crop; const nc = carryCrop(revJson(d.src_crop, null), t); if (nc) { srcCrop = JSON.stringify(nc); changed = true } }
+    if (!changed) continue
+    deckSnap.push(s)
+    deckStmts.push(c.env.DB.prepare('UPDATE decks SET crop = ?, src_crop = ?, updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)')
+      .bind(crop, srcCrop, now, d.id, depId, cur))
+  }
+  const snapshot = { title: dep.title, file_name: dep.file_name, drawing_data: dep.drawing_data, pages_data: dep.pages_data, source_meta: dep.source_meta,
+    pins: dep.pins, zones: dep.zones, annotations: dep.annotations, decks: deckSnap, version: cur }
+  const guard = 'EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)'
+  const stmts: any[] = [
+    c.env.DB.prepare(
+      `INSERT INTO drawing_revisions (id, deployment_id, project_id, kind, status, rev_label, prev_label, rev_date, memo, author_email, file_name,
+         drawing_data, pages_data, source_meta, transform, prev_snapshot, prev_pages_hash, dep_version_before, dep_version_after, created_at, applied_at, applied_by, ref_id)
+       SELECT ?, ?, ?, 'revision', 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard}`
+    ).bind(id, depId, dep.project_id || null, label, prevLabel, revDate, memo, proposal ? proposal.author_email : user.email, fileName, drawingData, pagesJson, sourceMeta,
+      JSON.stringify(t), JSON.stringify(snapshot), await revPagesHash(dep.pages_data), cur, cur + 1, now, now, user.email, proposal ? proposal.id : null, depId, cur),
+    ...deckStmts,
+  ]
+  if (proposal) stmts.push(c.env.DB.prepare(`UPDATE drawing_revisions SET status = 'accepted', ref_id = ?, applied_at = ?, applied_by = ? WHERE id = ? AND status = 'proposed' AND ${guard}`)
+    .bind(id, now, user.email, proposal.id, depId, cur))
+  stmts.push(c.env.DB.prepare('UPDATE deployments SET file_name = ?, drawing_data = ?, pages_data = ?, source_meta = ?, pins = ?, zones = ?, annotations = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
+    .bind(fileName || dep.file_name, drawingData, pagesJson, sourceMeta, JSON.stringify(nextPins), JSON.stringify(nextZones), JSON.stringify(nextAnnos), now, cur + 1, depId, cur))
+  const out: any = await c.env.DB.batch(stmts)
+  const last = out && out[out.length - 1]
+  if (!Number((last && last.meta && last.meta.changes) || 0)) return c.json({ error: 'conflict', message: '저장 경합(동시 저장) — 최신본을 다시 불러온 뒤 적용하세요' }, 409)
+  const livePins = nextPins.filter(revLive)
+  const carried = { pins: livePins.length, out: livePins.filter((p: any) => p.revReview && p.revReview.out).length,
+    zones: nextZones.filter(revLive).length, annotations: nextAnnos.filter(revLive).length, decks: deckSnap.length }
+  await logActivity(c, 'drawing.revision.apply', { actor: user, targetType: 'deployment', targetId: depId,
+    detail: { id, rev_label: label, prev_label: prevLabel, identity: revIsIdentity(t), carried, from_proposal: proposal ? proposal.id : null } })
+  return c.json({ ok: true, id, rev_label: label, prev_label: prevLabel, version: cur + 1, undo_until: now + REV_UNDO_MS, carried })
+})
+
+app.post('/api/deployments/:id/revisions/:rid/undo', async (c) => {
+  const g = await revGate(c, 'apply')
+  if (g.res) return g.res
+  if (!(await revTableReady(c))) return c.json({ error: 'migration 0040_drawing_revisions 미적용' }, 503)
+  const user = g.user, depId = String(g.dep.id), rid = c.req.param('rid')
+  const row: any = await c.env.DB.prepare("SELECT rowid AS rn, * FROM drawing_revisions WHERE id = ? AND deployment_id = ? AND kind = 'revision'").bind(rid, depId).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  if (row.status !== 'applied') return c.json({ error: '이미 되돌린 개정입니다', already: true }, 409)
+  const later: any = await c.env.DB.prepare(
+    `SELECT id FROM drawing_revisions WHERE deployment_id = ? AND kind = 'revision' AND status = 'applied' AND (created_at > ? OR (created_at = ? AND rowid > ?)) LIMIT 1`
+  ).bind(depId, row.created_at, row.created_at, row.rn).first()
+  if (later) return c.json({ error: '이후 개정이 있습니다 — 가장 최근 개정부터 되돌리세요', later: later.id }, 409)
+  const now = Date.now()
+  if (now - Number(row.applied_at || row.created_at) > REV_UNDO_MS) return c.json({ error: '되돌리기 시간(10분)이 지났습니다', expired: true }, 410)
+  const prev: any = revJson(row.prev_snapshot, null)
+  if (!prev) return c.json({ error: '스냅샷이 없습니다 — 되돌릴 수 없습니다' }, 500)
+  const t = revJson(row.transform, null) || { ...REV_IDENTITY }
+  const inv = invertAff(t) || { ...REV_IDENTITY }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
+    if (!dep) return c.json({ error: '배포본이 삭제됨' }, 409)
+    const cur = dep.version != null ? Number(dep.version) : 0
+    // 적용 뒤 아무도 저장하지 않았으면 스냅샷 그대로(정확한 원복), 저장이 있었으면 그 변경을 살리는 병합
+    const exact = cur === Number(row.dep_version_after)
+    const pins = exact ? prev.pins : JSON.stringify(revertPinsMerge(revJson(dep.pins, []), revJson(prev.pins, []), t, rid))
+    const zones = exact ? prev.zones : JSON.stringify(revertShapesMerge(revJson(dep.zones, []), revJson(prev.zones, []), t, carryZones))
+    const annos = exact ? prev.annotations : JSON.stringify(revertShapesMerge(revJson(dep.annotations, []), revJson(prev.annotations, []), t, carryAnnos))
+    const guard = 'EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)'
+    const stmts: any[] = [
+      c.env.DB.prepare(`UPDATE drawing_revisions SET status = 'reverted', reverted_at = ?, reverted_by = ? WHERE id = ? AND status = 'applied' AND ${guard}`).bind(now, user.email, rid, depId, cur),
+    ]
+    // 구역 윤곽: 지금 값이 "적용 때 이월한 값"이면 스냅샷으로, 그 뒤 누가 바꿨으면 현재 값을 역이월
+    for (const s of (Array.isArray(prev.decks) ? prev.decks : [])) {
+      const d: any = await c.env.DB.prepare('SELECT crop, src_crop FROM decks WHERE id = ?').bind(s.id).first()
+      if (!d) continue
+      const back = (now0: any, snap0: any) => {
+        if (snap0 == null) return now0
+        return (now0 === JSON.stringify(carryCrop(revJson(snap0, null), t))) ? snap0 : (now0 ? JSON.stringify(carryCrop(revJson(now0, null), inv)) : now0)
+      }
+      stmts.push(c.env.DB.prepare(`UPDATE decks SET crop = ?, src_crop = ?, updated_at = ? WHERE id = ? AND ${guard}`)
+        .bind(back(d.crop, s.crop), back(d.src_crop, s.src_crop), now, s.id, depId, cur))
+    }
+    stmts.push(c.env.DB.prepare('UPDATE deployments SET file_name = ?, drawing_data = ?, pages_data = ?, source_meta = ?, pins = ?, zones = ?, annotations = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
+      .bind(prev.file_name ?? dep.file_name, prev.drawing_data ?? null, prev.pages_data ?? null, prev.source_meta ?? null, pins ?? '[]', zones ?? '[]', annos ?? '[]', now, cur + 1, depId, cur))
+    const out: any = await c.env.DB.batch(stmts)
+    const last = out && out[out.length - 1]
+    if (!Number((last && last.meta && last.meta.changes) || 0)) continue   // 경합 → 다시 읽고 재시도
+    const restoredPins = (revJson(pins, []) as any[]).filter(revLive).length
+    await logActivity(c, 'drawing.revision.undo', { actor: user, targetType: 'deployment', targetId: depId, detail: { id: rid, rev_label: row.rev_label, exact, pins: restoredPins } })
+    return c.json({ ok: true, exact, version: cur + 1, restored: { pins: restoredPins }, rev_label: row.rev_label, prev_label: row.prev_label })
+  }
+  return c.json({ error: '저장 경합이 계속됨 — 다시 시도하세요' }, 409)
 })
 
 /** [WO 20261001-projectinfo] 🔴 단일 PATCH 지점(§G-2-5) — 이름 변경·원본 지정·정보메모 셋이 공유한다.
@@ -4445,6 +4757,25 @@ const updateDeployment = async (c: any) => {
     checkboard_start: body.checkboard_start != null ? body.checkboard_start : (existing.checkboard_start != null ? existing.checkboard_start : null),
   }
   const newVersion = curVersion + 1
+  // [WO 20261010-revision] 🔴 도면이 바뀌는 저장(종전 [도면 교체]·[메인 도면 교체]) — 밀려나는 이전 도면의 참조(pages_data·source_meta)를
+  //   덮어쓰기 전에 drawing_revisions(kind='replaced')로 보관한다(R2 객체는 원래 지우지 않는다 — 잃던 것은 참조뿐).
+  //   같은 도면은 한 번만(prev_pages_hash). 테이블이 없거나(마이그레이션 0040 전) 실패해도 저장은 종전대로 진행한다.
+  if (body.pages_data != null && existing.pages_data) {
+    try {
+      const oldH = await revPagesHash(existing.pages_data)
+      if (oldH && oldH !== (await revPagesHash(body.pages_data)) && (await revTableReady(c))) {
+        const dup = await c.env.DB.prepare('SELECT 1 AS x FROM drawing_revisions WHERE deployment_id = ? AND prev_pages_hash = ? LIMIT 1').bind(id, oldH).first()
+        if (!dup) {
+          const ex: any = existing
+          await c.env.DB.prepare(
+            `INSERT INTO drawing_revisions (id, deployment_id, project_id, kind, status, author_email, file_name, prev_snapshot, prev_pages_hash, dep_version_before, dep_version_after, created_at)
+             VALUES (?, ?, ?, 'replaced', 'archived', ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(genId('rev'), id, ex.project_id || null, user.email, merged.file_name || '', JSON.stringify({ title: ex.title, file_name: ex.file_name, drawing_data: ex.drawing_data,
+            pages_data: ex.pages_data, source_meta: ex.source_meta, pins: ex.pins, zones: ex.zones, annotations: ex.annotations, decks: [], version: curVersion }), oldH, curVersion, newVersion, now).run()
+        }
+      }
+    } catch {}
+  }
   await c.env.DB.prepare(
     `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?, source_meta=?, checkboard_start=?, updated_at=?, version=? WHERE id=?`
   ).bind(

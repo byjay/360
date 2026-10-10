@@ -672,6 +672,13 @@
       items.push({ label: "메인 도면 교체", danger: true, reason: ownerWhy || (pick ? "" : "메인(원본) 도면이 아직 없습니다 — 도면을 먼저 등록하세요"),
         desc: "프로젝트 메인 PDF 를 새 파일로(확인창)",
         run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "main" }); } });
+      // [WO 20261010-revision] 도면 개정 — 숨김 금지: 비활성 사유 SoT = Revision.reason()
+      if (typeof Revision !== "undefined") {
+        items.push({ label: "새 개정 올리기", desc: "이전 도면 보관 + 기준점 정렬로 핀·영역·주석 좌표 이월(10분 되돌리기)",
+          reason: Revision.reason({ kind: "main" }, "upload"), run: () => Revision.start({ kind: "main" }) });
+        items.push({ label: "개정 이력·비교", desc: "번호·일자·작성자·메모 · 이전 개정 보기 · 겹쳐 비교",
+          reason: Revision.reason({ kind: "main" }, "history"), run: () => Revision.openHistory({ kind: "main" }) });
+      }
       if (!pick) {
         items.push({ label: "지금 열린 도면을 원본으로 지정", reason: ownerWhy || ((typeof State !== "undefined" && State.currentDeploymentId) ? "" : "먼저 도면을 열어야 합니다"),
           run: () => { if (typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent(); } });
@@ -691,6 +698,12 @@
       items.push({ label, desc: "PDF·이미지 — 메인 PDF 는 바뀌지 않습니다",
         reason: why || (src.kind === "main" ? "메인 도면 — 원본 ⋯ → [메인 도면 교체](소유자·관리자)" : ""),
         run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "deck", deck }); } });
+      // [WO 20261010-revision] 이 구역 자기 도면의 개정 — 창·벡터 복사 구역은 비활성 + "메인 도면의 개정으로"(Revision.reason SoT)
+      if (typeof Revision !== "undefined" && src.kind !== "none") {
+        items.push({ label: "이 구역 새 개정 올리기", desc: "구역 도면 개정 — 이전 도면 보관 + 좌표 이월",
+          reason: Revision.reason({ kind: "deck", deck }, "upload"), run: () => Revision.start({ kind: "deck", deck }) });
+        items.push({ label: "이 구역 개정 이력·비교", reason: Revision.reason({ kind: "deck", deck }, "history"), run: () => Revision.openHistory({ kind: "deck", deck }) });
+      }
       // [WO 20261007-qrcov] QR 위치 태그 일괄 인쇄 — 숨김 금지: 미로드 구역은 비활성 + 사유(QrPrint.deckReason SoT)
       if (typeof QrPrint !== "undefined") {
         items.push({ label: "이 구역 QR 일괄 인쇄", desc: "구역·포인트마다 QR — A4 한 장에 " + QrPrint.PER_PAGE + "칸",
@@ -1589,6 +1602,18 @@
               <ellipse cx="14" cy="10.5" rx="3.4" ry="2.1" fill="#ffffff" opacity="0.5"/>
             </svg>
           </div>`;
+        // [WO 20261010-revision] 개정 이월된 핀 = "검토 필요" 배지(사람이 확정·이동하면 revReview=null 로 사라짐).
+        //   색은 인라인 리터럴 #111827 on #fde68a = 14.2:1(테마 변수 재해석 함정 회피). 도면 밖으로 나간 핀은 "도면 밖".
+        if (pin.revReview) {
+          marker.classList.add("pin-rev-review");
+          const rb = document.createElement("span");
+          rb.className = "pin-rev-badge";
+          rb.textContent = pin.revReview.out ? "도면 밖" : "검토";
+          rb.title = "도면 개정으로 좌표가 이월된 핀 — 위치를 확인하고 [개정 이력]에서 확정하세요";
+          rb.style.cssText = "position:absolute;left:50%;top:-16px;transform:translateX(-50%);background:#fde68a;color:#111827;border:1px solid #111827;"
+            + "border-radius:6px;font-size:11px;font-weight:800;line-height:1;padding:2px 4px;white-space:nowrap;pointer-events:none;z-index:3;";
+          marker.appendChild(rb);
+        }
           /* [마스터 요청] 핀 위 hover 액션버튼(.pin-actions) 제거 — 상단 "포인트 수정" 모드로 일원화.
              수정/이동/삭제/보기는 포인트수정 모드에서 핀 클릭 → PinActionPop 으로. */
         // ── 디자이너: 포인터 드래그로 핀 위치 이동 (click 과 구분: 이동 임계값) ──
@@ -1624,6 +1649,11 @@
             if (moved) {
               State.movingPinId = null;
               State.pinEditUnlocked = null; // 이동 끝나면 다시 잠금
+              if (pin.revReview) {   // [WO 20261010-revision] 사람이 직접 옮김 = 위치 확정(검토 배지 해제)
+                pin.revReview = null;
+                marker.classList.remove("pin-rev-review");
+                const _rb = marker.querySelector(".pin-rev-badge"); if (_rb) _rb.remove();
+              }
               if (typeof Zones !== "undefined" && Zones.refreshPinLinks) Zones.refreshPinLinks();
               UI.renderPinList();
               if (typeof Zones !== "undefined") Zones.render();

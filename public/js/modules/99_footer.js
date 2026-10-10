@@ -40,6 +40,7 @@
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
       FieldCapture: (typeof FieldCapture !== "undefined" ? FieldCapture : null),
+      Revision: (typeof Revision !== "undefined" ? Revision : null),
       Report: (typeof Report !== "undefined" ? Report : null),
       Requests: (typeof Requests !== "undefined" ? Requests : null),
       ProjectInfo: (typeof ProjectInfo !== "undefined" ? ProjectInfo : null),

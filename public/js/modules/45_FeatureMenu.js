@@ -57,6 +57,11 @@
         run: () => App.registerDrawingFor({ kind: "deck", deck: Projects.currentDeck }) },
       { id: "main-replace", group: "drawing", icon: "⟳", label: "메인 도면 교체", desc: "프로젝트 메인 PDF 를 새 파일로(확인창)", perm: "owner", needs: "project", danger: true,
         run: () => App.registerDrawingFor({ kind: "main" }) },
+      // [WO 20261010-revision] 도면 개정 — 대상 = 지금 보는 자기 도면 구역, 아니면 메인(Revision.currentTarget SoT). 사유 = Revision.reason
+      { id: "revision-upload", group: "drawing", icon: "⇡", label: "새 개정 올리기(Rev)", desc: "이전 도면 보관 + 기준점 정렬로 핀·영역·주석 좌표 이월(10분 되돌리기)", perm: "designer", needs: "project", mod: "Revision",
+        why: () => Revision.reason(null, "upload"), run: () => Revision.start() },
+      { id: "revision-history", group: "drawing", icon: "☰", label: "개정 이력·비교", desc: "번호·일자·작성자·메모 · 이전 개정 보기 · 겹쳐 비교 · 검토 필요 핀 확정", perm: "login", needs: "project", mod: "Revision",
+        why: () => Revision.reason(null, "history"), run: () => Revision.openHistory() },
       { id: "origin-open", group: "drawing", icon: "▤", label: "메인(원본) 전체 도면 열기", desc: "구역이 아닌 원본 PDF 전체", needs: "project", run: () => Projects.openOriginal() },
       { id: "origin-set", group: "drawing", icon: "★", label: "지금 도면을 원본으로 지정", desc: "원본 미지정 프로젝트에서", perm: "owner", needs: "drawing", run: () => Projects.setOriginalToCurrent() },
       { id: "deck-new", group: "drawing", icon: "+", label: "구역 생성", help: "deck-source-select", perm: "designer", needs: "project", click: "btn-new-deck", covers: ["btn-new-deck"] },
@@ -245,6 +250,7 @@
           case "Help": return typeof Help !== "undefined";
           case "PinPurge": return typeof PinPurge !== "undefined";
           case "FieldCapture": return typeof FieldCapture !== "undefined";
+          case "Revision": return typeof Revision !== "undefined";
           case "Delivery": return typeof Delivery !== "undefined" && typeof ZipStore !== "undefined";
           default: return false;
         }
