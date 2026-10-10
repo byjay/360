@@ -168,11 +168,13 @@ async function rclick(P, name, expr, opts) {
   let r = null;
   if (opts.at) r = opts.at; else r = await rectOf(P, expr);
   if (!r || r.miss) return { name, missing: true, diag: r };
+  let pre = null;
+  if (opts.before) pre = await P.ev(opts.before);   // 직전 준비(예: 글자 선택) — 허브 재렌더가 끼어들 틈 없이 바로 우클릭
   await mouseAt(P, r.x, r.y, "right", !!opts.shift);
   await wait(160);
   const log = await P.ev(`(window.__ctxLog||[]).slice(${n0})`);
   const last = log[log.length - 1] || null;
-  return Object.assign({ name }, last || { none: true });
+  return Object.assign({ name, pre }, last || { none: true });
 }
 
 try {
@@ -320,9 +322,9 @@ try {
   R.push(await rclick(P, "허브 카드", seedCard));
   await shot(P, "1280-hub-card-ctx");
   R.push(await rclick(P, "허브 빈 배경", null, { at: { x: 1260, y: 880 } }));
-  // 선택한 글자 = 브라우저 메뉴(복사)
-  await P.ev(`(function(){ var e=${seedCard}; var r=document.createRange(); r.selectNodeContents(e); var s=getSelection(); s.removeAllRanges(); s.addRange(r); return String(s).length })()`);
-  const selR = await rclick(P, "선택한 글자", seedCard);
+  // 선택한 글자 = 브라우저 메뉴(복사) — 선택은 우클릭 직전(같은 요소를 다시 찾아) 건다
+  const SEL = `(function(){ var e=${seedCard}; var r=document.createRange(); r.selectNodeContents(e); var s=getSelection(); s.removeAllRanges(); s.addRange(r); return String(s) })()`;
+  const selR = await rclick(P, "선택한 글자", seedCard, { before: SEL });
   await P.ev(`getSelection().removeAllRanges(); 1`);
   const shiftR = await rclick(P, "Shift+우클릭(허브 카드)", seedCard, { shift: true });
 
@@ -403,6 +405,7 @@ try {
     window.matchMedia = function (q) { if (typeof q === "string" && q.indexOf("display-mode: standalone") >= 0) return { matches: true, media: q, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; } }; return realMM(q); }; })();` });
   await P.send("Page.navigate", { url: BASE + "/" });
   await P.waitFor(FIND_SEED_ORIGIN, 30000); await settle(1500); await P.ev(CTX_PROBE);
+  console.log("    (진단 B4) " + JSON.stringify(await P.evS(`({ confirm: !!document.querySelector('#wm-confirm-modal.on'), kind: (document.getElementById('wm-confirm-modal')||{}).getAttribute && document.getElementById('wm-confirm-modal').getAttribute('data-confirm-kind'), stack: window.BackGuard._stack.length, hlen: history.length, act: navigator.userActivation.hasBeenActive, mk: window.__marker || null, dialogs: ${JSON.stringify(dialogs.length)} })`)) + " dialogs=" + JSON.stringify(dialogs.slice(-3)));
   const lr = await rectOf(P, seedCard);
   await P.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: lr.x, y: lr.y }] });
   await wait(900);
