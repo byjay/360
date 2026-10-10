@@ -21,6 +21,8 @@
     // [WO 20261007-qrcov] 핀 팝업 [QR] 주입 · 촬영 현황(커버리지) 초기화
     if (typeof QrPrint !== "undefined" && QrPrint.init) { try { QrPrint.init(); } catch (e) {} }
     if (typeof Coverage !== "undefined" && Coverage.init) { try { Coverage.init(); } catch (e) {} }
+    // [WO 20261010-delivery] 음성 메모 [🎤] — 노트·결함 입력칸(요청·답변 칸은 42_Requests 가 생성 시 attach)
+    if (typeof Voice !== "undefined" && Voice.init) { try { Voice.init(); } catch (e) {} }
     // [P40] 프로젝트 초대 링크(?invite=<token>) — 있으면 이름/비번 설정 모달을 띄운다.
     if (typeof Invite !== "undefined" && Invite.init) { try { Invite.init(); } catch (e) {} }
 
@@ -38,6 +40,12 @@
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
       FieldCapture: (typeof FieldCapture !== "undefined" ? FieldCapture : null),
+      Report: (typeof Report !== "undefined" ? Report : null),
+      Requests: (typeof Requests !== "undefined" ? Requests : null),
+      ProjectInfo: (typeof ProjectInfo !== "undefined" ? ProjectInfo : null),
+      Delivery: (typeof Delivery !== "undefined" ? Delivery : null),
+      ZipStore: (typeof ZipStore !== "undefined" ? ZipStore : null),
+      Voice: (typeof Voice !== "undefined" ? Voice : null),
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

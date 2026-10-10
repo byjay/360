@@ -161,6 +161,11 @@
         run: () => Report.print(Report.currentScope ? Report.currentScope() : undefined) },
       { id: "report-csv", group: "report", icon: "⇩", label: "보고서 CSV", desc: "지금 범위의 포인트 표", needs: "project", mod: "Report",
         run: () => Report.csv(Report.currentScope ? Report.currentScope() : undefined) },
+      // [WO 20261010-delivery] 납품 보고서(표지·요약·위치도·핀별 사진/결함) · 오프라인 묶음(zip)
+      { id: "report-delivery", group: "report", icon: "⎘", label: "납품 보고서(PDF)", desc: "표지·요약·핀 위치도·사진 전후·결함 — 인쇄창에서 PDF 저장", needs: "project", mod: "Delivery",
+        run: () => Delivery.open(Report.currentScope ? Report.currentScope() : undefined) },
+      { id: "report-bundle", group: "report", icon: "⇩", label: "오프라인 묶음(zip)", desc: "보고서 HTML + 축소 사진을 한 파일로", needs: "project", mod: "Delivery",
+        run: () => Delivery.bundle(Report.currentScope ? Report.currentScope() : undefined) },
       { id: "qr-deck", group: "report", icon: "▣", label: "이 구역 QR 위치 태그 일괄 인쇄", help: "qr-tag", needs: "deck", mod: "QrPrint",
         why: () => QrPrint.deckReason(Projects.currentDeck), run: () => QrPrint.printDeck(Projects.currentDeck) },
       { id: "pin-csv", group: "report", icon: "⇩", label: "포인트 CSV 내보내기", needs: "drawing", click: "pin-grid-csv", covers: ["pin-grid-csv"] },
@@ -240,6 +245,7 @@
           case "Help": return typeof Help !== "undefined";
           case "PinPurge": return typeof PinPurge !== "undefined";
           case "FieldCapture": return typeof FieldCapture !== "undefined";
+          case "Delivery": return typeof Delivery !== "undefined" && typeof ZipStore !== "undefined";
           default: return false;
         }
       } catch (e) { return false; }   // 선언 전(TDZ) 접근도 "미로드"로

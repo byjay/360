@@ -30,12 +30,14 @@
     _headers(extra) {
       return (typeof Auth !== "undefined" && Auth.headers) ? Auth.headers(Object.assign({ "Content-Type": "application/json" }, extra || {})) : Object.assign({ "Content-Type": "application/json" }, extra || {});
     },
-    _blank() { return { note: "", schedule: [], staleDays: null, updatedAt: null, updatedBy: null }; },
+    _blank() { return { note: "", vessel: "", hull: "", schedule: [], staleDays: null, updatedAt: null, updatedBy: null }; },
     _normalize(info) {
       const i = info || {};
       // [WO 20261007-qrcov] staleDays = 촬영 현황 "오래됨" 기준 일수(1~365, 없으면 null → Coverage 기본 14)
       const sd = Number(i.staleDays);
-      return { note: typeof i.note === "string" ? i.note : "", schedule: Array.isArray(i.schedule) ? i.schedule : [],
+      // [WO 20261010-delivery] 선명·호선 — 납품 보고서 표지(56_Delivery)가 읽는 SoT. 없으면 "" (지어내지 않음)
+      return { note: typeof i.note === "string" ? i.note : "", vessel: typeof i.vessel === "string" ? i.vessel : "", hull: typeof i.hull === "string" ? i.hull : "",
+        schedule: Array.isArray(i.schedule) ? i.schedule : [],
         staleDays: Number.isInteger(sd) && sd >= 1 && sd <= 365 ? sd : null, updatedAt: i.updatedAt || null, updatedBy: i.updatedBy || null };
     },
 
@@ -79,6 +81,19 @@
       })();
       list.innerHTML = "";
       const info = this._info;
+      // ── [WO 20261010-delivery] 선명·호선(납품 보고서 표지) ──
+      const shipRow = this._el("div", "display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px");
+      [["vessel", "선명", "예: SEASTAR PIONEER", 120], ["hull", "호선", "예: H.2451", 60]].forEach(([k, label, ph, max]) => {
+        const lab = this._el("label", "display:flex;flex-direction:column;gap:4px;flex:1 1 160px;font-size:12.5px;color:#c9962a;font-weight:700", label);
+        const inp = this._el("input", "padding:7px 9px;border-radius:6px;border:1px solid #554;background:#2a2518;color:#ffffff;font-size:13px;font-weight:400;font-family:sans-serif");
+        inp.type = "text"; inp.maxLength = max; inp.value = info[k] || ""; inp.placeholder = ph;
+        inp.setAttribute("data-pinfo-" + k, "1");
+        if (!this._editable) inp.disabled = true;
+        lab.appendChild(inp);
+        shipRow.appendChild(lab);
+      });
+      list.appendChild(shipRow);
+
       // ── 메모 ──
       list.appendChild(this._el("div", "font-weight:700;color:#c9962a;font-size:13.5px;margin:0 0 6px", "메모"));
       const ta = this._el("textarea", "width:100%;box-sizing:border-box;min-height:90px;padding:9px;border-radius:8px;border:1px solid #554;background:#2a2518;color:#ffffff;font-size:13.5px;font-family:sans-serif;resize:vertical");
@@ -173,7 +188,8 @@
       const sdEl = panel.querySelector("[data-pinfo-stale]");
       const sdRaw = sdEl ? String(sdEl.value || "").trim() : "";
       const sd = sdRaw === "" ? null : Math.round(Number(sdRaw));
-      return { note, schedule, staleDays: Number.isFinite(sd) && sd >= 1 && sd <= 365 ? sd : null };
+      const txt = (k) => { const el = panel.querySelector("[data-pinfo-" + k + "]"); return el ? String(el.value || "").trim() : ""; };
+      return { note, vessel: txt("vessel"), hull: txt("hull"), schedule, staleDays: Number.isFinite(sd) && sd >= 1 && sd <= 365 ? sd : null };
     },
 
     async save(force) {

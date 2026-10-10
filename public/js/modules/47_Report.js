@@ -177,13 +177,15 @@
 
     _esc(s) { return (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(s) : String(s == null ? "" : s); },
 
-    /** 인쇄용 HTML 문서 전체(새 창에 그대로 씀) — 사진은 Auth.r2()를 거쳐 <img>. */
-    _printHtml(rows, pins, title) {
+    /** 인쇄용 HTML 문서 전체(새 창에 그대로 씀).
+     *  [WO 20261010-delivery] 🔴 종전엔 <img src=Auth.r2(pin.imageId)> 였다 — imageId 는 pano_images 행 id 라
+     *  주소가 아니어서(Cloud.fetchImage 가 정본) 사진 칸이 항상 깨진 이미지였다. photoSrc(pin) → 주소|null 로 받는다. */
+    _printHtml(rows, pins, title, photoSrc) {
       const esc = this._esc.bind(this);
       const theadCells = this.COLUMNS.map((c) => "<th>" + esc(c) + "</th>").join("");
       const bodyRows = rows.map((r, i) => {
         const pin = pins[i];
-        const photoUrl = (pin && pin.imageId) ? ((typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(pin.imageId) : pin.imageId) : null;
+        const photoUrl = (pin && typeof photoSrc === "function") ? photoSrc(pin) : null;
         const photoCell = photoUrl ? '<img class="rpt-thumb" src="' + esc(photoUrl) + '" />' : "";
         return "<tr><td>" + r.map((v) => esc(v)).join("</td><td>") + "</td><td>" + photoCell + "</td></tr>";
       }).join("");
@@ -207,10 +209,17 @@
       if (!pins.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("내보낼 포인트가 없습니다."); return; }
       const rows = this._rows(pins, notes, decks, role);
       const title = "SEASTAR 점검 보고서 — " + new Date().toISOString().slice(0, 10);
-      const html = this._printHtml(rows, pins, title);
       const w = this.openPrintWindow();
       if (!w) return;
-      this.writePrint(w, html);
+      // 사진 = 납품 보고서와 같은 정면 크롭 축소본(Cloud.fetchImage → Auth.r2, 56_Delivery._photoBlob SoT)
+      const urls = new Map();
+      if (typeof Delivery !== "undefined") {
+        for (const pin of pins) {
+          if (!pin || !pin.imageId || urls.has(pin.imageId)) continue;
+          try { const b = await Delivery._photoBlob({ imageId: pin.imageId }); if (b) urls.set(pin.imageId, URL.createObjectURL(b)); } catch (e) { /* 그 칸만 비움 */ }
+        }
+      }
+      this.writePrint(w, this._printHtml(rows, pins, title, (pin) => urls.get(pin.imageId) || null));
     },
 
     /** 인쇄 창 열기(공유 지점) — 보고서·QR 위치 태그(50_QrLink) 인쇄가 같은 방식을 쓴다. 차단되면 안내 후 null. */
@@ -243,6 +252,19 @@
       csvBtn.insertAdjacentElement("afterend", sel);
       sel.insertAdjacentElement("afterend", printBtn);
       printBtn.addEventListener("click", () => this.print(sel.value));
+      // [WO 20261010-delivery] 납품 보고서(인쇄→PDF) · 오프라인 묶음(zip) — 같은 범위 선택(#rpt-scope)을 쓴다
+      const mk = (id, icon, label, fn) => {
+        const b = document.createElement("button");
+        b.id = id; b.type = "button"; b.className = csvBtn.className; b.title = label;
+        b.setAttribute("aria-label", label);
+        b.innerHTML = '<i class="fa-solid ' + icon + '"></i>';
+        b.addEventListener("click", () => fn(sel.value));
+        return b;
+      };
+      const dBtn = mk("rpt-delivery-btn", "fa-file-contract", "납품 보고서(PDF)", (s) => Delivery.open(s));
+      const zBtn = mk("rpt-bundle-btn", "fa-file-zipper", "오프라인 묶음(zip)", (s) => Delivery.bundle(s));
+      printBtn.insertAdjacentElement("afterend", dBtn);
+      dBtn.insertAdjacentElement("afterend", zBtn);
       // 🔴 csvBtn 자체 클릭 바인딩은 19_PinGrid.init()이 이미 가지고 있다(SoT 1곳) —
       //   여기서 또 bind 하면 클릭 1번에 CSV 2개가 나온다. PinGrid.exportCsv()가
       //   이 select(#rpt-scope)의 값을 읽어 Report.csv(scope)로 위임한다.

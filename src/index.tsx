@@ -2046,18 +2046,20 @@ function mapProject(r: any) {
 }
 /** [WO 20261001-projectinfo] 🔴 SoT — projects.info_json(TEXT) 파싱. 깨진/구버전 값은 조용히 삼키지 않고
  *  빈 기본값으로 안전 폴백(파싱 실패로 500 나던 사고 방지). PATCH 핸들러와 이 함수가 유일한 지점. */
-function parseProjectInfo(raw: any): { note: string, schedule: any[], staleDays: number | null, updatedAt: number | null, updatedBy: string | null } {
-  if (!raw) return { note: '', schedule: [], staleDays: null, updatedAt: null, updatedBy: null }
+function parseProjectInfo(raw: any): { note: string, vessel: string, hull: string, schedule: any[], staleDays: number | null, updatedAt: number | null, updatedBy: string | null } {
+  if (!raw) return { note: '', vessel: '', hull: '', schedule: [], staleDays: null, updatedAt: null, updatedBy: null }
   try {
     const o = JSON.parse(raw)
     return {
       note: typeof o.note === 'string' ? o.note : '',
+      vessel: typeof o.vessel === 'string' ? o.vessel : '',   // [WO 20261010-delivery] 선명(납품 보고서 표지)
+      hull: typeof o.hull === 'string' ? o.hull : '',         // [WO 20261010-delivery] 호선
       schedule: Array.isArray(o.schedule) ? o.schedule : [],
       staleDays: parseStaleDays(o.staleDays),
       updatedAt: Number.isFinite(o.updatedAt) ? o.updatedAt : null,
       updatedBy: typeof o.updatedBy === 'string' ? o.updatedBy : null,
     }
-  } catch { return { note: '', schedule: [], staleDays: null, updatedAt: null, updatedBy: null } }
+  } catch { return { note: '', vessel: '', hull: '', schedule: [], staleDays: null, updatedAt: null, updatedBy: null } }
 }
 /** [WO 20261007-qrcov] 촬영 현황 "오래됨" 기준 일수 — 1~365 정수만, 그 외 null(클라이언트 기본 14). */
 function parseStaleDays(v: any): number | null {
@@ -2891,6 +2893,8 @@ app.patch('/api/projects/:id', async (c) => {
     const now = Date.now()
     const next = {
       note: typeof incoming.note === 'string' ? incoming.note.slice(0, 20000) : '',
+      vessel: typeof incoming.vessel === 'string' ? incoming.vessel.trim().slice(0, 120) : '',
+      hull: typeof incoming.hull === 'string' ? incoming.hull.trim().slice(0, 60) : '',
       schedule: Array.isArray(incoming.schedule) ? incoming.schedule.slice(0, 200).map((s: any) => ({
         id: String((s && s.id) || genId('sch')),
         date: (s && typeof s.date === 'string') ? s.date.slice(0, 20) : '',

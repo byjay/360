@@ -56,5 +56,8 @@
 53_PinPurge.js
 52_CompareSync.js
 54_FieldCapture.js
+55_ZipStore.js
+56_Delivery.js
+57_Voice.js
 49_AiVision.js
 99_footer.js

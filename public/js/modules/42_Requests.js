@@ -204,7 +204,8 @@
     _isOpen(n) { return n.kind !== "reply" && n.status !== "done" && n.status !== "verified"; },
     openCount(items) { return (items || this._live()).filter((n) => this._isOpen(n)).length; },
     // [WO 20261002-gap 묶음C·3] 기한 지남 — 미완 + due_at 과거만. 완료/확인된 건은 지났어도 지남 배지를 달지 않는다.
-    _isOverdue(n) { return !!(n.due_at && Number(n.due_at) < Date.now() && this._isOpen(n)); },
+    //   now(선택) = 기준 시각 — 납품 보고서(56_Delivery)가 보고서 작성 시각으로 같은 판정을 쓴다(SoT 1곳).
+    _isOverdue(n, now) { return !!(n.due_at && Number(n.due_at) < (Number.isFinite(now) ? now : Date.now()) && this._isOpen(n)); },
     // 전역 탭([요청·질문]/[결함 노트]) + 필터(담당·기한지남) — 트리 그룹핑 전에 적용(groupByTree 는 순수 유지).
     _applyFilters(items) {
       let out = (items || []).filter((n) => n.kind === "reply" || (this._tab === "note" ? n.kind === "note" : n.kind !== "note"));
@@ -417,6 +418,7 @@
       const send = this._btn("답변 보내기", "margin-top:6px;padding:7px 12px;border-radius:8px;border:none;background:#c9962a;color:#1a1712;font-weight:700;font-size:12.5px;cursor:pointer", () => this.reply(n, ta.value));
       send.setAttribute("data-req-reply-send", "1");
       replyBox.appendChild(ta); replyBox.appendChild(send);
+      if (typeof Voice !== "undefined") Voice.attach(ta);   // [WO 20261010-delivery] 음성 입력(채우기만)
       const rb = this._btn("답변", null, () => { replyBox.style.display = replyBox.style.display === "none" ? "block" : "none"; if (replyBox.style.display === "block") ta.focus(); });
       rb.setAttribute("data-req-act", "reply");
       acts.appendChild(rb);
@@ -580,6 +582,7 @@
       ta.maxLength = 4000; ta.placeholder = "디자이너에게 요청하거나 묻고 싶은 내용을 적어주세요"; ta.setAttribute("data-req-body", "1");
       ta.setAttribute("aria-label", "요청·질문 내용");
       f.appendChild(ta);
+      if (typeof Voice !== "undefined") Voice.attach(ta);   // [WO 20261010-delivery] 음성 입력(채우기만)
       let nameIn = null, mailIn = null;
       if (this._isGuest()) {
         f.appendChild(this._el("div", "font-size:11.5px;color:#cbbfa0;margin:0 0 4px", "이름(필수)"));
