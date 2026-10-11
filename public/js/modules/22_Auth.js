@@ -750,6 +750,8 @@
      *  안내 + 기존 로그인 게이트를 재사용해 재로그인 동선을 제공한다(신규 UI 없음). */
     authExpired() {
       this._expired = true;
+      // [WO 20261010-offmatrix] 배지(32_Offline.updateNetBadge — SyncQueue 구독)를 즉시 "인증 필요"로 — 3초 주기를 기다리는 동안 "업로드 중"으로 보이지 않게
+      try { if (typeof SyncQueue !== "undefined" && SyncQueue._emit) SyncQueue._emit(); } catch (e) {}
       if (this._authExpiredNotified) return;
       this._authExpiredNotified = true;
       try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("로그인이 만료돼 업로드하지 못했습니다 — 다시 로그인하면 자동으로 이어서 올립니다", 4000); } catch (e) {}

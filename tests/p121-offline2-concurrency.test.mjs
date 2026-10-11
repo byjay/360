@@ -160,10 +160,11 @@ function mutateOfflineRemoveSerialization(src) {
       if (!depId || !entity || id == null) return;
       return this._enqueue(depId, async () => {
         const arr = await this._load(depId);
-        arr.push(this._mkOp(entity, action, id, data));
+        arr.push(this._mkOp(entity, action, id, data, depId));
         await this._save(depId, arr);
       });
     },`;   // [WO 20261006-oplog] op 모양을 _mkOp(SoT, recordPinDelta 공유)로 뽑아낸 뒤의 본문 — 뮤테이션(아래 recordMut)은 불변
+  //   [WO 20261010-offmatrix] _mkOp 가 depId(op.base — 개정 이월 기준 버전)를 받게 됐다 — needle 1줄만 갱신, recordMut·assertion 불변
   const recordMut = `    async record(depId, entity, action, id, data) {
       if (!depId || !entity || id == null) return;
       const arr = await this._load(depId);

@@ -237,7 +237,8 @@ function makeFlushDraftsSandbox(patchRes) {
   const block = extractBalanced(appSrc, "async _flushDirtyDrafts() {");
   // [WO 20260928-pinloss] _flushDirtyDrafts 가 충돌 규칙 단일 출처(_draftVsServer)를 호출하게 됐다 —
   //   하네스에도 **실 소스**를 그대로 싣는다(스텁 아님). 이 블록의 assertion 은 한 줄도 바꾸지 않았다.
-  const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer) {");
+  // [WO 20261010-offmatrix] _draftVsServer 가 주석 병합(srvAnnos → _mergeAnnos)을 받게 됐다 — 시그니처 needle 만 갱신 · 실 소스 그대로 · assertion 무변경.
+  const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer, srvAnnos) {");
   // [WO 20260929-lossless] _flushDirtyDrafts 가 원본 PDF(_draftSource)·R2 페이지 업로드(_uploadPagesToR2)를
   //   거치게 됐다 — 같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
   // [WO 20260929-bulkdel] _draftVsServer 가 핀 병합 단일 출처(_mergePins)를, flush 가 _pinIds 를 쓰게 됐다 —
@@ -248,7 +249,9 @@ function makeFlushDraftsSandbox(patchRes) {
     // [WO 20260930-numdup] _mergePins 가 동시 생성 번호 재채번(_renumberConcurrent)을 부르게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
     "_renumberConcurrent(pins, baseIds, srvPins) {",
     // [WO 20260930-lww] _mergePins 가 병합 결과를 수정 감지 기준으로 기록(_pinsSeen)하게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
-    "_pinsSeen(arr) {"]
+    "_pinsSeen(arr) {",
+    // [WO 20261010-offmatrix] _draftVsServer 가 주석 병합 SoT(_mergeAnnos)를 부른다 — 같은 원칙으로 실 소스. assertion 무변경.
+    "_mergeAnnos(srvAnnos, localAnnos, tombIds) {"]
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +
@@ -345,11 +348,12 @@ console.log("\n[⑥-b App._flushDirtyDrafts — 409(프로젝트 삭제) → aut
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[⑤ updateNetBadge — 인증 필요 배지]");
 function makeBadgeSandbox(offlineSrcArg) {
-  const block = extractBalanced(offlineSrcArg, "async function updateNetBadge() {");
+  // [WO 20261010-offmatrix] updateNetBadge 가 대기 건수 단일 판정(pendingTotal)을 쓰게 됐다 — 실 소스를 함께 싣는다. assertion 무변경.
+  const block = extractBalanced(offlineSrcArg, "async function pendingTotal() {") + "\n" + extractBalanced(offlineSrcArg, "async function updateNetBadge() {");
   const { getElementById, registry } = makeDoc(["net-badge", "net-text", "net-q"]);
   const document = { getElementById };
   let count = 0;
-  const SyncQueue = { count: async () => count };
+  const SyncQueue = { count: async () => count, allDraftKeys: async () => [], loadDraft: async () => null };
   const Auth = { _expired: false };
   const navigator = { onLine: true };
   const sandbox = {

@@ -112,11 +112,30 @@
 
     async _fetchNotes(depId) {
       if (!depId) return [];
+      if (typeof navigator === "undefined" || navigator.onLine !== false) {
+        try {
+          const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(depId), { headers: Auth.headers() });
+          const j = await r.json().catch(() => null);
+          return (j && j.data) || [];   // 서버 응답(권한 거부 포함)은 종전 그대로
+        } catch (e) { /* 네트워크 실패 → 아래 기기 보관분 */ }
+      }
+      return this._localNotes(depId);
+    },
+    /** 🔴 [WO 20261010-offmatrix] 오프라인·서버 실패 시 노트 = 기기 보관분(13_Notes 핀별 스냅샷 notes:<dep>:<pin> — 오프라인 작성분 포함).
+     *  종전엔 빈 배열을 돌려 보고서·납품 묶음이 결함을 "노트·결함 없음"으로 찍었다(조용한 실패). 서버 최신이 아님을 1회 알린다. */
+    async _localNotes(depId) {
+      const out = [];
       try {
-        const r = await fetch("/api/notes?deployment_id=" + encodeURIComponent(depId), { headers: Auth.headers() });
-        const j = await r.json();
-        return (j && j.data) || [];
-      } catch (e) { return []; }
+        const pre = "notes:" + depId + ":";
+        const keys = (typeof SyncQueue !== "undefined" && SyncQueue.allDraftKeys) ? await SyncQueue.allDraftKeys() : [];
+        for (const k of keys) {
+          if (String(k).indexOf(pre) !== 0) continue;
+          const rec = await SyncQueue.loadDraft(k);
+          if (rec && Array.isArray(rec.list)) rec.list.forEach((n) => { if (n && !out.some((o) => o.id === n.id)) out.push(Object.assign({ deployment_id: depId }, n)); });
+        }
+      } catch (e) {}
+      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인 — 노트·결함은 이 기기에 보관된 " + out.length + "건만 반영합니다(서버 최신 아님)", 4000); } catch (e) {}
+      return out;
     },
 
     /** 프로젝트 전체 구역을 서버에서 받아 pins/notes/decks 를 병합(프로젝트 스코프 전용, 네트워크 필요). */

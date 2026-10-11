@@ -252,19 +252,35 @@
       const onClick = (e) => {
         if (e.stopPropagation) e.stopPropagation();
         if (e.preventDefault) e.preventDefault();
-        const hit = e.target && e.target.closest ? e.target.closest("[data-id]") : null;
-        let pin = hit ? (State.pins || []).find((p) => String(p.id) === String(hit.dataset ? hit.dataset.id : hit.getAttribute("data-id"))) : null;
-        if (!pin) {
-          const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent) ? MapCtrl.viewportToPercent(e.clientX, e.clientY) : null;
-          if (!pct) return;
-          pin = (typeof App !== "undefined" && App._placeCheckboardPin) ? App._placeCheckboardPin(pct) : null;
-          if (!pin) return;   // 대역 가득 등 — App 이 이미 알렸다
-        }
-        this._endTap();
-        this._register(pin, row);
+        this._tapAt(e.clientX, e.clientY, e.target);
       };
       vp.addEventListener("click", onClick, true);
-      this._tap = { vp, onClick, banner };
+      this._tap = { vp, onClick, banner, row };
+    },
+    /** 탭 1회 처리(SoT) — 클릭 캡처(데스크톱)와 배치 터치(App._handlePlaceClick → takeTap, 모바일)가 공유. */
+    _tapAt(clientX, clientY, target) {
+      const t = this._tap;
+      if (!t) return false;
+      const hit = target && target.closest ? target.closest("[data-id]") : null;
+      let pin = hit ? (State.pins || []).find((p) => String(p.id) === String(hit.dataset ? hit.dataset.id : hit.getAttribute("data-id"))) : null;
+      if (!pin) {
+        const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent) ? MapCtrl.viewportToPercent(clientX, clientY) : null;
+        if (!pct) return true;
+        pin = (typeof App !== "undefined" && App._placeCheckboardPin) ? App._placeCheckboardPin(pct) : null;
+        if (!pin) return true;   // 대역 가득 등 — App 이 이미 알렸다
+      }
+      this._endTap();
+      this._register(pin, t.row);
+      return true;
+    },
+    /** 🔴 [WO 20261010-offmatrix] 모바일 근본원인(실 Chrome CDP 재현 p146): "등록할 포인트를 탭하세요" 대기 중에도
+     *  _awaitTap 이 켠 360 모드가 배치를 자동 시작해, 배치 터치(App._placeTouchStart 의 preventDefault)가 합성 click 을
+     *  없앴다 → 위 클릭 캡처는 영영 안 불리고 배치가 새 핀 + 다른 사진 선택창을 열었다(현장 촬영 사진 등록 0건, 조용한 실패).
+     *  배치 진입점(App._handlePlaceClick — 터치·클릭 공유)이 먼저 여기에 묻는다. 대기 중이 아니면 false. */
+    takeTap(e) {
+      if (!this._tap || !e) return false;
+      const target = (typeof document !== "undefined" && document.elementFromPoint) ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      return this._tapAt(e.clientX, e.clientY, target);
     },
     _endTap() {
       const t = this._tap;

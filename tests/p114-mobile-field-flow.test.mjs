@@ -32,7 +32,7 @@ if (process.env.P114 !== "1") {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP_ROOT = path.resolve(ROOT, process.env.P114_ROOT || ".");
 const DIST = path.join(APP_ROOT, "dist");
-const OUT = path.join(ROOT, ".tmp", "fixmobile2"); // 🔴 CLAUDE.md §G-5 — 프로젝트 안 .tmp 고정
+const OUT = path.join(ROOT, ".tmp", process.env.P114_OUT || "fixmobile2"); // 🔴 CLAUDE.md §G-5 — 프로젝트 안 .tmp 고정 (P114_OUT = EXPLORE 산출 폴더, 예 p146 → fixoffmatrix)
 const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -87,7 +87,7 @@ function readDist(pathname) {
 function exposeForTest(bundle) {
   const idx = bundle.lastIndexOf("})();");
   if (idx === -1) return bundle;
-  return bundle.slice(0, idx) + "\n  try { window.__T = { State, App, SyncQueue, PinSeries, MapCtrl, UI, Auth: (typeof Auth !== \"undefined\" ? Auth : null), OfflineBundle: (typeof OfflineBundle !== \"undefined\" ? OfflineBundle : null), ProjectHub: (typeof ProjectHub !== \"undefined\" ? ProjectHub : null), OpLog: (typeof OpLog !== \"undefined\" ? OpLog : null), PhotoBatch: (typeof PhotoBatch !== \"undefined\" ? PhotoBatch : null), PinActionPop: (typeof PinActionPop !== \"undefined\" ? PinActionPop : null), PdfAnno: (typeof PdfAnno !== \"undefined\" ? PdfAnno : null) }; } catch (e) { window.__T_err = String(e); }\n" + bundle.slice(idx);
+  return bundle.slice(0, idx) + "\n  try { window.__T = { State, App, SyncQueue, PinSeries, MapCtrl, UI, Auth: (typeof Auth !== \"undefined\" ? Auth : null), OfflineBundle: (typeof OfflineBundle !== \"undefined\" ? OfflineBundle : null), ProjectHub: (typeof ProjectHub !== \"undefined\" ? ProjectHub : null), OpLog: (typeof OpLog !== \"undefined\" ? OpLog : null), PhotoBatch: (typeof PhotoBatch !== \"undefined\" ? PhotoBatch : null), PinActionPop: (typeof PinActionPop !== \"undefined\" ? PinActionPop : null), PdfAnno: (typeof PdfAnno !== \"undefined\" ? PdfAnno : null), Notes: (typeof Notes !== \"undefined\" ? Notes : null), Zones: (typeof Zones !== \"undefined\" ? Zones : null), Requests: (typeof Requests !== \"undefined\" ? Requests : null), ThetaIntake: (typeof ThetaIntake !== \"undefined\" ? ThetaIntake : null), FieldCapture: (typeof FieldCapture !== \"undefined\" ? FieldCapture : null), GPS: (typeof GPS !== \"undefined\" ? GPS : null), PanoViewer: (typeof PanoViewer !== \"undefined\" ? PanoViewer : null), Prompt: (typeof Prompt !== \"undefined\" ? Prompt : null), Projects: (typeof Projects !== \"undefined\" ? Projects : null), Cloud: (typeof Cloud !== \"undefined\" ? Cloud : null), PinPurge: (typeof PinPurge !== \"undefined\" ? PinPurge : null), Revision: (typeof Revision !== \"undefined\" ? Revision : null), Report: (typeof Report !== \"undefined\" ? Report : null), Delivery: (typeof Delivery !== \"undefined\" ? Delivery : null), Offline: (typeof Offline !== \"undefined\" ? Offline : null), CompanyAuth: (typeof CompanyAuth !== \"undefined\" ? CompanyAuth : null), Coverage: (typeof Coverage !== \"undefined\" ? Coverage : null) }; } catch (e) { window.__T_err = String(e); }\n" + bundle.slice(idx);
 }
 /** 뮤테이션 증명용(P114_MUT) — 단언이 진짜 결함을 잡는지 확인. 대상 문자열이 없으면 EXIT=2. */
 const MUTS = {
@@ -302,7 +302,7 @@ await send("Page.addScriptToEvaluateOnNewDocument", { source: String.raw`(functi
 await send("Page.setInterceptFileChooserDialog", { enabled: true });
 
 export { };
-globalThis.__P114 = { ok, step, report, saveReport, ev, evSafe, shot, setNet, tap, waitFor, send, onceEvent, net, api, srvPins, srvDep, BASE, TOKEN, DEP_ID, DECK_ID, PRJ, OUT, PANO_JPG, consoleLog, wait, db, r2, mf, loads, dialogs };
+globalThis.__P114 = { ok, step, report, saveReport, ev, evSafe, shot, setNet, tap, waitFor, send, onceEvent, net, api, srvPins, srvDep, BASE, TOKEN, DEP_ID, DECK_ID, PRJ, OUT, PANO_JPG, consoleLog, wait, db, r2, mf, loads, dialogs, cdpPort: port, DESIGNER, evHandlers, run };
 
 try {
   if (process.env.P114_EXPLORE) await (await import("file:///" + path.resolve(process.env.P114_EXPLORE).replace(/\\/g, "/"))).default(globalThis.__P114);

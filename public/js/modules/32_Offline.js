@@ -177,14 +177,18 @@
     },
 
     /** op 1건의 모양 — record / recordPinDelta 공유(SoT). */
-    _mkOp(entity, action, id, data) {
-      return {
+    _mkOp(entity, action, id, data, depId) {
+      const op = {
         opId: this._newId(),
         entity, action, id,
         data: action === "delete" ? null : data,
         ts: Date.now(),
         author: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "offline"
       };
+      // 🔴 [WO 20261010-offmatrix S-REV] 이 편집이 기준으로 삼은 배포본 버전 — 서버 /ops 가 그 이후 적용된 도면 개정으로
+      //   좌표를 이월한다(개정 전 좌표가 복귀 업로드로 다시 올라가던 결함). 모르면 싣지 않는다(서버는 종전대로).
+      if (depId && typeof State !== "undefined" && String(State.autoSaveDepId) === String(depId) && State.depVersion != null) op.base = Number(State.depVersion);
+      return op;
     },
 
     /** entity:'pin'|'zone'|'anno', action:'upsert'|'delete' */
@@ -192,7 +196,7 @@
       if (!depId || !entity || id == null) return;
       return this._enqueue(depId, async () => {
         const arr = await this._load(depId);
-        arr.push(this._mkOp(entity, action, id, data));
+        arr.push(this._mkOp(entity, action, id, data, depId));
         await this._save(depId, arr);
       });
     },
@@ -237,12 +241,12 @@
         let n = 0;
         changed.forEach((c) => {
           if (last.get(String(c.id)) === c.j) return;
-          arr.push(this._mkOp(entity, "upsert", c.id, JSON.parse(c.j)));
+          arr.push(this._mkOp(entity, "upsert", c.id, JSON.parse(c.j), depId));
           n++;
         });
         gone.forEach((id) => {
           if (last.has(String(id)) && last.get(String(id)) === null) return;   // 이미 delete 기록됨
-          arr.push(this._mkOp(entity, "delete", id, null));
+          arr.push(this._mkOp(entity, "delete", id, null, depId));
           n++;
         });
         if (n) await this._save(depId, arr);
@@ -381,19 +385,29 @@
     };
   }
 
+  /** 🔴 [WO 20261010-offmatrix] 서버 반영 대기 건수의 **단일 판정**(SoT) — 배지(updateNetBadge)와 복귀 진행 표시
+   *  (SyncQueue._onReconnect "N건 업로드 중 → 완료")가 같은 수를 쓴다. 종전 배지는 "지금 열린 도면"의 oplog 만 셌고
+   *  복귀 토스트는 사진 큐 업로드 수만 셌다(실 Chrome 실측: 대기 25건인데 "1건 동기화 완료"). 모든 도면의 oplog +
+   *  사진·첨부 큐 + 서버 미반영 dirty draft(App._countDirtyDrafts — _flushDirtyDrafts 와 같은 판정). */
+  async function pendingTotal() {
+    let n = 0;
+    try {
+      const keys = await SyncQueue.allDraftKeys();
+      for (const k of keys) if (String(k).startsWith("oplog:")) n += ((await SyncQueue.loadDraft(k)) || []).length;
+    } catch (e) {}
+    try { n += await SyncQueue.count(); } catch (e) {}
+    try { if (typeof App !== "undefined" && App._countDirtyDrafts) n += await App._countDirtyDrafts(); } catch (e) {}
+    return n;
+  }
+
   /* ── 오프라인 상태 UI (배지 + 대기 카운트) ──────────────────────── */
   async function updateNetBadge() {
     const badge = document.getElementById("net-badge");
     if (!badge) return;
     const text = document.getElementById("net-text");
     const q = document.getElementById("net-q");
-    let pending = 0;
-    const depId = _curDepId();
-    if (depId) { try { pending = (await OpLog.pending(depId)).length; } catch (e) {} }
-    try { pending += await SyncQueue.count(); } catch (e) {}
-    // [WO 20261001-mobilefast R3] ops/이미지 큐 외에 "dirty draft"(서버 미반영 핀·영역 변경분)도
-    // 대기 건수에 포함 — 단일 판정(App._countDirtyDrafts, §G-2-5)을 공유한다.
-    try { if (typeof App !== "undefined" && App._countDirtyDrafts) pending += await App._countDirtyDrafts(); } catch (e) {}
+    // [WO 20261001-mobilefast R3] dirty draft 포함 · [WO 20261010-offmatrix] 모든 도면 oplog — 단일 판정(pendingTotal)
+    const pending = await pendingTotal();
     // [WO offline2-R4] 🔴 beforeunload(동기 이벤트)는 이 async 합계를 직접 await 할 수 없다 —
     //   여기서 3초 주기로 캐시해 두고 beforeunload 는 이 캐시값만 동기로 읽는다(공유 판정, §G-2-5).
     if (typeof App !== "undefined") App._pendingSyncCount = pending;
@@ -411,11 +425,13 @@
       //   판정은 SyncQueue.noteSyncResult 가 세운 단일 값(_lastSyncError)만 읽는다(§G-2-5 — 여기서
       //   따로 재계산하지 않는다). 색은 기존 오프라인 상태와 같은 빨강(syncing 클래스 제거) 재사용.
       const syncErr = (typeof SyncQueue !== "undefined") ? SyncQueue._lastSyncError : null;
+      // [WO 20261010-offmatrix] 복귀 업로드가 실제로 도는 중이면 "업로드 중"(남은 건수) — 대기만 있는 상태("동기화 중")와 구분
+      const uploading = !syncErr && typeof SyncQueue !== "undefined" && !!SyncQueue._reconnecting;
       badge.classList.add("show");
       badge.classList.toggle("syncing", !syncErr);
-      if (text) text.textContent = syncErr ? "동기화 실패" : "동기화 중";
+      if (text) text.textContent = syncErr ? "동기화 실패" : (uploading ? "업로드 중" : "동기화 중");
       if (q) q.textContent = pending;
-      badge.setAttribute("title", syncErr ? ("동기화 실패 — " + syncErr) : ("서버 반영 대기 " + pending + "건"));
+      badge.setAttribute("title", syncErr ? ("동기화 실패 — " + syncErr) : (uploading ? ("서버에 올리는 중 — 남은 " + pending + "건") : ("서버 반영 대기 " + pending + "건")));
     } else {
       badge.classList.remove("show", "syncing");
       badge.removeAttribute("title");
@@ -489,6 +505,7 @@
     resolvePanoSource: resolvePanoSource,
     persistLocalDeployment: persistLocalDeployment,
     updateNetBadge: updateNetBadge,
+    pendingTotal: pendingTotal,
     curDepId: _curDepId,
     init() {
       try {

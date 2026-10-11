@@ -4697,6 +4697,52 @@ app.post('/tables/deployments', async (c) => {
 
 // 갱신 (자동 저장 — 도면 업로드 즉시 생성된 배포본을 핀/영역 변경 시 갱신)
 //  PATCH/PUT 모두 허용. 전달된 필드만 부분 갱신.
+/* ── [WO 20261010-offmatrix S-REV] 개정 이전 좌표로 만든 편집의 재기준화(rebase) — 단일 지점 ────────────────
+ * 근본원인(p146 실 Chrome·실 D1 재현): 기기 A 가 오프라인으로 핀을 고치는 동안 B 가 개정을 적용(carryPins 로 좌표 이월)하면,
+ * A 의 복귀 업로드(① draft PATCH — 클라 병합 LWW 에서 A 의 수정 핀이 이김 ② /ops upsert — op.data 가 핀 통째)가
+ * **개정 전 좌표**를 그대로 다시 써 이월된 위치를 조용히 되돌렸다. 계산은 개정 SoT(revCore carry*) 그대로 — 두 벌 금지.
+ * 판정 근거 = 클라가 그 편집의 기준으로 삼은 배포본 버전(baseVer). 그 이후 적용(status 'applied')된 개정만 순서대로 적용한다.
+ * 이월된 핀엔 revReview(개정 검토 배지 — 개정 기능 SoT)가 붙어 사람이 확인한다 + updatedAt 갱신(LWW 에서 이 위치가 이긴다). */
+async function revsSinceVersion(c: any, depId: string, baseVer: any): Promise<{ id: string, t: any, at: number }[]> {
+  const v = Number(baseVer)
+  if (baseVer == null || !Number.isFinite(v)) return []
+  try {
+    if (!(await revTableReady(c))) return []
+    const rows: any[] = ((await c.env.DB.prepare(
+      "SELECT id, transform, applied_at, created_at FROM drawing_revisions WHERE deployment_id = ? AND kind = 'revision' AND status = 'applied' AND dep_version_before >= ? ORDER BY dep_version_before ASC"
+    ).bind(depId, v).all()).results) || []
+    return rows.map((r) => ({ id: String(r.id), t: revJson(r.transform, null) || { ...REV_IDENTITY }, at: Number(r.applied_at || r.created_at) }))
+      .filter((r) => !revIsIdentity(r.t))
+  } catch { return [] }
+}
+/** 개정 이전 기준의 항목 1개를 개정들로 이월 — entity 'pin'|'zone'|'anno'. 좌표 없는 항목·tombstone 은 그대로. */
+function rebaseOne(entity: string, o: any, revs: { id: string, t: any, at: number }[]): any {
+  if (!o || o._deleted || !revs.length) return o
+  let q = o
+  for (const r of revs) {
+    if (entity === 'pin') q = carryPins([q], r.t, { rev: r.id, at: r.at })[0]
+    else if (entity === 'zone') q = carryZones([q], r.t)[0]
+    else q = carryAnnos([q], r.t)[0]
+  }
+  if (entity === 'pin' && q !== o) {
+    q = Object.assign({}, q, { updatedAt: Date.now() })
+    if (q.revReview) q.revReview = Object.assign({}, q.revReview, { offline: true })   // 오프라인 편집이 이월됨 — 검토 대상
+  }
+  return q
+}
+/** PATCH 본문(배열 JSON)의 항목 중 "개정 이후 서버 상태와 다른 것" = 개정 전 기준 편집 → 이월. 같은 것은 이미 이월된 서버본(그대로). */
+function rebaseArrayJson(entity: string, incomingJson: any, existingJson: any, revs: { id: string, t: any, at: number }[]): any {
+  if (!revs.length || typeof incomingJson !== 'string') return incomingJson
+  let inc: any[]; try { inc = JSON.parse(incomingJson) } catch { return incomingJson }
+  if (!Array.isArray(inc)) return incomingJson
+  const ex = new Map<string, any>()
+  for (const e of (revJson(existingJson, []) as any[])) if (e && e.id != null) ex.set(String(e.id), e)
+  const same = (a: any, b: any) => entity === 'pin'
+    ? (b && Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y))
+    : (b && JSON.stringify(a) === JSON.stringify(b))
+  return JSON.stringify(inc.map((o) => (o && o.id != null && !o._deleted && !same(o, ex.get(String(o.id)))) ? rebaseOne(entity, o, revs) : o))
+}
+
 const updateDeployment = async (c: any) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
@@ -4755,6 +4801,16 @@ const updateDeployment = async (c: any) => {
     source_meta:  body.source_meta   != null ? body.source_meta  : (existing.source_meta != null ? existing.source_meta : null),
     // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(폴백값, 부분 갱신 — 미전송이면 기존값 보존).
     checkboard_start: body.checkboard_start != null ? body.checkboard_start : (existing.checkboard_start != null ? existing.checkboard_start : null),
+  }
+  // [WO 20261010-offmatrix S-REV] 클라가 "이 본문은 rebase_from 버전 기준 편집을 담는다"고 알리면(오프라인 복귀·병합 후 저장),
+  //   그 이후 적용된 개정으로 서버본과 다른 항목만 이월한다(rebaseArrayJson). 미전송이면 종전과 동일.
+  if (body.rebase_from != null) {
+    const revs = await revsSinceVersion(c, id, body.rebase_from)
+    if (revs.length) {
+      if (body.pins != null) merged.pins = rebaseArrayJson('pin', merged.pins, existing.pins, revs)
+      if (body.zones != null) merged.zones = rebaseArrayJson('zone', merged.zones, existing.zones, revs)
+      if (body.annotations != null) merged.annotations = rebaseArrayJson('anno', merged.annotations, existing.annotations, revs)
+    }
   }
   const newVersion = curVersion + 1
   // [WO 20261010-revision] 🔴 도면이 바뀌는 저장(종전 [도면 교체]·[메인 도면 교체]) — 밀려나는 이전 도면의 참조(pages_data·source_meta)를
@@ -4836,6 +4892,7 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   const applied: string[] = []
   let newlyApplied = 0   // 멱등: 실제로 새로 적용된 op만 카운트 → version 증가 판정에 사용
   const noteIdMap: Record<string, string> = {}   // 클라 임시 note id → 서버 실제 id
+  const revCache = new Map<string, { id: string, t: any, at: number }[]>()   // [WO 20261010-offmatrix S-REV] op.base → 이후 개정
   for (const op of ops) {
     if (!op || !op.opId || !op.entity || op.id == null) continue
     // 멱등: 이미 적용된 opId면 건너뜀(중복 업로드 무해, version 증가에 기여하지 않음)
@@ -4910,6 +4967,22 @@ app.post('/tables/deployments/:id/ops', async (c) => {
     const m = pick(op.entity)
     const cur = m.get(String(op.id))
     const opTs = Number(op.ts || Date.now())
+    if (op.action !== 'delete' && op.data && typeof op.data === 'object') {
+      // [WO 20261010-offmatrix] 🔴 핀 단위 LWW — 클라 병합(PinSeries.newer)과 같은 규칙: 서버 핀이 더 나중에 고쳐졌으면(updatedAt 큼)
+      //   늦게 도착한 옛 op 가 덮지 않는다. 종전엔 op.data(핀 통째)가 무조건 덮어 다른 기기의 최신 수정을 되돌렸다(p146 conc 재현).
+      if (op.entity === 'pin' && cur && !cur._deleted && Number(cur.updatedAt || 0) > Number(op.data.updatedAt || 0)) {
+        await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)').bind(op.opId, id, Date.now()).run()
+        applied.push(op.opId)
+        continue
+      }
+      // [WO 20261010-offmatrix S-REV] op 가 기준으로 삼은 버전(op.base) 이후 적용된 개정으로 좌표 이월(rebaseOne — revCore SoT)
+      if (op.base != null && (op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno')) {
+        const k = String(op.base)
+        if (!revCache.has(k)) revCache.set(k, await revsSinceVersion(c, id, op.base))
+        const revs = revCache.get(k) || []
+        if (revs.length) op.data = rebaseOne(op.entity, Object.assign({}, op.data, { id: op.id }), revs)
+      }
+    }
     if (op.action === 'delete') {
       // tombstone 보존 — 더 최신 의도만 반영
       if (!cur || opTs >= Number(cur.ts || 0)) {

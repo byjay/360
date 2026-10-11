@@ -1814,6 +1814,8 @@
 
     _handlePlaceClick(e) {
       if (!State.placing) return;
+      // [WO 20261010-offmatrix] 현장 촬영·THETA 공유가 "등록할 포인트 탭"을 기다리는 중이면 그 탭은 그 흐름의 것(ThetaIntake.takeTap)
+      if (typeof ThetaIntake !== "undefined" && ThetaIntake.takeTap && ThetaIntake.takeTap(e)) return;
       const pct = MapCtrl.viewportToPercent(e.clientX, e.clientY);
       if (!pct) return;
 
@@ -3272,6 +3274,7 @@
     _draftPinMeta() {
       return {
         deletedPins: Object.keys(this._pinTombstones()),
+        deletedAnnos: Object.keys(this._annoTombstones()),   // [WO 20261010-offmatrix] 주석 삭제도 draft 에 — 복귀 병합(_draftVsServer)에서 부활 금지
         basePinIds:  Array.isArray(State.pinBaseIds) ? State.pinBaseIds.slice() : null
       };
     },
@@ -4159,6 +4162,15 @@
     /** 409 충돌 시: 서버 최신본(current)과 현재 State 의 핀/구역을 병합하여 State 갱신.
      *  반환: 병합된 {pins, zones, version} (version 은 서버 최신값) */
     _mergeConflict(current) {
+      // [WO 20261010-offmatrix S-REV] 미저장 편집을 안은 채 더 새 서버본(개정 포함 가능)과 합치면, 다음 저장이 "옛 버전 기준 편집"임을
+      //   서버에 알린다(_patchDeployment rebase_from) — 서버가 그 사이 적용된 개정으로 좌표를 이월. 저장 성공 시 해제.
+      try {
+        const nv = current && current.version != null ? Number(current.version) : null;
+        if (this._dirty && nv != null && State.depVersion != null && nv > Number(State.depVersion)
+            && !(State.depRebase && State.depRebase.dep === State.autoSaveDepId)) {
+          State.depRebase = { dep: State.autoSaveDepId, ver: Number(State.depVersion) };
+        }
+      } catch (e) {}
       let srvPins = [], srvZones = [];
       try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
       try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
@@ -4288,6 +4300,7 @@
         sentPins = null;
         if (typeof body.pins === "string") { try { sentPins = JSON.parse(body.pins); } catch (e) { sentPins = null; } }
         body.base_version = (State.depVersion != null ? State.depVersion : 0);
+        if (State.depRebase && State.depRebase.dep === depId) body.rebase_from = State.depRebase.ver;   // [WO 20261010-offmatrix S-REV]
         const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
           method: "PATCH", headers: Auth.headers(bulk ? Auth.reauthHeader() : undefined), body: JSON.stringify(body)
         });
@@ -4311,6 +4324,10 @@
       let rec = null; try { rec = await res.json(); } catch (e) {}
       if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
       if (Array.isArray(sentPins)) State.pinBaseIds = this._pinIds(sentPins);
+      if (State.depRebase && State.depRebase.dep === depId) {   // [WO 20261010-offmatrix S-REV] 이월 반영됨 — 서버본(rec)으로 화면 정합 후 해제
+        State.depRebase = null;
+        if (rec && typeof rec.pins === "string") { try { this._mergeConflict(rec); } catch (e) {} }
+      }
       if (bulk) this._bulkReauthDep = null;   // 일괄삭제가 서버에 반영됨
       return { ok: true, rec };
     },
@@ -4948,14 +4965,18 @@
      *  ① draft 가 기준으로 삼은 서버 버전(baseVer) == 지금 서버 버전 → 그 사이 아무도 저장 안 함 → draft 그대로
      *     (로컬에서 지운 핀이 서버본에서 되살아나지 않는다)
      *  ② 서버가 더 새롭거나 기준 버전을 모름(구버전 draft) → id 병합: 서버에만 있는 항목 보존 + 같은 id 는 draft 우선 */
-    _draftVsServer(d, srvPins, srvZones, srvVer) {
+    _draftVsServer(d, srvPins, srvZones, srvVer, srvAnnos) {
       const same = d && d.baseVer != null && srvVer != null && Number(d.baseVer) === Number(srvVer);
       const dPins = Array.isArray(d && d.pins) ? d.pins : [];
       const dZones = Array.isArray(d && d.zones) ? d.zones : [];
+      // 🔴 [WO 20261010-offmatrix] 주석도 같은 규칙 — 종전 복귀 업로드·화면 복원은 draft 주석을 통째로 써서, 그 사이 다른 기기가
+      //   그린 주석을 지웠다(p146 conc 재현). 서버본과 _mergeAnnos(합집합 + 서버·내 tombstone)로 합친다. draft 에 주석이 없으면 null(손대지 않음).
+      const dAnnos = Array.isArray(d && d.annotations) ? d.annotations : null;
+      const annos = dAnnos == null ? null : ((same || !Array.isArray(srvAnnos)) ? dAnnos : this._mergeAnnos(srvAnnos, dAnnos, d && d.deletedAnnos));
       return same
-        ? { pins: dPins, zones: dZones }
+        ? { pins: dPins, zones: dZones, annos }
         // [WO 20260929-bulkdel] 핀은 _mergePins — draft 의 tombstone(deletedPins)·기준 id(basePinIds)로 삭제 부활 차단
-        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(this._live(srvZones || []), dZones) };
+        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(this._live(srvZones || []), dZones), annos };
     },
 
     /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
@@ -4963,7 +4984,7 @@
      *  draft 를 덮어 작업분이 영구 소실됐다(라이브 재현: 체크보드 핀 → 모드 전환 → 핀 사라짐 → 저장 → draft 0개). */
     _applyDirtyDraft(d, key, srvVer) {
       if (!d) return false;
-      const m = this._draftVsServer(d, State.pins, State.zones, srvVer);
+      const m = this._draftVsServer(d, State.pins, State.zones, srvVer, State.annotations);
       State.pins = m.pins;
       State.zones = m.zones;
       // 🔴 [WO 20261006-pinbase] draft 가 기억한 "내가 알던 서버 핀 목록"을 병합 기준으로 되돌린다.
@@ -4972,7 +4993,7 @@
       //   다음 서버 병합에서 _mergePins (b) 규칙이 그 핀들을 "남이 지운 핀"으로 지웠다(§G-2-5 형제 통일).
       if (Array.isArray(d.basePinIds)) State.pinBaseIds = d.basePinIds.map(String);
       this._adoptDraftTombstones(d);   // [WO 20260929-bulkdel] 저장 전 지운 핀 기록 유지(다음 409 병합에서도 부활 금지)
-      if (Array.isArray(d.annotations)) State.annotations = d.annotations;
+      if (Array.isArray(m.annos)) State.annotations = m.annos;   // [WO 20261010-offmatrix] 서버 주석과 병합(_draftVsServer)
       if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
       this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
       this._markDeckUnsaved(this._deckIdOfKey(key), true);
@@ -5122,7 +5143,7 @@
           //   기존엔 블록 스코프(let)로만 선언돼 매 PATCH 성공마다 ReferenceError → 바깥 catch 가
           //   조용히 삼켜 draft 가 영원히 dirty:false 로 정리되지 않는 별개의 기존 결함이었다.
           //   함수 스코프로 끌어올려 근본수정(이번 401 처리와 같은 함수 안이라 함께 정리).
-          let baseVer = 0, srvPins = null, srvZones = null;
+          let baseVer = 0, srvPins = null, srvZones = null, srvAnnos = null;
           if (d.depId) {
             // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
             //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
@@ -5130,8 +5151,9 @@
             // 🔴 [WO 20261001-offline · p102 A4] GET 과 PATCH 사이에 남이 저장하면 409(버전 경합, 'stale').
             //   최신본을 다시 읽어 같은 규칙으로 병합 후 재시도한다(최대 3회) — 경합은 권한/삭제가 아니다.
             for (let attempt = 0; attempt < 3; attempt++) {
-              baseVer = 0; srvPins = null; srvZones = null;
+              baseVer = 0; srvPins = null; srvZones = null; srvAnnos = null;
               body.pins = JSON.stringify(d.pins || []); body.zones = JSON.stringify(d.zones || []);
+              body.annotations = JSON.stringify(d.annotations || []);
               try {
                 const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
                 if (cur.ok) {
@@ -5139,15 +5161,19 @@
                   baseVer = (cj.version != null ? Number(cj.version) : 0);
                   try { srvPins = JSON.parse(cj.pins || "[]"); } catch (e) {}
                   try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
+                  try { srvAnnos = JSON.parse(cj.annotations || "[]"); } catch (e) {}
                 }
               } catch (e) {}
               // 🔴 [WO 20260928-pinloss] 충돌 규칙은 화면 복원과 같은 단일 출처(_draftVsServer)
               if (srvPins || srvZones) {
-                const m = this._draftVsServer(d, srvPins, srvZones, baseVer);
+                const m = this._draftVsServer(d, srvPins, srvZones, baseVer, srvAnnos);
                 if (srvPins) body.pins = JSON.stringify(m.pins);
                 if (srvZones) body.zones = JSON.stringify(m.zones);
+                if (Array.isArray(srvAnnos) && Array.isArray(m.annos)) body.annotations = JSON.stringify(m.annos);
               }
               body.base_version = baseVer;
+              // [WO 20261010-offmatrix S-REV] 이 draft 가 기준으로 삼은 버전 — 그 뒤 적용된 도면 개정으로 서버가 좌표를 이월(src updateDeployment)
+              if (d.baseVer != null) body.rebase_from = Number(d.baseVer);
               res = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), {
                 method: "PATCH", headers: Auth.headers(), body: JSON.stringify(body)
               });
@@ -5197,7 +5223,8 @@
           }
           this._markDeckUnsaved(this._deckIdOfKey(key), false);   // [B4] 서버 반영됨 → 배지 해제
           // 병합된 핀/구역을 draft 에도 반영(다음 동기화 기준 정합)
-          if (srvPins)  { try { d.pins  = JSON.parse(body.pins  || "[]"); } catch (e) {} }
+          // [WO 20261010-offmatrix S-REV] 서버가 저장한 실제 값(rec — 개정 이월 반영)이 있으면 그것이 기준
+          if (srvPins)  { try { d.pins  = JSON.parse((rec && typeof rec.pins === "string") ? rec.pins : (body.pins || "[]")); } catch (e) {} }
           d.basePinIds = this._pinIds(Array.isArray(d.pins) ? d.pins : []);   // [WO 20260929-bulkdel] 서버 = 방금 보낸 핀 = 새 기준
           if (srvZones) { try { d.zones = JSON.parse(body.zones || "[]"); } catch (e) {} }
           await SyncQueue.saveDraft(key, d);
@@ -5207,6 +5234,8 @@
             const ent = (State.fileType === "pdf" && State.fileData && this._srcKeys) ? this._srcKeys.get(State.fileData) : null;
             if (d.srcUrl && ent && ent.key === d.srcKey) State.sourcePdfUrl = d.srcUrl;
             if (rec && rec.version != null) State.depVersion = Number(rec.version); // 버전 동기화
+            // [WO 20261010-offmatrix S-REV] 화면도 서버 저장본과 병합(SoT _mergeConflict — 개정으로 이월된 핀은 updatedAt 이 새로워 LWW 로 이긴다)
+            if (rec && typeof rec.pins === "string") { try { this._mergeConflict(rec); } catch (e) {} }
             State.pinBaseIds = d.basePinIds.slice();   // [WO 20260929-bulkdel] 버전과 함께 병합 기준도 동기화
             this._setSaveIndicator("saved");
           }

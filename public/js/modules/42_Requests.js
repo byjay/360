@@ -604,8 +604,22 @@
         () => this.submitViewer({ kind, body: ta.value, author: nameIn ? nameIn.value : "", contact: mailIn ? mailIn.value : "" }, { ta, err, send }));
       send.setAttribute("data-req-send", "1");
       f.appendChild(send);
+      // [WO 20261010-offmatrix] 열람자 요청은 서버에 바로 보내는 기능(오프라인 대기열 없음 — 익명 수정키·멱등키가 서버 응답에서 나온다).
+      //   오프라인이면 숨기지 않고 비활성 + 사유(작성 내용은 그대로) · 연결되면 자동으로 다시 켠다. 종전엔 눌러야 "네트워크 오류"를 알았다.
+      const syncNet = () => {
+        if (!document.body.contains(send)) { window.removeEventListener("online", syncNet); window.removeEventListener("offline", syncNet); return; }
+        const off = typeof navigator !== "undefined" && navigator.onLine === false;
+        send.disabled = off;
+        send.setAttribute("aria-disabled", off ? "true" : "false");
+        send.title = off ? this.OFFLINE_REASON : "";
+        if (off) { err.textContent = this.OFFLINE_REASON; err.style.display = "block"; }
+        else if (err.textContent === this.OFFLINE_REASON) { err.textContent = ""; err.style.display = "none"; }
+      };
+      window.addEventListener("online", syncNet); window.addEventListener("offline", syncNet);
+      setTimeout(syncNet, 0);
       return f;
     },
+    OFFLINE_REASON: "오프라인 — 연결되면 보낼 수 있습니다(작성한 내용은 그대로 둡니다)",
 
     /** 열람자 요청 전송 — 성공 시 익명 수정키 보관 + 목록 갱신. 반환: 서버 응답 status(0 = 네트워크/입력 오류) */
     async submitViewer(v, ui) {
@@ -617,6 +631,7 @@
       const guest = this._isGuest();
       const author = String(v.author || "").trim();
       if (guest && !author) { showErr("이름을 입력하세요."); return 0; }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) { showErr(this.OFFLINE_REASON); return 0; }   // [WO 20261010-offmatrix] 보내지 않음(내용 유지)
       const deck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
       const payload = {
         deployment_id: ctx.dep, pin_id: ctx.pin ? String(ctx.pin.id) : "", pin_label: ctx.pin ? (ctx.pin.label || "") : "",

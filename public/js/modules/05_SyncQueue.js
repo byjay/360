@@ -506,8 +506,9 @@
        → 결과 판정·통보를 이 함수 하나로 모은다(§G-2-5). 자동(_onReconnect)·수동(App.syncNow)
          두 호출부가 같은 판정을 쓴다. 배지(32_Offline.updateNetBadge)는 _lastSyncError 를 읽는다. */
     _lastSyncError: null,   // 마지막 동기화에서 서버에 못 올린 사유(사람이 읽을 사실 1줄) · null = 실패 없음
-    /** @param {object|null} r flush() 결과  @param {string[]} errs 각 단계에서 잡힌 예외 메시지 */
-    noteSyncResult(r, errs) {
+    /** @param {object|null} r flush() 결과  @param {string[]} errs 각 단계에서 잡힌 예외 메시지
+     *  @param {{before:number, after:number}} [prog] [WO 20261010-offmatrix] 복귀 전·후 대기 건수(Offline.pendingTotal — 배지와 같은 판정) */
+    noteSyncResult(r, errs, prog) {
       const list = (errs || []).filter(Boolean);
       const failed = (r && r.failed) || 0;
       if (r && r.offlineAuth) list.unshift(r.reason || "오프라인 인증 상태 — 다시 로그인하면 이어서 올라갑니다");
@@ -516,6 +517,13 @@
       try {
         if (typeof Prompt !== "undefined" && Prompt.toast) {
           if (list.length) Prompt.toast("동기화 실패 — " + list[0], 5000);
+          // [WO 20261010-offmatrix] 완료 수 = 대기 건수의 실제 감소분(사진 큐만 세던 종전 "1건 완료"는 핀·노트·주석을 빼먹었다)
+          else if (prog && prog.before > 0 && !(prog.retry && prog.after > 0)) {   // 자동 재시도 중 "남은 N건" 반복 토스트 금지(배지가 계속 보인다)
+            const done = Math.max(0, prog.before - prog.after);
+            Prompt.toast(prog.after > 0
+              ? ("업로드 " + done + "건 완료 · 남은 " + prog.after + "건은 자동으로 다시 올립니다")
+              : ("업로드 완료 — 오프라인 변경 " + prog.before + "건 서버 반영"), 4000);
+          }
           else if (r && r.uploaded > 0) Prompt.toast("온라인 복구 — 오프라인 변경 " + r.uploaded + "건 동기화 완료");
         }
       } catch (e) {}
@@ -524,11 +532,37 @@
     },
 
     /** 재연동 시퀀스 — 첨부 동기화 + 핀ID 치환 + 도면 draft 서버반영을 순서대로 */
+    /** [WO 20261010-offmatrix] 복귀 동기화가 다 못 끝났을 때(일시 단절·서버 5xx·도면 PATCH 실패) 온라인 상태로 머물러도
+     *  스스로 다시 시도하는 간격(ms). 종전엔 다음 online 이벤트나 수동 [동기화]까지 대기분이 그대로 남았다(p146 F1 재현). */
+    RETRY_MS: [4000, 10000, 30000, 60000, 120000],
+    _retryN: 0,
+    _retryTimer: null,
+    _pendingTotal() {
+      return (typeof Offline !== "undefined" && Offline.pendingTotal) ? Offline.pendingTotal().catch(() => 0) : Promise.resolve(0);
+    },
+    _scheduleRetry(failed) {
+      if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+      if (!failed) { this._retryN = 0; return; }
+      // 재로그인이 필요한 상태는 시간으로 풀리지 않는다 — Auth.refresh 성공이 _onReconnect 를 다시 부른다(22_Auth)
+      if (typeof Auth !== "undefined" && (Auth._expired || (Auth.canServerWrite && !Auth.canServerWrite()))) return;
+      if (this._retryN >= this.RETRY_MS.length) return;   // 상한 — 이후는 다음 online 이벤트·수동 동기화(배지가 실패를 계속 보인다)
+      const ms = this.RETRY_MS[this._retryN++];
+      if (typeof setTimeout !== "function") return;
+      this._retryTimer = setTimeout(() => { this._retryTimer = null; if (navigator.onLine) this._onReconnect(); }, ms);
+    },
+
     async _onReconnect() {
-      if (this._reconnecting) return; this._reconnecting = true;
+      if (this._reconnecting) { this._rerun = true; return; }   // 진행 중 다시 불리면(재로그인 등) 끝난 뒤 1회 더
+      this._reconnecting = true;
       const errs = [];
       const msg = (e) => String((e && e.message) || e || "알 수 없는 오류").slice(0, 120);
+      let prog = null;
       try {
+        // [WO 20261010-offmatrix] 진행 표시 — 시작 시 대기 건수(배지와 같은 판정)를 알리고, 끝나면 실제 감소분으로 완료를 알린다
+        const before = await this._pendingTotal();
+        prog = { before, after: before, retry: this._retryN > 0 };
+        if (before > 0 && !prog.retry && navigator.onLine && typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("온라인 복귀 — 오프라인 변경 " + before + "건 업로드 중…", 3000);
+        this._emit();
         // 🔴 어떤 단계도 예외를 밖으로 흘리지 않는다 — 흘리면 online 리스너의
         //   setTimeout 안에서 unhandled rejection 이 되어 그대로 '조용한 실패'가 된다.
         const tryFlush = async () => { try { return await this.flush(); } catch (e) { errs.push("사진 업로드: " + msg(e)); return null; } };
@@ -555,12 +589,21 @@
         }
         // [WO 20261002-gap 묶음A④] 360 원본 재시도 큐도 재연결마다 비운다.
         try { await this.flushOriginals(); } catch (e) { errs.push("360 원본 보관: " + msg(e)); }
+        prog.after = await this._pendingTotal();
         // 성공/실패를 반드시 통보한다(조용한 실패 금지 — 공유 판정 1곳)
-        this.noteSyncResult(r, errs);
+        this.noteSyncResult(r, errs, prog);
       } catch (e) {
         // 예상 못 한 예외도 삼키지 않는다(배지·토스트로 사실 노출)
         try { this.noteSyncResult(null, errs.concat(["동기화 중단: " + msg(e)])); } catch (e2) {}
-      } finally { this._reconnecting = false; this._emit(); }
+        if (prog) prog.after = Math.max(prog.after, 1);
+      } finally {
+        this._reconnecting = false;
+        const again = this._rerun; this._rerun = false;
+        // 남은 대기·오류가 있으면(온라인 유지 중) 자동 재시도 — 대기 0 이면 재시도 계수 초기화
+        if (again && navigator.onLine) { if (typeof setTimeout === "function") setTimeout(() => this._onReconnect(), 0); }
+        else this._scheduleRetry(!!(errs.length || (prog && prog.after > 0) || this._lastSyncError));
+        this._emit();
+      }
     }
   };
 

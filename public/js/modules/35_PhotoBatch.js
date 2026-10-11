@@ -596,7 +596,7 @@
       this._rows.forEach((r, idx) => {
         const m = matchByRow.get(r);
         const pinNo = m ? m.no : (r.excluded ? "제외" : "범위 밖");
-        const hasExisting = m ? PinSeries.hasContent(m.pin) : false;
+        const hasExisting = m ? PinSeries.mediaOf(m.pin) : false;   // [WO 20261010-offmatrix] 덮어쓸 "사진"이 있는가 — _uploadOneRow 와 같은 판정
         if (r.bigGapBefore) {
           html += '<tr class="pb-gap-row"><td colspan="7">⏱ 간격 ' + Math.round(r.gapMs / 60000) + '분 — 구역 경계 추정</td></tr>';
         }
@@ -638,7 +638,9 @@
      *  @param {Set<string>} [usedNames] 이 배치가 공유하는 이름 충돌 회피 집합(PhotoNaming).
      *  @returns {Promise<{status:'done'|'skip'|'fail', offline?:boolean, reason?:string}>} */
     async _uploadOneRow(pin, row, overwrite, usedNames, source) {
-      if (!overwrite && PinSeries.hasContent(pin)) return { status: "skip" };
+      // 🔴 [WO 20261010-offmatrix] "이미 사진이 있으면 건너뜀" = 미디어(사진·영상) 판정(PinSeries.mediaOf). 종전 hasContent 는 GPS·노트(pinHasInfo)까지
+      //   콘텐츠로 쳐서, GPS 가 켜진 기기에서 방금 찍은 360 핀(생성 즉시 pin.gps)의 자동 연결이 skip 으로 조용히 버려졌다(p146 실 Chrome 재현).
+      if (!overwrite && PinSeries.mediaOf(pin)) return { status: "skip" };
       try {
         const { dataURL, width, height } = await Cloud.resizeImage(row.file);
         const shotAt = Number.isFinite(row.sortKey) ? row.sortKey : null;
