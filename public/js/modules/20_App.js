@@ -2207,7 +2207,8 @@
         if (_plan.blocked) { Prompt && Prompt.toast && Prompt.toast(_plan.blocked, 5200); return; }
         // 같은 배포본을 갈아끼우는 교체면 지금 열린 핀·영역을 그대로 이어받는다(State.reset 이 비우기 전에 보관).
         if (_plan.mode === "replace" && _plan.depId && String(_plan.depId) === String(State.currentDeploymentId || "")) {
-          _plan.keep = { pins: State.pins, zones: State.zones, pinTombstones: State.pinTombstones, annoTombstones: State.annoTombstones, pinBaseIds: State.pinBaseIds, depVersion: State.depVersion };
+          _plan.keep = { pins: State.pins, zones: State.zones, pinTombstones: State.pinTombstones, annoTombstones: State.annoTombstones, pinBaseIds: State.pinBaseIds, depVersion: State.depVersion,
+            zoneTombstones: State.zoneTombstones, annoBaseIds: State.annoBaseIds, zoneBaseIds: State.zoneBaseIds };   // [WO 20261011-offmerge] 주석·영역 병합 메타도 이어받는다
         }
       }
       this._regPlan = _plan;
@@ -3250,16 +3251,35 @@
          ② 남이 지운 핀: 내 로컬에 남은 옛 핀이 서버본에 덮여 복귀(3-way 기준 = 내가 아는 서버 버전의 id)
        규칙: 병합 결과에서 (a) 내 tombstone 에 있는 id, (b) 기준 id 목록엔 있었는데 지금 서버본엔 없는 id 를 뺀다.
        (b) 는 기준(baseIds)을 모르면(null) 적용하지 않는다 — 추정으로 지우지 않는다(유실 0 쪽). 삭제 우선(delete-wins). */
-    _pinTombstones() {
-      if (!State.pinTombstones || typeof State.pinTombstones !== "object") State.pinTombstones = {};
-      return State.pinTombstones;
+    /** 🔴 [WO 20261011-offmerge] 병합 대상 3종의 State·draft 필드 이름 — 단일 출처. 핀·주석·영역이 같은 병합(_mergeEntities)·
+     *  같은 기준 초기화(_initMergeMeta)·같은 draft 메타(_draftPinMeta)를 쓴다. ignore = 수정 감지(LWW)에서 뺄 파생 필드. */
+    _MERGE_KINDS: {
+      pin:  { arr: "pins",        tomb: "pinTombstones",  base: "pinBaseIds",  dDel: "deletedPins",  dBase: "basePinIds" },
+      anno: { arr: "annotations", tomb: "annoTombstones", base: "annoBaseIds", dDel: "deletedAnnos", dBase: "baseAnnoIds" },
+      zone: { arr: "zones",       tomb: "zoneTombstones", base: "zoneBaseIds", dDel: "deletedZones", dBase: "baseZoneIds", ignore: ["pinIds"] }
     },
+    _tombOf(kind) {
+      const f = this._MERGE_KINDS[kind].tomb;
+      if (!State[f] || typeof State[f] !== "object") State[f] = {};
+      return State[f];
+    },
+    _pinTombstones() { return this._tombOf("pin"); },
     /** 🔴 [WO 20261006-annodel] 주석 tombstone(내가 지운 주석 id → 삭제시각) — 핀(_pinTombstones)과 같은 규칙.
      *  쓰는 곳: PdfAnno._removeAnnos(삭제 3경로 공유) · 읽는 곳: 오프라인 delete op 기록(persistLocalDeployment)
      *  과 병합(_mergeAnnos — _mergeConflict 경유: 라이브폴·409·복귀 /ops). 도면 단위 — 로더가 핀과 함께 초기화. */
-    _annoTombstones() {
-      if (!State.annoTombstones || typeof State.annoTombstones !== "object") State.annoTombstones = {};
-      return State.annoTombstones;
+    _annoTombstones() { return this._tombOf("anno"); },
+    /** [WO 20261011-offmerge] 영역 tombstone — 쓰는 곳: Zones.remove · 읽는 곳: 병합(_mergeZones)·오프라인 delete op(persistLocalDeployment). */
+    _zoneTombstones() { return this._tombOf("zone"); },
+    /** 🔴 [WO 20261011-offmerge] 로더 공유 — 서버본(또는 번들 사본)을 State 에 올린 직후 병합 메타를 새 도면 기준으로 맞춘다.
+     *  trusted=false(오프라인 번들 사본 = 내 미동기화 항목 포함)면 기준은 "모름"(null) — (b) 판정을 건너뛴다([WO 20261006-pinbase] 규칙).
+     *  주석·영역은 수정 감지 기준도 함께 기록(_seen) — 기준이 없으면 첫 편집이 updatedAt 없이 남아 LWW 에서 서버본에 진다. */
+    _initMergeMeta(trusted) {
+      Object.keys(this._MERGE_KINDS).forEach(k => {
+        const m = this._MERGE_KINDS[k];
+        State[m.tomb] = {};
+        State[m.base] = trusted ? this._pinIds(State[m.arr]) : null;
+        if (k !== "pin") this._seen(k, State[m.arr]);
+      });
     },
     _pinIds(arr) {
       return (Array.isArray(arr) ? arr : []).filter(p => p && p.id != null).map(p => String(p.id));
@@ -3270,49 +3290,75 @@
     _live(arr) {
       return Array.isArray(arr) ? arr.filter(o => !(o && o._deleted)) : arr;
     },
-    /** draft 에 실어 둘 핀 병합 메타 — _saveDraftLocal / _markDraftClean 공유(SoT). */
+    /** draft 에 실어 둘 병합 메타(핀·주석·영역 — _MERGE_KINDS) — _saveDraftLocal / _markDraftClean 공유(SoT).
+     *  [WO 20261010-offmatrix] 주석 삭제도 draft 에 — 복귀 병합(_draftVsServer)에서 부활 금지. [WO 20261011-offmerge] 영역·기준 목록도. */
     _draftPinMeta() {
-      return {
-        deletedPins: Object.keys(this._pinTombstones()),
-        deletedAnnos: Object.keys(this._annoTombstones()),   // [WO 20261010-offmatrix] 주석 삭제도 draft 에 — 복귀 병합(_draftVsServer)에서 부활 금지
-        basePinIds:  Array.isArray(State.pinBaseIds) ? State.pinBaseIds.slice() : null
-      };
+      const out = {};
+      Object.keys(this._MERGE_KINDS).forEach(k => {
+        const m = this._MERGE_KINDS[k];
+        out[m.dDel] = Object.keys(this._tombOf(k));
+        out[m.dBase] = Array.isArray(State[m.base]) ? State[m.base].slice() : null;
+      });
+      return out;
     },
-    /** draft 의 tombstone 을 현재 도면 tombstone 에 합친다(복원 경로 공유). */
+    /** draft 의 tombstone 을 현재 도면 tombstone 에 합친다(복원 경로 공유 — 핀·주석·영역). */
     _adoptDraftTombstones(d) {
-      if (!d || !Array.isArray(d.deletedPins)) return;
-      const tomb = this._pinTombstones();
-      d.deletedPins.forEach(id => { if (id != null && !tomb[String(id)]) tomb[String(id)] = 1; });
+      if (!d) return;
+      Object.keys(this._MERGE_KINDS).forEach(k => {
+        const del = d[this._MERGE_KINDS[k].dDel];
+        if (!Array.isArray(del)) return;
+        const tomb = this._tombOf(k);
+        del.forEach(id => { if (id != null && !tomb[String(id)]) tomb[String(id)] = 1; });
+      });
     },
-    /** 🔴 [WO 20261006-oplog2] 주석(ezPDF annotations) 병합 SoT — 핀(_mergePins)과 같은 규칙의 최소판.
-     *  · id 기준 합집합(_mergeById): 서버에만 있는 것 보존 + 내 로컬 항목 보존(같은 id 는 내 편집 우선 — 주석엔 updatedAt 이 없다).
-     *  · 서버 tombstone(/ops 삭제가 남긴 {_deleted}) 은 내 로컬 같은 id 를 되살리지 않는다(_mergePins (a) 와 같은 규칙).
-     *  근본원인(실 Chrome 실측): _flushOpLogs 가 State.annotations 를 서버본으로 덮어 /ops 응답 대기 중 그린 주석이
-     *  화면·서버에서 사라졌다(주석 B 유실). 지우는 규칙(기준 목록 (b))은 넣지 않는다 — 서버 tombstone 만 반영. */
-    //  [WO 20261006-annodel] (a) 내 tombstone(tombIds — App._annoTombstones, 내가 지운 주석)도 서버본에서 되살리지 않는다.
-    _mergeAnnos(srvAnnos, localAnnos, tombIds) {
-      const tomb = new Set((Array.isArray(srvAnnos) ? srvAnnos : []).filter(a => a && a._deleted && a.id != null).map(a => String(a.id))
-        .concat((tombIds || []).map(String)));
-      return this._mergeById(this._live(srvAnnos), localAnnos).filter(a => !(a && a.id != null && tomb.has(String(a.id))));
+    /** draft 가 기억한 "내가 알던 서버 목록"을 병합 기준으로 되돌린다(복원 경로 공유). 구버전 draft(필드 없음)는 onlyIfPresent 면 그대로, 아니면 null(모름). */
+    _adoptDraftBases(d, onlyIfPresent) {
+      Object.keys(this._MERGE_KINDS).forEach(k => {
+        const m = this._MERGE_KINDS[k], b = d && d[m.dBase];
+        if (Array.isArray(b)) State[m.base] = b.map(String);
+        else if (!onlyIfPresent) State[m.base] = null;
+      });
     },
-    _mergePins(srvPins, localPins, baseIds, tombIds) {
-      // [WP1 · H5] 서버본의 tombstone 은 "누군가 지운 핀" — 내 로컬의 같은 id 가 병합으로 되살리지 못하게 tomb 에 합친다.
-      const srvTomb = (Array.isArray(srvPins) ? srvPins : []).filter(p => p && p._deleted && p.id != null).map(p => String(p.id));
-      // [WO 20260930-lww] 같은 id = 핀 단위 LWW(updatedAt 큰 쪽, 같거나 없으면 서버) — 종전 "로컬 통째 우선" 은
-      //   A 가 옮기거나 라벨을 바꾼 핀을 B 화면에 못 보이게 했고 B 저장이 A 의 수정을 되돌렸다(설계서 H2).
+    /** 🔴 [WO 20261011-offmerge] 핀·주석·영역 병합의 단일 출처 — 종전 핀(_mergePins)만 기준 목록·LWW 가 있었고 주석은 합집합 + tombstone,
+     *  영역은 _mergeById(합집합, 같은 id 는 로컬 통째 우선)라서 ① 다른 기기가 저장(PATCH)으로 지운 주석·영역이 오프라인 복귀 병합에서
+     *  되살아났고(서버 tombstone 이 없다) ② 영역은 /ops tombstone 도 무시했으며 ③ 같은 영역을 두 기기가 고치면 늦게 고친 쪽이 아니라
+     *  복귀한 쪽이 이겼다(p146 del·zconc 재현). 규칙(핀과 동일):
+     *   · 같은 id = LWW(updatedAt 큰 쪽, 같거나 없으면 서버 — PinSeries.newer) · 서버에만 있는 항목 보존
+     *   · (a) 서버 tombstone({_deleted}) 또는 내 tombstone(tombIds)인 id 제외 — 삭제 우선
+     *   · (b) 기준 목록(baseIds — 내가 알던 서버 목록)엔 있는데 지금 서버본에 없는 id 제외(남이 지움). 기준을 모르거나(null)
+     *     서버본을 실제로 받지 못했으면(비배열) (b) 는 건너뛴다 — 추정으로 지우지 않는다(유실 0 쪽). */
+    _mergeEntities(srvArr, localArr, baseIds, tombIds) {
+      const srvTomb = (Array.isArray(srvArr) ? srvArr : []).filter(o => o && o._deleted && o.id != null).map(o => String(o.id));
       const newer = (typeof PinSeries !== "undefined" && PinSeries.newer) ? (s, l) => PinSeries.newer(s, l) : null;
-      const merged = this._mergeById(this._live(srvPins), localPins, newer);
+      const merged = this._mergeById(this._live(srvArr), localArr, newer);
       const tomb = new Set((tombIds || []).map(String).concat(srvTomb));
-      // 서버본을 실제로 받지 못했으면(비배열) (b) 판정 불가 — 기준 핀 전부를 "남이 지웠다"로 오판하지 않는다.
-      const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? new Set(baseIds.map(String)) : null;
-      const srv = new Set(this._pinIds(srvPins));
-      const out = merged.filter(p => {
-        if (!p || p.id == null) return true;
-        const k = String(p.id);
-        if (tomb.has(k)) return false;                       // (a) 내가 지운 핀
-        if (base && base.has(k) && !srv.has(k)) return false; // (b) 남이 지운 핀
+      const base = (Array.isArray(baseIds) && Array.isArray(srvArr)) ? new Set(baseIds.map(String)) : null;
+      const srv = new Set(this._pinIds(srvArr));
+      return merged.filter(o => {
+        if (!o || o.id == null) return true;
+        const k = String(o.id);
+        if (tomb.has(k)) return false;                        // (a) 지운 항목
+        if (base && base.has(k) && !srv.has(k)) return false; // (b) 남이 지운 항목
         return true;
       });
+    },
+    /** 주석(ezPDF annotations) 병합 — _mergeEntities 규칙 그대로 + 수정 감지 기준 기록. 서버본 비배열이면 호출부가 부르지 않는다. */
+    _mergeAnnos(srvAnnos, localAnnos, tombIds, baseIds) {
+      return this._seen("anno", this._mergeEntities(srvAnnos, localAnnos, baseIds, tombIds));
+    },
+    /** [WO 20261011-offmerge] 영역(zones) 병합 — 종전 _mergeById(로컬 통째 우선·삭제 미반영)를 대체. */
+    _mergeZones(srvZones, localZones, tombIds, baseIds) {
+      return this._seen("zone", this._mergeEntities(srvZones, localZones, baseIds, tombIds));
+    },
+    /** 서버본·draft·병합 결과를 State 에 올릴 때 — 이 내용이 수정 감지 기준(PinSeries.baseline · 파생 필드 제외). */
+    _seen(kind, arr) {
+      if (typeof PinSeries !== "undefined" && PinSeries.baseline) PinSeries.baseline(arr, this._MERGE_KINDS[kind].ignore);
+      return arr;
+    },
+    _mergePins(srvPins, localPins, baseIds, tombIds) {
+      // [WP1 · H5] 서버 tombstone · [WO 20260930-lww] 핀 단위 LWW · [WO 20260929-bulkdel] (a)(b) — 규칙 본체는 _mergeEntities(3종 공유)
+      const out = this._mergeEntities(srvPins, localPins, baseIds, tombIds);
+      const base = (Array.isArray(baseIds) && Array.isArray(srvPins)) ? baseIds : null;
       // [WO 20260930-numdup] 🔴 병합 = 동시 생성 번호 충돌이 생기는 유일한 지점 — 409 재시도(_mergeConflict)와
       //   오프라인 복귀(_draftVsServer: 화면 복원·flush) 둘 다 여기를 지나므로 한 번만 고친다(§G-2-5).
       this._renumberConcurrent(out, base ? baseIds : null, srvPins);
@@ -3324,8 +3370,13 @@
       return arr;
     },
     /** [WO 20260930-lww] 편집 관찰 지점(_markDirty — _autoSave 도 경유 · 병합 직전 _mergeConflict) — 기준 이후 바뀐 핀에 updatedAt(PinSeries.stampChanged). */
+    //  [WO 20261011-offmerge] 주석·영역도 같은 관찰 지점에서 찍는다(영역은 파생 필드 pinIds 제외 — 핀만 옮겨도 다시 계산되어
+    //  남의 영역 수정을 LWW 로 이기는 일이 없게). 같은 PinSeries.stampChanged(객체 단위 WeakMap) 를 재사용한다.
     _pinsStamp() {
-      if (typeof PinSeries !== "undefined" && PinSeries.stampChanged) PinSeries.stampChanged(State.pins);
+      if (typeof PinSeries === "undefined" || !PinSeries.stampChanged) return;
+      PinSeries.stampChanged(State.pins);
+      PinSeries.stampChanged(State.annotations, undefined, this._MERGE_KINDS.anno.ignore);
+      PinSeries.stampChanged(State.zones, undefined, this._MERGE_KINDS.zone.ignore);
     },
     /** 병합 결과의 동시 생성 번호 충돌을 재채번(정본 PinSeries.resolveConcurrentNos)하고 1회 알린다.
      *  같은 변경을 화면 복원과 flush 가 두 번 계산해도 토스트는 한 번만(_numdupSeen). */
@@ -4171,25 +4222,28 @@
           State.depRebase = { dep: State.autoSaveDepId, ver: Number(State.depVersion) };
         }
       } catch (e) {}
-      let srvPins = [], srvZones = [];
+      let srvPins = [];
       try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
-      try { srvZones = JSON.parse(current.zones || "[]"); } catch (e) { srvZones = []; }
       this._pinsStamp();   // [WO 20260930-lww] 병합 직전 — _markDirty 를 아직 안 부른 편집(일괄 사진 등록 도중 등)도 로컬 수정으로 찍는다
       // [WO 20260929-bulkdel] 핀은 _mergePins(삭제 부활 방지) — 기준은 내가 알던 서버 버전, 병합 후엔 방금 받은 서버본
       const mergedPins  = this._mergePins(srvPins, State.pins || [], State.pinBaseIds, Object.keys(this._pinTombstones()));
-      const mergedZones = this._mergeById(this._live(srvZones), State.zones || []);
       State.pins  = mergedPins;
-      State.zones = mergedZones;
       State.pinBaseIds = this._pinIds(srvPins);
       State.depVersion = (current.version != null ? Number(current.version) : State.depVersion);
-      // 🔴 [WO 20261006-annodel] 주석도 같은 지점에서 병합(_mergeAnnos — 합집합 + 서버·내 tombstone). 종전엔 라이브폴·409 가
-      //   주석을 안 봤고(409 재시도가 내 목록을 통째로 보내 남이 그린 주석을 지웠다) 복귀 /ops 는 덮어썼다.
-      //   서버본에 주석 필드가 없으면(부분 응답) 건드리지 않는다.
-      if (current.annotations != null) {
-        let srvAnnos = null;
-        try { srvAnnos = JSON.parse(current.annotations || "[]"); } catch (e) { srvAnnos = null; }
-        if (Array.isArray(srvAnnos)) State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()));
+      // 🔴 [WO 20261006-annodel → 20261011-offmerge] 주석·영역도 같은 지점·같은 규칙(_mergeEntities — LWW + 서버·내 tombstone + 기준 목록).
+      //   종전 영역은 _mergeById(로컬 통째 우선)라 남이 지운 영역이 되살아났다. 서버본에 그 필드가 없거나 깨졌으면(부분 응답)
+      //   건드리지 않는다 — 빈 배열로 간주하면 (b) 규칙이 기준 항목 전부를 "남이 지움"으로 지운다.
+      const srvArr = (s) => { if (s == null) return null; try { const v = JSON.parse(s || "[]"); return Array.isArray(v) ? v : null; } catch (e) { return null; } };
+      const srvZones = srvArr(current.zones), srvAnnos = srvArr(current.annotations);
+      if (srvZones) {
+        State.zones = this._mergeZones(srvZones, State.zones || [], Object.keys(this._zoneTombstones()), State.zoneBaseIds);
+        State.zoneBaseIds = this._pinIds(srvZones);
       }
+      if (srvAnnos) {
+        State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()), State.annoBaseIds);
+        State.annoBaseIds = this._pinIds(srvAnnos);
+      }
+      const mergedZones = State.zones;
       // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
       try { if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); } } catch (e) {}
@@ -4295,10 +4349,13 @@
         try { Prompt.toast && Prompt.toast("일괄삭제 저장에는 본인 확인이 필요합니다 — 다시 저장을 눌러 확인하세요", 3600); } catch (e) {}
         return { ok: false, status: 403, reauth: true };
       }
+      let sentZones = null, sentAnnos = null;   // [WO 20261011-offmerge] 주석·영역도 성공 시 새 기준(State.zoneBaseIds/annoBaseIds)
       const send = async () => {
         const body = buildBody();
-        sentPins = null;
+        sentPins = null; sentZones = null; sentAnnos = null;
         if (typeof body.pins === "string") { try { sentPins = JSON.parse(body.pins); } catch (e) { sentPins = null; } }
+        if (typeof body.zones === "string") { try { sentZones = JSON.parse(body.zones); } catch (e) { sentZones = null; } }
+        if (typeof body.annotations === "string") { try { sentAnnos = JSON.parse(body.annotations); } catch (e) { sentAnnos = null; } }
         body.base_version = (State.depVersion != null ? State.depVersion : 0);
         if (State.depRebase && State.depRebase.dep === depId) body.rebase_from = State.depRebase.ver;   // [WO 20261010-offmatrix S-REV]
         const res = await fetch("/tables/deployments/" + encodeURIComponent(depId), {
@@ -4324,6 +4381,8 @@
       let rec = null; try { rec = await res.json(); } catch (e) {}
       if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
       if (Array.isArray(sentPins)) State.pinBaseIds = this._pinIds(sentPins);
+      if (Array.isArray(sentZones)) State.zoneBaseIds = this._pinIds(sentZones);
+      if (Array.isArray(sentAnnos)) State.annoBaseIds = this._pinIds(sentAnnos);
       if (State.depRebase && State.depRebase.dep === depId) {   // [WO 20261010-offmatrix S-REV] 이월 반영됨 — 서버본(rec)으로 화면 정합 후 해제
         State.depRebase = null;
         if (rec && typeof rec.pins === "string") { try { this._mergeConflict(rec); } catch (e) {} }
@@ -4554,6 +4613,7 @@
       if (!keep) return;
       State.pins = keep.pins || []; State.zones = keep.zones || [];
       State.pinTombstones = keep.pinTombstones || {}; State.annoTombstones = keep.annoTombstones || {}; State.pinBaseIds = keep.pinBaseIds || null;
+      State.zoneTombstones = keep.zoneTombstones || {}; State.annoBaseIds = keep.annoBaseIds || null; State.zoneBaseIds = keep.zoneBaseIds || null;
       if (keep.depVersion != null) State.depVersion = keep.depVersion;
       try { UI.renderPinsOnMap(); UI.renderPinList(); if (typeof Zones !== "undefined" && Zones.render) Zones.render(); } catch (e) {}
     },
@@ -4766,7 +4826,6 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
         try { State.pins  = this._pinsSeen(this._live(JSON.parse(dep.pins  || "[]"))); } catch { State.pins = []; }
-        State.pinTombstones = {}; State.annoTombstones = {};
         // 🔴 [WO 20261006-pinbase] 병합 기준(pinBaseIds)은 "서버가 아는 핀 목록" 이어야 한다.
         //   오프라인 번들 스냅샷(bundle:dep:<id>)은 persistLocalDeployment 가 **내 미동기화 핀까지**
         //   직렬화해 둔 로컬 사본이므로 서버 기준이 아니다. 이를 기준으로 삼으면 다음 서버 병합에서
@@ -4776,9 +4835,9 @@
         //     base 가 **3** 으로 바뀜 → 온라인 복귀 후 첫 라이브폴 병합에 화면 3핀 → **1핀**
         //     (서버엔 25핀이 멀쩡히 올라간 상태로 화면만 1핀 — p114 "local:1, server:25").
         //   서버본을 못 받았으면 기준은 "모름"(null) — _mergePins 가 (b) 판정을 건너뛴다(기존 규칙 재사용).
-        State.pinBaseIds = depFromBundle ? null : this._pinIds(State.pins);
         try { State.zones = this._live(JSON.parse(dep.zones || "[]")); } catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(dep.annotations || "[]")); } catch { State.annotations = []; }
+        this._initMergeMeta(!depFromBundle);   // [WO 20261011-offmerge] tombstone 3종 초기화 + 기준 목록(핀·주석·영역) — 형제 로더 공유
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식({checkboard,content})
@@ -4852,10 +4911,10 @@
         State.fileName    = d.fileName || "도면";
         State.pins        = this._pinsSeen(Array.isArray(d.pins)  ? d.pins  : []);
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
-        // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
-        State.pinTombstones = {}; State.annoTombstones = {}; this._adoptDraftTombstones(d);
-        State.pinBaseIds = Array.isArray(d.basePinIds) ? d.basePinIds.map(String) : null;
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
+        // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
+        //   [WO 20261011-offmerge] 핀·주석·영역 3종 공유(_initMergeMeta → draft tombstone·기준 채택)
+        this._initMergeMeta(false); this._adoptDraftTombstones(d); this._adoptDraftBases(d, false);
         // [WO 20260917 멀티유저 ①] 로컬 draft 에도 체크보드 시작번호 보존(오프라인 새로고침 대응)
         State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
         if (d.depId) { State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId; }
@@ -4972,11 +5031,12 @@
       // 🔴 [WO 20261010-offmatrix] 주석도 같은 규칙 — 종전 복귀 업로드·화면 복원은 draft 주석을 통째로 써서, 그 사이 다른 기기가
       //   그린 주석을 지웠다(p146 conc 재현). 서버본과 _mergeAnnos(합집합 + 서버·내 tombstone)로 합친다. draft 에 주석이 없으면 null(손대지 않음).
       const dAnnos = Array.isArray(d && d.annotations) ? d.annotations : null;
-      const annos = dAnnos == null ? null : ((same || !Array.isArray(srvAnnos)) ? dAnnos : this._mergeAnnos(srvAnnos, dAnnos, d && d.deletedAnnos));
+      const annos = dAnnos == null ? null : ((same || !Array.isArray(srvAnnos)) ? dAnnos : this._mergeAnnos(srvAnnos, dAnnos, d && d.deletedAnnos, d && d.baseAnnoIds));
       return same
         ? { pins: dPins, zones: dZones, annos }
         // [WO 20260929-bulkdel] 핀은 _mergePins — draft 의 tombstone(deletedPins)·기준 id(basePinIds)로 삭제 부활 차단
-        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeById(this._live(srvZones || []), dZones), annos };
+        // 🔴 [WO 20261011-offmerge] 영역도 같은 규칙(_mergeZones — LWW + tombstone + 기준 목록). 종전 _mergeById 는 다른 기기가 지운 영역을 되살렸다.
+        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeZones(srvZones, dZones, d && d.deletedZones, d && d.baseZoneIds), annos };
     },
 
     /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
@@ -4991,7 +5051,7 @@
       //   형제 복원 경로 _restoreDraftLocal 은 이미 그렇게 한다(d.basePinIds) — 이 경로만 빠져 있어
       //   직전 로더가 넣어 둔 기준(오프라인이면 번들 사본 = 내 미동기화 핀 전부)이 그대로 남았고,
       //   다음 서버 병합에서 _mergePins (b) 규칙이 그 핀들을 "남이 지운 핀"으로 지웠다(§G-2-5 형제 통일).
-      if (Array.isArray(d.basePinIds)) State.pinBaseIds = d.basePinIds.map(String);
+      this._adoptDraftBases(d, true);   // [WO 20261011-offmerge] 주석·영역 기준도 같은 규칙(구버전 draft = 직전 로더 기준 유지)
       this._adoptDraftTombstones(d);   // [WO 20260929-bulkdel] 저장 전 지운 핀 기록 유지(다음 409 병합에서도 부활 금지)
       if (Array.isArray(m.annos)) State.annotations = m.annos;   // [WO 20261010-offmatrix] 서버 주석과 병합(_draftVsServer)
       if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
@@ -5226,7 +5286,12 @@
           // [WO 20261010-offmatrix S-REV] 서버가 저장한 실제 값(rec — 개정 이월 반영)이 있으면 그것이 기준
           if (srvPins)  { try { d.pins  = JSON.parse((rec && typeof rec.pins === "string") ? rec.pins : (body.pins || "[]")); } catch (e) {} }
           d.basePinIds = this._pinIds(Array.isArray(d.pins) ? d.pins : []);   // [WO 20260929-bulkdel] 서버 = 방금 보낸 핀 = 새 기준
-          if (srvZones) { try { d.zones = JSON.parse(body.zones || "[]"); } catch (e) {} }
+          // [WO 20261011-offmerge] 영역·주석도 서버가 저장한 실제 값(rec)이 새 기준 — 핀과 같은 규칙
+          const recArr = (s, dflt) => { try { const v = JSON.parse((rec && typeof s === "string") ? s : (dflt || "[]")); return Array.isArray(v) ? v : null; } catch (e) { return null; } };
+          if (srvZones) { const z = recArr(rec && rec.zones, body.zones); if (z) d.zones = z; }
+          if (Array.isArray(srvAnnos)) { const a = recArr(rec && rec.annotations, body.annotations); if (a) d.annotations = a; }
+          d.baseZoneIds = this._pinIds(Array.isArray(d.zones) ? d.zones : []);
+          d.baseAnnoIds = this._pinIds(Array.isArray(d.annotations) ? d.annotations : []);
           await SyncQueue.saveDraft(key, d);
           if (key === this._draftKey() && d.depId) {
             State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId;
@@ -5237,6 +5302,7 @@
             // [WO 20261010-offmatrix S-REV] 화면도 서버 저장본과 병합(SoT _mergeConflict — 개정으로 이월된 핀은 updatedAt 이 새로워 LWW 로 이긴다)
             if (rec && typeof rec.pins === "string") { try { this._mergeConflict(rec); } catch (e) {} }
             State.pinBaseIds = d.basePinIds.slice();   // [WO 20260929-bulkdel] 버전과 함께 병합 기준도 동기화
+            State.zoneBaseIds = d.baseZoneIds.slice(); State.annoBaseIds = d.baseAnnoIds.slice();   // [WO 20261011-offmerge]
             this._setSaveIndicator("saved");
           }
         } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
@@ -5358,6 +5424,7 @@
         State.autoSaveDepId = (rec && rec.id) ? rec.id : null;
         State.currentDeploymentId = State.autoSaveDepId;
         try { State.pinBaseIds = this._pinIds(JSON.parse(body.pins || "[]")); } catch (e) {}   // [WO 20260929-bulkdel] 새 서버 기준
+        try { State.zoneBaseIds = this._pinIds(JSON.parse(body.zones || "[]")); State.annoBaseIds = this._pinIds(JSON.parse(body.annotations || "[]")); } catch (e) {}   // [WO 20261011-offmerge]
         // 서버 저장 성공 → 로컬 draft 의 dirty 해제(스냅샷은 백업으로 유지)
         await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
@@ -5877,14 +5944,13 @@
 
         try { State.pins = this._pinsSeen(this._live(JSON.parse(latest.pins || "[]"))); }
         catch { State.pins = []; }
-        State.pinTombstones = {}; State.annoTombstones = {};
-        // [WO 20260929-bulkdel] 형제 로더(loadDeckDrawing)와 같은 기준 — 🔴 [WO 20261006-pinbase]
-        //   오프라인 번들 사본(내 미동기화 핀 포함)은 "서버가 아는 목록"이 아니므로 기준 = null(판정 불가).
-        State.pinBaseIds = latestFromBundle ? null : this._pinIds(State.pins);
         try { State.zones = this._live(JSON.parse(latest.zones || "[]")); }
         catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(latest.annotations || "[]")); }
         catch { State.annotations = []; }
+        // [WO 20260929-bulkdel] 형제 로더(loadDeckDrawing)와 같은 기준 — 🔴 [WO 20261006-pinbase]
+        //   오프라인 번들 사본(내 미동기화 핀 포함)은 "서버가 아는 목록"이 아니므로 기준 = null(판정 불가).
+        this._initMergeMeta(!latestFromBundle);   // [WO 20261011-offmerge] 핀·주석·영역 공유
         // [WO 20260917 멀티유저 ①] 구버전 배포본(컬럼 없음) → {} → 종전대로 시작번호 1
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식 정규화(§10 SoT).
         try { State.checkboardStart = this._normalizeCheckboardStart(JSON.parse(latest.checkboard_start || "{}")); }

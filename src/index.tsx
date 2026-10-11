@@ -3135,6 +3135,9 @@ app.post('/api/deployments/:id/revisions/:rid/undo', async (c) => {
   if (!prev) return c.json({ error: '스냅샷이 없습니다 — 되돌릴 수 없습니다' }, 500)
   const t = revJson(row.transform, null) || { ...REV_IDENTITY }
   const inv = invertAff(t) || { ...REV_IDENTITY }
+  // [WO 20261011-offmerge R2] 되돌림이 일어난 배포본 버전(cur — 되돌림 직전)을 기록 → 오프라인 편집 재기준화(revsSinceVersion)가 역변환 여부를 판정.
+  //   0041 미적용 DB 면 종전 UPDATE 그대로(되돌리기 자체는 막지 않는다 — 그 경우 재기준화는 검토 표시로 내려간다).
+  const undoVer = await revUndoVerReady(c)
   for (let attempt = 0; attempt < 3; attempt++) {
     const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
     if (!dep) return c.json({ error: '배포본이 삭제됨' }, 409)
@@ -3146,7 +3149,9 @@ app.post('/api/deployments/:id/revisions/:rid/undo', async (c) => {
     const annos = exact ? prev.annotations : JSON.stringify(revertShapesMerge(revJson(dep.annotations, []), revJson(prev.annotations, []), t, carryAnnos))
     const guard = 'EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)'
     const stmts: any[] = [
-      c.env.DB.prepare(`UPDATE drawing_revisions SET status = 'reverted', reverted_at = ?, reverted_by = ? WHERE id = ? AND status = 'applied' AND ${guard}`).bind(now, user.email, rid, depId, cur),
+      undoVer
+        ? c.env.DB.prepare(`UPDATE drawing_revisions SET status = 'reverted', reverted_at = ?, reverted_by = ?, reverted_version = ? WHERE id = ? AND status = 'applied' AND ${guard}`).bind(now, user.email, cur, rid, depId, cur)
+        : c.env.DB.prepare(`UPDATE drawing_revisions SET status = 'reverted', reverted_at = ?, reverted_by = ? WHERE id = ? AND status = 'applied' AND ${guard}`).bind(now, user.email, rid, depId, cur),
     ]
     // 구역 윤곽: 지금 값이 "적용 때 이월한 값"이면 스냅샷으로, 그 뒤 누가 바꿨으면 현재 값을 역이월
     for (const s of (Array.isArray(prev.decks) ? prev.decks : [])) {
@@ -4703,27 +4708,58 @@ app.post('/tables/deployments', async (c) => {
  * **개정 전 좌표**를 그대로 다시 써 이월된 위치를 조용히 되돌렸다. 계산은 개정 SoT(revCore carry*) 그대로 — 두 벌 금지.
  * 판정 근거 = 클라가 그 편집의 기준으로 삼은 배포본 버전(baseVer). 그 이후 적용(status 'applied')된 개정만 순서대로 적용한다.
  * 이월된 핀엔 revReview(개정 검토 배지 — 개정 기능 SoT)가 붙어 사람이 확인한다 + updatedAt 갱신(LWW 에서 이 위치가 이긴다). */
-async function revsSinceVersion(c: any, depId: string, baseVer: any): Promise<{ id: string, t: any, at: number }[]> {
+/* [WO 20261011-offmerge R2] 🔴 개정 되돌리기(undo, 10분)도 좌표 사건이다 — 종전엔 status='applied' 만 봐서, 개정 적용 **뒤** 버전을 기준으로
+ * 오프라인 편집한 기기가 되돌린 뒤 복귀하면(편집 = 새 개정 좌표계, 서버 = 이전 좌표계) 역변환 없이 그대로 저장됐다(조용히 틀린 좌표).
+ * 사건 = 적용(dep_version_before 에서 t) · 되돌림(reverted_version 에서 t⁻¹ — invertAff, revCore SoT). 기준 v 이후 사건만 버전 순으로.
+ *  · 적용·되돌림 둘 다 v 이후 → 상쇄(둘 다 건너뜀) · 적용은 v 전, 되돌림은 v 이후 → 역변환
+ *  · 되돌림 버전을 모르면(0041 전 기록) 적용이 v 이후일 때만 상쇄가 확실 — 아니면 순서를 알 수 없으므로 좌표를 추정 변환하지 않고
+ *    검토 표시(ambiguous)만 단다(rebaseOne). */
+type RevEvent = { id: string, t: any, at: number, undo?: boolean, ambiguous?: boolean }
+async function revUndoVerReady(c: any): Promise<boolean> {
+  try { await c.env.DB.prepare('SELECT reverted_version FROM drawing_revisions LIMIT 1').first(); return true } catch { return false }
+}
+async function revsSinceVersion(c: any, depId: string, baseVer: any): Promise<RevEvent[]> {
   const v = Number(baseVer)
   if (baseVer == null || !Number.isFinite(v)) return []
   try {
     if (!(await revTableReady(c))) return []
+    const hasUndoVer = await revUndoVerReady(c)
     const rows: any[] = ((await c.env.DB.prepare(
-      "SELECT id, transform, applied_at, created_at FROM drawing_revisions WHERE deployment_id = ? AND kind = 'revision' AND status = 'applied' AND dep_version_before >= ? ORDER BY dep_version_before ASC"
-    ).bind(depId, v).all()).results) || []
-    return rows.map((r) => ({ id: String(r.id), t: revJson(r.transform, null) || { ...REV_IDENTITY }, at: Number(r.applied_at || r.created_at) }))
-      .filter((r) => !revIsIdentity(r.t))
+      `SELECT id, status, transform, applied_at, created_at, reverted_at, dep_version_before${hasUndoVer ? ', reverted_version' : ''}
+         FROM drawing_revisions WHERE deployment_id = ? AND kind = 'revision' AND status IN ('applied', 'reverted')`
+    ).bind(depId).all()).results) || []
+    const evs: { ver: number, e: RevEvent }[] = [], amb: RevEvent[] = []
+    for (const r of rows) {
+      const t = revJson(r.transform, null) || { ...REV_IDENTITY }
+      if (revIsIdentity(t)) continue
+      const before = Number(r.dep_version_before), at = Number(r.applied_at || r.created_at)
+      const appliedAfter = Number.isFinite(before) && before >= v
+      if (r.status === 'applied') { if (appliedAfter) evs.push({ ver: before, e: { id: String(r.id), t, at } }); continue }
+      if (appliedAfter) continue   // 적용·되돌림 모두 기준 이후 — 상쇄
+      const rv = (hasUndoVer && r.reverted_version != null) ? Number(r.reverted_version) : NaN
+      if (Number.isFinite(rv)) {
+        const inv = invertAff(t)
+        if (rv >= v && inv) evs.push({ ver: rv, e: { id: String(r.id), t: inv, at: Number(r.reverted_at || at), undo: true } })
+      } else amb.push({ id: String(r.id), t: { ...REV_IDENTITY }, at: Number(r.reverted_at || at), ambiguous: true })
+    }
+    return evs.sort((a, b) => a.ver - b.ver).map((x) => x.e).concat(amb)
   } catch { return [] }
 }
-/** 개정 이전 기준의 항목 1개를 개정들로 이월 — entity 'pin'|'zone'|'anno'. 좌표 없는 항목·tombstone 은 그대로. */
-function rebaseOne(entity: string, o: any, revs: { id: string, t: any, at: number }[]): any {
+/** 개정 이전 기준의 항목 1개를 개정들로 이월 — entity 'pin'|'zone'|'anno'. 좌표 없는 항목·tombstone 은 그대로.
+ *  되돌림 사건(undo)은 역변환으로 같은 carry* 를 쓴다. 순서를 모르는 되돌림(ambiguous)은 좌표를 바꾸지 않고 revReview 검토 표시만. */
+function rebaseOne(entity: string, o: any, revs: RevEvent[]): any {
   if (!o || o._deleted || !revs.length) return o
-  let q = o
+  let q = o, amb: RevEvent | null = null
   for (const r of revs) {
-    if (entity === 'pin') q = carryPins([q], r.t, { rev: r.id, at: r.at })[0]
+    if (r.ambiguous) { amb = r; continue }
+    if (entity === 'pin') {
+      q = carryPins([q], r.t, { rev: r.id, at: r.at })[0]
+      if (r.undo && q.revReview) q = Object.assign({}, q, { revReview: Object.assign({}, q.revReview, { undo: true }) })
+    }
     else if (entity === 'zone') q = carryZones([q], r.t)[0]
     else q = carryAnnos([q], r.t)[0]
   }
+  if (amb) q = Object.assign({}, q, { revReview: Object.assign({}, q.revReview || {}, { rev: amb.id, at: amb.at, ambiguous: true }) })
   if (entity === 'pin' && q !== o) {
     q = Object.assign({}, q, { updatedAt: Date.now() })
     if (q.revReview) q.revReview = Object.assign({}, q.revReview, { offline: true })   // 오프라인 편집이 이월됨 — 검토 대상
@@ -4731,7 +4767,7 @@ function rebaseOne(entity: string, o: any, revs: { id: string, t: any, at: numbe
   return q
 }
 /** PATCH 본문(배열 JSON)의 항목 중 "개정 이후 서버 상태와 다른 것" = 개정 전 기준 편집 → 이월. 같은 것은 이미 이월된 서버본(그대로). */
-function rebaseArrayJson(entity: string, incomingJson: any, existingJson: any, revs: { id: string, t: any, at: number }[]): any {
+function rebaseArrayJson(entity: string, incomingJson: any, existingJson: any, revs: RevEvent[]): any {
   if (!revs.length || typeof incomingJson !== 'string') return incomingJson
   let inc: any[]; try { inc = JSON.parse(incomingJson) } catch { return incomingJson }
   if (!Array.isArray(inc)) return incomingJson
@@ -4892,7 +4928,7 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   const applied: string[] = []
   let newlyApplied = 0   // 멱등: 실제로 새로 적용된 op만 카운트 → version 증가 판정에 사용
   const noteIdMap: Record<string, string> = {}   // 클라 임시 note id → 서버 실제 id
-  const revCache = new Map<string, { id: string, t: any, at: number }[]>()   // [WO 20261010-offmatrix S-REV] op.base → 이후 개정
+  const revCache = new Map<string, RevEvent[]>()   // [WO 20261010-offmatrix S-REV] op.base → 이후 개정
   for (const op of ops) {
     if (!op || !op.opId || !op.entity || op.id == null) continue
     // 멱등: 이미 적용된 opId면 건너뜀(중복 업로드 무해, version 증가에 기여하지 않음)
@@ -4970,7 +5006,8 @@ app.post('/tables/deployments/:id/ops', async (c) => {
     if (op.action !== 'delete' && op.data && typeof op.data === 'object') {
       // [WO 20261010-offmatrix] 🔴 핀 단위 LWW — 클라 병합(PinSeries.newer)과 같은 규칙: 서버 핀이 더 나중에 고쳐졌으면(updatedAt 큼)
       //   늦게 도착한 옛 op 가 덮지 않는다. 종전엔 op.data(핀 통째)가 무조건 덮어 다른 기기의 최신 수정을 되돌렸다(p146 conc 재현).
-      if (op.entity === 'pin' && cur && !cur._deleted && Number(cur.updatedAt || 0) > Number(op.data.updatedAt || 0)) {
+      //   [WO 20261011-offmerge] 주석·영역도 같은 규칙(클라 _mergeEntities 와 동일 — updatedAt 없는 구버전 항목은 종전대로 반영).
+      if ((op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno') && cur && !cur._deleted && Number(cur.updatedAt || 0) > Number(op.data.updatedAt || 0)) {
         await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)').bind(op.opId, id, Date.now()).run()
         applied.push(op.opId)
         continue

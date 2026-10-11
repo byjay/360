@@ -268,9 +268,20 @@ async function A6(src) {
   ok(App._mergePins(srv, local, null, []).length === 3, "기준 null → '남이 지웠다' 판정 생략(내 핀 보존)");
   ok(App._mergePins(srv, local, ["p1", "p2", "p3"], []).length === 1, "기준이 진짜 서버목록 → 남이 지운 핀은 반영(기존 규칙 불변)");
   // 형제 로더 2곳 전수 — 번들 사본을 기준으로 쓰지 않는다
-  const guarded = (src.match(/State\.pinBaseIds = (?:dep|latest)FromBundle \? null : this\._pinIds\(State\.pins\);/g) || []).length;
-  const bare = (src.match(/State\.pinBaseIds = this\._pinIds\(State\.pins\);/g) || []).length;
+  //   [WO 20261011-offmerge] 기준 기록이 핀·주석·영역 공유 지점(_initMergeMeta(trusted))으로 옮겨졌다 — 같은 가드를 그 호출 인자로 센다
+  //   (종전 needle `State.pinBaseIds = …FromBundle ? null : …` 와 같은 판정). 공유 지점 자체의 동작은 아래에서 실행으로 확인.
+  const guarded = (src.match(/State\.pinBaseIds = (?:dep|latest)FromBundle \? null : this\._pinIds\(State\.pins\);|this\._initMergeMeta\(!(?:dep|latest)FromBundle\);/g) || []).length;
+  const bare = (src.match(/State\.pinBaseIds = this\._pinIds\(State\.pins\);|this\._initMergeMeta\(true\);/g) || []).length;
   ok(guarded === 2 && bare === 0, "로더 2곳 모두 번들 사본 가드 적용(무가드 0건) — guarded=" + guarded + " bare=" + bare);
+  if (App._initMergeMeta) {
+    const { App: A2, State: S2 } = makeMergeApp(src);
+    S2.pins = [{ id: "p1" }]; S2.zones = [{ id: "z1" }]; S2.annotations = [{ id: "a1" }];
+    A2._initMergeMeta(false);
+    const unk = [S2.pinBaseIds, S2.zoneBaseIds, S2.annoBaseIds];
+    A2._initMergeMeta(true);
+    ok(unk.every((v) => v === null) && JSON.stringify([S2.pinBaseIds, S2.zoneBaseIds, S2.annoBaseIds]) === JSON.stringify([["p1"], ["z1"], ["a1"]]),
+      "공유 지점 _initMergeMeta: 번들 사본(false) → 기준 모름(null) 3종 · 서버본(true) → 실제 id 3종", { unk, after: [S2.pinBaseIds, S2.zoneBaseIds, S2.annoBaseIds] });
+  }
 }
 
 /* ══ 뮤테이션 — 고친 부분을 되돌리면 해당 단언이 FAIL 해야 한다 ══ */
@@ -293,15 +304,16 @@ function mutAppArrayOnly(src) {
         let changed = false;
         if (Array.isArray(d.pins)) {`);
 }
+//  [WO 20261011-offmerge] 두 뮤테이션 대상이 핀·주석·영역 공유 지점으로 옮겨졌다(_adoptDraftBases · _initMergeMeta) — 같은 것을 되돌린다.
 function mutAppDropBaseRestore(src) {
-  const needle = `      if (Array.isArray(d.basePinIds)) State.pinBaseIds = d.basePinIds.map(String);`;
+  const needle = `      this._adoptDraftBases(d, true);`;
   if (src.indexOf(needle) < 0) throw new Error("뮤테이션 대상(_applyDirtyDraft basePinIds 복원) 없음 — 소스 변경?");
   return src.replace(needle, "      /* 제거됨(뮤테이션) */");
 }
 function mutAppBundleBaseline(src) {
-  const needle = `        State.pinBaseIds = depFromBundle ? null : this._pinIds(State.pins);`;
+  const needle = `        this._initMergeMeta(!depFromBundle);`;
   if (src.indexOf(needle) < 0) throw new Error("뮤테이션 대상(번들 가드) 없음 — 소스 변경?");
-  return src.replace(needle, `        State.pinBaseIds = this._pinIds(State.pins);`);
+  return src.replace(needle, `        this._initMergeMeta(true);`);
 }
 function mutOfflineBadge(src) {
   const needle = `      if (text) text.textContent = syncErr ? "동기화 실패" : "동기화 중";`;

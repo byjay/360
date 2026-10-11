@@ -4,7 +4,9 @@
  *  실행(p114 하니스 재사용 — 서버는 safe-listen 임의 포트, 8799·8800 아님):
  *    P114=1 P114_ROOT=.tmp/<HEAD추출본> P114_OUT=fixoffmatrix P114_EXPLORE=tests/p146-offline-matrix-cdp.mjs \
  *      TEMP=<repo>\.tmp TMP=<repo>\.tmp node tests/p114-mobile-field-flow.test.mjs
- *    P146_PHASES=matrix,conc,rev,fail (기본 전체) — 단계 선택
+ *    P146_PHASES=matrix,conc,rev,fail,del,zconc,revundo (기본 전체) — 단계 선택
+ *    [WO 20261011-offmerge] del = 다른 기기가 지운 주석·영역(PATCH·/ops) 부활 0 · zconc = 영역 동시 추가·수정 LWW ·
+ *                           revundo = 개정 적용 → (오프라인 편집) → 10분 내 되돌리기 → 복귀 좌표 역변환 / 순서 모름 → 검토 배지
  *
  *  판정 = 서버 D1 을 직접 조회(P.db)해 항목별로 로컬(State·Notes)과 대조. 산출: .tmp/fixoffmatrix/matrix.json + 스크린샷.
  *  P114 가 "1" 이 아니면 하니스가 SKIP(전 스위트 무해) — 이 파일 자체는 하니스가 import 할 때만 실행된다.
@@ -14,7 +16,7 @@ import path from "node:path";
 import http from "node:http";
 import WebSocket from "ws";
 
-const PHASES = new Set(String(process.env.P146_PHASES || "matrix,conc,rev,fail").split(",").map((s) => s.trim()).filter(Boolean));
+const PHASES = new Set(String(process.env.P146_PHASES || "matrix,conc,rev,fail,del,zconc,revundo").split(",").map((s) => s.trim()).filter(Boolean));
 
 /* ── 페이지 측정 라이브러리(새 문서마다 주입 — 관찰만, 앱 동작 불변) ── */
 const XLIB = String.raw`(function(){
@@ -67,7 +69,7 @@ export default async function explore(P) {
   const { ev, evSafe, send, BASE, TOKEN, tap, waitFor, loads } = P;
   const J = (o) => JSON.stringify(o);
   const OUT = P.OUT;
-  const R = { phases: [...PHASES], matrix: [], conc: [], rev: [], fail: [], ui: {}, notes: [] };
+  const R = { phases: [...PHASES], matrix: [], conc: [], rev: [], fail: [], del: [], zconc: [], revundo: [], ui: {}, notes: [] };
   const save = () => fs.writeFileSync(path.join(OUT, process.env.P114_MUT ? "matrix-mut-" + process.env.P114_MUT + ".json" : (process.env.P146_TAG ? "matrix-" + process.env.P146_TAG + ".json" : "matrix.json")), J(R, null, 1));
   const log = (m, d) => console.log("[P146] " + m + (d !== undefined ? " " + J(d).slice(0, 700) : ""));
   let shotN = 0;
@@ -436,8 +438,13 @@ export default async function explore(P) {
     await s.send("Page.navigate", { url: BASE + "/" });
     const waitB = async (cond, to) => { const t0 = Date.now(); while (Date.now() - t0 < to) { const v = await s.evSafe("(function(){try{return !!(" + cond + ")}catch(e){return false}})()"); if (v === true) return Date.now() - t0; await P.wait(150); } return -1; };
     await waitB("window.__T && document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
-    await s.ev("(function(){ var e = document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); e.scrollIntoView({block:'center'}); e.click(); return 1; })()");
-    const okB = await waitB(drawn, 90000);
+    // [WO 20261011-offmerge] 허브가 첫 렌더 직후 다시 그려지면 그 사이 클릭이 떨어진 노드에 간다(실측: del 단계가 첫 B 진입일 때 허브에 머묾,
+    //   스크린샷 p146-deviceB-fail) — 같은 클릭을 최대 5회(매번 새로 찾은 노드)까지 반복한다. 앱 동작은 그대로(사용자 재클릭과 같다).
+    const clickLeafB = "(function(){ var e = document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); if (!e) return 0; e.scrollIntoView({block:'center'}); e.click(); return 1; })()";
+    let okB = -1;
+    for (let i = 0; i < 5 && okB < 0; i++) { await s.evSafe(clickLeafB); okB = await waitB(drawn, i < 4 ? 12000 : 40000); }
+    if (okB < 0) { await shot("deviceB-fail", s.send); log("device B 본문", await s.evSafe("({ decks: window.__T && __T.Projects ? (__T.Projects.decks || []).length : -1, cur: window.__T && __T.Projects && __T.Projects.currentProject ? __T.Projects.currentProject.id : null, mode: window.__T && __T.State.mode, toasts: (window.__M ? __M.toasts : []).slice(-5).map(function(t){ return t.text; }), body: (document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 400) })")); }
+    if (okB < 0) log("device B 진단", await s.evSafe("({ href: location.href, T: !!window.__T, dep: window.__T && __T.State.autoSaveDepId || null, rect: !!(window.__M && __M.drawingRect()), img: (function(){ var i = document.getElementById('map-image'); return i ? { c: i.complete, w: i.naturalWidth, src: String(i.src).slice(0, 80) } : null; })(), modal: Array.from(document.querySelectorAll('.modal, [role=dialog], .wm-gate, #install-gate')).filter(function(e){ return __M.visible(e); }).map(function(e){ return (e.id || e.className) + ':' + (e.innerText || '').slice(0, 80); }) })"));
     B = Object.assign(s, { waitB, ok: okB >= 0, TOKB });
     log("device B open", { ok: okB });
     return B;
@@ -555,6 +562,211 @@ export default async function explore(P) {
     save();
   }
 
+  /* ═════════════ 5~7 공용(주석·영역) — 앱 정본 경로만 쓴다(Zones._commitZone · Zones.remove · PdfAnno._persist/_removeAnnos · App._autoSave) ═════════════ */
+  const commitZoneVia = (E, label, geom) => E(`(async function(){ var Pr = __T.Prompt; var oa = Pr.ask; Pr.ask = function(){ return Promise.resolve({ value: ${J(label)} }); };
+    try { await __T.Zones._commitZone(${J(geom)}); } finally { Pr.ask = oa; }
+    var z = __T.State.zones.filter(function(z){ return z.label === ${J(label)}; }).pop(); return z ? { id: String(z.id), label: z.label } : null; })()`);
+  const removeZoneVia = (E, id) => E(`(async function(){ var Pr = __T.Prompt; var oc = Pr.confirm; Pr.confirm = function(){ return Promise.resolve(true); };
+    try { return await __T.Zones.remove(${J(id)}); } finally { Pr.confirm = oc; } })()`);
+  const editZoneVia = (E, id, js) => E(`(function(){ var z = __T.State.zones.find(function(z){ return String(z.id) === ${J(String(id))}; }); if (!z) return null; ${js}; __T.App._autoSave(); return { id: String(z.id), label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, upd: z.updatedAt || null }; })()`);
+  const addAnnoVia = (E, a) => E(`(function(){ __T.State.annotations.push(${J(a)}); __T.PdfAnno._persist(); return 1; })()`);
+  const localSets = (E = evSafe) => E("({ annos: __T.State.annotations.map(function(a){ return { id: String(a.id), x: a.x, y: a.y, w: a.w, h: a.h }; }), zones: __T.State.zones.map(function(z){ return { id: String(z.id), label: z.label, x: z.x, y: z.y, w: z.w, h: z.h, pinIds: (z.pinIds || []).map(String) }; }) })");
+  /** B 화면이 서버를 따라오게(라이브폴 정본 _liveTick) — 조건이 참이 될 때까지 */
+  const bCatchUp = async (b, cond, tries = 30) => { for (let i = 0; i < tries; i++) { await b.evSafe("__T.App._liveTick ? __T.App._liveTick() : null"); if ((await b.evSafe("(function(){try{return !!(" + cond + ")}catch(e){return false}})()")) === true) return true; await P.wait(700); } return false; };
+  const srvWait = async (pred, tries = 40) => { for (let i = 0; i < tries; i++) { const s = await srvLive(); if (pred(s)) return s; await P.wait(500); } return srvLive(); };
+  const idsOf = (arr) => (arr || []).map((o) => String(o.id)).sort();
+
+  /* ═════════════ 5. del — 다른 기기가 지운 주석·영역(저장 PATCH 경로 · /ops 경로) → A 오프라인 복귀 → 부활 0 ═════════════ */
+  if (PHASES.has("del")) {
+    await ensureADrawing();
+    await aOffline(false);
+    await waitSynced(evSafe, 90000, "pre-del");
+    const ts = Date.now().toString(36);
+    const AN = { d1: "an-d1-" + ts, d2: "an-d2-" + ts, k: "an-k-" + ts, a: "an-Aoff-" + ts };
+    const rect = (id, x) => ({ id, page: 1, type: "rect", color: "#1f2937", x, y: 620, w: 40, h: 20 });
+    await addAnnoVia(evSafe, rect(AN.d1, 100)); await addAnnoVia(evSafe, rect(AN.d2, 160)); await addAnnoVia(evSafe, rect(AN.k, 220));
+    const ZD1 = await commitZoneVia(evSafe, "D1영역-" + ts, { shape: "rect", x: 60, y: 62, w: 5, h: 5 });
+    const ZD2 = await commitZoneVia(evSafe, "D2영역-" + ts, { shape: "rect", x: 68, y: 62, w: 5, h: 5 });
+    await P.wait(2500);
+    await waitSynced(evSafe, 60000, "del-seed");
+    const s0 = await srvLive();
+    P.ok([AN.d1, AN.d2, AN.k].every((k) => s0.annos.some((a) => a.id === k)) && ZD1 && ZD2 && s0.zones.some((z) => String(z.id) === ZD1.id) && s0.zones.some((z) => String(z.id) === ZD2.id), "[del] 시드: 주석 3 · 영역 2 서버 반영", { annos: idsOf(s0.annos), zones: idsOf(s0.zones) });
+    const b = await openDeviceB();
+    const bSeen = await bCatchUp(b, `__T.State.annotations.some(function(a){ return a.id === ${J(AN.d2)}; }) && __T.State.zones.some(function(z){ return String(z.id) === ${J(ZD2 && ZD2.id)}; })`);
+    P.ok(bSeen, "[del] 기기 B 가 시드 주석·영역을 받음(라이브폴)");
+    // A 오프라인 — 다른 항목 편집(draft dirty + oplog 둘 다 생기게): 주석 추가 · 주석 수정 · 영역 추가
+    await aOffline(true); await P.wait(1200);
+    await addAnnoVia(evSafe, rect(AN.a, 300));
+    await evSafe(`(function(){ var a = __T.State.annotations.find(function(a){ return a.id === ${J(AN.k)}; }); a.x = 260; __T.PdfAnno._persist(); return 1; })()`);
+    const ZA = await commitZoneVia(evSafe, "A오프영역-" + ts, { shape: "rect", x: 76, y: 62, w: 5, h: 5 });
+    await P.wait(1500);
+    // B 온라인 — 저장(PATCH) 경로 삭제(정본 삭제 함수 → _autoSave → PATCH: 서버엔 tombstone 이 남지 않는다)
+    await b.evSafe(`(function(){ __T.PdfAnno._removeAnnos([${J(AN.d1)}]); return 1; })()`);
+    const bz = await removeZoneVia(b.evSafe, ZD1.id);
+    const sP = await srvWait((s) => !s.annos.some((a) => a.id === AN.d1) && !s.zones.some((z) => String(z.id) === ZD1.id));
+    const rawP = { annos: parse(sP.raw.annotations).filter((a) => a && a.id === AN.d1), zones: parse(sP.raw.zones).filter((z) => z && String(z.id) === ZD1.id) };
+    P.ok(bz === true && rawP.annos.length === 0 && rawP.zones.length === 0, "[del] B 저장(PATCH)으로 삭제 — 서버에 tombstone 없이 사라짐(기준 목록 없이는 구분 불가한 경로)", rawP);
+    // /ops 경로 삭제 — 다른 기기의 오프라인 복귀 op 와 같은 본문(OpLog._mkOp 모양)
+    const opsR = await P.api("POST", "/tables/deployments/" + P.DEP_ID + "/ops", { base_version: null, ops: [
+      { opId: "p146-del-a-" + ts, entity: "anno", action: "delete", id: AN.d2, data: null, ts: Date.now(), author: P.DESIGNER },
+      { opId: "p146-del-z-" + ts, entity: "zone", action: "delete", id: ZD2.id, data: null, ts: Date.now(), author: P.DESIGNER }] });
+    const rawO = await srvDepRow();
+    const tombs = { anno: parse(rawO.annotations).some((a) => a && a.id === AN.d2 && a._deleted), zone: parse(rawO.zones).some((z) => z && String(z.id) === ZD2.id && z._deleted) };
+    P.ok(opsR.status === 200 && tombs.anno && tombs.zone, "[del] /ops 로 삭제 — 서버 tombstone 남음", { status: opsR.status, tombs });
+    await bCatchUp(b, `!__T.State.annotations.some(function(a){ return a.id === ${J(AN.d2)}; }) && !__T.State.zones.some(function(z){ return String(z.id) === ${J(ZD2.id)}; })`, 10);
+    // A 복귀(사용자 조작 없음) → 동기화 끝 → 라이브폴·다음 저장 기회까지 준 뒤 판정
+    await aOffline(false);
+    const wd = await waitSynced(evSafe, 180000, "del");
+    await P.wait(2500);
+    await evSafe("__T.App._liveTick ? __T.App._liveTick() : null"); await P.wait(3500);
+    await waitSynced(evSafe, 60000, "del-after");
+    const S = await srvLive(), L = await localSets();
+    const sa = new Set(S.annos.map((a) => String(a.id))), sz = new Set(S.zones.map((z) => String(z.id)));
+    const la = new Set((L.annos || []).map((a) => a.id)), lz = new Set((L.zones || []).map((z) => z.id));
+    row("del", "주석: B 저장(PATCH)으로 지움 → A 오프라인 복귀 후 부활 0(서버·A 화면)", false, { srv: sa.has(AN.d1), local: la.has(AN.d1) }, !sa.has(AN.d1) && !la.has(AN.d1));
+    row("del", "영역: B 저장(PATCH)으로 지움 → A 오프라인 복귀 후 부활 0(서버·A 화면)", false, { srv: sz.has(ZD1.id), local: lz.has(ZD1.id) }, !sz.has(ZD1.id) && !lz.has(ZD1.id));
+    row("del", "주석: /ops 로 지움 → 부활 0(서버·A 화면)", false, { srv: sa.has(AN.d2), local: la.has(AN.d2) }, !sa.has(AN.d2) && !la.has(AN.d2));
+    row("del", "영역: /ops 로 지움 → 부활 0(서버·A 화면)", false, { srv: sz.has(ZD2.id), local: lz.has(ZD2.id) }, !sz.has(ZD2.id) && !lz.has(ZD2.id));
+    const kx = (S.annos.find((a) => a.id === AN.k) || {}).x;
+    row("del", "A 오프라인 주석 추가·수정 + 영역 추가 — 보존(삭제 규칙이 남의 것만 지움)", { add: AN.a, kx: 260, zone: ZA && ZA.id }, { add: sa.has(AN.a), kx, zone: ZA && sz.has(ZA.id), syncedMs: wd.ms }, sa.has(AN.a) && kx === 260 && ZA && sz.has(ZA.id));
+    row("del", "A 로컬 주석·영역 id = 서버", { a: [...la].sort(), z: [...lz].sort() }, { a: [...sa].sort(), z: [...sz].sort() }, J([...la].sort()) === J([...sa].sort()) && J([...lz].sort()) === J([...sz].sort()));
+    R.delDetail = { AN, ZD1, ZD2, ZA, wd };
+    save();
+  }
+
+  /* ═════════════ 6. zconc — 영역 동시 추가·수정(A 오프라인 · B 온라인) → 둘 다 보존 · 같은 영역은 나중 수정이 이김 ═════════════ */
+  if (PHASES.has("zconc")) {
+    await ensureADrawing();
+    await aOffline(false);
+    await waitSynced(evSafe, 90000, "pre-zconc");
+    const ts = Date.now().toString(36);
+    const ZA = await commitZoneVia(evSafe, "ZA-" + ts, { shape: "rect", x: 10, y: 70, w: 5, h: 5 });
+    const ZB = await commitZoneVia(evSafe, "ZB-" + ts, { shape: "rect", x: 18, y: 70, w: 5, h: 5 });
+    const ZC = await commitZoneVia(evSafe, "ZC-" + ts, { shape: "rect", x: 26, y: 70, w: 8, h: 8 });
+    await P.wait(2500);
+    await waitSynced(evSafe, 60000, "zconc-seed");
+    const b = await openDeviceB();
+    P.ok(await bCatchUp(b, `__T.State.zones.some(function(z){ return String(z.id) === ${J(ZC && ZC.id)}; })`), "[zconc] 기기 B 가 시드 영역을 받음");
+    await aOffline(true); await P.wait(1200);
+    // ZB: A 먼저(오프라인) · B 나중 → B 가 이김
+    await editZoneVia(evSafe, ZB.id, "z.label = 'A-ZB'");
+    await P.wait(400);
+    // ZA: B 먼저 · A 나중(오프라인) → A 가 이김 / ZC: B 만 수정(이름) — A 는 그 안에 핀만 둔다(파생 pinIds 변화는 수정이 아니다)
+    await editZoneVia(b.evSafe, ZA.id, "z.label = 'B-ZA'");
+    await editZoneVia(b.evSafe, ZC.id, "z.label = 'B-ZC'");
+    const BZ = await commitZoneVia(b.evSafe, "B새영역-" + ts, { shape: "rect", x: 34, y: 70, w: 5, h: 5 });
+    await srvWait((s) => s.zones.some((z) => z.label === "B-ZA") && s.zones.some((z) => z.label === "B-ZC") && s.zones.some((z) => BZ && String(z.id) === BZ.id));
+    await P.wait(800);
+    await editZoneVia(evSafe, ZA.id, "z.label = 'A-ZA'");
+    const pinInC = await placeVia(evSafe, 29, 73);
+    await P.wait(600);
+    const aZC = await evSafe(`(function(){ var z = __T.State.zones.find(function(z){ return String(z.id) === ${J(ZC.id)}; }); return z ? { label: z.label, pinIds: (z.pinIds || []).map(String), upd: z.updatedAt || null } : null; })()`);
+    const AZ = await commitZoneVia(evSafe, "A새영역-" + ts, { shape: "rect", x: 42, y: 70, w: 5, h: 5 });
+    await P.wait(1000);
+    await editZoneVia(b.evSafe, ZB.id, "z.label = 'B-ZB'");
+    await srvWait((s) => s.zones.some((z) => z.label === "B-ZB"));
+    // A 복귀
+    await aOffline(false);
+    const wz = await waitSynced(evSafe, 180000, "zconc");
+    await P.wait(2500);
+    const S = await srvLive();
+    const byId = new Map(S.zones.map((z) => [String(z.id), z]));
+    const lab = (z) => (byId.get(z && z.id) || {}).label;
+    row("zconc", "영역 동시 추가 — A 오프라인 새 영역 + B 온라인 새 영역 둘 다 보존", [AZ && AZ.id, BZ && BZ.id], [AZ && byId.has(AZ.id), BZ && byId.has(BZ.id)], AZ && BZ && byId.has(AZ.id) && byId.has(BZ.id));
+    row("zconc", "같은 영역(ZA) 두 기기 수정 → 나중(A 오프라인) 이 이김", "A-ZA", lab(ZA), lab(ZA) === "A-ZA");
+    row("zconc", "같은 영역(ZB) 두 기기 수정 → 나중(B 온라인) 이 이김", "B-ZB", lab(ZB), lab(ZB) === "B-ZB");
+    row("zconc", "ZC: B 이름 수정 보존 — A 가 그 안에 핀만 둔 것(파생 pinIds)은 수정으로 치지 않음", { label: "B-ZC", aLocalBefore: aZC, pin: pinInC && pinInC.id }, lab(ZC), lab(ZC) === "B-ZC" && aZC && aZC.pinIds.indexOf(String(pinInC && pinInC.id)) >= 0);
+    const L = await localSets();
+    const lz = (L.zones || []).map((z) => z.id + ":" + z.label).sort(), szs = S.zones.map((z) => String(z.id) + ":" + z.label).sort();
+    row("zconc", "A 로컬 영역(id·이름) = 서버", lz, szs, J(lz) === J(szs));
+    await bCatchUp(b, `__T.State.zones.some(function(z){ return z.label === 'A-ZA'; })`, 10);
+    const bz = ((await b.evSafe("__T.State.zones.map(function(z){ return String(z.id) + ':' + z.label; })")) || []).sort();
+    row("zconc", "B 화면 영역 = 서버(라이브 반영 후)", bz, szs, J(bz) === J(szs));
+    R.zconcDetail = { ZA, ZB, ZC, AZ, BZ, wz };
+    save();
+  }
+
+  /* ═════════════ 7. revundo — 개정 적용(A 반영) → A 오프라인 편집 → B 가 10분 안에 되돌림 → A 복귀: 역변환 / 순서 모름 → 검토 배지 ═════════════ */
+  if (PHASES.has("revundo")) {
+    await ensureADrawing();
+    await aOffline(false);
+    await waitSynced(evSafe, 90000, "pre-revundo");
+    const ts = Date.now().toString(36);
+    const U1 = await placeVia(evSafe, 24, 30), U2 = await placeVia(evSafe, 32, 30), U3 = await placeVia(evSafe, 40, 30);
+    const ZU = await commitZoneVia(evSafe, "ZU-" + ts, { shape: "rect", x: 50, y: 26, w: 6, h: 6 });
+    await P.wait(2500);
+    await waitSynced(evSafe, 60000, "revundo-seed");
+    const s0 = await srvLive();
+    const orig = new Map(s0.pins.map((p) => [String(p.id), p]));
+    const T = { a: 0.9, b: 0, c: 0, d: 0.9, e: 0, f: 0 };   // 배율만 — 좌표 단위(핀·영역 %, 주석 ‰)와 무관하게 역변환 판정이 같다
+    const pages = parse((await db.prepare("SELECT pages_data FROM deployments WHERE id = ?").bind(P.DEP_ID).first()).pages_data);
+    /** B(소유자) 개정 적용 → A 가 라이브폴(정본 _liveTick)로 개정 좌표를 받을 때까지 */
+    const applyRev = async (label) => {
+      const cur = await srvDepRow();
+      const ap = await P.api("POST", "/api/deployments/" + P.DEP_ID + "/revisions", { rev_label: label, pages_data: pages, transform: T, base_version: cur.version, file_name: "GA-" + label + ".pdf" });
+      let got = false;
+      for (let i = 0; i < 30 && ap.j && ap.j.version != null; i++) { await evSafe("__T.App._liveTick ? __T.App._liveTick() : null"); if (Number(await evSafe("__T.State.depVersion")) === Number(ap.j.version)) { got = true; break; } await P.wait(700); }
+      return { status: ap.status, id: ap.j && ap.j.id, version: ap.j && ap.j.version, aAdopted: got };
+    };
+    const undo = (rid) => P.api("POST", "/api/deployments/" + P.DEP_ID + "/revisions/" + rid + "/undo", {});
+    const near = (a, b) => Math.abs(Number(a) - Number(b)) < 0.01;
+    const inv = (v) => Number(v) / T.a;
+    // 7-a 정확한 역변환
+    const ap1 = await applyRev("Rev.C");
+    P.ok(ap1.status === 200 && ap1.aAdopted, "[revundo] 개정 적용 + A 화면 개정 좌표 반영(라이브폴)", ap1);
+    await aOffline(true); await P.wait(1200);
+    await editVia(evSafe, U1.id, "p.x = +p.x + 2; p.y = +p.y + 1");
+    await editVia(evSafe, U2.id, "p.label = 'UNDO-2'; p.labelManual = true");
+    const UN = await placeVia(evSafe, 60, 40);
+    await editZoneVia(evSafe, ZU.id, "z.x = +z.x + 2");
+    const AUN = "an-undo-" + ts;
+    await addAnnoVia(evSafe, { id: AUN, page: 1, type: "rect", color: "#1f2937", x: 500, y: 300, w: 40, h: 20 });
+    await P.wait(1500);
+    const aL = new Map(((await evSafe(PINS)) || []).map((p) => [p.id, p]));
+    const aLs = await localSets();
+    const aZU = (aLs.zones || []).find((z) => z.id === ZU.id), aAN = (aLs.annos || []).find((a) => a.id === AUN);
+    const ud = await undo(ap1.id);
+    P.ok(ud.status === 200 && ud.j && ud.j.ok, "[revundo] B 가 10분 안에 되돌림(서버 200)", ud);
+    await aOffline(false);
+    const wu = await waitSynced(evSafe, 180000, "revundo");
+    await P.wait(2500);
+    const S = await srvLive();
+    const sp = new Map(S.pins.map((p) => [String(p.id), p]));
+    const xy = (p) => p && { x: p.x, y: p.y, label: p.label, rev: p.revReview || null };
+    const u1 = sp.get(U1.id), u2 = sp.get(U2.id), u3 = sp.get(U3.id), un = sp.get(UN && UN.id);
+    const l1 = aL.get(U1.id), ln = aL.get(UN && UN.id);
+    row("revundo", "U1(A 오프라인 이동, 개정 좌표계) → 되돌린 도면 좌표로 역변환", { x: inv(l1.x), y: inv(l1.y) }, xy(u1), u1 && near(u1.x, inv(l1.x)) && near(u1.y, inv(l1.y)));
+    row("revundo", "U2(A 라벨만 수정) → 라벨 보존 + 원래 좌표", { label: "UNDO-2", x: orig.get(U2.id).x, y: orig.get(U2.id).y }, xy(u2), u2 && u2.label === "UNDO-2" && near(u2.x, orig.get(U2.id).x) && near(u2.y, orig.get(U2.id).y));
+    row("revundo", "UN(A 오프라인 새 핀) → 역변환", { x: inv(ln.x), y: inv(ln.y) }, xy(un), un && near(un.x, inv(ln.x)) && near(un.y, inv(ln.y)));
+    row("revundo", "U3(A 미수정) → 원래 좌표 그대로", { x: orig.get(U3.id).x, y: orig.get(U3.id).y }, xy(u3), u3 && near(u3.x, orig.get(U3.id).x) && near(u3.y, orig.get(U3.id).y));
+    const zu = S.zones.find((z) => String(z.id) === ZU.id), an = S.annos.find((a) => a.id === AUN);
+    row("revundo", "영역 ZU(A 오프라인 이동) → 역변환", aZU && { x: inv(aZU.x), w: inv(aZU.w) }, zu && { x: zu.x, w: zu.w }, zu && aZU && near(zu.x, inv(aZU.x)) && near(zu.w, inv(aZU.w)));
+    row("revundo", "주석(A 오프라인 추가) → 역변환", aAN && { x: inv(aAN.x), w: inv(aAN.w) }, an && { x: an.x, w: an.w }, an && aAN && near(an.x, inv(aAN.x)) && near(an.w, inv(aAN.w)));
+    const Lp = new Map(((await evSafe(PINS)) || []).map((p) => [p.id, p]));
+    const lu1 = Lp.get(U1.id);
+    row("revundo", "A 화면도 역변환 좌표(U1)", { x: inv(l1.x), y: inv(l1.y) }, lu1 && { x: lu1.x, y: lu1.y }, lu1 && near(lu1.x, inv(l1.x)) && near(lu1.y, inv(l1.y)));
+    // 7-b 되돌림 시점을 모르는 기록(0041 전 되돌림) — 순서가 섞였는지 알 수 없으므로 좌표를 추정 변환하지 않고 검토 배지
+    const ap2 = await applyRev("Rev.E");
+    P.ok(ap2.status === 200 && ap2.aAdopted, "[revundo] 개정 2 적용 + A 반영", ap2);
+    await aOffline(true); await P.wait(1200);
+    await editVia(evSafe, U3.id, "p.x = +p.x + 1; p.y = +p.y + 1");
+    await P.wait(1500);
+    const l3 = ((await evSafe(PINS)) || []).find((p) => p.id === U3.id);
+    const ud2 = await undo(ap2.id);
+    let legacy = "ok";
+    try { await P.run("UPDATE drawing_revisions SET reverted_version = NULL WHERE id = ?", [ap2.id]); } catch (e) { legacy = "no column: " + String(e.message).slice(0, 80); }
+    await aOffline(false);
+    const wu2 = await waitSynced(evSafe, 180000, "revundo-amb");
+    await P.wait(2500);
+    const S2 = await srvLive();
+    const u3b = S2.pins.find((p) => String(p.id) === U3.id);
+    const lu3 = await evSafe(`(function(){ var p = __T.State.pins.find(function(p){ return String(p.id) === ${J(U3.id)}; }); var m = document.querySelector('.pin-marker[data-id="' + ${J(U3.id)} + '"] .pin-rev-badge, [data-pin-id="' + ${J(U3.id)} + '"] .pin-rev-badge'); return p ? { x: p.x, y: p.y, rev: p.revReview || null, badge: !!m } : null; })()`);
+    row("revundo", "되돌림 시점 모름 → 좌표 추정 변환 0 + 검토 표시(revReview.ambiguous) · A 화면에도", { x: l3.x, y: l3.y, ambiguous: true, undo: ud2.status, legacy },
+      { srv: xy(u3b), local: lu3 }, u3b && near(u3b.x, l3.x) && near(u3b.y, l3.y) && u3b.revReview && u3b.revReview.ambiguous === true && lu3 && lu3.rev && lu3.rev.ambiguous === true);
+    R.revundoDetail = { ap1, ap2, wu, wu2, legacy };
+    save();
+  }
+
   /* ═════════════ 4. 실패·복구 경로 ═════════════ */
   if (PHASES.has("fail")) {
     await ensureADrawing();
@@ -657,7 +869,7 @@ export default async function explore(P) {
   }
 
   /* ── 요약 표 ── */
-  for (const t of ["matrix", "conc", "rev", "fail"]) {
+  for (const t of ["matrix", "conc", "rev", "fail", "del", "zconc", "revundo"]) {
     if (!R[t].length) continue;
     console.log("\n[P146] ── " + t + " " + R[t].filter((r) => r.match).length + "/" + R[t].length + " PASS");
     R[t].forEach((r) => console.log("   " + (r.match ? "PASS" : "FAIL") + " | " + r.item));

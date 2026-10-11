@@ -423,6 +423,9 @@
       const z = (State.zones || []).find(x => x.id === id);
       if (!z) return false;
       if (!await Prompt.confirm("영역 삭제", `영역 "${z.label}"을(를) 삭제할까요?`)) return false;
+      // 🔴 [WO 20261011-offmerge] tombstone(App._zoneTombstones) — 핀(_removePins)·주석(_removeAnnos)과 같은 규칙. 저장 전 서버가 더 새로우면
+      //   (409·라이브폴·오프라인 복귀) 병합(_mergeZones)이 서버본의 이 영역을 되살렸다. 오프라인 delete op 근거도 된다.
+      if (typeof App !== "undefined" && App._zoneTombstones) App._zoneTombstones()[String(id)] = Date.now();
       State.zones = (State.zones || []).filter(x => x.id !== id);
       if (this._active === id) this._active = null;
       this.render();

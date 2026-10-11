@@ -425,9 +425,11 @@
        부르고, 서버본·draft 가 State 에 들어오는 지점은 baseline 으로 "이 내용이 기준" 을 기록한다(객체 단위 WeakMap —
        새로 파싱된 객체는 기준이 없으니 옛 기록이 새 객체를 오염시키지 못한다). updatedAt 은 비교 대상에서 뺀다. */
     _pinSig: new WeakMap(),
-    _sigOf(p) {
+    //  [WO 20261011-offmerge] ignore = 비교에서 뺄 파생 필드(영역 pinIds — 핀을 옮기기만 해도 다시 계산된다). 핀·주석·영역이 같은 함수를 쓴다.
+    _sigOf(p, ignore) {
       const q = Object.assign({}, p);
       delete q.updatedAt;
+      if (ignore) ignore.forEach(k => { delete q[k]; });
       try { return JSON.stringify(q); } catch (e) { return null; }
     },
     /** 핀 1개의 수정 시각을 지금으로 — 단조 증가(같은 ms 두 번이어도 뒤가 크다). */
@@ -438,16 +440,16 @@
       return pin;
     },
     /** 서버본/draft 를 State 에 올린 직후·병합 직후 — 현재 내용을 기준으로 기록(찍지 않음). */
-    baseline(pins) {
-      (Array.isArray(pins) ? pins : []).forEach(p => { if (p && typeof p === "object") this._pinSig.set(p, this._sigOf(p)); });
+    baseline(pins, ignore) {
+      (Array.isArray(pins) ? pins : []).forEach(p => { if (p && typeof p === "object") this._pinSig.set(p, this._sigOf(p, ignore)); });
       return pins;
     },
     /** 기준 이후 내용이 바뀐 핀만 touch. 기준이 없는 객체(새로 만든 핀)는 기준만 기록. @returns 찍은 개수 */
-    stampChanged(pins, now) {
+    stampChanged(pins, now, ignore) {
       let n = 0;
       (Array.isArray(pins) ? pins : []).forEach(p => {
         if (!p || typeof p !== "object") return;
-        const s = this._sigOf(p), prev = this._pinSig.get(p);
+        const s = this._sigOf(p, ignore), prev = this._pinSig.get(p);
         if (prev !== undefined && prev !== s) { this.touch(p, now); n++; }
         this._pinSig.set(p, s);
       });

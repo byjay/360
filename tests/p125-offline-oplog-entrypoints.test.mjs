@@ -57,7 +57,8 @@ const MUTS = {
   // [oplog2] PinActionPop 라벨 저장을 종전처럼 _markDirty 만 → E8 이 FAIL 해야 한다
   papdirty: ["pap", "      pin.label = v;\n      PinActionPop._commitLocal();", "      pin.label = v;\n      if (typeof App !== \"undefined\" && App._markDirty) App._markDirty();"],
   // [oplog2] 주석을 종전처럼 서버본으로 덮어쓰기 → E9 가 FAIL 해야 한다
-  annooverwrite: ["app", "if (Array.isArray(srvAnnos)) State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()));", "if (Array.isArray(srvAnnos)) State.annotations = this._live(srvAnnos);"],
+  // [WO 20261011-offmerge] 주석 병합 줄이 기준 목록 인자를 받게 됐다(대상 문자열만 갱신 — 되돌리는 내용은 같다: 서버본으로 덮어쓰기)
+  annooverwrite: ["app", "State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()), State.annoBaseIds);", "State.annotations = this._live(srvAnnos);"],
   // [annodel] 주석 delete op 기록 제거 → E10/E11 이 FAIL 해야 한다
   noannodel: ["offline", "if (Array.isArray(prevA)) { try { await OpLog.recordDelta(\"anno\", depId, prevA, JSON.parse(annoJ), tombA); } catch (e) {} }", "/* 뮤테이션: 주석 기록 제거 */"],
   // [annodel] 삭제 공유 지점이 tombstone 을 안 남김 → E10/E11/E12 가 FAIL 해야 한다
@@ -65,7 +66,8 @@ const MUTS = {
   // [annodel] 병합이 내 tombstone 을 무시 → E12(라이브폴·409) 가 FAIL 해야 한다
   // [annodel] 서버 tombstone 항목 재삭제 방지 제거 → E13 이 FAIL 해야 한다
   redel: ["offline", "if (p && p.id != null && !p._deleted && !nextIds.has(", "if (p && p.id != null && !nextIds.has("],
-  mergeignoretomb: ["app", "        .concat((tombIds || []).map(String)));", "        );"],
+  // [WO 20261011-offmerge] 내 tombstone 합치기가 핀·주석·영역 공유 본체(_mergeEntities)로 옮겨졌다 — 같은 것을 끈다(내 tombstone 무시)
+  mergeignoretomb: ["app", "const tomb = new Set((tombIds || []).map(String).concat(srvTomb));", "const tomb = new Set(srvTomb);"],
 };
 const MUT = process.env.P125_MUT || "";
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }

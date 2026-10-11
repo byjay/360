@@ -251,7 +251,10 @@ function makeFlushDraftsSandbox(patchRes) {
     // [WO 20260930-lww] _mergePins 가 병합 결과를 수정 감지 기준으로 기록(_pinsSeen)하게 됐다 — 같은 원칙으로 실 소스. assertion 무변경.
     "_pinsSeen(arr) {",
     // [WO 20261010-offmatrix] _draftVsServer 가 주석 병합 SoT(_mergeAnnos)를 부른다 — 같은 원칙으로 실 소스. assertion 무변경.
-    "_mergeAnnos(srvAnnos, localAnnos, tombIds) {"]
+    // [WO 20261011-offmerge] 핀·주석·영역 병합이 공유 본체(_mergeEntities)·영역 병합(_mergeZones)·수정 감지 기준(_seen)·필드 표(_MERGE_KINDS)를
+    //   쓰게 됐고 _mergeAnnos 가 기준 목록 인자를 받는다 — 같은 원칙으로 실 소스(시그니처 needle 만 갱신). assertion 무변경.
+    "_mergeAnnos(srvAnnos, localAnnos, tombIds, baseIds) {", "_mergeEntities(srvArr, localArr, baseIds, tombIds) {",
+    "_mergeZones(srvZones, localZones, tombIds, baseIds) {", "_seen(kind, arr) {", "_MERGE_KINDS: {"]
     .map((h) => "  " + extractBalanced(appSrc, h) + ",\n").join("");
   const objSrc = "const __appTest = {\n" +
     "  _deckIdOfKey() { return 'deck1'; },\n" +

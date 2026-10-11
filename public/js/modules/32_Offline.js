@@ -217,17 +217,19 @@
      *  upsert = 이전 스냅샷 대비 새로 생기거나 바뀐 항목. delete = 이전 스냅샷엔 있고 지금 없으며 **명시 tombstone**
      *  (delIds — 사용자가 실제로 지운 id, App._annoTombstones)에 든 항목만. 스냅샷 차이만으로는 지우지 않는다
      *  (추정 삭제 금지 — 서버 삭제는 이 delete op → 서버 /ops tombstone 경로로만). 같은 내용 연속 op 는 건너뛴다. */
-    async recordDelta(entity, depId, prevArr, nextArr, delIds) {
+    //  [WO 20261011-offmerge] ignore = 변경 판정에서 뺄 파생 필드(영역 pinIds — 핀만 옮겨도 다시 계산된다. App._MERGE_KINDS 와 같은 목록).
+    async recordDelta(entity, depId, prevArr, nextArr, delIds, ignore) {
       if (!depId || !Array.isArray(prevArr) || !Array.isArray(nextArr)) return 0;
+      const sig = (p) => { if (!ignore) return JSON.stringify(p); const q = Object.assign({}, p); ignore.forEach((k) => { delete q[k]; }); return JSON.stringify(q); };
       const prevJ = new Map();
-      prevArr.forEach((p) => { if (p && p.id != null) prevJ.set(String(p.id), JSON.stringify(p)); });
+      prevArr.forEach((p) => { if (p && p.id != null) prevJ.set(String(p.id), sig(p)); });
       const changed = [];
       const nextIds = new Set();
       nextArr.forEach((p) => {
         if (!p || p.id == null || p._deleted) return;
         nextIds.add(String(p.id));
         const j = JSON.stringify(p);
-        if (prevJ.get(String(p.id)) !== j) changed.push({ id: p.id, j });
+        if (prevJ.get(String(p.id)) !== sig(p)) changed.push({ id: p.id, j });
       });
       const del = new Set((delIds || []).map(String));
       const gone = [];
@@ -306,8 +308,18 @@
         const tombA = (typeof App !== "undefined" && App._annoTombstones) ? Object.keys(App._annoTombstones()) : [];
         if (Array.isArray(prevA)) { try { await OpLog.recordDelta("anno", depId, prevA, JSON.parse(annoJ), tombA); } catch (e) {} }
       }
+      // 🔴 [WO 20261011-offmerge] 영역도 같은 지점·같은 규칙 — 종전엔 생성·삭제만 Zones 가 개별 기록해 오프라인 **수정**(이름·도형)은
+      //   op 0건이었다(draft PATCH 가 실패하고 /ops 만 성공하면 수정 유실). 같은 내용 연속 op 는 recordDelta 가 건너뛴다.
+      const zoneJ = JSON.stringify(State.zones || []);
+      if (typeof navigator !== "undefined" && !navigator.onLine && typeof dep.zones === "string") {
+        let prevZ = null;
+        try { prevZ = JSON.parse(dep.zones); } catch (e) { prevZ = null; }
+        const tombZ = (typeof App !== "undefined" && App._zoneTombstones) ? Object.keys(App._zoneTombstones()) : [];
+        const ignZ = (typeof App !== "undefined" && App._MERGE_KINDS) ? App._MERGE_KINDS.zone.ignore : null;
+        if (Array.isArray(prevZ)) { try { await OpLog.recordDelta("zone", depId, prevZ, JSON.parse(zoneJ), tombZ, ignZ); } catch (e) {} }
+      }
       dep.pins = nextJ;
-      dep.zones = JSON.stringify(State.zones || []);
+      dep.zones = zoneJ;
       dep.annotations = annoJ;
       await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
     });
