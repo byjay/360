@@ -5737,6 +5737,11 @@
         return;
       }
 
+      // [WO 20261011-viewmode] 마스터: "배포는 체커보드와 360 모드 각각 가능하게" — 범위 선택(구역·영역)은 그대로,
+      //   핀 모드만 고른다. 취소하면 배포하지 않는다(실수로 전체 공개 방지).
+      const depMode = await this._pickDeployMode();
+      if (depMode === "__cancel__") return;
+
       btn.disabled = true; btn.textContent = "배포 중...";
       status.classList.add("hidden"); status.classList.remove("error");
 
@@ -5773,14 +5778,31 @@
         let _origin = location.origin;
         const _m = _origin.match(/^https?:\/\/[a-f0-9]{6,}\.(scan360\.pages\.dev)$/i);
         if (_m) _origin = "https://" + _m[1];
-        const viewerUrl = _origin + location.pathname +
-          "?mode=viewer" + (depId ? "&d=" + encodeURIComponent(depId) : "");
+
+        // [WO 20261011-viewmode] 모드별 링크 발급(view_links) — 실패해도 하위호환 링크(둘다)로 배포는 끝낸다.
+        let linkId = null, linkErr = "";
+        try {
+          const lr = await fetch("/api/view-links", {
+            method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, Auth.headers()),
+            body: JSON.stringify({ dep_id: depId, mode: depMode || null })
+          });
+          const lj = await lr.json();
+          if (lr.ok && lj && lj.id) linkId = lj.id; else linkErr = (lj && lj.error) || ("HTTP " + lr.status);
+        } catch (e) { linkErr = String(e && e.message || e); }
+
+        const viewerUrl = _origin + location.pathname + "?mode=viewer" +
+          (depId ? "&d=" + encodeURIComponent(depId) : "") +
+          (linkId ? "&lk=" + encodeURIComponent(linkId) : "");
+        const modeLabel = depMode === "checker" ? "CHECKER 전용" : depMode === "360" ? "360 전용" : "체커+360 전체";
         // [C-LOOP1 결함1] 공유가 목적인 시스템 → 원클릭 링크 복사 버튼 제공
         status.innerHTML =
-          "배포 완료! (" + pageCount + "페이지 / " + State.pins.length + "핀)<br>" +
+          "배포 완료! (" + pageCount + "페이지 / " + State.pins.length + "핀 · " + modeLabel + ")<br>" +
+          (linkErr ? "<span style='color:#f87171'>⚠ 모드 링크 발급 실패(" + UI.escapeHtml(linkErr) + ") — 구버전 링크(둘다)로 공유됩니다</span><br>" : "") +
           "뷰어 전용 링크:<br>" +
           "<a id='deploy-link' href='" + viewerUrl + "' target='_blank' style='color:#10b981;word-break:break-all'>" + viewerUrl + "</a><br>" +
-          "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>링크 복사</button>";
+          "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>링크 복사</button> " +
+          "<button id='btn-manage-links' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #93c5fd;background:transparent;color:#93c5fd;cursor:pointer;font-size:13px'>링크 관리</button> " +
+          "<button id='btn-view-manual' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #fbbf24;background:transparent;color:#fbbf24;cursor:pointer;font-size:13px'>매뉴얼 보기</button>";
         status.classList.remove("hidden");
         // 복사 버튼 핸들러 (clipboard API + execCommand 폴백)
         const copyBtn = document.getElementById("btn-copy-link");
@@ -5791,6 +5813,12 @@
             setTimeout(() => { copyBtn.textContent = "링크 복사"; }, 2200);
           });
         }
+        const mgBtn = document.getElementById("btn-manage-links");
+        if (mgBtn) mgBtn.addEventListener("click", () => this._openLinkManager(depId));
+        const manBtn = document.getElementById("btn-view-manual");
+        if (manBtn) manBtn.addEventListener("click", () => {
+          window.open(depMode === "360" ? "/manual/viewer-360.html" : depMode === "checker" ? "/manual/viewer-checker.html" : "/manual/viewer-checker.html", "_blank");
+        });
       } catch (e) {
         status.textContent = "배포 실패: " + e.message;
         status.classList.add("error");
@@ -5819,6 +5847,112 @@
         document.body.removeChild(ta);
         return ok;
       } catch (e) { return false; }
+    },
+
+    /** [WO 20261011-viewmode] 배포 전 모드 선택 — CHECKER만 / 360만 / 둘 다. 취소 → '__cancel__'.
+     *  구역·영역 범위(현재 구역/도면)는 그대로다 — 이 선택은 핀 모드(view_links.mode)만 바꾼다. */
+    _pickDeployMode() {
+      return new Promise((resolve) => {
+        let modal = document.getElementById("wm-deploy-mode-modal");
+        if (!modal) {
+          modal = document.createElement("div");
+          modal.id = "wm-deploy-mode-modal";
+          modal.className = "admin-gate hidden";
+          modal.setAttribute("role", "dialog");
+          modal.setAttribute("aria-modal", "true");
+          modal.innerHTML =
+            '<div class="admin-gate-backdrop"></div>' +
+            '<div class="admin-gate-card">' +
+              '<h2 class="admin-gate-title">배포 범위를 고르세요</h2>' +
+              '<p class="admin-gate-sub">열람 링크에 어떤 모드의 포인트를 보여줄지 정합니다. 구역·영역 범위는 지금 화면 그대로입니다.</p>' +
+              '<div class="admin-gate-actions" style="flex-direction:column;gap:8px">' +
+                '<button id="wm-dm-checker" class="admin-gate-btn" type="button" style="width:100%">CHECKER 만(번호·리더선·보고서)</button>' +
+                '<button id="wm-dm-360" class="admin-gate-btn" type="button" style="width:100%">360 만(360 뷰어·사진 이력)</button>' +
+                '<button id="wm-dm-both" class="admin-gate-btn primary" type="button" style="width:100%">둘 다(전체)</button>' +
+                '<button id="wm-dm-cancel" class="admin-gate-btn ghost" type="button" style="width:100%">취소</button>' +
+              '</div>' +
+            '</div>';
+          document.body.appendChild(modal);
+        }
+        const close = (v) => {
+          modal.classList.remove("on");
+          setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);
+          resolve(v);
+        };
+        document.getElementById("wm-dm-checker").onclick = () => close("checker");
+        document.getElementById("wm-dm-360").onclick = () => close("360");
+        document.getElementById("wm-dm-both").onclick = () => close(null);
+        document.getElementById("wm-dm-cancel").onclick = () => close("__cancel__");
+        modal.querySelector(".admin-gate-backdrop").onclick = () => close("__cancel__");
+        modal.classList.remove("hidden");
+        requestAnimationFrame(() => modal.classList.add("on"));
+      });
+    },
+
+    /** [WO 20261011-viewmode] 링크 관리 — 모드·발급일·폐기 상태 표시, 복사·폐기·QR. */
+    async _openLinkManager(depId) {
+      let modal = document.getElementById("wm-link-mgr-modal");
+      if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "wm-link-mgr-modal";
+        modal.className = "admin-gate hidden";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+        modal.innerHTML =
+          '<div class="admin-gate-backdrop"></div>' +
+          '<div class="admin-gate-card" style="max-width:520px;max-height:80vh;overflow:auto">' +
+            '<h2 class="admin-gate-title">뷰어 링크 관리</h2>' +
+            '<div id="wm-lm-list" style="text-align:left;font-size:13px"></div>' +
+            '<div class="admin-gate-actions"><button id="wm-lm-close" class="admin-gate-btn ghost" type="button">닫기</button></div>' +
+          '</div>';
+        document.body.appendChild(modal);
+        modal.querySelector(".admin-gate-backdrop").onclick = () => { modal.classList.remove("on"); setTimeout(() => modal.classList.add("hidden"), 200); };
+        document.getElementById("wm-lm-close").onclick = () => { modal.classList.remove("on"); setTimeout(() => modal.classList.add("hidden"), 200); };
+      }
+      const list = modal.querySelector("#wm-lm-list");
+      list.innerHTML = "불러오는 중...";
+      modal.classList.remove("hidden");
+      requestAnimationFrame(() => modal.classList.add("on"));
+      let origin = location.origin;
+      const _m = origin.match(/^https?:\/\/[a-f0-9]{6,}\.(scan360\.pages\.dev)$/i);
+      if (_m) origin = "https://" + _m[1];
+      try {
+        const r = await fetch("/api/view-links?dep_id=" + encodeURIComponent(depId), { headers: Auth.headers() });
+        const j = await r.json();
+        const rows = (j && j.data) || [];
+        if (!rows.length) { list.innerHTML = "<p>발급된 링크가 없습니다.</p>"; return; }
+        list.innerHTML = rows.map((row) => {
+          const url = origin + location.pathname + "?mode=viewer&d=" + encodeURIComponent(depId) + "&lk=" + encodeURIComponent(row.id);
+          const modeLabel = row.mode === "checker" ? "CHECKER 전용" : row.mode === "360" ? "360 전용" : "둘 다";
+          const when = row.created_at ? new Date(row.created_at).toLocaleString("ko-KR") : "";
+          const revoked = !!row.revoked_at;
+          return '<div style="border:1px solid #333;border-radius:8px;padding:10px;margin-bottom:8px' + (revoked ? ";opacity:.55" : "") + '">' +
+            '<div><b>' + UI.escapeHtml(modeLabel) + '</b>' + (revoked ? ' <span style="color:#f87171">(폐기됨)</span>' : '') + ' <span style="color:#888;font-size:11px">' + UI.escapeHtml(when) + '</span></div>' +
+            '<div style="word-break:break-all;font-size:12px;color:#93c5fd;margin:4px 0">' + UI.escapeHtml(url) + '</div>' +
+            '<div id="wm-lm-qr-' + row.id + '" style="width:120px;height:120px;margin:6px 0"></div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+              '<button type="button" class="wm-lm-copy" data-url="' + UI.escapeHtml(url) + '" style="padding:4px 10px;border-radius:6px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer">복사</button>' +
+              '<button type="button" class="wm-lm-qr" data-url="' + UI.escapeHtml(url) + '" data-target="wm-lm-qr-' + row.id + '" style="padding:4px 10px;border-radius:6px;border:1px solid #93c5fd;background:transparent;color:#93c5fd;cursor:pointer">QR 보기</button>' +
+              (revoked ? '' : '<button type="button" class="wm-lm-revoke" data-id="' + row.id + '" style="padding:4px 10px;border-radius:6px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer">폐기</button>') +
+            '</div></div>';
+        }).join("");
+        list.querySelectorAll(".wm-lm-copy").forEach((b) => b.addEventListener("click", async () => {
+          const ok = await App._copyToClipboard(b.getAttribute("data-url"));
+          b.textContent = ok ? "복사됨!" : "실패"; setTimeout(() => { b.textContent = "복사"; }, 1800);
+        }));
+        list.querySelectorAll(".wm-lm-qr").forEach((b) => b.addEventListener("click", async () => {
+          const box = document.getElementById(b.getAttribute("data-target"));
+          if (!box) return;
+          if (typeof QrPrint === "undefined") { box.textContent = "QR 라이브러리 없음"; return; }
+          try { const lib = await QrPrint._lib(); box.innerHTML = QrPrint.svgFor(lib, b.getAttribute("data-url")); }
+          catch (e) { box.textContent = "QR 생성 실패"; }
+        }));
+        list.querySelectorAll(".wm-lm-revoke").forEach((b) => b.addEventListener("click", async () => {
+          if (!(await Prompt.confirm("링크 폐기", "이 링크로는 더 이상 열람할 수 없습니다. 계속할까요?"))) return;
+          await fetch("/api/view-links/" + encodeURIComponent(b.getAttribute("data-id")) + "/revoke", { method: "POST", headers: Auth.headers() });
+          this._openLinkManager(depId);
+        }));
+      } catch (e) { list.innerHTML = "<p>링크 목록을 불러오지 못했습니다.</p>"; }
     },
 
     /* ── 뷰어: 최신 배포본 자동 로드 ── */
@@ -5939,6 +6073,10 @@
         if (!Array.isArray(pages) || pages.length === 0) pages = [latest.drawing_data];
 
         State.currentDeploymentId = latest.id || null;  // 노트/협업 연결
+        // [WO 20261011-viewmode] 링크 모드('checker'|'360'|null=둘다) — 서버가 pins 를 이미 걸렀다(SoT).
+        //   메뉴 쪽은 이 값으로 모드 전용 항목(data-vmode)을 보조로 숨긴다(데이터는 어차피 서버가 거름 — 이중 방어).
+        State.viewMode = latest.view_mode || null;
+        try { if (typeof UI !== "undefined" && UI.applyViewMode) UI.applyViewMode(State.viewMode); } catch (e) {}
         // [N4] 설계자 재진입: 이후 편집이 새 배포본을 만들지 않고 이 배포본을 갱신하도록
         if (projectForDesigner && latest.id) { State.autoSaveDepId = latest.id; State.depVersion = (latest.version != null ? Number(latest.version) : 0); }
         State.fileType   = "image";

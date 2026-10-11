@@ -14,6 +14,19 @@
     enable(id)     { this.$(id).disabled = false; },
     disable(id)    { this.$(id).disabled = true; },
 
+    /** [WO 20261011-viewmode] 모드별 열람 링크 — data-vmode="checker"|"360" 를 단 요소를 모드에 안 맞으면 숨긴다.
+     *  🔴 보조 방어일 뿐이다 — 데이터(핀) 필터는 서버(mapDeploymentFor)가 이미 한다(화면만 숨기면 데이터가
+     *  그대로 내려가는 결함을 반복하지 않는다). mode=null(둘다·비링크)이면 전부 보인다. */
+    applyViewMode(mode) {
+      try {
+        document.querySelectorAll("[data-vmode]").forEach((el) => {
+          const want = el.getAttribute("data-vmode");
+          const show = !mode || want === mode;
+          el.classList.toggle("hidden", !show);
+        });
+      } catch (e) {}
+    },
+
     showScreen(name) {
       // [지휘자 2026-10-08 재현] 화면 전환 = 모든 라우트 변경의 공유 지점 — 열린 Prompt 모달을
       // 여기 한 곳에서 취소로 닫는다(다른 화면/프로젝트까지 떠 있던 결함, §G-2-5 공유 함수 1곳).

@@ -147,20 +147,25 @@
      *  🔴 _autoDesignerEntry 의 kind='viewer' 조건과 **같은 두 가지**여야 한다(p48·p61 계약 문구를 보존하려고 거기는 원형 유지).
      *  여기에 없는 링크 유형은 로그인 게이트로 간다(안전한 쪽으로 실패). */
     _isViewLink() {
-      try { if (new URLSearchParams(location.search).get("d")) return true; } catch (e) {}
+      try { const q = new URLSearchParams(location.search); if (q.get("d") || q.get("lk")) return true; } catch (e) {}
       return typeof ShareLink !== "undefined" && !!ShareLink.token();
     },
 
-    /** [WO 20261009-readacl] 현재 열람 링크의 식별자 — 서버 auto-entry 에 보내는 값({d}|{t})과 토큰-링크 짝 기록의 단일 소스.
-     *  링크가 아니면 null. 판정 기준은 _isViewLink 와 같은 두 가지(?d= · /srview 토큰). */
+    /** [WO 20261009-readacl] 현재 열람 링크의 식별자 — 서버 auto-entry 에 보내는 값({d}|{t}|{lk})과 토큰-링크 짝 기록의 단일 소스.
+     *  링크가 아니면 null. 판정 기준은 _isViewLink 와 같다(?d= · ?lk= · /srview 토큰).
+     *  [WO 20261011-viewmode] lk(모드별 발급 링크 id) 가 있으면 d 보다 우선 — 서버가 lk 로 dep_id·mode 를 정한다. */
     _viewLinkParams() {
-      try { const d = new URLSearchParams(location.search).get("d"); if (d) return { d }; } catch (e) {}
+      try {
+        const q = new URLSearchParams(location.search);
+        const lk = q.get("lk"); if (lk) return { lk };
+        const d = q.get("d"); if (d) return { d };
+      } catch (e) {}
       const t = (typeof ShareLink !== "undefined") ? ShareLink.token() : null;
       return t ? { t } : null;
     },
     _viewLinkKey() {
       const p = this._viewLinkParams();
-      return p ? (p.d ? "d:" + p.d : "t:" + p.t) : null;
+      return p ? (p.lk ? "lk:" + p.lk : p.d ? "d:" + p.d : "t:" + p.t) : null;
     },
     /** 열람 토큰을 이 링크와 짝지어 기록(다음 진입 때 다른 링크면 버린다). */
     _bindViewToken() {

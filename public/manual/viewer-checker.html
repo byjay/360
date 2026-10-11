@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEASTAR 360 — CHECKER 뷰어 사용 설명서</title>
+<style>
+  :root { --ink:#13171c; --sub:#44505c; --line:#d8dee4; --accent:#b45309; --bg:#ffffff; --chip:#fef3e8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif; line-height:1.55; }
+  .wrap { max-width:860px; margin:0 auto; padding:28px 20px 80px; }
+  header.top { border-bottom:3px solid var(--accent); padding-bottom:14px; margin-bottom:22px; }
+  header.top h1 { font-size:22px; margin:0 0 6px; color:var(--ink); }
+  header.top p { margin:0; color:var(--sub); font-size:13px; }
+  .badge { display:inline-block; background:var(--chip); color:var(--accent); font-weight:700; font-size:12px; padding:3px 10px; border-radius:999px; margin-right:6px; }
+  nav.toc { background:#faf8f5; border:1px solid var(--line); border-radius:10px; padding:14px 18px; margin:0 0 26px; font-size:13px; }
+  nav.toc a { color:#1d4ed8; text-decoration:none; }
+  nav.toc li { margin:3px 0; }
+  section.step { margin:0 0 34px; break-inside: avoid; page-break-inside: avoid; }
+  section.step h2 { font-size:17px; margin:0 0 4px; color:var(--ink); border-left:5px solid var(--accent); padding-left:10px; }
+  section.step .desc { color:var(--sub); font-size:13.5px; margin:6px 0 10px; }
+  figure { margin:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#f7f5f1; }
+  figure img { display:block; width:100%; height:auto; }
+  figcaption { font-size:12px; color:var(--sub); padding:8px 12px; border-top:1px solid var(--line); background:#fff; }
+  .callout-list { list-style:none; margin:10px 0 0; padding:0; font-size:13px; }
+  .callout-list li { display:flex; gap:8px; align-items:flex-start; margin:4px 0; }
+  .num { flex:0 0 auto; width:22px; height:22px; border-radius:50%; background:#dc2626; color:#fff; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; }
+  .note { background:#fff7ed; border:1px solid #fcd9a8; border-radius:8px; padding:10px 14px; font-size:13px; color:#7c4a03; margin:10px 0 0; }
+  .pending { background:#f1f5f9; border:1px dashed #94a3b8; border-radius:8px; padding:10px 14px; font-size:13px; color:#475569; }
+  .faq dt { font-weight:700; margin-top:14px; }
+  .faq dd { margin:4px 0 0; color:var(--sub); font-size:13.5px; }
+  .meta { font-size:11px; color:#8a97a3; margin-top:30px; border-top:1px solid var(--line); padding-top:10px; }
+  .btnbar { margin: 10px 0 0; }
+  .btnbar a { display:inline-block; padding:8px 14px; border-radius:8px; border:1px solid var(--accent); color:var(--accent); text-decoration:none; font-size:13px; font-weight:700; margin-right:8px; }
+  @media print {
+    body { font-size:12px; }
+    .wrap { max-width:none; padding:0 8mm; }
+    nav.toc { display:none; }
+    section.step { page-break-inside: avoid; }
+    a[href]:after { content:""; }
+    @page { size:A4; margin:14mm; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="badge">CHECKER 전용 열람 링크</span>
+    <h1>SEASTAR 360 — CHECKER 뷰어 사용 설명서</h1>
+    <p>이 설명서는 "CHECKER 만" 모드로 발급된 열람 링크를 받은 분을 위한 것입니다. 이 링크에서는 번호가 매겨진 점검 포인트(핀)와 리더선만 보이고, 360 사진·360 뷰어는 보이지 않습니다(서버가 데이터 단계에서 걸러서 보냅니다).</p>
+    <div class="btnbar"><a href="/manual/viewer-360.html">360 전용 설명서 보기</a></div>
+  </header>
+
+  <nav class="toc">
+    <b>차례</b>
+    <ol>
+      <li><a href="#s1">링크로 들어가기</a></li>
+      <li><a href="#s2">도면 이동·확대/축소</a></li>
+      <li><a href="#s3">사이드바(트리) 열기</a></li>
+      <li><a href="#s4">번호 핀 보기</a></li>
+      <li><a href="#s5">핀을 눌러 상세 보기</a></li>
+      <li><a href="#s6">전체 핀 목록·보고서</a></li>
+      <li><a href="#s7">요청·질문 보내기</a></li>
+      <li><a href="#s8">도움말("?") 모드</a></li>
+      <li><a href="#s9">오프라인 보관 · 앱 설치</a></li>
+      <li><a href="#faq">자주 묻는 질문</a></li>
+    </ol>
+  </nav>
+
+  <section class="step" id="s1">
+    <h2>1. 링크로 들어가기</h2>
+    <p class="desc">전달받은 열람 링크(https://…?mode=viewer&d=…&lk=…)를 누르면 로그인 없이 바로 도면이 열립니다. 상단에 <b>CHECKER</b> 배지와 포인트 수가 표시됩니다 — 이 숫자가 CHECKER 포인트 개수입니다(360 포인트는 세지 않습니다).</p>
+    <figure><img src="img/checker/01-entry.png" alt="CHECKER 링크로 들어간 첫 화면. 상단에 CHECKER 3 배지가 보이고 도면 위에 번호 핀 3개가 찍혀 있다."></figure>
+    <figcaption>① 도면 위 번호 핀 — 이 링크에는 CHECKER 핀만 보입니다.</figcaption>
+  </section>
+
+  <section class="step" id="s2">
+    <h2>2. 도면 이동·확대/축소</h2>
+    <p class="desc">상단 도구줄의 돋보기(+/−) 버튼이나 마우스 휠로 확대·축소합니다. 화면을 드래그하면 도면이 움직입니다. 휴대폰에서는 두 손가락으로 벌리거나 모아 확대·축소(핀치 줌)합니다. <b>[맞춤]</b> 버튼을 누르면 도면 전체가 화면에 맞춰집니다.</p>
+  </section>
+
+  <section class="step" id="s3">
+    <h2>3. 사이드바(트리) 열기</h2>
+    <p class="desc">좌상단 메뉴 아이콘을 누르면 프로젝트 → 구역 → 영역 구조의 트리가 열립니다. 트리에서 다른 구역을 선택하면 그 구역의 CHECKER 포인트로 화면이 바뀝니다.</p>
+    <figure><img src="img/checker/02-sidebar-tree.png" alt="사이드바 트리가 열린 화면"></figure>
+    <figcaption>사이드바(트리) — 구역·영역을 눌러 이동합니다.</figcaption>
+  </section>
+
+  <section class="step" id="s4">
+    <h2>4. 번호 핀 보기</h2>
+    <p class="desc">도면 위 주황색 물방울 모양이 CHECKER 번호 핀입니다. 숫자는 점검 순서/번호입니다. 리더선이 있는 핀은 번호 풍선이 핀에서 선으로 이어져 표시됩니다(겹치는 핀을 구분하기 위함).</p>
+    <figure><img src="img/checker/03-checker-pins.png" alt="도면 위에 번호 핀 1,2,3 이 찍혀 있고 상단에 CHECKER 3 배지가 보인다."></figure>
+    <figcaption>① CHECKER 번호 핀 — 이 링크에서는 360 핀이 전혀 섞이지 않습니다.</figcaption>
+  </section>
+
+  <section class="step" id="s5">
+    <h2>5. 핀을 눌러 상세 보기</h2>
+    <p class="desc">핀을 누르면 그 포인트의 정보 카드가 열립니다. CHECKER 포인트는 사진을 등록하지 않는 모드이므로 "번호만 · 사진은 360 모드에서"라는 안내가 보일 수 있습니다 — 정상입니다. 카드 아래에서 메모·요청을 남길 수 있습니다.</p>
+    <figure><img src="img/checker/04-pin-popup.png" alt="핀을 눌러 정보 카드가 열린 화면"></figure>
+    <figcaption>① 포인트 정보 카드.</figcaption>
+  </section>
+
+  <section class="step" id="s6">
+    <h2>6. 전체 핀 목록·보고서</h2>
+    <p class="desc">상단 <b>[전체 핀]</b> 버튼을 누르면 이 구역의 CHECKER 포인트를 목록으로 볼 수 있습니다(번호·이름으로 검색 가능). 보고서·인쇄는 <b>[전체 기능]</b> 메뉴의 보고서 항목에서 PDF로 저장하거나 인쇄할 수 있습니다. 보고서에도 CHECKER 포인트만 담깁니다.</p>
+    <div class="pending">이 설명서 버전에서는 핀 목록·보고서 캡처가 자동화 스크립트로 안정적으로 재현되지 않아 그림을 아직 못 실었습니다 — 다음 갱신에서 추가합니다. (자동 매뉴얼 캡처 build-tools/capture-viewer-manual.mjs 재실행 필요)</div>
+  </section>
+
+  <section class="step" id="s7">
+    <h2>7. 요청·질문 보내기</h2>
+    <p class="desc">화면 아래 <b>[요청·질문]</b> 버튼을 누르면 담당자에게 메시지를 보낼 수 있습니다. 특정 포인트에 대한 요청이면 그 핀을 먼저 연 뒤 작성하면 포인트가 함께 기록됩니다.</p>
+  </section>
+
+  <section class="step" id="s8">
+    <h2>8. 도움말("?") 모드</h2>
+    <p class="desc">화면 아래 물음표(?) 버튼을 누르면 설명이 필요한 버튼 옆에 작은 "?" 표시가 나타납니다. 그 표시를 누르면 그 버튼의 쓰임이 바로 뜹니다. 다시 누르면 꺼집니다.</p>
+    <figure><img src="img/checker/06-help-mode.png" alt="도움말 모드가 켜져 버튼 옆에 물음표 배지가 보이는 화면"></figure>
+    <figcaption>도움말 모드 — 화면 곳곳의 "?" 배지를 눌러보세요.</figcaption>
+  </section>
+
+  <section class="step" id="s9">
+    <h2>9. 오프라인 보관 · 앱 설치</h2>
+    <p class="desc">한 번 열어본 도면은 인터넷이 끊겨도 다시 볼 수 있도록 자동으로 보관됩니다. 홈 화면에 앱처럼 설치하려면 브라우저 메뉴의 "홈 화면에 추가"(iOS) 또는 설치 안내 배너(Android/PC)를 사용하세요.</p>
+  </section>
+
+  <section class="faq" id="faq">
+    <h2 style="border-left:5px solid var(--accent);padding-left:10px">자주 묻는 질문</h2>
+    <dl>
+      <dt>Q. 360 사진이 하나도 안 보여요.</dt>
+      <dd>A. 정상입니다. 이 링크는 CHECKER 전용으로 발급되어 360 포인트는 서버에서부터 내려오지 않습니다. 360 사진이 필요하면 담당자에게 "360 링크"를 요청하세요.</dd>
+      <dt>Q. 링크가 "폐기되었습니다"라고 나옵니다.</dt>
+      <dd>A. 설계자가 이 링크를 껐거나 새로 발급했습니다. 최신 링크를 다시 요청하세요.</dd>
+      <dt>Q. 로그인해야 하나요?</dt>
+      <dd>A. 아니요. 링크 자체가 열람 권한입니다. 로그인 없이 바로 볼 수 있습니다.</dd>
+    </dl>
+  </section>
+
+  <p class="meta">생성: build-tools/capture-viewer-manual.mjs(실 Chrome·실 workerd 캡처) · 화면 크기 1280×900(PC) · 휴대폰(375px) 화면은 다음 갱신에서 추가 예정</p>
+</div>
+</body>
+</html>

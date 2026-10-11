@@ -224,6 +224,20 @@
       hr.style.cssText = "border-top:1px solid rgba(255,255,255,.15);margin:14px 0";
       panel.appendChild(hr);
 
+      // [WO 20261011-viewmode] 그림으로 보는 설명서(매뉴얼) — 링크 모드(State.viewMode)에 맞는 쪽을 연다.
+      {
+        const manBtn = document.createElement("button");
+        manBtn.type = "button";
+        manBtn.textContent = "그림으로 보는 설명서(매뉴얼)";
+        manBtn.setAttribute("data-help-manual-open", "1");
+        manBtn.style.cssText = "width:100%;padding:12px;margin:0 0 8px;border:1px solid #6b7280;border-radius:10px;background:transparent;color:#e5e7eb;font-weight:700;font-size:14px;cursor:pointer";
+        manBtn.addEventListener("click", () => {
+          const vm = (typeof State !== "undefined" && State.viewMode) || null;
+          window.open(vm === "360" ? "/manual/viewer-360.html" : "/manual/viewer-checker.html", "_blank");
+        });
+        panel.appendChild(manBtn);
+      }
+
       // [WO 20261001-viewreq] 핀 없는(도면/구역 단위) 요청 진입 — 디자이너에게 가는 요청은 개발자 문의와 별개다.
       if (typeof Requests !== "undefined" && Requests.openViewer) {
         const reqBtn = document.createElement("button");
