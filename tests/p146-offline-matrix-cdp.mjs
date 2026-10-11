@@ -591,6 +591,9 @@ export default async function explore(P) {
     await waitSynced(evSafe, 60000, "del-seed");
     const s0 = await srvLive();
     P.ok([AN.d1, AN.d2, AN.k].every((k) => s0.annos.some((a) => a.id === k)) && ZD1 && ZD2 && s0.zones.some((z) => String(z.id) === ZD1.id) && s0.zones.some((z) => String(z.id) === ZD2.id), "[del] 시드: 주석 3 · 영역 2 서버 반영", { annos: idsOf(s0.annos), zones: idsOf(s0.zones) });
+    // 앞 단계(rev)의 복귀 직후 첫 온라인 저장이 새 항목을 지난 개정으로 다시 옮기지 않는다(depRebase 해제 — 이중 이월 0)
+    const sd1 = s0.annos.find((a) => a.id === AN.d1), sz1 = s0.zones.find((z) => ZD1 && String(z.id) === ZD1.id);
+    row("del", "새로 만든 주석·영역 좌표 그대로 저장(지난 개정 재이월 0)", { anno: [100, 620], zone: [60, 62] }, { anno: sd1 && [sd1.x, sd1.y], zone: sz1 && [sz1.x, sz1.y] }, sd1 && sd1.x === 100 && sd1.y === 620 && sz1 && sz1.x === 60 && sz1.y === 62);
     const b = await openDeviceB();
     const bSeen = await bCatchUp(b, `__T.State.annotations.some(function(a){ return a.id === ${J(AN.d2)}; }) && __T.State.zones.some(function(z){ return String(z.id) === ${J(ZD2 && ZD2.id)}; })`);
     P.ok(bSeen, "[del] 기기 B 가 시드 주석·영역을 받음(라이브폴)");
