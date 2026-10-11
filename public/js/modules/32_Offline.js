@@ -325,6 +325,23 @@
     });
   }
 
+  /** 🔴 [WO 20261011-offmerge] 서버본 병합(App._mergeConflict — 라이브폴·409·복귀) 직후 오프라인 변경 기록의 **비교 기준**(번들 스냅샷)만
+   *  병합본으로 갱신한다 — op 기록 0(온라인 전용). 종전엔 스냅샷이 내 마지막 편집 시점에 멈춰, 다음 오프라인 편집 1건이 남이 바꾼 항목
+   *  전부를 내 upsert 로 기록했다. 같은 직렬화 체인(_persistEnqueue)을 써 편집 기록과 순서가 섞이지 않는다. 보관본이 없으면 만들지 않는다. */
+  async function refreshBundleSnapshot(depId) {
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    if (!depId) depId = _curDepId();
+    if (!depId) return;
+    return _persistEnqueue(depId, async () => {
+      const dep = await SyncQueue.loadDraft("bundle:dep:" + depId);
+      if (!dep) return;
+      dep.pins = JSON.stringify(State.pins || []);
+      dep.zones = JSON.stringify(State.zones || []);
+      dep.annotations = JSON.stringify(State.annotations || []);
+      await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
+    });
+  }
+
   /* ── 온라인 복귀 자동 싱크 (op 로그 replay) ─────────────────────── */
   // 지수 백오프 POST (항구 약전파 대비)
   async function _postWithRetry(url, body, max) {
