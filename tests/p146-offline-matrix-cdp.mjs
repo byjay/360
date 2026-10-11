@@ -594,6 +594,7 @@ export default async function explore(P) {
     const b = await openDeviceB();
     const bSeen = await bCatchUp(b, `__T.State.annotations.some(function(a){ return a.id === ${J(AN.d2)}; }) && __T.State.zones.some(function(z){ return String(z.id) === ${J(ZD2 && ZD2.id)}; })`);
     P.ok(bSeen, "[del] 기기 B 가 시드 주석·영역을 받음(라이브폴)");
+    if (process.env.P146_DBG) log("del bundle before offline", await evSafe(`(async function(){ var b = await __T.SyncQueue.loadDraft('bundle:dep:' + __T.State.autoSaveDepId); var pa = function(s){ try { return JSON.parse(s || '[]').map(function(o){ return o.id; }); } catch (e) { return 'ERR'; } }; var one = function(s, id){ try { return JSON.parse(s || '[]').filter(function(o){ return String(o.id) === id; })[0] || null; } catch (e) { return null; } }; return b ? { annos: pa(b.annotations), zones: pa(b.zones), d1: one(b.annotations, ${J(AN.d1)}), z1: one(b.zones, ${J(ZD1 && ZD1.id)}), sd1: __T.State.annotations.filter(function(a){ return a.id === ${J(AN.d1)}; })[0] || null, ver: b.version } : null; })()`));
     // A 오프라인 — 다른 항목 편집(draft dirty + oplog 둘 다 생기게): 주석 추가 · 주석 수정 · 영역 추가
     await aOffline(true); await P.wait(1200);
     await addAnnoVia(evSafe, rect(AN.a, 300));
@@ -614,9 +615,15 @@ export default async function explore(P) {
     const tombs = { anno: parse(rawO.annotations).some((a) => a && a.id === AN.d2 && a._deleted), zone: parse(rawO.zones).some((z) => z && String(z.id) === ZD2.id && z._deleted) };
     P.ok(opsR.status === 200 && tombs.anno && tombs.zone, "[del] /ops 로 삭제 — 서버 tombstone 남음", { status: opsR.status, tombs });
     await bCatchUp(b, `!__T.State.annotations.some(function(a){ return a.id === ${J(AN.d2)}; }) && !__T.State.zones.some(function(z){ return String(z.id) === ${J(ZD2.id)}; })`, 10);
+    // 진단(관찰만): 복귀 직전 A 의 병합 기준·draft 메타 — 실패 시 원인 구분용
+    const diagA = await evSafe(`(async function(){ var S = __T.State, A = __T.App, d = await __T.SyncQueue.loadDraft(A._draftKey()); var ops = ((await __T.SyncQueue.loadDraft('oplog:' + S.autoSaveDepId)) || []).map(function(o){ return o.entity + ':' + o.action + ':' + o.id + (${J(!!process.env.P146_DBG)} ? ' ' + JSON.stringify(o.data) : ''); }); return { ops: ops, ver: S.depVersion, dep: S.autoSaveDepId, rebase: S.depRebase || null, aBase: S.annoBaseIds, zBase: S.zoneBaseIds, dKey: A._draftKey(), d: d ? { dirty: d.dirty, baseVer: d.baseVer, depId: d.depId, baseAnno: d.baseAnnoIds, baseZone: d.baseZoneIds } : null }; })()`);
+    log("del diagA", diagA);
+    const apiN0 = P.net.api.length;
     // A 복귀(사용자 조작 없음) → 동기화 끝 → 라이브폴·다음 저장 기회까지 준 뒤 판정
     await aOffline(false);
     const wd = await waitSynced(evSafe, 180000, "del");
+    if (process.env.P146_DBG) log("del dbg", (P.consoleLog || []).filter((l) => /P146DBG/.test(l)));
+    log("del api after return", P.net.api.slice(apiN0).filter((a) => a.m !== "GET").map((a) => a.m + " " + a.p.replace(/^\/tables\/deployments\/[^/]+/, "/dep") + " " + a.s));
     await P.wait(2500);
     await evSafe("__T.App._liveTick ? __T.App._liveTick() : null"); await P.wait(3500);
     await waitSynced(evSafe, 60000, "del-after");

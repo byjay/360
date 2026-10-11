@@ -5299,6 +5299,10 @@
             const ent = (State.fileType === "pdf" && State.fileData && this._srcKeys) ? this._srcKeys.get(State.fileData) : null;
             if (d.srcUrl && ent && ent.key === d.srcKey) State.sourcePdfUrl = d.srcUrl;
             if (rec && rec.version != null) State.depVersion = Number(rec.version); // 버전 동기화
+            // 🔴 [WO 20261011-offmerge] 이 업로드가 rebase_from(d.baseVer)으로 이미 재기준화됐다 — 화면의 재기준화 표시(depRebase)도 여기서 해제한다.
+            //   종전엔 _patchDeployment 만 해제해, 복귀 직후 라이브폴이 세운 depRebase 가 남아 다음 온라인 저장이 옛 버전 rebase_from 을 다시 보냈고
+            //   서버가 그 뒤에 **새로 만든** 주석·영역·핀까지 지난 개정으로 한 번 더 옮겼다(p146 rev→del 연속 실행 재현: 주석 x 100→105).
+            if (State.depRebase && String(State.depRebase.dep) === String(d.depId) && d.baseVer != null && Number(State.depRebase.ver) >= Number(d.baseVer)) State.depRebase = null;
             // [WO 20261010-offmatrix S-REV] 화면도 서버 저장본과 병합(SoT _mergeConflict — 개정으로 이월된 핀은 updatedAt 이 새로워 LWW 로 이긴다)
             if (rec && typeof rec.pins === "string") { try { this._mergeConflict(rec); } catch (e) {} }
             State.pinBaseIds = d.basePinIds.slice();   // [WO 20260929-bulkdel] 버전과 함께 병합 기준도 동기화
