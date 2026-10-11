@@ -182,7 +182,7 @@ async function hmacB64u(secret: string, msg: string): Promise<string> {
  *  [P63] gatePid 를 주면 그 프로젝트의 **초대코드 게이트를 통과했다**는 클레임(g)이 실린다.
  *    🔴 게이트 통과는 열람 자격일 뿐이다 — kind 는 언제나 'viewer'(열람 전용)로 강제한다.
  *    서명이 붙으므로 클라이언트가 g 를 위조할 수 없다(기존 HMAC 경로 재사용 = SoT). */
-async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string }): Promise<{ token: string, exp: number } | null> {
+async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string, m?: string }): Promise<{ token: string, exp: number } | null> {
   const secret = await autoEntrySecret(c)
   if (!secret) return null
   if (gatePid) kind = 'viewer'   // [불변식] 게이트 통과가 쓰기 권한이 되는 경로를 원천 차단
@@ -190,10 +190,12 @@ async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?:
   const body: any = { k: kind, exp, n: randToken('') }
   if (gatePid) body.g = String(gatePid)
   // [WO 20261009-readacl] 열람 범위(서명됨) — p=프로젝트, d=링크 배포본, th=공유 주소 지문. 검증은 요청마다(readScopeOf).
+  // [WO 20261011-viewmode] m=링크 모드('checker'|'360', 미전송=둘다) — view_links.mode 그대로 서명에 싣는다.
   if (scope) {
     body.p = scope.p.map(String)
     if (scope.d) body.d = String(scope.d)
     if (scope.th) body.th = String(scope.th)
+    if (scope.m) body.m = String(scope.m)
   }
   const payload = b64u(JSON.stringify(body))
   return { token: AUTO_ENTRY_PREFIX + payload + '.' + (await hmacB64u(secret, payload)), exp }
@@ -226,7 +228,7 @@ async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
   if (p.k === 'viewer') {
     const ps = Array.isArray(p.p) ? p.p.map(String).filter(Boolean) : ((typeof p.g === 'string' && p.g) ? [p.g] : [])
     if (!ps.length) return null
-    scope = { p: ps, d: (typeof p.d === 'string' && p.d) ? p.d : null, th: (typeof p.th === 'string' && p.th) ? p.th : null }
+    scope = { p: ps, d: (typeof p.d === 'string' && p.d) ? p.d : null, th: (typeof p.th === 'string' && p.th) ? p.th : null, m: (typeof p.m === 'string' && p.m) ? p.m : null }
   }
   // [P63] _gate = 초대코드를 통과한 프로젝트 id(없으면 null). 🔴 쓰기 권한과 무관하다.
   return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null, _scope: scope }
@@ -2291,7 +2293,8 @@ async function deploymentWriteDenied(c: any, user: any, projectId: any): Promise
  *   익명 열람 토큰(ae1) → 토큰에 **서명된** 링크의 프로젝트(배포 중 · 링크 유효 · 초대코드 게이트 통과)의 구역/원본 배포본만.
  *                          배포 취소·링크 폐기는 요청마다 다시 확인하므로 이미 발급된 토큰도 즉시 막힌다.
  * 요청당 1회 메모(c.set) — 한 요청에서 여러 번 불러도 D1 조회는 한 번. */
-type ReadScope = { all: boolean, pids: Set<string>, linkOnly: boolean, designer: boolean, unattachedTenant: string | null | false, mask: boolean, email: string, linkPids: Set<string> }
+// [WO 20261011-viewmode] linkMode — 지금 요청이 쓰는 링크의 모드('checker'|'360', null=둘다/링크아님). mapDeploymentFor 가 pins 를 거른다.
+type ReadScope = { all: boolean, pids: Set<string>, linkOnly: boolean, designer: boolean, unattachedTenant: string | null | false, mask: boolean, email: string, linkPids: Set<string>, linkMode: string | null }
 
 /** 살아있는(deleted=0) 프로젝트 전부 — id → {owner, published, share_token, original_deployment_id}. */
 async function liveProjectsOf(c: any): Promise<Map<string, any>> {
@@ -2334,20 +2337,29 @@ async function shareTokenHash(t: string): Promise<string> {
 
 /** 열람 링크(`?d=<배포본>` · `/srview/<이름>-<토큰>`) → 서명할 범위. 유효한 **배포 중** 링크가 아니면 null(→ 401).
  *  🔴 클라이언트가 보낸 값은 "어느 링크인가"만 쓰고, 범위(프로젝트)는 서버가 DB 로 정한다. */
-async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: string, th?: string } | null> {
+async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: string, th?: string, m?: string } | null> {
   let t = typeof body?.t === 'string' ? body.t.trim() : ''
   let d = typeof body?.d === 'string' ? body.d.trim() : ''
+  let lk = typeof body?.lk === 'string' ? body.lk.trim() : ''   // [WO 20261011-viewmode] 모드별 발급 링크 id(view_links)
   // 하위호환: 링크 식별자를 안 보내는 구버전 클라이언트(캐시된 옛 main.js)는 같은 출처 Referer 의 링크로 해석한다.
-  //   본문의 d/t 와 신뢰 수준이 같다(둘 다 "어느 링크인가"일 뿐 — 범위·배포 상태는 아래에서 서버가 DB 로 판정).
-  if (!t && !d) {
+  //   본문의 d/t/lk 와 신뢰 수준이 같다(둘 다 "어느 링크인가"일 뿐 — 범위·배포 상태는 아래에서 서버가 DB 로 판정).
+  if (!t && !d && !lk) {
     try {
       const ref = new URL(c.req.header('Referer') || '')
       if (ref.host === new URL(c.req.url).host) {
         d = String(ref.searchParams.get('d') || '').trim()
+        lk = String(ref.searchParams.get('lk') || '').trim()
         const m = ref.pathname.match(/^\/srview\/([^/]+)\/?$/)
-        if (!d && m) t = shareTokenFromSegment(decodeURIComponent(m[1])) || ''
+        if (!d && !lk && m) t = shareTokenFromSegment(decodeURIComponent(m[1])) || ''
       }
     } catch {}
+  }
+  let linkMode: string | null = null
+  if (lk) {
+    const lrow: any = await c.env.DB.prepare('SELECT id, dep_id, mode, revoked_at FROM view_links WHERE id = ?').bind(lk).first()
+    if (!lrow || lrow.revoked_at) return null   // 모르는 링크 id · 폐기된 링크 → 즉시 401
+    d = String(lrow.dep_id)
+    linkMode = (typeof lrow.mode === 'string' && lrow.mode) ? lrow.mode : null
   }
   if (t) {
     const row = await projectByShareToken(c, t)   // 미배포·삭제·형식불량 = null
@@ -2360,7 +2372,7 @@ async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: stri
   const projects = await liveProjectsOf(c)
   const bound = dep.project_id ? [String(dep.project_id)] : Array.from(refs)
   const p = bound.filter((pid) => refs.has(pid) && projects.has(pid) && Number(projects.get(pid).published))
-  return p.length ? { p, d } : null
+  return p.length ? { p, d, m: linkMode || undefined } : null
 }
 
 async function readScopeOf(c: any, user: any): Promise<ReadScope> {
@@ -2372,12 +2384,13 @@ async function readScopeOf(c: any, user: any): Promise<ReadScope> {
 }
 
 async function computeReadScope(c: any, user: any): Promise<ReadScope> {
-  const none: ReadScope = { all: false, pids: new Set(), linkOnly: false, designer: false, unattachedTenant: false, mask: true, email: '', linkPids: new Set() }
+  const none: ReadScope = { all: false, pids: new Set(), linkOnly: false, designer: false, unattachedTenant: false, mask: true, email: '', linkPids: new Set(), linkMode: null }
   if (!user) return none
   const email = String(user.email || '').trim().toLowerCase()
   // ── 익명 열람 토큰: 서명된 링크 범위 안에서, 지금도 유효한 것만 ──
   if (user._auto && user._readonly) {
-    return { ...none, pids: await validLinkPids(c, user, user._scope || { p: [], d: null, th: null }), linkOnly: true }
+    const sc0 = user._scope || { p: [], d: null, th: null, m: null }
+    return { ...none, pids: await validLinkPids(c, user, sc0), linkOnly: true, linkMode: (sc0 && sc0.m) || null }
   }
   if (isSuperAdmin(c, email)) return { ...none, all: true, mask: false, email }
   const designer = await isDesigner(c, email)
@@ -2402,12 +2415,13 @@ async function computeReadScope(c: any, user: any): Promise<ReadScope> {
   //   링크 식별은 같은 출처 Referer(auto-entry 의 하위호환 경로와 같은 신뢰 수준 — 익명이 같은 링크로 받을 수 있는 범위 이상은 아니다).
   //   멤버십(pids)과 분리해 둔다 → 링크로 읽었다고 멤버(공유 토큰·관리 권한)로 승격되지 않는다.
   let linkPids = new Set<string>()
+  let linkMode: string | null = null
   if (!user._auto && !user._readonly) {
     const sc = await viewLinkScope(c, {})
-    if (sc) linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null })
+    if (sc) { linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null }); linkMode = sc.m || null }
     for (const pid of pids) linkPids.delete(pid)
   }
-  return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email, linkPids }
+  return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email, linkPids, linkMode }
 }
 
 /** 링크 범위(서명 토큰의 _scope 또는 요청의 링크) → 지금도 유효한 프로젝트 id. 익명 토큰·로그인 링크 열람이 공유하는 단일 판정. */
@@ -2445,6 +2459,16 @@ function maskFor(s: ReadScope, pids: string[]): boolean {
 }
 function maskForDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
   return maskFor(s, dep ? boundPidsOf(refsIdx, dep) : [])
+}
+
+/** [WO 20261011-viewmode] 이 배포본 행에 핀 모드 필터를 적용하는가 — 링크(비멤버) 경로로 읽을 때만.
+ *  super·전체열람(all)과 멤버십(pids)으로 읽는 경우(자기 프로젝트 — 설계 화면도 같은 GET 을 쓴다)는 절대 거르지 않는다. */
+function linkModeForRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): string | null {
+  if (!s.linkMode || s.all) return null
+  if (s.linkOnly) return s.linkMode
+  const bound = dep ? boundPidsOf(refsIdx, dep) : []
+  if (bound.some((p) => s.pids.has(p))) return null
+  return s.linkMode
 }
 
 function canReadDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
@@ -4395,8 +4419,21 @@ function mapImage(r: any) {
 }
 
 /** [WO 20261009-readacl] 열람자 응답 = 핀·구역·주석 JSON 안의 작성자 이메일 마스킹. */
-function mapDeploymentFor(r: any, mask: boolean) {
+/** [WO 20261011-viewmode] 링크 모드별 pins 필터 — 분류 SoT = PinSeries.seriesOf(== !!pin.checkboard)와 동일 규칙.
+ *  mode=null(둘다/비링크)이면 그대로 돌려준다. 파싱 실패·배열 아님도 원본 유지(조용한 데이터 손상 방지). */
+function filterPinsByLinkMode(pinsJson: string | null | undefined, mode: string | null): string {
+  const raw = pinsJson || '[]'
+  if (!mode) return raw
+  let arr: any
+  try { arr = JSON.parse(raw) } catch { return raw }
+  if (!Array.isArray(arr)) return raw
+  const wantChecker = mode === 'checker'
+  return JSON.stringify(arr.filter((p: any) => !!(p && p.checkboard) === wantChecker))
+}
+
+function mapDeploymentFor(r: any, mask: boolean, linkMode?: string | null) {
   const o: any = mapDeployment(r)
+  if (linkMode) { o.pins = filterPinsByLinkMode(o.pins, linkMode); o.view_mode = linkMode }
   if (!mask) return o
   for (const k of ['title', 'pins', 'zones', 'annotations', 'checkboard_start']) o[k] = maskEmailsIn(o[k])
   return o
@@ -4610,7 +4647,7 @@ app.get('/tables/deployments', async (c) => {
     results = ids.map((id) => byId.get(id)).filter(Boolean)
   }
   const midx = await depRefIndexOf(c)
-  return c.json({ data: results.map((r: any) => mapDeploymentFor(r, maskForDepRow(s, midx, r))), total: results.length })
+  return c.json({ data: results.map((r: any) => mapDeploymentFor(r, maskForDepRow(s, midx, r), linkModeForRow(s, midx, r))), total: results.length })
 })
 
 // 단건 조회 (특정 배포본 고정 공유 — B1)
@@ -4635,7 +4672,55 @@ app.get('/tables/deployments/:id', async (c) => {
     const r = row as any
     return c.json({ id: r.id, version: (r.version != null ? r.version : 0), deleted: !!r.deleted })
   }
-  return c.json(mapDeploymentFor(row, maskForDepRow(scope, await depRefIndexOf(c), row)))
+  { const ridx = await depRefIndexOf(c); return c.json(mapDeploymentFor(row, maskForDepRow(scope, ridx, row), linkModeForRow(scope, ridx, row))) }
+})
+
+/* ══ [WO 20261011-viewmode] 모드별 뷰어 배포 링크 — 생성·목록·폐기. SoT = view_links 테이블.
+ *  mode: 'checker' | '360' | null(둘다). 쓰기 권한은 배포본 쓰기 SoT(deploymentWriteDenied) 그대로 재사용. ══ */
+app.post('/api/view-links', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const depId = typeof body.dep_id === 'string' ? body.dep_id.trim() : ''
+  if (!depId) return c.json({ error: 'dep_id required' }, 400)
+  const mode = (typeof body.mode === 'string' && body.mode) ? body.mode.trim() : null
+  if (mode && mode !== 'checker' && mode !== '360') return c.json({ error: "mode must be 'checker' or '360'" }, 400)
+  const dep: any = await c.env.DB.prepare('SELECT id, project_id FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
+  if (!dep) return c.json({ error: 'not found' }, 404)
+  const denied = await deploymentWriteDenied(c, user, dep.project_id)
+  if (denied) return c.json({ error: denied.error }, denied.status)
+  const id = genId('lk')
+  const now = Date.now()
+  await c.env.DB.prepare('INSERT INTO view_links (id, dep_id, mode, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, depId, mode, String(user.email || ''), now).run()
+  return c.json({ id, dep_id: depId, mode, created_at: now })
+})
+
+app.get('/api/view-links', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const depId = String(c.req.query('dep_id') || '').trim()
+  if (!depId) return c.json({ error: 'dep_id required' }, 400)
+  const dep: any = await c.env.DB.prepare('SELECT id, project_id FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
+  if (!dep) return c.json({ error: 'not found' }, 404)
+  const denied = await deploymentWriteDenied(c, user, dep.project_id)
+  if (denied) return c.json({ error: denied.error }, denied.status)
+  const r: any = await c.env.DB.prepare('SELECT id, dep_id, mode, created_by, created_at, revoked_at FROM view_links WHERE dep_id = ? ORDER BY created_at DESC').bind(depId).all()
+  return c.json({ data: r.results || [] })
+})
+
+app.post('/api/view-links/:id/revoke', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const id = c.req.param('id')
+  const row: any = await c.env.DB.prepare('SELECT id, dep_id FROM view_links WHERE id = ?').bind(id).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  const dep: any = await c.env.DB.prepare('SELECT project_id FROM deployments WHERE id = ?').bind(row.dep_id).first()
+  const denied = await deploymentWriteDenied(c, user, dep ? dep.project_id : null)
+  if (denied) return c.json({ error: denied.error }, denied.status)
+  await c.env.DB.prepare('UPDATE view_links SET revoked_at = ? WHERE id = ?').bind(Date.now(), id).run()
+  return c.json({ ok: true })
 })
 
 // 생성 (배포) — 디자이너 이상
