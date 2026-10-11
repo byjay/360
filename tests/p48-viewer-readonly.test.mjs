@@ -274,7 +274,13 @@ console.log("\n[⑧ 클라이언트 — `?d=` 일 때 열람전용 종류만 요
   const auth = fs.readFileSync(path.join(ROOT, "public/js/modules/22_Auth.js"), "utf8");
   ok(/get\("d"\)\s*\?\s*"viewer"\s*:\s*"designer"/.test(auth), "⑧ ?d= 존재 시 kind='viewer' 로 발급 요청");
   // [WO 20261001-invite] 공용석 종료 후에도 열람 링크(?d=·/srview)는 열람전용 자동입장을 탄다(_isViewLink 가 ?d=·ShareLink 를 본다)
-  ok(/get\("d"\)\)\s*return true/.test(auth) && /ShareLink\.token\(\);?\s*\n\s*\}/.test(auth) && /AUTO_DESIGNER_ENTRY\s*\|\|\s*this\._isViewLink\(\)/.test(auth) && /const AUTO_DESIGNER_ENTRY = false;/.test(auth), "⑧ 공용석 종료(AUTO_DESIGNER_ENTRY=false) 후에도 열람 링크는 열람전용 자동입장");
+  // [WO 20261011-viewmode 회귀수정] 지휘자 재현 — _isViewLink 본문에 ?lk=(모드별 링크 id) 분기가 추가되며
+  //   `get("d")) return true` 인접 리터럴이 깨졌다(의미는 불변: ?d= 는 여전히 true). 함수 본문을 떼어
+  //   토큰 존재로 판정 — 인접 문구가 아니라 "그 동작이 실제로 있는가"를 본다(더 튼튼 + 더 정확).
+  const isViewLinkBody = (auth.match(/_isViewLink\(\)\s*\{([\s\S]*?)\n\s*\},/) || [])[1] || "";
+  ok(/get\("d"\)/.test(isViewLinkBody) && /return true/.test(isViewLinkBody) && /ShareLink\.token\(\)/.test(isViewLinkBody)
+    && /AUTO_DESIGNER_ENTRY\s*\|\|\s*this\._isViewLink\(\)/.test(auth) && /const AUTO_DESIGNER_ENTRY = false;/.test(auth),
+    "⑧ 공용석 종료(AUTO_DESIGNER_ENTRY=false) 후에도 열람 링크는 열람전용 자동입장");
   ok(auth.includes("/api/auth/auto-entry"), "⑧ 서버 발급 엔드포인트를 호출한다(고정 문자열 직접 사용 아님)");
   const main = fs.readFileSync(path.join(ROOT, "public/js/main.js"), "utf8");
   ok(main.includes("/api/auth/auto-entry"), "⑧ 번들(main.js)에 반영됨 — assemble 미러 확인");

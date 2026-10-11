@@ -178,6 +178,10 @@ function runDeploy(appSrc, { deck, autoSaveDepId }) {
   const A = sandbox.__A;
   // 리프(I/O) 헬퍼만 대체 — 검사 대상인 _deployToViewer / _saveNow / _createInitialSave /
   // _patchDeployment / _buildSavePayload 는 실제 소스 그대로 돈다.
+  // [WO 20261011-viewmode 회귀수정] _pickDeployMode 는 실 DOM 모달(사용자 클릭 대기)이다 — 이
+  // 최소 sandbox 에는 모달 UI가 없다(지휘자 재현: TypeError modal.setAttribute is not a function).
+  // 다른 리프 I/O와 같은 방식으로 대체(둘다/null 선택 = 종전 동작과 동일한 범위).
+  A._pickDeployMode   = async () => null;
   A._snapshotPages    = async () => ["data:image/jpeg;base64,AAAA"];
   A._uploadPagesToR2  = async (p) => p;
   A._saveDraftLocal   = async () => {};
