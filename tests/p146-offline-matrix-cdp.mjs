@@ -761,7 +761,8 @@ export default async function explore(P) {
     const l3 = ((await evSafe(PINS)) || []).find((p) => p.id === U3.id);
     const ud2 = await undo(ap2.id);
     let legacy = "ok";
-    try { await P.run("UPDATE drawing_revisions SET reverted_version = NULL WHERE id = ?", [ap2.id]); } catch (e) { legacy = "no column: " + String(e.message).slice(0, 80); }
+    //   0041 전 되돌림 행 = 정확한 버전 없음 + 마이그레이션이 채운 상한(그 시점 배포본 버전) — 마이그레이션의 UPDATE 와 같은 식으로 흉내낸다
+    try { await P.run("UPDATE drawing_revisions SET reverted_version = NULL, reverted_version_max = (SELECT d.version FROM deployments d WHERE d.id = drawing_revisions.deployment_id) WHERE id = ?", [ap2.id]); } catch (e) { legacy = "no column: " + String(e.message).slice(0, 80); }
     await aOffline(false);
     const wu2 = await waitSynced(evSafe, 180000, "revundo-amb");
     await P.wait(2500);
@@ -770,6 +771,20 @@ export default async function explore(P) {
     const lu3 = await evSafe(`(function(){ var p = __T.State.pins.find(function(p){ return String(p.id) === ${J(U3.id)}; }); var m = document.querySelector('.pin-marker[data-id="' + ${J(U3.id)} + '"] .pin-rev-badge, [data-pin-id="' + ${J(U3.id)} + '"] .pin-rev-badge'); return p ? { x: p.x, y: p.y, rev: p.revReview || null, badge: !!m } : null; })()`);
     row("revundo", "되돌림 시점 모름 → 좌표 추정 변환 0 + 검토 표시(revReview.ambiguous) · A 화면에도", { x: l3.x, y: l3.y, ambiguous: true, undo: ud2.status, legacy },
       { srv: xy(u3b), local: lu3 }, u3b && near(u3b.x, l3.x) && near(u3b.y, l3.y) && u3b.revReview && u3b.revReview.ambiguous === true && lu3 && lu3.rev && lu3.rev.ambiguous === true);
+    // 7-c 그 뒤(상한보다 새 기준)의 오프라인 편집은 되돌림 이후가 확실 — 표시·변환 0(영구 표시가 LWW 로 이후 편집을 덮던 결함 방지, 실측 F1 사진 연결 유실)
+    //   (검토 표시는 사람이 확정할 때까지 남는 필드라, 앞 단계에서 표시된 핀이 아니라 새 핀으로 본다)
+    await aOffline(true); await P.wait(1200);
+    const UC = await placeVia(evSafe, 64, 34);
+    await P.wait(1500);
+    const lc = ((await evSafe(PINS)) || []).find((p) => p.id === (UC && UC.id));
+    await aOffline(false);
+    await waitSynced(evSafe, 180000, "revundo-after");
+    await P.wait(2500);
+    const ucS = (await srvLive()).pins.find((p) => String(p.id) === (UC && UC.id));
+    row("revundo", "상한보다 새 기준의 오프라인 편집(새 핀) → 좌표 그대로 · 순서 모름 표시 0", { x: lc && lc.x, y: lc && lc.y, ambiguous: false }, xy(ucS), ucS && lc && near(ucS.x, lc.x) && near(ucS.y, lc.y) && !(ucS.revReview && ucS.revReview.ambiguous));
+    // 손대지 않은 핀(U1)은 7-b 에서 op 로 다시 올라가지 않는다(번들 스냅샷이 병합본으로 갱신 — 남이 바꾼 항목을 내 upsert 로 기록 0)
+    const u1b = S2.pins.find((p) => String(p.id) === U1.id);
+    row("revundo", "7-b 손대지 않은 핀(U1) — 되돌린 좌표 유지 · 표시 0(남의 변경을 내 op 로 재기록 0)", { x: u1 && u1.x, y: u1 && u1.y }, xy(u1b), u1b && u1 && near(u1b.x, u1.x) && near(u1b.y, u1.y) && !(u1b.revReview && u1b.revReview.ambiguous));
     R.revundoDetail = { ap1, ap2, wu, wu2, legacy };
     save();
   }

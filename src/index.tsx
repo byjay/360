@@ -4716,7 +4716,7 @@ app.post('/tables/deployments', async (c) => {
  *    검토 표시(ambiguous)만 단다(rebaseOne). */
 type RevEvent = { id: string, t: any, at: number, undo?: boolean, ambiguous?: boolean }
 async function revUndoVerReady(c: any): Promise<boolean> {
-  try { await c.env.DB.prepare('SELECT reverted_version FROM drawing_revisions LIMIT 1').first(); return true } catch { return false }
+  try { await c.env.DB.prepare('SELECT reverted_version, reverted_version_max FROM drawing_revisions LIMIT 1').first(); return true } catch { return false }
 }
 async function revsSinceVersion(c: any, depId: string, baseVer: any): Promise<RevEvent[]> {
   const v = Number(baseVer)
@@ -4725,7 +4725,7 @@ async function revsSinceVersion(c: any, depId: string, baseVer: any): Promise<Re
     if (!(await revTableReady(c))) return []
     const hasUndoVer = await revUndoVerReady(c)
     const rows: any[] = ((await c.env.DB.prepare(
-      `SELECT id, status, transform, applied_at, created_at, reverted_at, dep_version_before${hasUndoVer ? ', reverted_version' : ''}
+      `SELECT id, status, transform, applied_at, created_at, reverted_at, dep_version_before${hasUndoVer ? ', reverted_version, reverted_version_max' : ''}
          FROM drawing_revisions WHERE deployment_id = ? AND kind = 'revision' AND status IN ('applied', 'reverted')`
     ).bind(depId).all()).results) || []
     const evs: { ver: number, e: RevEvent }[] = [], amb: RevEvent[] = []
@@ -4740,7 +4740,12 @@ async function revsSinceVersion(c: any, depId: string, baseVer: any): Promise<Re
       if (Number.isFinite(rv)) {
         const inv = invertAff(t)
         if (rv >= v && inv) evs.push({ ver: rv, e: { id: String(r.id), t: inv, at: Number(r.reverted_at || at), undo: true } })
-      } else amb.push({ id: String(r.id), t: { ...REV_IDENTITY }, at: Number(r.reverted_at || at), ambiguous: true })
+      } else {
+        // 0041 전 되돌림 — 상한(reverted_version_max, 마이그레이션 시점 배포본 버전) 이하 기준만 순서 모름. 상한보다 새 기준 = 되돌림 이후 확실.
+        //   상한도 없으면(마이그레이션 미적용) 종전과 같다(표시 없음) — 영구 표시가 LWW(updatedAt)로 이후 편집을 이기는 일을 막는다.
+        const mx = (hasUndoVer && r.reverted_version_max != null) ? Number(r.reverted_version_max) : NaN
+        if (Number.isFinite(mx) && v <= mx) amb.push({ id: String(r.id), t: { ...REV_IDENTITY }, at: Number(r.reverted_at || at), ambiguous: true })
+      }
     }
     return evs.sort((a, b) => a.ver - b.ver).map((x) => x.e).concat(amb)
   } catch { return [] }

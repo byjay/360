@@ -4244,6 +4244,10 @@
         State.annoBaseIds = this._pinIds(srvAnnos);
       }
       const mergedZones = State.zones;
+      // 🔴 [WO 20261011-offmerge] 오프라인 변경 기록의 비교 기준(번들 스냅샷 bundle:dep — persistLocalDeployment)도 방금 합친 서버본으로.
+      //   종전엔 라이브폴·409·복귀 병합이 스냅샷을 안 갱신해, 다음 오프라인 편집 1건이 "남이 바꾼 항목 전부"(개정 이월 좌표 포함)를
+      //   내 upsert 로 기록했다 → 되돌린 개정 좌표가 /ops 로 다시 올라감(p146 revundo 7-b 실측: 손대지 않은 핀까지 op). 온라인일 때만(기록 0).
+      try { if (navigator.onLine && typeof persistLocalDeployment === "function") persistLocalDeployment().catch(() => {}); } catch (e) {}
       // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
       try { if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); } } catch (e) {}
