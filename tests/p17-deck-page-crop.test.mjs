@@ -294,9 +294,11 @@ console.log("\n[뮤테이션 M2] crop 저장(_pickDeckCrop 결과) 무시 → �
 }
 console.log("\n[뮤테이션 M3] selectDeck 의 NULL 폴백 가드 제거 → ⑤ 실패해야 함");
 {
+  // [WO 20261012-treeexplorer] selectDeck 이 d.page/d.deployment_id 를 target.page/target.deployment_id 로
+  //   이름만 바꿨다(이름만 구역이 상위 도면을 보여주려면 target 과 d 가 달라질 수 있어야 한다) — 같은 가드, 새 변수명.
   const mut = projectsSrc.replace(
-    'if (d.page && typeof App._gotoPage === "function") { try { await App._gotoPage(d.page); } catch (e) {} }',
-    'if (typeof App._gotoPage === "function") { try { await App._gotoPage(d.page); } catch (e) {} }'
+    'if (target.page && typeof App._gotoPage === "function") { try { await App._gotoPage(target.page); } catch (e) {} }',
+    'if (typeof App._gotoPage === "function") { try { await App._gotoPage(target.page); } catch (e) {} }'
   );
   if (mut === projectsSrc) ok(false, "M3 앵커 없음(소스 변경?)");
   else {

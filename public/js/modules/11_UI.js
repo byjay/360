@@ -711,6 +711,29 @@
       items.push({ label, desc: "PDF·이미지 — 메인 PDF 는 바뀌지 않습니다",
         reason: why || (src.kind === "main" ? "메인 도면 — 원본 ⋯ → [메인 도면 교체](소유자·관리자)" : ""),
         run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "deck", deck }); } });
+      // [WO 20261012-treeexplorer] 탐색기처럼 — 이 구역 아래 다단 하위 구역(이름만, 폴더처럼 상위 도면을 그대로 봄).
+      items.push({ label: "+ 하위 구역", desc: "이 구역 아래 새 하위 구역을 만듭니다(이름만)",
+        reason: why, run: () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false, parent_id: deck.id }); } });
+      items.push({ label: "이름 변경", reason: why,
+        run: () => { if (typeof Projects !== "undefined" && Projects.renameDeck) Projects.renameDeck(deck); } });
+      items.push({ label: "이 구역 핀 목록", desc: "이 구역 범위로 전체 핀 목록을 엽니다",
+        reason: why, run: async () => {
+          if (typeof Projects !== "undefined" && Projects.selectDeck) await Projects.selectDeck(deck);
+          if (typeof AllPins !== "undefined" && AllPins.show) AllPins.show();
+        } });
+      items.push({ label: "이 구역 핀 전체 삭제", danger: true, desc: "확인 2번 — 첨부 사진·노트도 함께 사라집니다",
+        reason: why, run: async () => {
+          if (typeof Projects !== "undefined" && Projects.selectDeck) await Projects.selectDeck(deck);
+          const pins = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck((State.pins || []), deck) : [];
+          if (!pins.length) { Prompt.toast && Prompt.toast("삭제할 핀이 없습니다"); return; }
+          if (typeof App !== "undefined" && App.deletePins) App.deletePins(pins.map((p) => p.id), { scopeLabel: "구역 '" + (deck.name || "") + "'" });
+        } });
+      {
+        const childCount = (typeof Projects !== "undefined" && Projects.childDeckCount) ? Projects.childDeckCount(deck.id) : 0;
+        items.push({ label: "구역 삭제", danger: true, desc: "확인 2번",
+          reason: why || (childCount ? ("하위 구역 " + childCount + "개를 먼저 삭제하세요") : ""),
+          run: () => { if (typeof Projects !== "undefined" && Projects.deleteDeck) Projects.deleteDeck(deck.id, deck.name); } });
+      }
       // [WO 20261010-revision] 이 구역 자기 도면의 개정 — 창·벡터 복사 구역은 비활성 + "메인 도면의 개정으로"(Revision.reason SoT)
       if (typeof Revision !== "undefined" && src.kind !== "none") {
         items.push({ label: "이 구역 새 개정 올리기", desc: "구역 도면 개정 — 이전 도면 보관 + 좌표 이월",
@@ -1303,7 +1326,8 @@
         const rb = document.getElementById("side-tree-make-deck-region");
         if (rb) rb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.extractRegionAsDeck) Projects.extractRegionAsDeck(); });
         const cb = document.getElementById("side-tree-create-deck");
-        if (cb) cb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck(); });
+        // [WO 20261012-treeexplorer] 기본 = 이름만 구역(도면 등록·영역 잘라오기는 구역 메뉴에서 나중에).
+        if (cb) cb.addEventListener("click", () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false }); });
         return;
       }
       const curPage = State.pdfPage || 1;

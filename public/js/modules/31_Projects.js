@@ -14,7 +14,8 @@
         if (!this.currentProject) return;
         if (typeof ProjectHub !== "undefined" && ProjectHub.downloadProject) ProjectHub.downloadProject(this.currentProject, dlBtn);
       });
-      $("btn-new-deck") && $("btn-new-deck").addEventListener("click", () => this.createDeck());
+      // [WO 20261012-treeexplorer] 기본 = 이름만 구역 — 도면 등록/영역 잘라오기는 구역 메뉴(⋯)에서 나중에.
+      $("btn-new-deck") && $("btn-new-deck").addEventListener("click", () => this.createDeck({ askDrawing: false }));
       // #1: 프로젝트 드롭다운 '이동(전환)' 기능 제거 — select 대신 현재 프로젝트명만 표시.
     },
 
@@ -241,6 +242,8 @@
         }
         const body = { name };
         if (opts.askDrawing !== false) body.page = page; // 자동생성 경로는 전송하지 않음 → 서버 NULL(구버전과 동일)
+        // [WO 20261012-treeexplorer] 다단 하위 구역 — opts.parent_id 가 있으면 그대로 전송(없으면 최상위, 구버전과 동일).
+        if (opts.parent_id) body.parent_id = opts.parent_id;
         this._withDeckMode(body); // [WO 20260930-fixmode] 활성 모드 태그
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
@@ -753,13 +756,55 @@
       return this._nextFreeName(String(srcName || "도면").trim() + " 영역");
     },
 
+    /** [WO 20261012-treeexplorer] 🔴 공유 지점(SoT) — 자식(parent_id === id) 수. deleteDeck 의
+     *  데이터유실 방지 가드와 메뉴(11_UI.js deckMenuItems)의 비활성 사유가 같은 셈을 쓴다. */
+    childDeckCount(id) {
+      return (this.decks || []).filter((d) => d && String(d.parent_id || "") === String(id)).length;
+    },
+    /** [WO 20261012-treeexplorer] 🔴 2회 확인 — 하위 구역이 있으면 데이터유실 방지로 거부(안내 후 반환).
+     *  삭제 자체는 서버 soft-delete(DELETE /api/decks/:id) 그대로(자식 강제연쇄 삭제 없음 — 명시적 금지). */
     async deleteDeck(id, name) {
-      if (!await Prompt.confirm("구역 삭제", `구역 '${name}' 를 삭제할까요?`)) return;
+      const childCount = this.childDeckCount(id);
+      if (childCount > 0) { alert("하위 구역 " + childCount + "개를 먼저 삭제하세요"); return; }
+      if (!await Prompt.confirm("구역 삭제", `구역 '${name}' 를 삭제할까요? 핀·영역·주석도 함께 사라집니다.`)) return;
+      if (!await Prompt.confirm("구역 삭제 — 다시 확인", `정말로 '${name}' 구역을 삭제합니다. 되돌릴 수 없습니다.`)) return;
       try {
         await fetch("/api/decks/" + id, { method: "DELETE", headers: Auth.headers() });
         if (this.currentDeck && this.currentDeck.id === id) this.currentDeck = null;
         await this.loadDecks();
       } catch (e) {}
+    },
+
+    /** [WO 20261012-treeexplorer] 구역 이름 변경 — 기존 PUT /api/decks/:id(name 부분수정) 재사용(SoT 그대로, 새 API 0). */
+    async renameDeck(deck) {
+      if (!deck) return null;
+      const res = await Prompt.ask({ title: "구역 이름 변경", sub: "새 이름을 입력하세요", placeholder: "구역 이름", value: deck.name || "" });
+      if (!res) return null;
+      const name = String(res.value || "").trim();
+      if (!name) { alert("구역 이름을 입력하세요."); return null; }
+      try {
+        const r = await fetch("/api/decks/" + deck.id, { method: "PUT", headers: Auth.headers(), body: JSON.stringify({ name }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { alert((d && d.error) || "이름 변경 실패"); return null; }
+        await this.loadDecks();
+        return d;
+      } catch (e) { alert("네트워크 오류"); return null; }
+    },
+
+    /** [WO 20261012-treeexplorer] 이름만 구역(폴더, deployment_id 없음)이 열릴 때 보여줄 도면을 찾는다 —
+     *  parent_id 체인을 따라 가장 가까운, 도면이 있는 조상. 못 찾으면 프로젝트 원본(pickOriginalDeck).
+     *  둘 다 없으면 null(지어내지 않음 — 호출부가 그대로 두거나 도면 연결 UI 를 띄운다). */
+    _nearestDrawingAncestor(deck) {
+      const byId = new Map((this.decks || []).map((x) => [String(x.id), x]));
+      let cur = deck, guard = 0;
+      while (cur && cur.parent_id != null && guard++ < 50) {
+        const p = byId.get(String(cur.parent_id));
+        if (!p) break;
+        if (p.deployment_id) return p;
+        cur = p;
+      }
+      const orig = this.pickOriginalDeck(this.decks, this.currentProject);
+      return (orig && orig.deployment_id) ? orig : null;
     },
 
     /** 구역 선택 — 해당 구역에 연결된 도면(배포 스냅샷)이 있으면 불러옴 */
@@ -773,12 +818,15 @@
         }
       } catch (e) {}
       Prompt.toast && Prompt.toast("구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
+      // [WO 20261012-treeexplorer] 이름만 구역(폴더)은 이 구역 자신이 아니라 가장 가까운 상위(또는
+      // 원본) 도면을 그대로 보여준다 — deployment_id 가 이미 있는 구역은 종전과 완전히 동일(target=d).
+      const target = d.deployment_id ? d : (this._nearestDrawingAncestor(d) || d);
       // 연결된 도면이 있으면 로드, 없으면(끊김/미연결) 도면 연결 선택 띄움(디자이너)
-      if (d.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {
-        await App.loadDeckDrawing(d.deployment_id);
+      if (target.deployment_id && typeof App !== "undefined" && App.loadDeckDrawing) {
+        await App.loadDeckDrawing(target.deployment_id);
         // [WO 20260916] 구역=도면의 한 조각 — page 로 전환 + crop 있으면 그 부분만 확대(재사용: fitZone).
         // 구버전 구역(page/crop 없음)은 이 분기가 그냥 건너뛰어져 종전대로 동작.
-        if (d.page && typeof App._gotoPage === "function") { try { await App._gotoPage(d.page); } catch (e) {} }
+        if (target.page && typeof App._gotoPage === "function") { try { await App._gotoPage(target.page); } catch (e) {} }
         this._applyDeckCropView(d);
       } else if (!d.deployment_id && typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App.offerDeckDrawingLink) {
         App.offerDeckDrawingLink(d);
