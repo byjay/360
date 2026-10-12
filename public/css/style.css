@@ -5546,7 +5546,11 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
   -webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:background .14s,border-color .14s,color .14s,transform .1s;}
 .stb-btn:hover{border-color:var(--gold);color:var(--gold-ink);}
 .stb-btn:active{transform:scale(.94);}
-.stb-btn.active{background:rgba(201,150,42,.16);border-color:var(--gold);color:var(--gold-ink);}
+/* [WO 20261012-rail-contrast, R1/R4 재현 실측] 🔴 var(--gold-ink) 금지 — 활성 배경
+   rgba(201,150,42,.16) 위에서 라이트 ≈4.47:1(경계 미달), 다크(--gold-ink 미재정의 결함)
+   ≈1.92:1. var(--text)로 교체: 라이트(#2b2820 on 합성 #e9dcc0) ≈10.8:1, 다크(#e9eaee on
+   합성 #3e3830) ≈9.7:1 — 아이콘(svg currentColor)과 라벨(.stb-label, 아래) 둘 다 적용. */
+.stb-btn.active{background:rgba(201,150,42,.16);border-color:var(--gold);color:var(--text);}
 .stb-sep{flex:0 0 auto;width:1px;align-self:stretch;background:var(--border2);margin:2px;}
 /* [WO 20260917-pin] 항목3: 사이드바(.sidebar)는 overflow:hidden — 트리가 항상 전체 표시되면
    길어져 다른 섹션(도구바/업로드 버튼)을 화면 밖으로 밀어낼 수 있으므로 트리 자체에 세로
@@ -5598,11 +5602,15 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    안 보였다(FAIL, tests/p150). .stb-btn 아이콘이 이미 쓰는 동일 쌍 var(--text2)로
    맞춰야 배경과 함께 테마를 탄다 — 대비 실측(둘 다 계산 확인): 라이트(style.css 단독)
    #6b6457 on #efe9dc ≈ 10.3:1 · 다크(seastar-3d-skin.css 적용, 운영 기본) #9095a0 on
-   #23262c ≈ 5.06:1 — 둘 다 4.5:1 이상. active 상태는 기존 .stb-btn.active 아이콘 색
-   var(--gold-ink)(다크 스킨에서 미재정의 ≈1.9:1 — 기존 결함, 이 발주 범위 밖)을 새
-   텍스트에 물려받지 않도록 라벨은 active 와 무관하게 var(--text2) 고정. */
+   #23262c ≈ 5.06:1 — 둘 다 4.5:1 이상.
+   🔴 [R1 재현 CDP 실측, 2026-10-12] active 상태는 활성 배경(rgba(201,150,42,.16))이 섞여
+   위 색쌍이 라이트 ≈4.31:1·다크 ≈3.87:1(실측 4.19:1)로 떨어진다(AA 미달) — "active 와
+   무관하게 고정"이 틀렸다. .stb-btn.active 를 var(--text) 로 바꾼 것과 동일하게 라벨도
+   active 시 var(--text)로 override(아래 .stb-btn.active .stb-label) — 라이트 ≈10.8:1,
+   다크 ≈9.7:1. */
 .stb-label{display:none;font-size:9px;line-height:1.15;font-weight:600;color:var(--text2, #6b6457);
   white-space:nowrap;max-width:54px;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-ui);}
+.stb-btn.active .stb-label{color:var(--text);}
 /* 호버/포커스 설명 풍선(RailLabels._show) — 36_Help.js 배지 팝업과 동일 리터럴 색(이미 실측
    #ffffff on #1a1712 ≈ 18.7:1, 재계산 불필요). */
 .stb-tip{position:fixed;max-width:240px;padding:8px 12px;background:#1a1712;color:#ffffff;

@@ -2229,7 +2229,9 @@
       this._tip = null;
     }
   };
-  document.addEventListener("DOMContentLoaded", () => RailLabels.init());
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    document.addEventListener("DOMContentLoaded", () => RailLabels.init());
+  }
 
   /* ══════════════════════════════════════════
      PROJECT HUB  ── 첫 화면 = 프로젝트 선택 대시보드 (상용툴 모방)

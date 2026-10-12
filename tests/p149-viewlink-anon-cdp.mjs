@@ -65,6 +65,7 @@ const MUTS = {
   identity:  ["src/index.tsx", "return { ...(p.k === 'designer' ? AUTO_DESIGNER_USER : VIEW_LINK_USER), _auto: true", "return { ...AUTO_DESIGNER_USER, _auto: true"],
   projname:  ["src/index.tsx", "if (linkReadPids(s).includes(String(p.id))) return { ...stripShareKey(base), name: '', description: null, info_json: parseProjectInfo(null) }", ""],
   phone:     ["public/css/style.css", "input[type=\"text\"], input[type=\"email\"], input[type=\"password\"], input[type=\"tel\"],", "input[type=\"text\"], input[type=\"email\"], input[type=\"password\"],"],
+  decktoast: ["public/js/modules/31_Projects.js", "const isReadonly = typeof Auth !== \"undefined\" && Auth.readonly;\n      if (!isReadonly) {\n        Prompt.toast && Prompt.toast(\"구역 '\" + d.name + \"' 선택됨 — 도면을 등록하거나 포인트를 추가하세요\");\n      }", "Prompt.toast && Prompt.toast(\"구역 '\" + d.name + \"' 선택됨 — 도면을 등록하거나 포인트를 추가하세요\");"],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
 
@@ -336,6 +337,12 @@ try {
   ok(!B.hubSeen && !B.hubActive && !B.hubVis && B.cards === 0, "B4 허브(프로젝트 선택) — 첫 페인트부터 한 번도 안 보임 · 카드 0", { hubSeen: B.hubSeen, active: B.hubActive, cards: B.cards });
   ok(Object.keys(B.editVis).length === 0, "B5 편집·관리·내보내기 UI 0(⋯·정보·다운로드·삭제·구역 만들기·도구·CSV/보고서/zip·CHECKER 잎)", B.editVis);
   ok(B.treeDecks >= 2, "B5b 구역 트리(배포 시점 동결본) 읽기 전용 탐색 노드 표시", { treeDecks: B.treeDecks });
+  // [WO 20261012-rail-contrast R5] 열람자가 (비활성) 구역 노드를 클릭해 selectDeck()을 타도
+  // "도면을 등록하거나 포인트를 추가하세요" 편집 유도 토스트가 뜨면 안 된다(31_Projects.js).
+  const deckNodeR = await P.ev(`(function(){ ${VIS} var n=[].slice.call(document.querySelectorAll('.tree-node-deck:not(.active)')).filter(vis)[0]; if(!n) return null; var r=n.getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2}; })()`);
+  if (deckNodeR) { await click(P, deckNodeR.x, deckNodeR.y); await wait(500); }
+  const B5c = await P.ev(`(function(){ var h=document.getElementById('wm-toast-host'); return { hasNode: true, toastText: h ? h.textContent : "", bodyHasGuide: document.body.innerText.indexOf('도면을 등록하거나') >= 0 }; })()`);
+  ok(!!deckNodeR && !(B5c.toastText || "").includes("도면을 등록하거나") && !B5c.bodyHasGuide, "B5c 열람자가 구역 선택해도 '도면을 등록하거나...' 편집 유도 토스트 0(R5)", B5c);
   ok(B.chkPins === 0 && B.pins > 0, "B6 CHECKER 핀 0(360 핀만)", { chk: B.chkPins, pins: B.pins });
   const puts = reqLog.filter((r) => /^PUT \/api\/r2\/upload/.test(r)).length;
   ok(B.gates.length === 0 && !B.keepFail && puts === 0, "B7 남은 디자이너 draft 가 있어도 업로드 0 · '원본 PDF 보관 실패' 배너 0 · 로그인/Request Access 게이트 0", { gates: B.gates, keepFail: B.keepFail, puts });

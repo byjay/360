@@ -817,7 +817,12 @@
           localStorage.setItem(this.LS_LAST_OPEN, JSON.stringify({ projectId: this.currentProject.id, deckId: (d && d.id) || null, ts: Date.now() }));
         }
       } catch (e) {}
-      Prompt.toast && Prompt.toast("구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
+      // [WO 20261012-rail-contrast R5] 열람자(Auth.readonly=열람 링크 세션)는 쓰기 권한이
+      // 없어 "도면을 등록하거나 포인트를 추가하세요" 안내가 불필요한 편집 유도다 — 숨긴다.
+      const isReadonly = typeof Auth !== "undefined" && Auth.readonly;
+      if (!isReadonly) {
+        Prompt.toast && Prompt.toast("구역 '" + d.name + "' 선택됨 — 도면을 등록하거나 포인트를 추가하세요");
+      }
       // [WO 20261012-treeexplorer] 이름만 구역(폴더)은 이 구역 자신이 아니라 가장 가까운 상위(또는
       // 원본) 도면을 그대로 보여준다 — deployment_id 가 이미 있는 구역은 종전과 완전히 동일(target=d).
       const target = d.deployment_id ? d : (this._nearestDrawingAncestor(d) || d);
