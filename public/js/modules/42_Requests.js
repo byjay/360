@@ -119,19 +119,59 @@
       }
     },
 
+    /** [WO 20261012-viewlink] 🔴 마스터 "요청질문은 사진이 나온상태로 하고 사진내에서 가능하게해"
+     *  열람자 [요청·질문] 진입점은 **360 사진 뷰어 안**(#pano-overlay)에만 둔다 — 사진이 닫혀 있으면 오버레이째 숨어 보이지 않는다.
+     *  누르면 사진을 닫지 않고 그 위에 작성 패널이 열리고, 지금 보는 사진·시점(yaw/pitch/fov)이 함께 저장된다(openViewer).
+     *  (종전 도면 화면 좌하단 플로팅 버튼은 제거 — 도면에서 부르는 다른 진입점은 openViewer 가 "사진을 열어 주세요" 로 안내) */
     _createViewerBtn() {
+      const host = document.getElementById("pano-overlay");
+      if (!host) return;
+      // 대비: #1a1712 on #c9962a = 8.0:1(파일 상단 고지와 같은 조합)
       const b = this._el("button", [
-        "position:fixed", "left:112px", "bottom:16px", "height:40px", "padding:0 14px", "border-radius:20px", "border:none",
-        "cursor:pointer", "z-index:9550", "display:none", "align-items:center", "gap:6px", "font-size:13.5px", "font-weight:700",
-        "font-family:sans-serif", "box-shadow:0 4px 14px rgba(0,0,0,.3)", "background:#c9962a", "color:#1a1712",
+        "position:absolute", "left:50%", "top:84px", "transform:translateX(-50%)", "height:42px", "padding:0 18px", "border-radius:21px", "border:none",
+        "cursor:pointer", "z-index:30", "display:none", "align-items:center", "gap:6px", "font-size:14px", "font-weight:700",
+        "font-family:sans-serif", "box-shadow:0 4px 14px rgba(0,0,0,.45)", "background:#c9962a", "color:#1a1712",
       ].join(";"), "요청·질문");
       b.type = "button";
       b.setAttribute("data-req-viewer-entry", "1");
-      b.setAttribute("aria-label", "디자이너에게 요청·질문 남기기(이 도면 전체)");
-      b.title = "디자이너에게 요청·질문 남기기 — 특정 포인트에 대한 요청은 포인트를 눌러 남기세요";
-      b.addEventListener("click", (e) => { if (e.stopPropagation) e.stopPropagation(); this.openViewer({}); });
-      document.body.appendChild(b);
+      b.setAttribute("data-req-pano-entry", "1");
+      b.setAttribute("aria-label", "이 사진·지금 보는 방향에 대해 디자이너에게 요청·질문 남기기");
+      b.title = "이 사진의 지금 보는 방향을 함께 디자이너에게 보냅니다";
+      b.addEventListener("click", (e) => { if (e.stopPropagation) e.stopPropagation(); this.openViewer({ pin: (typeof PanoViewer !== "undefined" && PanoViewer._currentPin) || null }); });
+      host.appendChild(b);
       this._viewerBtn = b;
+    },
+
+    /** [WO 20261012-viewlink] 지금 열린 360 사진·시점 — {image_id, yaw, pitch, fov}. 사진이 안 열려 있으면 null(지어내지 않는다).
+     *  사진 id = 타임랩스 현재 시점(TimeLapse.currentShot — 여러 촬영 중 지금 보는 것)의 imageId, 없으면 그 시점 id. */
+    panoView() {
+      if (typeof PanoViewer === "undefined" || !PanoViewer.open || !PanoViewer.S) return null;
+      const pin = PanoViewer._currentPin || null;
+      const shot = (typeof TimeLapse !== "undefined" && TimeLapse.currentShot) ? TimeLapse.currentShot() : null;
+      const image_id = String((shot && (shot.imageId || shot.id)) || (pin && (pin.imageId || pin.id)) || "");
+      if (!image_id) return null;
+      const S = PanoViewer.S;
+      const yaw = ((Number(S.lon) % 360) + 360) % 360;
+      const pitch = Math.max(-90, Math.min(90, Number(S.lat) || 0));
+      const fov = Number.isFinite(Number(S.fov)) ? Number(S.fov) : null;
+      return Number.isFinite(yaw) ? { image_id, yaw: Math.round(yaw * 100) / 100, pitch: Math.round(pitch * 100) / 100, fov } : null;
+    },
+
+    /** [WO 20261012-viewlink] 요청함 → 그 사진·그 방향으로 연다(핀 360 열기 → 같은 촬영 시점 → 카메라 방향). 실패는 토스트로 정직하게. */
+    async _openPanoView(pin, v) {
+      if (!pin || !v || typeof App === "undefined" || !App.openPano || typeof PanoViewer === "undefined") return false;
+      App.openPano(pin);
+      const until = async (cond, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (cond()) return true; } catch (e) {} await new Promise((r) => setTimeout(r, 120)); } return false; };
+      const loaded = () => { const l = document.getElementById("pano-loading"); return PanoViewer.open && (!l || l.classList.contains("hidden")); };
+      if (!(await until(loaded, 10000))) { Prompt.toast && Prompt.toast("사진을 불러오지 못해 방향을 맞추지 못했습니다"); return false; }
+      if (typeof TimeLapse !== "undefined" && TimeLapse._shots) {
+        const i = TimeLapse._shots.findIndex((sh) => sh && (String(sh.imageId || "") === v.image_id || String(sh.id || "") === v.image_id));
+        if (i >= 0 && i !== TimeLapse._idx && TimeLapse.goto) { await TimeLapse.goto(i); await until(loaded, 10000); }
+        else if (i < 0) Prompt.toast && Prompt.toast("요청 당시 사진을 찾을 수 없습니다(삭제되었을 수 있음) — 현재 사진으로 엽니다");
+      }
+      Object.assign(PanoViewer.S, { lon: Number(v.yaw) || 0, lat: Number(v.pitch) || 0 }, Number.isFinite(Number(v.fov)) && v.fov != null ? { fov: Number(v.fov) } : {});
+      if (PanoViewer._invalidate) PanoViewer._invalidate();
+      return true;
     },
 
     _createInboxBtn() {
@@ -474,22 +514,30 @@
       const pin = ((typeof State !== "undefined" && State.pins) || []).find((p) => String(p.id) === String(n.pin_id));
       if (!pin) { Prompt.toast && Prompt.toast("이 포인트를 찾을 수 없습니다(삭제되었거나 다른 도면)"); return false; }
       if (typeof App !== "undefined" && App.focusPin) await App.focusPin(pin, false);
+      // [WO 20261012-viewlink] 사진 안에서 남긴 요청 = 그 사진·그 방향으로 연다
+      if (n.pano_view) return await this._openPanoView(pin, n.pano_view);
       return true;
     },
 
     /* ══ 열람자 요청·질문 ══ */
     /** opts: { pin?, noMedia? } — pin 없으면 도면/구역 단위 요청 */
+    PANO_ONLY_MSG: "요청·질문은 360 사진을 연 상태에서 남길 수 있습니다 — 도면의 360 포인트를 눌러 사진을 열어 주세요",
+
     async openViewer(opts) {
       opts = opts || {};
       const dep = (typeof State !== "undefined") && State.currentDeploymentId;
       if (!dep) { Prompt.toast && Prompt.toast("도면을 불러온 뒤 요청을 남길 수 있습니다"); return; }
+      // [WO 20261012-viewlink] 🔴 열람자 요청은 **사진 안에서만** — 도움말·전체기능·미디어 없는 포인트 등 모든 진입점이 이 관문 하나를 지난다.
+      const view = this.panoView();
+      if (this._isGuest() && !view) { Prompt.toast && Prompt.toast(this.PANO_ONLY_MSG, 4200); return; }
       this.closePanel();
-      const pin = opts.pin || null;
+      const pin = opts.pin || (view && typeof PanoViewer !== "undefined" ? PanoViewer._currentPin : null) || null;
       const ttl = pin ? ("포인트 #" + (pin.label || "") + " — 요청·질문") : "이 도면 — 요청·질문";
       const { backdrop, panel } = this._shell(ttl, "bottom");
       panel.setAttribute("data-req-viewer", "1");
       this._panelEl = backdrop;
-      this._vctx = { dep, pin };
+      this._vctx = { dep, pin, view };
+      if (view) panel.appendChild(this._el("div", "font-size:12.5px;color:#cbbfa0;margin:0 0 10px", "지금 보고 있는 사진과 방향이 함께 전달됩니다. 디자이너는 같은 사진·같은 방향으로 열어 봅니다."));
       if (pin && opts.noMedia) panel.appendChild(this._el("div", "font-size:12.5px;color:#cbbfa0;margin:0 0 10px", "이 지점에는 등록된 360° 사진이 없습니다. 필요한 내용을 디자이너에게 요청할 수 있습니다."));
       if (!pin) panel.appendChild(this._el("div", "font-size:12.5px;color:#cbbfa0;margin:0 0 10px", "특정 포인트에 대한 요청은 도면에서 포인트를 눌러 남기세요."));
       const list = this._el("div", "margin:0 0 12px");
@@ -585,10 +633,11 @@
       if (typeof Voice !== "undefined") Voice.attach(ta);   // [WO 20261010-delivery] 음성 입력(채우기만)
       let nameIn = null, mailIn = null;
       if (this._isGuest()) {
-        f.appendChild(this._el("div", "font-size:11.5px;color:#cbbfa0;margin:0 0 4px", "이름(필수)"));
+        // [WO 20261012-viewlink] 열람 링크 세션엔 사람 신원이 없다 — 이름/소속은 **선택**(비우면 '열람자'). 출처는 서버가 링크로 기록한다.
+        f.appendChild(this._el("div", "font-size:11.5px;color:#cbbfa0;margin:0 0 4px", "이름/소속(선택 — 비우면 '열람자')"));
         nameIn = this._el("input", field);
         nameIn.type = "text"; nameIn.maxLength = 60; nameIn.placeholder = "예: 홍길동 / 현장 감독"; nameIn.setAttribute("data-req-name", "1");
-        nameIn.setAttribute("aria-label", "이름");
+        nameIn.setAttribute("aria-label", "이름/소속(선택)");
         try { nameIn.value = localStorage.getItem(this.NAME_LS) || ""; } catch (e) {}
         f.appendChild(nameIn);
         f.appendChild(this._el("div", "font-size:11.5px;color:#cbbfa0;margin:0 0 4px", "회신 받을 이메일(선택)"));
@@ -629,8 +678,7 @@
       const body = String(v.body || "").trim();
       if (!body) { showErr("내용을 입력하세요."); return 0; }
       const guest = this._isGuest();
-      const author = String(v.author || "").trim();
-      if (guest && !author) { showErr("이름을 입력하세요."); return 0; }
+      const author = String(v.author || "").trim();   // [WO 20261012-viewlink] 선택 — 비우면 서버가 '열람자'
       if (typeof navigator !== "undefined" && navigator.onLine === false) { showErr(this.OFFLINE_REASON); return 0; }   // [WO 20261010-offmatrix] 보내지 않음(내용 유지)
       const deck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
       const payload = {
@@ -638,7 +686,8 @@
         kind: v.kind === "question" ? "question" : "request", body,
         deck_id: (deck && String(deck.deployment_id || "") === String(ctx.dep)) ? deck.id : "",
       };
-      if (guest) { payload.author = author; payload.contact = String(v.contact || "").trim(); try { localStorage.setItem(this.NAME_LS, author); } catch (e) {} }
+      if (ctx.view) payload.view = ctx.view;   // [WO 20261012-viewlink] 사진·시점(요청함에서 같은 사진·방향으로 연다)
+      if (guest) { payload.author = author; payload.contact = String(v.contact || "").trim(); try { if (author) localStorage.setItem(this.NAME_LS, author); } catch (e) {} }
       if (ui && ui.send) ui.send.disabled = true;
       try {
         const r = await fetch("/api/notes", { method: "POST", headers: this._headers(), body: JSON.stringify(payload) });

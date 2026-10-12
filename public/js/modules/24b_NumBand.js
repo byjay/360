@@ -42,6 +42,8 @@
     async refresh() {
       const pid = (typeof State !== "undefined" && State.currentProjectId) || null;
       if (!pid || typeof fetch === "undefined" || typeof Auth === "undefined" || !Auth.user) return null;
+      // [WO 20261012-viewlink] 번호 대역 = 핀을 만드는 사람(멤버)의 것 — 열람 링크 세션은 조회하지 않는다(종전: 매 진입 403 2회)
+      if (Auth.readonly) return null;
       if (this._loading && this._pid === pid) return this._loading;
       this._pid = pid;
       this._loading = (async () => {

@@ -27,7 +27,7 @@ const MODS = fs.readFileSync(path.join(PUB, "js/modules/_manifest.txt"), "utf8")
 const bundle = (() => {
   const b = MODS.map((f) => fs.readFileSync(path.join(PUB, "js/modules", f), "utf8").replace(/\r\n/g, "\n")).join("\n");
   const cut = b.lastIndexOf("})();");
-  return b.slice(0, cut) + "\nwindow.__T = { App, State, UI, Projects, Requests, Auth };\n" + b.slice(cut);
+  return b.slice(0, cut) + "\nwindow.__T = { App, State, UI, Projects, Requests, Auth, PanoViewer };\n" + b.slice(cut);
 })();
 const CT = { ".html": "text/html", ".css": "text/css", ".js": "application/javascript", ".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".webmanifest": "application/json" };
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -132,25 +132,39 @@ console.log("\n[V 열람자 375px — 요청 폼]");
   await page.goto(ORIGIN + "/?d=dep1", { waitUntil: "load" });
   await page.waitForFunction(() => window.__T && window.__T.State.currentDeploymentId === "dep1" && document.body.classList.contains("role-viewer"), { timeout: 25000 });
   await sleep(600);
-  const pill = await page.evaluate(() => { const b = document.querySelector("[data-req-viewer-entry]"); if (!b) return null; const r = b.getBoundingClientRect(); const h = document.querySelector("[data-help-inquiry-toggle]"); const hr = h ? h.getBoundingClientRect() : null; return { vis: getComputedStyle(b).display !== "none" && r.width > 0, right: r.right, left: r.left, helpRight: hr ? hr.right : 0, inbox: !!document.querySelector("#btn-req-inbox") && getComputedStyle(document.querySelector("#btn-req-inbox")).display !== "none" }; });
-  ok(pill && pill.vis && pill.right <= 375 && pill.left >= pill.helpRight, "V1 열람자 화면에 [요청·질문] 버튼 보임 · 뷰포트 안 · 도움말 버튼과 겹침 0 — " + JSON.stringify(pill));
-  ok(pill && !pill.inbox, "V1 열람자에게 디자이너 [요청함] 미노출");
+  // 🔴 [WO 20261012-viewlink] 계약 변경 — 마스터 "요청질문은 사진이 나온상태로 하고 사진내에서 가능하게해" + 이름은 선택(열람 세션 신원 0).
+  //   전: 도면 화면 좌하단 [요청·질문] 플로팅 → 도면 단위 폼 · 이름 필수(V3 오류).
+  //   후: 도면 화면 진입 0(V1·V1b) → 사진 안 버튼(V1c) → 포인트 단위 폼 · 이름 선택(V3: 이름 없이 전송 = 서버가 '열람자') · 사진·방향 동봉(V5).
+  //   이 하네스는 서버·파노 이미지가 목이라 "사진이 열린 상태" 는 PanoViewer 상태만 세운다(실 360 로드·작성·저장값은 p149 B11·B12 실측).
+  const vis0 = await page.evaluate(() => { const b = document.querySelector("[data-req-viewer-entry]"); const r = b ? b.getBoundingClientRect() : null; const ib = document.querySelector("#btn-req-inbox");
+    return { vis: !!(b && r.width > 0 && b.offsetParent !== null), inbox: !!ib && getComputedStyle(ib).display !== "none" }; });
+  ok(!vis0.vis, "V1 사진 밖(도면 화면) 열람자 [요청·질문] 진입 0 — " + JSON.stringify(vis0));
+  ok(!vis0.inbox, "V1 열람자에게 디자이너 [요청함] 미노출");
+  const noPanel = await page.evaluate(() => { window.__T.Requests.openViewer({}); return !!document.querySelector("[data-req-viewer]"); });
+  ok(!noPanel, "V1b 다른 진입점(도움말·전체기능 → openViewer({}))도 사진이 없으면 패널 0(안내만)");
+  await page.evaluate(() => { const T = window.__T; const pin = T.State.pins.find((p) => String(p.id) === "101"); T.PanoViewer._currentPin = pin; T.PanoViewer.open = true;
+    Object.assign(T.PanoViewer.S, { lon: 30, lat: 5, fov: 75 }); document.getElementById("pano-overlay").classList.remove("hidden"); });
+  await sleep(200);
+  const pill = await page.evaluate(() => { const b = document.querySelector("[data-req-viewer-entry]"); if (!b) return null; const r = b.getBoundingClientRect(); return { vis: getComputedStyle(b).display !== "none" && r.width > 0, right: r.right, left: r.left, top: r.top }; });
+  ok(pill && pill.vis && pill.right <= 375 && pill.left >= 0, "V1c 사진 안 [요청·질문] 버튼 보임 · 375 뷰포트 안 — " + JSON.stringify(pill));
   await page.evaluate(() => document.querySelector("[data-req-viewer-entry]").click());
   await page.waitForFunction(() => document.querySelector("[data-req-viewer]"), { timeout: 5000 });
   await sleep(300);
-  const geo = await page.evaluate(() => { const p = document.querySelector("[data-req-viewer]"); const r = p.getBoundingClientRect(); return { left: r.left, right: r.right, vw: window.innerWidth, docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1, name: !!p.querySelector("[data-req-name]"), contact: !!p.querySelector("[data-req-contact]"), kinds: p.querySelectorAll("[data-req-kind]").length, title: p.querySelector("[data-req-title]").textContent }; });
+  const geo = await page.evaluate(() => { const p = document.querySelector("[data-req-viewer]"); const r = p.getBoundingClientRect(); return { left: r.left, right: r.right, vw: window.innerWidth, docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1, name: !!p.querySelector("[data-req-name]"), contact: !!p.querySelector("[data-req-contact]"), kinds: p.querySelectorAll("[data-req-kind]").length, title: p.querySelector("[data-req-title]").textContent, nameLbl: p.innerText.includes("이름/소속(선택") }; });
   ok(geo.left >= 0 && geo.right <= geo.vw + 1 && !geo.docOverflow, "V2 375px 요청 폼 넘침 0 — " + JSON.stringify({ l: geo.left, r: geo.right, vw: geo.vw, o: geo.docOverflow }));
-  ok(geo.name && geo.contact && geo.kinds === 2 && geo.title.includes("이 도면"), "V2 익명 = 이름(필수)·회신 이메일(선택) 칸 · 요청/질문 선택 · 도면 단위 제목 — " + geo.title);
+  ok(geo.name && geo.nameLbl && geo.contact && geo.kinds === 2 && geo.title.includes("포인트 #1"), "V2 익명 = 이름/소속(선택)·회신 이메일(선택) 칸 · 요청/질문 선택 · 사진(포인트) 단위 제목 — " + geo.title);
   await page.evaluate(() => { document.querySelector("[data-req-body]").value = "도면 범례 추가 요청"; document.querySelector("[data-req-send]").click(); });
-  await sleep(300);
+  await sleep(500);
   const errShown = await page.evaluate(() => { const e = document.querySelector("[data-req-error]"); return e && e.style.display !== "none" ? e.textContent : ""; });
-  ok(errShown.includes("이름") && posts.length === 0, "V3 이름 없이 보내기 → 화면 오류 '" + errShown + "' · 전송 0");
+  ok(!errShown && posts.length === 1 && posts[0].author === "" && posts[0].pin_id === "101", "V3 이름 없이 보내기 → 전송됨(이름은 서버가 '열람자') · 화면 오류 0 — " + JSON.stringify({ err: errShown, n: posts.length, author: posts[0] && posts[0].author }));
   await page.evaluate(() => { document.querySelector("[data-req-name]").value = "김현장"; document.querySelector('[data-req-kind="question"]').click(); });
   await page.screenshot({ path: path.join(SHOTS, "viewer-request-form-375.png") });
   await contrast(page, "[data-req-viewer], [data-req-viewer-entry]", "V4 열람자 폼");
-  await page.evaluate(() => document.querySelector("[data-req-send]").click());
+  await page.evaluate(() => { document.querySelector("[data-req-body]").value = "배관 위치 질문"; document.querySelector("[data-req-send]").click(); });
   await sleep(500);
-  ok(posts.length === 1 && posts[0].author === "김현장" && posts[0].pin_id === "" && posts[0].kind === "question" && posts[0].deployment_id === "dep1", "V5 실 브라우저 전송 → 서버(목) 수신: " + JSON.stringify(posts[0]));
+  const p2 = posts[1] || {};
+  ok(posts.length === 2 && p2.author === "김현장" && p2.pin_id === "101" && p2.kind === "question" && p2.deployment_id === "dep1" && p2.view && p2.view.image_id === "101" && p2.view.yaw === 30 && p2.view.pitch === 5,
+    "V5 실 브라우저 전송 → 서버(목) 수신: 이름·포인트·종류 + 사진·방향(view) — " + JSON.stringify(p2));
   const keyKept = await page.evaluate(() => JSON.parse(localStorage.getItem("wm_note_keys") || "{}").new1 === "nk-shot");
   ok(keyKept, "V5 익명 수정키 로컬 보관(본인 수정·삭제용)");
   // 포인트 요청 — 기존 요청 목록(상태 배지 + 디자이너 답변)

@@ -37,6 +37,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+// [WO 20261012-viewlink] 열람 링크 = 배포 스냅샷(0044) — 가짜 저장소에 스냅샷 행 저장을 붙인다(SoT tests/_lib/fake-snapshot.mjs)
+import { snapFirst, snapAll, snapRun, snapBatch } from "./_lib/fake-snapshot.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -208,6 +210,7 @@ function makeDB(state) {
       const q = sql.replace(/\s+/g, " ").trim();
       const exec = (a) => ({
         async first() {
+          { const __s = snapFirst(state, q, a); if (__s !== undefined) return __s; }
           if (like(q, "FROM app_settings WHERE scope = '*' AND skey = ?")) return state.settings[a[0]] ? { value: state.settings[a[0]] } : null;
           if (like(q, "FROM local_sessions WHERE token = ?")) return state.sessions[a[0]] || null;
           if (like(q, "FROM local_users WHERE email = ?")) return state.localUsers[String(a[0]).toLowerCase()] || null;
@@ -240,6 +243,7 @@ function makeDB(state) {
           return null;
         },
         async all() {
+          { const __s = snapAll(state, q, a); if (__s !== undefined) return __s; }
           if (like(q, "SELECT project_id FROM decks WHERE deployment_id = ?"))
             return { results: state.decks.filter((d) => d.deployment_id === a[0] && !d.deleted).map((d) => ({ project_id: d.project_id })) };
           if (like(q, "FROM project_share_codes WHERE project_id = ?")) return { results: state.codes.filter((c) => c.project_id === a[0]) };
@@ -248,6 +252,7 @@ function makeDB(state) {
           return { results: [] };
         },
         async run() {
+          { const __s = snapRun(state, q, a); if (__s !== undefined) return __s; }
           if (like(q, "INSERT INTO app_settings")) { if (!state.settings[a[0]]) state.settings[a[0]] = a[1]; return { success: true }; }
           if (like(q, "INSERT INTO activity_log")) {
             state.logs.push({ id: a[0], ts: a[1], actor_email: a[2], actor_role: a[3], action: a[4], target_type: a[5], target_id: a[6], detail: a[7], ip: a[8], ua: a[9] });
@@ -275,7 +280,7 @@ function makeDB(state) {
       });
       return { bind: (...a) => exec(a), first: async () => exec([]).first(), all: async () => exec([]).all(), run: async () => exec([]).run() };
     },
-    batch: async () => [],
+    batch: snapBatch,
   };
 }
 const SHELL = '<!doctype html><html><head></head><body></body></html>';

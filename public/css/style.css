@@ -3769,6 +3769,27 @@ body.role-viewer #drop-tap-cta,
 body.role-viewer #section-checkboard,
 body.role-viewer #btn-checkboard-toggle,
 body.role-viewer #btn-checkboard-enter { display: none !important; }
+/* [WO 20261012-viewlink] 🔴 마스터 "뷰어는 디자이너가 지정한 구역트리별로 트리만 읽기 전용으로 보고 코멘트노드의 쓰기 권한으로
+   작성후 디자이너에게 문의할 권한만 있어" · "뷰어전용인데 이런게 나올필요는없겠지"
+   → 열람 화면(role-viewer)의 편집·관리·내보내기 진입점 0. 트리 펼치기/구역 이동/핀·360 보기와 [요청·질문]만 남긴다.
+   (서버가 쓰기를 전부 거부하는 것이 최종 방어 — 여기는 "누를 수 없는 버튼을 보이지 않게" 하는 화면 층)
+   · 트리 노드 ⋯ 메뉴 · 프로젝트 행 [정보][다운로드][프로젝트 삭제][이름변경] · 빈 트리 "구역 만들기" 안내 카드
+   · 우클릭 메뉴의 비활성(편집 전용) 항목 · 도구막대 포인트 수정 모드·방향 지정 · 포인트 목록 내보내기(CSV·보고서·zip) */
+body.role-viewer .tree-more,
+body.role-viewer .tree-project-actions,
+body.role-viewer .side-tree-empty,
+body.role-viewer .tree-pop-item.is-disabled,
+body.role-viewer .tree-mode-leaf-checker,
+body.role-viewer #tb-pin-edit,
+body.role-viewer #tb-setdir,
+body.role-viewer #pin-grid-csv,
+body.role-viewer #rpt-print-btn,
+body.role-viewer #rpt-delivery-btn,
+body.role-viewer #rpt-bundle-btn { display: none !important; }
+/* [WO 20261012-viewlink] 🔴 마스터 "해당 특정프로젝트 위로만 배포가 되는데 프로젝트 선택은 나올필요가없겠지"
+   열람 링크 세션(html.wm-view-link — 서버 asViewLinkShell 가 첫 바이트부터 심고, ShareLink.boot 가 캐시 셸에도 심는다)은
+   프로젝트 선택(허브)을 첫 페인트부터 그리지 않는다. 허브로 가는 모든 경로는 ProjectHub.open 이 열람 화면으로 되돌린다. */
+html.wm-view-link #screen-projects { display: none !important; }
 /* [WO 20260929] 편집화면 3모드 세그먼트(보기/체크보드/사진등록) — 신규 클래스, 타 규칙과 충돌 없음. */
 .regmode-seg { display: flex; gap: 4px; align-items: center; margin: 0 6px; flex-shrink: 0; }
 .regmode-btn {
@@ -5020,7 +5041,7 @@ select:focus-visible,
 }
 
 /* 2) 입력 필드 — 전문 툴 표준(부드러운 배경/보더/포커스 전환) */
-input[type="text"], input[type="email"], input[type="password"],
+input[type="text"], input[type="email"], input[type="password"], input[type="tel"],
 input[type="number"], input[type="search"], input[type="url"], textarea, select {
   font-family: var(--font-ui);
   font-size: 13.5px;

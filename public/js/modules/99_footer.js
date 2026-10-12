@@ -72,10 +72,12 @@
         const j = await ShareLink.resolve();
         if (!j || !j.project) {
           // 해석 실패(링크 해제/삭제) — 조용한 빈 화면 대신 이유와 재요청처를 보여준다.
-          if (typeof ShareGate !== "undefined") ShareGate.showDeadLink();
+          // [WO 20261012-viewlink] 410 = 배포 취소된 링크 → "배포가 중단된 링크입니다"(데이터·프로젝트 정보 0)
+          if (typeof ShareGate !== "undefined") { if (ShareLink.withdrawn && ShareGate.showWithdrawn) ShareGate.showWithdrawn(); else ShareGate.showDeadLink(); }
           return;
         }
-        App.openApp("viewer", { project: { id: j.project.id, name: j.project.name } });
+        // [WO 20261012-viewlink] 공개 응답엔 이름이 없다(비식별) — 범위(id)만 넘긴다
+        App.openApp("viewer", { project: { id: j.project.id, name: "" } });
       })();
     } else if (depId) {
       // [마스터 2026-09-13] 뷰어는 배포 링크(?d=배포ID) 전용 — mode=viewer 단독은 디자이너로 보낸다.
@@ -84,7 +86,9 @@
         // [P63] 🔴 `?d=` 에도 같은 게이트를 적용한다 — 적용하지 않으면 이 경로가 게이트 우회로가 된다.
         //   링크가 죽는 게 아니라 코드 입력 화면이 먼저 뜰 뿐이라 하위호환은 그대로다.
         if (typeof ShareGate !== "undefined") await ShareGate.ensure({ d: depId });
-        App.openApp("viewer");
+        // [WO 20261012-viewlink] 하위호환 링크도 같은 열람 범위(프로젝트 id — 이름 없음)로 연다 → 배포 시점 구역 트리 탐색
+        const gp = (typeof ShareGate !== "undefined" && ShareGate.project && ShareGate.project.id) ? { project: { id: ShareGate.project.id, name: "" } } : undefined;
+        App.openApp("viewer", gp);
       })();
     } else if (typeof DeepLink !== "undefined" && DeepLink.parse(location.search)) {
       // [WO 20261007-qrcov] QR 위치 태그 딥링크(?qp=&qk=&qpin=) — 위의 열람·공유 링크 분기보다 **뒤**에 둔다

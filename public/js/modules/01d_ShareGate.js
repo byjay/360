@@ -88,7 +88,7 @@
       const modal = $("share-gate-modal");
       if (!modal) return Promise.resolve(false);
       const nameEl = $("sg-proj-name");
-      if (nameEl) nameEl.textContent = (this.project && this.project.name) || "";
+      if (nameEl) nameEl.textContent = "";   // [WO 20261012-viewlink] 공개 응답엔 프로젝트 이름이 없다(비식별)
       const note = $("sg-contact-note");
       if (note) note.textContent = "코드를 못 받으셨나요? " + this.CONTACT + " 으로 링크를 다시 요청하세요.";
       const err = $("sg-error");
@@ -143,6 +143,30 @@
           if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
         });
       });
+    },
+
+    /** [WO 20261012-viewlink] 🔴 배포가 중단된 링크(디자이너가 배포 취소 · 링크 폐기) — 화면 전체를 덮고 데이터·프로젝트 정보를 지운다.
+     *  이미 열려 있던 열람 화면이 다음 요청에서 410 을 받으면 여기로 온다(새로 여는 링크는 서버가 410 화면을 바로 준다). */
+    showWithdrawn() {
+      try {
+        if (typeof State !== "undefined") { State.pins = []; State.zones = []; State.annotations = []; State.viewerPages = []; }
+        if (typeof PanoViewer !== "undefined" && PanoViewer.open && PanoViewer.close) PanoViewer.close();
+        if (typeof Projects !== "undefined") { Projects.decks = []; Projects.currentProject = null; Projects.currentDeck = null; }
+        ["screen-app", "screen-home", "screen-projects"].forEach((id) => { const e = document.getElementById(id); if (e) e.classList.remove("active"); });
+        const img = document.getElementById("map-image"); if (img) img.removeAttribute("src");
+      } catch (e) {}
+      let ov = document.getElementById("view-withdrawn");
+      if (!ov) {
+        ov = document.createElement("div");
+        ov.id = "view-withdrawn";
+        ov.setAttribute("role", "alert");
+        ov.setAttribute("data-view-withdrawn", "1");
+        // 대비: #e6edf7 on #0b1220 = 16.0:1 · #9fb0c9 on #0b1220 = 8.6:1 (서버 410 화면과 같은 팔레트)
+        ov.style.cssText = "position:fixed;inset:0;z-index:2147483000;background:#0b1220;color:#e6edf7;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;font-family:Pretendard,system-ui,sans-serif";
+        ov.innerHTML = '<div style="max-width:520px"><h1 style="font-size:20px;margin:0 0 12px;color:#e6edf7">배포가 중단된 링크입니다</h1>' +
+          '<p style="font-size:14px;line-height:1.7;margin:0;color:#9fb0c9">이 링크의 열람이 중단되었습니다. 링크를 보내 준 담당자에게 문의하세요.</p></div>';
+        document.body.appendChild(ov);
+      }
     },
 
     /** 링크 자체가 무효할 때(삭제/미배포) — 조용히 빈 화면을 주지 않는다. */

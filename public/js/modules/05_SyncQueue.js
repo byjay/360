@@ -552,6 +552,9 @@
     },
 
     async _onReconnect() {
+      // [WO 20261012-viewlink] 🔴 열람 링크 세션은 자동 동기화를 아예 돌리지 않는다 — 이 기기에 남은 디자이너 작업본(draft·대기열·원본)을
+      //   열람 통행증으로 올리려다 403 → 배너·로그인 게이트가 뜨던 근본 경로. 판정 SoT = App._readonlySession(Auth.readonly).
+      if (typeof App !== "undefined" && App._readonlySession && App._readonlySession()) return;
       if (this._reconnecting) { this._rerun = true; return; }   // 진행 중 다시 불리면(재로그인 등) 끝난 뒤 1회 더
       this._reconnecting = true;
       const errs = [];

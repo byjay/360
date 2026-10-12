@@ -419,6 +419,9 @@
    *  복귀 토스트는 사진 큐 업로드 수만 셌다(실 Chrome 실측: 대기 25건인데 "1건 동기화 완료"). 모든 도면의 oplog +
    *  사진·첨부 큐 + 서버 미반영 dirty draft(App._countDirtyDrafts — _flushDirtyDrafts 와 같은 판정). */
   async function pendingTotal() {
+    // [WO 20261012-viewlink] 열람 링크 세션은 이 기기의 작업본을 동기화하지 않는다(App._readonlySession) — 대기 0 으로 본다
+    //   (종전: 같은 기기에 남은 디자이너 draft 때문에 열람자 화면에 "동기화 중 1" 배지 · 나갈 때 미저장 확인창)
+    if (typeof App !== "undefined" && App._readonlySession && App._readonlySession()) return 0;
     let n = 0;
     try {
       const keys = await SyncQueue.allDraftKeys();

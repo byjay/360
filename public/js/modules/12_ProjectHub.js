@@ -353,6 +353,10 @@
 
     /** 화면 진입 시 호출 — 목록 로드 + 렌더 */
     async open() {
+      // [WO 20261012-viewlink] 🔴 열람 링크 세션은 프로젝트 선택(허브)을 **어떤 경로로도** 보지 않는다 — 마스터 "해당 특정프로젝트 위로만
+      //   배포가 되는데 프로젝트 선택은 나올필요가없겠지". 뒤로가기(BackGuard)·[←]·QR 딥링크·로그인 콜백 등 허브로 가는 모든 호출이
+      //   이 함수 하나를 지나므로 여기서 한 번 막는다(열람 범위 = 그 링크의 배포본 하나). 화면은 열람 화면 그대로 둔다.
+      if (this._isShareEntry()) { if (typeof UI !== "undefined" && UI.showScreen) UI.showScreen("screen-app"); return; }
       UI.showScreen("screen-projects");
       // [WO 20261008-pinstyle R7] 허브 = 프로젝트 밖 — 프로젝트 역할(편집 권한 SoT Auth.isDesigner 의 한 축)을 비운다.
       if (Auth.setProjectContext) Auth.setProjectContext(null);
@@ -875,6 +879,13 @@
     async togglePublish(p, btn) {
       if (!Auth.isDesigner) { Auth.requireDesigner(() => this.togglePublish(p)); return; }
       const willPublish = !p.published;
+      // [WO 20261012-viewlink] 배포 취소 = SoT App.deployCancel(확인 2번 · unpublish) — 편집 화면 배포 패널과 같은 함수.
+      if (!willPublish && typeof App !== "undefined" && App.deployCancel) {
+        if (btn) { btn.disabled = true; btn.classList.add("busy"); }
+        try { if (await App.deployCancel(p)) await this.load(); }
+        finally { if (btn) { btn.disabled = false; btn.classList.remove("busy"); } }
+        return;
+      }
       // [WO 20260921 publish-fix] window.confirm() → Prompt.confirm() (SoT: 30_Prompt.js).
       //  근본원인: PWA 독립실행모드에서 window.confirm()이 무음으로 false를 반환해 배포 버튼이
       //  아무 요청도 보내지 않았다(재현: 네트워크 0건·토스트 0건·콘솔오류 없음). 커스텀 DOM 모달은
@@ -913,7 +924,8 @@
      *     open() 본문을 잘라낸다(실제로 한 번 깨뜨렸다). URL 파생이라 _deployUrl 옆이 제자리다. */
     _isShareEntry() {
       try {
-        if (typeof ShareLink !== "undefined" && ShareLink.token()) return true;
+        // [WO 20261012-viewlink] 판정 SoT = ShareLink.isViewEntry(`/v/` · `/srview/` · `?d=` · `?lk=`)
+        if (typeof ShareLink !== "undefined" && ShareLink.isViewEntry) return ShareLink.isViewEntry();
         return !!new URLSearchParams(location.search).get("d");
       } catch (e) { return false; }
     },
@@ -925,8 +937,8 @@
       const parts = host.split(".");
       const base = parts.length >= 2 ? parts.slice(-2).join(".") : host;
       const origin0 = loc.origin || (loc.protocol + "//" + host);
-      // [P61] 🔴 1순위 = 공유 주소 `/srview/<프로젝트명>-<토큰>`.
-      //   경로 문자열은 **서버가** projects.name 에서 파생해 내려준다(share_path) — 클라가 슬러그 규칙을
+      // [P61 → WO 20261012-viewlink] 🔴 1순위 = 공유 주소 `/v/<토큰>`(이름 없음 — 회사·프로젝트 비식별).
+      //   경로 문자열은 **서버가** 내려준다(share_path = viewPath SoT) — 클라가 경로 규칙을
       //   다시 구현하면 SoT 가 둘로 갈라진다. 여기서는 접속 origin 만 붙인다(도메인 하드코딩 0).
       if (p.share_path) {
         // 화면/복사는 **사람이 읽는 형태**로. 서버는 퍼센트인코딩된 정본을 주지만, 마스터 요구는

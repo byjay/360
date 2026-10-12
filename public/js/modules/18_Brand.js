@@ -34,6 +34,12 @@
       this._setText("home-footer", "POWERED BY " + this.cfg.company.toUpperCase());
 
       // 4) 문서 제목
+      // [WO 20261012-viewlink] 🔴 열람 링크 세션 = 회사·프로젝트 없는 중립 제목. SoT = index.html <meta name="application-name">
+      //   (서버 asViewLinkShell 도 같은 값으로 <title> 을 바꾼다 — 문자열 중복 0). 탭·공유 미리보기·방문 기록에 회사명이 남지 않는다.
+      if (typeof ShareLink !== "undefined" && ShareLink.isViewEntry && ShareLink.isViewEntry()) {
+        try { const m = document.querySelector('meta[name="application-name"]'); document.title = (m && m.getAttribute("content")) || ""; } catch (e) {}
+        return;
+      }
       try { document.title = this.cfg.product + " · " + this.cfg.company; } catch (e) {}
     },
 

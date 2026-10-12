@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, sharePath, shareTokenFromSegment,
+import { normEmail, emailDomain, isValidEmail, gen6, randToken, bufToHex, hashPassword, verifyPassword, randInviteToken, sha256Hex, randShareToken, isShareToken, viewPath, isViewToken, shareTokenFromSegment,
   randShareCode, normalizeShareCode, isShareCode, REAUTH_TTL_MS, reauthFresh, safeEqualStr } from './lib/util'
 import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib/jev'
 import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
@@ -78,6 +78,11 @@ const AUTO_DESIGNER_TOKEN_ENABLED = false
 const AUTO_DESIGNER_TOKEN = 'auto-designer-entry-360'
 const AUTO_DESIGNER_EMAIL = 'auto.designer@seastargo.com'   // 예약 계정(실사용자 아님)
 const AUTO_DESIGNER_USER = { email: AUTO_DESIGNER_EMAIL, name: '설계자', picture: '', role: 'designer' as const }
+/** [WO 20261012-viewlink] 🔴 열람 링크 통행증(ae1 kind=viewer) 세션의 신원 — **사람 신원이 없다**.
+ *  종전엔 AUTO_DESIGNER_USER(auto.designer@seastargo.com · '설계자')를 그대로 실어 열람자 화면(Request Access 등)에
+ *  회사 예약 계정이 노출됐다(마스터 스크린샷 2026-10-12). 이메일은 비우고 표시 이름만 둔다.
+ *  빈 이메일은 isSuperAdmin/isAdmin/isDesigner/isDesignerDomain/owner 판정에서 전부 false(fail-closed). */
+const VIEW_LINK_USER = { email: '', name: '열람자', picture: '', role: 'viewer' as const }
 /** 자동입장 **레거시 고정 문자열** 토큰 → 열람 전용(_readonly) 사용자.
  *  [P48 보안 2026-09-18] 이 문자열은 클라이언트 번들에 박혀 공개돼 있다(= 비밀이 아니다).
  *  따라서 더 이상 쓰기 자격으로 인정하지 않는다. 읽기만 허용해 기존 세션의 열람은 유지한다.
@@ -182,7 +187,7 @@ async function hmacB64u(secret: string, msg: string): Promise<string> {
  *  [P63] gatePid 를 주면 그 프로젝트의 **초대코드 게이트를 통과했다**는 클레임(g)이 실린다.
  *    🔴 게이트 통과는 열람 자격일 뿐이다 — kind 는 언제나 'viewer'(열람 전용)로 강제한다.
  *    서명이 붙으므로 클라이언트가 g 를 위조할 수 없다(기존 HMAC 경로 재사용 = SoT). */
-async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string, m?: string }): Promise<{ token: string, exp: number } | null> {
+async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string, m?: string, l?: string }): Promise<{ token: string, exp: number } | null> {
   const secret = await autoEntrySecret(c)
   if (!secret) return null
   if (gatePid) kind = 'viewer'   // [불변식] 게이트 통과가 쓰기 권한이 되는 경로를 원천 차단
@@ -196,6 +201,7 @@ async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?:
     if (scope.d) body.d = String(scope.d)
     if (scope.th) body.th = String(scope.th)
     if (scope.m) body.m = String(scope.m)
+    if (scope.l) body.l = String(scope.l)   // [WO 20261012-viewlink] 발급 링크 id — 폐기 즉시 무효(validLinkPids) + 열람자 코멘트 출처 기록
   }
   const payload = b64u(JSON.stringify(body))
   return { token: AUTO_ENTRY_PREFIX + payload + '.' + (await hmacB64u(secret, payload)), exp }
@@ -228,10 +234,12 @@ async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
   if (p.k === 'viewer') {
     const ps = Array.isArray(p.p) ? p.p.map(String).filter(Boolean) : ((typeof p.g === 'string' && p.g) ? [p.g] : [])
     if (!ps.length) return null
-    scope = { p: ps, d: (typeof p.d === 'string' && p.d) ? p.d : null, th: (typeof p.th === 'string' && p.th) ? p.th : null, m: (typeof p.m === 'string' && p.m) ? p.m : null }
+    scope = { p: ps, d: (typeof p.d === 'string' && p.d) ? p.d : null, th: (typeof p.th === 'string' && p.th) ? p.th : null, m: (typeof p.m === 'string' && p.m) ? p.m : null,
+              l: (typeof p.l === 'string' && p.l) ? p.l : null }
   }
   // [P63] _gate = 초대코드를 통과한 프로젝트 id(없으면 null). 🔴 쓰기 권한과 무관하다.
-  return { ...AUTO_DESIGNER_USER, _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null, _scope: scope }
+  // [WO 20261012-viewlink] 열람 토큰 = 사람 신원 없음(VIEW_LINK_USER). 편집 공용석 토큰만 예약 계정 신원을 쓴다.
+  return { ...(p.k === 'designer' ? AUTO_DESIGNER_USER : VIEW_LINK_USER), _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null, _scope: scope }
 }
 
 function superAdmin(c: any): string {
@@ -736,6 +744,20 @@ app.use('*', async (c, next) => {
   return next()
 })
 
+/* ══ [WO 20261012-viewlink] 🔴 배포 중단 링크 차단 단일 지점 ════════════════════════════════
+ * 배포 취소(published=0)·뷰어 링크 폐기·공유 주소 교체 뒤에도 브라우저에 남은 열람 통행증(ae1 viewer)으로
+ * 데이터 경로를 부르면 **410** — 데이터·프로젝트 정보 0. (초대코드 게이트 미통과는 여기서 막지 않는다 — 게이트가 403 으로 안내)
+ * 클라이언트는 410 을 받으면 "배포가 중단된 링크입니다" 화면으로 바꾼다(ShareGate.showWithdrawn). */
+const LINK_DATA_PREFIXES = ['/tables/', '/api/notes', '/api/projects/', '/api/r2/object/', '/api/deployments/']
+app.use('*', async (c, next) => {
+  const p = c.req.path
+  if (!LINK_DATA_PREFIXES.some((x) => p.startsWith(x))) return next()
+  const user = await getUser(c)
+  if (!user || !user._auto || !user._readonly || !user._scope) return next()
+  if ((await validLinkPids(c, user, user._scope, { ignoreGate: true })).size) return next()
+  return c.json({ error: 'gone — this view link is no longer deployed', withdrawn: true }, 410)
+})
+
 /* ══ [P63] 🔴 열람 차단 단일 지점 — 초대코드 게이트 ═══════════════════════════
  * 마스터 요구: "코드 통과 전에는 도면 데이터를 내려보내지 마라 — UI 만 가리는 건 무의미."
  * 그래서 UI 가 아니라 **서버 미들웨어**에서 끊는다(p48 의 readOnlyGuard 와 같은 구조).
@@ -810,6 +832,8 @@ app.post('/api/auth/auto-entry', async (c) => {
 })
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
+  // [WO 20261012-viewlink] 이메일 없는 주체(열람 링크 통행증 VIEW_LINK_USER)는 어떤 경로로도 설계자가 아니다(designers 테이블 조회 전 차단).
+  if (!String(email || '').trim()) return false
   // 자동입장 예약계정: 스위치가 켜져 있을 때만 디자이너. designers 테이블 self-heal INSERT 도 타지 않게 최상단 처리.
   if (String(email || '').trim().toLowerCase() === AUTO_DESIGNER_EMAIL) return AUTO_DESIGNER_TOKEN_ENABLED
   if (isAdmin(c, email)) return true   // 관리자(슈퍼/일반)는 설계 권한도 보유(관리자 ≥ 디자이너)
@@ -855,7 +879,7 @@ app.get('/api/auth/me', async (c) => {
   }
   // 권한 없는(viewer) 로그인 사용자의 사용 신청 상태 동봉
   let request_status: string | null = null
-  if (role === 'viewer' && !user._demo) {
+  if (role === 'viewer' && !user._demo && !user._auto) {   // [WO 20261012-viewlink] 열람 링크 세션 = 신원 없음 → 사용 신청 대상 아님
     const rr: any = await c.env.DB.prepare(
       'SELECT status FROM access_requests WHERE email = ? AND deleted = 0 ORDER BY created_at DESC LIMIT 1'
     ).bind(user.email).first().catch(() => null)
@@ -2031,10 +2055,9 @@ async function tenantOf(c: any, user: any): Promise<string | null> {
   }
 }
 
-/** [P61] 프로젝트 행 → 공유 경로(`/srview/<이름>-<토큰>`). 토큰 없으면 null(=아직 배포 전/구 프로젝트).
- *  🔴 slug 는 여기서 **매번 name 에서 파생**한다 — DB 에 저장하지 않으므로 이름 변경과 절대 갈라지지 않는다. */
+/** [P61 → WO 20261012-viewlink] 프로젝트 행 → 공유 경로(`/v/<토큰>` — 이름 없음). 토큰 없으면 null(=아직 배포 전/구 프로젝트). */
 function sharePathOf(r: any): string | null {
-  return (r && r.share_token) ? sharePath(r.name, String(r.share_token)) : null
+  return (r && r.share_token) ? viewPath(String(r.share_token)) : null
 }
 
 function mapProject(r: any) {
@@ -2337,10 +2360,12 @@ async function shareTokenHash(t: string): Promise<string> {
 
 /** 열람 링크(`?d=<배포본>` · `/srview/<이름>-<토큰>`) → 서명할 범위. 유효한 **배포 중** 링크가 아니면 null(→ 401).
  *  🔴 클라이언트가 보낸 값은 "어느 링크인가"만 쓰고, 범위(프로젝트)는 서버가 DB 로 정한다. */
-async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: string, th?: string, m?: string } | null> {
+async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: string, th?: string, m?: string, l?: string } | null> {
   let t = typeof body?.t === 'string' ? body.t.trim() : ''
   let d = typeof body?.d === 'string' ? body.d.trim() : ''
   let lk = typeof body?.lk === 'string' ? body.lk.trim() : ''   // [WO 20261011-viewmode] 모드별 발급 링크 id(view_links)
+  // [WO 20261012-viewlink] v = 새 주소 `/v/<토큰>` 의 토큰 — 공유 토큰이면 t, 아니면 뷰어 링크 id(lk)
+  let v = typeof body?.v === 'string' ? body.v.trim() : ''
   // 하위호환: 링크 식별자를 안 보내는 구버전 클라이언트(캐시된 옛 main.js)는 같은 출처 Referer 의 링크로 해석한다.
   //   본문의 d/t/lk 와 신뢰 수준이 같다(둘 다 "어느 링크인가"일 뿐 — 범위·배포 상태는 아래에서 서버가 DB 로 판정).
   if (!t && !d && !lk) {
@@ -2351,8 +2376,15 @@ async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: stri
         lk = String(ref.searchParams.get('lk') || '').trim()
         const m = ref.pathname.match(/^\/srview\/([^/]+)\/?$/)
         if (!d && !lk && m) t = shareTokenFromSegment(decodeURIComponent(m[1])) || ''
+        const mv = ref.pathname.match(/^\/v\/([^/]+)\/?$/)
+        if (!d && !lk && !t && mv) v = decodeURIComponent(mv[1])
       }
     } catch {}
+  }
+  if (v && !t && !lk && !d) {
+    if (!isViewToken(v)) return null
+    if (isShareToken(v) && await projectByShareToken(c, v)) t = v
+    else lk = v
   }
   let linkMode: string | null = null
   if (lk) {
@@ -2361,6 +2393,7 @@ async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: stri
     d = String(lrow.dep_id)
     linkMode = (typeof lrow.mode === 'string' && lrow.mode) ? lrow.mode : null
   }
+  const linkId = lk || undefined
   if (t) {
     const row = await projectByShareToken(c, t)   // 미배포·삭제·형식불량 = null
     return row ? { p: [String(row.id)], th: await shareTokenHash(t) } : null
@@ -2371,8 +2404,10 @@ async function viewLinkScope(c: any, body: any): Promise<{ p: string[], d?: stri
   const refs = (await depRefIndexOf(c)).get(d) || new Set<string>()
   const projects = await liveProjectsOf(c)
   const bound = dep.project_id ? [String(dep.project_id)] : Array.from(refs)
-  const p = bound.filter((pid) => refs.has(pid) && projects.has(pid) && Number(projects.get(pid).published))
-  return p.length ? { p, d, m: linkMode || undefined } : null
+  // [WO 20261012-viewlink] 링크 배포본 ∈ 배포 스냅샷(validLinkPids 와 같은 판정 — 발급과 매 요청이 갈라지지 않게)
+  const p: string[] = []
+  for (const pid of bound) if (projects.has(pid) && Number(projects.get(pid).published) && await snapHasDep(c, pid, d)) p.push(pid)
+  return p.length ? { p, d, m: linkMode || undefined, l: linkId } : null
 }
 
 async function readScopeOf(c: any, user: any): Promise<ReadScope> {
@@ -2390,7 +2425,7 @@ async function computeReadScope(c: any, user: any): Promise<ReadScope> {
   // ── 익명 열람 토큰: 서명된 링크 범위 안에서, 지금도 유효한 것만 ──
   if (user._auto && user._readonly) {
     const sc0 = user._scope || { p: [], d: null, th: null, m: null }
-    return { ...none, pids: await validLinkPids(c, user, sc0), linkOnly: true, linkMode: (sc0 && sc0.m) || null }
+    return { ...none, pids: await validLinkPids(c, user, sc0), linkOnly: true, linkMode: LINK_VIEW_MODE }
   }
   if (isSuperAdmin(c, email)) return { ...none, all: true, mask: false, email }
   const designer = await isDesigner(c, email)
@@ -2418,23 +2453,29 @@ async function computeReadScope(c: any, user: any): Promise<ReadScope> {
   let linkMode: string | null = null
   if (!user._auto && !user._readonly) {
     const sc = await viewLinkScope(c, {})
-    if (sc) { linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null }); linkMode = sc.m || null }
+    if (sc) { linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null, l: sc.l || null }); linkMode = LINK_VIEW_MODE }
     for (const pid of pids) linkPids.delete(pid)
   }
   return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email, linkPids, linkMode }
 }
 
 /** 링크 범위(서명 토큰의 _scope 또는 요청의 링크) → 지금도 유효한 프로젝트 id. 익명 토큰·로그인 링크 열람이 공유하는 단일 판정. */
-async function validLinkPids(c: any, user: any, sc: { p: string[], d: string | null, th: string | null }): Promise<Set<string>> {
+async function validLinkPids(c: any, user: any, sc: { p: string[], d: string | null, th: string | null, l?: string | null }, opts?: { ignoreGate?: boolean }): Promise<Set<string>> {
+  // [WO 20261012-viewlink] 🔴 뷰어 링크(view_links) 폐기 = 그 링크로 받은 통행증도 **즉시** 무효(종전: 발급 시점에만 확인 → 토큰 만료까지 열람 가능)
+  if (sc.l) {
+    const lr: any = await c.env.DB.prepare('SELECT revoked_at FROM view_links WHERE id = ?').bind(String(sc.l)).first().catch(() => null)
+    if (!lr || lr.revoked_at) return new Set()
+  }
   const projects = await liveProjectsOf(c)
-  const refs = sc.d ? (await depRefIndexOf(c)).get(String(sc.d)) : null
   const pids = new Set<string>()
   for (const pid of (sc.p || [])) {
     const p = projects.get(String(pid))
     if (!p || !Number(p.published)) continue                                       // 배포 취소·삭제 → 즉시 무효
-    if (sc.d && !(refs && refs.has(String(pid)))) continue                         // 링크 배포본이 그 프로젝트에서 빠짐 = 링크 폐기
+    // [WO 20261012-viewlink] 🔴 링크 배포본의 소속 판정 = 배포 스냅샷(작업본에서 구역을 지워도 재배포 전까지 링크는 동결본을 연다 —
+    //   "디자이너의 수정내용이 반영돼서는 안돼"). 재배포 스냅샷에서 빠지면 그때 링크 폐기.
+    if (sc.d && !(await snapHasDep(c, String(pid), String(sc.d)))) continue
     if (sc.th && (!p.share_token || (await shareTokenHash(String(p.share_token))) !== sc.th)) continue   // 공유 주소 교체·해제
-    if (await shareGateLockedPid(c, user, [String(pid)])) continue                // 초대코드 게이트 미통과(목록 경로 포함 — H2)
+    if (!(opts && opts.ignoreGate) && await shareGateLockedPid(c, user, [String(pid)])) continue   // 초대코드 게이트 미통과(목록 경로 포함 — H2)
     pids.add(String(pid))
   }
   return pids
@@ -2460,6 +2501,11 @@ function maskFor(s: ReadScope, pids: string[]): boolean {
 function maskForDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
   return maskFor(s, dep ? boundPidsOf(refsIdx, dep) : [])
 }
+
+/** [WO 20261012-viewlink] 🔴 열람 링크로 읽는 핀 모드 — 마스터 "배포시에는 360만 배포하는거다".
+ *  링크의 저장 모드(view_links.mode: checker/360/NULL)와 무관하게 **항상 360** — 기존에 발급된 체커·둘다 링크 포함.
+ *  (모드 선택 UI 는 제거했고, POST /api/view-links 도 '360' 만 저장한다) */
+const LINK_VIEW_MODE = '360'
 
 /** [WO 20261011-viewmode] 이 배포본 행에 핀 모드 필터를 적용하는가 — 링크(비멤버) 경로로 읽을 때만.
  *  super·전체열람(all)과 멤버십(pids)으로 읽는 경우(자기 프로젝트 — 설계 화면도 같은 GET 을 쓴다)는 절대 거르지 않는다. */
@@ -2488,10 +2534,139 @@ function canReadDepRow(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any
 async function canReadDeployment(c: any, user: any, dep: any): Promise<boolean> {
   const s = await readScopeOf(c, user)
   if (s.all) return true
+  const depId = typeof dep === 'string' ? dep : (dep && dep.id)
+  // [WO 20261012-viewlink] 🔴 링크 세션의 읽기 범위 = 배포 스냅샷에 들어 있는 배포본(작업본의 구역 추가·삭제와 무관)
+  if (s.linkOnly) return !!(await linkSnapRow(c, s, String(depId || '')))
   const row = typeof dep === 'string'
     ? await c.env.DB.prepare('SELECT id, project_id, tenant_id FROM deployments WHERE id = ? AND deleted = 0').bind(dep).first()
     : dep
-  return canReadDepRow(s, await depRefIndexOf(c), row)
+  if (canReadDepRow(s, await depRefIndexOf(c), row)) return true
+  return s.linkPids.size > 0 && !!(await linkSnapRow(c, s, String(depId || '')))
+}
+
+/* ══ [WO 20261012-viewlink] 🔴 배포 = 고정 스냅샷(SoT) ═══════════════════════════════════════
+ * 마스터 2026-10-12 "이때는 반드시 디자이너의 프로젝트의 수정내용이 반영돼서는 안돼"
+ *                  "배포취소도 기능구현하고 이거한후 재배포하면 업데이트되게해"
+ * 근본원인: 열람 링크가 디자이너가 계속 PATCH 하는 **같은 deployments 행**과 **살아있는 decks** 를 그대로 읽었다
+ *   (배포 = _saveNow 재사용 → 자동저장 PATCH 가 즉시 열람자에게 노출).
+ * 해법: 배포(publish — 최초·다시 배포)가 그 시점 구역 트리 + 배포본 행 전부를 pub_snapshots/pub_snapshot_deps 에 동결하고,
+ *   **링크로 읽는 경로**(익명 통행증 linkOnly · 로그인 비멤버 linkPids)는 스냅샷만 읽는다. 멤버(설계 화면)는 작업본 그대로.
+ *   읽기 지점: GET /tables/deployments(/:id) · GET /api/projects/:id/decks · canReadDeployment(노트) · canReadR2Key/파노 · 공유 진입 배포본.
+ * 배포 취소 = published=0 → validLinkPids 가 즉시 비운다(통행증 포함) + 링크 미들웨어 410. 재배포 = 같은 공유 토큰 + 스냅샷 교체.
+ * 하위호환: 이 코드 이전에 배포된 프로젝트(스냅샷 없음)는 **첫 링크 열람 때 1회 동결**한다(그 뒤 편집은 재배포 전까지 비노출). */
+const SNAP_HEAVY_COLS = ['pages_data', 'drawing_data']
+
+/** 배포 스냅샷 동결 — 원자적(D1 batch = 단일 트랜잭션). 반환 = 동결한 배포본 수. */
+async function captureSnapshot(c: any, pid: string, by: string): Promise<number> {
+  const decks: any[] = ((await c.env.DB.prepare(
+    `SELECT d.*, dp.title AS deployment_title, dp.file_name AS deployment_file_name
+       FROM decks d
+       LEFT JOIN deployments dp ON dp.id = d.deployment_id AND dp.deleted = 0
+      WHERE d.project_id = ? AND d.deleted = 0
+      ORDER BY COALESCE(d.level_no, 999999), d.created_at`
+  ).bind(pid).all()).results) || []
+  const proj: any = await c.env.DB.prepare('SELECT original_deployment_id FROM projects WHERE id = ?').bind(pid).first()
+  const orig = proj && proj.original_deployment_id ? String(proj.original_deployment_id) : null
+  const ids = Array.from(new Set(decks.map((d: any) => d.deployment_id).filter(Boolean).map(String).concat(orig ? [orig] : [])))
+  const now = Date.now()
+  const stmts: any[] = [c.env.DB.prepare('DELETE FROM pub_snapshot_deps WHERE project_id = ?').bind(pid)]
+  let n = 0
+  for (const id of ids) {
+    const row: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(id).first()
+    if (!row) continue
+    let json = JSON.stringify(row)
+    // 🔴 D1 행 상한(2MB) — base64 도면 폴백(pages_data·drawing_data)이 큰 레거시 행은 그 두 칸만 빼고 동결하고 표시한다(__heavy_live).
+    //   그 두 칸은 읽을 때 작업본에서 채운다(도면 래스터만 — 핀·구역·주석·제목은 동결본). 조용히 실패하지 않는다.
+    if (json.length > SNAP_ROW_MAX) {
+      const lite: any = { ...row, __heavy_live: true }
+      for (const k of SNAP_HEAVY_COLS) lite[k] = null
+      json = JSON.stringify(lite)
+    }
+    stmts.push(c.env.DB.prepare('INSERT INTO pub_snapshot_deps (project_id, dep_id, row_json, created_at) VALUES (?, ?, ?, ?)').bind(pid, id, json, now))
+    n++
+  }
+  stmts.push(c.env.DB.prepare(
+    `INSERT INTO pub_snapshots (project_id, decks_json, original_deployment_id, created_at, created_by) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id) DO UPDATE SET decks_json = excluded.decks_json, original_deployment_id = excluded.original_deployment_id,
+       created_at = excluded.created_at, created_by = excluded.created_by`
+  ).bind(pid, JSON.stringify(decks), orig, now, String(by || '')))
+  await c.env.DB.batch(stmts)
+  return n
+}
+/** D1 문자열/행 상한(2,000,000 바이트)보다 여유 있게 — JSON 문자 수 기준(한글은 바이트가 더 크므로 보수적으로). */
+const SNAP_ROW_MAX = 600_000
+
+/** 프로젝트의 배포 스냅샷(구역 트리 + 배포본 id 집합). 배포 중인데 스냅샷이 없으면(레거시) 1회 동결한다. 미배포 = null. */
+async function snapshotOf(c: any, pid: string): Promise<{ decks: any[], depIds: Set<string>, orig: string | null, at: number } | null> {
+  const memo: Map<string, any> = c.get('__snap') || new Map()
+  if (memo.has(pid)) return memo.get(pid)
+  let snap: any = null
+  try {
+    const projects = await liveProjectsOf(c)
+    const p = projects.get(String(pid))
+    if (p && Number(p.published)) {
+      const q = () => c.env.DB.prepare('SELECT decks_json, original_deployment_id, created_at FROM pub_snapshots WHERE project_id = ?').bind(pid).first()
+      let row: any = await q()
+      if (!row) { await captureSnapshot(c, pid, 'lazy:first-view'); row = await q() }
+      if (row) {
+        const ids: any = await c.env.DB.prepare('SELECT dep_id FROM pub_snapshot_deps WHERE project_id = ?').bind(pid).all()
+        let decks: any[] = []
+        try { decks = JSON.parse(row.decks_json || '[]') } catch { decks = [] }
+        snap = { decks: Array.isArray(decks) ? decks : [], depIds: new Set(((ids.results) || []).map((r: any) => String(r.dep_id))), orig: row.original_deployment_id || null, at: Number(row.created_at) || 0 }
+      }
+    }
+  } catch { snap = null }   // 테이블 부재(마이그레이션 전) = 스냅샷 없음 → 호출부가 403(작업본 노출 금지 — fail-closed)
+  memo.set(pid, snap)
+  c.set('__snap', memo)
+  return snap
+}
+
+/** 배포 스냅샷에 이 배포본이 들어 있나(링크 유효성 판정 — validLinkPids·viewLinkScope 공유). */
+async function snapHasDep(c: any, pid: string, depId: string): Promise<boolean> {
+  const snap = await snapshotOf(c, pid)
+  return !!(snap && snap.depIds.has(String(depId)))
+}
+
+/** 스냅샷 배포본 행(동결본). 없으면 null. */
+async function snapshotDepRow(c: any, pid: string, depId: string): Promise<any | null> {
+  const r: any = await c.env.DB.prepare('SELECT row_json FROM pub_snapshot_deps WHERE project_id = ? AND dep_id = ?').bind(pid, depId).first().catch(() => null)
+  if (!r) return null
+  let row: any = null
+  try { row = JSON.parse(r.row_json) } catch { return null }
+  if (row && row.__heavy_live) {
+    const live: any = await c.env.DB.prepare('SELECT ' + SNAP_HEAVY_COLS.join(', ') + ' FROM deployments WHERE id = ?').bind(depId).first().catch(() => null)
+    for (const k of SNAP_HEAVY_COLS) row[k] = live ? live[k] : null
+    delete row.__heavy_live
+  }
+  return row
+}
+
+/** 이 범위가 **링크로** 읽는 프로젝트들(익명 통행증 = pids · 로그인 비멤버 = linkPids). */
+function linkReadPids(s: ReadScope): string[] {
+  if (s.all) return []
+  return Array.from(s.linkOnly ? s.pids : s.linkPids)
+}
+
+/** 링크 읽기 — depId 가 링크 프로젝트의 배포 스냅샷에 있으면 { pid, row(동결본) }, 아니면 null. */
+async function linkSnapRow(c: any, s: ReadScope, depId: string): Promise<{ pid: string, row: any } | null> {
+  if (!depId) return null
+  for (const pid of linkReadPids(s)) {
+    const snap = await snapshotOf(c, pid)
+    if (!snap || !snap.depIds.has(depId)) continue
+    const row = await snapshotDepRow(c, pid, depId)
+    if (row) return { pid, row }
+  }
+  return null
+}
+
+/** 링크 스냅샷 중 needle 을 담은 배포본이 있나(R2 키·파노 id 읽기 권한). */
+async function snapMention(c: any, pids: string[], needle: string): Promise<boolean> {
+  for (const pid of pids) {
+    if (!(await snapshotOf(c, pid))) continue
+    const r: any = await c.env.DB.prepare('SELECT 1 AS x FROM pub_snapshot_deps WHERE project_id = ? AND instr(row_json, ?) > 0 LIMIT 1').bind(pid, needle).first().catch(() => null)
+    if (r) return true
+  }
+  return false
 }
 
 /** 읽을 수 있는 배포본 id(최신순). null = 전부(super). */
@@ -2537,6 +2712,8 @@ async function canReadR2Key(c: any, user: any, key: string, obj: any): Promise<b
   if (!user) return false
   const s = await readScopeOf(c, user)
   if (s.all) return true
+  // [WO 20261012-viewlink] 🔴 익명 링크 세션 = 배포 스냅샷이 참조하는 객체만(배포 후 디자이너가 올린 사진·도면 0)
+  if (s.linkOnly) return await snapLinkMentions(c, s, key)
   const by = obj && obj.customMetadata && obj.customMetadata.by
   if (by && !user._readonly && s.email && String(by).toLowerCase() === s.email) return true
   const ids = await readableDeploymentIds(c, user) || []
@@ -2548,13 +2725,33 @@ async function canReadR2Key(c: any, user: any, key: string, obj: any): Promise<b
     panoIds = (pr.results || []).map((r: any) => String(r.id))
   } catch {}
   for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '"' + pid + '"', false)) return true
+  if (s.linkPids.size && await snapLinkMentions(c, s, key)) return true   // 로그인 비멤버 링크 = 스냅샷 기준
+  return false
+}
+
+/** [WO 20261012-viewlink] 링크 스냅샷이 R2 키를 (직접 또는 파노 행 경유로) 참조하는가.
+ *  🔴 동결본 row_json 안의 pins 는 JSON 문자열의 이스케이프(\") 형태다 → 파노 id 는 `\"<id>\"` 로 찾는다. */
+async function snapLinkMentions(c: any, s: ReadScope, key: string): Promise<boolean> {
+  const pids = linkReadPids(s)
+  if (!pids.length) return false
+  if (await snapMention(c, pids, key)) return true
+  let panoIds: string[] = []
+  try {
+    const pr: any = await c.env.DB.prepare("SELECT id FROM pano_images WHERE deleted = 0 AND instr(substr(COALESCE(image_data, ''), 1, 400), ?) > 0 LIMIT 20").bind(key).all()
+    panoIds = (pr.results || []).map((r: any) => String(r.id))
+  } catch {}
+  for (const id of panoIds) if (await snapMention(c, pids, '\\"' + id + '\\"')) return true
   return false
 }
 
 /** 파노 행 읽기 — super/디자이너는 종전 테넌트 규칙(호출부), 그 외는 읽을 수 있는 배포본의 핀이 그 id 를 참조할 때만. */
 async function canReadPanoAsViewer(c: any, user: any, imgId: string): Promise<boolean> {
+  // [WO 20261012-viewlink] 익명 링크 세션 = 스냅샷 핀이 참조하는 파노만
+  const s = await readScopeOf(c, user)
+  if (s.linkOnly) return await snapMention(c, linkReadPids(s), '\\"' + imgId + '\\"')
   const ids = await readableDeploymentIds(c, user) || []
-  return ids.length > 0 && await depsMention(c, ids, '"' + imgId + '"', false)
+  if (ids.length > 0 && await depsMention(c, ids, '"' + imgId + '"', false)) return true
+  return s.linkPids.size > 0 && await snapMention(c, linkReadPids(s), '\\"' + imgId + '\\"')
 }
 
 /** 열람자(익명·로그인 비디자이너) 응답의 이메일 마스킹 — 첫 글자만 남긴다(`d***`). 문자열 안의 이메일 전부. */
@@ -2681,7 +2878,10 @@ app.get('/api/projects', async (c) => {
       can_manage_members: canManageMembersOf(c, user, p.owner) }   // [WO 20261001-bulkreauth] 소유자·super — 일괄삭제 노출 SoT
     if (maskFor(s, [String(p.id)])) base = maskProjectEmails(base)   // 열람자(익명·로그인)·링크로만 읽는 비멤버에게 소유자·배포자 이메일 미노출(R2)
     // [P61] 🔴 공유 토큰은 멤버(설계자/소유자/배정멤버/슈퍼)에게만. 비멤버에게 주면 열거 차단이 무의미해진다.
-    return isMember ? base : stripShareKey(base)
+    if (isMember) return base
+    // [WO 20261012-viewlink] 🔴 링크로만 읽는 비멤버 = 회사·프로젝트 비식별 — 이름·설명·프로젝트 정보(선명·호선·메모)도 싣지 않는다
+    if (linkReadPids(s).includes(String(p.id))) return { ...stripShareKey(base), name: '', description: null, info_json: parseProjectInfo(null) }
+    return stripShareKey(base)
   }) })
 })
 
@@ -3368,29 +3568,72 @@ async function projectByShareToken(c: any, token: string): Promise<any | null> {
   return row
 }
 
-/** 공유 링크 해석(공개 · 인증 불필요) — 클라이언트가 경로에서 뽑은 토큰으로 프로젝트/배포본을 얻는다.
- *  🔴 토큰이 유효하지 않으면 404 + 본문 동일 → "이름만 맞춘" 추측에 어떤 힌트도 주지 않는다. */
-app.get('/api/share/:token', async (c) => {
-  const row = await projectByShareToken(c, c.req.param('token'))
-  if (!row) return c.json({ matched: false }, 404)
-  // 뷰어가 실제로 열 배포본(= 기존 `?d=` 가 가리키던 그 값). 없으면 null 로 정직하게 알린다.
+/** 공유 프로젝트의 열람 진입 배포본(= 기존 `?d=` 가 가리키던 그 값). 없으면 null(정직하게 알린다). */
+async function shareRootDepOf(c: any, pid: string): Promise<string | null> {
+  // [WO 20261012-viewlink] 배포 스냅샷이 정본 — 동결 시점 트리에서 같은 규칙(level_no NULL 먼저 → 오름차순, created_at)으로 고른다
+  const snap = await snapshotOf(c, pid)
+  if (snap) {
+    const cand = snap.decks.filter((d: any) => d && d.deployment_id).slice()
+      .sort((a: any, b: any) => ((a.level_no == null ? -Infinity : Number(a.level_no)) - (b.level_no == null ? -Infinity : Number(b.level_no))) || ((Number(a.created_at) || 0) - (Number(b.created_at) || 0)))
+    if (cand.length) return String(cand[0].deployment_id)
+    return snap.orig
+  }
   const deck: any = await c.env.DB.prepare(
     'SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL ORDER BY level_no ASC, created_at ASC LIMIT 1'
-  ).bind(row.id).first().catch(() => null)
+  ).bind(pid).first().catch(() => null)
+  return (deck && deck.deployment_id) ? String(deck.deployment_id) : null
+}
+
+/** [WO 20261012-viewlink] 🔴 열람 링크 토큰 해석의 단일 지점 — `/v/<tok>` · 구 `/srview/<이름>-<tok>` · `/api/share/:tok` ·
+ *  share-gate · share/verify 가 전부 여기서 갈린다. 토큰 = 프로젝트 공유 토큰(share_token) 또는 뷰어 링크 id(view_links.id).
+ *  무효(형식불량·미배포·삭제·폐기) = null — 종류를 구분해 알려주지 않는다(열거 차단).
+ *  반환 pid/depId 는 **서버 DB 판정**이다(클라이언트가 보낸 값이 아니다). */
+async function resolveViewToken(c: any, tok: string): Promise<{ pid: string, depId: string | null, th?: string, l?: string } | null> {
+  const t = String(tok || '')
+  if (!isViewToken(t)) return null
+  const proj = isShareToken(t) ? await projectByShareToken(c, t) : null
+  if (proj) return { pid: String(proj.id), depId: await shareRootDepOf(c, String(proj.id)), th: await shareTokenHash(t) }
+  const sc = await viewLinkScope(c, { lk: t })
+  if (!sc || !sc.p.length) return null
+  return { pid: String(sc.p[0]), depId: sc.d || null, l: t }
+}
+
+/** 공유 링크 해석(공개 · 인증 불필요) — 클라이언트가 경로에서 뽑은 토큰으로 프로젝트/배포본을 얻는다.
+ *  🔴 토큰이 유효하지 않으면 404 + 본문 동일 → 추측에 어떤 힌트도 주지 않는다.
+ *  [WO 20261012-viewlink] 🔴 프로젝트 **이름은 싣지 않는다**(공개 응답 = 비식별). 열람 UI 에 필요한 최소값(id·배포본)만. */
+app.get('/api/share/:token', async (c) => {
+  const tok = c.req.param('token')
+  const r = await resolveViewToken(c, tok)
+  if (!r) return (await viewTokenWithdrawn(c, tok)) ? c.json({ matched: false, withdrawn: true }, 410) : c.json({ matched: false }, 404)
   return c.json({
     matched: true,
-    project: { id: row.id, name: row.name },
-    deployment_id: (deck && deck.deployment_id) ? String(deck.deployment_id) : null,
-    share_path: sharePath(row.name, String(row.share_token)),
+    project: { id: r.pid, original_deployment_id: (await snapshotOf(c, r.pid))?.orig || null },
+    deployment_id: r.depId,
+    share_path: viewPath(tok),
   })
 })
+
+/** [WO 20261012-viewlink] 열람 링크 앱 셸 — 회사·프로젝트를 드러내는 문서 제목을 중립 이름으로 바꾸고
+ *  `<html class="wm-view-link">` 를 심는다(첫 페인트부터 허브(프로젝트 선택)를 그리지 않게 — CSS 가 이 클래스로 숨긴다).
+ *  🔴 중립 제목의 SoT = index.html 의 `<meta name="application-name">`(클라 Brand.apply 도 같은 값을 읽는다 — 문자열 중복 0). */
+async function asViewLinkShell(res: Response): Promise<Response> {
+  if (!res.ok) return res
+  const html = await res.text()
+  const m = html.match(/<meta\s+name="application-name"\s+content="([^"]*)"/i)
+  const title = m ? m[1] : ''
+  let out = html.replace(/<html(\s|>)/i, (_x: string, g: string) => '<html class="wm-view-link"' + g)
+  out = out.replace(/<title>[\s\S]*?<\/title>/i, '<title>' + title + '</title>')
+  const r = new Response(out, res)
+  r.headers.delete('Content-Length')
+  return r
+}
 
 /** 앱 셸(index.html) 서빙 — 정적 자산 폴백 로직의 단일 소스. 말미 app.all('*') 와 공유한다. */
 async function serveAppShell(c: any): Promise<Response> {
   const assets = c.env.ASSETS
   if (!assets || !assets.fetch) return c.text('Not Found', 404)
   const origin = new URL(c.req.url).origin
-  const res = await assets.fetch(new Request(origin + '/index.html', { method: 'GET' }))
+  const res = await asViewLinkShell(await assets.fetch(new Request(origin + '/index.html', { method: 'GET' })))
   const out = new Response(res.body, res)
   out.headers.set('Content-Type', 'text/html; charset=utf-8')
   out.headers.set('Cache-Control', 'no-cache, must-revalidate')
@@ -3405,12 +3648,56 @@ async function serveAppShell(c: any): Promise<Response> {
 app.get('/srview/:seg', async (c) => {
   const token = shareTokenFromSegment(c.req.param('seg'))
   const row = token ? await projectByShareToken(c, token) : null
-  if (!row) return shareNotFound(c)
+  if (!row) return (token && await viewTokenWithdrawn(c, token)) ? shareWithdrawn(c) : shareNotFound(c)
   return await serveAppShell(c)
 })
 // 토큰 없는 `/srview` · `/srview/` 도 동일한 404 (목록을 주지 않는다)
 app.get('/srview', (c) => shareNotFound(c))
 app.get('/srview/', (c) => shareNotFound(c))
+
+/** [WO 20261012-viewlink] 🔴 새 열람 주소 `/v/<토큰>` — 이름 없는 불투명 토큰. 유효한 **배포 중** 링크일 때만 앱 셸.
+ *  (구 `/srview/<이름>-<토큰>` 은 위 라우트가 계속 열고, 클라이언트 ShareLink.canonicalize 가 즉시 이 주소로 바꾼다) */
+app.get('/v/:tok', async (c) => {
+  const tok = c.req.param('tok')
+  if (!(await resolveViewToken(c, tok))) return (await viewTokenWithdrawn(c, tok)) ? shareWithdrawn(c) : shareNotFound(c)
+  return await serveAppShell(c)
+})
+
+/** [WO 20261012-viewlink] 실재하지만 **배포가 중단된** 링크인가(배포 취소 · 뷰어 링크 폐기). 삭제·미존재·형식불량 = false(404 그대로).
+ *  80비트 토큰이라 "존재했음"을 알려도 열거 위험이 없다 — 마스터 "배포가 중단된 링크입니다" 화면 요구. */
+async function viewTokenWithdrawn(c: any, tok: string): Promise<boolean> {
+  const t = String(tok || '')
+  if (!isViewToken(t)) return false
+  try {
+    if (isShareToken(t)) {
+      const p: any = await c.env.DB.prepare('SELECT published FROM projects WHERE share_token = ? AND deleted = 0').bind(t).first()
+      if (p) return !Number(p.published)
+    }
+    const l: any = await c.env.DB.prepare('SELECT dep_id, revoked_at FROM view_links WHERE id = ?').bind(t).first()
+    return !!l
+  } catch { return false }
+}
+
+/** 배포 중단 링크 화면(410) — 데이터·프로젝트 정보 0. 대비 ≥ 7:1(shareNotFound 와 같은 팔레트). */
+function shareWithdrawn(c: any): Response {
+  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>배포가 중단된 링크입니다</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{background:#0b1220;color:#e6edf7;font-family:Pretendard,system-ui,-apple-system,"Segoe UI",sans-serif;
+       display:flex;align-items:center;justify-content:center;text-align:center;padding:24px}
+  .c{max-width:520px}
+  h1{font-size:20px;margin:0 0 12px;color:#e6edf7}
+  p{font-size:14px;line-height:1.7;margin:0 0 8px;color:#9fb0c9}
+</style></head><body><div class="c" data-view-withdrawn="1">
+<h1>배포가 중단된 링크입니다</h1>
+<p>이 링크의 열람이 중단되었습니다. 링크를 보내 준 담당자에게 문의하세요.</p>
+</div></body></html>`
+  return new Response(html, { status: 410, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } })
+}
+app.get('/v', (c) => shareNotFound(c))
+app.get('/v/', (c) => shareNotFound(c))
 
 /** 공유 링크 404 — 존재/미존재/미배포를 구분해서 알려주지 않는다(열거 차단). 대비 ≥ 7:1. */
 function shareNotFound(c: any): Response {
@@ -3515,13 +3802,9 @@ app.get('/api/share-gate', async (c) => {
   const d = String(c.req.query('d') || '')
   let proj: any = null, depId: string | null = null
   if (t) {
-    proj = await projectByShareToken(c, t)
-    if (proj) {
-      const deck: any = await c.env.DB.prepare(
-        'SELECT deployment_id FROM decks WHERE project_id = ? AND deleted = 0 AND deployment_id IS NOT NULL ORDER BY level_no ASC, created_at ASC LIMIT 1'
-      ).bind(proj.id).first().catch(() => null)
-      depId = (deck && deck.deployment_id) ? String(deck.deployment_id) : null
-    }
+    // [WO 20261012-viewlink] t = 공유 토큰 또는 뷰어 링크 id — 해석은 단일 지점(resolveViewToken)
+    const vr = await resolveViewToken(c, t)
+    if (vr) { proj = { id: vr.pid }; depId = vr.depId }
   } else if (d) {
     const deck: any = await c.env.DB.prepare(
       'SELECT project_id FROM decks WHERE deployment_id = ? AND deleted = 0 LIMIT 1'
@@ -3539,7 +3822,7 @@ app.get('/api/share-gate', async (c) => {
   const passed = exempt || !!(user && user._gate && String(user._gate) === String(proj.id))
   return c.json({
     matched: true,
-    project: { id: proj.id, name: proj.name },
+    project: { id: proj.id },   // [WO 20261012-viewlink] 공개 응답 = 이름 없음(비식별)
     deployment_id: depId,
     gated, passed,
     contact: SUPPORT_CONTACT_EMAIL,
@@ -3559,9 +3842,9 @@ app.post('/api/share/verify', async (c) => {
              message: '초대코드가 올바르지 않습니다. ' + SUPPORT_CONTACT_EMAIL + ' 으로 링크를 다시 요청하세요.' }, status)
 
   // 대상 프로젝트 해석 — 공유 토큰(t) 또는 기존 배포 링크(d)
-  let proj: any = null
+  let proj: any = null, vref: any = null
   const t = String(body.t || ''), d = String(body.d || '')
-  if (t) proj = await projectByShareToken(c, t)
+  if (t) { vref = await resolveViewToken(c, t); if (vref) proj = { id: vref.pid } }   // [WO 20261012-viewlink] 공유 토큰 · 뷰어 링크 id
   else if (d) {
     const deck: any = await c.env.DB.prepare('SELECT project_id FROM decks WHERE deployment_id = ? AND deleted = 0 LIMIT 1').bind(d).first().catch(() => null)
     if (deck && deck.project_id) proj = await c.env.DB.prepare('SELECT id, name FROM projects WHERE id = ? AND deleted = 0').bind(deck.project_id).first()
@@ -3610,7 +3893,7 @@ app.post('/api/share/verify', async (c) => {
   }
   // [WO 20261009-readacl] 통행증도 이 링크·이 프로젝트로 범위를 서명한다(배포 취소·링크 폐기 시 즉시 무효).
   const pass = await mintAutoEntryToken(c, 'viewer', String(proj.id),
-    t ? { p: [String(proj.id)], th: await shareTokenHash(t) } : { p: [String(proj.id)], d })
+    vref ? (vref.th ? { p: [String(proj.id)], th: vref.th } : { p: [String(proj.id)], d: vref.depId || undefined, l: vref.l }) : { p: [String(proj.id)], d })
   if (!pass) return c.json({ error: 'gate unavailable', ok: false, contact: SUPPORT_CONTACT_EMAIL, message: '일시적인 오류입니다. 잠시 후 다시 시도하세요.' }, 503)
   await c.env.DB.prepare('UPDATE project_share_codes SET use_count = use_count + 1, last_used_at = ? WHERE id = ?')
     .bind(now, row.id).run().catch(() => {})
@@ -3618,12 +3901,12 @@ app.post('/api/share/verify', async (c) => {
   //   actor_email 은 비운다: 자기 신고 이름은 **검증된 신원이 아니다**(날조 금지).
   await logActivity(c, 'share.access', { actor: { email: '' }, targetType: 'project', targetId: proj.id,
     detail: { company, name: person, code_id: row.id, code_label: row.label,
-              url: c.req.header('Referer') || (t ? sharePath(proj.name, t) : ('/?d=' + d)),
+              url: c.req.header('Referer') || (t ? viewPath(t) : ('/?d=' + d)),
               // [P68] 회사 대조가 어떻게 통과했는지(규칙/추정) 남긴다 — 감사 질의에 답하기 위해
               allowed_company: row.company || null, gate_reason: gate.reason, jev: gate.jev,
               retention_days: PERSONAL_LOG_RETENTION_DAYS } })
   return c.json({ ok: true, token: pass.token, exp: pass.exp, readonly: true,
-                  project: { id: proj.id, name: proj.name } })
+                  project: { id: proj.id } })   // [WO 20261012-viewlink] 이름 없음
 })
 
 /* ── 마스터/설계자용: 초대코드 발급·목록·폐기 ─────────────────────────── */
@@ -4250,9 +4533,38 @@ app.post('/api/projects/:id/publish', async (c) => {
   //   slug 는 저장하지 않는다(응답 시 name 에서 파생) → 이름을 바꾸면 주소의 이름 부분만 따라 바뀌고
   //   토큰은 그대로이므로 옛 링크·새 링크가 **둘 다** 열린다.
   await ensureShareToken(c, pid)
-  await logActivity(c, 'project.publish', { actor: user, targetType: 'project', targetId: pid })
+  // [WO 20261012-viewlink] 🔴 배포 = 그 시점 스냅샷 동결(최초·다시 배포(업데이트)·취소 후 재배포 모두 같은 지점).
+  //   같은 공유 토큰(링크)은 그대로 두고 내용만 이 시점으로 교체된다. 동결 실패 = 배포 실패(작업본을 내보내지 않는다).
+  let snapDeps = 0
+  try { snapDeps = await captureSnapshot(c, pid, String(user.email || '')) }
+  catch (e: any) {
+    await c.env.DB.prepare('UPDATE projects SET published = 0, updated_at = ? WHERE id = ?').bind(Date.now(), pid).run().catch(() => {})
+    return c.json({ error: '배포 스냅샷 저장 실패 — 배포하지 않았습니다: ' + String(e && e.message || e).slice(0, 200) }, 500)
+  }
+  await logActivity(c, 'project.publish', { actor: user, targetType: 'project', targetId: pid, detail: { snapshot_deps: snapDeps } })
   const row: any = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(pid).first()
-  return c.json({ success: true, project: row ? mapProject(row) : null })
+  return c.json({ success: true, project: row ? mapProject(row) : null, snapshot_at: now, snapshot_deps: snapDeps })
+})
+
+/** [WO 20261012-viewlink] 새 링크 발급(공유 토큰 교체) — 디자이너 선택(기본은 같은 링크 유지).
+ *  🔴 옛 링크는 즉시 죽는다(이미 발급된 통행증 포함 — validLinkPids 의 공유 주소 지문 불일치). 확인은 클라이언트가 받는다. */
+app.post('/api/projects/:id/share-token/rotate', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  let tok: string | null = null
+  for (let i = 0; i < 5 && !tok; i++) {
+    const cand = randShareToken()
+    try {
+      const r: any = await c.env.DB.prepare('UPDATE projects SET share_token = ?, updated_at = ? WHERE id = ? AND deleted = 0').bind(cand, Date.now(), pid).run()
+      if (r && r.meta && r.meta.changes === 0) return c.json({ error: 'not found' }, 404)
+      tok = cand
+    } catch { /* UNIQUE 충돌 → 재시도 */ }
+  }
+  if (!tok) return c.json({ error: 'rotate failed' }, 500)
+  await logActivity(c, 'project.share_rotate', { actor: user, targetType: 'project', targetId: pid })
+  return c.json({ success: true, share_path: viewPath(tok) })
 })
 
 app.post('/api/projects/:id/unpublish', async (c) => {
@@ -4261,6 +4573,8 @@ app.post('/api/projects/:id/unpublish', async (c) => {
   const pid = c.req.param('id')
   if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
   const now = Date.now()
+  // [WO 20261012-viewlink] 배포 취소 — 공유 토큰은 남긴다(재배포 시 같은 링크가 살아난다). 열람자 코멘트(pin_notes)는 건드리지 않는다.
+  //   이미 발급된 통행증은 validLinkPids(published=0)가 즉시 비우고, 링크 미들웨어가 410 으로 끊는다.
   await c.env.DB.prepare('UPDATE projects SET published = 0, updated_at = ? WHERE id = ? AND deleted = 0').bind(now, pid).run()
   await logActivity(c, 'project.unpublish', { actor: user, targetType: 'project', targetId: pid })
   return c.json({ success: true })
@@ -4272,7 +4586,14 @@ app.get('/api/projects/:id/decks', async (c) => {
   if (!user) return c.json({ error: 'unauthorized' }, 401)  // [보안] 무인증 프로젝트 구조 열람 차단
   const pid = c.req.param('id')
   // [WO 20261009-readacl] 읽기 SoT — 멤버/소유/링크 범위 밖 프로젝트 구조 열람 차단
-  if (!canReadProjectId(await readScopeOf(c, user), pid)) return c.json({ error: 'forbidden' }, 403)
+  const dscope = await readScopeOf(c, user)
+  if (!canReadProjectId(dscope, pid)) return c.json({ error: 'forbidden' }, 403)
+  // [WO 20261012-viewlink] 🔴 링크로 읽는 프로젝트(멤버 아님) = 배포 시점 구역 트리(동결본)
+  if (!isMemberInScope(dscope, pid) && linkReadPids(dscope).includes(String(pid))) {
+    const snap = await snapshotOf(c, String(pid))
+    if (!snap) return c.json({ error: 'forbidden' }, 403)
+    return c.json({ data: snap.decks.map(mapDeck), snapshot_at: snap.at })
+  }
   // [WO 20260921] 트리의 '도면' 단을 그리려면 deployment 의 파일명이 필요하다 → LEFT JOIN 으로 동봉.
   //   d.* 로 기존 컬럼은 전부 그대로 나가고, 별칭 2개만 추가된다(응답 필드 추가 전용).
   const { results } = await c.env.DB.prepare(
@@ -4633,6 +4954,17 @@ app.get('/tables/deployments', async (c) => {
   // [WO 20261009-readacl] 🔴 읽기 SoT — 테넌트가 아니라 프로젝트 멤버십·링크 범위·게이트로 거른다(감사 H1·H2).
   const s = await readScopeOf(c, user)
   let results: any[] = []
+  // [WO 20261012-viewlink] 🔴 익명 링크 세션 = 배포 스냅샷 행만(작업본 0)
+  if (s.linkOnly) {
+    const out: any[] = []
+    for (const pid of linkReadPids(s)) {
+      const snap = await snapshotOf(c, pid)
+      if (!snap) continue
+      for (const id of snap.depIds) { const row = await snapshotDepRow(c, pid, id); if (row) out.push(row) }
+    }
+    out.sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0))
+    return c.json({ data: out.slice(0, limit).map((r: any) => mapDeploymentFor(r, true, LINK_VIEW_MODE)), total: Math.min(out.length, limit) })
+  }
   if (s.all) {
     const r = await c.env.DB.prepare('SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?').bind(limit).all()
     results = r.results || []
@@ -4647,7 +4979,14 @@ app.get('/tables/deployments', async (c) => {
     results = ids.map((id) => byId.get(id)).filter(Boolean)
   }
   const midx = await depRefIndexOf(c)
-  return c.json({ data: results.map((r: any) => mapDeploymentFor(r, maskForDepRow(s, midx, r), linkModeForRow(s, midx, r))), total: results.length })
+  // [WO 20261012-viewlink] 로그인 비멤버가 링크로 읽는 행(linkModeForRow != null)은 동결본으로 바꿔 싣는다(작업본 노출 0)
+  const outRows: any[] = []
+  for (const r of results) {
+    const lm = linkModeForRow(s, midx, r)
+    if (lm) { const snap = await linkSnapRow(c, s, String(r.id)); if (snap) outRows.push(mapDeploymentFor(snap.row, true, lm)); continue }
+    outRows.push(mapDeploymentFor(r, maskForDepRow(s, midx, r), lm))
+  }
+  return c.json({ data: outRows, total: outRows.length })
 })
 
 // 단건 조회 (특정 배포본 고정 공유 — B1)
@@ -4660,12 +4999,25 @@ app.get('/tables/deployments/:id', async (c) => {
   // [설계서 D4 · 버전 폴링] ?fields=version → 편집 화면의 20초 폴링이 쓰는 경량 응답(pins 등 본문 없이 버전만).
   //   권한 가드(로그인·테넌트)는 아래 그대로 공유한다 — 별도 라우트를 만들지 않는다.
   const light = c.req.query('fields') === 'version'
+  const scope = await readScopeOf(c, user)
+  // [WO 20261012-viewlink] 🔴 링크로 읽는 요청 = 배포 스냅샷(동결본)만. 멤버로 읽을 수 있는 프로젝트면 작업본(설계 화면).
+  {
+    const ridx = await depRefIndexOf(c)
+    const liveRow: any = await c.env.DB.prepare('SELECT id, project_id, tenant_id FROM deployments WHERE id = ?').bind(id).first()
+    const memberRead = !!liveRow && !scope.linkOnly && (scope.all || boundPidsOf(ridx, liveRow).some((p) => scope.pids.has(p)) ||
+      (!boundPidsOf(ridx, liveRow).length && canReadDepRow(scope, ridx, liveRow)))
+    if (!memberRead && linkReadPids(scope).length) {
+      const snap = await linkSnapRow(c, scope, String(id))
+      if (!snap) return c.json({ error: 'forbidden' }, 403)
+      if (light) return c.json({ id: snap.row.id, version: (snap.row.version != null ? snap.row.version : 0), deleted: false, snapshot: true })
+      return c.json({ ...mapDeploymentFor(snap.row, true, LINK_VIEW_MODE), snapshot_at: (await snapshotOf(c, snap.pid))?.at || null })
+    }
+  }
   const row = await c.env.DB.prepare(light
     ? 'SELECT id, version, deleted, tenant_id, project_id FROM deployments WHERE id = ?'
     : 'SELECT * FROM deployments WHERE id = ?').bind(id).first()
   if (!row) return c.json({ error: 'not found' }, 404)
   // [WO 20261009-readacl] 🔴 읽기 SoT — 다른 프로젝트·범위 밖 링크·미배포 = 403(감사 H1: 익명 토큰으로 비공개 B 200)
-  const scope = await readScopeOf(c, user)
   if (!canReadDepRow(scope, await depRefIndexOf(c), row)) return c.json({ error: 'forbidden' }, 403)
   //   (종전 테넌트 검사는 canReadDepRow 가 대체 — 귀속 없는 레거시 배포본은 거기서 디자이너 자기 테넌트로 한정)
   if (light) {
@@ -4684,17 +5036,28 @@ app.post('/api/view-links', async (c) => {
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
   const depId = typeof body.dep_id === 'string' ? body.dep_id.trim() : ''
   if (!depId) return c.json({ error: 'dep_id required' }, 400)
-  const mode = (typeof body.mode === 'string' && body.mode) ? body.mode.trim() : null
-  if (mode && mode !== 'checker' && mode !== '360') return c.json({ error: "mode must be 'checker' or '360'" }, 400)
+  // [WO 20261012-viewlink] 🔴 마스터 "배포시에는 360만 배포하는거다" — 요청 모드와 무관하게 '360' 으로 저장(구버전 클라가 보낸 checker/둘다 포함).
+  //   형식 검증은 유지한다(오타·주입 값은 400 — 조용히 삼키지 않는다).
+  const reqMode = (typeof body.mode === 'string' && body.mode) ? body.mode.trim() : null
+  if (reqMode && reqMode !== 'checker' && reqMode !== '360') return c.json({ error: "mode must be 'checker' or '360'" }, 400)
+  const mode = LINK_VIEW_MODE
   const dep: any = await c.env.DB.prepare('SELECT id, project_id FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
   if (!dep) return c.json({ error: 'not found' }, 404)
   const denied = await deploymentWriteDenied(c, user, dep.project_id)
   if (denied) return c.json({ error: denied.error }, denied.status)
-  const id = genId('lk')
+  // [WO 20261012-viewlink] 🔴 링크 id = 주소의 열쇠(`/v/<id>`) → 80비트 암호난수(randShareToken). 종전 genId('lk')는 시각+Math.random(비암호).
   const now = Date.now()
-  await c.env.DB.prepare('INSERT INTO view_links (id, dep_id, mode, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, depId, mode, String(user.email || ''), now).run()
-  return c.json({ id, dep_id: depId, mode, created_at: now })
+  let id = ''
+  for (let i = 0; i < 5 && !id; i++) {
+    const cand = randShareToken()
+    try {
+      await c.env.DB.prepare('INSERT INTO view_links (id, dep_id, mode, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(cand, depId, mode, String(user.email || ''), now).run()
+      id = cand
+    } catch { /* PK 충돌(천문학적 확률) → 새 토큰으로 재시도 */ }
+  }
+  if (!id) return c.json({ error: 'link issue failed' }, 500)
+  return c.json({ id, dep_id: depId, mode, created_at: now, path: viewPath(id) })
 })
 
 app.get('/api/view-links', async (c) => {
@@ -4707,7 +5070,8 @@ app.get('/api/view-links', async (c) => {
   const denied = await deploymentWriteDenied(c, user, dep.project_id)
   if (denied) return c.json({ error: denied.error }, denied.status)
   const r: any = await c.env.DB.prepare('SELECT id, dep_id, mode, created_by, created_at, revoked_at FROM view_links WHERE dep_id = ? ORDER BY created_at DESC').bind(depId).all()
-  return c.json({ data: r.results || [] })
+  // [WO 20261012-viewlink] 주소는 서버 SoT(viewPath)에서만 — 클라가 경로를 조립하지 않는다.
+  return c.json({ data: (r.results || []).map((x: any) => ({ ...x, path: viewPath(String(x.id)) })) })
 })
 
 app.post('/api/view-links/:id/revoke', async (c) => {
@@ -5264,7 +5628,23 @@ function mapNoteRaw(r: any, withContact = false) {
     created_at: r.created_at,
     updated_at: r.updated_at,
     resolved_at: r.resolved_at,
+    pano_view: parsePanoView(r.pano_view),   // [WO 20261012-viewlink] 작성 당시 360 사진·시점(없으면 null)
+    // [WO 20261012-viewlink] 작성 링크(열람 세션 출처) — 관리 화면(요청함 = withContact)에만
+    ...(withContact ? { link_ref: r.link_ref ?? null } : {}),
   }
+}
+
+/** [WO 20261012-viewlink] 🔴 360 시점 SoT — 저장(POST /api/notes)과 응답(mapNoteRaw)이 같은 검증을 쓴다.
+ *  image_id(문자열 ≤120) + yaw/pitch/fov(유한 수, 범위 클램프). 하나라도 깨지면 null(지어내지 않는다). */
+function parsePanoView(raw: any): { image_id: string, yaw: number, pitch: number, fov: number | null } | null {
+  let o: any = raw
+  if (typeof raw === 'string') { try { o = JSON.parse(raw) } catch { return null } }
+  if (!o || typeof o !== 'object') return null
+  const image_id = typeof o.image_id === 'string' ? o.image_id.trim().slice(0, 120) : ''
+  const yaw = Number(o.yaw), pitch = Number(o.pitch)
+  if (!image_id || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return null
+  const fovN = Number(o.fov)
+  return { image_id, yaw: ((yaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, pitch)), fov: Number.isFinite(fovN) ? Math.max(10, Math.min(120, fovN)) : null }
 }
 
 /** [WO 20261001-viewreq] 🔴 노트 주체 판정 — 단일 지점(작성·수정·삭제·요청함이 공유).
@@ -5419,8 +5799,9 @@ app.post('/api/notes', async (c) => {
   // 작성자 — 실계정은 계정 정보, 익명(공유/배포 링크·무토큰)은 자기 신고 이름(필수) + 회신 이메일(선택)
   let author: string, author_contact: string | null = null
   if (a.role === 'guest') {
-    author = String(body.author || '').trim()
-    if (!author) return c.json({ error: '이름을 입력하세요.' }, 400)
+    // [WO 20261012-viewlink] 이름/소속은 **선택** — 열람 세션엔 사람 신원이 없다(VIEW_LINK_USER). 비우면 '열람자'.
+    //   출처는 자기 신고 이름이 아니라 서명된 링크(link_ref)로 남긴다(아래).
+    author = String(body.author || '').trim() || VIEW_LINK_USER.name
     if (author.length > NOTE_AUTHOR_MAX) return c.json({ error: `이름은 ${NOTE_AUTHOR_MAX}자 이내로 입력하세요.` }, 400)
     const contact = String(body.contact || '').trim()
     if (contact && (contact.length > NOTE_CONTACT_MAX || !isValidEmail(contact))) return c.json({ error: '회신 이메일 형식이 올바르지 않습니다.' }, 400)
@@ -5454,19 +5835,24 @@ app.post('/api/notes', async (c) => {
 
   const id = genId('note')
   const now = Date.now()
+  // [WO 20261012-viewlink] 열람 세션 출처 = 서명된 링크 범위(_scope)에서만 — 클라이언트가 보낸 값을 쓰지 않는다.
+  const sc = (a.role === 'guest' && a.user && a.user._scope) || null
+  const link_ref = sc ? (sc.l ? String(sc.l) : (sc.th ? 'share:' + String(sc.th) : (sc.d ? 'dep:' + String(sc.d) : null))) : null
+  // [WO 20261012-viewlink] 360 사진 안 요청 — 작성 당시 사진·시점(검증 실패면 null). 답변은 원 요청 위치를 따르므로 싣지 않는다.
+  const pv = parent ? null : parsePanoView(body.view)
   const row = {
     id, deployment_id, pin_id, pin_label, body: text, status, assignee, due_at, severity, author, author_email: a.email, author_role: a.role,
     created_at: now, updated_at: now, resolved_at: status === 'done' ? now : null,
-    kind, parent_id: parent ? String(parent.id) : null, deck_id, author_contact,
+    kind, parent_id: parent ? String(parent.id) : null, deck_id, author_contact, link_ref, pano_view: pv ? JSON.stringify(pv) : null,
   }
   await c.env.DB.prepare(
     `INSERT INTO pin_notes
       (id, deployment_id, pin_id, pin_label, body, status, assignee, due_at, severity, author, author_email, author_role, created_at, updated_at, resolved_at, deleted,
-       kind, parent_id, deck_id, author_contact, author_key_hash, ip)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
+       kind, parent_id, deck_id, author_contact, author_key_hash, ip, link_ref, pano_view)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.due_at, row.severity, row.author, row.author_email, row.author_role,
-    row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey
+    row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey, row.link_ref, row.pano_view
   ).run()
   return c.json({ ...mapNote(row, mod || a.role === 'guest', mod ? undefined : a.email), ...(editKey ? { edit_key: editKey } : {}) })
 })
@@ -5605,6 +5991,17 @@ app.all('*', async (c) => {
     //   ⚠ _worker.js(Advanced Mode)에선 _headers 가 무시되므로 워커에서 직접 헤더를 씌운다.
     //   CF ASSETS 기본 max-age=14400(4시간)이 "배포해도 새로고침 안 됨 + 깨짐"의 원인이었다.
     const p = url.pathname
+    // [WO 20261012-viewlink] 하위호환 열람 링크(`/?d=` · `?lk=`)도 같은 열람 셸(중립 제목 · 허브 미표시 클래스)
+    if (p === '/' && (url.searchParams.get('d') || url.searchParams.get('lk'))) {
+      // 배포 취소·폐기된 하위호환 링크 = 앱 셸 대신 "배포가 중단된 링크" 화면(데이터 0) — `/v/` 와 같은 판정
+      const qd = String(url.searchParams.get('d') || ''), ql = String(url.searchParams.get('lk') || '')
+      if (!(await viewLinkScope(c, ql ? { lk: ql } : { d: qd }))) {
+        const known: any = ql ? await c.env.DB.prepare('SELECT 1 AS x FROM view_links WHERE id = ?').bind(ql).first().catch(() => null)
+          : await c.env.DB.prepare('SELECT 1 AS x FROM deployments WHERE id = ? AND deleted = 0').bind(qd).first().catch(() => null)
+        if (known) return shareWithdrawn(c)
+      }
+      res = await asViewLinkShell(res)
+    }
     const isShell = p === '/' || p === '/sw.js' || p === '/manifest.webmanifest' || /\.(html|css|js)$/i.test(p)
     if (isShell) {
       res = new Response(res.body, res)   // 헤더 수정 가능하도록 복제

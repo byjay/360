@@ -25,7 +25,8 @@ const SRC = { srv: rd("src/index.tsx"), ui: rd(M + "11_UI.js"), notes: rd(M + "1
 const MUTS = {
   "allowlist":     ["srv", ", '/api/inquiries', '/api/notes']", ", '/api/inquiries']"],
   "readonly-id":   ["srv", "if (!user || user._readonly) return { user, designer: false, role: 'guest', email: null }", "if (!user) return { user, designer: false, role: 'guest', email: null }"],
-  "name-required": ["srv", "if (!author) return c.json({ error: '이름을 입력하세요.' }, 400)", "if (!author) author = '익명'"],
+  // [WO 20261012-viewlink] 이름 필수 → 선택(비우면 '열람자') 로 계약 변경 — 뮤테이션도 새 계약의 기본값 제거로 바꾼다
+  "name-default":  ["srv", "author = String(body.author || '').trim() || VIEW_LINK_USER.name", "author = String(body.author || '').trim()"],
   "viewer-kind":   ["srv", "if (!a.designer && !NOTE_VIEWER_KINDS.includes(kind)) return", "if (false) return"],
   "rate":          ["srv", "if (limiterKey && await overRateLimit(c, 'pin_notes', limiterKey, NOTE_REQUEST_RATE_LIMIT_PER_MIN))", "if (false)"],
   "edit-key":      ["srv", "if (key && note.author_key_hash && (await sha256Hex(key)) === String(note.author_key_hash)) return 'author'", "if (note.author_key_hash) return 'author'"],
@@ -182,8 +183,14 @@ try {
   ok(pa.status === 403, "S1 공유 링크 세션 핀 편집 PATCH → 403(readOnlyGuard 유지) — " + pa.status);
 
   console.log("\n[S2 공유 링크 익명 — 이름 필수 · 수정키 · 핀 없는 요청]");
+  // [WO 20261012-viewlink] 마스터 "뷰어는 ... 코멘트노드의 쓰기 권한으로 작성후 디자이너에게 문의할 권한만" + 열람 세션 = 사람 신원 0
+  //   → 이름/소속은 선택, 비우면 '열람자'(종전 계약: 400). 아래 S6 집계를 바꾸지 않도록 만든 글은 수정키로 바로 지운다.
   const n0 = await api(anon1, "POST", "/api/notes", { deployment_id: dep1, pin_id: "p2", body: "질문입니다", kind: "question" });
-  ok(n0.status === 400, "S2 익명 이름 없음 → 400 — " + n0.status + " " + JSON.stringify(n0.j));
+  ok(n0.status === 200 && n0.j.author === "열람자" && typeof n0.j.edit_key === "string", "S2 익명 이름 없음 → 200 · author='열람자' — " + n0.status + " " + JSON.stringify(n0.j && n0.j.author));
+  if (n0.j && n0.j.id && n0.j.edit_key) {
+    const del0 = await api(anon1, "DELETE", "/api/notes/" + n0.j.id, null, { "X-Note-Key": n0.j.edit_key });
+    ok(del0.status === 200, "S2 이름 없이 쓴 글 → 본인 수정키로 삭제 200 — " + del0.status);
+  }
   const nb = await api(anon1, "POST", "/api/notes", { deployment_id: dep1, pin_id: "p2", body: "q", author: "김현장", contact: "not-an-email" });
   ok(nb.status === 400, "S2 회신 이메일 형식 오류 → 400 — " + nb.status);
   const a1 = await api(anon1, "POST", "/api/notes", { deployment_id: dep1, pin_id: "p2", pin_label: "2", body: "배관 위치가 맞나요?", kind: "question", author: "김현장", contact: "kim@field.test" });

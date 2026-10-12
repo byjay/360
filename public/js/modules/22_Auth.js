@@ -147,8 +147,10 @@
      *  🔴 _autoDesignerEntry 의 kind='viewer' 조건과 **같은 두 가지**여야 한다(p48·p61 계약 문구를 보존하려고 거기는 원형 유지).
      *  여기에 없는 링크 유형은 로그인 게이트로 간다(안전한 쪽으로 실패). */
     _isViewLink() {
+      // [WO 20261012-viewlink] 판정 SoT = ShareLink.isViewEntry(`/v/` · `/srview/` · `?d=` · `?lk=`)
+      if (typeof ShareLink !== "undefined" && ShareLink.isViewEntry) return ShareLink.isViewEntry();
       try { const q = new URLSearchParams(location.search); if (q.get("d") || q.get("lk")) return true; } catch (e) {}
-      return typeof ShareLink !== "undefined" && !!ShareLink.token();
+      return false;
     },
 
     /** [WO 20261009-readacl] 현재 열람 링크의 식별자 — 서버 auto-entry 에 보내는 값({d}|{t}|{lk})과 토큰-링크 짝 기록의 단일 소스.
@@ -161,11 +163,13 @@
         const d = q.get("d"); if (d) return { d };
       } catch (e) {}
       const t = (typeof ShareLink !== "undefined") ? ShareLink.token() : null;
-      return t ? { t } : null;
+      if (!t) return null;
+      // [WO 20261012-viewlink] 새 주소 `/v/<토큰>` = 공유 토큰 또는 뷰어 링크 id → 서버가 판별(v). 구 `/srview/` = 공유 토큰(t).
+      return /^\/v\//.test(location.pathname) ? { v: t } : { t };
     },
     _viewLinkKey() {
       const p = this._viewLinkParams();
-      return p ? (p.lk ? "lk:" + p.lk : p.d ? "d:" + p.d : "t:" + p.t) : null;
+      return p ? (p.lk ? "lk:" + p.lk : p.d ? "d:" + p.d : p.v ? "v:" + p.v : "t:" + p.t) : null;
     },
     /** 열람 토큰을 이 링크와 짝지어 기록(다음 진입 때 다른 링크면 버린다). */
     _bindViewToken() {
@@ -543,6 +547,10 @@
     },
 
     _openGate() {
+      // [WO 20261012-viewlink] 🔴 열람 링크 통행증 세션(readonly)은 로그인·사용 신청 게이트를 **절대** 보지 않는다.
+      //   종전: 오프라인 draft 자동 업로드 403 → authExpired → 여기 → (user 있음·디자이너 아님) → Request Access 에
+      //   예약 계정 이메일까지 노출(마스터 스크린샷 2026-10-12). requireDesigner·authExpired·Invite 등 모든 호출부의 공유 관문.
+      if (this.readonly) return;
       // 이미 로그인했지만 권한이 없는 계정이면 → 바로 사용신청(권한없음) 게이트로
       if (this.user && !this.isDesigner) { this._openAccessGate(); return; }
       const gate = document.getElementById("login-gate");
@@ -566,6 +574,7 @@
 
     /* ── 권한 없음 / 사용 신청(Request Access) 게이트 ── */
     _openAccessGate() {
+      if (this.readonly) return;   // [WO 20261012-viewlink] 열람 링크 세션 = 사용 신청 대상 아님(_openGate 와 같은 관문)
       const gate = document.getElementById("access-gate");
       if (!gate) return;
       // 본인 이메일 표시
@@ -961,7 +970,8 @@
       return { ok: true, user: this.user };
     },
     /** 서버 쓰기(업로드/동기화) 허용 여부 — 오프라인 검증만으로는 절대 허용하지 않는다. */
-    canServerWrite() { return !this._offlineOnly && !!this.idToken; },
+    // [WO 20261012-viewlink] 열람 링크 통행증(readonly)은 서버 쓰기 자격이 없다 — 자동 업로드·대기열 flush 가 스스로 멈춘다.
+    canServerWrite() { return !this._offlineOnly && !!this.idToken && !this.readonly; },
     async clearOfflineVerifier() { try { await SyncQueue.clearAuthRecord(); } catch (e) {} },
 
     signOut() {

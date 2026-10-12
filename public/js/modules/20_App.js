@@ -218,6 +218,10 @@
         UI.text("file-name-label", opts.project.name);
         State.currentProjectId = opts.project.id;
         State.currentProjectName = opts.project.name;
+      } else if (opts.project && opts.project.id) {
+        // [WO 20261012-viewlink] 열람 링크 = 이름 없는 프로젝트(공개 응답 비식별) — 범위(id)만 잡는다(트리·요청 연결)
+        State.currentProjectId = opts.project.id;
+        State.currentProjectName = "";
       }
 
       // 체크보드 모드 UI 반영: 토글 버튼 활성 + 배치 버튼 라벨 변경
@@ -3727,10 +3731,17 @@
        보이는 영역만 다시 그린다. 새 렌더 파이프라인은 만들지 않는다.
        ================================================================== */
 
+    /** [WO 20261012-viewlink] 🔴 열람 링크 세션(서버 판정 readonly)인가 — 이 기기에 남은 작업본(draft·대기열)을
+     *  **읽지도 올리지도 않는다**. 종전: 같은 기기에 남은 디자이너 draft 를 열람 세션이 자동 업로드(PUT /api/r2/upload 403)
+     *  → "원본 PDF 보관 실패" 배너 → authExpired → Request Access(예약 계정 노출) — 마스터 스크린샷 2026-10-12.
+     *  자동 동기화 진입점(SyncQueue._onReconnect)·draft 업로드(_flushDirtyDrafts)·구역 연결 재시도·업로드 SoT·draft 복원이 이 판정 하나를 쓴다. */
+    _readonlySession() { return typeof Auth !== "undefined" && !!Auth.readonly; },
+
     /** [SoT] /api/r2/upload PUT 공통 경로 — 원본 PDF 보관(_uploadSourcePdf)과 360 도형 첨부
      *  (_uploadAttachment, WO 20261001-panoshapes)가 함께 쓴다. 실패 -> null(호출부가 각자 처리). */
     async _uploadToR2(ab, contentType) {
       if (!ab || !ab.byteLength) return null;
+      if (this._readonlySession && this._readonlySession()) return null;   // [WO 20261012-viewlink] 열람 세션 = 업로드 요청 0
       try {
         const blob = new Blob([ab], { type: contentType || "application/octet-stream" });
         const r = await fetch("/api/r2/upload", {
@@ -4773,6 +4784,7 @@
     },
     /** 앱 시작/온라인 복귀 시: 미연결 도면↔구역 연결을 재시도해 누락을 복구 */
     async _flushDeckLinkQueue() {
+      if (this._readonlySession && this._readonlySession()) return;   // [WO 20261012-viewlink]
       let q = {};
       try { q = JSON.parse(localStorage.getItem(this._deckLinkKey()) || "{}"); } catch (e) { return; }
       const items = Object.values(q || {});
@@ -4811,6 +4823,7 @@
           if (!dep) { await this._restoreDraftLocal(); return; }
         } else {
           const r = await fetch("/tables/deployments/" + encodeURIComponent(deploymentId), { headers: Auth.headers() });
+          if (r.status === 410 && typeof ShareGate !== "undefined" && ShareGate.showWithdrawn) { ShareGate.showWithdrawn(); return; }   // [WO 20261012-viewlink] 배포 취소된 링크
           if (!r.ok) { await this._restoreDraftLocal(); return; }   // 서버 실패 → 로컬 폴백
           dep = await r.json();
         }
@@ -4897,6 +4910,7 @@
     async _restoreDraftLocal(key) {
       try {
         if (typeof SyncQueue === "undefined") return false;
+        if (this._readonlySession && this._readonlySession()) return false;   // [WO 20261012-viewlink] 열람 화면에 이 기기의 작업본을 섞지 않는다(배포 스냅샷만)
         const dkey = key || this._draftKey();
         const d = await SyncQueue.loadDraft(dkey);
         if (!d || !d.pages || !d.pages.length) return false;
@@ -5017,6 +5031,7 @@
      *  다른 배포본을 기준으로 만든 draft(depId 불일치)는 이 서버본에 얹지 않는다(엉뚱한 도면에 핀 이식 금지). */
     async _readDirtyDraft(key, depId) {
       if (!key || typeof SyncQueue === "undefined" || !SyncQueue.loadDraft) return null;
+      if (this._readonlySession && this._readonlySession()) return null;   // [WO 20261012-viewlink] 열람 세션 = 동결본만(작업본 병합 0)
       let d = null;
       try { d = await SyncQueue.loadDraft(key); } catch (e) { return null; }
       if (!d || !d.dirty) return null;
@@ -5079,6 +5094,7 @@
     async _refreshUnsavedDecks() {
       try {
         if (typeof SyncQueue === "undefined" || !SyncQueue.allDraftKeys) return;
+        if (this._readonlySession && this._readonlySession()) return;   // [WO 20261012-viewlink] 열람 트리에 이 기기 작업본의 '미저장' 표시 0
         const keys = (await SyncQueue.allDraftKeys()) || [];
         let changed = false;
         for (const k of keys) {
@@ -5101,6 +5117,7 @@
     async _restoreProjectDraft(pid) {
       try {
         if (!pid || typeof SyncQueue === "undefined" || !SyncQueue.allDraftKeys) return false;
+        if (this._readonlySession && this._readonlySession()) return false;   // [WO 20261012-viewlink]
         let keys = [];
         try { keys = (await SyncQueue.allDraftKeys()) || []; } catch (e) { return false; }
         const prefix = pid + "::";
@@ -5165,6 +5182,7 @@
     /** 온라인 복귀 시 dirty draft 를 서버로 자동 업로드 */
     async _flushDirtyDrafts() {
       if (!navigator.onLine) return;
+      if (this._readonlySession && this._readonlySession()) return;   // [WO 20261012-viewlink] 열람 세션은 이 기기의 작업본을 올리지 않는다
       if (typeof SyncQueue === "undefined") return;
       let keys = [];
       try { keys = await SyncQueue.allDraftKeys(); } catch (e) { return; }
@@ -5738,10 +5756,8 @@
         return;
       }
 
-      // [WO 20261011-viewmode] 마스터: "배포는 체커보드와 360 모드 각각 가능하게" — 범위 선택(구역·영역)은 그대로,
-      //   핀 모드만 고른다. 취소하면 배포하지 않는다(실수로 전체 공개 방지).
-      const depMode = await this._pickDeployMode();
-      if (depMode === "__cancel__") return;
+      // [WO 20261012-viewlink] 🔴 마스터 "배포시에는 360만 배포하는거다" — 모드 선택(CHECKER/360/둘다) 제거.
+      //   열람 링크는 서버가 항상 360 핀만 내려준다(LINK_VIEW_MODE). 배포 = 프로젝트 스냅샷 동결 + 같은 링크 유지.
 
       btn.disabled = true; btn.textContent = "배포 중...";
       status.classList.add("hidden"); status.classList.remove("error");
@@ -5780,46 +5796,16 @@
         const _m = _origin.match(/^https?:\/\/[a-f0-9]{6,}\.(scan360\.pages\.dev)$/i);
         if (_m) _origin = "https://" + _m[1];
 
-        // [WO 20261011-viewmode] 모드별 링크 발급(view_links) — 실패해도 하위호환 링크(둘다)로 배포는 끝낸다.
-        let linkId = null, linkErr = "";
-        try {
-          const lr = await fetch("/api/view-links", {
-            method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, Auth.headers()),
-            body: JSON.stringify({ dep_id: depId, mode: depMode || null })
-          });
-          const lj = await lr.json();
-          if (lr.ok && lj && lj.id) linkId = lj.id; else linkErr = (lj && lj.error) || ("HTTP " + lr.status);
-        } catch (e) { linkErr = String(e && e.message || e); }
-
-        const viewerUrl = _origin + location.pathname + "?mode=viewer" +
-          (depId ? "&d=" + encodeURIComponent(depId) : "") +
-          (linkId ? "&lk=" + encodeURIComponent(linkId) : "");
-        const modeLabel = depMode === "checker" ? "CHECKER 전용" : depMode === "360" ? "360 전용" : "체커+360 전체";
-        // [C-LOOP1 결함1] 공유가 목적인 시스템 → 원클릭 링크 복사 버튼 제공
-        status.innerHTML =
-          "배포 완료! (" + pageCount + "페이지 / " + State.pins.length + "핀 · " + modeLabel + ")<br>" +
-          (linkErr ? "<span style='color:#f87171'>⚠ 모드 링크 발급 실패(" + UI.escapeHtml(linkErr) + ") — 구버전 링크(둘다)로 공유됩니다</span><br>" : "") +
-          "뷰어 전용 링크:<br>" +
-          "<a id='deploy-link' href='" + viewerUrl + "' target='_blank' style='color:#10b981;word-break:break-all'>" + viewerUrl + "</a><br>" +
-          "<button id='btn-copy-link' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer;font-size:13px'>링크 복사</button> " +
-          "<button id='btn-manage-links' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #93c5fd;background:transparent;color:#93c5fd;cursor:pointer;font-size:13px'>링크 관리</button> " +
-          "<button id='btn-view-manual' type='button' style='margin-top:8px;padding:6px 14px;border-radius:8px;border:1px solid #fbbf24;background:transparent;color:#fbbf24;cursor:pointer;font-size:13px'>매뉴얼 보기</button>";
-        status.classList.remove("hidden");
-        // 복사 버튼 핸들러 (clipboard API + execCommand 폴백)
-        const copyBtn = document.getElementById("btn-copy-link");
-        if (copyBtn) {
-          copyBtn.addEventListener("click", async () => {
-            const ok = await App._copyToClipboard(viewerUrl);
-            copyBtn.textContent = ok ? "복사됨!" : "복사 실패 — 링크를 길게 눌러 복사하세요";
-            setTimeout(() => { copyBtn.textContent = "링크 복사"; }, 2200);
-          });
-        }
-        const mgBtn = document.getElementById("btn-manage-links");
-        if (mgBtn) mgBtn.addEventListener("click", () => this._openLinkManager(depId));
-        const manBtn = document.getElementById("btn-view-manual");
-        if (manBtn) manBtn.addEventListener("click", () => {
-          window.open(depMode === "360" ? "/manual/viewer-360.html" : depMode === "checker" ? "/manual/viewer-checker.html" : "/manual/viewer-checker.html", "_blank");
-        });
+        // [WO 20261012-viewlink] 🔴 배포 = 서버가 이 시점의 구역 트리·배포본을 **스냅샷으로 동결**(publish — 최초·다시 배포 같은 지점).
+        //   열람자는 동결본만 본다 → 배포 후 편집은 [다시 배포(업데이트)] 전까지 노출 0. 링크는 같은 것을 유지(공유 토큰).
+        const proj = (typeof Projects !== "undefined") ? Projects.currentProject : null;
+        if (!proj || !proj.id) throw new Error("프로젝트를 연 상태에서만 배포할 수 있습니다");
+        btn.textContent = "배포 스냅샷 동결 중...";
+        const pr = await fetch("/api/projects/" + encodeURIComponent(proj.id) + "/publish", { method: "POST", headers: Auth.headers() });
+        const pj = await pr.json().catch(() => ({}));
+        if (!pr.ok || !pj || !pj.project || !pj.project.share_path) throw new Error((pj && pj.error) || ("HTTP " + pr.status));
+        proj.published = true; proj.share_path = pj.project.share_path;
+        this._renderDeployStatus(status, { origin: _origin, project: proj, sharePath: pj.project.share_path, at: pj.snapshot_at, pageCount, pins: State.pins.length });
       } catch (e) {
         status.textContent = "배포 실패: " + e.message;
         status.classList.add("error");
@@ -5850,110 +5836,78 @@
       } catch (e) { return false; }
     },
 
-    /** [WO 20261011-viewmode] 배포 전 모드 선택 — CHECKER만 / 360만 / 둘 다. 취소 → '__cancel__'.
-     *  구역·영역 범위(현재 구역/도면)는 그대로다 — 이 선택은 핀 모드(view_links.mode)만 바꾼다. */
-    _pickDeployMode() {
-      return new Promise((resolve) => {
-        let modal = document.getElementById("wm-deploy-mode-modal");
-        if (!modal) {
-          modal = document.createElement("div");
-          modal.id = "wm-deploy-mode-modal";
-          modal.className = "admin-gate hidden";
-          modal.setAttribute("role", "dialog");
-          modal.setAttribute("aria-modal", "true");
-          modal.innerHTML =
-            '<div class="admin-gate-backdrop"></div>' +
-            '<div class="admin-gate-card">' +
-              '<h2 class="admin-gate-title">배포 범위를 고르세요</h2>' +
-              '<p class="admin-gate-sub">열람 링크에 어떤 모드의 포인트를 보여줄지 정합니다. 구역·영역 범위는 지금 화면 그대로입니다.</p>' +
-              '<div class="admin-gate-actions" style="flex-direction:column;gap:8px">' +
-                '<button id="wm-dm-checker" class="admin-gate-btn" type="button" style="width:100%">CHECKER 만(번호·리더선·보고서)</button>' +
-                '<button id="wm-dm-360" class="admin-gate-btn" type="button" style="width:100%">360 만(360 뷰어·사진 이력)</button>' +
-                '<button id="wm-dm-both" class="admin-gate-btn primary" type="button" style="width:100%">둘 다(전체)</button>' +
-                '<button id="wm-dm-cancel" class="admin-gate-btn ghost" type="button" style="width:100%">취소</button>' +
-              '</div>' +
-            '</div>';
-          document.body.appendChild(modal);
-        }
-        const close = (v) => {
-          modal.classList.remove("on");
-          setTimeout(() => { if (!modal.classList.contains("on")) modal.classList.add("hidden"); }, 200);
-          resolve(v);
-        };
-        document.getElementById("wm-dm-checker").onclick = () => close("checker");
-        document.getElementById("wm-dm-360").onclick = () => close("360");
-        document.getElementById("wm-dm-both").onclick = () => close(null);
-        document.getElementById("wm-dm-cancel").onclick = () => close("__cancel__");
-        modal.querySelector(".admin-gate-backdrop").onclick = () => close("__cancel__");
-        modal.classList.remove("hidden");
-        requestAnimationFrame(() => modal.classList.add("on"));
+    /** [WO 20261012-viewlink] 배포 결과 패널 — 링크 1개(같은 링크 유지) + 복사·QR · [다시 배포(업데이트)] · [새 링크 발급] · [배포 취소].
+     *  링크 문자열은 서버 SoT(share_path = viewPath)에서만 — 클라가 경로를 조립하지 않는다. */
+    _renderDeployStatus(status, o) {
+      const url = o.origin + o.sharePath;
+      const at = o.at ? new Date(o.at).toLocaleString("ko-KR") : "";
+      const B = (id, color, label) => "<button id='" + id + "' type='button' style='margin:8px 6px 0 0;padding:6px 14px;border-radius:8px;border:1px solid " + color + ";background:transparent;color:" + color + ";cursor:pointer;font-size:13px'>" + label + "</button>";
+      status.innerHTML =
+        "배포 완료 (" + (o.pageCount || 1) + "페이지 / " + (o.pins || 0) + "핀 · 360 전용" + (at ? " · " + UI.escapeHtml(at) + " 스냅샷" : "") + ")<br>" +
+        "<span style='color:#cbd5e1;font-size:12px'>열람자는 이 시점 내용만 봅니다. 이후 편집은 [다시 배포(업데이트)] 를 눌러야 반영됩니다.</span><br>" +
+        "뷰어 전용 링크:<br>" +
+        "<a id='deploy-link' href='" + UI.escapeHtml(url) + "' target='_blank' rel='noopener' style='color:#10b981;word-break:break-all'>" + UI.escapeHtml(url) + "</a><br>" +
+        B("btn-copy-link", "#10b981", "링크 복사") + B("btn-deploy-qr", "#93c5fd", "QR 보기") +
+        B("btn-deploy-update", "#fbbf24", "다시 배포(업데이트)") + B("btn-deploy-rotate", "#c4b5fd", "새 링크 발급") +
+        B("btn-deploy-cancel", "#f87171", "배포 취소") + B("btn-view-manual", "#fbbf24", "매뉴얼 보기") +
+        "<div id='deploy-qr-box' style='width:140px;height:140px;margin-top:8px;display:none;background:#fff;padding:6px;border-radius:6px'></div>";
+      status.classList.remove("hidden", "error");
+      const $ = (id) => document.getElementById(id);
+      const copyBtn = $("btn-copy-link");
+      if (copyBtn) copyBtn.addEventListener("click", async () => {
+        const ok = await App._copyToClipboard(url);
+        copyBtn.textContent = ok ? "복사됨!" : "복사 실패 — 링크를 길게 눌러 복사하세요";
+        setTimeout(() => { copyBtn.textContent = "링크 복사"; }, 2200);
       });
+      const qrBtn = $("btn-deploy-qr");
+      if (qrBtn) qrBtn.addEventListener("click", async () => {
+        const box = $("deploy-qr-box"); if (!box) return;
+        box.style.display = "block";
+        if (typeof QrPrint === "undefined") { box.textContent = "QR 라이브러리 없음"; return; }
+        try { const lib = await QrPrint._lib(); box.innerHTML = QrPrint.svgFor(lib, url); } catch (e) { box.textContent = "QR 생성 실패"; }
+      });
+      const up = $("btn-deploy-update");
+      if (up) up.addEventListener("click", () => this._deployToViewer());
+      const rot = $("btn-deploy-rotate");
+      if (rot) rot.addEventListener("click", () => this.deployRotateLink(o.project, status, o));
+      const cancel = $("btn-deploy-cancel");
+      if (cancel) cancel.addEventListener("click", async () => {
+        if (await this.deployCancel(o.project)) { status.textContent = "배포를 취소했습니다 — 링크로 접속하면 \"배포가 중단된 링크입니다\" 가 표시됩니다. [뷰어로 배포] 를 누르면 같은 링크로 다시 열립니다."; }
+      });
+      const man = $("btn-view-manual");
+      if (man) man.addEventListener("click", () => window.open("/manual/viewer-360.html", "_blank"));
     },
 
-    /** [WO 20261011-viewmode] 링크 관리 — 모드·발급일·폐기 상태 표시, 복사·폐기·QR. */
-    async _openLinkManager(depId) {
-      let modal = document.getElementById("wm-link-mgr-modal");
-      if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "wm-link-mgr-modal";
-        modal.className = "admin-gate hidden";
-        modal.setAttribute("role", "dialog");
-        modal.setAttribute("aria-modal", "true");
-        modal.innerHTML =
-          '<div class="admin-gate-backdrop"></div>' +
-          '<div class="admin-gate-card" style="max-width:520px;max-height:80vh;overflow:auto">' +
-            '<h2 class="admin-gate-title">뷰어 링크 관리</h2>' +
-            '<div id="wm-lm-list" style="text-align:left;font-size:13px"></div>' +
-            '<div class="admin-gate-actions"><button id="wm-lm-close" class="admin-gate-btn ghost" type="button">닫기</button></div>' +
-          '</div>';
-        document.body.appendChild(modal);
-        modal.querySelector(".admin-gate-backdrop").onclick = () => { modal.classList.remove("on"); setTimeout(() => modal.classList.add("hidden"), 200); };
-        document.getElementById("wm-lm-close").onclick = () => { modal.classList.remove("on"); setTimeout(() => modal.classList.add("hidden"), 200); };
-      }
-      const list = modal.querySelector("#wm-lm-list");
-      list.innerHTML = "불러오는 중...";
-      modal.classList.remove("hidden");
-      requestAnimationFrame(() => modal.classList.add("on"));
-      let origin = location.origin;
-      const _m = origin.match(/^https?:\/\/[a-f0-9]{6,}\.(scan360\.pages\.dev)$/i);
-      if (_m) origin = "https://" + _m[1];
+    /** [WO 20261012-viewlink] 🔴 배포 취소 SoT — 확인 2번(마스터 지시) → POST unpublish. 허브 카드 [배포 취소]도 이 함수 하나를 쓴다.
+     *  열람 링크·이미 발급된 통행증은 서버가 즉시 410 으로 끊는다. 열람자 코멘트는 보존(서버가 지우지 않는다). @returns 취소했으면 true */
+    async deployCancel(p) {
+      if (!p || !p.id) return false;
+      const ok1 = await Prompt.confirm("배포 취소", "배포를 취소할까요?\n\n링크로 접속한 열람자에게 \"배포가 중단된 링크입니다\" 가 표시되고, 이미 열린 화면도 더 이상 데이터를 받지 못합니다.");
+      if (!ok1) return false;
+      const ok2 = await Prompt.confirm("배포 취소 — 마지막 확인", "정말 배포를 중단합니다.\n\n(열람자가 남긴 요청·질문은 보존됩니다. 다시 배포하면 같은 링크가 최신 내용으로 다시 열립니다.)");
+      if (!ok2) return false;
       try {
-        const r = await fetch("/api/view-links?dep_id=" + encodeURIComponent(depId), { headers: Auth.headers() });
-        const j = await r.json();
-        const rows = (j && j.data) || [];
-        if (!rows.length) { list.innerHTML = "<p>발급된 링크가 없습니다.</p>"; return; }
-        list.innerHTML = rows.map((row) => {
-          const url = origin + location.pathname + "?mode=viewer&d=" + encodeURIComponent(depId) + "&lk=" + encodeURIComponent(row.id);
-          const modeLabel = row.mode === "checker" ? "CHECKER 전용" : row.mode === "360" ? "360 전용" : "둘 다";
-          const when = row.created_at ? new Date(row.created_at).toLocaleString("ko-KR") : "";
-          const revoked = !!row.revoked_at;
-          return '<div style="border:1px solid #333;border-radius:8px;padding:10px;margin-bottom:8px' + (revoked ? ";opacity:.55" : "") + '">' +
-            '<div><b>' + UI.escapeHtml(modeLabel) + '</b>' + (revoked ? ' <span style="color:#f87171">(폐기됨)</span>' : '') + ' <span style="color:#888;font-size:11px">' + UI.escapeHtml(when) + '</span></div>' +
-            '<div style="word-break:break-all;font-size:12px;color:#93c5fd;margin:4px 0">' + UI.escapeHtml(url) + '</div>' +
-            '<div id="wm-lm-qr-' + row.id + '" style="width:120px;height:120px;margin:6px 0"></div>' +
-            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-              '<button type="button" class="wm-lm-copy" data-url="' + UI.escapeHtml(url) + '" style="padding:4px 10px;border-radius:6px;border:1px solid #10b981;background:transparent;color:#10b981;cursor:pointer">복사</button>' +
-              '<button type="button" class="wm-lm-qr" data-url="' + UI.escapeHtml(url) + '" data-target="wm-lm-qr-' + row.id + '" style="padding:4px 10px;border-radius:6px;border:1px solid #93c5fd;background:transparent;color:#93c5fd;cursor:pointer">QR 보기</button>' +
-              (revoked ? '' : '<button type="button" class="wm-lm-revoke" data-id="' + row.id + '" style="padding:4px 10px;border-radius:6px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer">폐기</button>') +
-            '</div></div>';
-        }).join("");
-        list.querySelectorAll(".wm-lm-copy").forEach((b) => b.addEventListener("click", async () => {
-          const ok = await App._copyToClipboard(b.getAttribute("data-url"));
-          b.textContent = ok ? "복사됨!" : "실패"; setTimeout(() => { b.textContent = "복사"; }, 1800);
-        }));
-        list.querySelectorAll(".wm-lm-qr").forEach((b) => b.addEventListener("click", async () => {
-          const box = document.getElementById(b.getAttribute("data-target"));
-          if (!box) return;
-          if (typeof QrPrint === "undefined") { box.textContent = "QR 라이브러리 없음"; return; }
-          try { const lib = await QrPrint._lib(); box.innerHTML = QrPrint.svgFor(lib, b.getAttribute("data-url")); }
-          catch (e) { box.textContent = "QR 생성 실패"; }
-        }));
-        list.querySelectorAll(".wm-lm-revoke").forEach((b) => b.addEventListener("click", async () => {
-          if (!(await Prompt.confirm("링크 폐기", "이 링크로는 더 이상 열람할 수 없습니다. 계속할까요?"))) return;
-          await fetch("/api/view-links/" + encodeURIComponent(b.getAttribute("data-id")) + "/revoke", { method: "POST", headers: Auth.headers() });
-          this._openLinkManager(depId);
-        }));
-      } catch (e) { list.innerHTML = "<p>링크 목록을 불러오지 못했습니다.</p>"; }
+        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/unpublish", { method: "POST", headers: Auth.headers() });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { Prompt.toast && Prompt.toast("배포 취소 실패: " + ((j && j.error) || ("HTTP " + r.status))); return false; }
+        p.published = false;
+        Prompt.toast && Prompt.toast("배포를 취소했습니다");
+        return true;
+      } catch (e) { Prompt.toast && Prompt.toast("배포 취소 실패(네트워크)"); return false; }
+    },
+
+    /** [WO 20261012-viewlink] 새 링크 발급(선택) — 기본은 같은 링크 유지. 옛 링크는 즉시 죽는다(확인 1번). */
+    async deployRotateLink(p, status, o) {
+      if (!p || !p.id) return false;
+      if (!(await Prompt.confirm("새 링크 발급", "새 링크를 발급할까요?\n\n지금 링크는 즉시 열리지 않게 됩니다. 열람자에게 새 링크를 다시 보내야 합니다."))) return false;
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(p.id) + "/share-token/rotate", { method: "POST", headers: Auth.headers() });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.share_path) { Prompt.toast && Prompt.toast("새 링크 발급 실패: " + ((j && j.error) || ("HTTP " + r.status))); return false; }
+        p.share_path = j.share_path;
+        if (status) this._renderDeployStatus(status, Object.assign({}, o, { sharePath: j.share_path }));
+        return true;
+      } catch (e) { Prompt.toast && Prompt.toast("새 링크 발급 실패(네트워크)"); return false; }
     },
 
     /* ── 뷰어: 최신 배포본 자동 로드 ── */
@@ -6039,6 +5993,8 @@
               const t = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
               try {
                 const r1 = await fetch("/tables/deployments/" + encodeURIComponent(wantId), { headers: Auth.headers(), signal: ctrl.signal });
+                // [WO 20261012-viewlink] 배포 취소된 링크 = 데이터 0 화면(오프라인 번들·목록 폴백으로 옛 스냅샷을 보이지 않는다)
+                if (r1.status === 410 && typeof ShareGate !== "undefined" && ShareGate.showWithdrawn) { ShareGate.showWithdrawn(); return; }
                 if (r1.ok) latest = await r1.json();
               } finally { clearTimeout(t); }
             } catch (e) {}
@@ -6074,6 +6030,15 @@
         if (!Array.isArray(pages) || pages.length === 0) pages = [latest.drawing_data];
 
         State.currentDeploymentId = latest.id || null;  // 노트/협업 연결
+        // [WO 20261012-viewlink] 마스터 "뷰어는 디자이너가 지정한 구역트리별로 트리만 읽기 전용으로" — 링크 세션은 배포 시점 구역 트리
+        //   (서버 스냅샷)를 읽어 사이드바 트리로 탐색한다(펼치기·구역 이동·핀·360). 편집 진입점은 CSS(role-viewer)가 0 으로 만든다.
+        if (this._readonlySession && this._readonlySession() && State.currentProjectId && typeof Projects !== "undefined" && Projects.loadDecks &&
+            !(Projects.currentProject && String(Projects.currentProject.id) === String(State.currentProjectId))) {
+          const sp = (typeof ShareLink !== "undefined" && ShareLink.project) || {};
+          const vp = { id: State.currentProjectId, name: "", original_deployment_id: sp.original_deployment_id || null };
+          if (Projects.setCurrentProject) Projects.setCurrentProject(vp); else Projects.currentProject = vp;
+          Promise.resolve(Projects.loadDecks()).catch(() => {});
+        }
         // [WO 20261011-viewmode] 링크 모드('checker'|'360'|null=둘다) — 서버가 pins 를 이미 걸렀다(SoT).
         //   메뉴 쪽은 이 값으로 모드 전용 항목(data-vmode)을 보조로 숨긴다(데이터는 어차피 서버가 거름 — 이중 방어).
         State.viewMode = latest.view_mode || null;

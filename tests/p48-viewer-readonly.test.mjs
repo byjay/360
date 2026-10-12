@@ -27,6 +27,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+// [WO 20261012-viewlink] 열람 링크 읽기 = 배포 스냅샷(0044) — 가짜 저장소에 스냅샷 행 저장을 붙인다(SoT tests/_lib/fake-snapshot.mjs)
+import { snapFirst, snapAll, snapRun, snapBatch } from "./_lib/fake-snapshot.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -63,6 +65,7 @@ function makeDB(state) {
         bind(...a) {
           return {
             async first() {
+              { const __s = snapFirst(state, q, a); if (__s !== undefined) return __s; }
               if (like(q, "FROM app_settings WHERE scope = '*' AND skey = ?"))
                 return state.settings[a[0]] ? { value: state.settings[a[0]] } : null;
               if (like(q, "FROM local_sessions WHERE token = ?"))
@@ -81,8 +84,9 @@ function makeDB(state) {
               if (like(q, "FROM tenant_members WHERE email = ?")) return null;
               return null;
             },
-            async all() { return allOf(q); },
+            async all() { { const __s = snapAll(state, q, a); if (__s !== undefined) return __s; } return allOf(q); },
             async run() {
+              { const __s = snapRun(state, q, a); if (__s !== undefined) return __s; }
               if (like(q, "INSERT INTO app_settings")) {
                 // ON CONFLICT DO NOTHING — 이미 있으면 유지
                 if (!state.settings[a[0]]) state.settings[a[0]] = a[1];
@@ -100,7 +104,7 @@ function makeDB(state) {
         async run() { return { success: true }; },
       };
     },
-    batch: async () => [],
+    batch: snapBatch,
   };
 }
 function freshState() {
@@ -278,7 +282,13 @@ console.log("\n[⑧ 클라이언트 — `?d=` 일 때 열람전용 종류만 요
   //   `get("d")) return true` 인접 리터럴이 깨졌다(의미는 불변: ?d= 는 여전히 true). 함수 본문을 떼어
   //   토큰 존재로 판정 — 인접 문구가 아니라 "그 동작이 실제로 있는가"를 본다(더 튼튼 + 더 정확).
   const isViewLinkBody = (auth.match(/_isViewLink\(\)\s*\{([\s\S]*?)\n\s*\},/) || [])[1] || "";
-  ok(/get\("d"\)/.test(isViewLinkBody) && /return true/.test(isViewLinkBody) && /ShareLink\.token\(\)/.test(isViewLinkBody)
+  // [WO 20261012-viewlink] _isViewLink 는 판정 SoT(ShareLink.isViewEntry — /v/·/srview/·?d=·?lk=)에 위임한다(폴백으로 ?d= 직접 판정 유지).
+  //   전: _isViewLink 본문에 get("d")·return true·ShareLink.token() 이 직접 있어야 했다.
+  //   후: _isViewLink 가 ShareLink.isViewEntry() 를 부르고(또는 ?d= 폴백), isViewEntry 본문이 token(L) 과 get("d") 를 둘 다 본다.
+  const share = fs.readFileSync(path.join(ROOT, "public/js/modules/01c_ShareLink.js"), "utf8");
+  const isViewEntryBody = (share.match(/isViewEntry\(loc\)\s*\{([\s\S]*?)\n\s*\},/) || [])[1] || "";
+  ok(/ShareLink\.isViewEntry\(\)/.test(isViewLinkBody) && /get\("d"\)/.test(isViewLinkBody) && /return true/.test(isViewLinkBody)
+    && /this\.token\(L\)/.test(isViewEntryBody) && /get\("d"\)/.test(isViewEntryBody)
     && /AUTO_DESIGNER_ENTRY\s*\|\|\s*this\._isViewLink\(\)/.test(auth) && /const AUTO_DESIGNER_ENTRY = false;/.test(auth),
     "⑧ 공용석 종료(AUTO_DESIGNER_ENTRY=false) 후에도 열람 링크는 열람전용 자동입장");
   ok(auth.includes("/api/auth/auto-entry"), "⑧ 서버 발급 엔드포인트를 호출한다(고정 문자열 직접 사용 아님)");

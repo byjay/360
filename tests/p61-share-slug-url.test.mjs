@@ -12,6 +12,12 @@
  * 🔴 두 요구는 충돌한다(이름은 보여야 하는데 남의 것은 유추 불가해야 한다).
  *    해법 = **이름은 노출하되 열쇠가 아니다.** 열쇠는 80비트 암호난수 토큰이다.
  *
+ * 🔴 [WO 20261012-viewlink] 계약 변경 — 마스터 2026-10-12 "배포시 회사이름이나 프로젝트는 전체 보안화해
+ *    https://scan.seastar.work/까지만 노출하고" → 새 주소 = `/v/<토큰>`(이름 0). 슬러그 생성기(slugifyProjectName) 삭제.
+ *    구 `/srview/<이름>-<토큰>` 은 하위호환으로 계속 열린다(서버 200 → 클라이언트가 /v/ 로 replace — p149).
+ *    바뀐 단언: ①(주소 형태) ⑤c(이름 변경 후 주소) ⑥e·f(빈 이름 주소) ⑦(슬러그 → viewPath/isViewToken + 구 주소 왕복).
+ *    토큰 열쇠·열거 차단·평문 저장·?d= 하위호환·재배포 토큰 불변·쓰기 403 단언과 뮤테이션은 그대로.
+ *
  *  ① 배포 시 토큰 발급 + 주소에 프로젝트명이 보인다
  *  ② 🔴 토큰 없이 이름(slug)만으로는 404 — 비멤버 API 응답에도 토큰이 없다(열거 차단)
  *  ③ 토큰이 암호난수·80비트(≥64비트) — DB 평문 저장 여부와 그 판단 근거
@@ -34,6 +40,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+// [WO 20261012-viewlink] 열람 링크 읽기 = 배포 스냅샷(0044) — 가짜 저장소에 스냅샷 행 저장을 붙인다(SoT tests/_lib/fake-snapshot.mjs)
+import { snapFirst, snapAll, snapRun, snapBatch } from "./_lib/fake-snapshot.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -121,6 +129,7 @@ function makeDB(state) {
       const q = sql.replace(/\s+/g, " ").trim();
       const exec = (a) => ({
         async first() {
+          { const __s = snapFirst(state, q, a); if (__s !== undefined) return __s; }
           if (like(q, "FROM app_settings WHERE scope = '*' AND skey = ?")) return state.settings[a[0]] ? { value: state.settings[a[0]] } : null;
           if (like(q, "FROM local_sessions WHERE token = ?")) return state.sessions[a[0]] || null;
           if (like(q, "FROM local_users WHERE email = ?")) return state.localUsers[String(a[0]).toLowerCase()] || null;
@@ -148,12 +157,14 @@ function makeDB(state) {
           return null;
         },
         async all() {
+          { const __s = snapAll(state, q, a); if (__s !== undefined) return __s; }
           if (like(q, "FROM projects WHERE deleted = 0")) return { results: Object.values(state.projects).filter((p) => !p.deleted) };
           // [WO 20261009-readacl] 읽기 SoT(depRefIndexOf) — 살아있는 구역의 배포본 참조
           if (like(q, "FROM decks WHERE deleted = 0 AND deployment_id IS NOT NULL")) return { results: state.decks.filter((d) => !d.deleted && d.deployment_id) };
           return { results: [] };
         },
         async run() {
+          { const __s = snapRun(state, q, a); if (__s !== undefined) return __s; }
           if (like(q, "INSERT INTO app_settings")) { if (!state.settings[a[0]]) state.settings[a[0]] = a[1]; return { success: true }; }
           if (like(q, "UPDATE projects SET share_token = ?")) {
             const onlyIfNull = like(q, "share_token IS NULL");
@@ -177,7 +188,7 @@ function makeDB(state) {
       });
       return { bind: (...a) => exec(a), first: async () => exec([]).first(), all: async () => exec([]).all(), run: async () => exec([]).run() };
     },
-    batch: async () => [],
+    batch: snapBatch,
   };
 }
 
@@ -216,7 +227,7 @@ async function publish(call, pid) {
   return { status: r.status, project: j.project || null, error: j.error };
 }
 
-console.log("\n[① 배포 시 토큰 발급 · 주소에 프로젝트명이 보인다]");
+console.log("\n[① 배포 시 토큰 발급 · 주소 = /v/<토큰> (이름 0 — WO 20261012-viewlink)]");
 let STATE = freshState();
 let call = makeCaller(worker, STATE);
 {
@@ -225,13 +236,12 @@ let call = makeCaller(worker, STATE);
   ok(status === 200, "① publish → 200 (실제 " + status + ")");
   ok(!!project && typeof project.share_token === "string" && project.share_token.length === 16,
     "① share_token 16자 발급 → " + (project && project.share_token));
-  ok(!!project && typeof project.share_path === "string" && project.share_path.startsWith("/srview/"),
-    "① 주소가 /srview/ 로 시작(마스터: '보이는 건 seastar 과 srview') → " + (project && project.share_path));
+  ok(!!project && project.share_path === "/v/" + project.share_token,
+    "① 주소 = /v/<토큰>(마스터 2026-10-12 '회사이름이나 프로젝트는 전체 보안화') → " + (project && project.share_path));
   const readable = decodeURIComponent(project.share_path);
-  ok(readable.includes("선각"), "① 🔴 주소에 프로젝트 이름이 그대로 보인다(고객 인지) → " + readable);
-  ok(readable.endsWith("-" + project.share_token), "① 이름 뒤에 토큰이 붙는다 → " + readable);
+  ok(!readable.includes("선각"), "① 🔴 주소에 프로젝트 이름 0 → " + readable);
   // 실제 링크가 열리는지
-  const open = await call("GET", "/srview/" + encodeURIComponent(readable.split("/srview/")[1]));
+  const open = await call("GET", project.share_path);
   ok(open.status === 200, "① 발급된 전체 주소로 앱 셸 200 (실제 " + open.status + ")");
   const html = await open.text();
   ok(html.includes("/js/main.js"), "① 반환된 셸이 index.html 이다");
@@ -277,7 +287,7 @@ const TOK_A = STATE.projects.prj_a.share_token;
 
 console.log("\n[뮤테이션ⓐ] /srview 토큰 검사를 제거하면 ②가 실패해야 함");
 {
-  const w = await buildWorker([{ file: "index.tsx", from: "  if (!row) return shareNotFound(c)\n  return await serveAppShell(c)", to: "  return await serveAppShell(c)" }]);
+  const w = await buildWorker([{ file: "index.tsx", from: "  if (!row) return (token && await viewTokenWithdrawn(c, token)) ? shareWithdrawn(c) : shareNotFound(c)\n  return await serveAppShell(c)", to: "  return await serveAppShell(c)" }]);
   if (w) {
     const c2 = makeCaller(w, STATE);
     const r = await c2("GET", "/srview/" + encodeURIComponent("선각-a동"));
@@ -392,7 +402,7 @@ console.log("\n[⑤ 🔴 이름 변경 후에도 기존 토큰 링크가 열린�
   const r1 = await call("GET", oldPath);
   ok(r1.status === 200, "⑤b 🔴 **옛 이름**이 박힌 옛 링크가 그대로 열린다 (실제 " + r1.status + ")");
   const newPath = again.project.share_path;
-  ok(decodeURIComponent(newPath).includes("선각"), "⑤c 새 주소에는 바뀐 이름이 반영된다 → " + decodeURIComponent(newPath));
+  ok(newPath === "/v/" + TOK_A && !decodeURIComponent(newPath).includes("선각"), "⑤c 이름을 바꿔도 주소는 같은 /v/<토큰>(이름 0) → " + decodeURIComponent(newPath));
   const r2 = await call("GET", newPath);
   ok(r2.status === 200, "⑤d 새 주소도 열린다(둘 다 유효) (실제 " + r2.status + ")");
   const j = await (await call("GET", "/api/share/" + TOK_A)).json();
@@ -432,29 +442,28 @@ console.log("\n[⑥ 이름 중복·빈 이름에서 충돌 0]");
   const jb = await (await c3("GET", "/api/share/" + b.project.share_token)).json();
   ok(ja.project.id === "prj_1" && jb.project.id === "prj_2", "⑥d 각자 자기 프로젝트로 해석된다 → " + ja.project.id + " / " + jb.project.id);
   const e = await publish(c3, "prj_e"), s = await publish(c3, "prj_s");
-  ok(e.project.share_path.startsWith("/srview/project-"), "⑥e 빈 이름 → 기본 slug 'project' → " + e.project.share_path);
-  ok(s.project.share_path.startsWith("/srview/project-"), "⑥f 기호뿐인 이름 → 기본 slug 'project' → " + s.project.share_path);
+  ok(e.project.share_path === "/v/" + e.project.share_token, "⑥e 빈 이름 → /v/<토큰>(이름 무관) → " + e.project.share_path);
+  ok(s.project.share_path === "/v/" + s.project.share_token, "⑥f 기호뿐인 이름 → /v/<토큰> → " + s.project.share_path);
   const re = await c3("GET", e.project.share_path);
   ok(re.status === 200, "⑥g 빈 이름 프로젝트 링크도 정상 200 (실제 " + re.status + ")");
 }
 
-console.log("\n[⑦ 한글 이름 처리]");
+console.log("\n[⑦ 주소 SoT(viewPath) · 토큰 형식 · 한글 이름 구 주소 하위호환]");
 {
-  ok(util.slugifyProjectName("선각 A동") === "선각-a동", "⑦a '선각 A동' → " + util.slugifyProjectName("선각 A동"));
-  ok(util.slugifyProjectName("ㅅㄷㄴㅅ1") === "ㅅㄷㄴㅅ1", "⑦b 자모 이름 보존(실데이터) → " + util.slugifyProjectName("ㅅㄷㄴㅅ1"));
-  ok(util.slugifyProjectName("tes") === "tes" && util.slugifyProjectName("test1") === "test1", "⑦c 기존 실데이터 영문 이름 그대로");
-  ok(util.slugifyProjectName("A/B?C#D") === "a-b-c-d", "⑦d URL 구분자는 '-' 로 접힌다 → " + util.slugifyProjectName("A/B?C#D"));
-  ok(!util.slugifyProjectName("배 ---").endsWith("-"), "⑦e 슬러그는 '-' 로 끝나지 않는다(토큰 분리 유일성) → " + JSON.stringify(util.slugifyProjectName("배 ---")));
-  ok(Array.from(util.slugifyProjectName("한".repeat(80))).length === 40, "⑦f 길이 상한 40 코드포인트");
-  ok(util.slugifyProjectName("🚢🚢") === "project", "⑦g 이모지뿐인 이름 → 'project' (깨진 문자 생성 0)");
-  // 한글 slug 가 붙은 실제 경로가 왕복한다
+  const t = util.randShareToken();
+  ok(util.viewPath(t) === "/v/" + t, "⑦a viewPath(토큰) = /v/<토큰> → " + util.viewPath(t));
+  ok(util.isViewToken(t) && util.isViewToken("lk_mv4o90vr_819jprlh") && !util.isViewToken("선각-a동") && !util.isViewToken("abc") && !util.isViewToken("../etc"),
+    "⑦b isViewToken — 공유 토큰·구 뷰어 링크 id 만 통과(이름·짧은 값·경로 조작 거부)");
+  // 자모 이름 프로젝트 — 새 주소엔 이름이 없고, 이름이 박힌 구 주소는 인코딩/디코딩 두 형태 모두 계속 열린다
   const S = freshState(); const c4 = makeCaller(worker, S);
   addProject(S, "prj_k", "ㅅㄷㄴㅅ1");
   const p = await publish(c4, "prj_k");
-  ok(decodeURIComponent(p.project.share_path).startsWith("/srview/ㅅㄷㄴㅅ1-"), "⑦h 자모 이름 주소 → " + decodeURIComponent(p.project.share_path));
-  const enc = await c4("GET", p.project.share_path);                       // 퍼센트인코딩 형태
-  const dec = await c4("GET", decodeURIComponent(p.project.share_path));   // 사람이 읽는 형태(브라우저 붙여넣기)
-  ok(enc.status === 200 && dec.status === 200, "⑦i 인코딩/디코딩 두 형태 모두 200 (" + enc.status + "/" + dec.status + ")");
+  ok(p.project.share_path === "/v/" + p.project.share_token && !decodeURIComponent(p.project.share_path).includes("ㅅㄷㄴㅅ"), "⑦h 자모 이름 프로젝트 주소 = /v/<토큰>(이름 0) → " + p.project.share_path);
+  const legacy = "/srview/ㅅㄷㄴㅅ1-" + p.project.share_token;
+  const enc = await c4("GET", "/srview/" + encodeURIComponent("ㅅㄷㄴㅅ1") + "-" + p.project.share_token);   // 퍼센트인코딩 형태
+  const dec = await c4("GET", legacy);                                                                    // 사람이 읽는 형태(구 링크 붙여넣기)
+  const vv = await c4("GET", p.project.share_path);
+  ok(enc.status === 200 && dec.status === 200 && vv.status === 200, "⑦i 구 주소(인코딩/디코딩)·새 주소 모두 200 (" + enc.status + "/" + dec.status + "/" + vv.status + ")");
 }
 
 console.log("\n[⑧ 🔴 새 경로에서도 쓰기 403 — p48 보안 회귀 금지]");

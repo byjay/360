@@ -45,18 +45,24 @@ const watchdog = setTimeout(() => { console.log("\nWATCHDOG — 240s 초과 → 
 /* ── 뮤테이션(src 사본) ── */
 const MUTS = {
   noLink:   ["if (!sc) return c.json({ error: 'view link required", "if (false) return c.json({ error: 'view link required"],
-  list:     ["  const s = await readScopeOf(c, user)\n  let results: any[] = []\n  if (s.all) {", "  const s = await readScopeOf(c, user)\n  let results: any[] = []\n  if (true) {"],
+  // [WO 20261012-viewlink] 익명 링크 목록은 스냅샷 블록이 먼저 처리 — 범위 필터(if (s.all)) 자리는 그 블록 뒤로 이동(의미 동일)
+  list:     ["  if (s.all) {\n    const r = await c.env.DB.prepare('SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?')", "  if (true) {\n    const r = await c.env.DB.prepare('SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?')"],
   single:   ["if (!canReadDepRow(scope, await depRefIndexOf(c), row)) return c.json({ error: 'forbidden' }, 403)", "if (false) return c.json({ error: 'forbidden' }, 403)"],
   r2:       ["if (!(await canReadR2Key(c, user, key, obj))) return c.json({ error: 'forbidden' }, 403)", ""],
   member:   ["    const role = roles.get(id)\n    if (role == null) continue", "    const role = roles.get(id)\n    if (false) continue"],
-  gate:     ["if (await shareGateLockedPid(c, user, [String(pid)])) continue", ""],
+  // [WO 20261012-viewlink] 410 미들웨어가 validLinkPids 를 ignoreGate 로 공유 — 게이트 조건식 앞에 옵션 검사가 붙었다
+  gate:     ["if (!(opts && opts.ignoreGate) && await shareGateLockedPid(c, user, [String(pid)])) continue", ""],
+  // [WO 20261012-viewlink] 링크 배포본 소속 = 배포 스냅샷 — 작업본(live refs) 판정으로 되돌리면 T11b0(재배포 전 구역 삭제 → 링크 유지)이 깨진다
+  snapdep:  ["if (sc.d && !(await snapHasDep(c, String(pid), String(sc.d)))) continue", "if (sc.d && !((await depRefIndexOf(c)).get(String(sc.d)) || new Set()).has(String(pid))) continue"],
   mask:     ["  const o: any = mapDeployment(r)\n  if (!mask) return o", "  const o: any = mapDeployment(r)\n  return o"],
-  unpub:    ["if (!p || !Number(p.published)) continue", "if (!p) continue"],
+  // [WO 20261012-viewlink] 배포 취소 차단이 두 겹(validLinkPids 의 published 검사 + 배포 스냅샷 snapshotOf 의 published 검사) — 둘 다 걷어낸다
+  unpub:    [["if (!p || !Number(p.published)) continue", "if (!p) continue"], ["    if (p && Number(p.published)) {\n      const q = () =>", "    if (p) {\n      const q = () =>"]],
   decks:    ["  // [WO 20261009-readacl] 🔴 남의 프로젝트에 구역 추가 차단 — 프로젝트 관리 권한(슈퍼·소유자·designer 멤버) SoT\n  if (!(await canManageProject(c, user, pid))) return", "  if (false) return"],
   proj401:  ["if (!user) return c.json({ error: 'unauthorized — login required' }, 401)\n  const email = String(user.email || '').trim().toLowerCase()\n  const s = await readScopeOf(c, user)", "if (!user) return c.json({ data: [] })\n  const email = String(user.email || '').trim().toLowerCase()\n  const s = await readScopeOf(c, user)"],
   notePost: ["if (!(await canReadDeployment(c, a.user, deployment_id))) return c.json({ error: 'forbidden — no access to this deployment' }, 403)", ""],
   legacyTok:["    if (!ps.length) return null\n", "\n"],
-  linkGone: ["if (sc.d && !(refs && refs.has(String(pid)))) continue", ""],
+  // [WO 20261012-viewlink] 링크 배포본 소속 판정 = 배포 스냅샷(snapHasDep) — 그 검사 자체를 지우면 재배포로 빠진 링크가 산다(T11b)
+  linkGone: ["if (sc.d && !(await snapHasDep(c, String(pid), String(sc.d)))) continue", ""],
   pano:     ["if (!s.all && !s.designer && !(await canReadPanoAsViewer(c, user, id))) return c.json({ error: 'forbidden' }, 403)", ""],
   // ── 2026-10-10 S1~S4 ──
   s1link:   ["    if (sc) linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null })\n", "\n"],
@@ -69,7 +75,8 @@ const MUTS = {
   s3me:     ["...(role === 'super' ? { super_admin: superAdmin(c) } : {})", "super_admin: superAdmin(c)"],
   s3list:   ["  const rows = isSuperAdmin(c, su.email) ? (results || []) : (results || []).filter((r: any) => !isSuperAdmin(c, r.email))", "  const rows = results || []"],
   s3del:    ["  if (isSuperAdmin(c, email)) return c.json({ error: 'forbidden — super admin account is protected' }, 403)\n", "\n"],
-  s4r2:     ["  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '\"' + pid + '\"', false)) return true\n  return false", "  for (const pid of panoIds) if (ids.length && await depsMention(c, ids, '\"' + pid + '\"', false)) return true\n  if (s.designer && !user._readonly && !panoIds.length && !(await depsMention(c, null, key, true))) return true\n  return false"],
+  // [WO 20261012-viewlink] canReadR2Key 끝에 링크 스냅샷 판정 한 줄이 붙었다 — 주입 위치(맨 끝 return false 직전)는 동일
+  s4r2:     ["  if (s.linkPids.size && await snapLinkMentions(c, s, key)) return true   // 로그인 비멤버 링크 = 스냅샷 기준\n  return false", "  if (s.linkPids.size && await snapLinkMentions(c, s, key)) return true   // 로그인 비멤버 링크 = 스냅샷 기준\n  if (s.designer && !user._readonly && !panoIds.length && !(await depsMention(c, null, key, true))) return true\n  return false"],
   r1flag:   ["  return rows.map((r: any) => ({ ...r, is_super: isSuperAdmin(c, r && r.email) }))", "  return rows.map((r: any) => ({ ...r, is_super: false }))"],
   r2mask:   ["  return pids.some((p) => s.linkPids.has(p)) && !pids.some((p) => s.pids.has(p))", "  return false"],
   r2notes:  ["  const full = actor.designer && !maskForDepRow(", "  const full = actor.designer || !maskForDepRow("],
@@ -84,9 +91,13 @@ if (MUT) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.cpSync(path.join(ROOT, "src"), dir, { recursive: true });
   const f = path.join(dir, "index.tsx");
-  const s = fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n");
-  if (!s.includes(m[0])) { console.log("MUT " + MUT + " 치환 대상 없음"); process.exit(3); }
-  fs.writeFileSync(f, s.replace(m[0], m[1]));
+  let s = fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n");
+  // [WO 20261012-viewlink] 심층 방어(두 겹)를 함께 걷어내야 하는 뮤테이션은 [[from,to],[from,to]] 형태(나머지는 종전 [from,to])
+  for (const [from, to] of (Array.isArray(m[0]) ? m : [m])) {
+    if (!s.includes(from)) { console.log("MUT " + MUT + " 치환 대상 없음"); process.exit(3); }
+    s = s.replace(from, to);
+  }
+  fs.writeFileSync(f, s);
   entry = f;
   console.log("[MUT=" + MUT + "]");
 }
@@ -338,16 +349,23 @@ console.log("\n[T11 배포 취소·링크 폐기 → 이미 발급된 토큰 즉
 {
   const linkA2 = (await mint({ d: D.a2 })).j.token;
   ok((await api(linkA2, "GET", "/tables/deployments/" + D.a2)).status === 200, "T11a 구역 A2 링크 토큰 → 200");
+  // [WO 20261012-viewlink] 🔴 계약 변경 — 배포 = 고정 스냅샷("디자이너의 수정내용이 반영돼서는 안돼").
+  //   작업본에서 구역을 지워도 재배포 전까지 링크는 동결본을 연다(T11b0). **재배포**로 그 구역이 스냅샷에서 빠지면
+  //   그때 이미 받은 토큰이 끊긴다(T11b) — 종전 403 → 배포 중단 링크 공통 응답 410(데이터 0).
   await run("UPDATE decks SET deleted = 1 WHERE id = 'dk_p140_a2'");
+  const still = await api(linkA2, "GET", "/tables/deployments/" + D.a2);
+  ok(still.status === 200, "T11b0 작업본에서 구역 삭제(재배포 전) → 링크는 동결본 그대로 200", still.status);
+  ok((await api(TOK.o, "POST", "/api/projects/" + P.a + "/publish", {})).status === 200, "T11b1 소유자 다시 배포(스냅샷 갱신)");
   const gone = await api(linkA2, "GET", "/tables/deployments/" + D.a);
-  ok(gone.status === 403, "T11b 🔴 링크 폐기(구역 삭제) 후 그 링크로 받은 토큰 → 403", gone.status);
+  ok(gone.status === 410, "T11b 🔴 재배포로 링크 배포본이 빠진 뒤 그 링크로 받은 토큰 → 410(데이터 0)", gone.status);
   await run("UPDATE decks SET deleted = 0 WHERE id = 'dk_p140_a2'");
+  ok((await api(TOK.o, "POST", "/api/projects/" + P.a + "/publish", {})).status === 200, "T11b2 원복 후 다시 배포");
   const un = await api(TOK.o, "POST", "/api/projects/" + P.a + "/unpublish", {});
   ok(un.status === 200, "T11c 소유자 배포 취소", un.status);
   const old = await api(ANON, "GET", "/tables/deployments/" + D.a);
-  ok(old.status === 403, "T11d 🔴 배포 취소 후 이미 발급된 토큰 → 403", old.status);
+  ok(old.status === 410, "T11d 🔴 배포 취소 후 이미 발급된 토큰 → 410(배포 중단 — 데이터 0)", old.status);
   const oldR2 = await api(ANON, "GET", "/api/r2/object/" + K.a);
-  ok(oldR2.status === 403, "T11e 배포 취소 후 R2 A 키 → 403", oldR2.status);
+  ok(oldR2.status === 410, "T11e 배포 취소 후 R2 A 키 → 410", oldR2.status);
   const re = await mint({ d: D.a });
   ok(re.status === 401, "T11f 배포 취소 후 옛 링크로 재발급 → 401", re.status);
   await api(TOK.o, "POST", "/api/projects/" + P.a + "/publish", {});

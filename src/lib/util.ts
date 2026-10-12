@@ -50,24 +50,18 @@ export function randShareToken(): string {
 /** [P61] 공유 링크 토큰 형식 검증 — 라우트에서 DB 조회 전에 값싸게 거른다. */
 export function isShareToken(s: string): boolean { return /^[a-z2-7]{16}$/.test(String(s || '')) }
 
-/** [P61] 프로젝트명 → URL 슬러그(장식). 🔴 한글 보존 — 브라우저 주소창은 퍼센트인코딩을
- *  디코딩해 보여주므로 고객이 "선각A동" 을 그대로 읽는다.
- *  · 허용: 숫자·영소문자·한글 음절(가–힣)·한글 자모(ㄱ–ㆎ) — 실데이터 "ㅅㄷㄴㅅ1" 같은 자모 이름 대응
- *  · 그 외(공백·`/`·`?`·`#`·이모지 등)는 '-' 로 접고, 연속/양끝 '-' 를 정리한다
- *  · 빈 이름·기호뿐인 이름 → 'project' (조용히 빈 주소를 만들지 않는다)
- *  · 길이 상한 40 **코드포인트**(바이트가 아니라) — 서로게이트를 잘라 깨진 문자를 만들지 않는다
- *  🔴 반환값은 절대 '-' 로 끝나지 않는다 → `<slug>-<token>` 분리가 항상 유일하다. */
-export function slugifyProjectName(name: string): string {
-  const base = String(name || '').trim().toLowerCase()
-    .replace(/[^0-9a-zㄱ-ㆎ가-힣]+/g, '-')
-  const cut = Array.from(base).slice(0, 40).join('')
-  const s = cut.replace(/-+/g, '-').replace(/^-+|-+$/g, '')
-  return s || 'project'
+/** [P61 → WO 20261012-viewlink] 열람 링크 경로의 단일 생성원(SoT) — 서버 응답·QR·링크 복사가 전부 여기서 파생한다.
+ *  마스터 2026-10-12: "배포시 회사이름이나 프로젝트는 전체 보안화해 https://scan.seastar.work/까지만 노출"
+ *  → 경로에 이름(slug)을 싣지 않는다. 토큰 = 공유 토큰(projects.share_token) 또는 뷰어 링크 id(view_links.id) — 둘 다 불투명.
+ *  구 주소 `/srview/<이름>-<토큰>` 은 하위호환으로 계속 열리고(shareTokenFromSegment), 클라이언트가 즉시 이 경로로 바꾼다. */
+export function viewPath(token: string): string {
+  return '/v/' + encodeURIComponent(String(token || ''))
 }
 
-/** [P61] 공유 경로의 단일 생성원(SoT) — 서버 응답·테스트·클라이언트가 전부 이 한 곳에서 파생한다. */
-export function sharePath(name: string, token: string): string {
-  return '/srview/' + encodeURIComponent(slugifyProjectName(name)) + '-' + token
+/** [WO 20261012-viewlink] `/v/<토큰>` 의 토큰 형식 — 공유 토큰(base32 16자) · 새 뷰어 링크 id(같은 형식) · 구 뷰어 링크 id(lk_<시각>_<난수>). */
+export function isViewToken(s: string): boolean {
+  const v = String(s || '')
+  return isShareToken(v) || /^lk_[a-z0-9]{4,16}_[a-z0-9]{4,16}$/.test(v)
 }
 
 /** [P61] 공유 경로 세그먼트 → 토큰. slug 는 버린다(장식이므로 틀려도 무방 = 이름 변경 내성).

@@ -25,6 +25,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+// [WO 20261012-viewlink] 열람 링크 = 배포 스냅샷(0044) — 가짜 저장소에 스냅샷 행 저장을 붙인다(SoT tests/_lib/fake-snapshot.mjs)
+import { snapFirst, snapAll, snapRun, snapBatch } from "./_lib/fake-snapshot.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -76,6 +78,7 @@ function makeDB(state) {
         bind(...a) {
           return {
             async first() {
+              { const __s = snapFirst(state, q, a); if (__s !== undefined) return __s; }
               if (like(q, "FROM app_settings WHERE scope = '*' AND skey = ?"))
                 return state.settings[a[0]] ? { value: state.settings[a[0]] } : null;
               if (like(q, "SELECT COUNT(*) AS n FROM inquiries WHERE ip = ?")) {
@@ -91,6 +94,7 @@ function makeDB(state) {
               return null;
             },
             async all() {
+              { const __s = snapAll(state, q, a); if (__s !== undefined) return __s; }
               if (like(q, "FROM inquiries WHERE deleted = 0 ORDER BY created_at DESC")) {
                 const limit = a[0];
                 return { results: state.inquiries.filter((r) => !r.deleted).sort((x, y) => y.created_at - x.created_at).slice(0, limit) };
@@ -98,6 +102,7 @@ function makeDB(state) {
               return linkAll(q);
             },
             async run() {
+              { const __s = snapRun(state, q, a); if (__s !== undefined) return __s; }
               if (like(q, "INSERT INTO app_settings")) {
                 if (!state.settings[a[0]]) state.settings[a[0]] = a[1];
               } else if (like(q, "INSERT INTO inquiries")) {
@@ -121,7 +126,7 @@ function makeDB(state) {
         async run() { return { success: true }; },
       };
     },
-    batch: async () => [],
+    batch: snapBatch,
   };
 }
 

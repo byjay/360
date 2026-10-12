@@ -33,6 +33,8 @@ const watchdog = setTimeout(() => { console.log("\nWATCHDOG — 120s 초과 → 
 const MUTS = {
   noFilter:   ["if (linkMode) { o.pins = filterPinsByLinkMode(o.pins, linkMode); o.view_mode = linkMode }", "if (linkMode) { o.view_mode = linkMode }"],
   noRevoke:   ["if (!lrow || lrow.revoked_at) return null", "if (!lrow) return null"],
+  // [WO 20261012-viewlink] 360 강제(LINK_VIEW_MODE)를 끄면 T1·T1e·T3·T6 의 CHECKER 핀이 샌다
+  no360:      ["const LINK_VIEW_MODE = '360'", "const LINK_VIEW_MODE: any = null"],
   noOwnGuard: ["if (bound.some((p) => s.pids.has(p))) return null\n  return s.linkMode", "return s.linkMode"],
 };
 const MUT = process.env.MUT || "";
@@ -106,17 +108,25 @@ await run("INSERT INTO decks (id, project_id, name, deployment_id, created_at, u
 const mint = (body) => api(null, "POST", "/api/auth/auto-entry", Object.assign({ kind: "viewer" }, body || {}));
 const createLink = (tok, mode) => api(tok, "POST", "/api/view-links", mode ? { dep_id: D, mode } : { dep_id: D });
 
-console.log("\n[T1 체커 링크 — pins=checkboard만 · view_mode='checker']");
+// [WO 20261012-viewlink] 🔴 계약 변경 — 마스터 "배포시에는 360만 배포하는거다": 링크 모드와 무관하게 열람 = 360 핀만.
+//   종전 T1(체커 링크 → checkboard 2개)·T3(둘다/옛 ?d= → 4개)·T6(목록 checkboard)는 새 계약(전부 content 2개 · view_mode '360')으로 바뀐다.
+//   필터 자체(filterPinsByLinkMode)를 끄는 뮤테이션 noFilter 는 그대로 — 4개가 새면 T1·T2·T3·T6 이 실패한다.
+console.log("\n[T1 체커로 요청한 링크 — 360 강제(pins=content만 · view_mode='360')]");
 {
   const l = await createLink(TOK.o, "checker");
-  ok(l.status === 200 && l.j && l.j.id && l.j.mode === "checker", "T1a 링크 발급(mode=checker)", l.status);
+  ok(l.status === 200 && l.j && l.j.id && l.j.mode === "360", "T1a 링크 발급(mode=checker 요청) → '360' 으로 저장", l.j && l.j.mode);
   const m = await mint({ lk: l.j.id });
   ok(m.status === 200 && m.j && m.j.token, "T1b auto-entry(lk) → 200 토큰", m.status);
   const g = await api(m.j.token, "GET", "/tables/deployments/" + D);
   const gp = (g.j && g.j.pins) ? JSON.parse(g.j.pins) : null;
-  ok(g.status === 200 && g.j.view_mode === "checker", "T1c 단건 GET view_mode='checker'", g.j && g.j.view_mode);
-  ok(Array.isArray(gp) && gp.length === 2 && gp.every((p) => p.checkboard === true), "T1d 🔴 pins = checkboard 2개만(360 핀 0건)", gp);
-  globalThis.__LK_CHECKER = l.j.id;
+  ok(g.status === 200 && g.j.view_mode === "360", "T1c 단건 GET view_mode='360'", g.j && g.j.view_mode);
+  ok(Array.isArray(gp) && gp.length === 2 && gp.every((p) => !p.checkboard), "T1d 🔴 pins = content 2개만(CHECKER 핀 0건)", gp);
+  // 이미 발급돼 있던 '체커 전용' 링크(0042 시절 DB 행 mode='checker')도 360 강제
+  await run("INSERT INTO view_links (id, dep_id, mode, created_by, created_at) VALUES ('lk_p147old_chk1', ?, 'checker', ?, ?)", [D, U.o, Date.now()]);
+  const mo = await mint({ lk: "lk_p147old_chk1" });
+  const go = await api(mo.j && mo.j.token, "GET", "/tables/deployments/" + D);
+  const gpo = (go.j && go.j.pins) ? JSON.parse(go.j.pins) : null;
+  ok(go.status === 200 && Array.isArray(gpo) && gpo.length === 2 && gpo.every((p) => !p.checkboard) && go.j.view_mode === "360", "T1e 🔴 기존 체커 전용 링크(DB mode=checker)도 360 강제", gpo);
 }
 
 console.log("\n[T2 360 링크 — pins=content만 · view_mode='360']");
@@ -130,18 +140,18 @@ console.log("\n[T2 360 링크 — pins=content만 · view_mode='360']");
   ok(Array.isArray(gp) && gp.length === 2 && gp.every((p) => !p.checkboard), "T2c 🔴 pins = content 2개만(checker 핀 0건)", gp);
 }
 
-console.log("\n[T3 둘다 링크·옛 링크 — 전부 하위호환]");
+console.log("\n[T3 모드 미전송 링크·옛 ?d= 링크 — 열리되 360 강제]");
 {
   const l = await createLink(TOK.o, null);
-  ok(l.status === 200 && l.j.mode === null, "T3a 링크 발급(mode 미전송=둘다)", l.j);
+  ok(l.status === 200 && l.j.mode === "360", "T3a 링크 발급(mode 미전송) → '360'", l.j);
   const m = await mint({ lk: l.j.id });
   const g = await api(m.j.token, "GET", "/tables/deployments/" + D);
   const gp = JSON.parse(g.j.pins);
-  ok(gp.length === 4 && !g.j.view_mode, "T3b 둘다 링크 → pins 4개 전부 · view_mode 없음", [gp.length, g.j.view_mode]);
+  ok(gp.length === 2 && gp.every((p) => !p.checkboard) && g.j.view_mode === "360", "T3b 미전송 링크 → content 2개 · view_mode '360'", [gp.length, g.j.view_mode]);
   const m2 = await mint({ d: D });   // 옛 클라이언트(lk 없이 d만)
   const g2 = await api(m2.j.token, "GET", "/tables/deployments/" + D);
   const gp2 = JSON.parse(g2.j.pins);
-  ok(gp2.length === 4 && !g2.j.view_mode, "T3c 옛 ?d= 링크(lk 없음) → pins 4개 전부(유실 0)", [gp2.length, g2.j.view_mode]);
+  ok(g2.status === 200 && gp2.length === 2 && gp2.every((p) => !p.checkboard) && g2.j.view_mode === "360", "T3c 옛 ?d= 링크(lk 없음) → 열리고(200) 360 강제", [g2.status, gp2.length, g2.j.view_mode]);
 }
 
 console.log("\n[T4 링크 폐기]");
@@ -174,7 +184,7 @@ console.log("\n[T6 배포본 목록(GET /tables/deployments)도 같은 필터]")
   const L = await api(m.j.token, "GET", "/tables/deployments");
   const row = (L.j.data || []).find((d) => d.id === D);
   const gp = row ? JSON.parse(row.pins) : null;
-  ok(L.status === 200 && Array.isArray(gp) && gp.length === 2 && gp.every((p) => p.checkboard === true), "T6a 목록 응답도 checkboard 2개만", gp);
+  ok(L.status === 200 && Array.isArray(gp) && gp.length === 2 && gp.every((p) => !p.checkboard), "T6a 목록 응답도 360 강제(content 2개만)", gp);
 }
 
 console.log("\n[T7 멤버십(자기 편집 화면) 경로는 필터 없음]");
