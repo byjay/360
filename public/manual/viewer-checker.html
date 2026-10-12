@@ -8,7 +8,7 @@
   :root { --ink:#13171c; --sub:#44505c; --line:#d8dee4; --accent:#b45309; --bg:#ffffff; --chip:#fef3e8; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif; line-height:1.55; }
-  .wrap { max-width:860px; margin:0 auto; padding:28px 20px 80px; }
+  .wrap { max-width:960px; margin:0 auto; padding:28px 20px 80px; }
   header.top { border-bottom:3px solid var(--accent); padding-bottom:14px; margin-bottom:22px; }
   header.top h1 { font-size:22px; margin:0 0 6px; color:var(--ink); }
   header.top p { margin:0; color:var(--sub); font-size:13px; }
@@ -22,9 +22,10 @@
   figure { margin:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#f7f5f1; }
   figure img { display:block; width:100%; height:auto; }
   figcaption { font-size:12px; color:var(--sub); padding:8px 12px; border-top:1px solid var(--line); background:#fff; }
-  .callout-list { list-style:none; margin:10px 0 0; padding:0; font-size:13px; }
-  .callout-list li { display:flex; gap:8px; align-items:flex-start; margin:4px 0; }
-  .num { flex:0 0 auto; width:22px; height:22px; border-radius:50%; background:#dc2626; color:#fff; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; }
+  .shot-row { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+  .shot-row figure { flex:1 1 320px; max-width:420px; }
+  .shot-row.mobile-row figure { flex:0 0 200px; max-width:200px; }
+  .shot-solo { max-width:260px; margin:0 auto; }
   .note { background:#fff7ed; border:1px solid #fcd9a8; border-radius:8px; padding:10px 14px; font-size:13px; color:#7c4a03; margin:10px 0 0; }
   .pending { background:#f1f5f9; border:1px dashed #94a3b8; border-radius:8px; padding:10px 14px; font-size:13px; color:#475569; }
   .faq dt { font-weight:700; margin-top:14px; }
@@ -32,12 +33,12 @@
   .meta { font-size:11px; color:#8a97a3; margin-top:30px; border-top:1px solid var(--line); padding-top:10px; }
   .btnbar { margin: 10px 0 0; }
   .btnbar a { display:inline-block; padding:8px 14px; border-radius:8px; border:1px solid var(--accent); color:var(--accent); text-decoration:none; font-size:13px; font-weight:700; margin-right:8px; }
+  .subhead { font-size:13px; font-weight:700; color:var(--accent); margin:14px 0 6px; }
   @media print {
     body { font-size:12px; }
     .wrap { max-width:none; padding:0 8mm; }
     nav.toc { display:none; }
     section.step { page-break-inside: avoid; }
-    a[href]:after { content:""; }
     @page { size:A4; margin:14mm; }
   }
 </style>
@@ -58,10 +59,10 @@
       <li><a href="#s2">도면 이동·확대/축소</a></li>
       <li><a href="#s3">사이드바(트리) 열기</a></li>
       <li><a href="#s4">번호 핀 보기</a></li>
-      <li><a href="#s5">핀을 눌러 상세 보기</a></li>
-      <li><a href="#s6">전체 핀 목록·보고서</a></li>
-      <li><a href="#s7">요청·질문 보내기</a></li>
-      <li><a href="#s8">도움말("?") 모드</a></li>
+      <li><a href="#s5">핀을 눌러 요청·질문 보내기</a></li>
+      <li><a href="#s6">전체 핀 목록</a></li>
+      <li><a href="#s7">도움말("?") 모드</a></li>
+      <li><a href="#s8">휴대폰 화면(375px)</a></li>
       <li><a href="#s9">오프라인 보관 · 앱 설치</a></li>
       <li><a href="#faq">자주 묻는 질문</a></li>
     </ol>
@@ -70,8 +71,8 @@
   <section class="step" id="s1">
     <h2>1. 링크로 들어가기</h2>
     <p class="desc">전달받은 열람 링크(https://…?mode=viewer&d=…&lk=…)를 누르면 로그인 없이 바로 도면이 열립니다. 상단에 <b>CHECKER</b> 배지와 포인트 수가 표시됩니다 — 이 숫자가 CHECKER 포인트 개수입니다(360 포인트는 세지 않습니다).</p>
-    <figure><img src="img/checker/01-entry.png" alt="CHECKER 링크로 들어간 첫 화면. 상단에 CHECKER 3 배지가 보이고 도면 위에 번호 핀 3개가 찍혀 있다."></figure>
-    <figcaption>① 도면 위 번호 핀 — 이 링크에는 CHECKER 핀만 보입니다.</figcaption>
+    <figure><img src="img/checker/pc/01-entry.png" alt="CHECKER 링크로 들어간 첫 화면. 상단에 CHECKER 3 배지가 보이고 도면 위에 주황색 번호 핀 3개가 찍혀 있다."></figure>
+    <figcaption>도면 위 번호 핀 — 이 링크에는 CHECKER 핀만 보입니다.</figcaption>
   </section>
 
   <section class="step" id="s2">
@@ -82,45 +83,70 @@
   <section class="step" id="s3">
     <h2>3. 사이드바(트리) 열기</h2>
     <p class="desc">좌상단 메뉴 아이콘을 누르면 프로젝트 → 구역 → 영역 구조의 트리가 열립니다. 트리에서 다른 구역을 선택하면 그 구역의 CHECKER 포인트로 화면이 바뀝니다.</p>
-    <figure><img src="img/checker/02-sidebar-tree.png" alt="사이드바 트리가 열린 화면"></figure>
+    <figure><img src="img/checker/pc/02-sidebar-tree.png" alt="좌측에 사이드바 트리가 열린 화면. 프로젝트와 구역 목록이 보인다."></figure>
     <figcaption>사이드바(트리) — 구역·영역을 눌러 이동합니다.</figcaption>
   </section>
 
   <section class="step" id="s4">
     <h2>4. 번호 핀 보기</h2>
-    <p class="desc">도면 위 주황색 물방울 모양이 CHECKER 번호 핀입니다. 숫자는 점검 순서/번호입니다. 리더선이 있는 핀은 번호 풍선이 핀에서 선으로 이어져 표시됩니다(겹치는 핀을 구분하기 위함).</p>
-    <figure><img src="img/checker/03-checker-pins.png" alt="도면 위에 번호 핀 1,2,3 이 찍혀 있고 상단에 CHECKER 3 배지가 보인다."></figure>
-    <figcaption>① CHECKER 번호 핀 — 이 링크에서는 360 핀이 전혀 섞이지 않습니다.</figcaption>
+    <p class="desc">도면 위 주황색 물방울 모양이 CHECKER 번호 핀입니다. 숫자는 점검 순서/번호입니다. 핀을 한 번 누르면 그 핀을 중심으로 화면이 확대됩니다(①).</p>
+    <div class="shot-row">
+      <figure><img src="img/checker/pc/03-checker-pins.png" alt="도면 위에 번호 핀 1,2,3 이 찍혀 있고 상단에 CHECKER 3 배지가 보인다."></figure>
+      <figure><img src="img/checker/pc/04-pin-focused.png" alt="1번 핀을 눌러 그 핀 주변으로 도면이 확대된 화면"></figure>
+    </div>
+    <figcaption>① CHECKER 번호 핀(이 링크엔 360 핀이 섞이지 않습니다) → 핀을 누르면 확대됩니다.</figcaption>
   </section>
 
   <section class="step" id="s5">
-    <h2>5. 핀을 눌러 상세 보기</h2>
-    <p class="desc">핀을 누르면 그 포인트의 정보 카드가 열립니다. CHECKER 포인트는 사진을 등록하지 않는 모드이므로 "번호만 · 사진은 360 모드에서"라는 안내가 보일 수 있습니다 — 정상입니다. 카드 아래에서 메모·요청을 남길 수 있습니다.</p>
-    <figure><img src="img/checker/04-pin-popup.png" alt="핀을 눌러 정보 카드가 열린 화면"></figure>
-    <figcaption>① 포인트 정보 카드.</figcaption>
+    <h2>5. 핀을 눌러 요청·질문 보내기</h2>
+    <p class="desc">확대된 핀을 <b>한 번 더</b> 누르면 그 포인트의 요청·질문 창이 열립니다. CHECKER 포인트는 사진을 등록하지 않는 모드라 "이 지점에는 등록된 360° 사진이 없습니다 — 필요한 내용을 디자이너에게 요청할 수 있습니다"라는 안내가 뜹니다. [요청]·[질문] 중 고르고 내용을 적어 보냅니다.</p>
+    <figure><img src="img/checker/pc/05-request-form.png" alt="1번 포인트의 요청·질문 창. 요청/질문 탭과 입력창, 이름, 이메일, 보내기 버튼이 보인다."></figure>
+    <figcaption>요청·질문 창 — 담당자에게 바로 전달됩니다.</figcaption>
   </section>
 
   <section class="step" id="s6">
-    <h2>6. 전체 핀 목록·보고서</h2>
-    <p class="desc">상단 <b>[전체 핀]</b> 버튼을 누르면 이 구역의 CHECKER 포인트를 목록으로 볼 수 있습니다(번호·이름으로 검색 가능). 보고서·인쇄는 <b>[전체 기능]</b> 메뉴의 보고서 항목에서 PDF로 저장하거나 인쇄할 수 있습니다. 보고서에도 CHECKER 포인트만 담깁니다.</p>
-    <div class="pending">이 설명서 버전에서는 핀 목록·보고서 캡처가 자동화 스크립트로 안정적으로 재현되지 않아 그림을 아직 못 실었습니다 — 다음 갱신에서 추가합니다. (자동 매뉴얼 캡처 build-tools/capture-viewer-manual.mjs 재실행 필요)</div>
+    <h2>6. 전체 핀 목록</h2>
+    <p class="desc">상단 <b>[전체 핀]</b> 버튼을 누르면 이 구역의 CHECKER 포인트를 목록으로 볼 수 있습니다(번호·이름으로 검색 가능).</p>
+    <figure><img src="img/checker/pc/06-pin-list.png" alt="전체 핀 목록 패널이 열린 화면"></figure>
+    <figcaption>전체 핀 목록.</figcaption>
   </section>
 
   <section class="step" id="s7">
-    <h2>7. 요청·질문 보내기</h2>
-    <p class="desc">화면 아래 <b>[요청·질문]</b> 버튼을 누르면 담당자에게 메시지를 보낼 수 있습니다. 특정 포인트에 대한 요청이면 그 핀을 먼저 연 뒤 작성하면 포인트가 함께 기록됩니다.</p>
+    <h2>7. 도움말("?") 모드</h2>
+    <p class="desc">화면 아래 물음표(?) 버튼을 누르면 설명이 필요한 버튼 옆에 작은 "?" 표시가 나타납니다. 그 표시를 누르면 그 버튼의 쓰임이 바로 뜹니다. 다시 누르면 꺼집니다.</p>
+    <figure><img src="img/checker/pc/07-help-mode.png" alt="도움말 모드가 켜져 버튼 옆에 물음표 배지가 보이는 화면"></figure>
+    <figcaption>도움말 모드 — 화면 곳곳의 "?" 배지를 눌러보세요.</figcaption>
   </section>
 
   <section class="step" id="s8">
-    <h2>8. 도움말("?") 모드</h2>
-    <p class="desc">화면 아래 물음표(?) 버튼을 누르면 설명이 필요한 버튼 옆에 작은 "?" 표시가 나타납니다. 그 표시를 누르면 그 버튼의 쓰임이 바로 뜹니다. 다시 누르면 꺼집니다.</p>
-    <figure><img src="img/checker/06-help-mode.png" alt="도움말 모드가 켜져 버튼 옆에 물음표 배지가 보이는 화면"></figure>
-    <figcaption>도움말 모드 — 화면 곳곳의 "?" 배지를 눌러보세요.</figcaption>
+    <h2>8. 휴대폰 화면(375px)</h2>
+    <p class="desc">휴대폰에서도 같은 기능을 그대로 쓸 수 있습니다. 화면이 좁은 만큼 버튼이 아래쪽에 모여 있고, 손가락으로 핀치 줌·드래그합니다.</p>
+    <div class="shot-row mobile-row">
+      <figure><img src="img/checker/mobile/01-entry.png" alt="휴대폰에서 CHECKER 링크로 들어간 첫 화면"></figure>
+      <figure><img src="img/checker/mobile/02-sidebar-tree.png" alt="휴대폰 사이드바 트리"></figure>
+      <figure><img src="img/checker/mobile/03-checker-pins.png" alt="휴대폰 화면의 번호 핀"></figure>
+      <figure><img src="img/checker/mobile/04-pin-focused.png" alt="휴대폰에서 핀을 눌러 확대된 화면"></figure>
+      <figure><img src="img/checker/mobile/05-request-form.png" alt="휴대폰에서 연 요청·질문 창"></figure>
+      <figure><img src="img/checker/mobile/06-help-mode.png" alt="휴대폰 도움말 모드"></figure>
+    </div>
+    <figcaption>왼쪽부터: 진입 → 트리 → 번호 핀 → 핀 확대 → 요청·질문 → 도움말.</figcaption>
   </section>
 
   <section class="step" id="s9">
     <h2>9. 오프라인 보관 · 앱 설치</h2>
-    <p class="desc">한 번 열어본 도면은 인터넷이 끊겨도 다시 볼 수 있도록 자동으로 보관됩니다. 홈 화면에 앱처럼 설치하려면 브라우저 메뉴의 "홈 화면에 추가"(iOS) 또는 설치 안내 배너(Android/PC)를 사용하세요.</p>
+    <p class="desc">한 번 열어본 도면은 인터넷이 끊겨도 다시 볼 수 있도록 자동으로 보관됩니다. 휴대폰 화면 아래 설치 안내 배너에서 <b>[설치]</b>를 누르면 홈 화면에 앱처럼 추가됩니다(iOS는 공유 버튼 → "홈 화면에 추가").</p>
+    <figure class="shot-solo"><img src="img/install/mobile/01-pwa-banner.png" alt="휴대폰 화면 아래 '홈 화면에 설치' 안내 배너"></figure>
+    <figcaption>설치 안내 배너 — 앱처럼 열리고 오프라인에서도 작업할 수 있습니다.</figcaption>
+    <p class="subhead">안드로이드 전용 앱(APK) 설치 — 5단계</p>
+    <p class="desc">사내 배포 앱이라 Play 스토어를 거치지 않습니다. Chrome·설치 화면이 보안 경고를 띄우는 것이 정상이며, 아래 순서대로 진행하세요.</p>
+    <div class="shot-row mobile-row">
+      <figure><img src="img/install/02-apk-1-download.png" alt="1단계: APK 내려받기 — Chrome 경고 안내와 SHA-256 지문"></figure>
+      <figure><img src="img/install/03-apk-2-blocker.png" alt="2단계: 삼성 보안 위험 자동 차단 끄기 안내"></figure>
+      <figure><img src="img/install/04-apk-3-unknown-source.png" alt="3단계: 출처를 알 수 없는 앱 허용 안내"></figure>
+      <figure><img src="img/install/05-apk-4-protect.png" alt="4단계: Play 프로텍트 검사 통과 안내"></figure>
+      <figure><img src="img/install/06-apk-5-done.png" alt="5단계: 설치 완료 — 앱 열기 안내"></figure>
+    </div>
+    <figcaption>안내 팝업이 화면마다 무엇을 눌러야 하는지 그림으로 보여 줍니다. 받은 파일이 진짜인지는 SHA-256 지문으로 확인하세요.</figcaption>
   </section>
 
   <section class="faq" id="faq">
@@ -135,7 +161,7 @@
     </dl>
   </section>
 
-  <p class="meta">생성: build-tools/capture-viewer-manual.mjs(실 Chrome·실 workerd 캡처) · 화면 크기 1280×900(PC) · 휴대폰(375px) 화면은 다음 갱신에서 추가 예정</p>
+  <p class="meta">생성: build-tools/capture-viewer-manual.mjs(실 Chrome CDP · 실 workerd 캡처, 목 0) · PC 1280×900 · 휴대폰 375×812(DPR3)</p>
 </div>
 </body>
 </html>
