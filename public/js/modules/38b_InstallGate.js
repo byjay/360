@@ -17,8 +17,9 @@
      · Install.isMobile() — 휴대폰(터치 또는 좁은 폭). 기존 판정 재사용(새 판정 0).
      · !Install.isStandalone() — 이미 설치된 앱(standalone)이면 영향 없음(요구 6).
      · Auth.user — 로그인 사용자만 대상. 🔴 공유 열람 링크(`?d=`) 예외는 Auth._isViewLink()를
-       독립적으로 먼저 검사하지 않고 이 로그인 검사 하나로 자연히 성립시킨다 — 열람 공유 링크의
-       실제 사용자는 비로그인이므로 Auth.user 가 없어 여기서 그대로 빠진다. 링크 여부로 별도
+       독립적으로 먼저 검사하지 않는다. 열람 링크 방문자는 /api/auth/me 가 통행증 세션으로
+       user 를 채우므로(Auth.user 있음) 서버 판정 Auth.readonly=true 로 예외 처리한다(URL 로는
+       readonly 가 되지 않아 우회 불가 — 실계정 세션은 readonly=false). 링크 여부로 별도
        분기를 두면 "로그인된 사용자가 URL에 ?d= 만 붙이면 강제설치를 피해간다"는 우회로가
        생긴다(로그인했다면 공유링크로 들어왔어도 설치 대상이 맞다 — 마스터 지시 "비로그인
        열람자"만 예외).
@@ -44,8 +45,10 @@
         if (typeof Install === "undefined") return false;
         if (Install.isStandalone()) return false;     // 이미 설치된 앱(요구 6)
         if (!Install.isMobile()) return false;         // PC 제외
-        // 로그인 사용자만 대상 — 공유 열람 링크(비로그인)는 이 한 줄로 자연히 예외가 된다(위 설계 메모).
+        // 로그인 사용자만 대상 — 비로그인 방문자는 여기서 빠진다(위 설계 메모).
         if (!(typeof Auth !== "undefined" && Auth.user)) return false;
+        // 열람 링크=readonly 세션도 예외 — /api/auth/me 가 통행증 세션에도 user 를 채우므로 서버 판정 Auth.readonly 로 거른다.
+        if (Auth.readonly) return false;
         if (typeof AdminPanels !== "undefined" && AdminPanels.isEnabled && !AdminPanels.isEnabled(this.FLAG_KEY)) return false; // 관리자 스위치
         return true;
       } catch (e) { return false; }

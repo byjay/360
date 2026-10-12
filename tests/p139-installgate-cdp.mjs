@@ -38,6 +38,7 @@ const HARNESS_HTML = `<!doctype html>
       standalone: qs.get('standalone') === '1',
       loggedIn: qs.get('loggedin') !== '0',       // 기본 로그인됨
       viewLink: qs.get('viewlink') === '1',
+      readonly: qs.get('readonly') === '1',       // 서버 판정 열람전용(통행증) 세션
       flagOn: qs.get('flagoff') !== '1'           // 기본 플래그 ON
     };
     var realMM = window.matchMedia.bind(window);
@@ -52,6 +53,7 @@ const HARNESS_HTML = `<!doctype html>
     }
     window.Auth = {
       user: window.__scn.loggedIn ? { email: 'designer@test.com' } : null,
+      readonly: window.__scn.readonly,
       _isViewLink: function () { return window.__scn.viewLink; }
     };
     window.AdminPanels = { isEnabled: function (k) { return k === 'install-required' ? window.__scn.flagOn : true; } };
@@ -190,6 +192,13 @@ async function run(installSrc, gateSrc) {
       return st;
     });
 
+    // S3c: 열람 링크 통행증 세션 — /api/auth/me 가 user 를 채우고 readonly=true → 게이트 없음
+    results.s3c = await withPage(port, "/harness.html?viewlink=1&loggedin=1&readonly=1", async (ws) => {
+      const st = JSON.parse(await evalJson(ws, STATE_EXPR));
+      await shot(ws, "s3c-readonly-link-nogate");
+      return st;
+    });
+
     // S4: PC(mobile=0) → 게이트 없음
     results.s4 = await withPage(port, "/harness.html?mobile=0", async (ws) => {
       const st = JSON.parse(await evalJson(ws, STATE_EXPR));
@@ -251,7 +260,7 @@ async function run(installSrc, gateSrc) {
   const gateSrc = fs.readFileSync(GATE_FILE, "utf8");
   fs.writeFileSync(HARNESS, HARNESS_HTML, "utf8");
 
-  console.log("[CDP] 정상 소스 — 시나리오 9종 실행");
+  console.log("[CDP] 정상 소스 — 시나리오 10종 실행");
   const r = await run(installSrc, gateSrc);
   console.log(JSON.stringify(r, null, 2));
 
@@ -264,6 +273,7 @@ async function run(installSrc, gateSrc) {
   check("S2 standalone: 게이트 없음", r.s2.gateHidden === true);
   check("S3 공유링크(비로그인): 게이트 없음", r.s3.gateHidden === true);
   check("S3b 공유링크+로그인: 그래도 게이트(우회 금지)", r.s3b.gateHidden === false);
+  check("S3c 열람링크 readonly 세션(Auth.user 있음): 게이트 없음", r.s3c.gateHidden === true);
   check("S4 PC: 게이트 없음", r.s4.gateHidden === true);
   check("S5 플래그 OFF: 게이트 없음", r.s5.gateHidden === true);
   check("S6 수동 숨김 후 pageshow 재진입: 다시 표시", r.s6.hiddenNow.gateHidden === true && r.s6.afterPageshow.gateHidden === false);
@@ -293,6 +303,17 @@ async function run(installSrc, gateSrc) {
     const mr2 = await run(installSrc, mutated2);
     const broke2 = mr2.s5.gateHidden === false;
     if (broke2) console.log("  PASS(뮤테이션 효과 확인) — 플래그 가드 제거 시 OFF 에도 게이트가 뜸(회귀 재현됨)");
+    else { console.log("  FAIL 뮤테이션을 넣어도 영향 없음(테스트가 실효성 없음)"); fail = 1; }
+  }
+
+  // ── 뮤테이션 3: readonly 예외 제거 → S3c(열람링크 readonly 세션)가 깨져야(게이트가 떠야) 함 ──
+  const needle3 = "if (Auth.readonly) return false;";
+  if (!gateSrc.includes(needle3)) { console.log("  FAIL 뮤테이션3 대상 문자열을 찾지 못함(소스 변경?)"); fail = 1; }
+  else {
+    const mutated3 = gateSrc.replace(needle3, "/* mutated: no-op */");
+    console.log("\n[CDP][뮤테이션3] readonly 예외 제거 — 열람 링크 모바일 방문자가 게이트에 막혀야 함(=원 결함 재현)");
+    const mr3 = await run(installSrc, mutated3);
+    if (mr3.s3c.gateHidden === false) console.log("  PASS(뮤테이션 효과 확인) — readonly 예외 제거 시 열람링크에 게이트가 뜸(회귀 재현됨)");
     else { console.log("  FAIL 뮤테이션을 넣어도 영향 없음(테스트가 실효성 없음)"); fail = 1; }
   }
 
