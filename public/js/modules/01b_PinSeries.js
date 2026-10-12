@@ -225,11 +225,14 @@
      * - 체크보드 핀은 저장된 pin.label 숫자를 우선 사용(기존 저장 데이터 불변 · 마이그레이션 없음).
      * - 🔴 항상 "필터와 무관하게 전체 핀"으로 계산한다 → 필터를 켜도 번호가 재계산되지 않는다.
      */
-    numbers(pins, page) {
+    numbers(pins, page, base) {
       const map = new Map();
       const pg = page || 1;
       let nContent = 0, nCheck = 0;
-      (pins || []).forEach((p) => {
+      // [WO 20261012-pinsync] 구역(별칭) 화면 = 원본 그 페이지 핀 집합 기준으로 센다(같은 핀 = 같은 번호). 원본 화면은 base 없음 → 종전 그대로.
+      const all = this._withBase(pins, pg, base);
+      const mine = all === pins ? null : new Set((pins || []).filter((p) => p && p.id != null).map((p) => String(p.id)));
+      all.forEach((p) => {
         if (!p) return;
         if ((p.page || 1) !== pg) return;
         const series = this.seriesOf(p);
@@ -246,9 +249,35 @@
           const raw = String(p.label == null ? "" : p.label).trim();
           no = /^\d+$/.test(raw) ? parseInt(raw, 10) : nContent;
         }
+        if (mine && !mine.has(String(p.id))) return;   // 원본에만 있는(구역 상자 밖) 핀은 결과에 싣지 않는다 — 순번 계산에만 쓴다
         map.set(p.id, { no: no, kind: this.kindOf(p), series: series });
       });
       return map;
+    },
+
+    /** [WO 20261012-pinsync] 번호 기준 집합(SoT) — 벡터 복사 구역은 핀 정본이 원본이라(서버 별칭) 화면 핀이 원본의 부분집합이다.
+     *  그대로 세면 360 순번이 원본과 어긋나고, 다음 번호(최댓값+1)가 상자 밖 원본 핀 번호와 겹친다.
+     *  base = 원본 그 페이지 핀 최소 사본 [{id,page,label,checkboard}](서버 base_pins_min → State.basePins, 구역 좌표계 page=1).
+     *  합친 목록 = 원본 순서(번호 순번이 배열 순서에 묶임) · 화면 핀이 같은 id 를 덮음(편집 중 라벨 반영) · 원본에 아직 없는 새 핀은 뒤에.
+     *  기본값: base 를 안 넘기고 pins 가 **바로 State.pins** 일 때만 State.basePins — 다른 배열(납품·합치기 미리보기 등)은 그대로.
+     *  base 없음(원본 화면·구버전 서버) = pins 그대로(종전 동작 불변). */
+    _withBase(pins, page, base) {
+      if (base === undefined) base = (typeof State !== "undefined" && State && pins === State.pins) ? State.basePins : null;
+      const arr = pins || [];
+      if (!Array.isArray(base) || !base.length) return arr;
+      const pg = page || 1;
+      const local = new Map();
+      arr.forEach((p) => { if (p && p.id != null && (p.page || 1) === pg) local.set(String(p.id), p); });
+      const out = [], seen = new Set();
+      base.forEach((b) => {
+        if (!b || b.id == null || (b.page || 1) !== pg) return;
+        const k = String(b.id);
+        if (seen.has(k)) return;
+        seen.add(k);
+        out.push(local.has(k) ? local.get(k) : b);
+      });
+      arr.forEach((p) => { if (p && !(p.id != null && seen.has(String(p.id)))) out.push(p); });
+      return out;
     },
 
     /** 체크보드 다음 번호 = max(시작번호, 같은 페이지 체크보드 핀들의 label 숫자 최댓값 + 1).
@@ -280,10 +309,10 @@
      *  🔴 [WO 20261001-startno] 대역 우선 — 위 "대역 침범 허용"을 폐기한다(마스터 확정: 100 단위 대역).
      *  다음 번호 = 내 대역(band, 생략 시 start 가 속한 대역) 안의 전원 같은 계열 핀 최댓값+1, 대역 밖 핀은 무시.
      *  start 는 그 대역 안에서만 하한으로 쓴다. 대역이 가득 차면 null(넘쳐 들어가지 않는다 — 호출부가 확인창). */
-    nextSeriesNo(pins, page, start, author, series, band) {
+    nextSeriesNo(pins, page, start, author, series, band, base) {
       const s = (Number.isFinite(start) && start >= 1) ? start : 1;
       const k = (Number.isFinite(band) && band >= 1) ? band : this.bandOf(s);
-      return this.nextInBand(pins, page, series, k, s).no;
+      return this.nextInBand(pins, page, series, k, s, base).no;
     },
 
     /* ══ [WO 20261001-startno] 100 단위 번호 대역 정본 ══════════════════════════════
@@ -300,12 +329,13 @@
     },
     bandLabel(k) { const r = this.bandRange(k); return r.lo + "–" + r.hi; },
     /** 대역 안 다음 번호. @returns {{no:number|null, full:boolean, band:number, lo:number, hi:number}} */
-    nextInBand(pins, page, series, band, floor) {
+    nextInBand(pins, page, series, band, floor, base) {
       const pg = page || 1;
       const ser = series === "content" ? "content" : "checkboard";
       const r = this.bandRange(band);
       let maxNo = 0;
-      (pins || []).forEach(p => {
+      // [WO 20261012-pinsync] 구역(별칭) 화면 = 원본 그 페이지 전체(상자 밖 포함) 최댓값 — 상자 밖 원본 번호와 겹치지 않게(_withBase)
+      this._withBase(pins, pg, base).forEach(p => {
         if (!p || (p.page || 1) !== pg) return;               // 삭제 표식 핀도 센다 — 구멍 재사용 금지(종전 규칙)
         if (this.seriesOf(p) !== ser) return;
         const n = parseInt(p.label, 10);                       // label 이 숫자가 아니면(NaN) 무시
@@ -340,10 +370,10 @@
      *  탐지·표시 전용 — 이미 저장된 중복 번호를 자동으로 바꾸지 않는다
      *  (마스터 명시: 현장 기록과 연결된 실데이터라 임의 재채번 금지).
      *  @returns {Set<number|string>} 중복인 핀들의 id */
-    duplicateCheckboardIds(pins, page) {
+    duplicateCheckboardIds(pins, page, base) {
       const pg = page || 1;
       const byLabel = new Map();
-      (pins || []).forEach(p => {
+      this._withBase(pins, pg, base).forEach(p => {   // [WO 20261012-pinsync] 구역 화면도 원본 기준 중복 판정
         if (!p || (p.page || 1) !== pg || !p.checkboard) return;
         const key = String(p.label);
         if (!byLabel.has(key)) byLabel.set(key, []);

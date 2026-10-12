@@ -9,6 +9,8 @@ import { askVision, visionModelOf, visionRunnerOf, visionCacheKey, pinImageRefs,
   AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P, AI_VISION_GLOBAL_NEURON_CAP, AI_VISION_FREE_NEURONS_PER_DAY, AI_VISION_PROVIDER } from './lib/aiVision'
 import { normalizeRevLabel, revLabelKey, nextRevLabel, IDENTITY as REV_IDENTITY, isIdentity as revIsIdentity, affSane, solveCarry, autoCarry,
   carryPins, carryZones, carryAnnos, carryCrop, diffPins, revertPinsMerge, revertShapesMerge, invertAff } from './lib/revCore'
+import { aliasBoxOf, projectPins, mergeIntoHome, basePinsMin, unprojectOp, parsePins, aliasVersion, homeVersionOf, planMigration,
+  type Box as AliasBox } from './lib/regionAlias'
 
 type Bindings = {
   DB: D1Database
@@ -3127,6 +3129,11 @@ async function revGate(c: any, mode: 'read' | 'propose' | 'apply'): Promise<{ us
   }
   if (mode === 'propose' && !canPropose) return { res: c.json({ error: 'forbidden — 이 프로젝트 디자이너만(designer of this project only)' }, 403) }
   if (mode === 'apply' && !canApply) return { res: c.json({ error: 'forbidden — 소유자·관리자 전용(project owner or super admin only)' }, 403) }
+  // [WO 20261012-pinsync] S6 — 핀이 원본에 연동된 구역(별칭)에는 개정을 따로 걸 수 없다(핀 이월은 원본 개정 1회가 구역 상자와 함께 처리).
+  if (mode !== 'read') {
+    const ph = await resolvePinHome(c, String(dep.id), dep)
+    if (ph && ph.kind === 'alias') return { res: c.json({ error: '이 구역은 핀이 원본 도면에 연동돼 있어 개정을 따로 적용할 수 없습니다 — 원본 도면에서 개정하세요', pin_alias: 'on', pin_home: String(ph.home.id) }, 409) }
+  }
   return { user, dep, canApply, canPropose, mask: maskForDepRow(scope, idx, dep) }
 }
 async function revRowsOf(c: any, depId: string): Promise<any[]> {
@@ -4784,6 +4791,92 @@ function mapDeployment(r: any) {
   }
 }
 
+/* ══ [WO 20261012-pinsync] 원본 ↔ 벡터 복사 구역 핀 연동 — 서버 별칭(설계 .tmp/design-pinsync.md A★) ══════════════
+ * 마스터 "전체 PDF에서 구역을 지정하고 그 구역에 핀을 박았는데 구역의 페이지에서는 그게 연동이 안되네 서로 연동되게해야지."
+ * 근본원인: 벡터 복사 구역(_createRegionCopyDeployment)은 새 배포본 D1 을 만들고 핀을 따로 저장했다 — 같은 핀이 두 곳.
+ * 해법: 핀 정본 = 원본 D0. D1 의 pins 는 저작 대상이 아니다 —
+ *   읽기(GET 단건·목록·링크 스냅샷) = D0 핀을 구역 상자로 투영 / 쓰기(PATCH·PUT·/ops) = 역변환해 D0 에만 쓴다.
+ *   좌표·병합 계산은 src/lib/regionAlias.ts 한 곳(SoT). 창(crop) 구역은 이미 같은 행을 공유하므로 대상 아님.
+ * 별칭 조건(resolvePinHome): 그 D1 을 가리키는 살아있는 deck 의 src_* 상자가 하나로 정해지고(모호 = 거부), D0 가 살아 있고,
+ *   같은 프로젝트이며, D1 자기 핀이 0건. 자기 핀이 있으면 'pending' — 자동 변환 금지, [원본과 합치기](이관)로만 넘어간다.
+ * 1차 범위 = 핀(+핀 노트). zones/annotations/checkboard_start 는 구역(D1) 로컬로 남는다(설계 §7). */
+type PinHome = { kind: 'alias', box: AliasBox, home: any } | { kind: 'pending', box: AliasBox, count: number } | { kind: 'ambiguous' }
+
+/** 원본 상자(src_*)가 기록된 살아있는 구역 행 — 요청당 1회 조회(메모). 0031 이전(컬럼 부재) = [] (별칭 없음 — 종전 동작). */
+async function aliasDecksOf(c: any): Promise<any[]> {
+  const memo = c.get('__aliasDecks')
+  if (memo) return memo
+  let rows: any[] = []
+  try {
+    rows = ((await c.env.DB.prepare('SELECT id, project_id, deployment_id, src_dep_id, src_page, src_crop, deleted FROM decks WHERE deleted = 0 AND src_dep_id IS NOT NULL AND deployment_id IS NOT NULL').all()).results) || []
+  } catch { rows = [] }
+  c.set('__aliasDecks', rows)
+  return rows
+}
+
+/** 배포본 depId 의 핀 정본 판정(S1). null = 별칭 아님(종전 그대로 자기 행). d1Row 를 주면 그 행의 pins·project_id 를 재사용한다. */
+async function resolvePinHome(c: any, depId: string, d1Row?: any): Promise<PinHome | null> {
+  const decks = await aliasDecksOf(c)
+  const b = aliasBoxOf(decks, depId)
+  if (!b) return null
+  if (b === 'ambiguous') return { kind: 'ambiguous' }
+  // 원본이 없거나 삭제됨 → 별칭 금지(D1 자기 핀 그대로 — 날조 0)
+  const home: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(b.home).first()
+  if (!home) return null
+  const d1: any = (d1Row && d1Row.pins !== undefined && d1Row.project_id !== undefined) ? d1Row
+    : await c.env.DB.prepare('SELECT id, project_id, tenant_id, pins FROM deployments WHERE id = ?').bind(depId).first()
+  if (!d1) return null
+  // 🔴 같은 프로젝트만 — src_dep_id 는 클라가 보낸 문자열(parseDeckSrcBox)이라 남의 배포본을 가리키면 읽기 누출·쓰기 탈취가 된다
+  const idx = await depRefIndexOf(c)
+  const dp = boundPidsOf(idx, d1)
+  if (!boundPidsOf(idx, home).some((p) => dp.includes(p))) return null
+  // 체인(원본 자신이 또 다른 별칭) — 설계 F3 상 생기지 않는다(구역→영역은 원본까지 합성). 생겼다면 추정하지 않고 별칭 금지.
+  if (aliasBoxOf(decks, b.home)) return null
+  const own = parsePins(d1.pins).filter((p: any) => p && p.id != null && !p._deleted).length
+  if (own > 0) return { kind: 'pending', box: b, count: own }
+  return { kind: 'alias', box: b, home }
+}
+
+/** 읽기 투영 행 — 핀만 원본에서 투영 + version = 별칭 버전(regionAlias.aliasVersion — 오프셋 사유는 거기). 나머지 칸은 D1 그대로. */
+function aliasReadRow(row: any, h: { box: AliasBox, home: any }): any {
+  return Object.assign({}, row, { pins: JSON.stringify(projectPins(parsePins(h.home.pins), h.box)), version: aliasVersion(h.home.version) })
+}
+
+/** 응답 객체에 별칭 메타 — pin_alias('on'|'pending'|'ambiguous') · pin_home · base_pins_min(번호·채번용 원본 최소 사본, 설계 §4). */
+function aliasMeta(o: any, h: PinHome | null, mask: boolean, linkMode?: string | null): any {
+  if (!h) return o
+  if (h.kind === 'ambiguous') { o.pin_alias = 'ambiguous'; return o }
+  if (h.kind === 'pending') { o.pin_alias = 'pending'; o.pin_alias_pending = h.count; return o }
+  let base = basePinsMin(parsePins(h.home.pins), h.box.page)
+  if (linkMode) base = base.filter((p: any) => !!p.checkboard === (linkMode === 'checker'))   // = filterPinsByLinkMode 규칙
+  if (mask) base = JSON.parse(maskEmailsIn(JSON.stringify(base)))
+  o.pin_alias = 'on'
+  o.pin_home = String(h.home.id)
+  o.base_pins_min = base
+  return o
+}
+
+/** 응답 한 지점 — 투영(별칭이면) → 링크 모드 필터 → 마스킹(mapDeploymentFor) → 메타. 필터는 반드시 투영 **뒤**(설계 §1-3). */
+function mapAliasedFor(row: any, h: PinHome | null, mask: boolean, linkMode?: string | null): any {
+  const r = (h && h.kind === 'alias') ? aliasReadRow(row, h) : row
+  return aliasMeta(mapDeploymentFor(r, mask, linkMode), h, mask, linkMode)
+}
+
+/** 링크(배포 스냅샷) 읽기의 별칭 — 작업본이 아니라 **스냅샷의** 구역 트리·원본 행으로 같은 규칙을 적용한다(동결본 일관성). */
+async function snapshotPinHome(c: any, pid: string, depId: string, row: any): Promise<PinHome | null> {
+  const snap = await snapshotOf(c, pid)
+  if (!snap) return null
+  const b = aliasBoxOf(snap.decks, depId)
+  if (!b) return null
+  if (b === 'ambiguous') return { kind: 'ambiguous' }
+  if (aliasBoxOf(snap.decks, b.home)) return null
+  const home = await snapshotDepRow(c, pid, b.home)
+  if (!home) return null
+  const own = parsePins(row && row.pins).filter((p: any) => p && p.id != null && !p._deleted).length
+  if (own > 0) return { kind: 'pending', box: b, count: own }
+  return { kind: 'alias', box: b, home }
+}
+
 /* ════════════════════════════════════════════
    pano_images — 360° 그림 클라우드 저장
 ════════════════════════════════════════════ */
@@ -4956,14 +5049,17 @@ app.get('/tables/deployments', async (c) => {
   let results: any[] = []
   // [WO 20261012-viewlink] 🔴 익명 링크 세션 = 배포 스냅샷 행만(작업본 0)
   if (s.linkOnly) {
-    const out: any[] = []
+    const out: { row: any, pid: string }[] = []
     for (const pid of linkReadPids(s)) {
       const snap = await snapshotOf(c, pid)
       if (!snap) continue
-      for (const id of snap.depIds) { const row = await snapshotDepRow(c, pid, id); if (row) out.push(row) }
+      for (const id of snap.depIds) { const row = await snapshotDepRow(c, pid, id); if (row) out.push({ row, pid }) }
     }
-    out.sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0))
-    return c.json({ data: out.slice(0, limit).map((r: any) => mapDeploymentFor(r, true, LINK_VIEW_MODE)), total: Math.min(out.length, limit) })
+    out.sort((a, b) => (Number(b.row.created_at) || 0) - (Number(a.row.created_at) || 0))
+    // [WO 20261012-pinsync] 벡터 복사 구역 = 스냅샷 원본 핀 투영(동결본 기준)
+    const data: any[] = []
+    for (const x of out.slice(0, limit)) data.push(mapAliasedFor(x.row, await snapshotPinHome(c, x.pid, String(x.row.id), x.row), true, LINK_VIEW_MODE))
+    return c.json({ data, total: Math.min(out.length, limit) })
   }
   if (s.all) {
     const r = await c.env.DB.prepare('SELECT * FROM deployments WHERE deleted = 0 ORDER BY created_at DESC LIMIT ?').bind(limit).all()
@@ -4983,8 +5079,9 @@ app.get('/tables/deployments', async (c) => {
   const outRows: any[] = []
   for (const r of results) {
     const lm = linkModeForRow(s, midx, r)
-    if (lm) { const snap = await linkSnapRow(c, s, String(r.id)); if (snap) outRows.push(mapDeploymentFor(snap.row, true, lm)); continue }
-    outRows.push(mapDeploymentFor(r, maskForDepRow(s, midx, r), lm))
+    // [WO 20261012-pinsync] 벡터 복사 구역 = 원본 핀 투영(링크 = 스냅샷 기준 · 멤버 = 작업본 기준)
+    if (lm) { const snap = await linkSnapRow(c, s, String(r.id)); if (snap) outRows.push(mapAliasedFor(snap.row, await snapshotPinHome(c, snap.pid, String(r.id), snap.row), true, lm)); continue }
+    outRows.push(mapAliasedFor(r, await resolvePinHome(c, String(r.id), r), maskForDepRow(s, midx, r), lm))
   }
   return c.json({ data: outRows, total: outRows.length })
 })
@@ -5009,8 +5106,10 @@ app.get('/tables/deployments/:id', async (c) => {
     if (!memberRead && linkReadPids(scope).length) {
       const snap = await linkSnapRow(c, scope, String(id))
       if (!snap) return c.json({ error: 'forbidden' }, 403)
-      if (light) return c.json({ id: snap.row.id, version: (snap.row.version != null ? snap.row.version : 0), deleted: false, snapshot: true })
-      return c.json({ ...mapDeploymentFor(snap.row, true, LINK_VIEW_MODE), snapshot_at: (await snapshotOf(c, snap.pid))?.at || null })
+      // [WO 20261012-pinsync] 벡터 복사 구역 = 스냅샷 원본 핀 투영 · 버전도 별칭 버전(폴링 일관)
+      const sph = await snapshotPinHome(c, snap.pid, String(id), snap.row)
+      if (light) return c.json({ id: snap.row.id, version: (sph && sph.kind === 'alias') ? aliasVersion(sph.home.version) : (snap.row.version != null ? snap.row.version : 0), deleted: false, snapshot: true })
+      return c.json({ ...mapAliasedFor(snap.row, sph, true, LINK_VIEW_MODE), snapshot_at: (await snapshotOf(c, snap.pid))?.at || null })
     }
   }
   const row = await c.env.DB.prepare(light
@@ -5020,11 +5119,13 @@ app.get('/tables/deployments/:id', async (c) => {
   // [WO 20261009-readacl] 🔴 읽기 SoT — 다른 프로젝트·범위 밖 링크·미배포 = 403(감사 H1: 익명 토큰으로 비공개 B 200)
   if (!canReadDepRow(scope, await depRefIndexOf(c), row)) return c.json({ error: 'forbidden' }, 403)
   //   (종전 테넌트 검사는 canReadDepRow 가 대체 — 귀속 없는 레거시 배포본은 거기서 디자이너 자기 테넌트로 한정)
+  // [WO 20261012-pinsync] S2 — 벡터 복사 구역(별칭)이면 핀·버전을 원본에서(투영). 경량 버전 폴링도 같은 버전 공간.
+  const ph = (row as any).deleted ? null : await resolvePinHome(c, String(id), light ? undefined : row)
   if (light) {
     const r = row as any
-    return c.json({ id: r.id, version: (r.version != null ? r.version : 0), deleted: !!r.deleted })
+    return c.json({ id: r.id, version: (ph && ph.kind === 'alias') ? aliasVersion(ph.home.version) : (r.version != null ? r.version : 0), deleted: !!r.deleted })
   }
-  { const ridx = await depRefIndexOf(c); return c.json(mapDeploymentFor(row, maskForDepRow(scope, ridx, row), linkModeForRow(scope, ridx, row))) }
+  { const ridx = await depRefIndexOf(c); return c.json(mapAliasedFor(row, ph, maskForDepRow(scope, ridx, row), linkModeForRow(scope, ridx, row))) }
 })
 
 /* ══ [WO 20261011-viewmode] 모드별 뷰어 배포 링크 — 생성·목록·폐기. SoT = view_links 테이블.
@@ -5271,11 +5372,16 @@ const updateDeployment = async (c: any) => {
   // 그 사이 다른 사용자가 저장한 것 → 409 충돌. 서버 최신본(pins/zones/version)을
   // 함께 돌려주어 클라이언트가 병합 후 재시도하게 한다.
   // base_version 미전송(구버전 클라이언트)이면 종전처럼 그대로 갱신(하위호환).
-  if (body.base_version != null && Number(body.base_version) !== curVersion) {
+  // [WO 20261012-pinsync] S3 — 벡터 복사 구역(별칭): 잠금 버전 = 별칭 버전(원본 기준), 핀은 원본에, 나머지 칸은 구역 행에.
+  const ph = await resolvePinHome(c, String(id), existing)
+  const alias = (ph && ph.kind === 'alias') ? ph : null
+  const lockVersion = alias ? aliasVersion(alias.home.version) : curVersion
+  // 🔴 별칭 + 핀 본문 = base_version 필수 — 잠금 없는 전량 치환이 원본 상자 안 남의 핀을 지우지 않게(구버전 하위호환 예외 없음)
+  if ((body.base_version != null && Number(body.base_version) !== lockVersion) || (alias && body.pins != null && body.base_version == null)) {
     return c.json({
       error: 'conflict',
       message: '다른 사용자가 먼저 저장했습니다. 최신본과 병합 후 다시 저장하세요.',
-      current: mapDeployment(existing)
+      current: alias ? mapAliasedFor(existing, alias, false, null) : mapDeployment(existing)
     }, 409)
   }
 
@@ -5284,7 +5390,8 @@ const updateDeployment = async (c: any) => {
     file_name:    body.file_name     != null ? body.file_name    : existing.file_name,
     drawing_data: body.drawing_data  != null ? body.drawing_data : existing.drawing_data,
     pages_data:   body.pages_data    != null ? body.pages_data   : existing.pages_data,
-    pins:         body.pins          != null ? body.pins         : existing.pins,
+    // 별칭이면 구역 행 pins 는 저작 대상이 아니다(그대로 둔다) — 핀은 아래 homePins 로 원본에 쓴다
+    pins:         (body.pins != null && !alias) ? body.pins : existing.pins,
     zones:        body.zones         != null ? body.zones        : existing.zones,
     annotations:  body.annotations   != null ? body.annotations  : (existing.annotations || '[]'),
     // [P14] 미전송 시 기존 값 보존(부분 갱신) — 원본 없는 구버전 저장 흐름이 기존 원본을 지우지 않는다.
@@ -5294,7 +5401,9 @@ const updateDeployment = async (c: any) => {
   }
   // [WO 20261010-offmatrix S-REV] 클라가 "이 본문은 rebase_from 버전 기준 편집을 담는다"고 알리면(오프라인 복귀·병합 후 저장),
   //   그 이후 적용된 개정으로 서버본과 다른 항목만 이월한다(rebaseArrayJson). 미전송이면 종전과 동일.
-  if (body.rebase_from != null) {
+  //   [WO 20261012-pinsync] 별칭이면 rebase_from 은 별칭 버전 공간 → 영역·주석(구역 로컬)엔 대응할 개정 버전이 없어 건너뛰고,
+  //   핀은 아래 원본 쓰기에서 원본 버전으로 환산해 원본 개정으로 이월한다.
+  if (body.rebase_from != null && !alias) {
     const revs = await revsSinceVersion(c, id, body.rebase_from)
     if (revs.length) {
       if (body.pins != null) merged.pins = rebaseArrayJson('pin', merged.pins, existing.pins, revs)
@@ -5321,6 +5430,41 @@ const updateDeployment = async (c: any) => {
         }
       }
     } catch {}
+  }
+  if (alias) {
+    // [WO 20261012-pinsync] S3 — 핀: 원본 = (원본 − 상자 안 살아있는 핀) ∪ 역변환(본문), 원본 순서 보존(regionAlias.mergeIntoHome).
+    //   두 행(원본 핀 · 구역 나머지 칸)은 DB.batch 한 트랜잭션. 원본 UPDATE 는 읽은 version 조건부, 구역 UPDATE 는
+    //   "원본이 방금 이 요청으로 바뀌었다"(version+1 · updated_at=now) 조건부 → 경합이면 둘 다 0건(부분 적용 0) → 409.
+    const home: any = alias.home
+    const homeVer = Number(home.version) || 0
+    let homePins = home.pins
+    if (body.pins != null) {
+      let inc: any
+      try { inc = typeof body.pins === 'string' ? JSON.parse(body.pins) : body.pins } catch { inc = null }
+      if (!Array.isArray(inc)) return c.json({ error: 'pins must be a JSON array' }, 400)   // 깨진 본문을 [] 로 읽어 상자 안 핀을 지우지 않는다
+      homePins = JSON.stringify(mergeIntoHome(parsePins(home.pins), inc, alias.box))
+      const hv = body.rebase_from != null ? homeVersionOf(body.rebase_from) : null
+      if (hv != null) {
+        const revs = await revsSinceVersion(c, String(home.id), hv)
+        if (revs.length) homePins = rebaseArrayJson('pin', homePins, home.pins, revs)
+      }
+    }
+    const out: any = await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE deployments SET pins=?, updated_at=?, version=? WHERE id=? AND deleted=0 AND version=?')
+        .bind(homePins, now, homeVer + 1, home.id, homeVer),
+      c.env.DB.prepare(
+        `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, zones=?, annotations=?, source_meta=?, checkboard_start=?, updated_at=?, version=?
+          WHERE id=? AND EXISTS (SELECT 1 FROM deployments WHERE id=? AND version=? AND updated_at=?)`
+      ).bind(merged.title, merged.file_name, merged.drawing_data, merged.pages_data, merged.zones, merged.annotations, merged.source_meta, merged.checkboard_start,
+        now, newVersion, id, home.id, homeVer + 1, now),
+    ])
+    if (!Number((out && out[0] && out[0].meta && out[0].meta.changes) || 0)) {
+      const fresh = await resolvePinHome(c, String(id))
+      return c.json({ error: 'conflict', message: '다른 사용자가 먼저 저장했습니다. 최신본과 병합 후 다시 저장하세요.',
+        current: mapAliasedFor(existing, fresh, false, null) }, 409)
+    }
+    const nh = Object.assign({}, home, { pins: homePins, version: homeVer + 1, updated_at: now })
+    return c.json(mapAliasedFor(Object.assign({}, existing, merged, { id, updated_at: now, version: newVersion }), { kind: 'alias', box: alias.box, home: nh }, false, null))
   }
   await c.env.DB.prepare(
     `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?, source_meta=?, checkboard_start=?, updated_at=?, version=? WHERE id=?`
@@ -5376,7 +5520,15 @@ app.post('/tables/deployments/:id/ops', async (c) => {
     for (const o of arr) if (o && o.id != null) m.set(String(o.id), o)
     return m
   }
-  const pins = toMap(dep.pins), zones = toMap(dep.zones), annos = toMap(dep.annotations)
+  // [WO 20261012-pinsync] S4 — 벡터 복사 구역(별칭): 핀 op 는 역변환해 **원본** 핀 맵에 적용(LWW·tombstone·개정 이월 규칙 그대로),
+  //   영역·주석은 구역 행, 핀 노트는 원본. 응답 current 는 반드시 재투영(원본 좌표가 클라 _mergeConflict 로 가면 좌표 오염).
+  const oph = await resolvePinHome(c, String(id), dep)
+  const opAlias = (oph && oph.kind === 'alias') ? oph : null
+  const pinDepId = opAlias ? String(opAlias.home.id) : String(id)
+  // 노트 쓰기 경계(S2) — 일반 배포본은 종전 SQL 그대로, 별칭 구역은 구역+원본
+  const noteDepSql = opAlias ? 'deployment_id IN (?, ?)' : 'deployment_id = ?'
+  const noteDepArgs = opAlias ? [String(id), pinDepId] : [id]
+  const pins = toMap(opAlias ? opAlias.home.pins : dep.pins), zones = toMap(dep.zones), annos = toMap(dep.annotations)
   const pick = (e: string) => e === 'pin' ? pins : e === 'zone' ? zones : annos
 
   const applied: string[] = []
@@ -5398,8 +5550,9 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       if (op.action === 'delete') {
         if (!isTemp) {
           // [S2] 🔴 쓰기 권한은 URL 의 배포본(id)으로만 검사했다 → 노트도 그 배포본 소속만(다른 프로젝트 노트 id 를 끼워 넣는 IDOR 차단)
-          await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ? AND deployment_id = ?')
-            .bind(opTsNote, realId, id).run()
+          //   [WO 20261012-pinsync] 별칭 구역이면 원본(핀 노트 소속)도 같은 경계 안 — 같은 프로젝트(resolvePinHome 검증)
+          await c.env.DB.prepare('UPDATE pin_notes SET deleted = 1, updated_at = ? WHERE id = ? AND ' + noteDepSql)
+            .bind(opTsNote, realId, ...noteDepArgs).run()
         }
         // isTemp(한 번도 서버에 생성된 적 없는 노트) → 삭제할 행이 없으므로 no-op
       } else { // upsert
@@ -5415,7 +5568,8 @@ app.post('/tables/deployments/:id/ops', async (c) => {
               (id, deployment_id, pin_id, pin_label, body, status, assignee, due_at, severity, author, author_email, author_role, created_at, updated_at, resolved_at, deleted)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
           ).bind(
-            newId, id, String(d.pin_id || ''), String(d.pin_label || ''),
+            // [WO 20261012-pinsync] 핀 노트는 핀 정본(원본)에 — 별칭 구역의 핀 id 는 원본 핀 id 그대로다. 핀 없는 글은 구역 행.
+            newId, (d.pin_id ? pinDepId : id), String(d.pin_id || ''), String(d.pin_label || ''),
             String(d.body || '').slice(0, 4000), status,
             (d.assignee ? String(d.assignee) : null), dueAt, severityIn, String(d.author || '익명'),
             d.author_email || null, d.author_role || 'guest',
@@ -5443,8 +5597,8 @@ app.post('/tables/deployments/:id/ops', async (c) => {
           }
           if (fields.length) {
             fields.push('updated_at = ?'); args.push(opTsNote)
-            args.push(realId, id)   // [S2] 그 배포본 소속 노트만(위 delete 와 같은 경계)
-            await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ? AND deployment_id = ? AND deleted = 0`).bind(...args).run()
+            args.push(realId, ...noteDepArgs)   // [S2] 그 배포본 소속 노트만(위 delete 와 같은 경계 · 별칭이면 원본 포함)
+            await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ? AND ${noteDepSql} AND deleted = 0`).bind(...args).run()
           }
         }
       }
@@ -5457,19 +5611,27 @@ app.post('/tables/deployments/:id/ops', async (c) => {
     const m = pick(op.entity)
     const cur = m.get(String(op.id))
     const opTs = Number(op.ts || Date.now())
+    // [WO 20261012-pinsync] 별칭 구역의 핀 op = 구역 좌표 → 원본 좌표(움직이지 않은 핀은 원본 좌표 바이트 그대로 — unprojectPin)
+    if (opAlias && op.entity === 'pin') {
+      const t = unprojectOp(op, opAlias.box, cur)
+      if (t !== op && t.data) op.data = t.data
+    }
+    const opDepId = (op.entity === 'pin') ? pinDepId : String(id)   // applied_ops 키 = 그 엔티티의 정본 행(설계 §1-3)
     if (op.action !== 'delete' && op.data && typeof op.data === 'object') {
       // [WO 20261010-offmatrix] 🔴 핀 단위 LWW — 클라 병합(PinSeries.newer)과 같은 규칙: 서버 핀이 더 나중에 고쳐졌으면(updatedAt 큼)
       //   늦게 도착한 옛 op 가 덮지 않는다. 종전엔 op.data(핀 통째)가 무조건 덮어 다른 기기의 최신 수정을 되돌렸다(p146 conc 재현).
       //   [WO 20261011-offmerge] 주석·영역도 같은 규칙(클라 _mergeEntities 와 동일 — updatedAt 없는 구버전 항목은 종전대로 반영).
       if ((op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno') && cur && !cur._deleted && Number(cur.updatedAt || 0) > Number(op.data.updatedAt || 0)) {
-        await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)').bind(op.opId, id, Date.now()).run()
+        await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)').bind(op.opId, opDepId, Date.now()).run()
         applied.push(op.opId)
         continue
       }
       // [WO 20261010-offmatrix S-REV] op 가 기준으로 삼은 버전(op.base) 이후 적용된 개정으로 좌표 이월(rebaseOne — revCore SoT)
-      if (op.base != null && (op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno')) {
-        const k = String(op.base)
-        if (!revCache.has(k)) revCache.set(k, await revsSinceVersion(c, id, op.base))
+      //   [WO 20261012-pinsync] 별칭이면 op.base = 별칭 버전 → 핀만 원본 버전으로 환산해 원본 개정으로 이월(영역·주석은 대응 개정 없음 — 건너뜀)
+      const revBase = !opAlias ? op.base : (op.entity === 'pin' ? homeVersionOf(op.base) : null)
+      if (revBase != null && (op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno')) {
+        const k = op.entity === 'pin' ? pinDepId + ':' + String(revBase) : String(id) + ':' + String(revBase)
+        if (!revCache.has(k)) revCache.set(k, await revsSinceVersion(c, op.entity === 'pin' ? pinDepId : String(id), revBase))
         const revs = revCache.get(k) || []
         if (revs.length) op.data = rebaseOne(op.entity, Object.assign({}, op.data, { id: op.id }), revs)
       }
@@ -5490,7 +5652,7 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       }
     }
     await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)')
-      .bind(op.opId, id, Date.now()).run()
+      .bind(op.opId, opDepId, Date.now()).run()
     applied.push(op.opId)
     newlyApplied++
   }
@@ -5500,6 +5662,22 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   // 새로 적용된 op가 있을 때만 version 증가(중복 opId 재전송은 version 불변 — 멱등)
   const changed = newlyApplied > 0
   const newVersion = changed ? curVersion + 1 : curVersion
+  if (opAlias) {
+    // [WO 20261012-pinsync] 두 행(원본 핀 · 구역 영역/주석)을 한 트랜잭션으로. 별칭 버전 = 원본 version 기준이라 원본도 함께 올린다.
+    const home: any = opAlias.home
+    const homeVer = Number(home.version) || 0
+    const now2 = Date.now()
+    const nh = changed ? Object.assign({}, home, { pins: dump(pins), version: homeVer + 1, updated_at: now2 }) : home
+    if (changed) {
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE deployments SET pins=?, updated_at=?, version=? WHERE id=?').bind(nh.pins, now2, nh.version, home.id),
+        c.env.DB.prepare('UPDATE deployments SET zones=?, annotations=?, updated_at=?, version=? WHERE id=?').bind(dump(zones), dump(annos), now2, newVersion, id),
+      ])
+    }
+    // 🔴 응답 current = 재투영(구역 좌표) — 원본 좌표를 그대로 돌려주면 클라 병합이 구역 화면 핀 좌표를 오염시킨다(설계 §1-3)
+    const cur2 = mapAliasedFor(Object.assign({}, dep, { zones: dump(zones), annotations: dump(annos), version: newVersion }), { kind: 'alias', box: opAlias.box, home: nh }, false, null)
+    return c.json({ ok: true, applied, version: cur2.version, noteIdMap, current: cur2 })
+  }
   if (changed) {
     await c.env.DB.prepare(
       'UPDATE deployments SET pins=?, zones=?, annotations=?, updated_at=?, version=? WHERE id=?'
@@ -5512,6 +5690,143 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       pins: dump(pins), zones: dump(zones), annotations: dump(annos), version: newVersion
     }))
   })
+})
+
+/* ══ [WO 20261012-pinsync] 기존 구역 핀 이관(설계 §2) — 자동 변환 금지, 사람이 미리보기 보고 [원본과 합치기] ══════════
+ *  GET  /tables/deployments/:id/pin-alias        상태·미리보기(N건 · 화면 안 M · 밖 K · id 재발급 · 번호 겹침 · 노트)
+ *  POST /tables/deployments/:id/pin-alias        이관 실행 — 보관(region_pin_migration) + D0 추가 + D1 비움 + 노트 이동 = 한 batch(멱등)
+ *  POST /tables/deployments/:id/pin-alias/undo   되돌리기(PIN_PURGE_UNDO_MS 안) — 보관 원문으로 D1 복원 + D0 추가분 tombstone + 노트 복귀
+ *  권한 = 배포본 쓰기 SoT(updateDeployment 와 같은 게이트). */
+async function pinAliasGate(c: any): Promise<{ user?: any, dep?: any, res?: Response }> {
+  const user = await requireDesigner(c)
+  if (!user || user._readonly) return { res: c.json({ error: 'forbidden — designer login required' }, 403) }
+  const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(c.req.param('id')).first()
+  if (!dep) return { res: c.json({ error: 'not found' }, 404) }
+  const tid = await tenantOf(c, user)
+  if (tid && (dep.tenant_id || DEFAULT_TENANT) !== tid) return { res: c.json({ error: 'not found' }, 404) }
+  const denied = await deploymentWriteDenied(c, user, dep.project_id)
+  if (denied) return { res: c.json({ error: denied.error }, denied.status) }
+  return { user, dep }
+}
+async function pinMigrationReady(c: any): Promise<boolean> {
+  try { await c.env.DB.prepare('SELECT id FROM region_pin_migration LIMIT 1').first(); return true } catch { return false }
+}
+/** 이관 미리보기 계산(SoT — GET 미리보기와 POST 실행이 같은 값을 쓴다). */
+async function pinMigrationPlan(c: any, dep: any, box: AliasBox) {
+  const home: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(box.home).first()
+  if (!home) return null
+  const homePins = parsePins(home.pins)
+  const d1Pins = parsePins(dep.pins)
+  const plan = planMigration(d1Pins, homePins, box)
+  const liveIds = d1Pins.filter((p: any) => p && p.id != null && !p._deleted).map((p: any) => String(p.id))
+  const notes: any[] = ((await c.env.DB.prepare('SELECT * FROM pin_notes WHERE deployment_id = ? AND pin_id IN (SELECT value FROM json_each(?))')
+    .bind(String(dep.id), JSON.stringify(liveIds)).all()).results) || []
+  // 번호 겹침(표시만 — 자동 재채번 금지 규율): 원본 그 페이지의 같은 계열·같은 숫자 라벨
+  const key = (p: any) => (p.checkboard ? 'c:' : 'p:') + String(p.label == null ? '' : p.label).trim()
+  const used = new Set(homePins.filter((p: any) => p && !p._deleted && (Number(p.page) || 1) === box.page && /^\d+$/.test(String(p.label == null ? '' : p.label).trim())).map(key))
+  const dupNos = plan.pins.filter((p: any) => used.has(key(p))).length
+  return { home, plan, notes, liveIds, dupNos }
+}
+
+app.get('/tables/deployments/:id/pin-alias', async (c) => {
+  const g = await pinAliasGate(c)
+  if (g.res) return g.res
+  const dep = g.dep
+  const ph = await resolvePinHome(c, String(dep.id), dep)
+  const ready = await pinMigrationReady(c)
+  if (!ph) return c.json({ state: 'none', ready })
+  if (ph.kind === 'ambiguous') return c.json({ state: 'ambiguous', ready })
+  if (ph.kind === 'alias') return c.json({ state: 'alias', home: String(ph.home.id), deck_id: ph.box.deckId, ready })
+  const p = await pinMigrationPlan(c, dep, ph.box)
+  if (!p) return c.json({ state: 'none', ready })
+  return c.json({ state: 'pending', home: String(p.home.id), deck_id: ph.box.deckId, count: p.liveIds.length, inside: p.plan.inside, outside: p.plan.outside,
+    renamed: Object.keys(p.plan.idMap).length, dup_numbers: p.dupNos, notes: p.notes.filter((n: any) => !Number(n.deleted)).length,
+    version: Number(dep.version) || 0, undo_window_ms: PIN_PURGE_UNDO_MS, ready })
+})
+
+app.post('/tables/deployments/:id/pin-alias', async (c) => {
+  const g = await pinAliasGate(c)
+  if (g.res) return g.res
+  const dep = g.dep, user = g.user, id = String(dep.id)
+  let body: any = {}
+  try { body = await c.req.json() } catch { body = {} }
+  const ph = await resolvePinHome(c, id, dep)
+  if (!ph) return c.json({ error: '원본 상자가 기록된 벡터 복사 구역이 아닙니다 — 합칠 원본이 없습니다' }, 400)
+  if (ph.kind === 'ambiguous') return c.json({ error: '이 도면을 서로 다른 원본 상자로 가리키는 구역이 2개 이상입니다 — 자동으로 정하지 않습니다', pin_alias: 'ambiguous' }, 409)
+  if (ph.kind === 'alias') return c.json({ ok: true, moved: 0, already: true })   // 멱등 — 옮길 핀 0건
+  if (!(await pinMigrationReady(c))) return c.json({ error: 'migration 0045_region_pin_migration 미적용 — 옮기지 않았습니다' }, 503)
+  const d1Ver = Number(dep.version) || 0
+  if (body && body.version != null && Number(body.version) !== d1Ver) return c.json({ error: '미리보기 이후 구역이 바뀌었습니다 — 다시 미리보기 후 실행하세요', conflict: true }, 409)
+  const p = await pinMigrationPlan(c, dep, ph.box)
+  if (!p) return c.json({ error: '원본 도면이 없습니다' }, 409)
+  const home = p.home, homeVer = Number(home.version) || 0, now = Date.now(), mig = genId('rpm')
+  const nextHome = parsePins(home.pins).concat(p.plan.pins)
+  const moved = p.plan.pins.map((x: any) => String(x.id))
+  const remapped = Object.keys(p.plan.idMap)
+  const keepIds = p.liveIds.filter((x: string) => !Object.prototype.hasOwnProperty.call(p.plan.idMap, x))
+  const MARK = 'EXISTS (SELECT 1 FROM region_pin_migration WHERE id = ?)'
+  const stmts: any[] = [
+    // ① 보관 — 두 행이 미리보기 때 그대로일 때만(경합 = 0건 → 아래 전부 0건)
+    c.env.DB.prepare(
+      `INSERT INTO region_pin_migration (id, deck_id, deployment_id, home_id, pins_json, notes_json, id_map, moved_ids, actor_email, migrated_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)
+          AND EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)`
+    ).bind(mig, ph.box.deckId, id, String(home.id), String(dep.pins || '[]'), JSON.stringify(p.notes), JSON.stringify(p.plan.idMap), JSON.stringify(moved),
+      String(user.email || ''), now, id, d1Ver, String(home.id), homeVer),
+    // ② 원본에 추가(원본 핀 바이트 불변 + 끝에 이관 핀) ③ 구역 비움(→ 별칭 성립)
+    c.env.DB.prepare(`UPDATE deployments SET pins = ?, updated_at = ?, version = ? WHERE id = ? AND version = ? AND ${MARK}`)
+      .bind(JSON.stringify(nextHome), now, homeVer + 1, String(home.id), homeVer, mig),
+    c.env.DB.prepare(`UPDATE deployments SET pins = '[]', updated_at = ?, version = ? WHERE id = ? AND version = ? AND ${MARK}`)
+      .bind(now, d1Ver + 1, id, d1Ver, mig),
+    // ④ 노트 = 핀을 따라 원본으로(재발급 id 는 같은 맵으로 치환)
+    c.env.DB.prepare(`UPDATE pin_notes SET deployment_id = ? WHERE deployment_id = ? AND pin_id IN (SELECT value FROM json_each(?)) AND ${MARK}`)
+      .bind(String(home.id), id, JSON.stringify(keepIds), mig),
+  ]
+  for (const old of remapped) {
+    stmts.push(c.env.DB.prepare(`UPDATE pin_notes SET deployment_id = ?, pin_id = ? WHERE deployment_id = ? AND pin_id = ? AND ${MARK}`)
+      .bind(String(home.id), p.plan.idMap[old], id, old, mig))
+  }
+  const out: any = await c.env.DB.batch(stmts)
+  if (!Number((out && out[0] && out[0].meta && out[0].meta.changes) || 0)) return c.json({ error: '저장 경합(동시 저장) — 다시 미리보기 후 실행하세요', conflict: true }, 409)
+  await logActivity(c, 'pins.region_migrate', { actor: user, targetType: 'deployment', targetId: id,
+    detail: { migration: mig, home: String(home.id), deck: ph.box.deckId, moved: moved.length, renamed: remapped.length, notes: p.notes.length } })
+  return c.json({ ok: true, migration_id: mig, moved: moved.length, inside: p.plan.inside, outside: p.plan.outside, renamed: remapped.length,
+    notes: p.notes.length, home: String(home.id), undo_until: now + PIN_PURGE_UNDO_MS })
+})
+
+app.post('/tables/deployments/:id/pin-alias/undo', async (c) => {
+  const g = await pinAliasGate(c)
+  if (g.res) return g.res
+  const id = String(g.dep.id)
+  let body: any = {}
+  try { body = await c.req.json() } catch { body = {} }
+  if (!(await pinMigrationReady(c))) return c.json({ error: 'migration 0045_region_pin_migration 미적용' }, 503)
+  const row: any = await c.env.DB.prepare('SELECT * FROM region_pin_migration WHERE id = ? AND deployment_id = ?').bind(String((body && body.migration_id) || ''), id).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  if (row.undone_at != null) return c.json({ ok: true, already: true })
+  const now = Date.now()
+  if (now - Number(row.migrated_at) > PIN_PURGE_UNDO_MS) return c.json({ error: '되돌리기 시간(10분)이 지났습니다', expired: true }, 410)
+  const home: any = await c.env.DB.prepare('SELECT id, pins, version FROM deployments WHERE id = ? AND deleted = 0').bind(row.home_id).first()
+  if (!home) return c.json({ error: '원본 도면이 삭제됨' }, 409)
+  const d1Ver = Number(g.dep.version) || 0, homeVer = Number(home.version) || 0
+  const moved = new Set((parsePins(row.moved_ids) as any[]).map(String))
+  // 원본 추가분 = tombstone(다른 화면의 병합이 되살리지 않게 — 일괄삭제와 같은 규칙). 그 외 원본 핀 바이트 불변.
+  const nextHome = parsePins(home.pins).map((p: any) => (p && p.id != null && !p._deleted && moved.has(String(p.id))) ? { id: p.id, _deleted: true, ts: now } : p)
+  const MARK = 'EXISTS (SELECT 1 FROM deployments WHERE id = ? AND version = ? AND updated_at = ?)'
+  const stmts: any[] = [
+    c.env.DB.prepare('UPDATE deployments SET pins = ?, updated_at = ?, version = ? WHERE id = ? AND version = ?').bind(JSON.stringify(nextHome), now, homeVer + 1, String(home.id), homeVer),
+    c.env.DB.prepare(`UPDATE deployments SET pins = ?, updated_at = ?, version = ? WHERE id = ? AND ${MARK}`).bind(String(row.pins_json), now, d1Ver + 1, id, String(home.id), homeVer + 1, now),
+    c.env.DB.prepare(`UPDATE region_pin_migration SET undone_at = ? WHERE id = ? AND ${MARK}`).bind(now, String(row.id), String(home.id), homeVer + 1, now),
+  ]
+  let notes: any[] = []
+  try { const a = JSON.parse(row.notes_json || '[]'); notes = Array.isArray(a) ? a : [] } catch { notes = [] }
+  for (const n of notes) {
+    stmts.push(c.env.DB.prepare(`UPDATE pin_notes SET deployment_id = ?, pin_id = ? WHERE id = ? AND ${MARK}`).bind(id, String(n.pin_id || ''), String(n.id), String(home.id), homeVer + 1, now))
+  }
+  const out: any = await c.env.DB.batch(stmts)
+  if (!Number((out && out[0] && out[0].meta && out[0].meta.changes) || 0)) return c.json({ error: '저장 경합(동시 저장) — 다시 시도하세요', conflict: true }, 409)
+  return c.json({ ok: true, restored: parsePins(row.pins_json).filter((p: any) => p && !p._deleted).length })
 })
 
 // 삭제 (soft delete) — 디자이너 이상
@@ -5530,6 +5845,15 @@ app.delete('/tables/deployments/:id', async (c) => {
   if (row) {
     const denied = await deploymentWriteDenied(c, user, row.project_id)
     if (denied) return c.json({ error: denied.error }, denied.status)
+  }
+  // [WO 20261012-pinsync] S5 — 이 배포본이 벡터 복사 구역들의 핀 정본이면 삭제 거부(지우면 구역 화면에서 핀이 사라진다).
+  {
+    let n = 0
+    for (const d of (await aliasDecksOf(c)).filter((x: any) => String(x.src_dep_id) === String(id))) {
+      const h = await resolvePinHome(c, String(d.deployment_id))
+      if (h && h.kind === 'alias' && String(h.home.id) === String(id)) n++
+    }
+    if (n) return c.json({ error: '이 도면은 구역 ' + n + '개의 핀 정본입니다(구역에서 찍은 핀이 이 도면에 저장됨) — 그 구역을 먼저 삭제하세요', pin_alias_children: n }, 409)
   }
   await c.env.DB.prepare('UPDATE deployments SET deleted = 1, updated_at = ? WHERE id = ?')
     .bind(Date.now(), id).run()
@@ -5662,6 +5986,15 @@ async function noteActor(c: any): Promise<{ user: any, designer: boolean, role: 
  *  핀 요청: 배포본 핀 좌표(page·x·y %)를 이 배포본 deck 들의 crop(% · NULL = 페이지 전체)에 대어 **가장 작은** deck(= 가장 깊은 영역).
  *  핀 없는 요청: 클라가 보던 deck(hint)이 이 배포본 deck 이면 그것, 아니면 최상위 구역(parent_id NULL) 우선.
  *  특정 불가(이 배포본을 가리키는 deck 0) = null — 지어내지 않는다(요청함이 "구역 미지정"으로 정직하게 표시). */
+/** [WO 20261012-pinsync] S7 — 노트 조회 범위 SQL 조각. 별칭 구역(D1) = 구역 자기 글 + 원본(D0) 노트 중 **구역 상자 안 핀**의 것.
+ *  상자 밖 원본 핀의 노트는 구역 화면에 싣지 않는다(그 핀이 구역에 없으므로). pin_id 목록은 json_each 1 바인딩(D1 변수 상한 회피). */
+async function noteDepScope(c: any, depId: string): Promise<{ sql: string, args: any[] }> {
+  const ph = await resolvePinHome(c, String(depId))
+  if (!ph || ph.kind !== 'alias') return { sql: 'deployment_id = ?', args: [depId] }
+  const ids = projectPins(parsePins(ph.home.pins), ph.box).filter((p: any) => p && !p._deleted).map((p: any) => String(p.id))
+  return { sql: '(deployment_id = ? OR (deployment_id = ? AND pin_id IN (SELECT value FROM json_each(?))))', args: [depId, String(ph.home.id), JSON.stringify(ids)] }
+}
+
 async function resolveNoteDeck(c: any, depId: string, pinId: string, hint: string): Promise<string | null> {
   let decks: any[] = []
   try {
@@ -5728,8 +6061,10 @@ app.get('/api/notes', async (c) => {
   const pin = c.req.query('pin_id')
   const status = c.req.query('status')
   const limit = Math.min(Number(c.req.query('limit') || 500), 2000)
-  let sql = 'SELECT * FROM pin_notes WHERE deleted = 0 AND deployment_id = ?'
-  const args: any[] = [dep]
+  // [WO 20261012-pinsync] S7 — 별칭 구역이면 구역 자기 글 + 원본의 "상자 안 핀" 노트(noteDepScope)
+  const ns = await noteDepScope(c, dep)
+  let sql = 'SELECT * FROM pin_notes WHERE deleted = 0 AND ' + ns.sql
+  const args: any[] = ns.args.slice()
   if (pin) { sql += ' AND pin_id = ?'; args.push(pin) }
   if (status && VALID_STATUS.includes(status)) { sql += ' AND status = ?'; args.push(status) }
   sql += ' ORDER BY created_at ASC LIMIT ?'
@@ -5748,15 +6083,16 @@ app.get('/api/notes/summary', async (c) => {
   const dep = c.req.query('deployment_id')
   if (!dep) return c.json({ error: 'deployment_id required' }, 400)
   if (!(await canReadDeployment(c, user, dep))) return c.json({ error: 'forbidden' }, 403)   // [WO 20261009-readacl]
+  const ns = await noteDepScope(c, dep)   // [WO 20261012-pinsync] S7
   const { results } = await c.env.DB.prepare(
     `SELECT pin_id,
             COUNT(*) AS total,
             SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open,
             SUM(CASE WHEN status='progress' THEN 1 ELSE 0 END) AS progress,
             SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done
-     FROM pin_notes WHERE deleted = 0 AND deployment_id = ? AND kind != 'reply'
+     FROM pin_notes WHERE deleted = 0 AND ${ns.sql} AND kind != 'reply'
      GROUP BY pin_id`
-  ).bind(dep).all()
+  ).bind(...ns.args).all()
   const map: any = {}
   for (const r of (results || [])) {
     map[(r as any).pin_id] = {
@@ -5829,6 +6165,12 @@ app.post('/api/notes', async (c) => {
   if (severity && !SEVERITY_LEVELS.includes(severity as any)) severity = null
   const deck_id = parent ? (parent.deck_id ?? null) : await resolveNoteDeck(c, deployment_id, pin_id, String(body.deck_id || ''))
   const pin_label = parent ? String(parent.pin_label || '') : String(body.pin_label || '').slice(0, 200)
+  // [WO 20261012-pinsync] S7 — 핀 노트는 핀 정본(원본) 소속. 별칭 구역 화면에서 쓴 핀 노트도 원본 deployment_id 로 저장한다
+  //   (권한·읽기 판정은 위에서 구역 배포본으로 끝났다 — 같은 프로젝트임은 resolvePinHome 이 보장). 핀 없는 글은 구역 그대로.
+  if (pin_id && !parent) {
+    const nph = await resolvePinHome(c, deployment_id)
+    if (nph && nph.kind === 'alias') deployment_id = String(nph.home.id)
+  }
   // 익명 본인 확인 수정키 — 원문은 이 응답에만, DB 엔 해시만(초대 토큰과 같은 규칙)
   const editKey = a.role === 'guest' ? randToken('nk-') : null
   const author_key_hash = editKey ? await sha256Hex(editKey) : null

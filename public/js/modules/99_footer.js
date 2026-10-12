@@ -43,6 +43,7 @@
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
       FieldCapture: (typeof FieldCapture !== "undefined" ? FieldCapture : null),
       Revision: (typeof Revision !== "undefined" ? Revision : null),
+      PinAlias: (typeof PinAlias !== "undefined" ? PinAlias : null),   // [WO 20261012-pinsync]
       Report: (typeof Report !== "undefined" ? Report : null),
       Requests: (typeof Requests !== "undefined" ? Requests : null),
       ProjectInfo: (typeof ProjectInfo !== "undefined" ? ProjectInfo : null),

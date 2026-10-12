@@ -134,6 +134,7 @@ function buildOpsHandler() {
     async function requireDesigner(c) { return { email: 'designer@test.com' }; }
     async function deploymentWriteDenied(c, user, pid) { return null; }  // [WP3] 프로젝트 권한 가드 — 이 테스트 대상 아님(p93 B5 가 실 워커로 검증)
     async function tenantOf(c, user) { return null; }
+    async function resolvePinHome(c, depId, row) { return null; }  // [WO 20261012-pinsync] 일반 배포본(별칭 아님) — 별칭 경로는 p151 이 실 워커로 검증
     // [WO 20261002-gap] '확인(verified)' 권한 게이트 — 이 테스트는 verified 전환을 다루지 않으므로 거부로 고정(p111/p117 가 별도 검증).
     async function canManageMembers(c, user, pid) { return false; }
     function mapDeployment(row) { return row; }
@@ -412,6 +413,7 @@ console.log("\n[뮤테이션2] 서버 ops 핸들러의 applied_ops 멱등 dup �
       async function requireDesigner(c) { return { email: 'd@test.com' }; }
       async function deploymentWriteDenied(c, user, pid) { return null; }  // [WP3] p93 B5 가 검증
       async function tenantOf(c, user) { return null; }
+      async function resolvePinHome(c, depId, row) { return null; }  // [WO 20261012-pinsync] 일반 배포본(별칭 아님) — 별칭 경로는 p151 이 실 워커로 검증
       function mapDeployment(row) { return row; }
       const app = { post(path, handler) { globalThis.__opsHandler = handler; } };
       ${opsCallSrc}

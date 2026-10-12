@@ -112,13 +112,18 @@
       const srcKey = this.deckKey(srcDeck), dstKey = this.deckKey(dstDeck);
       const have = new Set();
       (dstPins || []).forEach((p) => { if (p && p.srcDeckId != null && p.srcPinId != null) have.add(String(p.srcDeckId) + "\u0000" + String(p.srcPinId)); });
+      // [WO 20261012-pinsync] 같은 id 핀이 대상에 이미 있으면 같은 핀이다 — 원본↔벡터 복사 구역은 서버가 핀을 공유(별칭)하므로
+      //   원본·형제 구역에서 가져오면 그 핀들이 이미 보인다 → "이미 있음"(자기 복제 0). 후보 목록은 그대로 둔다:
+      //   다른 구역이 연동(별칭)인지 아직 따로 저장(pending)인지는 그 배포본을 읽어야 알 수 있어 목록 단계에서 거르지 않는다.
+      const sameId = new Set();
+      (dstPins || []).forEach((p) => { if (p && p.id != null && !p._deleted) sameId.add(String(p.id)); });
       const out = { items: [], total: 0, outside: 0, already: 0, otherMode: 0 };
       (srcPins || []).forEach((p) => {
         if (!p || p._deleted || !this.inDeck(sb, p)) return;
         if (series && PinSeries.seriesOf(p) !== series) { out.otherMode++; return; }
         out.total++;
         // 🔴 멱등 — 이미 가져온 핀(같은 원본 구역·같은 원본 핀) · 대상에서 건너갔던 핀(되돌려 합치면 자기 복제)
-        if (have.has(srcKey + "\u0000" + String(p.id)) || (p.srcDeckId != null && String(p.srcDeckId) === dstKey)) { out.already++; return; }
+        if (have.has(srcKey + "\u0000" + String(p.id)) || (p.srcDeckId != null && String(p.srcDeckId) === dstKey) || sameId.has(String(p.id))) { out.already++; return; }
         let pos = null;
         if (raw) { const d = this.toDisplay(sb, p); pos = d ? this.fromDisplay(db, d, p.page || 1) : null; }
         else pos = this.fromBase(db, this.toBase(sb, p));

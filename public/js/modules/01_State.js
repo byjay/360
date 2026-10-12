@@ -68,6 +68,7 @@
     pinColor:    null,           // 핀 기본 색상(설정에서 변경) — null이면 PinPrefs 기본(green)
     checkboardStart: {},         // [WO 20260929 addendum] { checkboard:{page:n}, content:{page:n} } 계열별·구역(페이지)별 시작 번호 — SoT 정규화는 App._normalizeCheckboardStart()(20_App.js)
     zoneView:    null,           // 구역 페이지(crop-view) 진입 중인 zone id — null이면 전체 도면
+    basePins:    null,           // [WO 20261012-pinsync] 벡터 복사 구역(핀이 원본에 연동) = 원본 그 페이지 핀 최소 사본(서버 base_pins_min) — 번호·채번 기준(PinSeries._withBase). 원본 화면 = null
 
     reset() {
       if (this.imageUrl) { URL.revokeObjectURL(this.imageUrl); this.imageUrl = null; }
@@ -85,6 +86,7 @@
       this.pendingIcon = "number";
       this.editingPinId = null; this.movingPinId = null;
       this.autoSaveDepId = null; this.autoSaving = false; this.depVersion = 0;
+      this.basePins = null;   // [WO 20261012-pinsync] 다른 도면의 번호 기준이 새 도면에 남지 않게
       this.activePin = null; this.zoom = 1; this.pan = { x: 0, y: 0 };
     }
   };

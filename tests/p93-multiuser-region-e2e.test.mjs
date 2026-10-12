@@ -509,15 +509,24 @@ let area = null;
   ok(o.pins === orig0.pins && o.ver === orig0.ver, "C2' 영역 생성 후에도 원본 불변");
 }
 {
-  console.log("\n[C4] 구역에서 핀 추가·저장 → 원본 핀 불변");
+  // [WO 20261012-pinsync] 🔴 단정 개정 — 마스터 "구역에 핀을 박았는데 구역의 페이지에서는 그게 연동이 안되네 서로 연동되게해야지".
+  //   종전 C4 = "구역 핀은 구역 행에만 · 원본 핀 불변"(분리 저장) → 이제 벡터 복사 구역의 핀 정본은 원본이다(서버 별칭).
+  //   원본 관리 유지는 그대로 단정한다: 기존 원본 핀 3개 **바이트 동일** + 원본에 새 핀 1개만 추가(크롭 역변환 좌표).
+  console.log("\n[C4] 구역에서 핀 추가·저장 → 원본과 연동(기존 원본 핀 바이트 불변)");
   A.Projects.currentDeck = zone;
   await A.App.loadDeckDrawing(zone.deployment_id);
+  const seen = A.State.pins.map((p) => String(p.id));
   await place(A, 50, 50);
   const s = await save(A);
   const zp = await srvPins(zone.deployment_id);
   const o = await snap(ORIG);
-  ok(s && zp.length === 1, "C4 구역 배포본에 핀 저장됨(" + zp.length + ")");
-  ok(JSON.parse(o.pins).length === 3 && o.pins === orig0.pins, "C4 원본 핀 3개 그대로");
+  const op = JSON.parse(o.pins), op0 = JSON.parse(orig0.pins);
+  ok(seen.length === 1 && seen[0] === String(op0[0].id), "C4 구역을 열면 원본의 크롭 안 핀 1개가 보인다(" + seen.length + ")");
+  ok(s && zp.length === 2, "C4 구역 화면 = 원본 크롭 안 핀 1 + 새 핀 1 (" + zp.length + ")");
+  ok(op.length === 4 && op0.every((p0) => JSON.stringify(op.find((q) => String(q.id) === String(p0.id))) === JSON.stringify(p0)), "C4 원본 = 기존 3핀 바이트 그대로 + 구역 새 핀 1 (" + op.length + ")");
+  const nw = op.find((q) => !op0.some((p0) => String(p0.id) === String(q.id)));
+  ok(!!nw && Math.abs(nw.x - (CROP.x + 0.5 * CROP.w)) < 1e-9 && Math.abs(nw.y - (CROP.y + 0.5 * CROP.h)) < 1e-9, "C4 새 핀 원본 좌표 = 크롭 역변환(" + (nw && [nw.x, nw.y]) + ")");
+  ok((await getDep(zone.deployment_id)).pin_alias === "on", "C4 구역 응답 pin_alias=on");
 }
 {
   console.log("\n[C3] 트리 최상단 프로젝트 노드 → pickOriginalDeck/openOriginal (WP3 — 이제 EXIT 에 포함)");

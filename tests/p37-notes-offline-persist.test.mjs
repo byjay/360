@@ -126,6 +126,7 @@ function buildOpsHandler(srcOverride) {
     async function requireDesigner(c) { return { email: 'designer@test.com' }; }
     async function deploymentWriteDenied(c, user, pid) { return null; }  // [WP3] 프로젝트 권한 가드 — 이 테스트 대상 아님(p93 B5 가 실 워커로 검증)
     async function tenantOf(c, user) { return null; }
+    async function resolvePinHome(c, depId, row) { return null; }  // [WO 20261012-pinsync] 일반 배포본(별칭 아님) — 별칭 경로는 p151 이 실 워커로 검증
     function mapDeployment(row) { return row; }
     const app = { post(path, handler) { globalThis.__opsHandler = handler; } };
     ${opsCallSrc}

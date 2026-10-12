@@ -227,6 +227,16 @@ ok(!!area1 && area1.src_dep_id === ORIG && area1.src_crop && eq(area1.src_crop, 
   ok(bad.status === 400 && bad2.status === 400, "R0 src_* 신뢰 경계 — 일부만 전송 400 · w=0 400 (" + bad.status + "/" + bad2.status + ")");
 }
 
+/* [WO 20261012-pinsync] 🔴 픽스처 개정 — 벡터 복사 구역은 이제 자기 핀이 0개면 원본과 연동된다(서버 별칭: 구역 핀 = 원본 핀,
+ *   마스터 "서로 연동되게"). 그 구역끼리의 "포인트 가져오기"는 자기 복제가 되므로 아래 [연동] 블록·p151 이 검증한다.
+ *   합치기(복사) 경로는 **이 기능 이전에 만든 구역 = 자기 핀을 가진 구역(서버 pin_alias:'pending')** 에서 그대로 유효하다 →
+ *   구역1·구역2 를 그 상태로 만든다: 각 구역 행에 이전 버전이 저장한 핀 1개를 심고(DB 직접), 사용자가 그 핀을 지운 뒤 작업한다.
+ *   지우는 저장 순간에도 구역 행엔 살아있는 핀이 있어 pending 이 유지된다 → 아래 검사 수치·단정은 종전과 동일. */
+const LEGACY = { id: "legacy-own", x: 99, y: 99, page: 1, label: "L" };
+for (const z of [zone1, zone2]) await db.prepare("UPDATE deployments SET pins = ? WHERE id = ?").bind(JSON.stringify([LEGACY]), z.deployment_id).run();
+const dropLegacy = (c) => { c.State.pins = c.State.pins.filter((p) => p.id !== LEGACY.id); };
+ok((await getDep(zone1.deployment_id)).pin_alias === "pending", "R0' 자기 핀 있는 구역 = pending(자동 연동·변환 없음)");
+
 /* ══════════ B(다른 사람 · 프로젝트 설계자 멤버) 가 구역1 에서 작업 ══════════ */
 const invB = await api("a", "POST", "/api/projects/prj_A/members", { email: USERS.b, role: "designer" });
 ok(invB.status === 200, "B 를 prj_A 설계자로 초대(" + invB.status + ")");
@@ -234,6 +244,7 @@ const B = makeClient("b");
 B.Projects.currentProject = { id: "prj_A", name: "prj_A" };
 B.Projects.currentDeck = zone1;
 await B.App.loadDeckDrawing(zone1.deployment_id);
+dropLegacy(B);
 B.State.mode = "designer"; B.State.regMode = "checkboard";
 const b1 = await place(B, 75, 50);   // 원본 (40,35) → 구역2 화면 (25,25)
 const b2 = await place(B, 10, 10);   // 원본 (14,23) → 구역2 범위 밖
@@ -261,6 +272,7 @@ console.log("\n[⑨] 좌표 변환 — 원본 기준 경유, 새 수식 0");
 console.log("\n[M] A: 구역2 ← 구역1 (CHECKER)");
 A.Projects.currentDeck = zone2;
 await A.App.loadDeckDrawing(zone2.deployment_id);
+dropLegacy(A);
 A.State.mode = "designer"; A.State.regMode = "checkboard";
 // 대상에 이미 있는 핀: 들어올 핀(25,25)과 0.5% 거리(같은 위치)
 await place(A, 25.3, 25.4);
@@ -361,6 +373,15 @@ console.log("\n[노트] 옵션");
   await A.RM.undo(bt);
   const got2 = (await api("a", "GET", "/api/notes?deployment_id=" + zone2.deployment_id)).j.data || [];
   ok(got2.length === 0, "노트 — 되돌리기 시 복사 노트 삭제(" + got2.length + ")");
+}
+
+/* ══════════ [연동] 원본과 연동된 구역끼리 — 같은 id 핀 = 이미 있음(자기 복제 0) ══════════ */
+console.log("\n[연동] 연동(별칭) 구역끼리 가져오기 = 이미 있음");
+{
+  const sp = { id: "shared-1", x: 75, y: 50, page: 1, label: "9", checkboard: true };   // 구역1 화면 좌표
+  const dp = { id: "shared-1", x: 25, y: 25, page: 1, label: "9", checkboard: true };   // 같은 핀이 구역2 화면에 투영된 것
+  const pl = A.RM.plan({ srcDeck: zone1, dstDeck: zone2, srcPins: [sp], dstPins: [dp], series: "checkboard" });
+  ok(pl.total === 1 && pl.items.length === 0 && pl.already === 1, "연동 — 대상에 같은 id 핀이 있으면 가져오지 않음(already 1 · 신규 0)");
 }
 
 await mf.dispose();

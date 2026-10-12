@@ -3277,6 +3277,16 @@
     /** 🔴 [WO 20261011-offmerge] 로더 공유 — 서버본(또는 번들 사본)을 State 에 올린 직후 병합 메타를 새 도면 기준으로 맞춘다.
      *  trusted=false(오프라인 번들 사본 = 내 미동기화 항목 포함)면 기준은 "모름"(null) — (b) 판정을 건너뛴다([WO 20261006-pinbase] 규칙).
      *  주석·영역은 수정 감지 기준도 함께 기록(_seen) — 기준이 없으면 첫 편집이 updatedAt 없이 남아 LWW 에서 서버본에 진다. */
+    /** [WO 20261012-pinsync] 서버 별칭 메타 반영(SoT) — 로더 2곳·병합(_mergeConflict)·저장 성공이 공유한다.
+     *  벡터 복사 구역은 핀 정본이 원본이다(서버가 읽기 투영·쓰기 역변환). 클라는 좌표계가 바뀌지 않는다(구역 1페이지 % 그대로) —
+     *  번호만 원본 기준(base_pins_min → State.basePins → PinSeries._withBase)으로 센다. 원본·일반 도면 = null(종전 동작).
+     *  fromLoad = 도면을 새로 연 때만 이관 안내(PinAlias 배너)를 띄운다. */
+    _applyPinAlias(dep, fromLoad) {
+      if (!dep || typeof dep !== "object") return;
+      State.basePins = (dep.pin_alias === "on" && Array.isArray(dep.base_pins_min)) ? dep.base_pins_min : null;
+      if (fromLoad) { try { if (typeof PinAlias !== "undefined" && PinAlias.onLoad) PinAlias.onLoad(dep); } catch (e) {} }
+    },
+
     _initMergeMeta(trusted) {
       Object.keys(this._MERGE_KINDS).forEach(k => {
         const m = this._MERGE_KINDS[k];
@@ -4233,6 +4243,7 @@
           State.depRebase = { dep: State.autoSaveDepId, ver: Number(State.depVersion) };
         }
       } catch (e) {}
+      this._applyPinAlias(current, false);   // [WO 20261012-pinsync] 병합(409·/ops·라이브폴) 때도 번호 기준을 서버 최신으로
       let srvPins = [];
       try { srvPins = JSON.parse(current.pins || "[]"); } catch (e) { srvPins = []; }
       this._pinsStamp();   // [WO 20260930-lww] 병합 직전 — _markDirty 를 아직 안 부른 편집(일괄 사진 등록 도중 등)도 로컬 수정으로 찍는다
@@ -4396,6 +4407,7 @@
       if (!res.ok) return { ok: false, status: res.status };
       let rec = null; try { rec = await res.json(); } catch (e) {}
       if (rec && rec.version != null) State.depVersion = Number(rec.version); // 성공 → 새 버전 반영
+      if (rec && rec.id != null) this._applyPinAlias(rec, false);   // [WO 20261012-pinsync] 저장 직후 원본 기준 번호 집합 갱신
       if (Array.isArray(sentPins)) State.pinBaseIds = this._pinIds(sentPins);
       if (Array.isArray(sentZones)) State.zoneBaseIds = this._pinIds(sentZones);
       if (Array.isArray(sentAnnos)) State.annoBaseIds = this._pinIds(sentAnnos);
@@ -4844,6 +4856,7 @@
         UI.$("drop-hint").classList.add("hidden");
         UI.$("pdf-canvas").classList.add("hidden");
         try { State.pins  = this._pinsSeen(this._live(JSON.parse(dep.pins  || "[]"))); } catch { State.pins = []; }
+        this._applyPinAlias(dep, true);   // [WO 20261012-pinsync] 벡터 복사 구역 = 핀이 원본에 연동(번호 기준·이관 안내)
         // 🔴 [WO 20261006-pinbase] 병합 기준(pinBaseIds)은 "서버가 아는 핀 목록" 이어야 한다.
         //   오프라인 번들 스냅샷(bundle:dep:<id>)은 persistLocalDeployment 가 **내 미동기화 핀까지**
         //   직렬화해 둔 로컬 사본이므로 서버 기준이 아니다. 이를 기준으로 삼으면 다음 서버 병합에서
@@ -6056,6 +6069,7 @@
 
         try { State.pins = this._pinsSeen(this._live(JSON.parse(latest.pins || "[]"))); }
         catch { State.pins = []; }
+        this._applyPinAlias(latest, true);   // [WO 20261012-pinsync] 형제 로더(loadDeckDrawing)와 같은 지점
         try { State.zones = this._live(JSON.parse(latest.zones || "[]")); }
         catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(latest.annotations || "[]")); }
