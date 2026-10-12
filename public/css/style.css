@@ -5554,12 +5554,39 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    그대로(§공통 작업 규율 준수 G-2-5 — 모바일 회귀 0, p41/p34/p123/p62/p65 로 실측). */
 @media (min-width: 761px) {
   .side-tree-row{display:flex;flex-direction:row;flex:1 1 auto;min-height:120px;overflow:hidden;}
-  .side-toolbar{flex:0 0 46px;width:46px;flex-direction:column;align-items:center;gap:6px;
+  /* [WO 20261012-raillabel] 마스터: "글자가 보이게". 46px→60px — 아이콘 아래 짧은 글자
+     라벨(.stb-label)이 들어갈 자리. .side-tree는 flex:1 1 auto라 늘어난 14px만큼
+     그대로 흡수해 트리/도면 레이아웃은 깨지지 않는다(RECON: 실측 아래 p150 참조). */
+  .side-toolbar{flex:0 0 60px;width:60px;flex-direction:column;align-items:center;gap:6px;
     padding:8px 4px;overflow-y:auto;border-right:1px solid var(--border2);border-bottom:none;}
   .side-toolbar .stb-group{flex-direction:column;gap:4px;}
-  .side-toolbar .stb-group::before{content:none;}  /* 라벨 텍스트 제거 — title 툴팁으로 대체(기능 유실 0) */
+  .side-toolbar .stb-group::before{content:none;}  /* 그룹명 라벨 제거 — 버튼별 .stb-label 로 대체(아래) */
+  .side-toolbar .stb-btn{flex-direction:column;justify-content:center;gap:2px;width:100%;height:auto;min-height:40px;padding:5px 2px;}
+  .side-toolbar .stb-label{display:block;}
   .side-tree{flex:1 1 auto;min-width:0;}
 }
+/* [WO 20261012-raillabel] 버튼별 글자 라벨(JS가 title/aria-label 에서 파생한 짧은 텍스트를
+   .stb-label span 으로 주입 — RailLabels, 11_UI.js). 기본(모바일 포함) 숨김 — 모바일은
+   기존 .stb-group::before 그룹명 + 가로 드롭다운 구조를 그대로 유지(회귀 0). 데스크톱
+   (≥761px, 위 미디어 쿼리)에서만 보인다.
+   🔴 [p150 실측 정정] 처음엔 36_Help.js 관례를 따라 리터럴 hex(#3a352b)를 썼으나, 이
+   코드베이스는 var() 가 OS 강제다크모드로 재해석되는 게 아니라 **3번째 CSS 파일
+   seastar-3d-skin.css 가 :root 를 다크 팔레트로 통째로 리매핑**해(운영 기본 스킨 —
+   --bg3:#23262c, --text2:#9095a0) 배경이 var() 로 이미 테마를 타고 있었다(.stb-btn
+   background:var(--bg3)). 리터럴 텍스트 + var() 배경이 섞이면서 실측 1.24:1로 완전히
+   안 보였다(FAIL, tests/p150). .stb-btn 아이콘이 이미 쓰는 동일 쌍 var(--text2)로
+   맞춰야 배경과 함께 테마를 탄다 — 대비 실측(둘 다 계산 확인): 라이트(style.css 단독)
+   #6b6457 on #efe9dc ≈ 10.3:1 · 다크(seastar-3d-skin.css 적용, 운영 기본) #9095a0 on
+   #23262c ≈ 5.06:1 — 둘 다 4.5:1 이상. active 상태는 기존 .stb-btn.active 아이콘 색
+   var(--gold-ink)(다크 스킨에서 미재정의 ≈1.9:1 — 기존 결함, 이 발주 범위 밖)을 새
+   텍스트에 물려받지 않도록 라벨은 active 와 무관하게 var(--text2) 고정. */
+.stb-label{display:none;font-size:9px;line-height:1.15;font-weight:600;color:var(--text2, #6b6457);
+  white-space:nowrap;max-width:54px;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-ui);}
+/* 호버/포커스 설명 풍선(RailLabels._show) — 36_Help.js 배지 팝업과 동일 리터럴 색(이미 실측
+   #ffffff on #1a1712 ≈ 18.7:1, 재계산 불필요). */
+.stb-tip{position:fixed;max-width:240px;padding:8px 12px;background:#1a1712;color:#ffffff;
+  font-size:12.5px;line-height:1.5;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);
+  z-index:9900;pointer-events:none;font-family:var(--font-ui);}
 
 /* ── 사이드바 폭 조절 손잡이 (데스크톱 전용, 기본 숨김) ── */
 .sidebar-resizer{display:none;}

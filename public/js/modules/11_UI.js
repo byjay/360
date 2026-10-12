@@ -2148,6 +2148,90 @@
   };
 
   /* ══════════════════════════════════════════
+     RAIL LABELS — 세로 아이콘 레일(#side-toolbar) 11개 버튼에 글자 라벨 +
+     호버/포커스 설명 풍선. [WO 20261012-raillabel, 마스터: "글자가 보이게하고
+     마우스오버하면 설명글을 풍선으로"]. 근본원인(R1 CDP 실측, p150): style.css
+     `.side-toolbar .stb-group::before{content:none}` 가 데스크톱(≥761px)에서
+     그룹명(라벨)을 지워 11개 버튼 전부 textContent 길이 0이었다.
+     SoT: 아래 LABELS 배열 하나뿐(짧은 라벨). 설명(풍선 본문)은 그 버튼에 이미
+     있는 title 속성 값을 그대로 옮겨 쓴다(손목록 중복 금지) — title 자체는
+     떼어내 data-rail-desc 로 이동해 네이티브 브라우저 툴팁과 커스텀 풍선이
+     겹쳐 뜨지 않게 한다. 다른 트랙 점유 파일(20_App.js 등) 수정 0 —
+     DOMContentLoaded 로 독립 동작. ══════════════════════════════════════════ */
+  const RailLabels = {
+    LABELS: [
+      { sel: '[data-deleg="btn-new-deck"]', label: "구역" },
+      { sel: '[data-deleg="btn-upload-drawing"]', label: "업로드" },
+      { sel: "#btn-quickpoint", label: "핀" },
+      { sel: '[data-deleg="btn-zone-rect"]', label: "사각형" },
+      { sel: '[data-deleg="btn-zone-circle"]', label: "원" },
+      { sel: '[data-deleg="btn-zone-poly"]', label: "다각형" },
+      { sel: '[data-deleg="btn-region-extract"]', label: "자르기" },
+      { sel: '[data-deleg="btn-theta-intake"]', label: "360" },
+      { sel: '[data-deleg="btn-checkboard-enter"]', label: "격자" },
+      { sel: "#btn-checkboard-renumber", label: "목록" },
+      { sel: "#btn-photobatch", label: "사진" }
+    ],
+    _tip: null,
+    _hideTimer: null,
+
+    init() {
+      const rail = document.getElementById("side-toolbar");
+      if (!rail) return;
+      this.LABELS.forEach(({ sel, label }) => {
+        const btn = rail.querySelector(sel);
+        if (!btn || btn.querySelector(".stb-label")) return; // 중복 주입 방지(재호출 안전)
+        const span = document.createElement("span");
+        span.className = "stb-label";
+        span.textContent = label;
+        btn.appendChild(span);
+        const desc = btn.getAttribute("title");
+        if (desc) { btn.setAttribute("data-rail-desc", desc); btn.removeAttribute("title"); }
+        btn.addEventListener("mouseenter", () => this._show(btn));
+        btn.addEventListener("mouseleave", () => this._scheduleHide());
+        btn.addEventListener("focus", () => this._show(btn));
+        btn.addEventListener("blur", () => this._hide());
+      });
+      window.addEventListener("scroll", () => this._hide(), true);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") this._hide(); });
+    },
+
+    _show(btn) {
+      this._hide();
+      const text = btn.getAttribute("data-rail-desc");
+      if (!text) return;
+      const tip = document.createElement("div");
+      tip.className = "stb-tip";
+      tip.setAttribute("role", "tooltip");
+      tip.textContent = text;
+      document.body.appendChild(tip);
+      const r = btn.getBoundingClientRect();
+      const vw = window.innerWidth || 1024;
+      const vh = window.innerHeight || 768;
+      const TW = 240;
+      let left = r.right + 8;
+      if (left + TW > vw - 8) left = Math.max(8, r.left - TW - 8);
+      let top = r.top;
+      tip.style.left = left + "px";
+      tip.style.top = top + "px";
+      requestAnimationFrame(() => {
+        const th = tip.offsetHeight || 36;
+        if (top + th > vh - 8) tip.style.top = Math.max(8, vh - th - 8) + "px";
+      });
+      this._tip = tip;
+    },
+
+    _scheduleHide() { this._hideTimer = setTimeout(() => this._hide(), 80); },
+
+    _hide() {
+      if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null; }
+      if (this._tip && this._tip.parentNode) this._tip.parentNode.removeChild(this._tip);
+      this._tip = null;
+    }
+  };
+  document.addEventListener("DOMContentLoaded", () => RailLabels.init());
+
+  /* ══════════════════════════════════════════
      PROJECT HUB  ── 첫 화면 = 프로젝트 선택 대시보드 (상용툴 모방)
        · 로그인 안 함/뷰어: 카드 클릭 → 뷰어로 해당 프로젝트 열람
        · 디자이너/슈퍼: "+새 프로젝트" + 카드 편집/삭제, 카드 클릭 → 디자이너 작업
