@@ -66,6 +66,7 @@ const MUTS = {
   projname:  ["src/index.tsx", "if (linkReadPids(s).includes(String(p.id))) return { ...stripShareKey(base), name: '', description: null, info_json: parseProjectInfo(null) }", ""],
   phone:     ["public/css/style.css", "input[type=\"text\"], input[type=\"email\"], input[type=\"password\"], input[type=\"tel\"],", "input[type=\"text\"], input[type=\"email\"], input[type=\"password\"],"],
   decktoast: ["public/js/modules/31_Projects.js", "const isReadonly = typeof Auth !== \"undefined\" && Auth.readonly;\n      if (!isReadonly) {\n        Prompt.toast && Prompt.toast(\"구역 '\" + d.name + \"' 선택됨 — 도면을 등록하거나 포인트를 추가하세요\");\n      }", "Prompt.toast && Prompt.toast(\"구역 '\" + d.name + \"' 선택됨 — 도면을 등록하거나 포인트를 추가하세요\");"],
+  nomore:    ["public/js/modules/11_UI.js", "const isReadonlyTree = typeof App !== \"undefined\" && App._readonlySession && !!App._readonlySession();", "const isReadonlyTree = false;"],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
 
@@ -329,7 +330,8 @@ try {
       chkPins: __wm.State.pins.filter(function(p){return p.checkboard}).length, pins: __wm.State.pins.length,
       gates: ['access-gate','login-gate','share-gate-modal'].filter(function(id){ var e=document.getElementById(id); return e && vis(e); }),
       keepFail: !!document.getElementById('src-keep-fail'), unsavedTags: [].slice.call(document.querySelectorAll('.tree-tag-unsaved,.deck-unsaved-tag')).filter(vis).length,
-      syncPending: (function(){ var b=document.getElementById('net-badge'); return !!(b && vis(b) && /동기화|업로드|대기/.test(b.textContent||'')); })(), drawEntry: [].slice.call(document.querySelectorAll('[data-req-viewer-entry]')).filter(vis).length }; })()`);
+      syncPending: (function(){ var b=document.getElementById('net-badge'); return !!(b && vis(b) && /동기화|업로드|대기/.test(b.textContent||'')); })(), drawEntry: [].slice.call(document.querySelectorAll('[data-req-viewer-entry]')).filter(vis).length,
+      treeMoreCount: document.querySelectorAll('.tree-more').length }; })()`);
   await shot(P, "viewer-first");
   ok(B.path === "/v/" + tok && !B.nameInUrl, "B2 구 /srview/<이름>-<토큰> → /v/<토큰> 으로 replace(주소창 이름 0)", { path: B.path });
   ok(!B.nameInTitle && !B.nameInText && !B.nameInDom && !B.weareTitle && !B.weareText && !B.idText && B.email === "" && B.ro === true,
@@ -337,6 +339,10 @@ try {
   ok(!B.hubSeen && !B.hubActive && !B.hubVis && B.cards === 0, "B4 허브(프로젝트 선택) — 첫 페인트부터 한 번도 안 보임 · 카드 0", { hubSeen: B.hubSeen, active: B.hubActive, cards: B.cards });
   ok(Object.keys(B.editVis).length === 0, "B5 편집·관리·내보내기 UI 0(⋯·정보·다운로드·삭제·구역 만들기·도구·CSV/보고서/zip·CHECKER 잎)", B.editVis);
   ok(B.treeDecks >= 2, "B5b 구역 트리(배포 시점 동결본) 읽기 전용 탐색 노드 표시", { treeDecks: B.treeDecks });
+  // [WO 20261012-treemenu-viewer] 마스터: "뷰어전용인데 이런게 나올필요는없겠지" — 라이브 실측(/v/d4kzekritwsw23u6)에서
+  //   열람자 트리 노드에 기능 없는 ⋯ 글리프가 보였다. CSS 숨김(.tree-more{display:none})이 아니라 DOM 에 아예
+  //   렌더하지 않아야 한다 — editVis(B5)는 vis() 필터라 CSS 숨김도 통과하므로 여기선 DOM 전체 개수를 센다.
+  ok(B.treeMoreCount === 0, "B5c 열람자 트리 ⋯ 요소 DOM 개수 0(CSS 숨김이 아니라 렌더 생략)", { treeMoreCount: B.treeMoreCount });
   // [WO 20261012-rail-contrast R5] 열람자가 (비활성) 구역 노드를 클릭해 selectDeck()을 타도
   // "도면을 등록하거나 포인트를 추가하세요" 편집 유도 토스트가 뜨면 안 된다(31_Projects.js).
   const deckNodeR = await P.ev(`(function(){ ${VIS} var n=[].slice.call(document.querySelectorAll('.tree-node-deck:not(.active)')).filter(vis)[0]; if(!n) return null; var r=n.getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2}; })()`);

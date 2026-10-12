@@ -1184,6 +1184,12 @@
       };
       const decks = (typeof Projects !== "undefined" && Projects.decks) || [];
       host.innerHTML = "";
+      // [WO 20261012-treemenu-viewer] 🔴 열람전용 세션(Auth.readonly, 열람 링크) — 트리 ⋯ 메뉴는
+      //   디자이너용 항목(도면 등록/교체·개정·삭제·이름변경 등)이 대부분이고, 열람자에게는 기능이
+      //   없다(라이브 실측: ⋯ 눌러도 쓸 항목이 없음). "숨김 금지" 원칙은 디자이너 역할 사이의
+      //   권한 차이(소유자/관리자/일반 디자이너)를 위한 것이고, 뷰어 전용 링크는 범위 밖이다.
+      //   SoT = App._readonlySession(기존, 20_App.js) — 새 판정 로직 금지.
+      const isReadonlyTree = typeof App !== "undefined" && App._readonlySession && !!App._readonlySession();
       // [WO 20261001-projectinfo] 🔴 docLabel 을 여기로 끌어올린다(원래 위치는 이 함수 뒤쪽) —
       //   아래 originNode()와 "구역 0개" 분기(이 함수 더 아래, early return)가 둘 다 이 함수를 쓴다.
       //   decks/State 에만 의존하므로 끌어올려도 동작은 그대로다(순수 함수 이동, 로직 변경 0).
@@ -1206,7 +1212,7 @@
         const pick = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks, proj) : null;
         const n = document.createElement("button");
         n.className = "tree-node tree-node-origin";
-        const moreHtml = ' <span class="tree-more" role="button" tabindex="0" aria-label="원본 도면 메뉴" title="원본 도면 메뉴 — 열기·메인 도면 교체">⋯</span>';
+        const moreHtml = isReadonlyTree ? "" : ' <span class="tree-more" role="button" tabindex="0" aria-label="원본 도면 메뉴" title="원본 도면 메뉴 — 열기·메인 도면 교체">⋯</span>';
         const canSet = !!(proj && proj.can_manage_members);
         if (pick) {
           const label = (pick.deployment_id ? docLabel(pick.deployment_id) : null) || pick.name || "원본 도면";
@@ -1428,11 +1434,14 @@
         // 이름만으로 헷갈리지 않게" — 아이콘(형태)만으로는 약하므로 작은 텍스트 꼬리표를 더한다.
         const kindTag = '<span class="tree-kind-tag">' + (isRegion ? "영역" : "구역") + '</span>';
         // [WO 20261002-allmenu §5] 구역 도면 출처(잘라옴 / 별도 등록 · 파일명) — SoT = UI.deckSourceOf.
+        //   [WO 20261012-treemenu-viewer] 출처 배지는 디자이너가 도면을 관리할 때 쓰는 편집 정보라
+        //   열람자에게는 의미가 없다(도면 등록/교체 메뉴가 그 아래에서 사라지므로 맥락도 없다) — 숨긴다.
         const _src = this.deckSourceOf(deck, mainDepId, decks);
-        const srcTag = (_src.kind === "crop" || _src.kind === "own")
+        const srcTag = (!isReadonlyTree && (_src.kind === "crop" || _src.kind === "own"))
           ? '<span class="tree-src-tag tree-src-' + _src.kind + '" title="구역 도면 출처: ' + esc(_src.label) + '">' + esc(_src.label) + '</span>' : "";
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag
-          + '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
+        // [WO 20261012-treemenu-viewer] 열람자에겐 ⋯ 메뉴 자체를 렌더하지 않는다(CSS 숨김이 아니라 렌더 생략) — ⑴ 참조.
+        const moreTag = isReadonlyTree ? "" : '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20261007-qrcov] 촬영 현황 배지(미촬영·오래됨) — 켜졌고 이 구역 도면이 로드됐을 때만(SoT: Coverage.deckSummary → Projects.pinsForDeck)
         const covTag = (typeof Coverage !== "undefined" && Coverage.treeBadgeHtml) ? Coverage.treeBadgeHtml(deck) : "";
