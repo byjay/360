@@ -34,6 +34,8 @@
       // [고아 방지] 35_PhotoBatch 는 자체 init() 안에서만 버튼을 바인딩한다 —
       //   여기서 부르지 않으면 번들에는 있는데 버튼이 죽는다(전역 CLAUDE.md §5 렌더 고아).
       if (typeof PhotoBatch !== "undefined") PhotoBatch.init();
+      // [고아 방지][WO 20261013-photofolder] 60_PhotoFolder 도 자체 init() 안에서만 상태바를 바인딩한다.
+      if (typeof PhotoFolder !== "undefined") PhotoFolder.init();
       // [고아 방지] 36_Help 도 자체 init() 안에서만 토글 버튼/배지를 바인딩한다 —
       //   여기서 부르지 않으면 번들에는 있는데 도움말이 뜨지 않는다(전역 CLAUDE.md §5 렌더 고아).
       if (typeof Help !== "undefined") Help.init();
@@ -1793,6 +1795,8 @@
      *  [WO 20260929 addendum] State.regMode 로 계열을 판정해 CHECKER/360 각각의 시작번호·
      *  개수·다음번호를 보여준다(마스터: "번호체계도 다르게 해"). */
     _updateCheckboardQuickStatus(page) {
+      // [WO 20261013-photofolder] 폴더 지정 상태바 노출 토글(360/체크보드 모드 전환마다 갱신).
+      if (typeof PhotoFolder !== "undefined" && PhotoFolder.syncUI) { try { PhotoFolder.syncUI(); } catch (e) {} }
       const pg = page || State.pdfPage || 1;
       const series = (State.regMode === "photo") ? "content" : "checkboard";
       const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
@@ -1838,8 +1842,16 @@
       if (State.regMode === "photo") {
         const pin = this._placeCheckboardPin(pct);
         if (pin) {
-          if (typeof PhotoBatch !== "undefined" && PhotoBatch.autoConnectPin) PhotoBatch.autoConnectPin(pin);
-          else this._openPinMediaPicker(pin); // PhotoBatch 미로드 시 기존 단일선택 폴백(조용한 실패 금지)
+          const fallback = () => {
+            if (typeof PhotoBatch !== "undefined" && PhotoBatch.autoConnectPin) PhotoBatch.autoConnectPin(pin);
+            else this._openPinMediaPicker(pin); // PhotoBatch 미로드 시 기존 단일선택 폴백(조용한 실패 금지)
+          };
+          // [WO 20261013-photofolder] 지정 폴더가 있으면 핀 번호 ↔ 파일명 매칭을 먼저 시도한다.
+          // 폴더 미지정/불일치(0건)면 handlePinPlaced가 false를 돌려주고 기존 폴백으로 넘어간다
+          // (폴더 미지정 시 체감 동작 100% 불변).
+          if (typeof PhotoFolder !== "undefined" && PhotoFolder.handlePinPlaced) {
+            PhotoFolder.handlePinPlaced(pin).then((handled) => { if (!handled) fallback(); });
+          } else fallback();
         }
         return; // placing 유지 — 계속 클릭하면 다음 번호 핀 + 자동매칭.
       }

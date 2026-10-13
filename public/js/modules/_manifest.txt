@@ -63,5 +63,6 @@
 57_Voice.js
 58_BackGuard.js
 59_PinAlias.js
+60_PhotoFolder.js
 49_AiVision.js
 99_footer.js
