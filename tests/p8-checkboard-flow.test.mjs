@@ -9,9 +9,9 @@
  *     꺼져있으면 #btn-checkboard-enter 로, 켜져있으면 #btn-place 로 위임한다
  *  ② 연속 클릭 시 번호가 1씩 증가한다(시작번호 반영, PinSeries.nextCheckboardNo 그대로 재사용)
  *  ③ 범위(시작~마지막)는 PinSeries 정본에서 파생한다(자체 채번 금지)
- *  ④ [WO 20260930-moderole 재정정] 마스터: "체커는 사진을 등록하지 않을 거야" — CHECKER 모드에서
- *     찍은 핀은 PhotoBatch 대상이 아니다. #btn-photobatch(단독 진입)를 눌러도 항상 content(360)
- *     계열로 열린다(35_PhotoBatch.js _defaultRange, CHECKER 분기 제거 — 구 기대 폐기).
+ *  ④ 🔴 [WO 20261015-numunify 계약 반전] CHECKER 모드에서 찍은 핀도 PhotoBatch 대상이다(마스터: "체크보드
+ *     모드에서 번호만 일괄적으로 찍고 나서 사진폴더 … 일괄적으로"). #btn-photobatch 는 페이지 전 핀("all")으로
+ *     열리고 방금 찍은 체커 핀 2개가 범위에 든다. 전·후 대조: 종전 {series:"content",1~1} → 새 {series:"all", 첫 핀~둘째 핀}.
  *  ⑤ 기존 진입 경로 2개(#btn-checkboard-enter 단독, #btn-photobatch 단독)와
  *     신규 버튼 1개(#btn-quickpoint)가 모두 바인딩된다
  *
@@ -218,13 +218,15 @@ function makeFullEnv(pins) {
   State.checkboardStart = { checkboard: { 1: 10 } };
   App._placeCheckboardPin({ x: 1, y: 1 });
   App._placeCheckboardPin({ x: 2, y: 2 });
-  registry["btn-photobatch"].click(); // 단독 진입(범위 인자 없음) — _defaultRange() 는 항상 content
-  ok(PB._range.series === "content" && PB._range.start === 1 && PB._range.end === 1,
-    "④ CHECKER 모드에서 #btn-photobatch 클릭 → 방금 찍은 CHECKER 핀은 대상 아님, content 계열 기본범위(1~1)로 열림 → " + JSON.stringify(PB._range));
+  registry["btn-photobatch"].click(); // 단독 진입(범위 인자 없음) — _defaultRange() 는 페이지 전 핀("all")
+  const n0 = parseInt(State.pins[0].label, 10), n1 = parseInt(State.pins[1].label, 10);
+  ok(PB._range.series === "all" && PB._range.start === n0 && PB._range.end === n1 && n1 === n0 + 1,
+    "④ CHECKER 모드에서 #btn-photobatch 클릭 → 방금 찍은 CHECKER 핀 2개가 범위(" + n0 + "~" + n1 + ")에 듦 → " + JSON.stringify(PB._range));
 
-  console.log("\n[뮤테이션④] _defaultRange() 가 CHECKER 모드일 때 checkboard 계열을 고르도록 되돌리면 실패해야 함");
-  const needle = 'const series = "content";';
-  const mutated = pbSrc.replace(needle, 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";');
+  // [WO 20261015-numunify] 뮤테이션 방향 갱신 — 옛 "content 고정"(체커 핀 제외)으로 되돌리면 ④가 깨져야 한다
+  console.log("\n[뮤테이션④] _defaultRange() 를 옛 content 고정으로 되돌리면 실패해야 함");
+  const needle = 'const series = "all";';
+  const mutated = pbSrc.replace(needle, 'const series = "content";');
   if (mutated === pbSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { document: docM, registry: regM } = makeDoc();
@@ -237,8 +239,8 @@ function makeFullEnv(pins) {
     sandboxM.__App._bindSidebar();
     sandboxM.__App._placeCheckboardPin({ x: 1, y: 1 });
     regM["btn-photobatch"].click();
-    ok(sandboxM.__PB._range.series === "checkboard",
-      `뮤테이션 적용 시 CHECKER 모드에서 checkboard 계열로 다시 열려 깨짐(구 동작 재현, 테스트 실효성 증명) → ${sandboxM.__PB._range.series}`);
+    ok(sandboxM.__PB._range.series === "content",
+      `뮤테이션 적용 시 CHECKER 핀이 범위에서 빠져 ④가 깨짐(구 동작 재현, 테스트 실효성 증명) → ${sandboxM.__PB._range.series}`);
   }
 }
 

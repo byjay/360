@@ -389,7 +389,7 @@
     _orderTargets(targets, order) {
       const arr = (targets || []).slice();
       if (order === "pos") {
-        arr.sort((a, b) => ((a.page || 1) - (b.page || 1)) || ((a.y || 0) - (b.y || 0)) || ((a.x || 0) - (b.x || 0)));
+        arr.sort((a, b) => PinSeries.byPosition(a, b));   // [WO 20261015-numunify] 위치순 SoT(번호 리셋과 같은 규칙)
         return arr;
       }
       const pos = new Map(this._sortedAll().map((o, i) => [o.pin.id, i]));

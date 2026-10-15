@@ -117,6 +117,11 @@
         run: () => NumBand.open(), covers: ["btn-numband", "btn-settings-numband", "allpins-band-btn"] },
       { id: "renumber", group: "checker", icon: "⇅", label: "번호 다시 매기기", help: "checkboard-renumber", perm: "designer", needs: "drawing", mode: "checkboard",
         click: "btn-checkboard-renumber", covers: ["btn-checkboard-renumber", "btn-settings-checkboard-renumber", "allpins-btn-renumber"] },
+      // [WO 20261015-numunify] 마스터 "번호 리셋기능도 구현하고" — 구역(페이지) 핀 번호 1부터 연속 재부여(미리보기 → 확인 2회) + 되돌리기.
+      { id: "num-reset", group: "checker", icon: "1↻", label: "번호 리셋(1부터)", desc: "이 구역·페이지 핀 번호를 위치순/기존 순서로 1부터 다시(미리보기·확인 2회·되돌리기)", needs: "drawing", danger: true, mod: "NumReset",
+        why: () => NumReset.reason(), run: () => NumReset.open() },
+      { id: "num-reset-undo", group: "checker", icon: "↺", label: "번호 리셋 되돌리기", desc: "가장 최근 번호 리셋을 옛 번호로 복원", needs: "drawing", mod: "NumReset",
+        why: () => NumReset.undoReason(), run: () => NumReset.undo() },
       { id: "all-pins", group: "checker", icon: "≡", label: "전체 포인트 목록", keys: "P", desc: "검색·정렬·선택", needs: "drawing", mod: "AllPins",
         run: () => AllPins.toggle(), covers: ["btn-all-pins", "allpins-select-all", "allpins-select-clear", "allpins-btn-delete"] },
       { id: "pin-list", group: "checker", icon: "≣", label: "포인트 리스트 패널", desc: "현재 페이지 포인트", needs: "drawing", click: "tq-pins", covers: ["tq-pins", "pin-list-toggle", "pin-grid-toggle", "pin-grid-reopen"] },
@@ -277,6 +282,7 @@
           case "Revision": return typeof Revision !== "undefined";
           case "BackGuard": return typeof BackGuard !== "undefined";
           case "Delivery": return typeof Delivery !== "undefined" && typeof ZipStore !== "undefined";
+          case "NumReset": return typeof NumReset !== "undefined";
           default: return false;
         }
       } catch (e) { return false; }   // 선언 전(TDZ) 접근도 "미로드"로

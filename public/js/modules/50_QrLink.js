@@ -154,16 +154,8 @@
     async focusPin(pinId) {
       const pin = await this._waitPin(pinId);
       if (!pin) { this._toast("QR 의 포인트를 이 도면에서 찾을 수 없습니다 — 삭제되었을 수 있습니다", 4600); return false; }
-      // 모드 = 작업공간: 핀 계열과 다른 모드면 핀이 안 보인다 → 그 모드로 전환(상단 세그먼트와 같은 SoT).
-      if (typeof PinSeries !== "undefined" && State.mode === "designer") {
-        const want = PinSeries.seriesOf(pin);
-        const mode = (PinSeries.DECK_MODES || []).find((m) => m.series === want);
-        if (mode && PinSeries.activeSeries() !== want && App._setRegMode) {
-          App._setRegMode(mode.regMode);
-          await new Promise((r) => setTimeout(r, 120));
-          if (State.placing && App._togglePlacing) App._togglePlacing();   // 스캔 직후 지도 탭이 새 핀을 만들지 않게
-        }
-      }
+      // [WO 20261015-numunify] 종전 "핀 계열과 다른 모드면 그 모드로 전환" 폐기 — 모드는 더 이상 가시성을 잠그지 않는다
+      //   (PinSeries.filter/inMode). 모드를 바꾸지 않으니 배치 상태도 그대로다.
       await App.focusPin(pin, false);
       this._pulse(pin.id);
       if (State.mode === "designer" && typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(pin.id);

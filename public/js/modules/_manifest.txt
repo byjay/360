@@ -64,6 +64,7 @@
 58_BackGuard.js
 59_PinAlias.js
 60_PhotoFolder.js
+61_NumReset.js
 62_PersonBlur.js
 49_AiVision.js
 99_footer.js

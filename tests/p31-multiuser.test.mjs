@@ -271,8 +271,9 @@ suitePaletteSoT("⑪⑫ 팔레트 SoT + 대비 실측 (정상 소스)", seriesSr
 {
   // [WO 20261001-startno] nextInBand 에는 author 인자가 없다 — "내 핀만 봄" 을 Auth.user 비교로 주입한다.
   console.log("\n[뮤테이션A] author 필터(내 핀만 봄) 주입 → ③-b 가 실패해야 함");
-  const needle = "        if (this.seriesOf(p) !== ser) return;\n        const n = parseInt(p.label, 10);";
-  const mutated = seriesSrc.replace(needle, "        if (this.seriesOf(p) !== ser) return;\n        if (p.author && Auth.user && p.author !== Auth.user.email) return;\n        const n = parseInt(p.label, 10);");
+  // [WO 20261015-numunify] nextInBand 의 계열 필터 줄이 삭제돼 주입 지점을 label 파싱 줄로 옮겼다(주입 내용·기대값 불변).
+  const needle = "        const n = parseInt(p.label, 10);                       // label 이 숫자가 아니면(NaN) 무시";
+  const mutated = seriesSrc.replace(needle, "        if (p.author && Auth.user && p.author !== Auth.user.email) return;\n" + needle);
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const c2 = makeCtx(mutated, appSrc);

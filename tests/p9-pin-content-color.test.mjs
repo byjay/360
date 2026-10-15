@@ -241,8 +241,10 @@ function suiteNumbers(label, sSrc, rSrc) {
   const fixture = FIXTURE();
   const ui = runUI(sSrc, uiSrc, fixture).pins;
   const rdr = runRadar(sSrc, rSrc, fixture, CURRENT(fixture)).pins;
-  ok(ui.c1.no === "1" && ui.e1.no === "2" && ui.c2.no === "3", `콘텐츠 계열 = ${ui.c1.no}/${ui.e1.no}/${ui.c2.no} (기대 1/2/3)`);
-  ok(ui.bA.no === "1" && ui.bB.no === "77" && ui.bC.no === "3", `체크보드 계열 = ${ui.bA.no}/${ui.bB.no}/${ui.bC.no} (기대 1/77/3 — label 우선)`);
+  // [WO 20261015-numunify] 번호 공간 통합(계열 무관 단일 카운터) — 종전 기대 1/2/3 · 1/77/3 → 새 기대 1/3/5 · 2/77/6.
+  //   색·형태 검사(이 파일의 본 목적)는 그대로 둔다(설계 §7 — p9 는 색 회귀 가드). 번호 뮤테이션 증명은 p4/p155 가 맡는다.
+  ok(ui.c1.no === "1" && ui.e1.no === "3" && ui.c2.no === "5", `통합 번호(360) = ${ui.c1.no}/${ui.e1.no}/${ui.c2.no} (기대 1/3/5)`);
+  ok(ui.bA.no === "2" && ui.bB.no === "77" && ui.bC.no === "6", `통합 번호(CHECKER) = ${ui.bA.no}/${ui.bB.no}/${ui.bC.no} (기대 2/77/6 — label 우선)`);
   const nd = Object.keys(ui).filter((id) => ui[id].no !== rdr[id].no);
   ok(nd.length === 0, `도면↔미니맵 번호 불일치 ${nd.length}건 (채번 정본 불변)`);
   ok(ui.x1 === undefined, "다른 페이지 핀은 렌더되지 않음");

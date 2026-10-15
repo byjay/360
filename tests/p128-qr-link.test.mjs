@@ -89,13 +89,14 @@ async function suite(src, quiet) {
     ok(r === "gated" && L.gate === 1 && L.popped.length === 0 && L.focused.length === 0, "A4 🔴 비디자이너 → 기존 requireDesigner 게이트, 핀·팝업 노출 0 (" + r + ")");
   }
 
-  /* ── A5 핀 계열 ≠ 활성 모드 → 그 모드로 전환(배치모드 자동 시작은 취소) / 없는 핀 = 정직 안내 ── */
+  /* ── A5 [WO 20261015-numunify 계약 변경] 핀 계열 ≠ 활성 모드여도 모드 전환 없음(모드가 가시성을 잠그지 않는다) → 바로 팝업
+         전·후 대조: 종전 L.modes[0]==="checkboard"(전환 후 팝업) → 새 L.modes.length===0(전환 0) / 없는 핀 = 정직 안내 ── */
   {
     const { X, S, L } = boot("", { pins: [{ id: "pin_c", x: 5, y: 5, page: 1, checkboard: true }] });
     X.Auth.role = "designer"; X.Auth.user = { email: "d@x.com" };
     const r = await X.DeepLink.run({ project: "proj_1", deck: "dck_A", pin: "pin_c" });
     await tick(80);
-    ok(r === "opened" && L.modes[0] === "checkboard" && L.popped[0] === "pin_c", "A5 CHECKER 핀 → CHECKER 모드 전환 후 팝업");
+    ok(r === "opened" && L.modes.length === 0 && L.popped[0] === "pin_c", "A5 CHECKER 핀 → 모드 전환 없이 바로 팝업(전환 " + L.modes.length + "회)");
     ok(S.placing === false, "A5 스캔 직후 배치모드 꺼짐(지도 탭이 새 핀을 만들지 않음)");
     const r2 = await X.DeepLink.run({ project: "proj_1", deck: "dck_A", pin: "pin_gone" });
     ok(r2 === "pin-missing" && L.toasts.some((t) => /찾을 수 없/.test(t)), "A5 없는 핀 → 안내(지어내지 않음)");
@@ -158,7 +159,9 @@ const MUT = [
   ["M3 비디자이너 gated 중단 제거", "qr", 'if (!(typeof Auth !== "undefined" && Auth.isDesigner)) return "gated";', ""],
   ["M4 Auth.refresh 복귀 훅 제거", "auth", "if (typeof DeepLink !== \"undefined\" && DeepLink.resumePending) setTimeout(", "if (false) setTimeout("],
   ["M5 구역 QR 칸 제외", "qr", "if (o.includeDeck && deck && deck.id) {", "if (false) {"],
-  ["M9 딥링크 분기를 ?d= 앞으로", "footer", "    if (shareTok) {", "    if (false) { DeepLink.boot(); } else if (shareTok) {"]
+  ["M9 딥링크 분기를 ?d= 앞으로", "footer", "    if (shareTok) {", "    if (false) { DeepLink.boot(); } else if (shareTok) {"],
+  // [WO 20261015-numunify] 옛 "계열 모드로 전환" 복구 → A5(전환 0) 가 실패해야 한다
+  ["M10 QR 핀 계열 모드 전환 복구", "qr", "      await App.focusPin(pin, false);", "      if (App._setRegMode) App._setRegMode(\"checkboard\");\n      await App.focusPin(pin, false);"]
 ];
 const fails = await suite(BASE, false);
 const mutBad = await runMutations(BASE, MUT, suite);

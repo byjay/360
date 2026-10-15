@@ -47,8 +47,12 @@
      "하나씩 등록"(845a081 원래 흐름 — 핀 찍을 때마다 확인/자동)을 구역마다 독립 ON/OFF 한다.
      둘 다 꺼진 구역은 종전 파일선택 폴백만(체감 변화 0).
 
-     🔴 CHECKER(체크보드) 핀은 이 모듈의 대상이 아니다(2026-10-01 마스터 확정, 88e52ff 5곳 차단과
-     동일 SoT: PinSeries.seriesOf) — 일괄 등록도 이 규칙을 그대로 따른다(§마지막 블록 지휘자 보고).
+     🔴 [WO 20261015-numunify] CHECKER(체크보드) 핀도 대상이다 — 244c5d8 의 "CHECKER 예외 미구현, 결정
+     대기"는 **허용**으로 확정(마스터: "체크 모드와 360 모드 번호를 하나로 합치고 … 체크보드 모드에서 번호만
+     일괄적으로 찍고 나서 사진폴더 … 바로 그 위치에 360도 사진이 일괄적으로"). 번호 공간이 (배포본, 페이지)
+     1개로 통합돼(.tmp/design-numunify.md §2) 같은 번호가 두 핀에 걸리는 모호성이 없어졌다. 폴더 바는
+     360 전용(syncUI 주석 — 모바일 가림 실측), CHECKER 진입 = 기능 메뉴 [구역별 사진 폴더 지정] → 일괄 등록.
+     "핀 찍을 때 사진창"은 360 모드 배치에서만(20_App 진입 훅 불변).
 
      폴더 핸들 영속화: 새 IndexedDB 스토어/DB버전 업그레이드 없이 SyncQueue.saveDraft/loadDraft
      (05_SyncQueue.js DRAFT_STORE, 기존 스토어 재사용)를 재사용한다 — FileSystemDirectoryHandle 은
@@ -347,6 +351,11 @@
       const bar = document.getElementById("photofolder-bar");
       if (!bar) return;
       const readonly = typeof Auth !== "undefined" && Auth.readonly;
+      // 🔴 [WO 20261015-numunify — 설계 §5 #9 의도적 미적용, 실측 근거] 이 바(position:fixed 하단 중앙)를 CHECKER 모드에도
+      //   띄우면 모바일에서 ① 연속 탭 위치를 가리고(p114: 10탭 중 3탭이 #photofolder-bar 에 맞음) ② 배치 해제 상태에선 하단
+      //   도크의 [포인트] 버튼을 가려 CHECKER 핀이 0개 생성됐다(p146 matrix O=[] — 기준 7cb6b66 은 3개). 그래서 바는 360 전용으로
+      //   두고, CHECKER 의 "번호 찍고 → 폴더 지정 → 일괄 등록"은 모드 무관 진입인 기능 메뉴 [구역별 사진 폴더 지정](openDeckManager
+      //   → 일괄 등록, _batchTargets 가 체커 핀 포함)과 [사진 폴더 일괄 매칭](#btn-photobatch, CHECKER 에서도 표시)으로 한다.
       const active = !readonly && typeof State !== "undefined" && State.checkboard && State.regMode === "photo";
       bar.classList.toggle("hidden", !active);
       if (active) { try { this._refreshBarForActiveDeck(); } catch (e) {} }
@@ -479,7 +488,7 @@
     _showConfirmModal(pin, no, entry, key) {
       this._ensureConfirmModal();
       const modal = document.getElementById("photofolder-confirm-modal");
-      const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : ("P" + no);
+      const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
       document.getElementById("photofolder-confirm-msg").textContent = label + " ← " + entry.name + " — 이 사진을 등록할까요?";
       const close = () => modal.classList.add("hidden");
       document.getElementById("photofolder-confirm-register").onclick = async () => {
@@ -520,7 +529,7 @@
       const modal = document.getElementById("photofolder-pick-modal");
       const list = document.getElementById("photofolder-pick-list");
       list.innerHTML = "";
-      const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : ("P" + no);
+      const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
       document.getElementById("photofolder-pick-title").textContent = label + " — 일치하는 사진이 여러 개입니다. 선택하세요";
       candidates.forEach((entry) => {
         const b = document.createElement("button"); b.type = "button"; b.textContent = entry.name; b.className = "photofolder-pick-item";
@@ -542,12 +551,7 @@
       try {
         if (!pin) return false;
         if (typeof Auth !== "undefined" && Auth.readonly) return false;
-        // 🔴 [한계·설계 충돌 — 지휘자 보고] CHECKER(체크보드) 핀은 사진 등록 대상이 아니다(2026-10-01
-        // 마스터 확정, 88e52ff 5곳 차단과 동일 SoT). 일괄 등록(runBatchConfirmed)도 같은 가드를 쓴다
-        // (_batchTargets) — 마스터 음성 "체크보드에서 번호만 찍고 → 폴더 → 360 사진 일괄"을 문자 그대로
-        // 체크보드 핀 자체에 사진을 붙이는 것으로 읽으면 이 차단과 정면으로 충돌한다. 이 턴에서는
-        // 기존 차단을 유지했다 — 체크보드 핀에 예외를 허용할지는 마스터 재확인 필요(아래 보고 참조).
-        if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return false;
+        // [WO 20261015-numunify] CHECKER 핀 차단 해제 — 결정 = 허용(헤더 주석). 계열 무관하게 번호로 매칭한다.
         if (typeof PinSeries !== "undefined" && PinSeries.mediaOf && PinSeries.mediaOf(pin)) return false; // 이미 사진 있는 핀은 덮어쓰지 않는다
         const key = await this._resolveFolderKeyForPin(pin);
         if (key == null) return false;
@@ -559,7 +563,7 @@
         const page = (typeof State !== "undefined") ? (State.pdfPage || 1) : 1;
         const entries = await this._listEntries(key);
         const candidates = this.findMatches(no, entries, this._existingNumbers(page));
-        const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : ("P" + no);
+        const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
         if (!candidates.length) {
           if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("폴더에 " + label + " 사진이 없습니다");
           return false;
@@ -584,7 +588,7 @@
 
     /* ══ 일괄 등록 — 구역의 "사진 없는 핀 전체" 미리보기 → 확인 → 순차 등록 ══════════════ */
 
-    /** 일괄 등록 대상 — 그 구역(crop) 안, 360(content) 계열, 아직 사진 없는 핀.
+    /** 일괄 등록 대상 — 그 구역(crop) 안, 아직 사진 없는 핀(계열 무관 — WO 20261015-numunify: CHECKER 핀 포함).
      *  🔴 root(deck=null)는 pinsForDeck 규약상 "전체"를 돌려준다(31_Projects.js SoT) — 여러
      *  구역에 걸쳐 중복 처리될 수 있으나 _uploadOneRow 가 이미 사진 있는 핀을 skip 하므로
      *  안전하다(§보고: 완벽한 구역 격리는 아님, 데이터 훼손은 없음). */
@@ -592,8 +596,7 @@
       const pins = (typeof State !== "undefined" && State.pins) || [];
       const page = (typeof State !== "undefined") ? (State.pdfPage || 1) : 1;
       const scoped = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(pins, deck) : pins;
-      return (scoped || []).filter((p) => p && (p.page || 1) === page
-        && !(typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(p) === "checkboard")
+      return (scoped || []).filter((p) => p && !p._deleted && (p.page || 1) === page
         && !(typeof PinSeries !== "undefined" && PinSeries.mediaOf && PinSeries.mediaOf(p)));
     },
 

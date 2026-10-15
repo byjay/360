@@ -192,11 +192,14 @@ async function runB() {
     ok(handled === false, "B1b 폴더 있어도 '하나씩 등록' OFF(기본값) → false");
   }
 
-  // B2: CHECKER 계열 핀 → false
+  // B2: 🔴 [WO 20261015-numunify 계약 반전] CHECKER 계열 핀도 대상 — 244c5d8 "CHECKER 예외 미구현, 결정 대기" → 결정 = 허용.
+  //   전·후 대조: 종전 handled===false(대상 아님) → 새 handled===true(폴더·하나씩 ON 이면 번호 1 ↔ P1.jpg 매칭 처리).
+  //   (종전 B2 는 폴더 없는 mkPF() 로 불러 게이트가 없어도 false 가 나와 약했다 — 이제 핀 목록에 넣어 번호가 잡히게 한다.)
   {
-    const { PF } = mkPF();
-    const handled = await PF.handlePinPlaced({ id: "c1", page: 1, checkboard: true });
-    ok(handled === false, "B2 CHECKER 계열 핀 → false(대상 아님)");
+    const c1 = { id: "c1", page: 1, checkboard: true };
+    const { PF } = mkPF({ pins: [c1] });
+    const handled = await PF.handlePinPlaced(c1);
+    ok(handled === true, "B2 CHECKER 계열 핀 → true(사진 폴더 매칭 대상 — 번호 통합)");
   }
   // B3: 열람자 → false
   {

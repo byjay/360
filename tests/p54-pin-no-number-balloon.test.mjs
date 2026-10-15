@@ -160,17 +160,17 @@ function suiteHeadHasNumberText(label, sSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
   const ui = runUI(sSrc, uiSrc, fixture).pins;
-  // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo — content(360) 계열은 "P" 접두,
-  // checkboard(CHECKER) 계열은 숫자만(기존 그대로). dataset.no(raw)는 ⑥에서 별도로 검증한다.
-  const expectLabel = { photo1: "P1", content1: "P2", empty1: "P3", cbPhoto: "1", cbEmpty: "2", iconPin: "P4" };
+  // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo. dataset.no(raw)는 ⑥에서 별도로 검증한다.
+  // 🔴 [WO 20261015-numunify] 전·후 대조: 종전 P1/P2/P3/1/2/P4(계열별 독립·360 P접두) → 새 1/2/3/4/5/6(한 번호 공간·접두 없음)
+  const expectLabel = { photo1: "1", content1: "2", empty1: "3", cbPhoto: "4", cbEmpty: "5", iconPin: "6" };
   Object.keys(expectLabel).forEach((id) => {
     ok(/<text\b/.test(ui[id].html), `① ${id}: 머리 SVG 에 <text> 요소 있음(번호)`);
     const re = new RegExp(`>${expectLabel[id]}</text>`);
     ok(re.test(ui[id].html), `① ${id}: 번호 텍스트 표시 라벨이 PinSeries.formatNo(${expectLabel[id]})와 일치`);
   });
   // 🔴 9/29 핵심 수정: 커스텀 아이콘(icon="valve") 핀도 번호 <text> 가 있어야 한다(더는 번호 대체 아님)
-  ok(/<text\b/.test(ui.iconPin.html) && />P4<\/text>/.test(ui.iconPin.html),
-    "① iconPin: 커스텀 아이콘 핀도 번호(P4) <text> 존재 — 9/29 재회귀 수정 확인");
+  ok(/<text\b/.test(ui.iconPin.html) && />6<\/text>/.test(ui.iconPin.html),
+    "① iconPin: 커스텀 아이콘 핀도 번호(6) <text> 존재 — 9/29 재회귀 수정 확인");
   // 아이콘은 버리지 않고 보조 배지로 공존(원본 기능 보존)
   ok(ui.iconPin.hasBadge, "① iconPin: 아이콘은 pin-icon-badge 보조 배지로 이동해 공존");
   ok(!ui.photo1.hasBadge && !ui.content1.hasBadge,

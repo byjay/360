@@ -25,7 +25,7 @@
     JPEG_Q: 0.82,
     CONC: 3,
     MARK: {
-      content:    { fill: "#1d4ed8", text: "#ffffff", shape: "circle", label: "360 사진 위치 — 원형·P번호" },   // 6.7:1
+      content:    { fill: "#1d4ed8", text: "#ffffff", shape: "circle", label: "360 사진 위치 — 원형·번호" },   // 6.7:1
       checkboard: { fill: "#7c2d12", text: "#ffffff", shape: "square", label: "CHECKER 점검 번호 — 사각형" }    // 10.9:1
     },
     EMAIL_RE: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
@@ -156,7 +156,8 @@
           if (!pagesMap.has(pg)) pagesMap.set(pg, []);
           pagesMap.get(pg).push({ key, noText, series, x: Number(pin.x), y: Number(pin.y) });
           let photos = [];
-          if (series === "content") {
+          // [WO 20261015-numunify] 사진 블록 = 콘텐츠 보유 핀(계열 무관) — 종전 series==="content" 는 사진 붙은 체커 핀의 사진을 보고서에서 뺐다
+          if (PinSeries.hasContent(pin)) {
             const shots = this._sortShots(TimeLapse._normalize(pin) || []);
             const pick = shots.length >= 2 ? [["before", shots[0]], ["after", shots[shots.length - 1]]] : (shots.length ? [["current", shots[0]]] : []);
             photos = pick.map(([role, s]) => ({
@@ -334,7 +335,7 @@
       out.push("</div></section>");
       // ── 위치도 ──
       out.push('<section class="sec" data-rpt="maps"><h2>포인트 위치도</h2>');
-      const legend = '<div class="legend"><span>' + chip("background:" + this.MARK.content.fill + ";color:" + this.MARK.content.text, "P1") + " " + e(this.MARK.content.label) + "</span><span>" +
+      const legend = '<div class="legend"><span>' + chip("background:" + this.MARK.content.fill + ";color:" + this.MARK.content.text, "1") + " " + e(this.MARK.content.label) + "</span><span>" +
         chip("background:" + this.MARK.checkboard.fill + ";color:" + this.MARK.checkboard.text, "1") + " " + e(this.MARK.checkboard.label) + "</span></div>";
       let anyMap = false;
       m.sections.forEach((s) => s.pages.forEach((pg) => {
@@ -349,10 +350,10 @@
       // ── 핀별 ──
       out.push('<section class="sec" data-rpt="pins"><h2>포인트 상세</h2>');
       m.pins.forEach((p) => {
-        const head = e(p.noText) + (p.label && p.label !== p.noText.replace(/^P/, "") ? " · " + e(p.label) : "") +
+        const head = e(p.noText) + (p.label && p.label !== p.noText ? " · " + e(p.label) : "") +
           ' <span class="muted">' + e(p.section + (p.area ? " › " + p.area : "") + " · " + p.seriesLabel) + "</span>";
         let photos = "";
-        if (p.series === "content") {
+        if (p.series === "content" || p.photos.length) {   // [WO 20261015-numunify] 사진 붙은 체커 핀도 사진 칸
           const one = p.photos.length === 1;
           photos = '<div class="photos">' + (p.photos.length ? p.photos.map((ph) => {
             const u = get(ph.key);

@@ -54,6 +54,7 @@
       ZipStore: (typeof ZipStore !== "undefined" ? ZipStore : null),
       Voice: (typeof Voice !== "undefined" ? Voice : null),
       PhotoFolder: (typeof PhotoFolder !== "undefined" ? PhotoFolder : null),
+      NumReset: (typeof NumReset !== "undefined" ? NumReset : null),   // [WO 20261015-numunify]
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

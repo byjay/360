@@ -243,7 +243,14 @@ export default async function explore(P) {
     // ① CHECKER 연속 3
     await setMode("checkboard"); await ensurePlacing();
     before = await pinIds();
-    for (const [fx, fy] of [[0.15, 0.35], [0.3, 0.35], [0.45, 0.35]]) { await tapMap(fx, fy); await P.wait(800); }
+    // [WO 20261015-numunify] 탭 위치를 고정 좌표 (0.15/0.3/0.45, 0.35) → "실측 빈 자리 3곳"으로 바꾼다. 모드가 더 이상 가시성을
+    //   잠그지 않아(설계 §1-1) 온라인 시드 360 핀 P1(15%,55%) 마커가 CHECKER 모드에서도 보이고, 도면 높이가 115px 뿐이라 그 머리가
+    //   fy 0.25~0.45 를 덮어 첫 탭이 새 핀 대신 기존 핀 패널(PinActionPop.open)을 열었다(계측: PAP.open 1회 · 생성 0 → O=[]).
+    //   종전엔 P1 이 숨어 있어 같은 좌표가 비어 있었다. 검사 내용(오프라인 CHECKER 연속 3개 생성·동기화)은 불변 — 찍는 자리만
+    //   elementFromPoint 로 "도면 이미지 자체이고 기존 핀 마커에서 30px 이상 떨어진" 격자점 3곳을 고른다.
+    const freeSpots = await evSafe("(function(){ var d = __M.drawingRect(); if (!d) return []; var ms = Array.from(document.querySelectorAll('#pins-layer [data-id]')).map(function(m){ var r = m.getBoundingClientRect(); return r; }); var out = []; for (var fy = 0.2; fy <= 0.85 && out.length < 3; fy += 0.1) { for (var fx = 0.1; fx <= 0.9 && out.length < 3; fx += 0.06) { var x = d.x + d.w * fx, y = d.y + d.h * fy; var e = document.elementFromPoint(x, y); if (!e || e.id !== 'map-image') continue; var near = ms.some(function(r){ return x > r.left - 30 && x < r.right + 30 && y > r.top - 30 && y < r.bottom + 30; }) || out.some(function(o){ return Math.abs(o[2] - x) < 30 && Math.abs(o[3] - y) < 40; }); if (!near) out.push([+fx.toFixed(2), +fy.toFixed(2), x, y]); } } return out.map(function(o){ return [o[0], o[1]]; }); })()");
+    log("offline CHECKER 빈 자리", freeSpots);
+    for (const [fx, fy] of freeSpots) { await tapMap(fx, fy); await P.wait(800); }
     const O = await newIds(before);
     // ② 360 핀 생성 + 사진(파일 선택창 주입)
     await setMode("photo");

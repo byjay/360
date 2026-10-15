@@ -282,7 +282,7 @@ function appEnv(opt) {
   const { App, State, msg } = appEnv();
   State.regMode = "checkboard";
   App._autoStartPlacing();
-  ok(/CHECKER: 번호만 · 사진은 360 모드에서/.test(msg.textContent), "F7 CHECKER 배치 배너 = \"" + msg.textContent + "\"");
+  ok(/CHECKER: 번호만 · 사진은 폴더 일괄로/.test(msg.textContent), "F7 CHECKER 배치 배너 = \"" + msg.textContent + "\"");   // [WO 20261015-numunify] 문구 갱신(종전 "사진은 360 모드에서")
   State.regMode = "photo"; App._syncPlacingUi();
   ok(/^360:/.test(msg.textContent) && !/CHECKER/.test(msg.textContent), "F8 360 배너 = \"" + msg.textContent + "\"");
   ok(msg.textContent.length <= 26, "F9 배너는 nowrap — 375px 안(26자 이하) → " + msg.textContent.length);

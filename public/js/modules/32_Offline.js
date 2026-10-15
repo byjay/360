@@ -517,13 +517,12 @@
       const since = _offlineSessionStartAt;
       _offlineSessionStartAt = null;
       const pins = (typeof State !== "undefined" && Array.isArray(State.pins)) ? State.pins : [];
-      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 이 배너는 360 사진
-      // 연결을 안내하므로 대상도 360(content) 계열 핀만 센다(SoT: PinSeries.seriesOf). CHECKER
-      // 핀까지 포함해 세면 "N개 생성됨"이라 안내하고도 매칭 대상이 0건인 조용한 불일치가 난다.
+      // [WO 20260930-moderole → 20261015-numunify] 🔴 이 배너는 360 사진 연결을 안내한다. 번호 통합 후 CHECKER 핀도
+      // 사진 일괄 등록(사진 폴더·시각 매칭) 대상이라 계열과 무관하게 오프라인 동안 만든 핀을 전부 센다
+      // (종전 content 계열만 세던 제한 해제 — 매칭 대상과 안내 숫자가 다시 같아진다).
       const createdDuring = pins.filter((p) => {
         const t = (typeof PinSeries !== "undefined" && PinSeries.createdAt) ? PinSeries.createdAt(p) : null;
-        if (!Number.isFinite(t) || t < since) return false;
-        return (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(p) !== "checkboard" : true;
+        return Number.isFinite(t) && t >= since;
       });
       if (createdDuring.length) _showReconnectBanner(createdDuring.length);
     } catch (e) {}

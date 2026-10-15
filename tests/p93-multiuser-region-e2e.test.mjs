@@ -385,7 +385,9 @@ const saveAll = async (cs) => { let r = await Promise.all(cs.map(save)); for (le
   ok(lab(pa) === "101" && lab(pb) === "201" && numdupToasts(ta, tb).length === 0, "B4-g 다른 대역 동시 생성 → 101·201 그대로 · 재채번 0");
 }
 {
-  // B4-h 360 계열도 같은 대역 동시 → 101·102(P101·P102) · CHECKER 번호와 독립
+  // B4-h 🔴 [WO 20261015-numunify 계약 반전] 번호 공간 1개 — CHECKER 101 다음 360 동시 생성은 102·103(교차 중복 0).
+  //   전·후 대조: 종전 CHECKER 101 · 360 101·102(계열별 독립, 같은 숫자 공존) → 새 101 · 102 · 103(전부 다른 번호).
+  //   resolveConcurrentNos 묶음 키에서 계열이 빠졌기 때문 — 계열을 되돌리면(P93_SERIES_SRC 뮤테이션) B 가 101 로 남아 실패한다.
   const { depId, deck } = await seedDeployment([]);
   const [A, B] = ["a", "b"].map(makeClient);
   for (const c of [A, B]) { await open(c, depId, deck); c.App._setNumBand(2); }
@@ -396,8 +398,8 @@ const saveAll = async (cs) => { let r = await Promise.all(cs.map(save)); for (le
   const srv = await srvPins(depId);
   const lab = (p) => (srv.find((q) => String(q.id) === String(p.id)) || {}).label;
   console.log("   측정(B4-h 360): CHECKER=" + lab(ac) + " 360 A=" + lab(pa) + " B=" + lab(pb) + " 계열=" + JSON.stringify(srv.map((p) => (p.checkboard ? "C" : "P") + p.label)));
-  ok(lab(ac) === "101" && lab(pa) === "101" && lab(pb) === "102" && !srv.find((p) => String(p.id) === String(pb.id)).checkboard,
-    "B4-h 360 같은 대역 동시 → P101·P102 · CHECKER 101 과 독립");
+  ok(lab(ac) === "101" && lab(pa) === "102" && lab(pb) === "103" && !srv.find((p) => String(p.id) === String(pb.id)).checkboard,
+    "B4-h 360 같은 대역 동시 → CHECKER 101 다음 102·103(교차 중복 0)");
 }
 
 /* ══════════ B5 — 초대 권한(H4) · WP3: 배포본 project_id 기준 프로젝트 단위 쓰기 권한 ══════════ */

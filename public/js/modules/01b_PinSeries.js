@@ -157,10 +157,13 @@
     activeSeries() { const m = this.activeMode(); return m ? m.series : null; },
     /** 새 구역·영역에 붙일 decks.mode 태그 — null 이면 태그 안 함(서버 NULL) */
     deckModeTag() { const m = this.activeMode(); return m ? m.tag : null; },
-    /** 핀이 (지정 계열 또는) 활성 모드 작업공간에 속하는가 */
+    /** 핀이 (지정 계열 또는) 활성 모드 작업공간에 속하는가.
+     *  🔴 [WO 20261015-numunify] 활성 모드는 더 이상 가시성을 잠그지 않는다(설계 §1-1 — CHECKER 에서 찍은 핀이
+     *  360 에서 안 보이면 사진 폴더 일괄 등록 대상이 0건이 된다). 모드 = "클릭 시 사진창 여부"만.
+     *  series 를 **명시**하면(트리 모드 잎 묶음 등) 생성 계열로 가른다 — 숨김이 아니라 묶음 표시용. */
     inMode(pin, series) {
-      const s = series !== undefined ? series : this.activeSeries();
-      return !s || this.seriesOf(pin) === s;
+      if (series === undefined || series === null) return true;
+      return this.seriesOf(pin) === series;
     },
     /** 활성 모드 작업공간의 핀만 */
     modePins(pins) { return (pins || []).filter((p) => p && this.inMode(p)); },
@@ -180,7 +183,10 @@
      *  (전역 CLAUDE.md §10 SoT). 27_PinActionPop.js 패널 헤더는 현재 이 정본을 쓰지 않는 별도
      *  버그(samePage.indexOf 자체 채번)가 있어 이관 대상이나, 그 파일은 다른 팀 점유라 이번 턴엔
      *  손대지 않는다(지휘자 보고 대상). */
-    formatNo(no, series) { return series === "checkboard" ? String(no) : ("P" + no); },
+    //  🔴 [WO 20261015-numunify] "P" 접두 폐기 — 마스터: "체크 모드와 360 모드 번호를 하나로 합치고 … 번호는 공통적으로 하나로 관리".
+    //  번호 공간이 (배포본, 페이지) 1개가 되어 계열 구분 접두가 필요 없다. 화면 = "1","2","3"(한 자리 그대로).
+    //  시그니처(no, series)는 유지 — 호출부 20곳 수정 0. 🔴 매칭(사진 파일명)에는 쓰지 마라 — 정본 = PhotoFolder.matchKey(no).
+    formatNo(no, series) { return String(no); },
 
     /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용)
      *  @param {string} kind   부류(content/empty/checkboard)
@@ -221,14 +227,15 @@
      * @param {number} page 대상 페이지
      * @returns {Map<id, {no:number, kind:string, series:string}>}
      *
-     * - content / checkboard 계열이 각각 1부터 독립 채번된다.
+     * - 🔴 [WO 20261015-numunify] 번호 공간 = 페이지 1개 — 계열(content/checkboard) 무관 단일 카운터.
+     *   반환 shape {no, kind, series} 불변(series/kind 는 색·필터가 계속 쓴다).
      * - 체크보드 핀은 저장된 pin.label 숫자를 우선 사용(기존 저장 데이터 불변 · 마이그레이션 없음).
      * - 🔴 항상 "필터와 무관하게 전체 핀"으로 계산한다 → 필터를 켜도 번호가 재계산되지 않는다.
      */
     numbers(pins, page, base) {
       const map = new Map();
       const pg = page || 1;
-      let nContent = 0, nCheck = 0;
+      let n = 0;   // [WO 20261015-numunify] 단일 카운터(계열별 2카운터 폐기)
       // [WO 20261012-pinsync] 구역(별칭) 화면 = 원본 그 페이지 핀 집합 기준으로 센다(같은 핀 = 같은 번호). 원본 화면은 base 없음 → 종전 그대로.
       const all = this._withBase(pins, pg, base);
       const mine = all === pins ? null : new Set((pins || []).filter((p) => p && p.id != null).map((p) => String(p.id)));
@@ -237,17 +244,16 @@
         if ((p.page || 1) !== pg) return;
         const series = this.seriesOf(p);
         let no;
+        n++;
         if (series === "checkboard") {
-          nCheck++;
           const lbl = parseInt(p.label, 10);
-          no = Number.isFinite(lbl) ? lbl : nCheck;
+          no = Number.isFinite(lbl) ? lbl : n;
         } else {
-          nContent++;
           // [WO 20261001-startno] 360 도 대역 번호(P101…)를 보여야 한다 — label 이 순수 숫자면 그 값,
           //   아니면(자유 텍스트 이름·label 없음) 종전 페이지 내 순번. prod 360 핀 8개(label "1"~"8")는 실측상
           //   순번과 label 이 같아 표시 번호가 바뀌지 않는다(.tmp 조회 diff 0).
           const raw = String(p.label == null ? "" : p.label).trim();
-          no = /^\d+$/.test(raw) ? parseInt(raw, 10) : nContent;
+          no = /^\d+$/.test(raw) ? parseInt(raw, 10) : n;
         }
         if (mine && !mine.has(String(p.id))) return;   // 원본에만 있는(구역 상자 밖) 핀은 결과에 싣지 않는다 — 순번 계산에만 쓴다
         map.set(p.id, { no: no, kind: this.kindOf(p), series: series });
@@ -331,13 +337,12 @@
     /** 대역 안 다음 번호. @returns {{no:number|null, full:boolean, band:number, lo:number, hi:number}} */
     nextInBand(pins, page, series, band, floor, base) {
       const pg = page || 1;
-      const ser = series === "content" ? "content" : "checkboard";
+      // [WO 20261015-numunify] series 인자는 시그니처 하위호환용 — 번호 공간은 계열 무관 1개(체커 101 · 360 102 → 다음 103)
       const r = this.bandRange(band);
       let maxNo = 0;
       // [WO 20261012-pinsync] 구역(별칭) 화면 = 원본 그 페이지 전체(상자 밖 포함) 최댓값 — 상자 밖 원본 번호와 겹치지 않게(_withBase)
       this._withBase(pins, pg, base).forEach(p => {
         if (!p || (p.page || 1) !== pg) return;               // 삭제 표식 핀도 센다 — 구멍 재사용 금지(종전 규칙)
-        if (this.seriesOf(p) !== ser) return;
         const n = parseInt(p.label, 10);                       // label 이 숫자가 아니면(NaN) 무시
         if (Number.isFinite(n) && n >= r.lo && n <= r.hi && n > maxNo) maxNo = n; // 다른 대역 핀 무시
       });
@@ -347,13 +352,13 @@
       const full = no > r.hi;
       return { no: full ? null : no, full: full, band: r.band, lo: r.lo, hi: r.hi };
     },
-    /** 대역 사용 현황(칩 표시용) — 계열별 그 대역 안 핀 수와 작성자별 개수. */
+    /** 대역 사용 현황(칩 표시용) — 그 대역 안 핀 수와 작성자별 개수.
+     *  [WO 20261015-numunify] 계열 무관(번호 공간 1개) — series 인자는 시그니처 하위호환용. */
     bandUsage(pins, page, series) {
       const pg = page || 1;
-      const ser = series === "content" ? "content" : "checkboard";
       const out = new Map();   // band → { count, authors: Map<author, n> }
       (pins || []).forEach(p => {
-        if (!p || p._deleted || (p.page || 1) !== pg || this.seriesOf(p) !== ser) return;
+        if (!p || p._deleted || (p.page || 1) !== pg) return;
         const raw = String(p.label == null ? "" : p.label).trim();
         if (!/^\d+$/.test(raw)) return;
         const k = this.bandOf(raw);
@@ -366,16 +371,20 @@
       return out;
     },
 
-    /** 🔴 [2026-09-17] 같은 페이지 체크보드 계열에서 label 이 중복된 핀 id 집합.
+    /** 🔴 [2026-09-17] 같은 페이지에서 번호(label)가 중복된 핀 id 집합.
      *  탐지·표시 전용 — 이미 저장된 중복 번호를 자동으로 바꾸지 않는다
-     *  (마스터 명시: 현장 기록과 연결된 실데이터라 임의 재채번 금지).
+     *  (마스터 명시: 현장 기록과 연결된 실데이터라 임의 재채번 금지 — 정리는 사용자가 누르는 [번호 리셋]).
+     *  🔴 [WO 20261015-numunify] 계열 무관 — 체커 "1" 과 360 "1" 도 중복이다(종전 !p.checkboard 필터는 교차 중복을 못 잡았다).
+     *  숫자 번호(공백 제외 /^\d+$/)만 본다 — 360 핀의 자유 텍스트 이름은 번호가 아니다. 삭제 표식(_deleted) 핀은 제외.
      *  @returns {Set<number|string>} 중복인 핀들의 id */
-    duplicateCheckboardIds(pins, page, base) {
+    duplicateNoIds(pins, page, base) {
       const pg = page || 1;
       const byLabel = new Map();
       this._withBase(pins, pg, base).forEach(p => {   // [WO 20261012-pinsync] 구역 화면도 원본 기준 중복 판정
-        if (!p || (p.page || 1) !== pg || !p.checkboard) return;
-        const key = String(p.label);
+        if (!p || p._deleted || (p.page || 1) !== pg) return;
+        const raw = String(p.label == null ? "" : p.label).trim();
+        if (!/^\d+$/.test(raw)) return;
+        const key = String(parseInt(raw, 10));
         if (!byLabel.has(key)) byLabel.set(key, []);
         byLabel.get(key).push(p.id);
       });
@@ -383,6 +392,8 @@
       byLabel.forEach(ids => { if (ids.length > 1) ids.forEach(id => dup.add(id)); });
       return dup;
     },
+    /** 구명 별칭(호출부 11_UI·27_PinActionPop·41_RegionMerge·테스트) — 정본 duplicateNoIds 하나만 둔다(§10 SoT). */
+    duplicateCheckboardIds(pins, page, base) { return this.duplicateNoIds(pins, page, base); },
 
     /** 🔴 [WO 20260930-numdup] 동시 생성 번호 충돌 재채번 정본 — 저장 병합(20_App._mergePins) 직후에만 부른다.
      *  서로의 핀을 보기 전에 두 사람이 같은 번호를 만들면(각자 max+1) 409 병합 뒤 같은 페이지·CHECKER 계열에
@@ -393,7 +404,7 @@
      *  · 기존 데이터 불변: 묶음이 전부 기준 핀(baseIds = 내가 알던 서버본)이거나 기준 핀이 둘 이상이면
      *    이미 저장돼 있던 중복이라 건드리지 않는다(위 duplicateCheckboardIds 주석의 "자동 재채번 금지").
      *    baseIds 를 모르면(null) 동시 생성 여부를 판정할 수 없으니 아무것도 바꾸지 않는다.
-     *  · [WO 20261001-startno] 360 계열도 대상 — numbers() 가 이제 숫자 label 을 그대로 표시(P101…)하므로 겹칠 수 있다.
+     *  · [WO 20261001-startno] 360 계열도 대상 — numbers() 가 이제 숫자 label 을 그대로 표시하므로 겹칠 수 있다.
      *    묶음 키 = 계열|페이지|번호. 🔴 옮길 곳 = 그 번호가 속한 **대역 안** 최댓값+1 — 대역 밖으로 절대 옮기지 않고,
      *    대역이 가득 찼으면 옮기지 않는다(duplicateCheckboardIds 가 중복으로 표시).
      *  · 흔들림 방지: 재채번한 핀엔 renumberedFrom(옛 번호)을 남긴다. 낡은 화면(옛 번호를 든 클라이언트)이
@@ -415,7 +426,7 @@
       const groups = new Map(), maxByBand = new Map();
       pins.forEach(p => {
         if (!p || p._deleted) return;
-        const ser = this.seriesOf(p);
+        const ser = "n";   // [WO 20261015-numunify] 번호 공간 1개 — 묶음 키에서 계열 축 제거(체커 5 · 360 5 동시 생성도 충돌)
         const lbl = String(p.label == null ? "" : p.label).trim();
         if (!/^\d+$/.test(lbl)) return;
         const pg = p.page || 1, n = parseInt(lbl, 10);
@@ -440,7 +451,7 @@
             const to = (maxByBand.get(g.bk) || 0) + 1;
             if (to > hi) return;                                  // 대역 가득 → 옮기지 않음(중복 표시만)
             maxByBand.set(g.bk, to);
-            changes.push({ id: p.id, page: g.pg, series: g.ser, from: String(p.label), to: String(to) });
+            changes.push({ id: p.id, page: g.pg, series: this.seriesOf(p), from: String(p.label), to: String(to) });
             p.renumberedFrom = String(p.label);
             p.label = String(to);
           });
@@ -527,7 +538,8 @@
       const newLabelSet = new Set(changes.map((c) => c.newLabel));
       if (newLabelSet.size !== changes.length) return { ok: false, changes: [], reason: "변경 결과에 번호 중복이 발생합니다 — 적용하지 않았습니다" };
       const targetIdSet = new Set(targets.map((p) => p.id));
-      const collide = (pins || []).some((p) => p && (p.page || 1) === pg && matches(p) && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label)));
+      // [WO 20261015-numunify] 충돌 검사는 계열 무관(번호 공간 1개) — 대상 선택만 계열(호출부 범위)
+      const collide = (pins || []).some((p) => p && !p._deleted && (p.page || 1) === pg && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label == null ? "" : p.label).trim()));
       if (collide) return { ok: false, changes: [], reason: "기존 다른 핀과 번호가 겹칩니다 — 적용하지 않았습니다" };
       return { ok: true, changes: changes };
     },
@@ -557,7 +569,7 @@
       const count = new Map();
       const bump = (pg, lbl) => { const k = pg + "|" + lbl; count.set(k, (count.get(k) || 0) + 1); };
       (allPins || []).forEach((p) => {
-        if (!p || this.seriesOf(p) !== ser || targetIdSet.has(p.id)) return;
+        if (!p || p._deleted || targetIdSet.has(p.id)) return;   // [WO 20261015-numunify] 계열 무관 중복 판정
         const lbl = String(p.label == null ? "" : p.label).trim();
         if (lbl) bump(p.page || 1, lbl);
       });
@@ -565,6 +577,111 @@
       const duplicateIds = new Set();
       changes.forEach((c) => { if ((count.get(c.page + "|" + c.newLabel) || 0) > 1) duplicateIds.add(c.id); });
       return { ok: true, changes: changes, duplicateIds: duplicateIds };
+    },
+
+    /* ══ [WO 20261015-numunify] 번호 리셋(1부터 연속 재부여) 정본 — 순수 계산 + 적용 + 되돌리기 ══════════════
+       마스터: "번호 리셋기능도 구현하고". UI(61_NumReset.js)는 호출·확인·저장만 한다.
+       🔴 id 는 절대 건드리지 않는다(사진·노트는 pin.id 로 연결 — 라벨만 바뀐다).
+       🔴 되돌리기 스냅샷 = 핀 자신에 pin.numReset = {batch, from, fromManual, to, at} 로 남긴다 — 일반 저장 경로(D1 pins JSON·
+          오프라인 큐·LWW 병합)를 그대로 타서 새로고침·다른 기기에서도 되돌릴 수 있다(D1 스키마 변경 0 · 마이그레이션 0).
+          6e2f408(일괄삭제 되돌리기)의 서버 기록 테이블 대신 이 방식을 고른 이유: 라벨 변경은 핀 내용 편집이라 같은
+          저장 경로를 타야 병합 규칙(updatedAt LWW)이 한 곳에 남는다(별도 테이블이면 저장본과 기록이 갈라진다 — §SoT). */
+
+    /** 도면 위치순 비교자 SoT — 페이지 → 위(y)→아래 → 왼(x)→오른쪽. 21_AllPins "도면 위치순" 과 같은 규칙. */
+    byPosition(a, b) {
+      return ((a.page || 1) - (b.page || 1)) || ((Number(a.y) || 0) - (Number(b.y) || 0)) || ((Number(a.x) || 0) - (Number(b.x) || 0));
+    },
+
+    /** 리셋 미리보기(pins 무변형).
+     *  @param {Array} pins   State.pins(전체)
+     *  @param {number} page  대상 페이지
+     *  @param {{order?:"pos"|"no", targets?:Array, start?:number, base?:Array}} [opts]
+     *         targets = 이미 고른 대상 pin 배열(구역 범위 — 생략 시 그 페이지 전 핀). order 기본 "pos".
+     *  @returns {{ok:boolean, reason?:string, changes:Array<{id,oldLabel,oldNo,newLabel}>, changed:number, collisions:Set}} */
+    resetPlan(pins, page, opts) {
+      const o = opts || {};
+      const pg = page || 1;
+      const start = Number.isFinite(parseInt(o.start, 10)) && parseInt(o.start, 10) >= 1 ? parseInt(o.start, 10) : 1;
+      const src = Array.isArray(o.targets) ? o.targets : (pins || []);
+      const list = src.filter((p) => p && !p._deleted && p.id != null && (p.page || 1) === pg);
+      if (!list.length) return { ok: false, reason: "이 화면에는 번호를 다시 매길 핀이 없습니다", changes: [], changed: 0, collisions: new Set() };
+      const map = this.numbers(pins, pg, o.base);
+      const noOf = (p) => { const i = map.get(p.id); return i && Number.isFinite(i.no) ? i.no : Infinity; };
+      const ordered = list.slice().sort(o.order === "no"
+        ? (a, b) => (noOf(a) - noOf(b)) || this.byPosition(a, b)
+        : (a, b) => this.byPosition(a, b));
+      const changes = ordered.map((p, i) => ({ id: p.id, oldLabel: p.label == null ? "" : String(p.label), oldNo: noOf(p), newLabel: String(start + i) }));
+      // 대상 밖 같은 페이지 핀(구역 화면이면 원본의 상자 밖 핀까지 — _withBase)과 겹치는 새 번호 → 표시(차단 아님)
+      const want = new Set(changes.map((c) => c.newLabel));
+      const tid = new Set(list.map((p) => String(p.id)));
+      const collisions = new Set();
+      this._withBase(pins, pg, o.base).forEach((p) => {
+        if (!p || p._deleted || p.id == null || (p.page || 1) !== pg || tid.has(String(p.id))) return;
+        const raw = String(p.label == null ? "" : p.label).trim();
+        if (/^\d+$/.test(raw) && want.has(String(parseInt(raw, 10)))) collisions.add(p.id);
+      });
+      const changed = changes.filter((c) => c.oldLabel.trim() !== c.newLabel).length;
+      return { ok: true, changes: changes, changed: changed, collisions: collisions };
+    },
+
+    /** 리셋 적용 — plan.changes 대로 라벨을 바꾸고 핀마다 되돌리기 스냅샷을 남긴다. @returns 바뀐 핀 배열 */
+    applyReset(pins, plan, batch, now) {
+      if (!plan || !plan.ok) return [];
+      const t = Number.isFinite(now) ? now : Date.now();
+      const byId = new Map((pins || []).filter((p) => p && p.id != null).map((p) => [String(p.id), p]));
+      const out = [];
+      plan.changes.forEach((c) => {
+        const pin = byId.get(String(c.id));
+        if (!pin) return;
+        pin.numReset = { batch: String(batch), from: pin.label == null ? null : pin.label, fromManual: !!pin.labelManual, to: c.newLabel, at: t };
+        pin.label = c.newLabel;
+        pin.labelManual = true;   // [WO 20260930-numdup] 사용자가 정한 번호 — 동시 생성 재채번(resolveConcurrentNos) 대상 아님
+        out.push(pin);
+      });
+      return out;
+    },
+
+    /** 그 페이지에서 가장 최근 리셋 묶음(되돌리기 대상). 없으면 null. */
+    lastResetBatch(pins, page) {
+      const pg = page || 1;
+      let best = null;
+      (pins || []).forEach((p) => {
+        const r = p && !p._deleted && (p.page || 1) === pg ? p.numReset : null;
+        if (!r || r.batch == null) return;
+        const at = Number(r.at) || 0;
+        if (!best || at > best.at) best = { batch: String(r.batch), at: at, count: 0 };
+      });
+      if (!best) return null;
+      (pins || []).forEach((p) => { if (p && !p._deleted && (p.page || 1) === pg && p.numReset && String(p.numReset.batch) === best.batch) best.count++; });
+      return best;
+    },
+
+    /** 되돌리기 계획 — 리셋 뒤 사용자가 다시 고친 핀(label ≠ to)은 건드리지 않는다(skipped). */
+    undoResetPlan(pins, batch) {
+      const restore = [], skipped = [];
+      (pins || []).forEach((p) => {
+        if (!p || !p.numReset || String(p.numReset.batch) !== String(batch)) return;
+        if (String(p.label == null ? "" : p.label) === String(p.numReset.to)) restore.push({ id: p.id, from: p.numReset.from, fromManual: !!p.numReset.fromManual, to: p.numReset.to });
+        else skipped.push(p.id);
+      });
+      return { batch: String(batch), restore: restore, skipped: skipped };
+    },
+
+    /** 되돌리기 적용 — 옛 라벨·수동 표시 복원 + 그 묶음 스냅샷 제거(건너뛴 핀도 스냅샷은 제거 — 다시 되돌리기 대상이 되지 않게). */
+    applyUndoReset(pins, plan) {
+      if (!plan) return [];
+      const byId = new Map((pins || []).filter((p) => p && p.id != null).map((p) => [String(p.id), p]));
+      const out = [];
+      plan.restore.forEach((r) => {
+        const pin = byId.get(String(r.id));
+        if (!pin) return;
+        pin.label = r.from;
+        if (r.fromManual) pin.labelManual = true; else delete pin.labelManual;
+        delete pin.numReset;
+        out.push(pin);
+      });
+      plan.skipped.forEach((id) => { const pin = byId.get(String(id)); if (pin) { delete pin.numReset; out.push(pin); } });
+      return out;
     },
 
     /** [WO 20260918] 개별 번호 변경 검증 — 이미 쓰는 번호로 바꾸려 하면 거부(조용히 삼키지 않음).
@@ -575,7 +692,8 @@
       const lbl = String(newLabel == null ? "" : newLabel).trim();
       if (!lbl) return { ok: false, reason: "번호를 입력하세요" };
       if (!/^\d+$/.test(lbl)) return { ok: false, reason: "체크보드 번호는 숫자만 가능합니다" };
-      const dup = (pins || []).some((p) => p && p.id !== pinId && (p.page || 1) === pg && p.checkboard && String(p.label) === lbl);
+      // [WO 20261015-numunify] 계열 무관 — 360 핀이 쓰는 번호도 이미 사용 중이다
+      const dup = (pins || []).some((p) => p && !p._deleted && p.id !== pinId && (p.page || 1) === pg && String(p.label == null ? "" : p.label).trim() === lbl);
       if (dup) return { ok: false, reason: "이미 사용 중인 번호입니다(" + lbl + ") — 다른 번호를 입력하세요" };
       return { ok: true, newLabel: lbl };
     },
@@ -598,8 +716,7 @@
       // [WO 20260930-fixmode] 🔴 모드 = 작업공간 — 활성 모드(CHECKER/360)가 있으면 표시 계열은 그 모드
       // 하나로 고정된다(지도 마커·미니맵이 쓰는 isVisible() 이 이 값 하나만 본다 — 판정 지점 1곳).
       // 세션 칩 상태(_filter)는 건드리지 않는다 — 뷰어(모드 없음)로 돌아가면 종전 칩 필터 그대로.
-      const act = this.activeSeries();
-      if (act) return { checkboard: act === "checkboard", content: act === "content" };
+      // 🔴 [WO 20261015-numunify] 위 잠금 폐기 — 활성 모드가 있어도 세션 칩 필터만 본다(전 핀 보임이 기본).
       if (!this._filter) this._filter = { checkboard: true, content: true };
       return this._filter;
     },
@@ -666,7 +783,6 @@
     toggle(series) {
       const f = this.filter();
       if (this.SERIES.indexOf(series) < 0) return;
-      if (this.activeSeries()) return; // [WO 20260930-fixmode] 모드 작업공간에선 칩 1개 = 표시 전용
       const next = Object.assign({}, f, {});
       next[series] = !f[series];
       // 마지막 하나를 끄는 건 전체 숨김 → 그 하나만 보기로 해석(단독 선택)
@@ -814,10 +930,9 @@
       // [WO 20260930-badge] 🔴 카운트는 페이지 전체(두 계열) 기준으로 센다 — modePins()로 먼저
       // 거르면 활성 모드가 아닌 계열은 항상 0으로 계산되고(칩 자체가 못 뜸), 활성 모드 핀이
       // 0개면 c.all 도 0이 되어 칩바 전체가 숨어버린다(재현: 360 모드에서 콘텐츠 핀 0개일 때
-      // 칩 영역이 완전히 빈다 — 지휘자 라이브 보고). seriesCounts 는 항상 전체 기준으로 세고,
-      // 아래에서 활성 모드일 때만 자기 계열 칩 하나로 좁힌다.
+      // 칩 영역이 완전히 빈다 — 지휘자 라이브 보고). seriesCounts 는 항상 전체 기준으로 센다.
       const c = this.seriesCounts(pins, page);
-      const active = this.activeSeries();   // 모드 작업공간 SoT — null 이면 분리 없음(뷰어/구 view)
+      // [WO 20261015-numunify] 모드는 가시성을 잠그지 않는다 — 편집 화면도 뷰어와 같은 2칩(독립 토글). 종전 "활성 모드 칩 1개(표시 전용)" 폐기.
       const f = this.filter();
       const chip = (series, label, n, on) =>
         '<button type="button" class="zpager-tab pinfilter-chip pf-' + series + (on ? " active" : "") +
@@ -825,17 +940,12 @@
         '" title="' + label + ' 핀만 보기"><span class="pinfilter-dot"></span>' + label +
         '<span class="zpager-cnt">' + n + '</span></button>';
       let html = "";
-      if (active) {
-        // 모드 작업공간(CHECKER/360 분리 화면) — 그 모드 자신의 칩만, 0개여도 대칭 표시한다
-        // (마스터 재현: CHECKER "CHECKER 11" 처럼 360 모드도 "360 0" 이 보여야 한다).
-        host.classList.remove("hidden");
-        html = chip(active, this.LABELS[active], c[active] || 0, !!f[active]);
-      } else {
-        // 모드 분리 없는 화면(뷰어/구 view) — 기존 2칩, 개수가 있는 계열만(회귀 없음).
-        if (!c.all) { host.classList.add("hidden"); host.innerHTML = ""; return; }
-        host.classList.remove("hidden");
-        this.SERIES.forEach(s => { if (c[s]) html += chip(s, this.LABELS[s], c[s], !!f[s]); });
-      }
+      // 2칩(생성 계열별 개수). 편집 화면(활성 모드 있음)은 0개여도 두 칩 대칭 표시(마스터 재현 "360 0" 유지 — 종전
+      // fixmode 대칭 규칙 계승), 뷰어는 개수가 있는 계열만(회귀 없음).
+      const showAll = !!this.activeSeries();
+      if (!c.all && !showAll) { host.classList.add("hidden"); host.innerHTML = ""; return; }
+      host.classList.remove("hidden");
+      this.SERIES.forEach(s => { if (showAll || c[s]) html += chip(s, this.LABELS[s], c[s] || 0, !!f[s]); });
 
       host.innerHTML = html;
       if (!this._chipsBound) {

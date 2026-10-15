@@ -8,7 +8,8 @@
  * U = 클라 실 소스(01b_PinSeries · 20_App · 24b_NumBand)를 vm 에 · S = 서버 src/index.tsx 실 번들 → Miniflare + 실 D1(migrations 전부).
  *   U1 대역 내 다음 번호(남의 핀 포함) · U2 다른 대역 핀 무시 · U3 대역 가득 → 확인창 · 넘침 0
  *   U4 같은 대역 동시 생성 → 대역 안 다음 빈 번호 · U5 다른 대역 동시 생성 → 충돌 0 · U6 가득 → 옮기지 않고 중복 표시
- *   U7 수동 번호 보호 · U8 모드별 독립(CHECKER 101 / 360 P101) · U9 칩에 작성자·개수 · 내 대역 강조
+ *   U7 수동 번호 보호 · U8 🔴[WO 20261015-numunify 계약 반전] 모드 무관 한 줄 번호(CHECKER 101 → 360 102·103 → CHECKER 104)
+ *   · U9 칩에 작성자·개수 · 내 대역 강조 (360 모드 다음 번호도 같은 공간 → 104, 종전 P101)
  *   S1 소유자=1 · S2 멤버 추가 시 빈 대역 자동 배정(추가 즉시 DB) · S3 초대 수락 · S4 가입 자동 편입(claimPendingInvites)
  *   S5 기존 NULL 멤버 지연 백필(추가 순서·결정론) · S6 본인 변경 / 남의 대역은 소유자·super 만 · S7 비멤버 403
  *
@@ -33,8 +34,9 @@ const MUTS = {
   "full-overflow":    ["series", "const full = no > r.hi;", "const full = false;"],
   "resolve-page-max": ["series", 'const bk = ser + "|" + pg + "|" + this.bandOf(n);', 'const bk = ser + "|" + pg;'],
   "resolve-overflow": ["series", "if (to > hi) return;                                  // 대역 가득", "// 대역 가득"],
-  "mode-shared":      ["series", "        if (this.seriesOf(p) !== ser) return;\n        const n = parseInt(p.label, 10);", "        const n = parseInt(p.label, 10);"],
-  "numbers-content":  ["series", "no = /^\\d+$/.test(raw) ? parseInt(raw, 10) : nContent;", "no = nContent;"],
+  // [WO 20261015-numunify] mode-shared 방향 반전 — 이제 "계열 필터 복구(번호 공간 재분리)"가 뮤테이션이다(U8 이 실패해야 한다).
+  "mode-shared":      ["series", "        const n = parseInt(p.label, 10);                       // label 이 숫자가 아니면(NaN) 무시", "        if (this.seriesOf(p) !== (series === \"content\" ? \"content\" : \"checkboard\")) return;\n        const n = parseInt(p.label, 10);"],
+  "numbers-content":  ["series", "no = /^\\d+$/.test(raw) ? parseInt(raw, 10) : n;", "no = n;"],
   "chip-meta":        ["nb", 'r.count ? (r.count + "개") : (r.free ? "" : "0개")', '""'],
   "server-assign":    ["srv", "  await projectBands(c, pid)   // [WO 20261001-startno] 새 멤버", "  // [뮤테이션] 새 멤버"],
   "backfill-order":   ["srv", "FROM project_members WHERE project_id = ? ORDER BY created_at, email').bind(pid).all()", "FROM project_members WHERE project_id = ? ORDER BY email DESC').bind(pid).all()"],
@@ -119,7 +121,7 @@ console.log("\n[U4·U5·U6·U7 동시 생성 재채번 — 대역 안]");
   ok(chC.length === 1 && chC[0].series === "content" && chC[0].to === "102", "U4' 360 계열도 같은 대역 동시 생성 → P102 — " + JSON.stringify(chC));
 }
 
-console.log("\n[U8 모드별 독립 — 같은 대역 번호, 계열별 증가]");
+console.log("\n[U8 모드 무관 한 줄 번호 — 같은 대역, 계열 무관 증가(WO 20261015-numunify)]");
 {
   const c = makeCtx("a@t");
   c.App._setNumBand(2);
@@ -130,8 +132,9 @@ console.log("\n[U8 모드별 독립 — 같은 대역 번호, 계열별 증가]"
   c.State.regMode = "checkboard";
   c.App._placeCheckboardPin({ x: 4, y: 4 });
   const show = c.State.pins.map((p) => { const m = c.PinSeries.numbers(c.State.pins, 1).get(p.id); return c.PinSeries.formatNo(m.no, m.series); });
-  ok(JSON.stringify(show) === JSON.stringify(["101", "P101", "P102", "102"]), "U8 CHECKER 101 → 360 P101·P102 → CHECKER 102 (표시 번호) — " + JSON.stringify(show));
-  ok(c.State.pins[1].checkboard === undefined && c.State.pins[1].label === "101", "U8 360 핀은 checkboard 플래그 없음 · label 101");
+  // 전·후 대조: 종전 ["101","P101","P102","102"](계열별 독립·P접두) → 새 ["101","102","103","104"](한 번호 공간·접두 없음)
+  ok(JSON.stringify(show) === JSON.stringify(["101", "102", "103", "104"]), "U8 CHECKER 101 → 360 102·103 → CHECKER 104 (표시 번호) — " + JSON.stringify(show));
+  ok(c.State.pins[1].checkboard === undefined && c.State.pins[1].label === "102", "U8 360 핀은 checkboard 플래그 없음 · label 102(체커 101 다음)");
 }
 
 console.log("\n[U9 칩 — 작성자·개수 · 내 대역 강조 · 다음 빈 대역]");
@@ -151,7 +154,7 @@ console.log("\n[U9 칩 — 작성자·개수 · 내 대역 강조 · 다음 빈 
   ok(c.reg["numband-next"].textContent === "다음 핀 = 104", "U9 미리보기 '다음 핀 = 104' — " + c.reg["numband-next"].textContent);
   c.State.regMode = "photo";
   c.NumBand._renderSheet();
-  ok(c.reg["numband-next"].textContent === "다음 핀 = P101" && c.reg["numband-mode"].textContent === "360", "U9 360 모드 → '다음 핀 = P101' · 모드 표시 360 — " + c.reg["numband-next"].textContent);
+  ok(c.reg["numband-next"].textContent === "다음 핀 = 104" && c.reg["numband-mode"].textContent === "360", "U9 360 모드 → '다음 핀 = 104'(같은 번호 공간, 종전 P101) · 모드 표시 360 — " + c.reg["numband-next"].textContent);
 }
 
 /* ══ 서버: 실 번들 + 실 D1 ══ */

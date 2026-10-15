@@ -5,7 +5,10 @@
  *  "360 사진/첨부를 넣는 핀과 단순 체크보드 핀은 색상을 달리하고,
  *   각각 일련번호도 따로, 그 핀만 보기 버튼도 칩 버튼(필터)으로."
  *
- *  ① 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번된다.
+ *  ① 🔴 [WO 20261015-numunify 계약 변경] 번호 공간 = 페이지 1개 — 계열 무관 단일 카운터(종전: 계열별 독립 채번).
+ *     마스터: "체크 모드와 360 모드를 번호를 따로 구분한 걸 하나로 합치고 … 번호는 공통적으로 하나로 관리".
+ *     전·후 대조: 종전 기대 c1/e1/c2=1/2/3 · b1/b3=1/3 → 새 기대 c1/b1/e1/c2/b3 = 1/2/3/5/6(배열 순서 단일 카운터).
+ *     뮤테이션A 방향 반전 — 이제 "계열별 카운터 복구"가 뮤테이션이다(EXIT=1 이어야 한다).
  *  ② 체크보드 핀은 저장된 label 숫자를 우선한다(기존 데이터 불변).
  *  ③ 도면 마커(11_UI.renderPinsOnMap)와 미니맵 점(07_Radar.update)이 같은 번호를 낸다
  *     — 둘 다 정본 PinSeries.numbers() 하나만 호출하기 때문.
@@ -127,8 +130,7 @@ function runRadar(sSrc, rSrc, { pins, page = 1, filter = null, currentPin }) {
 }
 
 /* 공통 픽스처
-   콘텐츠 계열(체크보드 아님): c1(콘텐츠), e1(미배치), c2(콘텐츠)  → 1, 2, 3
-   체크보드 계열: b1(label 없음) → 1,  b2(label "77") → 77,  b3(label 없음) → 3
+   [WO 20261015-numunify] 단일 카운터(배열 순서): c1→1, b1→2, e1→3, b2→77(label 우선, 카운터 4 소비), c2→5, b3→6
    다른 페이지 x1 은 제외된다. */
 const FIXTURE = () => [
   { id: "c1", page: 1, x: 10, y: 10, imageId: "img1" },
@@ -146,11 +148,11 @@ const FIXTURE = () => [
 function suiteSeries(label, sSrc) {
   console.log("\n[" + label + "]");
   const { nums, kinds } = runUI(sSrc, uiSrc, { pins: FIXTURE() });
-  ok(nums.c1 === "1", `콘텐츠 계열 c1 = ${nums.c1} (기대 1)`);
-  ok(nums.e1 === "2", `콘텐츠 계열 e1(미배치도 같은 계열) = ${nums.e1} (기대 2)`);
-  ok(nums.c2 === "3", `콘텐츠 계열 c2 = ${nums.c2} (기대 3)`);
-  ok(nums.b1 === "1", `체크보드 계열 b1 = ${nums.b1} (기대 1 — 콘텐츠 계열과 독립)`);
-  ok(nums.b3 === "3", `체크보드 계열 b3 = ${nums.b3} (기대 3 — 체크보드 3번째)`);
+  ok(nums.c1 === "1", `통합 번호 c1 = ${nums.c1} (기대 1)`);
+  ok(nums.e1 === "3", `통합 번호 e1 = ${nums.e1} (기대 3 — 앞의 체커 b1 이 2 를 썼다)`);
+  ok(nums.c2 === "5", `통합 번호 c2 = ${nums.c2} (기대 5)`);
+  ok(nums.b1 === "2", `통합 번호 b1 = ${nums.b1} (기대 2 — 계열 무관 단일 카운터)`);
+  ok(nums.b3 === "6", `통합 번호 b3 = ${nums.b3} (기대 6)`);
   ok(nums.x1 === undefined, "다른 페이지 핀 x1 은 렌더되지 않음");
   ok(kinds.c1 === "content" && kinds.e1 === "empty" && kinds.b1 === "checkboard",
     `부류 판정 = ${kinds.c1}/${kinds.e1}/${kinds.b1} (기대 content/empty/checkboard)`);
@@ -190,21 +192,21 @@ function suiteFilter(label, sSrc, rSrc) {
   const shown = Object.keys(ui.nums).sort();
   ok(shown.join(",") === "c1,c2,e1", `도면 표시 핀 = [${shown.join(",")}] (기대 c1,c2,e1 — checkboard 아닌 전부)`);
   // ④ 필터 전과 같은 번호(1, 3) — 1,2 로 다시 매겨지면 안 된다
-  ok(ui.nums.c1 === "1" && ui.nums.c2 === "3",
-    `필터 후 번호 c1=${ui.nums.c1}, c2=${ui.nums.c2} (기대 1, 3 — 재채번 금지)`);
+  ok(ui.nums.c1 === "1" && ui.nums.c2 === "5",
+    `필터 후 번호 c1=${ui.nums.c1}, c2=${ui.nums.c2} (기대 1, 5 — 재채번 금지)`);
 
   // ⑤ 미니맵에도 같은 필터 적용 + 같은 번호
   const rd2 = runRadar(sSrc, rSrc, { pins, filter, currentPin: pins[0] });
   const shownR = Object.keys(rd2.nums).sort();
   ok(shownR.join(",") === "c1,c2,e1", `미니맵 표시 점 = [${shownR.join(",")}] (기대 c1,c2,e1 — 도면과 동일)`);
-  ok(rd2.nums.c1 === "1" && rd2.nums.c2 === "3",
-    `미니맵 필터 후 번호 c1=${rd2.nums.c1}, c2=${rd2.nums.c2} (기대 1, 3)`);
+  ok(rd2.nums.c1 === "1" && rd2.nums.c2 === "5",
+    `미니맵 필터 후 번호 c1=${rd2.nums.c1}, c2=${rd2.nums.c2} (기대 1, 5)`);
 
-  // 체크보드만 보기 → 체크보드 번호(1, 77, 3) 유지
+  // 체크보드만 보기 → 통합 번호(2, 77, 6) 유지
   const ui2 = runUI(sSrc, uiSrc, { pins, filter: { checkboard: true, content: false } });
   ok(Object.keys(ui2.nums).sort().join(",") === "b1,b2,b3", `체크보드만 보기 = [${Object.keys(ui2.nums).sort().join(",")}]`);
-  ok(ui2.nums.b1 === "1" && ui2.nums.b2 === "77" && ui2.nums.b3 === "3",
-    `체크보드만 보기 번호 = ${ui2.nums.b1}/${ui2.nums.b2}/${ui2.nums.b3} (기대 1/77/3)`);
+  ok(ui2.nums.b1 === "2" && ui2.nums.b2 === "77" && ui2.nums.b3 === "6",
+    `체크보드만 보기 번호 = ${ui2.nums.b1}/${ui2.nums.b2}/${ui2.nums.b3} (기대 2/77/6)`);
 
   // 칩 렌더: CHECKER/360 2칩뿐 — '전체' 칩 없음(마스터: "그냥 체크보드랑 360모드랑 2개 해")
   const bar = ui.registry["pin-filter-bar"];
@@ -216,7 +218,7 @@ function suiteFilter(label, sSrc, rSrc) {
 /* ────────────────────────────────────────────────────────────
  * 실행: 정상 소스
  * ──────────────────────────────────────────────────────────── */
-suiteSeries("①② 계열 독립 채번 + label 우선 (정상 소스)", seriesSrc);
+suiteSeries("①② 통합 단일 번호 + label 우선 (정상 소스)", seriesSrc);
 suiteSameNumbers("③ 도면 == 미니맵 (정상 소스)", seriesSrc, radarSrc);
 suiteFilter("④⑤ 필터 (정상 소스)", seriesSrc, radarSrc);
 
@@ -224,15 +226,16 @@ suiteFilter("④⑤ 필터 (정상 소스)", seriesSrc, radarSrc);
  * 뮤테이션 A: 계열 분리를 되돌려 하나의 카운터로 세면 ①이 실패해야 한다
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션A] 계열 분리 제거(체크보드가 콘텐츠 계열 번호를 소비) → ①이 실패해야 함");
-  const needle = "          nCheck++;\n";
-  const mutated = seriesSrc.replace(needle, "          nCheck++; nContent++; nCheck = nContent;\n");
+  // [WO 20261015-numunify] 방향 반전 — 계열별 카운터를 **복구**하는 것이 뮤테이션(M1 split-numbers). 통합 기대값이 깨져야 한다.
+  console.log("\n[뮤테이션A] 계열별 카운터 복구(번호 공간 재분리) → ①이 실패해야 함");
+  const needle = "        n++;\n        if (series === \"checkboard\") {";
+  const mutated = seriesSrc.replace(needle, "        n = (this.__nc = this.__nc || {})[pg + series] = ((this.__nc[pg + series]) || 0) + 1;\n        if (series === \"checkboard\") {");
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { nums } = runUI(mutated, uiSrc, { pins: FIXTURE() });
-    const broken = (nums.c1 === "1" && nums.e1 === "2" && nums.c2 === "3" && nums.b1 === "1" && nums.b3 === "3");
-    ok(broken === false,
-      `뮤테이션 적용 시 계열 독립 채번이 깨짐(테스트 실효성 증명) → c1=${nums.c1}, e1=${nums.e1}, c2=${nums.c2}, b1=${nums.b1}, b3=${nums.b3}`);
+    const unified = (nums.c1 === "1" && nums.b1 === "2" && nums.e1 === "3" && nums.c2 === "5" && nums.b3 === "6");
+    ok(unified === false,
+      `뮤테이션 적용 시 통합 번호가 깨짐(테스트 실효성 증명) → c1=${nums.c1}, b1=${nums.b1}, e1=${nums.e1}, c2=${nums.c2}, b3=${nums.b3}`);
   }
 }
 
@@ -263,31 +266,34 @@ suiteFilter("④⑤ 필터 (정상 소스)", seriesSrc, radarSrc);
 
 /* ────────────────────────────────────────────────────────────
  * ⑥ [WO 20260930-marker-no] 지도 마커 표시 라벨 = PinSeries.formatNo SoT
- *    (트리/핀패널과 같은 포맷: 360=P접두, CHECKER=숫자만). dataset.no 는 원본 숫자 그대로(위 ①③④⑤ 불변).
+ *    🔴 [WO 20261015-numunify] "P" 접두 폐기 — 360·CHECKER 모두 숫자만(마스터: 표시는 1, 2, 3).
+ *    전·후 대조: 종전 c1/e1/c2 = P1/P2/P3 → 새 기대 1/3/5(접두 없음). dataset.no 는 원본 숫자 그대로.
  * ──────────────────────────────────────────────────────────── */
-console.log("\n[⑥ 지도 마커 표시 라벨 — 360=P접두 / CHECKER=숫자만 (정상 소스)]");
+console.log("\n[⑥ 지도 마커 표시 라벨 — 전 계열 숫자만, P접두 없음 (정상 소스)]");
 {
   const { markers } = runUI(seriesSrc, uiSrc, { pins: FIXTURE() });
   const byId = {}; markers.forEach((m) => { byId[m.dataset.id] = m; });
-  ok(/>P1</.test(byId.c1.innerHTML), `콘텐츠(360) 계열 c1 마커 라벨 = P1 표시: ${/>P\d+</.exec(byId.c1.innerHTML)}`);
-  ok(/>P2</.test(byId.e1.innerHTML), `콘텐츠(360) 계열 e1 마커 라벨 = P2 표시`);
-  ok(/>P3</.test(byId.c2.innerHTML), `콘텐츠(360) 계열 c2 마커 라벨 = P3 표시`);
-  ok(/>1</.test(byId.b1.innerHTML) && !/>P1</.test(byId.b1.innerHTML), `CHECKER 계열 b1 마커 라벨 = 1(접두 없음, 기존 그대로)`);
+  ok(/>1</.test(byId.c1.innerHTML) && !/>P\d+</.test(byId.c1.innerHTML), `콘텐츠(360) 계열 c1 마커 라벨 = 1(P 접두 없음): ${/>P?\d+</.exec(byId.c1.innerHTML)}`);
+  ok(/>3</.test(byId.e1.innerHTML) && !/>P\d+</.test(byId.e1.innerHTML), `콘텐츠(360) 계열 e1 마커 라벨 = 3`);
+  ok(/>5</.test(byId.c2.innerHTML) && !/>P\d+</.test(byId.c2.innerHTML), `콘텐츠(360) 계열 c2 마커 라벨 = 5`);
+  ok(/>2</.test(byId.b1.innerHTML) && !/>P2</.test(byId.b1.innerHTML), `CHECKER 계열 b1 마커 라벨 = 2(접두 없음)`);
   ok(/>77</.test(byId.b2.innerHTML) && !/>P77</.test(byId.b2.innerHTML), `CHECKER 계열 b2 마커 라벨 = 77(접두 없음)`);
   // dataset.no 는 여전히 원본 숫자(포맷 없음) — 위 ①의 nums 비교(p4 suiteSeries)와 회귀 없음 재확인
-  ok(String(byId.c1.dataset.no) === "1" && String(byId.b1.dataset.no) === "1", `dataset.no 는 원본 숫자 그대로(포맷 미적용): c1=${byId.c1.dataset.no}, b1=${byId.b1.dataset.no}`);
+  ok(String(byId.c1.dataset.no) === "1" && String(byId.b1.dataset.no) === "2", `dataset.no 는 원본 숫자 그대로(포맷 미적용): c1=${byId.c1.dataset.no}, b1=${byId.b1.dataset.no}`);
 }
-console.log("\n[뮤테이션C] 마커 라벨 포맷을 dispNo(포맷 없음)로 되돌리면 ⑥이 실패해야 함");
+// [WO 20261015-numunify] 뮤테이션C 대상 변경 — 종전(마커가 dispNo 로 되돌아감)은 formatNo 가 String(no) 가 되어 출력이 같아져 판별 불가.
+//   이제 정본 formatNo 에 "P" 접두를 **복구**(M3 p-prefix)하면 ⑥(접두 없음)이 깨져야 한다 — 마커가 formatNo SoT 를 쓴다는 증명도 겸한다.
+console.log("\n[뮤테이션C] formatNo 에 360 \"P\" 접두 복구 → ⑥이 실패해야 함(마커 = formatNo SoT)");
 {
-  const needle = 'const dispLabel = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(meta.no, meta.series) : String(dispNo);';
-  if (uiSrc.indexOf(needle) < 0) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  const needle = 'formatNo(no, series) { return String(no); },';
+  if (seriesSrc.indexOf(needle) < 0) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const mutatedUiSrc = uiSrc.replace(needle, "const dispLabel = dispNo;");
-    const { markers } = runUI(seriesSrc, mutatedUiSrc, { pins: FIXTURE() });
+    const mutatedSeries = seriesSrc.replace(needle, 'formatNo(no, series) { return series === "checkboard" ? String(no) : ("P" + no); },');
+    const { markers } = runUI(mutatedSeries, uiSrc, { pins: FIXTURE() });
     const byId = {}; markers.forEach((m) => { byId[m.dataset.id] = m; });
-    const stillFormatted = /P1/.test(byId.c1.innerHTML);
-    console.log((!stillFormatted ? "  PASS(예상대로 실패 재현) " : "  FAIL(뮤테이션에도 통과 — 테스트가 가짜) ") + "c1 innerHTML has P1: " + stillFormatted);
-    if (stillFormatted) failed++;
+    const prefixed = />P1</.test(byId.c1.innerHTML);
+    console.log((prefixed ? "  PASS(예상대로 접두 재출현 — ⑥ 검사가 이를 잡는다) " : "  FAIL(뮤테이션이 마커에 안 닿음 — 마커가 formatNo SoT 를 안 씀) ") + "c1 innerHTML has P1: " + prefixed);
+    if (!prefixed) failed++;
   }
 }
 

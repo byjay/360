@@ -148,17 +148,18 @@ function loadPB(pbSource, extraState = {}) {
    [마스터 요청 2026-09-03 갱신] 기대값 변경 근거는 파일 상단 헤더 ④ 설명 참조. */
 {
   const pins = [
-    { id: "A", page: 1, label: "A", imageId: null },                 // content no=1
+    { id: "A", page: 1, label: "A", imageId: null },                 // content no=1 (통합 카운터 1)
     { id: "X", page: 1, label: "5", checkboard: true },               // checkboard no=5(label 우선)
-    { id: "B", page: 1, label: "B", imageId: null },                  // content no=2
+    { id: "B", page: 1, label: "B", imageId: null },                  // content no=3 (통합 카운터 3 — WO 20261015-numunify, 종전 2)
     { id: "Y", page: 1, label: "6", checkboard: true }                // checkboard no=6
   ];
   const { PB } = loadPB(pbSrc, { pins, pdfPage: 1 });
 
-  // ④a series 미지정 → 기존 단독 진입과 동일하게 content 로 폴백(하위호환 불변)
+  // ④a 🔴 [WO 20261015-numunify 계약 변경] series 미지정 → 페이지 전 핀("all" — 체커 핀도 사진 일괄 매칭 대상).
+  //   전·후 대조: 종전 [A1,B2](content 만) → 새 [A1,B3,X5,Y6](한 번호 공간, 번호순).
   const listDefault = PB._pinList(pins, 1);
-  ok(listDefault.length === 2 && listDefault[0].no === 1 && listDefault[0].pin.id === "A" && listDefault[1].no === 2 && listDefault[1].pin.id === "B",
-    "④a series 미지정 → 기존처럼 콘텐츠 계열만(하위호환) → " + JSON.stringify(listDefault.map(e => ({ id: e.pin.id, no: e.no }))));
+  ok(JSON.stringify(listDefault.map(e => e.pin.id + e.no)) === JSON.stringify(["A1", "B3", "X5", "Y6"]),
+    "④a series 미지정 → 페이지 전 핀(체커 포함·통합 번호순) → " + JSON.stringify(listDefault.map(e => ({ id: e.pin.id, no: e.no }))));
 
   // ④b series="checkboard" 지정 → 체크보드 계열이 매칭 대상에 들어옴(마스터 지시 반영)
   const listCb = PB._pinList(pins, 1, "checkboard");
@@ -177,7 +178,7 @@ function loadPB(pbSource, extraState = {}) {
     "④d 범위 밖 핀(X, no=5) 제외 → 매칭=" + bm4.matches.map(m => m.pin.id).join(","));
 
   console.log("\n[뮤테이션④-1] 체크보드 제외 필터를 되살리면 ④b(①: 체크보드 계열 매칭)가 실패해야 함");
-  const needle1 = `        if (!info || info.series !== ser) return;`;
+  const needle1 = `        if (!info || (ser !== "all" && info.series !== ser)) return;`;
   const mutated1 = pbSrc.replace(needle1, `        if (!info || info.series !== "content") return;`);
   if (mutated1 === pbSrc) { console.log("  FAIL 뮤테이션①-1 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
@@ -195,6 +196,18 @@ function loadPB(pbSource, extraState = {}) {
     const listContentM = PBm2._pinList(pins, 1, "content");
     ok(listContentM.some(e => e.pin.id === "X" || e.pin.id === "Y"),
       `뮤테이션①-2 적용 시 series 무시로 계열이 뒤섞임(테스트 실효성 증명) → ${JSON.stringify(listContentM.map(e => e.pin.id))}`);
+  }
+
+  // [WO 20261015-numunify] 뮤테이션①-3 — 기본값을 옛 "content" 로 되돌리면 ④a(체커 핀 포함)가 실패해야 한다
+  console.log("\n[뮤테이션④-3] _pinList 기본 series 를 \"content\" 로 되돌리면 ④a 가 실패해야 함");
+  const needle3 = `const ser = series || "all";`;
+  const mutated3 = pbSrc.replace(needle3, `const ser = series || "content";`);
+  if (mutated3 === pbSrc) { console.log("  FAIL 뮤테이션①-3 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const { PB: PBm3 } = loadPB(mutated3, { pins, pdfPage: 1 });
+    const listM3 = PBm3._pinList(pins, 1);
+    ok(!listM3.some(e => e.pin.id === "X" || e.pin.id === "Y"),
+      `뮤테이션①-3 적용 시 기본 범위에서 체커 핀이 빠짐(테스트 실효성 증명) → ${JSON.stringify(listM3.map(e => e.pin.id))}`);
   }
 }
 

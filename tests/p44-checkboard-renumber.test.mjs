@@ -85,7 +85,8 @@ function loadSeries(source) {
   const needleA = `      const newLabelSet = new Set(changes.map((c) => c.newLabel));
       if (newLabelSet.size !== changes.length) return { ok: false, changes: [], reason: "변경 결과에 번호 중복이 발생합니다 — 적용하지 않았습니다" };
       const targetIdSet = new Set(targets.map((p) => p.id));
-      const collide = (pins || []).some((p) => p && (p.page || 1) === pg && matches(p) && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label)));
+      // [WO 20261015-numunify] 충돌 검사는 계열 무관(번호 공간 1개) — 대상 선택만 계열(호출부 범위)
+      const collide = (pins || []).some((p) => p && !p._deleted && (p.page || 1) === pg && !targetIdSet.has(p.id) && newLabelSet.has(String(p.label == null ? "" : p.label).trim()));
       if (collide) return { ok: false, changes: [], reason: "기존 다른 핀과 번호가 겹칩니다 — 적용하지 않았습니다" };`;
   const mutatedA = seriesSrc.replace(needleA, `      const newLabelSet = new Set(changes.map((c) => c.newLabel));`);
   if (mutatedA === seriesSrc) { console.log("  FAIL 뮤테이션ⓐ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }

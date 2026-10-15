@@ -127,7 +127,7 @@ function suitePinNumbers(label, src) {
     { id: "a", page: 1, x: 10, y: 10 },                                   // 콘텐츠 계열 1 → "1"
     { id: "b", page: 1, x: 20, y: 20, checkboard: true, label: "77" },    // 체크보드 계열 · label 우선 → "77"
     { id: "c", page: 2, x: 5, y: 5 },                                     // 다른 페이지 → 제외
-    { id: "d", page: 1, x: 30, y: 30 }                                    // 콘텐츠 계열 2 → "2" (계열 분리)
+    { id: "d", page: 1, x: 30, y: 30 }                                    // [WO 20261015-numunify] 통합 번호 3번째 → "3"(종전 계열 분리 "2")
   ];
   const { registry } = runRadar(src, { lsInitial: {}, pins, currentPin: pins[0] });
   const dots = registry["pano-radar-pins"]._children;
@@ -135,7 +135,7 @@ function suitePinNumbers(label, src) {
   const nums = dots.map((d) => d._children[0] && d._children[0]._text);
   ok(nums[0] === "1", `일반 핀 a 번호 = ${nums[0]} (기대 1)`);
   ok(nums[1] === "77", `체크보드 핀 b 번호 = ${nums[1]} (기대 77, label 우선)`);
-  ok(nums[2] === "2", `일반 핀 d 번호 = ${nums[2]} (기대 2 — 체크보드는 별도 계열이라 번호를 소비하지 않는다)`);
+  ok(nums[2] === "3", `일반 핀 d 번호 = ${nums[2]} (기대 3 — 번호 공간 통합: 체커 b 도 카운터를 소비한다)`);
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -165,8 +165,8 @@ suitePinNumbers("③ 점 번호 표시 (정상 소스)", radarSrc);
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션] PinSeries 정본의 checkboard label 우선 로직을 제거하면 ③이 실패해야 함");
-  const needle = "no = Number.isFinite(lbl) ? lbl : nCheck;";
-  const mutated = seriesSrc.replace(needle, "no = nCheck;");
+  const needle = "no = Number.isFinite(lbl) ? lbl : n;";   // [WO 20261015-numunify] 카운터명 nCheck → n(단일)
+  const mutated = seriesSrc.replace(needle, "no = n;");
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const pins = [

@@ -12,7 +12,10 @@
  *  - 전: ±10분 허용오차 밖이면 미연결 → 후: 허용오차로 탈락시키지 않음(≥30분이면 경고만).
  *  - 신규: 이미 다른 핀에 연결된 파일명은 건너뛰고 다음 최신을 쓴다.
  *  - 신규: 핀 생성 → .click() 호출 경로에 await 없음(동기)을 소스로 확정.
- *  - 유지: CHECKER 계열은 절대 연결 대상이 아니다(SoT: PinSeries.seriesOf).
+ *  - 🔴 [WO 20261015-numunify 계약 변경] 종전 "CHECKER 계열은 절대 연결 대상이 아니다"(⑥a 미연결·⑥b 선택창 안 열림) →
+ *    새: autoConnectPin(체커 핀) **직접 호출**(사용자가 연 경로 — ThetaIntake 핀 시트 등)은 선택창을 연다(⑥a).
+ *    "CHECKER 배치 클릭에서 사진창 안 뜸"은 유지 — 20_App._handlePlaceClick 의 checkboard 분기가 autoConnectPin/
+ *    PhotoFolder 를 부르지 않는다(⑥b, 실행 증명은 tests/p155-numunify N6).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -229,26 +232,30 @@ async function testCancelLeavesUnconnected() {
   ok(toasts.some((t) => /이미지 파일을 찾을 수 없습니다/.test(t)), "⑤b 취소 안내 토스트 노출");
 }
 
-/* ══ ⑥ CHECKER 핀은 절대 대상이 아니다(SoT: PinSeries.seriesOf) ══════════════ */
+/* ══ ⑥ [WO 20261015-numunify] CHECKER 핀도 사진 연결 대상 — 단 CHECKER **배치 클릭**은 사진창을 열지 않는다 ══ */
 async function testCheckerGuard() {
-  const checkerPin = { id: 20, page: 1, label: "C1", checkboard: true, createdAt: 5 * 60000 };
+  const checkerPin = { id: 20, page: 1, label: "1", checkboard: true, createdAt: 5 * 60000 };
   const { PB, registry } = loadEnv(pbSrc, [checkerPin]);
 
   PB.autoConnectPin(checkerPin);
-  ok(!checkerPin.imageName, "⑥a CHECKER 핀은 연결되지 않음");
   const input = registry.get("photobatch-auto-files");
-  ok(!input, "⑥b CHECKER 핀은 파일선택창도 열지 않음(가드가 함수 맨 앞에서 반환)");
+  ok(!!input && input._clickCount === 1 && PB._pendingAutoPin === checkerPin,
+    "⑥a CHECKER 핀 autoConnectPin 직접 호출 → 선택창 1회 열림(early-return 해제) → click=" + (input && input._clickCount));
+  // ⑥b 배치 클릭 축(유지): _handlePlaceClick 의 checkboard 분기는 autoConnectPin/PhotoFolder 를 부르지 않고 return 한다
+  const m = /if \(State\.regMode === "checkboard"\) \{([\s\S]*?)\n      \}/.exec(appSrc);
+  ok(!!m && /_placeCheckboardPin\(pct\)/.test(m[1]) && /return;/.test(m[1]) && !/autoConnectPin|handlePinPlaced|_openPinMediaPicker/.test(m[1]),
+    "⑥b CHECKER 배치 분기 = 번호 핀만(사진창 호출 0 — 유지 가드)");
 
-  console.log("\n  [뮤테이션④] CHECKER 가드를 제거하면 — 실패해야 함(선택창이 열림)");
-  const needle = 'if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return;';
+  console.log("\n  [뮤테이션④] CHECKER early-return 을 복구하면 — 실패해야 함(⑥a 선택창이 안 열림)");
+  const needle = "      // [WO 20261015-numunify] CHECKER 핀 early-return 해제";
   if (!pbSrc.includes(needle)) { console.log("    FAIL 뮤테이션④ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const mutated = pbSrc.replace(needle, "/* 가드 제거(뮤테이션) */");
-    const checkerPinM = { id: 21, page: 1, label: "C2", checkboard: true, createdAt: 5 * 60000 };
+    const mutated = pbSrc.replace(needle, '      if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return;\n' + needle);
+    const checkerPinM = { id: 21, page: 1, label: "2", checkboard: true, createdAt: 5 * 60000 };
     const { PB: PBm, registry: regM } = loadEnv(mutated, [checkerPinM]);
     PBm.autoConnectPin(checkerPinM);
     const inM = regM.get("photobatch-auto-files");
-    ok(!!inM && inM._clickCount === 1, "뮤테이션 적용 시 CHECKER 핀에도 선택창이 열림(⑥b 가 깨짐을 증명) → click=" + (inM && inM._clickCount));
+    ok(!inM || !inM._clickCount, "뮤테이션 적용 시 CHECKER 핀 선택창이 안 열림(⑥a 가 깨짐을 증명) → click=" + (inM && inM._clickCount));
   }
 }
 
@@ -268,7 +275,7 @@ function testHandlePlaceClickRouting() {
   await testNewestUnused();
   console.log("\n[⑤ 취소 → 미연결]");
   await testCancelLeavesUnconnected();
-  console.log("\n[⑥ CHECKER 핀 차단]");
+  console.log("\n[⑥ CHECKER 핀 연결 허용 · 배치 클릭 사진창 0]");
   await testCheckerGuard();
   console.log("\n[⑦ _handlePlaceClick 라우팅]");
   testHandlePlaceClickRouting();

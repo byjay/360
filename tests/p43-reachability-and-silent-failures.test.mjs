@@ -2,11 +2,11 @@
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p43-reachability-and-silent-failures.test.mjs)
  *
  * 발주서(WO 20260918) 3건 + 마스터 정정(기본모드 = 등록모드) 검증:
- *  ① [WO 20260930-moderole 재정정] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — CHECKER 모드
- *     (State.regMode='checkboard')여도 PhotoBatch.open() 은 항상 content(360) 계열로 열린다
- *     (예전엔 checkboard 계열로 열렸으나, 이제 CHECKER 핀은 사진 등록 대상 자체가 아니다).
- *  ② 등록(360) 모드에서도 종전대로 content series(회귀 없음)
- *  ③ _defaultRange() 가 State.regMode 를 참조하지 않고 항상 "content" 를 반환한다(CHECKER 분기 제거)
+ *  ① 🔴 [WO 20261015-numunify 계약 반전] 마스터: "체크보드 모드에서 번호만 일괄적으로 찍고 나서 사진폴더 …
+ *     360도 사진이 일괄적으로" — 모드와 무관하게 PhotoBatch.open() 은 페이지 전 핀("all")으로 열리고 체커 핀이 범위에 든다.
+ *     전·후 대조: 종전 기대 series==="content"(체커 핀 대상 아님) → 새 기대 series==="all" + 범위 1~2(체커 C1·C2 포함).
+ *  ② 등록(360)/뷰 모드에서도 같은 "all"(모드 무관)
+ *  ③ _defaultRange() 가 State.regMode 를 참조하지 않고 항상 "all" 을 반환한다(계열 축 제거)
  *  ④ 대상 핀 0건이면 사용자에게 알린다(조용한 실패 0)
  *  ⑤ 숨겨진 죽은 버튼(#btn-checkboard-photobatch)이 남아있지 않다(렌더 고아 0)
  *  ⑥ _pickDrawingFile() 이 상한 타임아웃 후 반드시 resolve 한다(영구 교착 금지)
@@ -14,8 +14,7 @@
  *  ⑧ createProject/deleteProject/createDeck 오프라인 시 사용자 알림이 있다(조용한 실패 0)
  *  ⑨ 저장된 사용자 선택(PinSeries.setPreferredMode)이 있으면 기본값보다 우선한다
  *  ⑩ 기본값이 등록모드(designer)다 — 마스터가 같은 날 "체크보드 기본"을 되돌림
- *  ⑪ [WO 20260930-moderole 재정정] CHECKER 모드로 전환해 PhotoBatch.open() 을 직접 호출해도
- *     content 계열로 열린다(CHECKER 핀은 사진 등록 대상이 아니다, 방어적 확인)
+ *  ⑪ [WO 20261015-numunify] CHECKER 모드에서 PhotoBatch.open() 을 직접 호출하면 체커 핀이 범위에 든다("all")
  *
  * 실제 모듈 소스(01b_PinSeries.js/35_PhotoBatch.js/20_App.js/31_Projects.js/index.html)를
  * 그대로 vm 에 평가/검사한다(목 구현 아님). ①③④⑥⑧⑩ 에 뮤테이션 케이스가 붙는다.
@@ -75,7 +74,7 @@ function loadPB(pbSource, seriesSource, extraState = {}) {
   // (마스터: "체커는 사진을 등록하지 않을 거야") — 항상 content 계열로 열린다.
   const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
   PB.open();
-  ok(PB._range.series === "content", "① CHECKER 모드(State.regMode='checkboard') → open() 이 content 계열로 열림(CHECKER는 사진 등록 대상 아님), 실제 " + PB._range.series);
+  ok(PB._range.series === "all" && PB._range.start === 1 && PB._range.end === 2, "① CHECKER 모드(State.regMode='checkboard') → open() 이 전 핀(all)·범위 1~2 로 열림(체커 핀도 사진 대상), 실제 " + PB._range.series + " " + PB._range.start + "~" + PB._range.end);
 
   const pinsContent = [
     { id: "A1", page: 1, label: "A", imageId: "x" },
@@ -83,25 +82,26 @@ function loadPB(pbSource, seriesSource, extraState = {}) {
   ];
   const { PB: PB2 } = loadPB(pbSrc, seriesSrc, { pins: pinsContent, pdfPage: 1, checkboard: false, regMode: "view" });
   PB2.open();
-  ok(PB2._range.series === "content", "② 등록(뷰어) 모드(State.regMode='view') → open() 이 content 계열로 열림(회귀 없음), 실제 " + PB2._range.series);
+  ok(PB2._range.series === "all", "② 등록(뷰어) 모드(State.regMode='view') → open() 이 전 핀(all)으로 열림(모드 무관), 실제 " + PB2._range.series);
 }
 
 /* ══ ③ _defaultRange() 가 State.regMode 를 보지 않고 항상 content(+ 뮤테이션ⓐ) ══════════════ */
 {
-  ok(/_defaultRange\(\) \{[\s\S]{0,400}?const series = "content";/.test(pbSrc),
-    "③ _defaultRange() 가 State.regMode 와 무관하게 series = \"content\" 로 고정돼 있다(CHECKER 분기 제거)");
+  ok(/_defaultRange\(\) \{[\s\S]{0,400}?const series = "all";/.test(pbSrc),
+    "③ _defaultRange() 가 State.regMode 와 무관하게 series = \"all\" 로 고정돼 있다(계열 축 제거)");
   ok(!/const series = \(typeof State !== "undefined" && State\.regMode === "checkboard"\) \? "checkboard" : "content";/.test(pbSrc),
     "③ _defaultRange() 소스에 CHECKER 모드용 checkboard 계열 분기가 남아있지 않다");
 
-  console.log("\n[뮤테이션ⓐ] _defaultRange() 를 다시 CHECKER 분기(구 동작)로 되돌리면 ①이 실패해야 함");
-  const needleA = 'const series = "content";';
-  const mutatedA = pbSrc.replace(needleA, 'const series = (typeof State !== "undefined" && State.regMode === "checkboard") ? "checkboard" : "content";');
+  // [WO 20261015-numunify] 뮤테이션 방향 갱신 — 옛 "content 고정"(체커 핀 제외)으로 되돌리면 ①이 실패해야 한다
+  console.log("\n[뮤테이션ⓐ] _defaultRange() 를 옛 content 고정(체커 핀 제외)으로 되돌리면 ①이 실패해야 함");
+  const needleA = 'const series = "all";';
+  const mutatedA = pbSrc.replace(needleA, 'const series = "content";');
   if (mutatedA === pbSrc) { console.log("  FAIL 뮤테이션ⓐ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const pinsCb = [{ id: "C1", page: 1, label: "1", checkboard: true }];
     const { PB: PBm } = loadPB(mutatedA, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
     PBm.open();
-    ok(PBm._range.series !== "content", "뮤테이션ⓐ 적용 시 CHECKER 모드에서 checkboard 계열로 다시 열림(①이 깨짐, 구 동작 재현) → " + PBm._range.series);
+    ok(PBm._range.series !== "all", "뮤테이션ⓐ 적용 시 CHECKER 모드에서 전 핀 범위가 깨짐(①이 깨짐, 구 동작 재현) → " + PBm._range.series);
   }
 }
 
@@ -340,7 +340,7 @@ function makePinSeriesSandbox(initialStore) {
   const pinsCb = [{ id: "C1", page: 1, label: "1", checkboard: true }];
   const { PB } = loadPB(pbSrc, seriesSrc, { pins: pinsCb, pdfPage: 1, checkboard: true, regMode: "checkboard" });
   PB.open();
-  ok(PB._range.series === "content", "⑪ CHECKER 모드에서 PhotoBatch.open() 을 직접 호출해도(방어적) content 계열로 열림 — CHECKER 는 대상 아님, 실제 " + PB._range.series);
+  ok(PB._range.series === "all" && PB._range.end === 1, "⑪ CHECKER 모드에서 PhotoBatch.open() 직접 호출 → 체커 핀 C1 이 범위에 듦(all · 1~1), 실제 " + PB._range.series + " " + PB._range.start + "~" + PB._range.end);
 }
 
 console.log(failed === 0 ? "\n[ALL PASS]" : "\n[" + failed + " FAILED]");

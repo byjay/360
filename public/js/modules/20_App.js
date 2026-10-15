@@ -784,7 +784,8 @@
     },
     /** 포인트 모드 안내문 SoT — 지도 위 배너(.crosshair-msg)와 사이드 #place-hint 가 같은 문장을 쓴다.
      *  [WO 20261008-pinstyle R4] CHECKER 는 사진을 등록하지 않는다(마스터 2026-10-01) — 숨기지 말고 문장으로 보인다. */
-    CHECKER_PHOTO_NOTE: "CHECKER: 번호만 · 사진은 360 모드에서",
+    //  [WO 20261015-numunify] 체커 핀도 사진 폴더 일괄 등록 대상 — "360 모드에서" 문구 폐기(배너 2곳 자동 전파).
+    CHECKER_PHOTO_NOTE: "CHECKER: 번호만 · 사진은 폴더 일괄로",
     _placeBannerText() {
       // 배너는 nowrap(style.css .crosshair-msg) — 375px 폭 안에 들도록 짧게 둔다(실측 대상).
       if (State.regMode === "checkboard") return this.CHECKER_PHOTO_NOTE;
@@ -818,13 +819,13 @@
         b.classList.toggle("active", active);
         b.setAttribute && b.setAttribute("aria-pressed", String(active));
       });
-      // [WO 20260930-moderole] 🔴 마스터: "체커는 번호만 매기는 기능" — 사진 등록 계열 도구(사진
-      // 폴더 일괄 매칭·THETA 360 인입·모바일 도크 사진등록)는 CHECKER 모드에서 숨긴다. 렌더 지점
-      // 하나(§10 SoT) — 모드 전환은 전부 openApp()/_setRegMode() 를 거쳐 이 함수를 부른다.
-      const isChecker = State.regMode === "checkboard";
+      // [WO 20260930-moderole → 20261015-numunify] 🔴 사진 등록 도구(사진 폴더 일괄 매칭·THETA 360 인입·모바일
+      // 도크 사진등록)를 CHECKER 모드에서도 보인다 — 마스터: "체크보드 모드에서 번호만 일괄적으로 찍고 나서
+      // 사진폴더 … 360도 사진이 일괄적으로". 종전 숨김 해제(설계 §5 #1). "클릭 시 사진창 안 뜸"은 배치 분기에서 유지.
+      // 렌더 지점 하나(§10 SoT) — 모드 전환은 전부 openApp()/_setRegMode() 를 거쳐 이 함수를 부른다.
       ["btn-photobatch", "btn-theta-intake", "mdock-photobatch"].forEach((id) => {
         const b = UI.$(id);
-        if (b) b.classList.toggle("hidden", isChecker);
+        if (b) b.classList.remove("hidden");
       });
       // #btn-theta-intake 는 side-toolbar 컴팩트 칩(.stb-btn[data-deleg="btn-theta-intake"])의
       // 위임 대상이다 — 대상만 숨기면 그 칩은 .click()으로 여전히 눌린다(delegate 는 hidden 을
@@ -832,7 +833,7 @@
       try {
         if (typeof document !== "undefined" && document.querySelector) {
           const thetaChip = document.querySelector('[data-deleg="btn-theta-intake"]');
-          if (thetaChip && thetaChip.classList) thetaChip.classList.toggle("hidden", isChecker);
+          if (thetaChip && thetaChip.classList) thetaChip.classList.remove("hidden");
         }
       } catch (e) {}
       // [WO 20261001-startno] 모드 전환·편집 진입 = 상단 [번호 대역] 표시(현재 모드 계열의 다음 번호) 갱신 지점
@@ -3457,7 +3458,7 @@
       const fresh = changes.filter(c => { const k = c.id + ":" + c.from + ">" + c.to; if (seen.has(k)) return false; seen.add(k); return true; });
       fresh.forEach(c => { if (typeof Log !== "undefined" && Log.push) Log.push("pin.renumber", c.id, { oldLabel: c.from, newLabel: c.to, page: c.page, reason: "concurrent" }); });
       if (fresh.length && typeof Prompt !== "undefined" && Prompt.toast) {
-        const fmt = (n, s) => (s && PinSeries.formatNo) ? PinSeries.formatNo(n, s) : n;   // 360 은 P접두(대역 계열 공통)
+        const fmt = (n, s) => (s && PinSeries.formatNo) ? PinSeries.formatNo(n, s) : n;   // 표시 SoT(번호 통합 — 접두 없음)
         Prompt.toast("번호 " + fresh.map(c => fmt(c.from, c.series) + " → " + fmt(c.to, c.series)).join(", ") + " 조정(동시 생성)");
       }
       return changes;
@@ -3472,6 +3473,7 @@
       // 계열 핀(SoT: PinSeries.seriesOf)은 이미 계열 게이트가 있는 PinActionPop(27_PinActionPop.js
       // open() — #pap-bottom 등록 섹션 숨김)으로 위임해 사진 등록 경로를 원천 차단한다(유실 0 —
       // 번호·위치명 수정은 PinActionPop 에도 있다).
+      // [WO 20261015-numunify] 위임은 유지(설계 §5 #2 🔒) — 단 PinActionPop 은 이제 체커 핀에도 등록 섹션을 연다(사진 경로 = 패널·폴더 일괄).
       const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
       if (isChecker) {
         if (typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(id);

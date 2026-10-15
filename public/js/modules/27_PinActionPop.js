@@ -282,30 +282,26 @@
       const labelHint = $("pap-label-hint");
       if (labelHint) labelHint.textContent = "";
 
-      // [WO 20260930-moderole] 🔴 마스터: "체커는 번호만 매기는 기능" / "체커는 사진을 등록하지
-      //   않을 거야" — CHECKER 계열 핀(SoT: PinSeries.seriesOf)은 등록 섹션(#pap-bottom: 등록
-      //   종류 그리드 + 사진/문서/노트 패널) 전체를 숨긴다. 번호·위치명 수정·이동·삭제(#pap-top)는
-      //   그대로 남는다. 기존에 이미 사진이 붙어 있던 CHECKER 핀도 데이터는 그대로 두고(유실 0),
-      //   #pap-view(이미 있는 읽기 버튼)로만 본다 — 새 등록 경로는 열지 않는다.
-      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+      // [WO 20260930-moderole → 20261015-numunify] 🔴 CHECKER 핀 등록 섹션 차단 해제 — 마스터: "체크보드 모드에서
+      //   번호만 일괄적으로 찍고 나서 사진폴더 … 바로 그 위치에 360도 사진이 일괄적으로". 체커 핀도 사진 대상이라
+      //   등록 섹션(#pap-bottom)·AI 분석(#pap-ai)을 모든 핀에 연다. "클릭 시 사진창 안 뜸"(20_App.editPin 의 PinActionPop
+      //   위임·CHECKER 배치 흐름)은 유지 — 이 패널은 사용자가 핀을 눌러 연 뒤다.
       const bottom = $("pap-bottom");
-      if (bottom) bottom.classList.toggle("hidden", isChecker);
+      if (bottom) bottom.classList.remove("hidden");
       // [WO 20261007-aivision] [🤖 AI 분석] — 숨김 금지: 뷰어/사진 없음/오프라인/키·한도 는 비활성 + 사유(AiVision.buttonState SoT).
-      //   CHECKER 계열은 등록 섹션과 같은 정책(마스터: "체커는 사진을 등록하지 않을 거야")으로 자리 자체를 비운다.
       const aiHost = $("pap-ai");
       if (aiHost) {
-        aiHost.classList.toggle("hidden", isChecker);
-        if (isChecker) { aiHost.innerHTML = ""; if (typeof AiVision !== "undefined" && AiVision.unmount) AiVision.unmount("pap-ai"); }
-        else if (typeof AiVision !== "undefined" && AiVision.mount) AiVision.mount("pap-ai", pin, { theme: "light", canEdit });
+        aiHost.classList.remove("hidden");
+        if (typeof AiVision !== "undefined" && AiVision.mount) AiVision.mount("pap-ai", pin, { theme: "light", canEdit });
       }
-      if (!isChecker) {
-        this._renderPhoto(pin, canEdit);
-        this._loadNotes(pin, canEdit);
-        // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
-        this._regCat = "photo";
-        this._renderRegTools();
-        this._renderDocList(pin);
-      }
+      // [WO 20261015-personblur] [🫥 사람 흐리게] — 디자이너 전용(PersonBlur.render 가 canEdit=false 면 숨김).
+      if (typeof PersonBlur !== "undefined" && PersonBlur.mount) PersonBlur.mount("pap-personblur", pin, { theme: "light", canEdit });
+      this._renderPhoto(pin, canEdit);
+      this._loadNotes(pin, canEdit);
+      // [WO 20260921] 등록 종류 그리드 — 열 때마다 '사진'으로 초기화(이전 핀의 선택 상태 유지 금지)
+      this._regCat = "photo";
+      this._renderRegTools();
+      this._renderDocList(pin);
 
       // [지휘자 발주 2026-09-29 항목2] 🔴 좌하단 도움말(?) 토글(36_Help.js, position:fixed
       // left:16/bottom:16)이 이 패널(모바일 92vw, 화면 오른쪽 정렬)의 왼쪽 가장자리와
@@ -319,6 +315,7 @@
       if (el) el.classList.add("hidden");
       this._pinId = null;
       if (typeof AiVision !== "undefined" && AiVision.unmount) AiVision.unmount("pap-ai");
+      if (typeof PersonBlur !== "undefined" && PersonBlur.unmount) PersonBlur.unmount("pap-personblur");
       if (typeof Help !== "undefined" && Help.setVisible) Help.setVisible(true);
     },
     /** [지휘자 발주 2026-09-29 항목4] 제목 = 위치명. 번호(pap-no 배지)와 같은 문자열이면

@@ -116,12 +116,17 @@ try {
   await input.uploadFile(F_P1, F_P02, F_P3A, F_P3B);
   await page.waitForFunction(() => /\(4장\)/.test(document.getElementById("photofolder-status-text").textContent), { timeout: 5000 });
   ok(true, "B 폴백 폴더 지정(webkitdirectory, 실 파일 4장) → 상태바 '(4장)' 반영");
+  // [WO 20261015-numunify 동반 수정] 244c5d8(구역별 폴더·체크박스)가 API 를 바꿨는데 이 CDP 테스트는 갱신되지 않아 HEAD 에서도
+  //   EXIT=1(확인모달 대기 타임아웃)이었다. "하나씩 등록" 기본값 OFF → 이 시나리오(핀 찍을 때마다 확인/자동)는 ON 전제.
+  //   setAuto/_draftKey 는 구역 키 인자를 받는다(시그니처 변경 반영). 표시 번호는 "P" 접두 폐기(1·99).
+  const DKEY = await page.evaluate(() => window.__wm.PhotoFolder._activeDeckKey());
+  await page.evaluate((k) => window.__wm.PhotoFolder.setSingleOn(k, true), DKEY);
 
   /* ── 1건+자동OFF → 확인모달 → [등록] ── */
   await page.evaluate(() => { window.__handled1 = null; window.__wm.PhotoFolder.handlePinPlaced(window.__wm.State.pins.find((p) => p.id === 1)).then((h) => { window.__handled1 = h; }); });
   await page.waitForFunction(() => !document.getElementById("photofolder-confirm-modal").classList.contains("hidden"), { timeout: 5000 });
   const msg1 = await page.evaluate(() => document.getElementById("photofolder-confirm-msg").textContent);
-  ok(/P1/.test(msg1) && /P1\.jpg/.test(msg1), "C 1건+자동OFF → 확인모달 노출(핀 P1 ↔ P1.jpg) — " + msg1);
+  ok(/^1 ← P1\.jpg/.test(msg1), "C 1건+자동OFF → 확인모달 노출(핀 1 ↔ P1.jpg, 표시 접두 없음) — " + msg1);
   await page.evaluate(() => document.getElementById("photofolder-confirm-register").click());
   // [실측] 목 서버엔 /api/r2/upload 가 없어 Cloud.uploadImage 가 실패 → SyncQueue.enqueue 오프라인
   // 폴백(pendingOpId)으로 떨어진다 — _uploadOneRow 의 정상 분기(35_PhotoBatch.js:653-663)이며
@@ -131,7 +136,7 @@ try {
   ok((await page.evaluate(() => window.__handled1)) === true, "C handlePinPlaced(핀1) → true(처리함)");
 
   /* ── [앞으로 자동] 경로: 핀2(p02.jpg 1건 매칭) — 등록 전 자동ON 세팅 ── */
-  await page.evaluate(() => window.__wm.PhotoFolder.setAuto(true));
+  await page.evaluate((k) => window.__wm.PhotoFolder.setAuto(k, true), DKEY);
   let handled2;
   handled2 = await page.evaluate(async () => { return await window.__wm.PhotoFolder.handlePinPlaced(window.__wm.State.pins.find((p) => p.id === 2)); });
   ok(handled2 === true, "D 자동ON → handlePinPlaced(핀2) → true(즉시 처리)");
@@ -162,7 +167,7 @@ try {
   ok(handled99 === false, "G 0건 매칭(핀99) → false(기존 폴백 — 파일선택창 경로로)");
   await sleep(150);
   const toastText = await page.evaluate(() => { const h = document.getElementById("wm-toast-host"); return h ? Array.from(h.children).map((c) => c.textContent).join(" | ") : ""; });
-  ok(/P99/.test(toastText) && /없습니다/.test(toastText), "G 안내 토스트에 'P99 사진이 없습니다' — " + toastText);
+  ok(/폴더에 99 사진이 없습니다/.test(toastText), "G 안내 토스트에 '폴더에 99 사진이 없습니다'(접두 없음) — " + toastText);
 
   /* ── 열람자(Auth.readonly) → 기능 0(모든 핀에서 false, 상태바 숨김) ── */
   await page.evaluate(() => { window.__wm.Auth.readonly = true; window.__wm.App._updateCheckboardQuickStatus(1); });
@@ -175,8 +180,8 @@ try {
 
   /* ── IndexedDB(SyncQueue draft) 저장·복원 라운드트립 — handle 경로는 헤드리스에서 네이티브
      다이얼로그를 띄울 수 없으므로 저장/복원 "단위" 수준만 검증(지시 §, 실제 핸들 객체는 제외). ── */
-  const draftKey = await page.evaluate(() => window.__wm.PhotoFolder._draftKey());
-  ok(draftKey === "photofolder:prjT", "I draft 키 = 'photofolder:<projectId>' — " + draftKey);
+  const draftKey = await page.evaluate((k) => window.__wm.PhotoFolder._draftKey(k), DKEY);
+  ok(draftKey === "photofolder:prjT:" + DKEY, "I draft 키 = 'photofolder:<projectId>:<구역키>' — " + draftKey);
   await page.evaluate(async (key) => { await window.__wm.SyncQueue.saveDraft(key, { name: "RICOH THETA" }); }, draftKey);
   const loaded1 = await page.evaluate(async (key) => await window.__wm.SyncQueue.loadDraft(key), draftKey);
   ok(loaded1 && loaded1.name === "RICOH THETA", "I SyncQueue.saveDraft→loadDraft 즉시 라운드트립 — " + JSON.stringify(loaded1));

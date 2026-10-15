@@ -159,7 +159,7 @@
       try { if (App._keepLocal) App._keepLocal(); } catch (e) {}
     },
     _rows: [],              // 표시/매칭 순서 그대로 보관 [{file,name,lastModified,exif,excluded,sortKey,timeSource,timeLabel,is360,w,h,bigGapBefore,gapMs}]
-    _range: { start: 1, end: 1, series: "content" },
+    _range: { start: 1, end: 1, series: "all" },
     _busy: false,
 
     /* ══ 순수 로직 — 회귀 테스트가 직접 호출한다(DOM 무의존) ══════════ */
@@ -313,14 +313,23 @@
      *  핀만 오름차순으로 나열한다. @param {string} [series="content"] 번호는 계열마다
      *  독립 채번(1부터)이라 계열을 반드시 지정해야 모호성이 없다(미지정 시 기존 단독
      *  진입과 동일하게 "content" 로 폴백 — 하위호환). */
+    /** [WO 20261015-numunify] 대상 범위 표시 문구 SoT — "all" = 전체 핀(체커+360), 그 외 = "<계열> 계열". */
+    _seriesText(series) {
+      if (!series || series === "all") return "전체 핀";
+      const l = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[series]) || series;
+      return l + " 계열";
+    },
+
     _pinList(pins, page, series) {
-      const ser = series || "content";
+      // [WO 20261015-numunify] series "all"(기본) = 페이지 전 핀(번호 공간 1개 — 체커·360 공통 번호).
+      //   "checkboard"/"content" 를 명시한 호출(테스트·구 경로)만 그 생성 계열로 좁힌다(하위호환).
+      const ser = series || "all";
       const map = PinSeries.numbers(pins || [], page);
       const list = [];
       (pins || []).forEach((p) => {
         if (!p || (p.page || 1) !== (page || 1)) return;
         const info = map.get(p.id);
-        if (!info || info.series !== ser) return;
+        if (!info || (ser !== "all" && info.series !== ser)) return;
         list.push({ pin: p, no: info.no });
       });
       list.sort((a, b) => a.no - b.no);
@@ -495,11 +504,9 @@
      *  조용히 실패). 현재 배치 모드(State.checkboard, 20_App.js SoT)를 그대로 반영한다 —
      *  새 상태를 만들지 않고 기존 SoT 를 재사용. */
     _defaultRange() {
-      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 사진 폴더 일괄
-      // 매칭의 대상은 항상 360(content) 계열만이다(CHECKER 계열은 절대 대상이 아니다, SoT:
-      // PinSeries.seriesOf). 예전엔 State.regMode 로 CHECKER 계열도 골랐으나(WO 20260929 addendum),
-      // 이제 CHECKER 핀은 사진을 등록하지 않으므로 그 분기를 제거한다(항상 content).
-      const series = "content";
+      // [WO 20260930-moderole → 20261015-numunify] 🔴 계열 축 제거 — 범위 = 페이지 전 핀("all").
+      //   번호가 (배포본, 페이지) 하나로 통합돼 체커 핀도 사진 일괄 매칭 대상이다(종전 content 고정 해제).
+      const series = "all";
       const list = this._pinList(State.pins, State.pdfPage || 1, series);
       return { start: list.length ? list[0].no : 1, end: list.length ? list[list.length - 1].no : 1, series: series };
     },
@@ -513,7 +520,7 @@
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
       this._rows = [];
       this._range = (range && Number.isFinite(range.start) && Number.isFinite(range.end))
-        ? { start: range.start, end: range.end, series: range.series || "content" }
+        ? { start: range.start, end: range.end, series: range.series || "all" }
         : this._defaultRange();
       const modal = document.getElementById("photobatch-modal");
       if (!modal) return;
@@ -527,16 +534,14 @@
       // (조용히 아무거나 고르지 않음 — §10 조용한 실패 금지).
       const title = document.getElementById("photobatch-title");
       if (title) {
-        const label = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
-        title.textContent = "사진 폴더 일괄 매칭 — " + label + " 계열";
+        title.textContent = "사진 폴더 일괄 매칭 — " + this._seriesText(this._range.series);
       }
       this._renderTable();
       // [WO 20260918] 🔴 조용한 실패 금지 — 대상 계열 핀이 0건이면 모달만 열고 아무 말 없던 것을
       // 이유와 함께 알린다(기존 토스트 경로 재사용, 새 UI 없음).
       const targetList = this._pinList(State.pins, State.pdfPage || 1, this._range.series);
       if (!targetList.length && typeof Prompt !== "undefined" && Prompt.toast) {
-        const label2 = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
-        Prompt.toast("이 화면(" + label2 + " 계열)에는 대상 핀이 없습니다 — 먼저 번호 핀을 찍어주세요");
+        Prompt.toast("이 화면(" + this._seriesText(this._range.series) + ")에는 대상 핀이 없습니다 — 먼저 번호 핀을 찍어주세요");
       }
     },
 
@@ -626,8 +631,7 @@
       }
       const cntEl = document.getElementById("photobatch-count");
       if (cntEl) {
-        const serLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[this._range.series]) || this._range.series;
-        cntEl.textContent = matches.length + "건 매칭 예정 · [" + serLabel + " 계열] 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+        cntEl.textContent = matches.length + "건 매칭 예정 · [" + this._seriesText(this._range.series) + "] 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
       }
     },
 
@@ -742,9 +746,8 @@
      *  요구사항 §9). series 미지정 시 현재 배치모드(SoT: State.regMode, _defaultRange()와 동일 판정). */
     openTimeMatch(range) {
       if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
-      // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 시각 자동 매칭 대상도
-      // 항상 360(content) 계열만(_defaultRange() 와 동일 SoT, CHECKER 분기 제거).
-      const series = (range && range.series) || "content";
+      // [WO 20261015-numunify] 시각 자동 매칭 대상 = 페이지 전 핀(_defaultRange() 와 동일 SoT — 계열 축 제거).
+      const series = (range && range.series) || "all";
       this._tm = { rows: [], series };
       this._ensureTimeMatchModal();
       // [지휘자 발주 보강] 브라우저는 폴더를 자동으로 못 찾는다(showDirectoryPicker 모바일 미지원)
@@ -979,7 +982,8 @@
      *  한다(모바일 user-activation 유지 — await 금지, 기존 _openPinMediaPicker와 동일 관례). */
     autoConnectPin(pin) {
       if (!pin) return;
-      if (typeof PinSeries !== "undefined" && PinSeries.seriesOf && PinSeries.seriesOf(pin) === "checkboard") return;
+      // [WO 20261015-numunify] CHECKER 핀 early-return 해제 — 사용자가 연 경로(ThetaIntake 핀 시트 등)면 체커 핀도 사진을 받는다.
+      //   CHECKER **배치** 클릭에서 사진창이 안 뜨는 것은 호출부(20_App._handlePlaceClick 의 checkboard 분기)가 이 함수를 안 부르기 때문(유지).
       this._pendingAutoPin = pin;
       this._ensureAutoInput();
       if (typeof Prompt !== "undefined" && Prompt.toast)
@@ -1070,7 +1074,7 @@
         const pinT = this._pinTimeMs(pin);
         const dtMs = (Number.isFinite(pinT) && Number.isFinite(best.sortKey)) ? Math.abs(pinT - best.sortKey) : null;
         const hhmm = best.timeLabel && best.timeLabel.length >= 16 ? best.timeLabel.slice(11, 16) : "";
-        let msg = "P" + (pin.label || "") + " ← " + best.name + (hhmm ? (" (" + hhmm + " 촬영)") : "") + " 등록" + (r.offline ? "(오프라인 저장됨)" : "");
+        let msg = (pin.label || "") + " ← "   // [WO 20261015-numunify] "P" 접두 폐기 + best.name + (hhmm ? (" (" + hhmm + " 촬영)") : "") + " 등록" + (r.offline ? "(오프라인 저장됨)" : "");
         if (dtMs != null && dtMs >= BIG_GAP_WARN_MS) msg += " · 핀 생성 " + Math.round(dtMs / 60000) + "분 전 사진";
         msg += " · [다른 사진]";
         if (typeof Prompt !== "undefined" && Prompt.toast)

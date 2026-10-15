@@ -84,7 +84,9 @@ export default async function explore(P) {
   rec("L1", { orig: mo, region: mr, no0, no1, st1 });
   const no = (arr, id) => (arr.find((m) => m.id === id) || {}).no;
   P.ok(st1 && st1.ids.join(",") === "a,b" && st1.base === 5, "[L1] 구역 열기 → 원본 상자 안 핀 a,b 가 화면 상태에 · 번호 기준 5", st1);
-  P.ok(mr.length === 1 && no(mr, "b") != null && no(mr, "b") === no(mo, "b") && !mr.some((m) => m.id === "o1"), "[L1] 구역 화면 CHECKER 마커 = 상자 안 b 1개 · 같은 번호(" + no(mo, "b") + "/" + no(mr, "b") + ")");
+  // [WO 20261015-numunify 계약 변경] 모드가 가시성을 잠그지 않는다 — 구역 화면(CHECKER 모드)에 상자 안 핀 a(360)·b(체커) 둘 다 보인다.
+  //   전·후 대조: 종전 mr = [b] 1개(360 핀 a 숨김) → 새 mr = [a, b] 2개 · 원본과 같은 번호 · 상자 밖 o1 은 여전히 0.
+  P.ok(mr.length === 2 && no(mr, "a") === no(mo, "a") && no(mr, "b") != null && no(mr, "b") === no(mo, "b") && !mr.some((m) => m.id === "o1"), "[L1] 구역 화면 마커 = 상자 안 a·b 2개(모드 무관) · 같은 번호(a " + no(mo, "a") + "/" + no(mr, "a") + " · b " + no(mo, "b") + "/" + no(mr, "b") + ")");
   P.ok(no0 && no1 && no0.a === 2 && no1.a === no0.a && no1.b === no0.b, "[L1] 360 핀 a 번호 원본 " + (no0 && no0.a) + " == 구역 " + (no1 && no1.a));
 
   /* L2 — 구역에서 핀 탭 → 원본에 역변환 저장 → 원본 화면에 보임 */
