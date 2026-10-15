@@ -255,22 +255,27 @@
       };
       const finish = (n) => { if (n > 0) { s.on = false; s.ids.clear(); this.renderPinList(); } };
       const canDel = this._pinBulkOk();
+      // [WO 20261015-bulkdel-undo] 일괄 삭제(서버 기록·되돌리기)는 온라인 전용 — 숨김 금지, 비활성 + 사유.
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
       out.push(mk(s.on ? "선택 종료" : "선택", "pin-bulk-toggle", () => this.setPinSelectMode(!s.on), "여러 포인트를 골라 풍선 정렬(디자이너) 또는 한꺼번에 삭제(프로젝트 소유자·슈퍼관리자, 본인 확인 필요)"));
       if (s.on) {
         const n = s.ids.size;
         const del = mk("선택 삭제 " + n + "개", "danger pin-bulk-del", async () => {
           finish(await App.deletePins(Array.from(s.ids)));
         });
-        // [WO 20261002-allmenu §2] 🔴 숨김 금지 — 소유자·super 가 아니면 비활성 + 사유(title/aria).
-        del.disabled = n === 0 || !canDel;
+        // [WO 20261002-allmenu §2 → 20261015-bulkdel-undo] 🔴 숨김 금지 — 권한 없음/오프라인이면 비활성 + 사유(title/aria).
+        del.disabled = n === 0 || !canDel || offline;
         if (!canDel) { del.title = "소유자·관리자 전용 — 프로젝트 소유자·슈퍼관리자만 일괄 삭제할 수 있습니다"; del.setAttribute("aria-disabled", "true"); }
+        else if (offline) { del.title = "온라인에서만 — 일괄 삭제는 오프라인에서 실행하지 않습니다"; del.setAttribute("aria-disabled", "true"); }
         out.push(del);
       }
       const scope = Array.isArray(opts.scopePins) ? opts.scopePins : null;
       if (canDel && scope && scope.length) {
-        out.push(mk((opts.scopeLabel || "이 구역") + " 핀 전체 삭제 (" + scope.length + ")", "danger pin-bulk-scope", async () => {
+        const sb = mk((opts.scopeLabel || "이 구역") + " 핀 전체 삭제 (" + scope.length + ")", "danger pin-bulk-scope", async () => {
           finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역", scope: "zone" }));
-        }));
+        });
+        if (offline) { sb.disabled = true; sb.title = "온라인에서만 — 일괄 삭제는 오프라인에서 실행하지 않습니다"; sb.setAttribute("aria-disabled", "true"); }
+        out.push(sb);
       }
       // [WO 20261001-leader §5] 마스터 2차 지시 — 리더선 풍선 정렬. 같은 선택 UI 재사용.
       if (s.on) {
@@ -725,7 +730,9 @@
           if (typeof AllPins !== "undefined" && AllPins.show) AllPins.show();
         } });
       items.push({ label: "이 구역 핀 전체 삭제", danger: true, desc: "확인 2번 — 첨부 사진·노트도 함께 사라집니다",
-        reason: why, run: async () => {
+        // [WO 20261015-bulkdel-undo] 서버 기록·되돌리기는 온라인 전용 — 숨김 금지, 비활성 + 사유.
+        reason: why || ((typeof navigator !== "undefined" && navigator.onLine === false) ? "온라인에서만 — 일괄 삭제는 오프라인에서 실행하지 않습니다" : ""),
+        run: async () => {
           if (typeof Projects !== "undefined" && Projects.selectDeck) await Projects.selectDeck(deck);
           const pins = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck((State.pins || []), deck) : [];
           if (!pins.length) { Prompt.toast && Prompt.toast("삭제할 핀이 없습니다"); return; }
