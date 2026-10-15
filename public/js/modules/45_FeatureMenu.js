@@ -44,8 +44,11 @@
         run: () => ProjectHub.openMembers(Projects.currentProject) },
       { id: "project-delete", group: "project", icon: "✕", label: "프로젝트 삭제", desc: "프로젝트와 모든 구역을 삭제(확인창)", perm: "owner", needs: "project", danger: true,
         click: "btn-delete-project", covers: ["btn-delete-project"] },
-      { id: "pin-purge", group: "project", icon: "✕", label: "모든 핀 삭제", desc: "프로젝트 전체 구역·도면의 핀(미리보기 → 이름 입력 → 본인 확인, 10분 되돌리기)", needs: "project", danger: true, mod: "PinPurge",
+      { id: "pin-purge", group: "project", icon: "✕", label: "모든 핀 삭제", desc: "프로젝트 전체 구역·도면의 핀(미리보기 → 이름 입력 → 본인 확인, 30일 되돌리기)", needs: "project", danger: true, mod: "PinPurge",
         why: () => PinPurge.reason(), run: () => PinPurge.start() },
+      // [WO 20261015-bulkdel-undo] 마스터(음성) "삭제했던 걸 다시 되돌리고 싶을 때 되돌릴 수 있게끔" — 구역·선택 삭제도 같은 목록.
+      { id: "pin-purge-history", group: "project", icon: "↺", label: "삭제 기록", desc: "일괄 삭제한 핀을 나중에 되돌립니다(프로젝트 전체·구역·선택 공통)", needs: "project", mod: "PinPurge",
+        why: () => PinPurge.historyReason(), run: () => PinPurge.openHistory() },
       { id: "edit-mode", group: "project", icon: "✎", label: "편집 모드로 전환", desc: "디자이너 권한이 있을 때 편집 화면으로", perm: "login",
         click: "btn-enter-edit", covers: ["btn-enter-edit", "btn-go-edit", "btn-exit-edit"] },
       { id: "mode-checker", group: "project", icon: "#", label: "CHECKER 모드", help: "checkerboard", perm: "designer", needs: "drawing",
@@ -129,6 +132,9 @@
       { id: "field-capture-method", group: "pano", icon: "⇄", label: "현장 촬영 방식 변경", desc: "THETA 공유·갤러리·카메라·안드로이드 앱 중 다시 고릅니다", perm: "designer", needs: "drawing", mod: "FieldCapture",
         run: () => FieldCapture.open(true) },
       { id: "photo-batch", group: "pano", icon: "▣", label: "사진 폴더 일괄 매칭", help: "photo-batch", perm: "designer", needs: "drawing", mode: "photo", click: "btn-photobatch", covers: ["btn-photobatch", "mdock-photobatch"] },
+      // [WO 20261015-photofolder2] 구역마다 폴더를 지정하고 일괄/하나씩 등록을 체크박스로 고르는 화면(60_PhotoFolder.js openDeckManager)
+      { id: "photo-folder-deck", group: "pano", icon: "📁", label: "구역별 사진 폴더 지정", desc: "구역마다 폴더를 지정하고 일괄/하나씩 등록 방식을 고릅니다", perm: "designer", needs: "project", mod: "PhotoFolder",
+        run: () => PhotoFolder.openDeckManager() },
       { id: "coverage", group: "pano", icon: "◔", label: "촬영 현황 보기 켜기/끄기", help: "coverage", needs: "drawing", mod: "Coverage",
         why: () => Coverage.reason(), run: () => Coverage.toggle() },
       { id: "pano-setdir-map", group: "pano", icon: "⌖", label: "360 시야 방향 보정(도면)", help: "orientation-fix", perm: "designer", needs: "drawing", click: "tb-setdir", covers: ["tb-setdir"] },

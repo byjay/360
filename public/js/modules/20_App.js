@@ -3213,21 +3213,51 @@
       return State.mode === "designer" && typeof Auth !== "undefined" && !!Auth.projectCanManage && !Auth.readonly;
     },
 
-    /** [WO 20260929-bulkdel → 20261001-bulkreauth] 핀 일괄삭제 — 확인(Prompt.confirm, 개수 명시) → 본인 재인증(Auth.ensureReauth,
-     *  5분 내 재사용) → 단건과 같은 _removePins 경로. 재인증 실패·취소면 0건. 이 배포본의 다음 저장에 X-Reauth 를 싣는다.
+    /** [WO 20260929-bulkdel → 20261001-bulkreauth → 20261015-bulkdel-undo] 핀 일괄삭제 — 마스터(음성) "핀 일괄 삭제 기능도
+     *  구현하고 되돌리기도 기능도 구현해. 삭제했던 걸 다시 되돌리고 싶을 때 되돌릴 수 있게끔."
+     *  🔴 서버 경로로 통합(53_PinPurge 의 [모든 핀 삭제]와 같은 pin_bulk_deletes 기록·같은 되돌리기) — 로컬만 지우던
+     *  종전(_removePins)은 서버에 기록이 안 남아 되돌릴 수 없었다(R1). 온라인 전용(오프라인 큐에 넣지 않음, 모든 핀
+     *  삭제와 같은 원칙) — 재인증(Auth.ensureReauth) → POST /api/projects/:id/pins/bulk-delete → 성공 시 서버 최신본을
+     *  병합(PinPurge._afterServerChange, 별칭 구역이면 원본 변경을 당겨온다) → 삭제 직후 되돌리기 바(PinPurge._showBar).
+     *  opts.scope: 'zone'(범위 전체 삭제·구역 전체 삭제) | 생략 시 'selection'(사람이 고른 핀) — 삭제 기록 화면 분류용.
      *  번호는 자동 재채번하지 않는다(기존 번호 리셋 기능이 따로 있다). 반환: 삭제된 개수. */
     async deletePins(ids, opts) {
+      opts = opts || {};
       if (!this.canBulkDeletePins()) { Prompt.toast("프로젝트 소유자·슈퍼관리자만 핀을 일괄 삭제할 수 있습니다"); return 0; }
       const want = new Set((ids || []).map(String));
       const targets = (State.pins || []).filter(p => want.has(String(p.id)));
       if (!targets.length) return 0;
-      const scope = (opts && opts.scopeLabel) ? `${opts.scopeLabel}의 ` : "";
-      if (!await Prompt.confirm("포인트 일괄 삭제", `${scope}포인트 ${targets.length}개를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거되며, 번호는 자동으로 다시 매기지 않습니다)`)) return 0;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) { Prompt.toast("온라인에서만 — 일괄 삭제는 오프라인에서 실행하지 않습니다"); return 0; }
+      const proj = (typeof Projects !== "undefined" && Projects.currentProject) || null;
+      if (!proj || !proj.id || !State.autoSaveDepId) { Prompt.toast("프로젝트·도면을 먼저 여세요"); return 0; }
+      const scopeTxt = opts.scopeLabel ? `${opts.scopeLabel}의 ` : "";
+      if (!await Prompt.confirm("포인트 일괄 삭제", `${scopeTxt}포인트 ${targets.length}개를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거되며, 번호는 자동으로 다시 매기지 않습니다)`)) return 0;
       if (!Auth.ensureReauth || !(await Auth.ensureReauth())) { Prompt.toast("본인 확인이 끝나지 않아 삭제하지 않았습니다"); return 0; }
-      const removed = this._removePins(targets.map(p => p.id));
-      if (removed.length) this._bulkReauthDep = State.autoSaveDepId || null;
-      Prompt.toast(`포인트 ${removed.length}개 삭제됨`);
-      return removed.length;
+      const body = { deployment_id: State.autoSaveDepId, ids: targets.map(p => p.id),
+        scope: opts.scope === "zone" ? "zone" : "selection", scope_label: opts.scopeLabel || null,
+        base_version: State.depVersion != null ? Number(State.depVersion) : 0 };
+      let res = await this._bulkDeleteReq(proj.id, body, Auth.reauthHeader());
+      if (res.status === 403 && res.j && res.j.reauth_required) {
+        Auth.clearReauth();
+        if (!(await Auth.ensureReauth())) { Prompt.toast("본인 확인이 끝나지 않아 삭제하지 않았습니다"); return 0; }
+        res = await this._bulkDeleteReq(proj.id, body, Auth.reauthHeader());
+      }
+      if (res.status !== 200) { Prompt.toast("삭제하지 않았습니다 — " + ((res.j && res.j.error) || res.status)); return 0; }
+      if (typeof PinPurge !== "undefined" && PinPurge._afterServerChange) await PinPurge._afterServerChange();
+      UI.renderPinList(); UI.renderPinsOnMap();
+      const deleted = (res.j && res.j.deleted) || 0;
+      Prompt.toast(`포인트 ${deleted}개 삭제됨`);
+      if (deleted && typeof PinPurge !== "undefined" && PinPurge._showBar) PinPurge._showBar(proj.id, res.j);
+      return deleted;
+    },
+    /** deletePins 서버 호출 — 53_PinPurge._req 와 같은 모양(요청 실패도 {status:0} 로 정직하게). */
+    async _bulkDeleteReq(pid, body, extra) {
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(pid) + "/pins/bulk-delete",
+          { method: "POST", headers: Auth.headers(extra), body: JSON.stringify(body) });
+        let j = null; try { j = await r.json(); } catch (e) {}
+        return { status: r.status, j: j || {} };
+      } catch (e) { return { status: 0, j: { error: "네트워크 오류 — 서버에 닿지 못했습니다" } }; }
     },
     _bulkReauthDep: null,   // [WO 20261001-bulkreauth] 일괄삭제가 아직 서버에 안 올라간 배포본 id — 그 PATCH 에만 X-Reauth
 

@@ -269,7 +269,7 @@
       const scope = Array.isArray(opts.scopePins) ? opts.scopePins : null;
       if (canDel && scope && scope.length) {
         out.push(mk((opts.scopeLabel || "이 구역") + " 핀 전체 삭제 (" + scope.length + ")", "danger pin-bulk-scope", async () => {
-          finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역" }));
+          finish(await App.deletePins(scope.map(p => p.id), { scopeLabel: opts.scopeLabel || "이 구역", scope: "zone" }));
         }));
       }
       // [WO 20261001-leader §5] 마스터 2차 지시 — 리더선 풍선 정렬. 같은 선택 UI 재사용.
@@ -698,8 +698,11 @@
       }
       // [WO 20261008-pinpurge] 프로젝트 모든 핀 삭제 — 숨김 금지: 비활성 사유 SoT = PinPurge.reason()
       if (typeof PinPurge !== "undefined") {
-        items.push({ label: "모든 핀 삭제", danger: true, desc: "프로젝트 전체 구역·도면의 핀(미리보기 → 이름 입력 → 본인 확인, 10분 되돌리기)",
+        items.push({ label: "모든 핀 삭제", danger: true, desc: "프로젝트 전체 구역·도면의 핀(미리보기 → 이름 입력 → 본인 확인, 30일 되돌리기)",
           reason: PinPurge.reason(), run: () => PinPurge.start() });
+        // [WO 20261015-bulkdel-undo] 프로젝트 전체·구역·선택 일괄 삭제 공통 되돌리기 목록 — 숨김 금지(조회는 온라인 불필요).
+        items.push({ label: "삭제 기록", desc: "일괄 삭제한 핀을 나중에 되돌립니다(프로젝트 전체·구역·선택 공통)",
+          reason: PinPurge.historyReason(), run: () => PinPurge.openHistory() });
       }
       return items;
     },
@@ -726,7 +729,7 @@
           if (typeof Projects !== "undefined" && Projects.selectDeck) await Projects.selectDeck(deck);
           const pins = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck((State.pins || []), deck) : [];
           if (!pins.length) { Prompt.toast && Prompt.toast("삭제할 핀이 없습니다"); return; }
-          if (typeof App !== "undefined" && App.deletePins) App.deletePins(pins.map((p) => p.id), { scopeLabel: "구역 '" + (deck.name || "") + "'" });
+          if (typeof App !== "undefined" && App.deletePins) App.deletePins(pins.map((p) => p.id), { scopeLabel: "구역 '" + (deck.name || "") + "'", scope: "zone" });
         } });
       {
         const childCount = (typeof Projects !== "undefined" && Projects.childDeckCount) ? Projects.childDeckCount(deck.id) : 0;
