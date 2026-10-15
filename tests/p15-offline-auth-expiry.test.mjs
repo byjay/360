@@ -238,7 +238,9 @@ function makeFlushDraftsSandbox(patchRes) {
   // [WO 20260928-pinloss] _flushDirtyDrafts 가 충돌 규칙 단일 출처(_draftVsServer)를 호출하게 됐다 —
   //   하네스에도 **실 소스**를 그대로 싣는다(스텁 아님). 이 블록의 assertion 은 한 줄도 바꾸지 않았다.
   // [WO 20261010-offmatrix] _draftVsServer 가 주석 병합(srvAnnos → _mergeAnnos)을 받게 됐다 — 시그니처 needle 만 갱신 · 실 소스 그대로 · assertion 무변경.
-  const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer, srvAnnos) {");
+  // [360 동선] _draftVsServer 가 동선 병합(srvRoutes → _mergeRoutes)도 받게 됐다 — 같은 원칙으로 시그니처 needle 만 갱신.
+  //   이 하네스의 draft 에는 routes 필드가 없어(dRoutes=null) 그 분기는 실행되지 않는다 — assertion 무변경.
+  const ruleBlock = extractBalanced(appSrc, "_draftVsServer(d, srvPins, srvZones, srvVer, srvAnnos, srvRoutes) {");
   // [WO 20260929-lossless] _flushDirtyDrafts 가 원본 PDF(_draftSource)·R2 페이지 업로드(_uploadPagesToR2)를
   //   거치게 됐다 — 같은 원칙으로 **실 소스**를 싣는다(스텁 아님). assertion 은 한 줄도 바꾸지 않았다.
   // [WO 20260929-bulkdel] _draftVsServer 가 핀 병합 단일 출처(_mergePins)를, flush 가 _pinIds 를 쓰게 됐다 —

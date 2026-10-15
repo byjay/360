@@ -592,6 +592,10 @@
         }
         // [WO 20261002-gap 묶음A④] 360 원본 재시도 큐도 재연결마다 비운다.
         try { await this.flushOriginals(); } catch (e) { errs.push("360 원본 보관: " + msg(e)); }
+        // [360 동선] 오프라인 중 큐잉된 동선 영상 업로드
+        if (typeof Routes !== "undefined" && Routes.flushPendingVideos) {
+          try { await Routes.flushPendingVideos(); } catch (e) { errs.push("동선 영상 업로드: " + msg(e)); }
+        }
         prog.after = await this._pendingTotal();
         // 성공/실패를 반드시 통보한다(조용한 실패 금지 — 공유 판정 1곳)
         this.noteSyncResult(r, errs, prog);

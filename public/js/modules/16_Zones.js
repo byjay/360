@@ -60,6 +60,8 @@
         UI.$("place-hint") && UI.$("place-hint").classList.add("hidden");
         UI.$("crosshair-overlay") && UI.$("crosshair-overlay").classList.add("hidden");
       }
+      // [360 동선] 동선 그리기와도 상호 배타
+      if (State.drawingRoute && typeof Routes !== "undefined" && Routes._cancelDraw) Routes._cancelDraw();
       this._syncToolUi();
     },
 

@@ -2764,6 +2764,58 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   .cmp360-btn { font-size: 11px; padding: 6px 10px; }
 }
 
+/* ══════════ 360 동영상 동선(Route) — 얇은 점선 + 진행방향 화살표 ══════════
+   [마스터 요청] 핀이 아니라 "선"을 그어 360 동영상을 연결. 도면 배경이 밝든 어둡든
+   보이도록 흰 외곽(halo) + 대비색 점선의 2중 stroke 기법 사용(CSS 변수 비의존 — 고정값). */
+.routes-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
+.routes-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.route-line-halo {
+  fill: none; stroke: #fff; stroke-width: 3px; stroke-linecap: round; stroke-linejoin: round;
+  opacity: .85; vector-effect: non-scaling-stroke; pointer-events: none;
+}
+.route-line {
+  fill: none; stroke: #0a66ff; stroke-width: 1.3px; stroke-dasharray: 3 3; stroke-linecap: round;
+  vector-effect: non-scaling-stroke; pointer-events: auto; cursor: pointer;
+  marker-end: url(#route-arrow);
+}
+.route-line:hover { stroke-width: 2px; stroke: #e0503e; }
+.route-arrow-head { fill: #0a66ff; }
+.route-dot-start { fill: #0a66ff; stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.route-dot-end   { fill: #ff3b30; stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+/* 재생 진행률에 맞춰 도면 위에서 움직이는 점 */
+.route-playhead { fill: #ffd400; stroke: #111; stroke-width: 1.2px; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgba(0,0,0,.6)); }
+.route-draft-svg .zd-line { fill: none; stroke: #0a66ff; stroke-width: 2px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.route-draft-svg .zd-dot { fill: #0a66ff; }
+.route-draft-svg .zd-dot.first { fill: #fff; stroke: #0a66ff; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+/* [p100 대비 감사] #route-count(.zone-count 재사용)·#route-list .zone-empty(.zone-empty 재사용)는
+   그 공유 클래스의 기본색이 이 다크 사이드바 컨텍스트에서 대비 미달(2.61·1.05 — 실측)이라 이 두 자리만 보정.
+   공유 클래스 자체는 건드리지 않는다(Zones 쪽 회귀 방지, §G-2-5 — 영향 범위는 신규 동선 UI 로 한정). */
+#route-count { color: #07111c; }                 /* rgb(58,151,221) 배경 위 — 6.6:1 */
+#route-list .zone-empty { color: rgba(241,243,248,.78); }   /* rgb(29,32,37) 배경 위 — 8.9:1 */
+
+/* [360 동선] THETA 뷰처럼 재생/탐색 바 — .pano-controls 와 동일한 고정색(비-var) 패턴 */
+.pano-video-bar {
+  position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; z-index: 12;
+  background: rgba(10,16,32,.78);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(43,40,32,0.17);
+  border-radius: 12px; padding: 8px 14px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(43,40,32,0.102);
+  min-width: 280px; max-width: 92vw;
+}
+.pano-video-bar.hidden { display: none !important; }
+.btn-pano-video-pp {
+  background: transparent; border: 1px solid transparent; color: #f1f3f8; border-radius: 8px;
+  padding: 6px; cursor: pointer; display: inline-flex; align-items: center; flex-shrink: 0;
+}
+.btn-pano-video-pp:hover { background: rgba(43,40,32,0.17); }
+.pano-video-seek { flex: 1; min-width: 120px; accent-color: #0a66ff; cursor: pointer; }
+.pano-video-time { color: #f1f3f8; font-size: 11px; font-weight: 700; font-family: var(--font-ui); white-space: nowrap; }
+@media (max-width: 760px) {
+  .pano-video-bar { bottom: 150px; min-width: 240px; padding: 6px 10px; }
+}
+
 /* ══════════ 영역(Zone) 하이라이트 ══════════ */
 .zones-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; } /* 항상 핀 레이어(.pins-layer z-index:3) 뒤 — 핀 클릭 간섭 방지 */
 /* SVG 도형 오버레이 — 도면 전체를 덮고 % 좌표(viewBox 0~100)로 그림 */

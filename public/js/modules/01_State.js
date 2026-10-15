@@ -30,6 +30,7 @@
     annoTool:    "cursor",  // 현재 주석 도구
     annoColor:   "#ff3b30", // 현재 주석 색상
     zones:       [],        // {id,page,x,y,w,h,label,color,pinIds[],note} 영역(%) 줌무관
+    routes:      [],        // [360 동선] {id,page,points:[{x,y}](%),videoId,name} 360 동영상 동선(선)
     // [WO 20260929-bulkdel] 핀 삭제 부활 방지(20_App._mergePins) — 도면 단위, reset() 에서 초기화.
     pinTombstones: {},      // { [String(pinId)]: 삭제시각ms } 이 도면에서 내가 지운 핀
     annoTombstones: {},     // [WO 20261006-annodel] { [String(annoId)]: 삭제시각ms } 이 도면에서 내가 지운 주석(20_App._annoTombstones)
@@ -40,6 +41,7 @@
     zoneBaseIds:  null,     // 내가 아는 서버 버전의 영역 id 목록 — null=모름
     placing:     false,
     drawingZone: false,     // 영역 그리기 모드
+    drawingRoute: false,    // [360 동선] 동선 그리기 모드(360 동영상용 선)
     isoView:     false,     // ISO 3D 아이소메트릭 뷰 (평면↔입체 회전)
     isoDir:      0,          // ISO 시점 방향 0~3 (북동/남동/남서/북서) — 4방향 회전
     pending:     null,      // { x, y }
@@ -79,7 +81,7 @@
       // [P14] 원본 PDF 지연 로드 상태 초기화 — 도면이 바뀌면 이전 원본은 거짓 화면이 된다.
       this.sourceMeta = null; this.sourcePdfUrl = null; this.srcPdfDoc = null;
       this.srcNoticed = false; this.srcFailed = false;
-      this.pins = []; this.zones = []; this.pinTombstones = {}; this.annoTombstones = {}; this.pinBaseIds = null; this.zoneTombstones = {}; this.annoBaseIds = null; this.zoneBaseIds = null;this.placing = false; this.drawingZone = false; this.pending = null;
+      this.pins = []; this.zones = []; this.routes = []; this.pinTombstones = {}; this.annoTombstones = {}; this.pinBaseIds = null; this.zoneTombstones = {}; this.annoBaseIds = null; this.zoneBaseIds = null;this.placing = false; this.drawingZone = false; this.drawingRoute = false; this.pending = null;
       this.pendingFile = null; this.pendingIsVideo = false;
       this.pendingDocs = [];
       this.pendingFls = null;

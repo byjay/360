@@ -4,8 +4,53 @@
     videoEl: null, rafId: null, canvas: null, open: false, _currentPin: null,
     _dragSpotId: null, // [마스터: 마커 드래그] 현재 끌고 있는 spot.id (null이면 카메라 드래그)
     _dragOrigLL: null, _dragArrow: null, _dragArrowActive: false, // [마스터: 이동 화살표] 드래그 시작 lon/lat, 화살표 3D 오브젝트, 활성 플래그
+    onProgress: null,   // [360 동선] 재생진행률(0~1) 콜백 — Routes 가 도면 위 위치점 갱신에 사용
 
-    init(canvas) { this.canvas = canvas; },
+    init(canvas) {
+      this.canvas = canvas;
+      // [360 동선] THETA 뷰처럼 재생/일시정지 + 탐색 바
+      const pp = document.getElementById("btn-pano-video-playpause");
+      if (pp) pp.addEventListener("click", () => this.togglePlay());
+      const seek = document.getElementById("pano-video-seek");
+      if (seek) {
+        seek.addEventListener("input", () => { this._seeking = true; this.seekRatio(Number(seek.value) / 1000); });
+        seek.addEventListener("change", () => { this._seeking = false; });
+      }
+    },
+
+    _fmtTime(s) {
+      if (!isFinite(s) || s < 0) s = 0;
+      const m = Math.floor(s / 60), ss = Math.floor(s % 60);
+      return m + ":" + String(ss).padStart(2, "0");
+    },
+    _updateVideoBar() {
+      const v = this.videoEl;
+      const bar = document.getElementById("pano-video-bar");
+      if (!v || !bar) return;
+      const dur = v.duration || 0;
+      const seek = document.getElementById("pano-video-seek");
+      if (seek && !this._seeking) seek.value = String(Math.round((dur ? v.currentTime / dur : 0) * 1000));
+      const t = document.getElementById("pano-video-time");
+      if (t) t.textContent = this._fmtTime(v.currentTime) + " / " + this._fmtTime(dur);
+      const playIco = document.getElementById("ico-pano-video-play");
+      const pauseIco = document.getElementById("ico-pano-video-pause");
+      if (playIco && pauseIco) {
+        const playing = !v.paused && !v.ended;
+        playIco.classList.toggle("hidden", playing);
+        pauseIco.classList.toggle("hidden", !playing);
+      }
+    },
+    togglePlay() {
+      if (!this.videoEl) return;
+      if (this.videoEl.paused) this.videoEl.play().catch(() => {}); else this.videoEl.pause();
+    },
+    /** [360 동선] 동선 위 임의 지점 클릭 → 그 비율(0~1)로 영상 탐색(서버 Range 지원) */
+    seekRatio(r) {
+      if (!this.videoEl || !isFinite(this.videoEl.duration)) return;
+      r = Math.max(0, Math.min(1, r));
+      this.videoEl.currentTime = r * this.videoEl.duration;
+      this._invalidate();
+    },
 
     /** [WO 20261008-comparesync] 메인 뷰어(위 싱글턴)와 완전히 독립된 360 뷰어 인스턴스를 만든다.
      *  15_Compare.js(360 동기 비교)가 좌/우 2개를 각각 생성해 쓴다 — 씬/카메라/텍스처가 서로 분리되어
@@ -374,6 +419,7 @@
       $("pano-hint").classList.add("hidden");
       $("pano-controls").classList.add("hidden");
       $("pano-overlay").classList.remove("hidden");
+      this._disposeVideo();   // [360 동선] 직전에 재생 중이던 360 영상이 있으면 정리(정지 이미지로 전환)
       this.open = true;
 
       if (!this._ensureGL()) {
@@ -469,6 +515,18 @@
         this._resize();
         this._startLoop();
         video.play().catch(() => {/* 사용자 제스처 후 재생됨 */});
+        // [360 동선] 재생/탐색 바 노출 + 진행률 콜백(동선 위 위치점 갱신용)
+        const bar = $("pano-video-bar");
+        if (bar) bar.classList.remove("hidden");
+        this._updateVideoBar();
+        video.addEventListener("timeupdate", () => {
+          this._updateVideoBar();
+          if (typeof this.onProgress === "function" && isFinite(video.duration) && video.duration > 0) {
+            this.onProgress(video.currentTime / video.duration);
+          }
+        });
+        video.addEventListener("play", () => this._updateVideoBar());
+        video.addEventListener("pause", () => this._updateVideoBar());
         this.Dive.onTextureReady(this);
       }, { once: true });
       video.addEventListener("error", () => this._showError(src, "360° 영상을 불러올 수 없습니다 (코덱/CORS 확인)"));
@@ -478,6 +536,9 @@
     },
 
     _disposeVideo() {
+      const bar = document.getElementById("pano-video-bar");
+      if (bar) bar.classList.add("hidden");
+      this.onProgress = null;
       if (this.videoEl) {
         try { this.videoEl.pause(); } catch (e) {}
         this.videoEl.removeAttribute("src");

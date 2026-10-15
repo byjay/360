@@ -318,9 +318,18 @@
         const ignZ = (typeof App !== "undefined" && App._MERGE_KINDS) ? App._MERGE_KINDS.zone.ignore : null;
         if (Array.isArray(prevZ)) { try { await OpLog.recordDelta("zone", depId, prevZ, JSON.parse(zoneJ), tombZ, ignZ); } catch (e) {} }
       }
+      // [360 동선] 같은 지점·같은 규칙 — 오프라인 중 그린/수정/삭제한 동선도 delta 기록(연결된 영상은 Routes 가 별도 큐잉).
+      const routeJ = JSON.stringify(State.routes || []);
+      if (typeof navigator !== "undefined" && !navigator.onLine && typeof dep.routes === "string") {
+        let prevR = null;
+        try { prevR = JSON.parse(dep.routes); } catch (e) { prevR = null; }
+        const tombR = (typeof App !== "undefined" && App._routeTombstones) ? Object.keys(App._routeTombstones()) : [];
+        if (Array.isArray(prevR)) { try { await OpLog.recordDelta("route", depId, prevR, JSON.parse(routeJ), tombR); } catch (e) {} }
+      }
       dep.pins = nextJ;
       dep.zones = zoneJ;
       dep.annotations = annoJ;
+      dep.routes = routeJ;   // [360 동선]
       await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
     });
   }
@@ -338,6 +347,7 @@
       dep.pins = JSON.stringify(State.pins || []);
       dep.zones = JSON.stringify(State.zones || []);
       dep.annotations = JSON.stringify(State.annotations || []);
+      dep.routes = JSON.stringify(State.routes || []);   // [360 동선]
       await SyncQueue.saveDraft("bundle:dep:" + depId, dep);
     });
   }

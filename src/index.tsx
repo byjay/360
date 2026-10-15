@@ -8,7 +8,7 @@ import { askJevSeverity, gateSeverity, SEVERITY_LEVELS } from './lib/jevSeverity
 import { askVision, visionModelOf, visionRunnerOf, visionCacheKey, pinImageRefs, visionQuotaExhausted, visionDayStartUtc,
   AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P, AI_VISION_GLOBAL_NEURON_CAP, AI_VISION_FREE_NEURONS_PER_DAY, AI_VISION_PROVIDER } from './lib/aiVision'
 import { normalizeRevLabel, revLabelKey, nextRevLabel, IDENTITY as REV_IDENTITY, isIdentity as revIsIdentity, affSane, solveCarry, autoCarry,
-  carryPins, carryZones, carryAnnos, carryCrop, diffPins, revertPinsMerge, revertShapesMerge, invertAff } from './lib/revCore'
+  carryPins, carryZones, carryAnnos, carryRoutes, carryCrop, diffPins, revertPinsMerge, revertShapesMerge, invertAff } from './lib/revCore'
 import { aliasBoxOf, projectPins, mergeIntoHome, basePinsMin, unprojectOp, parsePins, aliasVersion, homeVersionOf, planMigration,
   type Box as AliasBox } from './lib/regionAlias'
 
@@ -2691,7 +2691,9 @@ function isMemberInScope(s: ReadScope, pid: any): boolean {
 
 /** 주어진 배포본들 중 하나라도 needle(R2 키 · 파노 id)을 참조하는가. wide=false 면 핀만 본다. */
 async function depsMention(c: any, ids: string[] | null, needle: string, wide: boolean): Promise<boolean> {
-  const cols = wide ? ['pins', 'source_meta', 'pages_data', 'zones', 'annotations', 'drawing_data'] : ['pins']
+  // [360 동선] 동선에 연결된 영상(route.videoId)도 routes 컬럼에 키가 적힌다 — 그 배포본을 읽을 수 있는 사람만.
+  //   migration 0047 미적용 환경(컬럼 없음)에서는 이 스캔이 전체 R2 읽기를 깨뜨리므로 routesReady 로 가드.
+  const cols = wide ? ['pins', 'source_meta', 'pages_data', 'zones', 'annotations', 'drawing_data', ...((await routesReady(c)) ? ['routes'] : [])] : ['pins']
   const cond = '(' + cols.map((k) => `instr(COALESCE(${k}, ''), ?) > 0`).join(' OR ') + ')'
   const needles = cols.map(() => needle)
   if (ids === null) {
@@ -2986,6 +2988,11 @@ async function purgeTableReady(c: any): Promise<boolean> {
 /** [WO 20261015-bulkdel-undo] migration 0046(scope·scope_label 컬럼) 적용 여부 — 미적용이면 구역/선택 삭제는 503(날조 0). */
 async function purgeScopeReady(c: any): Promise<boolean> {
   try { await c.env.DB.prepare('SELECT scope FROM pin_bulk_deletes LIMIT 1').first(); return true } catch { return false }
+}
+/** [360 동선] migration 0047(deployments.routes 컬럼) 적용 여부 — 미적용 환경에서는 routes 저장을 조용히 건너뛴다
+ *  (다른 필드 저장은 그대로 진행 — 전체 배포본 저장 흐름을 막지 않는다. 원격 적용은 지휘자가 한다). */
+async function routesReady(c: any): Promise<boolean> {
+  try { await c.env.DB.prepare('SELECT routes FROM deployments LIMIT 1').first(); return true } catch { return false }
 }
 
 app.get('/api/projects/:id/pins/purge', async (c) => {
@@ -3325,7 +3332,9 @@ app.post('/api/deployments/:id/revisions/preview', async (c) => {
   const decks = (await revDeckRows(c, String(dep.id))).length
   return c.json({ transform: sol.t, kind: sol.kind, rms: sol.rms, max_err: sol.maxErr, identity: revIsIdentity(sol.t), pins: list,
     summary: { pins: list.length, out: list.filter((p) => p.out).length, zones: (revJson(dep.zones, []) as any[]).filter(revLive).length,
-      annotations: (revJson(dep.annotations, []) as any[]).filter(revLive).length, decks } })
+      annotations: (revJson(dep.annotations, []) as any[]).filter(revLive).length,
+      // [360 동선] 미적용 환경(dep.routes undefined)은 0 — 날조 없이 실제 값 그대로.
+      routes: (revJson(dep.routes, []) as any[]).filter(revLive).length, decks } })
 })
 
 app.get('/api/deployments/:id/revisions/:rid', async (c) => {
@@ -3353,7 +3362,7 @@ app.get('/api/deployments/:id/revisions/:rid', async (c) => {
   return c.json({
     revision: revMeta(row, !!g.mask), transform: t,
     prev: { label: row.kind === 'proposal' ? null : row.prev_label, file_name: prev.file_name || '', pages_data: prev.pages_data || null, source_meta: prev.source_meta || null,
-      pins: m(asStr(prev.pins, '[]')), zones: m(asStr(prev.zones, '[]')), annotations: m(asStr(prev.annotations, '[]')) },
+      pins: m(asStr(prev.pins, '[]')), zones: m(asStr(prev.zones, '[]')), annotations: m(asStr(prev.annotations, '[]')), routes: m(asStr(prev.routes, '[]')) },
     next: row.kind === 'replaced' ? null : { label: row.rev_label, file_name: row.file_name || '', pages_data: row.pages_data || null, source_meta: row.source_meta || null },
     diff,
   })
@@ -3416,8 +3425,11 @@ app.post('/api/deployments/:id/revisions', async (c) => {
     return c.json({ error: 'conflict', message: '다른 사용자가 먼저 저장했습니다 — 최신본을 다시 불러온 뒤 개정을 적용하세요', version: cur }, 409)
   }
   const flag = { rev: id, at: now }
+  // [360 동선] migration 0047 미적용 환경에서는 routes 컬럼 자체가 없어 이월·저장을 건너뛴다(다른 엔티티 개정 적용은 그대로 진행).
+  const hasRoutesCol = await routesReady(c)
   const pinsArr = revJson(dep.pins, []) as any[]
   const nextPins = carryPins(pinsArr, t, flag), nextZones = carryZones(revJson(dep.zones, []), t), nextAnnos = carryAnnos(revJson(dep.annotations, []), t)
+  const nextRoutes = hasRoutesCol ? carryRoutes(revJson(dep.routes, []), t) : []
   const deckSnap: any[] = [], deckStmts: any[] = []
   for (const d of await revDeckRows(c, depId)) {
     const s: any = { id: d.id }
@@ -3430,7 +3442,7 @@ app.post('/api/deployments/:id/revisions', async (c) => {
       .bind(crop, srcCrop, now, d.id, depId, cur))
   }
   const snapshot = { title: dep.title, file_name: dep.file_name, drawing_data: dep.drawing_data, pages_data: dep.pages_data, source_meta: dep.source_meta,
-    pins: dep.pins, zones: dep.zones, annotations: dep.annotations, decks: deckSnap, version: cur }
+    pins: dep.pins, zones: dep.zones, annotations: dep.annotations, routes: hasRoutesCol ? (dep.routes || '[]') : '[]', decks: deckSnap, version: cur }
   const guard = 'EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)'
   const stmts: any[] = [
     c.env.DB.prepare(
@@ -3443,8 +3455,10 @@ app.post('/api/deployments/:id/revisions', async (c) => {
   ]
   if (proposal) stmts.push(c.env.DB.prepare(`UPDATE drawing_revisions SET status = 'accepted', ref_id = ?, applied_at = ?, applied_by = ? WHERE id = ? AND status = 'proposed' AND ${guard}`)
     .bind(id, now, user.email, proposal.id, depId, cur))
-  stmts.push(c.env.DB.prepare('UPDATE deployments SET file_name = ?, drawing_data = ?, pages_data = ?, source_meta = ?, pins = ?, zones = ?, annotations = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
-    .bind(fileName || dep.file_name, drawingData, pagesJson, sourceMeta, JSON.stringify(nextPins), JSON.stringify(nextZones), JSON.stringify(nextAnnos), now, cur + 1, depId, cur))
+  stmts.push(c.env.DB.prepare(
+    `UPDATE deployments SET file_name = ?, drawing_data = ?, pages_data = ?, source_meta = ?, pins = ?, zones = ?, annotations = ?${hasRoutesCol ? ', routes = ?' : ''}, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?`
+  ).bind(fileName || dep.file_name, drawingData, pagesJson, sourceMeta, JSON.stringify(nextPins), JSON.stringify(nextZones), JSON.stringify(nextAnnos),
+    ...(hasRoutesCol ? [JSON.stringify(nextRoutes)] : []), now, cur + 1, depId, cur))
   const out: any = await c.env.DB.batch(stmts)
   const last = out && out[out.length - 1]
   if (!Number((last && last.meta && last.meta.changes) || 0)) return c.json({ error: 'conflict', message: '저장 경합(동시 저장) — 최신본을 다시 불러온 뒤 적용하세요' }, 409)
@@ -3477,6 +3491,8 @@ app.post('/api/deployments/:id/revisions/:rid/undo', async (c) => {
   // [WO 20261011-offmerge R2] 되돌림이 일어난 배포본 버전(cur — 되돌림 직전)을 기록 → 오프라인 편집 재기준화(revsSinceVersion)가 역변환 여부를 판정.
   //   0041 미적용 DB 면 종전 UPDATE 그대로(되돌리기 자체는 막지 않는다 — 그 경우 재기준화는 검토 표시로 내려간다).
   const undoVer = await revUndoVerReady(c)
+  // [360 동선] migration 0047 미적용 환경에서는 routes 되돌리기를 건너뛴다(다른 엔티티 되돌리기는 그대로 진행).
+  const hasRoutesCol = await routesReady(c)
   for (let attempt = 0; attempt < 3; attempt++) {
     const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(depId).first()
     if (!dep) return c.json({ error: '배포본이 삭제됨' }, 409)
@@ -3486,6 +3502,8 @@ app.post('/api/deployments/:id/revisions/:rid/undo', async (c) => {
     const pins = exact ? prev.pins : JSON.stringify(revertPinsMerge(revJson(dep.pins, []), revJson(prev.pins, []), t, rid))
     const zones = exact ? prev.zones : JSON.stringify(revertShapesMerge(revJson(dep.zones, []), revJson(prev.zones, []), t, carryZones))
     const annos = exact ? prev.annotations : JSON.stringify(revertShapesMerge(revJson(dep.annotations, []), revJson(prev.annotations, []), t, carryAnnos))
+    // prev.routes 는 0047 전 기록된 개정(스냅샷에 routes 없음)일 수 있다 — 그 경우 '[]' (당시 동선 0건 전제, 날조 아님).
+    const routes = hasRoutesCol ? (exact ? (prev.routes || '[]') : JSON.stringify(revertShapesMerge(revJson(dep.routes, []), revJson(prev.routes, []), t, carryRoutes))) : null
     const guard = 'EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)'
     const stmts: any[] = [
       undoVer
@@ -3503,8 +3521,10 @@ app.post('/api/deployments/:id/revisions/:rid/undo', async (c) => {
       stmts.push(c.env.DB.prepare(`UPDATE decks SET crop = ?, src_crop = ?, updated_at = ? WHERE id = ? AND ${guard}`)
         .bind(back(d.crop, s.crop), back(d.src_crop, s.src_crop), now, s.id, depId, cur))
     }
-    stmts.push(c.env.DB.prepare('UPDATE deployments SET file_name = ?, drawing_data = ?, pages_data = ?, source_meta = ?, pins = ?, zones = ?, annotations = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
-      .bind(prev.file_name ?? dep.file_name, prev.drawing_data ?? null, prev.pages_data ?? null, prev.source_meta ?? null, pins ?? '[]', zones ?? '[]', annos ?? '[]', now, cur + 1, depId, cur))
+    stmts.push(c.env.DB.prepare(
+      `UPDATE deployments SET file_name = ?, drawing_data = ?, pages_data = ?, source_meta = ?, pins = ?, zones = ?, annotations = ?${hasRoutesCol ? ', routes = ?' : ''}, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?`
+    ).bind(prev.file_name ?? dep.file_name, prev.drawing_data ?? null, prev.pages_data ?? null, prev.source_meta ?? null, pins ?? '[]', zones ?? '[]', annos ?? '[]',
+      ...(hasRoutesCol ? [routes ?? '[]'] : []), now, cur + 1, depId, cur))
     const out: any = await c.env.DB.batch(stmts)
     const last = out && out[out.length - 1]
     if (!Number((last && last.meta && last.meta.changes) || 0)) continue   // 경합 → 다시 읽고 재시도
@@ -4885,7 +4905,7 @@ function mapDeploymentFor(r: any, mask: boolean, linkMode?: string | null) {
   const o: any = mapDeployment(r)
   if (linkMode) { o.pins = filterPinsByLinkMode(o.pins, linkMode); o.view_mode = linkMode }
   if (!mask) return o
-  for (const k of ['title', 'pins', 'zones', 'annotations', 'checkboard_start']) o[k] = maskEmailsIn(o[k])
+  for (const k of ['title', 'pins', 'zones', 'annotations', 'routes', 'checkboard_start']) o[k] = maskEmailsIn(o[k])
   return o
 }
 
@@ -4899,6 +4919,9 @@ function mapDeployment(r: any) {
     pins: r.pins,
     zones: r.zones || '[]',
     annotations: r.annotations || '[]',
+    // [360 동선] 도면 위 동선(점선) + 연결된 360 동영상. pins/zones/annotations 와 같은 패턴(JSON TEXT, 기본 '[]').
+    //   구버전 배포본(migration 0047 전 생성)은 컬럼 자체가 없어도 SELECT * 는 undefined → 기본값으로 안전.
+    routes: r.routes || '[]',
     // [P14 · 뷰어 확대 화질] 원본 PDF 위치 + 실제 저장 픽셀(JSON). 구버전 배포본은 NULL.
     source_meta: r.source_meta != null ? r.source_meta : null,
     // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(JSON). 구버전 배포본(컬럼 없음)은 '{}'
@@ -5112,22 +5135,38 @@ app.get('/api/r2/status', (c) => {
   return c.json({ enabled: !!c.env.R2, bucket: 'seastar-assets' })
 })
 
+// [360 동선] 동선에 연결하는 360 동영상 업로드 허용 최대 크기 — 마스터 지시(30MB 기준, 재이식 발주서 확정)
+const MAX_VIDEO_BYTES = 30 * 1024 * 1024
+
 // 업로드 (raw body) — Content-Type 헤더로 MIME 결정 · 디자이너 이상
 app.put('/api/r2/upload', async (c) => {
   const user = await requireDesigner(c)
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   if (!c.env.R2) return c.json({ error: 'R2 미구성 (wrangler.jsonc r2_buckets 확인)' }, 501)
   const ct = c.req.header('Content-Type') || 'application/octet-stream'
-  const ext = ct.includes('png') ? 'png' : ct.includes('jpeg') || ct.includes('jpg') ? 'jpg'
+  // [360 동선] video/mp4(webm 포함) — 서버 측 크기 상한을 본문을 읽기 전에 Content-Length 로 먼저 차단
+  const isVideo = ct.includes('mp4') || ct.includes('webm') || ct.includes('quicktime') || ct.includes('video')
+  if (isVideo) {
+    const declaredLen = Number(c.req.header('Content-Length') || 0)
+    if (declaredLen > MAX_VIDEO_BYTES) {
+      return c.json({ error: `영상 파일은 ${Math.floor(MAX_VIDEO_BYTES / 1024 / 1024)}MB 까지 업로드할 수 있습니다.` }, 413)
+    }
+  }
+  const ext = ct.includes('mp4') ? 'mp4' : ct.includes('webm') ? 'webm'
+    : ct.includes('png') ? 'png' : ct.includes('jpeg') || ct.includes('jpg') ? 'jpg'
     : ct.includes('webp') ? 'webp' : ct.includes('pdf') ? 'pdf' : 'bin'
   const key = `assets/${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${ext}`
   const body = await c.req.arrayBuffer()
+  // Content-Length 가 없거나 거짓인 경우를 대비해 실제 수신 바이트도 재검증
+  if (isVideo && body.byteLength > MAX_VIDEO_BYTES) {
+    return c.json({ error: `영상 파일은 ${Math.floor(MAX_VIDEO_BYTES / 1024 / 1024)}MB 까지 업로드할 수 있습니다.` }, 413)
+  }
   // [WO 20261009-readacl] 업로더 기록 — 저장 전(배포본 미참조) 미리보기는 본인만 읽는다(canReadR2Key)
   await c.env.R2.put(key, body, { httpMetadata: { contentType: ct }, customMetadata: { by: String(user.email || '').toLowerCase() } })
   return c.json({ key, url: `/api/r2/object/${key}`, size: body.byteLength, contentType: ct })
 })
 
-// 다운로드 — /api/r2/object/assets/xxxx.png
+// 다운로드 — /api/r2/object/assets/xxxx.png · [360 동선] Range(206) 지원 — <video> 탐색/시킹용
 app.get('/api/r2/object/*', async (c) => {
   if (!c.env.R2) return c.json({ error: 'R2 미구성' }, 501)
   // [보안] 로그인 필수 — 도면/파노 바이너리가 URL만으로 공개되던 구멍 차단.
@@ -5135,6 +5174,34 @@ app.get('/api/r2/object/*', async (c) => {
   const user = await getUser(c)
   if (!user) return c.json({ error: 'forbidden' }, 403)
   const key = c.req.path.replace('/api/r2/object/', '')
+  const rangeHeader = c.req.header('Range') || ''
+  const m = rangeHeader.match(/bytes=(\d*)-(\d*)/)
+  if (m) {
+    // [360 동선] HTML5 <video> 가 보내는 Range 요청에 206 Partial Content 로 응답 — 먼저 메타(크기)를 조회.
+    const head = await c.env.R2.get(key)
+    if (!head) return c.notFound()
+    // [WO 20261009-readacl] 🔴 로그인 여부만 보던 구멍(감사: 익명 토큰으로 비공개 프로젝트 원본 200) — 읽기 SoT(Range 요청도 동일 게이트)
+    if (!(await canReadR2Key(c, user, key, head))) return c.json({ error: 'forbidden' }, 403)
+    const total = head.size
+    let start = m[1] ? parseInt(m[1], 10) : 0
+    let end = m[2] ? parseInt(m[2], 10) : total - 1
+    if (isNaN(start) || start < 0) start = 0
+    if (isNaN(end) || end > total - 1) end = total - 1
+    if (start > end || start >= total) {
+      return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${total}` } })
+    }
+    const length = end - start + 1
+    const obj = await c.env.R2.get(key, { range: { offset: start, length } })
+    if (!obj) return c.notFound()
+    const headers = new Headers()
+    headers.set('Content-Type', head.httpMetadata?.contentType || 'application/octet-stream')
+    headers.set('Content-Range', `bytes ${start}-${end}/${total}`)
+    headers.set('Content-Length', String(length))
+    headers.set('Accept-Ranges', 'bytes')
+    headers.set('Cache-Control', 'private, max-age=31536000, immutable')
+    headers.set('ETag', obj.httpEtag)
+    return new Response(obj.body, { status: 206, headers })
+  }
   const obj = await c.env.R2.get(key)
   if (!obj) return c.notFound()
   // [WO 20261009-readacl] 🔴 로그인 여부만 보던 구멍(감사: 익명 토큰으로 비공개 프로젝트 원본 200) — 읽기 SoT
@@ -5144,6 +5211,8 @@ app.get('/api/r2/object/*', async (c) => {
   // private: 인증된 콘텐츠가 공유 엣지캐시에 남지 않도록(브라우저 캐시는 유지)
   headers.set('Cache-Control', 'private, max-age=31536000, immutable')
   headers.set('ETag', obj.httpEtag)
+  headers.set('Accept-Ranges', 'bytes')
+  headers.set('Content-Length', String(obj.size))
   return new Response(obj.body, { headers })
 })
 
@@ -5326,9 +5395,11 @@ app.post('/tables/deployments', async (c) => {
   const now = Date.now()
   // [PART 0 · Tenant 격리] 새 배포본은 작성자 테넌트로 귀속(슈퍼/미등록은 기본 테넌트)
   const ownerTenant = (await tenantOf(c, user)) || DEFAULT_TENANT
+  // [360 동선] migration 0047 미적용 환경(원격 적용 전)에서는 routes 컬럼이 없어도 나머지 생성은 그대로 진행.
+  const hasRoutesCol = await routesReady(c)
   await c.env.DB.prepare(
-    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations, source_meta, checkboard_start, tenant_id, project_id, created_at, updated_at, version, deleted)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+    `INSERT INTO deployments (id, title, file_name, drawing_data, pages_data, pins, zones, annotations${hasRoutesCol ? ', routes' : ''}, source_meta, checkboard_start, tenant_id, project_id, created_at, updated_at, version, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?${hasRoutesCol ? ', ?' : ''}, ?, ?, ?, ?, ?, ?, 0, 0)`
   ).bind(
     id,
     body.title || '',
@@ -5338,6 +5409,7 @@ app.post('/tables/deployments', async (c) => {
     body.pins || '[]',
     body.zones || '[]',
     body.annotations || '[]',
+    ...(hasRoutesCol ? [body.routes || '[]'] : []),
     body.source_meta || null,
     // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(폴백값). 사용자 대역(1순위)은
     // 클라이언트 localStorage 에만 있어 서버가 알 필요 없다 — 여기는 구버전/비로그인 폴백뿐.
@@ -5365,6 +5437,7 @@ app.post('/tables/deployments', async (c) => {
     id, title: body.title || '', file_name: body.file_name || '',
     drawing_data: body.drawing_data || null, pages_data: body.pages_data || null,
     pins: body.pins || '[]', zones: body.zones || '[]', annotations: body.annotations || '[]',
+    routes: hasRoutesCol ? (body.routes || '[]') : '[]',
     source_meta: body.source_meta || null,
     checkboard_start: body.checkboard_start || null,
     project_id: projectId,
@@ -5434,6 +5507,7 @@ function rebaseOne(entity: string, o: any, revs: RevEvent[]): any {
       if (r.undo && q.revReview) q = Object.assign({}, q, { revReview: Object.assign({}, q.revReview, { undo: true }) })
     }
     else if (entity === 'zone') q = carryZones([q], r.t)[0]
+    else if (entity === 'route') q = carryRoutes([q], r.t)[0]
     else q = carryAnnos([q], r.t)[0]
   }
   if (amb) q = Object.assign({}, q, { revReview: Object.assign({}, q.revReview || {}, { rev: amb.id, at: amb.at, ambiguous: true }) })
@@ -5516,11 +5590,16 @@ const updateDeployment = async (c: any) => {
     pins:         (body.pins != null && !alias) ? body.pins : existing.pins,
     zones:        body.zones         != null ? body.zones        : existing.zones,
     annotations:  body.annotations   != null ? body.annotations  : (existing.annotations || '[]'),
+    // [360 동선] 구역 배포본의 동선도 zones/annotations 와 같은 방식(별칭이어도 구역 로컬 — 핀만 원본에 쓴다).
+    routes:       body.routes        != null ? body.routes       : (existing.routes || '[]'),
     // [P14] 미전송 시 기존 값 보존(부분 갱신) — 원본 없는 구버전 저장 흐름이 기존 원본을 지우지 않는다.
     source_meta:  body.source_meta   != null ? body.source_meta  : (existing.source_meta != null ? existing.source_meta : null),
     // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호(폴백값, 부분 갱신 — 미전송이면 기존값 보존).
     checkboard_start: body.checkboard_start != null ? body.checkboard_start : (existing.checkboard_start != null ? existing.checkboard_start : null),
   }
+  // [360 동선] migration 0047 미적용 환경에서는 routes 컬럼이 없어도 나머지 저장은 그대로 진행(저장만 건너뜀).
+  const hasRoutesCol = await routesReady(c)
+  if (!hasRoutesCol) merged.routes = existing.routes || '[]'
   // [WO 20261010-offmatrix S-REV] 클라가 "이 본문은 rebase_from 버전 기준 편집을 담는다"고 알리면(오프라인 복귀·병합 후 저장),
   //   그 이후 적용된 개정으로 서버본과 다른 항목만 이월한다(rebaseArrayJson). 미전송이면 종전과 동일.
   //   [WO 20261012-pinsync] 별칭이면 rebase_from 은 별칭 버전 공간 → 영역·주석(구역 로컬)엔 대응할 개정 버전이 없어 건너뛰고,
@@ -5531,6 +5610,7 @@ const updateDeployment = async (c: any) => {
       if (body.pins != null) merged.pins = rebaseArrayJson('pin', merged.pins, existing.pins, revs)
       if (body.zones != null) merged.zones = rebaseArrayJson('zone', merged.zones, existing.zones, revs)
       if (body.annotations != null) merged.annotations = rebaseArrayJson('anno', merged.annotations, existing.annotations, revs)
+      if (body.routes != null) merged.routes = rebaseArrayJson('route', merged.routes, existing.routes, revs)
     }
   }
   const newVersion = curVersion + 1
@@ -5575,9 +5655,9 @@ const updateDeployment = async (c: any) => {
       c.env.DB.prepare('UPDATE deployments SET pins=?, updated_at=?, version=? WHERE id=? AND deleted=0 AND version=?')
         .bind(homePins, now, homeVer + 1, home.id, homeVer),
       c.env.DB.prepare(
-        `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, zones=?, annotations=?, source_meta=?, checkboard_start=?, updated_at=?, version=?
+        `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, zones=?, annotations=?${hasRoutesCol ? ', routes=?' : ''}, source_meta=?, checkboard_start=?, updated_at=?, version=?
           WHERE id=? AND EXISTS (SELECT 1 FROM deployments WHERE id=? AND version=? AND updated_at=?)`
-      ).bind(merged.title, merged.file_name, merged.drawing_data, merged.pages_data, merged.zones, merged.annotations, merged.source_meta, merged.checkboard_start,
+      ).bind(merged.title, merged.file_name, merged.drawing_data, merged.pages_data, merged.zones, merged.annotations, ...(hasRoutesCol ? [merged.routes] : []), merged.source_meta, merged.checkboard_start,
         now, newVersion, id, home.id, homeVer + 1, now),
     ])
     if (!Number((out && out[0] && out[0].meta && out[0].meta.changes) || 0)) {
@@ -5589,10 +5669,10 @@ const updateDeployment = async (c: any) => {
     return c.json(mapAliasedFor(Object.assign({}, existing, merged, { id, updated_at: now, version: newVersion }), { kind: 'alias', box: alias.box, home: nh }, false, null))
   }
   await c.env.DB.prepare(
-    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?, source_meta=?, checkboard_start=?, updated_at=?, version=? WHERE id=?`
+    `UPDATE deployments SET title=?, file_name=?, drawing_data=?, pages_data=?, pins=?, zones=?, annotations=?${hasRoutesCol ? ', routes=?' : ''}, source_meta=?, checkboard_start=?, updated_at=?, version=? WHERE id=?`
   ).bind(
     merged.title, merged.file_name, merged.drawing_data, merged.pages_data,
-    merged.pins, merged.zones, merged.annotations, merged.source_meta, merged.checkboard_start, now, newVersion, id
+    merged.pins, merged.zones, merged.annotations, ...(hasRoutesCol ? [merged.routes] : []), merged.source_meta, merged.checkboard_start, now, newVersion, id
   ).run()
   return c.json(mapDeployment(Object.assign({}, existing, merged, { id, updated_at: now, version: newVersion })))
 }
@@ -5651,7 +5731,11 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   const noteDepSql = opAlias ? 'deployment_id IN (?, ?)' : 'deployment_id = ?'
   const noteDepArgs = opAlias ? [String(id), pinDepId] : [id]
   const pins = toMap(opAlias ? opAlias.home.pins : dep.pins), zones = toMap(dep.zones), annos = toMap(dep.annotations)
-  const pick = (e: string) => e === 'pin' ? pins : e === 'zone' ? zones : annos
+  // [360 동선] routes 도 zones/annotations 와 같은 패턴 — 별칭 구역이어도 구역 행 로컬(원본에 투영하지 않음).
+  const routes = toMap(dep.routes)
+  const pick = (e: string) => e === 'pin' ? pins : e === 'zone' ? zones : e === 'route' ? routes : annos
+  // migration 0047 미적용 환경에서는 routes 저장을 건너뛴다(다른 엔티티 ops 는 그대로 진행).
+  const hasRoutesCol = await routesReady(c)
 
   const applied: string[] = []
   let newlyApplied = 0   // 멱등: 실제로 새로 적용된 op만 카운트 → version 증가 판정에 사용
@@ -5743,15 +5827,15 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       // [WO 20261010-offmatrix] 🔴 핀 단위 LWW — 클라 병합(PinSeries.newer)과 같은 규칙: 서버 핀이 더 나중에 고쳐졌으면(updatedAt 큼)
       //   늦게 도착한 옛 op 가 덮지 않는다. 종전엔 op.data(핀 통째)가 무조건 덮어 다른 기기의 최신 수정을 되돌렸다(p146 conc 재현).
       //   [WO 20261011-offmerge] 주석·영역도 같은 규칙(클라 _mergeEntities 와 동일 — updatedAt 없는 구버전 항목은 종전대로 반영).
-      if ((op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno') && cur && !cur._deleted && Number(cur.updatedAt || 0) > Number(op.data.updatedAt || 0)) {
+      if ((op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno' || op.entity === 'route') && cur && !cur._deleted && Number(cur.updatedAt || 0) > Number(op.data.updatedAt || 0)) {
         await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)').bind(op.opId, opDepId, Date.now()).run()
         applied.push(op.opId)
         continue
       }
       // [WO 20261010-offmatrix S-REV] op 가 기준으로 삼은 버전(op.base) 이후 적용된 개정으로 좌표 이월(rebaseOne — revCore SoT)
-      //   [WO 20261012-pinsync] 별칭이면 op.base = 별칭 버전 → 핀만 원본 버전으로 환산해 원본 개정으로 이월(영역·주석은 대응 개정 없음 — 건너뜀)
+      //   [WO 20261012-pinsync] 별칭이면 op.base = 별칭 버전 → 핀만 원본 버전으로 환산해 원본 개정으로 이월(영역·주석·동선은 대응 개정 없음 — 건너뜀)
       const revBase = !opAlias ? op.base : (op.entity === 'pin' ? homeVersionOf(op.base) : null)
-      if (revBase != null && (op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno')) {
+      if (revBase != null && (op.entity === 'pin' || op.entity === 'zone' || op.entity === 'anno' || op.entity === 'route')) {
         const k = op.entity === 'pin' ? pinDepId + ':' + String(revBase) : String(id) + ':' + String(revBase)
         if (!revCache.has(k)) revCache.set(k, await revsSinceVersion(c, op.entity === 'pin' ? pinDepId : String(id), revBase))
         const revs = revCache.get(k) || []
@@ -5793,23 +5877,24 @@ app.post('/tables/deployments/:id/ops', async (c) => {
     if (changed) {
       await c.env.DB.batch([
         c.env.DB.prepare('UPDATE deployments SET pins=?, updated_at=?, version=? WHERE id=?').bind(nh.pins, now2, nh.version, home.id),
-        c.env.DB.prepare('UPDATE deployments SET zones=?, annotations=?, updated_at=?, version=? WHERE id=?').bind(dump(zones), dump(annos), now2, newVersion, id),
+        c.env.DB.prepare(`UPDATE deployments SET zones=?, annotations=?${hasRoutesCol ? ', routes=?' : ''}, updated_at=?, version=? WHERE id=?`)
+          .bind(dump(zones), dump(annos), ...(hasRoutesCol ? [dump(routes)] : []), now2, newVersion, id),
       ])
     }
     // 🔴 응답 current = 재투영(구역 좌표) — 원본 좌표를 그대로 돌려주면 클라 병합이 구역 화면 핀 좌표를 오염시킨다(설계 §1-3)
-    const cur2 = mapAliasedFor(Object.assign({}, dep, { zones: dump(zones), annotations: dump(annos), version: newVersion }), { kind: 'alias', box: opAlias.box, home: nh }, false, null)
+    const cur2 = mapAliasedFor(Object.assign({}, dep, { zones: dump(zones), annotations: dump(annos), routes: hasRoutesCol ? dump(routes) : (dep.routes || '[]'), version: newVersion }), { kind: 'alias', box: opAlias.box, home: nh }, false, null)
     return c.json({ ok: true, applied, version: cur2.version, noteIdMap, current: cur2 })
   }
   if (changed) {
     await c.env.DB.prepare(
-      'UPDATE deployments SET pins=?, zones=?, annotations=?, updated_at=?, version=? WHERE id=?'
-    ).bind(dump(pins), dump(zones), dump(annos), Date.now(), newVersion, id).run()
+      `UPDATE deployments SET pins=?, zones=?, annotations=?${hasRoutesCol ? ', routes=?' : ''}, updated_at=?, version=? WHERE id=?`
+    ).bind(dump(pins), dump(zones), dump(annos), ...(hasRoutesCol ? [dump(routes)] : []), Date.now(), newVersion, id).run()
   }
 
   return c.json({
     ok: true, applied, version: newVersion, noteIdMap,
     current: mapDeployment(Object.assign({}, dep, {
-      pins: dump(pins), zones: dump(zones), annotations: dump(annos), version: newVersion
+      pins: dump(pins), zones: dump(zones), annotations: dump(annos), routes: hasRoutesCol ? dump(routes) : (dep.routes || '[]'), version: newVersion
     }))
   })
 })

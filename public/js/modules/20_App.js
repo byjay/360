@@ -48,6 +48,7 @@
       Notes.init();
       TimeLapse.init();
       Zones.init();
+      if (typeof Routes !== "undefined") Routes.init();   // [360 동선]
       Inspector.init();
       PinGrid.init();
       PinActionPop.init();
@@ -154,6 +155,7 @@
         if (isDesigner) App._renderIconPicker("cb-icon-grid", "cb-icon-label");
       } catch (e) {}
       if (typeof Zones !== "undefined") Zones.renderList(); // 영역 목록(디자이너=항상, 뷰어=영역 있을 때)
+      if (typeof Routes !== "undefined") Routes.renderList(); // [360 동선] 동선 목록(디자이너=항상, 뷰어=동선 있을 때)
       UI.toggle("section-export",    isDesigner);   // 뷰어로 배포
       // 핀 편집 폼은 사이드바가 아닌 도면 위 플로팅 패널 — 시작 시 닫힘
       this._closePinForm();
@@ -903,6 +905,12 @@
           if (Zones._cancelDraw) Zones._cancelDraw(); did = true;
         }
       } catch (e) {}
+      // 1b) [360 동선] 동선 그리기 중 → 취소
+      try {
+        if (typeof Routes !== "undefined" && (State.drawingRoute || (Routes._poly && Routes._poly.length))) {
+          if (Routes._cancelDraw) Routes._cancelDraw(); did = true;
+        }
+      } catch (e) {}
       // 2) 핀 배치(placing) 모드 → 종료
       if (State.placing) {
         State.placing = false;
@@ -1287,10 +1295,13 @@
         if (e.button === 2) return;
         if (State.placing) { this._handlePlaceClick(e); return; }
         if (State.drawingZone) { if (Zones.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
+        // [360 동선] 동선 그리기 중 클릭 = 점 추가
+        if (State.drawingRoute && typeof Routes !== "undefined") { if (Routes.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         MapCtrl.handlePanStart(e);
       });
       window.addEventListener("mousemove", e => {
         if (State.drawingZone && (Zones._drag || Zones._shape === "poly")) { Zones.onDrawMove(e.clientX, e.clientY); return; }
+        if (State.drawingRoute && typeof Routes !== "undefined" && Routes._poly) { Routes.onDrawMove(e.clientX, e.clientY); return; }
         MapCtrl.handlePanMove(e);
       });
       window.addEventListener("mouseup",   e => {
@@ -1339,6 +1350,10 @@
           if (!inPinchCooldown && State.drawingZone && typeof Zones !== "undefined") {
             if (Zones.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
           }
+          // [360 동선] 모바일 동선 그리기 — 데스크톱 mousedown 과 동일하게 터치에서도 onDrawStart
+          if (!inPinchCooldown && State.drawingRoute && typeof Routes !== "undefined") {
+            if (Routes.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
+          }
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
       }, { passive: false });
@@ -1363,6 +1378,12 @@
         // [버그복원] 영역 그리는 중엔 팬 대신 onDrawMove
         if (e.touches.length === 1 && State.drawingZone && typeof Zones !== "undefined" && (Zones._drag || Zones._shape === "poly")) {
           Zones.onDrawMove(e.touches[0].clientX, e.touches[0].clientY);
+          e.preventDefault();
+          return;
+        }
+        // [360 동선] 동선 그리는 중엔 팬 대신 onDrawMove
+        if (e.touches.length === 1 && State.drawingRoute && typeof Routes !== "undefined" && Routes._poly) {
+          Routes.onDrawMove(e.touches[0].clientX, e.touches[0].clientY);
           e.preventDefault();
           return;
         }
@@ -3316,7 +3337,9 @@
     _MERGE_KINDS: {
       pin:  { arr: "pins",        tomb: "pinTombstones",  base: "pinBaseIds",  dDel: "deletedPins",  dBase: "basePinIds" },
       anno: { arr: "annotations", tomb: "annoTombstones", base: "annoBaseIds", dDel: "deletedAnnos", dBase: "baseAnnoIds" },
-      zone: { arr: "zones",       tomb: "zoneTombstones", base: "zoneBaseIds", dDel: "deletedZones", dBase: "baseZoneIds", ignore: ["pinIds"] }
+      zone: { arr: "zones",       tomb: "zoneTombstones", base: "zoneBaseIds", dDel: "deletedZones", dBase: "baseZoneIds", ignore: ["pinIds"] },
+      // [360 동선] 동선도 핀·주석·영역과 같은 병합(_mergeEntities)·같은 draft 메타(_draftPinMeta) — 이 한 줄만 추가하면 전부 연결된다.
+      route: { arr: "routes",     tomb: "routeTombstones", base: "routeBaseIds", dDel: "deletedRoutes", dBase: "baseRouteIds" }
     },
     _tombOf(kind) {
       const f = this._MERGE_KINDS[kind].tomb;
@@ -3330,6 +3353,8 @@
     _annoTombstones() { return this._tombOf("anno"); },
     /** [WO 20261011-offmerge] 영역 tombstone — 쓰는 곳: Zones.remove · 읽는 곳: 병합(_mergeZones)·오프라인 delete op(persistLocalDeployment). */
     _zoneTombstones() { return this._tombOf("zone"); },
+    /** [360 동선] 동선 tombstone — 쓰는 곳: Routes.remove · 읽는 곳: 병합(_mergeRoutes)·오프라인 delete op(persistLocalDeployment). */
+    _routeTombstones() { return this._tombOf("route"); },
     /** 🔴 [WO 20261011-offmerge] 로더 공유 — 서버본(또는 번들 사본)을 State 에 올린 직후 병합 메타를 새 도면 기준으로 맞춘다.
      *  trusted=false(오프라인 번들 사본 = 내 미동기화 항목 포함)면 기준은 "모름"(null) — (b) 판정을 건너뛴다([WO 20261006-pinbase] 규칙).
      *  주석·영역은 수정 감지 기준도 함께 기록(_seen) — 기준이 없으면 첫 편집이 updatedAt 없이 남아 LWW 에서 서버본에 진다. */
@@ -3419,6 +3444,10 @@
     /** [WO 20261011-offmerge] 영역(zones) 병합 — 종전 _mergeById(로컬 통째 우선·삭제 미반영)를 대체. */
     _mergeZones(srvZones, localZones, tombIds, baseIds) {
       return this._seen("zone", this._mergeEntities(srvZones, localZones, baseIds, tombIds));
+    },
+    /** [360 동선] 동선(routes) 병합 — zones/annotations 와 같은 규칙(_mergeEntities). */
+    _mergeRoutes(srvRoutes, localRoutes, tombIds, baseIds) {
+      return this._seen("route", this._mergeEntities(srvRoutes, localRoutes, baseIds, tombIds));
     },
     /** 서버본·draft·병합 결과를 State 에 올릴 때 — 이 내용이 수정 감지 기준(PinSeries.baseline · 파생 필드 제외). */
     _seen(kind, arr) {
@@ -4313,7 +4342,7 @@
       //   종전 영역은 _mergeById(로컬 통째 우선)라 남이 지운 영역이 되살아났다. 서버본에 그 필드가 없거나 깨졌으면(부분 응답)
       //   건드리지 않는다 — 빈 배열로 간주하면 (b) 규칙이 기준 항목 전부를 "남이 지움"으로 지운다.
       const srvArr = (s) => { if (s == null) return null; try { const v = JSON.parse(s || "[]"); return Array.isArray(v) ? v : null; } catch (e) { return null; } };
-      const srvZones = srvArr(current.zones), srvAnnos = srvArr(current.annotations);
+      const srvZones = srvArr(current.zones), srvAnnos = srvArr(current.annotations), srvRoutes = srvArr(current.routes);
       if (srvZones) {
         State.zones = this._mergeZones(srvZones, State.zones || [], Object.keys(this._zoneTombstones()), State.zoneBaseIds);
         State.zoneBaseIds = this._pinIds(srvZones);
@@ -4321,6 +4350,11 @@
       if (srvAnnos) {
         State.annotations = this._mergeAnnos(srvAnnos, State.annotations || [], Object.keys(this._annoTombstones()), State.annoBaseIds);
         State.annoBaseIds = this._pinIds(srvAnnos);
+      }
+      // [360 동선] 같은 지점·같은 규칙 — 서버본에 routes 컬럼이 없는 구버전/미적용 환경(null)은 건너뛴다(유실 0 쪽).
+      if (srvRoutes) {
+        State.routes = this._mergeRoutes(srvRoutes, State.routes || [], Object.keys(this._routeTombstones()), State.routeBaseIds);
+        State.routeBaseIds = this._pinIds(srvRoutes);
       }
       const mergedZones = State.zones;
       // 🔴 [WO 20261011-offmerge] 오프라인 변경 기록의 비교 기준(번들 스냅샷 bundle:dep — persistLocalDeployment)도 방금 합친 서버본으로.
@@ -4331,6 +4365,7 @@
       // 화면 즉시 반영(다른 사람이 추가한 핀/구역도 보이도록)
       try { UI.renderPinList(); UI.renderPinsOnMap(); } catch (e) {}
       try { if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); } } catch (e) {}
+      try { if (typeof Routes !== "undefined") { Routes.render(); Routes.renderList(); } } catch (e) {}
       try { if (typeof PdfAnno !== "undefined" && PdfAnno.refresh) PdfAnno.refresh(); } catch (e) {}
       return { pins: mergedPins, zones: mergedZones, version: State.depVersion };
     },
@@ -4496,6 +4531,7 @@
       return this._deploymentBody({
         title: State.fileName || "도면", fileName: State.fileName || "",
         pins: deployablePins, zones: State.zones || [], annotations: State.annotations || [],
+        routes: (typeof Routes !== "undefined" && Routes.serialize) ? JSON.parse(Routes.serialize()) : (State.routes || []),
         checkboardStart: State.checkboardStart
       }, pagesData, sourceMeta);
     },
@@ -4507,7 +4543,8 @@
         file_name:   o.fileName || "",
         pins:        JSON.stringify(o.pins || []),
         zones:       JSON.stringify(o.zones || []),
-        annotations: JSON.stringify(o.annotations || [])
+        annotations: JSON.stringify(o.annotations || []),
+        routes:      JSON.stringify(o.routes || [])   // [360 동선]
       };
       // [WO 20260917 멀티유저 ①] 체크보드 시작번호(페이지별) 영속화 — 항상 함께 보낸다(작아서
       //   조건부 전송할 이유가 없음). 서버는 컬럼 자체가 없던 구버전에서도 부분갱신 규칙(§merged)
@@ -4925,7 +4962,8 @@
         //   서버본을 못 받았으면 기준은 "모름"(null) — _mergePins 가 (b) 판정을 건너뛴다(기존 규칙 재사용).
         try { State.zones = this._live(JSON.parse(dep.zones || "[]")); } catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(dep.annotations || "[]")); } catch { State.annotations = []; }
-        this._initMergeMeta(!depFromBundle);   // [WO 20261011-offmerge] tombstone 3종 초기화 + 기준 목록(핀·주석·영역) — 형제 로더 공유
+        try { State.routes = this._live(JSON.parse(dep.routes || "[]")); } catch { State.routes = []; }   // [360 동선]
+        this._initMergeMeta(!depFromBundle);   // [WO 20261011-offmerge] tombstone 4종 초기화 + 기준 목록(핀·주석·영역·동선) — 형제 로더 공유
         // [WO 20260917 멀티유저 ①] 페이지별 체크보드 시작번호 복원 — 컬럼 없는 구버전 배포본은
         //   dep.checkboard_start 가 undefined/null → {} → _checkboardStart()가 종전대로 1 반환.
         // [WO 20260929 addendum] _normalizeCheckboardStart() 로 계열별 중첩 형식({checkboard,content})
@@ -4943,6 +4981,7 @@
           this._showMapViewport();
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
+          if (typeof Routes !== "undefined") Routes.render();
         };
         this._armDisplay();   // [WO 20260929-fitrace2] _r0→_showMapViewport 가 settle
         imgEl.onload = _r0;
@@ -5001,6 +5040,7 @@
         State.pins        = this._pinsSeen(Array.isArray(d.pins)  ? d.pins  : []);
         State.zones       = Array.isArray(d.zones) ? d.zones : [];
         State.annotations = Array.isArray(d.annotations) ? d.annotations : [];
+        State.routes      = Array.isArray(d.routes) ? d.routes : [];   // [360 동선]
         // [WO 20260929-bulkdel] draft 가 기억한 병합 기준·삭제 기록 복원(구버전 draft = 기준 모름 → null)
         //   [WO 20261011-offmerge] 핀·주석·영역 3종 공유(_initMergeMeta → draft tombstone·기준 채택)
         this._initMergeMeta(false); this._adoptDraftTombstones(d); this._adoptDraftBases(d, false);
@@ -5018,6 +5058,7 @@
           this._showMapViewport();
           UI.renderPinList(); UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
+          if (typeof Routes !== "undefined") Routes.render();
         };
         this._armDisplay();   // [WO 20260929-fitrace2] _r1→_showMapViewport 가 settle
         if (srcDoc) {
@@ -5114,7 +5155,7 @@
      *  ① draft 가 기준으로 삼은 서버 버전(baseVer) == 지금 서버 버전 → 그 사이 아무도 저장 안 함 → draft 그대로
      *     (로컬에서 지운 핀이 서버본에서 되살아나지 않는다)
      *  ② 서버가 더 새롭거나 기준 버전을 모름(구버전 draft) → id 병합: 서버에만 있는 항목 보존 + 같은 id 는 draft 우선 */
-    _draftVsServer(d, srvPins, srvZones, srvVer, srvAnnos) {
+    _draftVsServer(d, srvPins, srvZones, srvVer, srvAnnos, srvRoutes) {
       const same = d && d.baseVer != null && srvVer != null && Number(d.baseVer) === Number(srvVer);
       const dPins = Array.isArray(d && d.pins) ? d.pins : [];
       const dZones = Array.isArray(d && d.zones) ? d.zones : [];
@@ -5122,11 +5163,14 @@
       //   그린 주석을 지웠다(p146 conc 재현). 서버본과 _mergeAnnos(합집합 + 서버·내 tombstone)로 합친다. draft 에 주석이 없으면 null(손대지 않음).
       const dAnnos = Array.isArray(d && d.annotations) ? d.annotations : null;
       const annos = dAnnos == null ? null : ((same || !Array.isArray(srvAnnos)) ? dAnnos : this._mergeAnnos(srvAnnos, dAnnos, d && d.deletedAnnos, d && d.baseAnnoIds));
+      // [360 동선] 같은 규칙(_mergeRoutes) — draft 에 routes 가 없으면(구버전 draft) null(손대지 않음).
+      const dRoutes = Array.isArray(d && d.routes) ? d.routes : null;
+      const routes = dRoutes == null ? null : ((same || !Array.isArray(srvRoutes)) ? dRoutes : this._mergeRoutes(srvRoutes, dRoutes, d && d.deletedRoutes, d && d.baseRouteIds));
       return same
-        ? { pins: dPins, zones: dZones, annos }
+        ? { pins: dPins, zones: dZones, annos, routes }
         // [WO 20260929-bulkdel] 핀은 _mergePins — draft 의 tombstone(deletedPins)·기준 id(basePinIds)로 삭제 부활 차단
         // 🔴 [WO 20261011-offmerge] 영역도 같은 규칙(_mergeZones — LWW + tombstone + 기준 목록). 종전 _mergeById 는 다른 기기가 지운 영역을 되살렸다.
-        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeZones(srvZones, dZones, d && d.deletedZones, d && d.baseZoneIds), annos };
+        : { pins: this._mergePins(srvPins, dPins, d && d.basePinIds, d && d.deletedPins), zones: this._mergeZones(srvZones, dZones, d && d.deletedZones, d && d.baseZoneIds), annos, routes };
     },
 
     /** 🔴 [WO 20260928-pinloss] 서버본을 State 에 올린 직후 호출 — dirty draft 가 있으면 그 작업분을 화면에 복원.
@@ -5134,16 +5178,17 @@
      *  draft 를 덮어 작업분이 영구 소실됐다(라이브 재현: 체크보드 핀 → 모드 전환 → 핀 사라짐 → 저장 → draft 0개). */
     _applyDirtyDraft(d, key, srvVer) {
       if (!d) return false;
-      const m = this._draftVsServer(d, State.pins, State.zones, srvVer, State.annotations);
+      const m = this._draftVsServer(d, State.pins, State.zones, srvVer, State.annotations, State.routes);
       State.pins = m.pins;
       State.zones = m.zones;
       // 🔴 [WO 20261006-pinbase] draft 가 기억한 "내가 알던 서버 핀 목록"을 병합 기준으로 되돌린다.
       //   형제 복원 경로 _restoreDraftLocal 은 이미 그렇게 한다(d.basePinIds) — 이 경로만 빠져 있어
       //   직전 로더가 넣어 둔 기준(오프라인이면 번들 사본 = 내 미동기화 핀 전부)이 그대로 남았고,
       //   다음 서버 병합에서 _mergePins (b) 규칙이 그 핀들을 "남이 지운 핀"으로 지웠다(§G-2-5 형제 통일).
-      this._adoptDraftBases(d, true);   // [WO 20261011-offmerge] 주석·영역 기준도 같은 규칙(구버전 draft = 직전 로더 기준 유지)
+      this._adoptDraftBases(d, true);   // [WO 20261011-offmerge] 주석·영역·동선 기준도 같은 규칙(구버전 draft = 직전 로더 기준 유지)
       this._adoptDraftTombstones(d);   // [WO 20260929-bulkdel] 저장 전 지운 핀 기록 유지(다음 409 병합에서도 부활 금지)
       if (Array.isArray(m.annos)) State.annotations = m.annos;   // [WO 20261010-offmatrix] 서버 주석과 병합(_draftVsServer)
+      if (Array.isArray(m.routes)) State.routes = m.routes;   // [360 동선] 서버 동선과 병합(_draftVsServer)
       if (d.checkboardStart && typeof d.checkboardStart === "object") State.checkboardStart = this._normalizeCheckboardStart(d.checkboardStart); // [WO 20260929 addendum]
       this._markDirty();                                   // 저장 버튼 활성 — 서버에 아직 없다
       this._markDeckUnsaved(this._deckIdOfKey(key), true);
@@ -5268,6 +5313,7 @@
             title: d.fileName || "도면", file_name: d.fileName || "",
             pins: JSON.stringify(d.pins || []), zones: JSON.stringify(d.zones || []),
             annotations: JSON.stringify(d.annotations || []),
+            routes: JSON.stringify(d.routes || []),   // [360 동선]
             drawing_data: d.pages[0], pages_data: JSON.stringify(d.pages)
           };
           // [WO 20260930-WP3] 소속 프로젝트 = 이 draft 의 키(현재 열린 프로젝트가 아닐 수 있다)
@@ -5296,7 +5342,7 @@
           //   기존엔 블록 스코프(let)로만 선언돼 매 PATCH 성공마다 ReferenceError → 바깥 catch 가
           //   조용히 삼켜 draft 가 영원히 dirty:false 로 정리되지 않는 별개의 기존 결함이었다.
           //   함수 스코프로 끌어올려 근본수정(이번 401 처리와 같은 함수 안이라 함께 정리).
-          let baseVer = 0, srvPins = null, srvZones = null, srvAnnos = null;
+          let baseVer = 0, srvPins = null, srvZones = null, srvAnnos = null, srvRoutes = null;
           if (d.depId) {
             // [멀티유저 충돌방지] 오프라인 작업분 동기화도 낙관적 잠금.
             //   서버에서 최신 버전을 먼저 읽어 base_version 으로 첨부하고,
@@ -5304,9 +5350,10 @@
             // 🔴 [WO 20261001-offline · p102 A4] GET 과 PATCH 사이에 남이 저장하면 409(버전 경합, 'stale').
             //   최신본을 다시 읽어 같은 규칙으로 병합 후 재시도한다(최대 3회) — 경합은 권한/삭제가 아니다.
             for (let attempt = 0; attempt < 3; attempt++) {
-              baseVer = 0; srvPins = null; srvZones = null; srvAnnos = null;
+              baseVer = 0; srvPins = null; srvZones = null; srvAnnos = null; srvRoutes = null;
               body.pins = JSON.stringify(d.pins || []); body.zones = JSON.stringify(d.zones || []);
               body.annotations = JSON.stringify(d.annotations || []);
+              body.routes = JSON.stringify(d.routes || []);   // [360 동선]
               try {
                 const cur = await fetch("/tables/deployments/" + encodeURIComponent(d.depId), { headers: Auth.headers() });
                 if (cur.ok) {
@@ -5315,14 +5362,16 @@
                   try { srvPins = JSON.parse(cj.pins || "[]"); } catch (e) {}
                   try { srvZones = JSON.parse(cj.zones || "[]"); } catch (e) {}
                   try { srvAnnos = JSON.parse(cj.annotations || "[]"); } catch (e) {}
+                  try { srvRoutes = JSON.parse(cj.routes || "[]"); } catch (e) {}
                 }
               } catch (e) {}
               // 🔴 [WO 20260928-pinloss] 충돌 규칙은 화면 복원과 같은 단일 출처(_draftVsServer)
               if (srvPins || srvZones) {
-                const m = this._draftVsServer(d, srvPins, srvZones, baseVer, srvAnnos);
+                const m = this._draftVsServer(d, srvPins, srvZones, baseVer, srvAnnos, srvRoutes);
                 if (srvPins) body.pins = JSON.stringify(m.pins);
                 if (srvZones) body.zones = JSON.stringify(m.zones);
                 if (Array.isArray(srvAnnos) && Array.isArray(m.annos)) body.annotations = JSON.stringify(m.annos);
+                if (Array.isArray(srvRoutes) && Array.isArray(m.routes)) body.routes = JSON.stringify(m.routes);
               }
               body.base_version = baseVer;
               // [WO 20261010-offmatrix S-REV] 이 draft 가 기준으로 삼은 버전 — 그 뒤 적용된 도면 개정으로 서버가 좌표를 이월(src updateDeployment)
@@ -5383,8 +5432,10 @@
           const recArr = (s, dflt) => { try { const v = JSON.parse((rec && typeof s === "string") ? s : (dflt || "[]")); return Array.isArray(v) ? v : null; } catch (e) { return null; } };
           if (srvZones) { const z = recArr(rec && rec.zones, body.zones); if (z) d.zones = z; }
           if (Array.isArray(srvAnnos)) { const a = recArr(rec && rec.annotations, body.annotations); if (a) d.annotations = a; }
+          if (Array.isArray(srvRoutes)) { const rt = recArr(rec && rec.routes, body.routes); if (rt) d.routes = rt; }   // [360 동선]
           d.baseZoneIds = this._pinIds(Array.isArray(d.zones) ? d.zones : []);
           d.baseAnnoIds = this._pinIds(Array.isArray(d.annotations) ? d.annotations : []);
+          d.baseRouteIds = this._pinIds(Array.isArray(d.routes) ? d.routes : []);
           await SyncQueue.saveDraft(key, d);
           if (key === this._draftKey() && d.depId) {
             State.autoSaveDepId = d.depId; State.currentDeploymentId = d.depId;
@@ -5400,6 +5451,7 @@
             if (rec && typeof rec.pins === "string") { try { this._mergeConflict(rec); } catch (e) {} }
             State.pinBaseIds = d.basePinIds.slice();   // [WO 20260929-bulkdel] 버전과 함께 병합 기준도 동기화
             State.zoneBaseIds = d.baseZoneIds.slice(); State.annoBaseIds = d.baseAnnoIds.slice();   // [WO 20261011-offmerge]
+            State.routeBaseIds = (d.baseRouteIds || []).slice();   // [360 동선]
             this._setSaveIndicator("saved");
           }
         } catch (e) { /* 네트워크 단절 — 다음 online 때 */ }
@@ -5436,6 +5488,7 @@
           pins:        State.pins || [],
           zones:       (typeof Zones !== "undefined" && State.zones) ? State.zones : [],
           annotations: State.annotations || [],
+          routes:      (typeof Routes !== "undefined" && State.routes) ? State.routes : [],   // [360 동선]
           checkboardStart: State.checkboardStart || {}, // [WO 20260917 멀티유저 ①]
           depId:       State.autoSaveDepId || null,
           // 🔴 [WO 20260928-pinloss] 이 작업분이 기준으로 삼은 서버 버전 — 재로드 시 충돌 규칙(_draftVsServer) 판정용
@@ -5452,6 +5505,7 @@
           payload.pins = State.pins || [];
           payload.zones = (typeof Zones !== "undefined" && State.zones) ? State.zones : [];
           payload.annotations = State.annotations || [];
+          payload.routes = (typeof Routes !== "undefined" && State.routes) ? State.routes : [];   // [360 동선]
           return SyncQueue.saveDraft(dkey, payload);
         }, () => SyncQueue.saveDraft(dkey, payload));
         this._draftWriteChains[dkey] = run.catch(() => {});
@@ -5522,6 +5576,7 @@
         State.currentDeploymentId = State.autoSaveDepId;
         try { State.pinBaseIds = this._pinIds(JSON.parse(body.pins || "[]")); } catch (e) {}   // [WO 20260929-bulkdel] 새 서버 기준
         try { State.zoneBaseIds = this._pinIds(JSON.parse(body.zones || "[]")); State.annoBaseIds = this._pinIds(JSON.parse(body.annotations || "[]")); } catch (e) {}   // [WO 20261011-offmerge]
+        try { State.routeBaseIds = this._pinIds(JSON.parse(body.routes || "[]")); } catch (e) {}   // [360 동선]
         // 서버 저장 성공 → 로컬 draft 의 dirty 해제(스냅샷은 백업으로 유지)
         await this._markDraftClean(pages);
         this._setSaveIndicator("saved");
@@ -5596,6 +5651,7 @@
           fileName: State.fileName || "도면", fileType: State.fileType || "image",
           pages: (pages && pages.length) ? pages : await this._snapshotPages(),
           pins: State.pins || [], zones: State.zones || [], annotations: State.annotations || [],
+          routes: State.routes || [],   // [360 동선]
           depId: State.autoSaveDepId || null, dirty: false
         };
         Object.assign(payload, this._draftPinMeta());           // [WO 20260929-bulkdel] 복원 후 병합에도 삭제 기록 유지
@@ -6131,6 +6187,8 @@
         catch { State.zones = []; }
         try { State.annotations = this._live(JSON.parse(latest.annotations || "[]")); }
         catch { State.annotations = []; }
+        try { State.routes = this._live(JSON.parse(latest.routes || "[]")); }   // [360 동선]
+        catch { State.routes = []; }
         // [WO 20260929-bulkdel] 형제 로더(loadDeckDrawing)와 같은 기준 — 🔴 [WO 20261006-pinbase]
         //   오프라인 번들 사본(내 미동기화 핀 포함)은 "서버가 아는 목록"이 아니므로 기준 = null(판정 불가).
         this._initMergeMeta(!latestFromBundle);   // [WO 20261011-offmerge] 핀·주석·영역 공유
@@ -6149,6 +6207,7 @@
           UI.renderPinList();
           UI.renderPinsOnMap();
           if (typeof Zones !== "undefined") { Zones.render(); Zones.renderList(); }
+          if (typeof Routes !== "undefined") Routes.render();
           if (typeof PdfAnno !== "undefined") PdfAnno.refresh();
           if (typeof Notes !== "undefined") Notes.loadSummary();
           // 🔴 [WO 20260930-fitopen · 지휘자 실측] 허브 카드/프로젝트 재진입은 트리(selectDeck)·

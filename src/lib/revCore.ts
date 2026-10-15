@@ -269,6 +269,15 @@ export function carryAnnos(annos: any[], t: Aff): any[] {
   })
 }
 
+/** [360 동선] 동선(routes) 이월 — zone poly와 동일 패턴: 점마다 변환(points[]). bbox 없음(선분이라 폭/높이 의미 없음). */
+export function carryRoutes(routes: any[], t: Aff): any[] {
+  return (Array.isArray(routes) ? routes : []).map((r) => {
+    if (!live(r) || !Array.isArray(r.points)) return r
+    const points = r.points.map((p: any) => (fin(p?.x) && fin(p?.y)) ? (() => { const q = applyAff(t, p); return { x: R3(q.x), y: R3(q.y) } })() : p)
+    return Object.assign({}, r, { points })
+  })
+}
+
 /** 구역 crop({x,y,w,h} %) 이월 — 외접 사각형. 형식 밖이면 그대로. */
 export function carryCrop(crop: any, t: Aff): any {
   if (!crop || !fin(crop.x) || !fin(crop.y) || !fin(crop.w) || !fin(crop.h)) return crop

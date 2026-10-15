@@ -66,5 +66,6 @@
 60_PhotoFolder.js
 61_NumReset.js
 62_PersonBlur.js
+63_RouteDraw.js
 49_AiVision.js
 99_footer.js

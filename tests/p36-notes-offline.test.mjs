@@ -137,6 +137,9 @@ function buildOpsHandler() {
     async function resolvePinHome(c, depId, row) { return null; }  // [WO 20261012-pinsync] 일반 배포본(별칭 아님) — 별칭 경로는 p151 이 실 워커로 검증
     // [WO 20261002-gap] '확인(verified)' 권한 게이트 — 이 테스트는 verified 전환을 다루지 않으므로 거부로 고정(p111/p117 가 별도 검증).
     async function canManageMembers(c, user, pid) { return false; }
+    // [360 동선] migration 0047 미적용 가정(이 가짜 DB 행에는 routes 컬럼이 없다) — SQL 자리수(6 args) 불변 유지.
+    //   routes CRUD 자체는 p156 이 실 워커로 검증(이 테스트는 노트 멱등만 다룬다).
+    async function routesReady(c) { return false; }
     function mapDeployment(row) { return row; }
     const app = { post(path, handler) { globalThis.__opsHandler = handler; } };
     ${opsCallSrc}
@@ -414,6 +417,7 @@ console.log("\n[뮤테이션2] 서버 ops 핸들러의 applied_ops 멱등 dup �
       async function deploymentWriteDenied(c, user, pid) { return null; }  // [WP3] p93 B5 가 검증
       async function tenantOf(c, user) { return null; }
       async function resolvePinHome(c, depId, row) { return null; }  // [WO 20261012-pinsync] 일반 배포본(별칭 아님) — 별칭 경로는 p151 이 실 워커로 검증
+      async function routesReady(c) { return false; }   // [360 동선] migration 0047 미적용 가정 — SQL 자리수(6 args) 불변
       function mapDeployment(row) { return row; }
       const app = { post(path, handler) { globalThis.__opsHandler = handler; } };
       ${opsCallSrc}

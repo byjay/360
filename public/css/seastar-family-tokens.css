@@ -199,6 +199,7 @@
 
 /* [마스터 요청 N7] 영역(zone)이 핀 클릭을 막던 것 수정 — 영역 맨 뒤, 핀 맨 앞 */
 .zones-layer, .zones-svg { z-index: 1 !important; }
+.routes-layer, .routes-svg { z-index: 1 !important; }   /* [360 동선] 영역과 동일 우선순위 — 핀 클릭 방해 금지 */
 .pins-layer { z-index: 6 !important; }
 .pin-marker { z-index: 7; }   /* 마커 자체도 영역 위로 */
 
