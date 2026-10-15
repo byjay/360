@@ -20,6 +20,8 @@
     if (typeof ApkInstall !== "undefined" && ApkInstall.init) { try { ApkInstall.init(); } catch (e) {} }
     // [WO 20261007-aivision] 온라인/오프라인 전환 시 AI 분석 버튼 사유 재계산
     if (typeof AiVision !== "undefined" && AiVision.init) { try { AiVision.init(); } catch (e) {} }
+    // [WO 20261015-personblur] 온라인/오프라인 전환 시 [사람 흐리게] 버튼 사유 재계산
+    if (typeof PersonBlur !== "undefined" && PersonBlur.init) { try { PersonBlur.init(); } catch (e) {} }
     // [WO 20261007-qrcov] 핀 팝업 [QR] 주입 · 촬영 현황(커버리지) 초기화
     if (typeof QrPrint !== "undefined" && QrPrint.init) { try { QrPrint.init(); } catch (e) {} }
     if (typeof Coverage !== "undefined" && Coverage.init) { try { Coverage.init(); } catch (e) {} }
@@ -39,6 +41,7 @@
       QrPrint: (typeof QrPrint !== "undefined" ? QrPrint : null),
       Coverage: (typeof Coverage !== "undefined" ? Coverage : null),
       AiVision: (typeof AiVision !== "undefined" ? AiVision : null),
+      PersonBlur: (typeof PersonBlur !== "undefined" ? PersonBlur : null),   // [WO 20261015-personblur]
       PdfPopup: (typeof PdfPopup !== "undefined" ? PdfPopup : null),
       NumBand: (typeof NumBand !== "undefined" ? NumBand : null),
       FieldCapture: (typeof FieldCapture !== "undefined" ? FieldCapture : null),
