@@ -512,6 +512,51 @@
       } finally { this._extractingRegion = false; }
     },
 
+    /** [WO 20261016-multiregion] 원본의 큰 도면에서 여러 영역을 한 번에 골라 **선택한 부모 구역** 아래
+     *  자식으로 일괄 등록한다 — 마스터: "원본의 큰 도면에서 구역 하위 그룹으로 여러 개 등록할 수 있게 해".
+     *  🔴 복사 로직 두 벌 금지(§G-2-5) — extractRegionAsDeck 과 **같은** _planRegionCopy/_srcBoxFields/
+     *  _withDeckMode 를 그대로 재사용한다. 차이는 parent_id 를 호출자가 고른 parentId 로 고정하는 것뿐이다.
+     *  regions: [{crop, name}] — 드래그·이름 입력을 이미 마친 목록(UI 는 65_Sheets.openMultiRegion).
+     *  🔴 조용한 실패 금지 — 영역 단위로 성공/실패를 전부 기록해 돌려준다(부분 실패 재시도 가능).
+     *  @returns {Promise<{created:Array, failed:Array}>} failed=[{crop,name,reason}] */
+    async extractRegionsAsDecks(parentId, regions) {
+      const created = [], failed = [];
+      const list = Array.isArray(regions) ? regions : [];
+      if (typeof Auth !== "undefined" && !Auth.isDesigner) {
+        list.forEach((r) => failed.push({ crop: r.crop, name: r.name, reason: "설계자만 영역을 추출할 수 있습니다" }));
+        return { created, failed };
+      }
+      const src = this.currentDeck;
+      if (!this.currentProject || !src || !src.deployment_id) {
+        list.forEach((r) => failed.push({ crop: r.crop, name: r.name, reason: "원본 도면이 없습니다" }));
+        return { created, failed };
+      }
+      if (!navigator.onLine) {
+        list.forEach((r) => failed.push({ crop: r.crop, name: r.name, reason: "오프라인이라 지금은 등록할 수 없습니다" }));
+        return { created, failed };
+      }
+      const page = (typeof State !== "undefined" && State.pdfPage) || src.page || 1;
+      for (const region of list) {
+        const crop = region && region.crop, name = String((region && region.name) || "").trim();
+        if (!crop || !(crop.w > 0) || !(crop.h > 0) || !name) { failed.push({ crop, name, reason: "영역/이름이 올바르지 않습니다" }); continue; }
+        try {
+          // 🔴 공유 지점(SoT) — extractRegionAsDeck 과 완전히 같은 계획 함수.
+          const plan = await this._planRegionCopy(src, page, crop, name);
+          if (!plan) { failed.push({ crop, name, reason: "복사 계획 실패/취소" }); continue; }
+          const body = this._withDeckMode(plan.depId
+            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: parentId }, this._srcBoxFields(src, page, crop))
+            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: parentId },
+            src);
+          const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", { method: "POST", headers: Auth.headers(), body: JSON.stringify(body) });
+          const d = await r.json();
+          if (!r.ok) { failed.push({ crop, name, reason: (d && d.error) || "등록 실패" }); continue; }
+          created.push(d);
+        } catch (e) { failed.push({ crop, name, reason: "네트워크 오류" }); }
+      }
+      if (created.length) await this.loadDecks();
+      return { created, failed };
+    },
+
     /** [WO 20260928-copy] 영역을 "복사본(새 PDF 배포본)"으로 만들지 "창(crop)"으로 만들지 결정한다.
      *  @returns {Promise<{depId, box}|{mode:"window", limited?}|null>} null = 취소/실패(사유는 이미 표시)
      *  · 원본 있음  → 벡터 복사 → 새 배포본 id

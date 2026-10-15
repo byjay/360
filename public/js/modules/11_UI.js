@@ -733,6 +733,17 @@
           if (Projects.selectDeck) await Projects.selectDeck(deck);
           if (Projects.extractRegionAsDeck) Projects.extractRegionAsDeck();
         } });
+      // [WO 20261016-multiregion] 마스터: "원본의 큰 도면에서 구역 하위 그룹으로 여러 개 등록할 수 있게".
+      //   65_Sheets.openMultiRegion 이 부모 선택(기본값=이 구역) + 반복 드래그 + 일괄 등록을 지휘한다.
+      if (typeof Sheets !== "undefined" && Sheets.openMultiRegion) {
+        items.push({ label: "원본에서 여러 영역 지정해 이 구역 아래로", desc: "원본 도면에서 영역 여러 개를 연속 드래그해 한 번에 등록합니다",
+          reason: why, run: async () => { if (typeof Projects !== "undefined" && Projects.openOriginal) await Projects.openOriginal(); await Sheets.openMultiRegion(deck); } });
+      }
+      // [WO 20261016-multisheet] 마스터: "A데크 안에는 도면을 낱장 기준으로 여러 장을 동시에 등록".
+      if (typeof Sheets !== "undefined" && Sheets.openRegisterSheets) {
+        items.push({ label: "도면 여러 장 등록", desc: "PDF·이미지 여러 개를 골라 페이지별로 이 구역 아래 시트로 등록합니다",
+          reason: why, run: () => Sheets.openRegisterSheets(deck) });
+      }
       items.push({ label: "이름 변경", reason: why,
         run: () => { if (typeof Projects !== "undefined" && Projects.renameDeck) Projects.renameDeck(deck); } });
       // [WO 20261016-treednd] 🔴 드래그의 키보드 대체 — reason 판정은 TreeDnD.canDrag(SoT)와 같은
