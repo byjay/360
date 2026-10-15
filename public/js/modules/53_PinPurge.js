@@ -38,6 +38,13 @@
       } catch (e) { return { status: 0, j: { error: "네트워크 오류 — 서버에 닿지 못했습니다" } }; }
     },
 
+    /** [WO 20261015-bulkdel-undo] ms → "30일"/"45분" 같은 사람이 읽는 길이(1시간 넘으면 일 단위로, 분 단위는 그 아래만). */
+    _fmtWindow(ms) {
+      const m = Math.round((ms || 0) / 60000);
+      if (m >= 1440) return Math.round(m / 1440) + "일";
+      if (m >= 60) return Math.round(m / 60) + "시간";
+      return m + "분";
+    },
     previewText(pv) {
       const t = pv.totals || {};
       const lines = ["구역 " + (pv.decks || 0) + "개 · 핀 " + (t.pins || 0) + "개(CHECKER " + (t.checker || 0) + " / 360 " + (t.pano || 0) + ") · 사진 연결 " + (t.photos || 0) + "개"];
@@ -47,8 +54,17 @@
         deps.forEach((d) => lines.push("· " + (d.title || d.id) + " — 핀 " + d.pins + "개"));
       }
       lines.push("", "지우지 않는 것: 360 사진 원본 · 사진 이력 · PDF 주석 · 구역 윤곽",
-        "삭제 후 " + Math.round((pv.undo_window_ms || 600000) / 60000) + "분 동안 [되돌리기]로 복원할 수 있습니다.");
+        "삭제 후 " + this._fmtWindow(pv.undo_window_ms || 600000) + " 동안 [되돌리기]로 복원할 수 있습니다(또는 ⋯ 메뉴 [삭제 기록]에서).");
       return lines.join("\n");
+    },
+    /** [WO 20261015-bulkdel-undo] [삭제 기록] 진입 사유 — reason() 과 달리 온라인 요구 없음(조회는 오프라인도 가능,
+     *  되돌리기 버튼만 온라인에서 활성). 트리 ⋯ 메뉴·전체 기능 메뉴가 같은 문구를 쓴다. */
+    historyReason() {
+      const proj = this._proj();
+      if (!proj || !proj.id) return "프로젝트를 먼저 여세요";
+      const A = (typeof Auth !== "undefined") ? Auth : null;
+      if (!(proj.can_manage_members || (A && A.isSuper)) || (A && A.readonly)) return "소유자·관리자 전용";
+      return "";
     },
 
     /** 진입점(트리 원본 ⋯ · 전체 기능 메뉴). 반환: { done, deleted?, stage? } — stage = 멈춘 단계(테스트·진단용). */
@@ -158,14 +174,20 @@
       if (j.batch && j.undo_until) {
         const until = Number(j.undo_until);
         const ub = mkBtn("되돌리기", "pin-purge-undo", (b) => { b.disabled = true; this.undo(pid, j.batch); });
-        const tick = () => {
-          const left = until - Date.now();
-          if (left <= 0) { this._dropUndoButton(); this._setBarText(msg.textContent + " · 되돌리기 시간이 지났습니다"); this._autoClose(6000); return; }
-          const s = Math.ceil(left / 1000);
-          ub.textContent = "되돌리기 " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-        };
-        tick();
-        this._timer = setInterval(tick, 1000);
+        // [WO 20261015-bulkdel-undo] 창이 30일로 늘어 mm:ss 초시계는 더 의미 없다(1시간 넘으면 정적 표시 +
+        //   "⋯ [삭제 기록]에서도" — 이 바가 닫혀도 복원 경로가 남아 있음을 알린다).
+        if (until - Date.now() > 3600000) {
+          ub.textContent = "되돌리기(" + this._fmtWindow(until - Date.now()) + " 안)";
+        } else {
+          const tick = () => {
+            const left = until - Date.now();
+            if (left <= 0) { this._dropUndoButton(); this._setBarText(msg.textContent + " · 되돌리기 시간이 지났습니다"); this._autoClose(6000); return; }
+            const s = Math.ceil(left / 1000);
+            ub.textContent = "되돌리기 " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+          };
+          tick();
+          this._timer = setInterval(tick, 1000);
+        }
       }
       const close = mkBtn("닫기", "pin-purge-close", () => this.closeBar());
       close.style.background = "#e5e7eb";
@@ -184,5 +206,109 @@
       if (this._timer) { clearInterval(this._timer); this._timer = null; }
       if (this._bar && this._bar.parentNode) this._bar.parentNode.removeChild(this._bar);
       this._bar = null; this._msg = null;
+    },
+
+    /* ══ [WO 20261015-bulkdel-undo] 삭제 기록 — 마스터(음성) "되돌리고 싶을 때 되돌릴 수 있게끔" ═══════════════════
+       진입점 = 트리 원본 ⋯ 메뉴 · 전체 기능 메뉴([삭제 기록]). 프로젝트 전체·구역·선택 일괄 삭제를 한 목록으로
+       (서버가 pin_bulk_deletes 를 batch 단위로 묶어 돌려준다 — SoT = 서버). 되돌리기는 기존 /purge/:batch/undo 재사용.
+       색은 하단 바와 같은 인라인 리터럴(이미 p132-cdp 가 재측정한 쌍만 재사용 — 새 쌍 계산 금지). */
+    _historyEl: null, _historyKeyHandler: null,
+
+    /** 진입점(트리 ⋯ · 전체 기능 메뉴). */
+    async openHistory() {
+      const toast = (m, ms) => { try { Prompt.toast(m, ms || 3600); } catch (e) {} };
+      const why = this.historyReason();
+      if (why) { toast("삭제 기록 — " + why); return; }
+      const proj = this._proj(), pid = String(proj.id);
+      const res = await this._req("GET", this._url(pid, "/history"));
+      if (res.status !== 200) { toast("삭제 기록을 불러오지 못했습니다 — " + (res.j.error || res.status)); return; }
+      this._renderHistory(pid, res.j);
+    },
+
+    _scopeLabel(r) {
+      if (r.scope_label) return r.scope_label;
+      return r.scope === "zone" ? "구역" : (r.scope === "selection" ? "선택" : "프로젝트 전체");
+    },
+
+    _renderHistory(pid, data) {
+      this.closeHistory();
+      const backdrop = document.createElement("div");
+      backdrop.id = "pin-purge-history-backdrop";
+      backdrop.style.cssText = "position:fixed;inset:0;z-index:10060;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;";
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) this.closeHistory(); });
+      const panel = document.createElement("div");
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-label", "삭제 기록");
+      panel.style.cssText = "background:#111827;color:#ffffff;border-radius:12px;max-width:min(720px,100%);max-height:min(640px,90vh);width:100%;"
+        + "display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.4);";
+      const head = document.createElement("div");
+      head.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid #374151;";
+      const title = document.createElement("div");
+      title.textContent = "삭제 기록" + (data.undo_window_ms ? " — 삭제 후 " + this._fmtWindow(data.undo_window_ms) + " 안에 되돌릴 수 있습니다" : "");
+      title.style.cssText = "font-size:15px;font-weight:700;color:#ffffff;";
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button"; closeBtn.textContent = "닫기"; closeBtn.setAttribute("aria-label", "삭제 기록 닫기");
+      closeBtn.style.cssText = "background:#e5e7eb;color:#111827;border:0;border-radius:8px;padding:6px 12px;font-size:14px;font-weight:700;cursor:pointer;min-height:36px;flex:0 0 auto;";
+      closeBtn.addEventListener("click", () => this.closeHistory());
+      head.appendChild(title); head.appendChild(closeBtn);
+      const body = document.createElement("div");
+      body.style.cssText = "overflow:auto;padding:4px 16px 16px;flex:1 1 auto;";
+      const rows = data.batches || [];
+      if (!rows.length) {
+        const empty = document.createElement("div");
+        empty.textContent = "아직 삭제 기록이 없습니다.";
+        empty.style.cssText = "color:#e5e7eb;padding:28px 4px;text-align:center;font-size:14px;";
+        body.appendChild(empty);
+      } else {
+        rows.forEach((r) => this._historyRow(pid, r, body));
+      }
+      panel.appendChild(head); panel.appendChild(body);
+      backdrop.appendChild(panel);
+      document.body.appendChild(backdrop);
+      this._historyEl = backdrop;
+      this._historyKeyHandler = (e) => { if (e.key === "Escape") this.closeHistory(); };
+      document.addEventListener("keydown", this._historyKeyHandler);
+    },
+
+    _historyRow(pid, r, body) {
+      const row = document.createElement("div");
+      row.className = "pin-purge-history-row";
+      row.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid #374151;";
+      const info = document.createElement("div");
+      info.style.cssText = "flex:1 1 240px;min-width:0;font-size:13px;color:#ffffff;line-height:1.5;";
+      let when = "-"; try { when = new Date(Number(r.created_at)).toLocaleString(); } catch (e) {}
+      info.textContent = when + " · " + (r.actor || "") + " · " + this._scopeLabel(r) + " · 핀 " + (r.pin_count || 0) + "개";
+      const status = document.createElement("span");
+      status.textContent = r.status === "restored" ? "복원됨" : (r.status === "partial" ? "일부 복원" : "가능");
+      status.style.cssText = "font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:#1f2937;color:"
+        + (r.status === "available" ? "#fde68a" : "#ffffff") + ";flex:0 0 auto;";
+      row.appendChild(info); row.appendChild(status);
+      if (r.status !== "restored") {
+        const ub = document.createElement("button");
+        ub.type = "button"; ub.textContent = "되돌리기";
+        ub.style.cssText = "background:#fde68a;color:#111827;border:0;border-radius:8px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;min-height:32px;flex:0 0 auto;";
+        const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+        if (offline) { ub.disabled = true; ub.title = "온라인에서만 — 오프라인에서는 되돌릴 수 없습니다"; ub.setAttribute("aria-disabled", "true"); }
+        ub.addEventListener("click", async () => {
+          if (!(await Prompt.confirm("되돌리기", this._scopeLabel(r) + " 삭제(핀 " + (r.pin_count || 0) + "개)를 되돌릴까요?"))) return;
+          ub.disabled = true; ub.textContent = "되돌리는 중…";
+          const u = await this._req("POST", this._url(pid, "/" + encodeURIComponent(r.batch) + "/undo"));
+          if (u.status === 200 || u.status === 409) {
+            this._afterServerChange();
+            try { Prompt.toast("핀 " + (u.j.restored || 0) + "개 복원" + (u.j.failed ? " · 실패 " + u.j.failed + "곳" : "")); } catch (e) {}
+          } else {
+            try { Prompt.toast("되돌리지 못했습니다 — " + (u.j.error || u.status)); } catch (e) {}
+          }
+          this.openHistory();   // 목록 새로고침(상태 갱신)
+        });
+        row.appendChild(ub);
+      }
+      body.appendChild(row);
+    },
+
+    closeHistory() {
+      if (this._historyEl && this._historyEl.parentNode) this._historyEl.parentNode.removeChild(this._historyEl);
+      this._historyEl = null;
+      if (this._historyKeyHandler) { document.removeEventListener("keydown", this._historyKeyHandler); this._historyKeyHandler = null; }
     }
   };

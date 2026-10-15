@@ -2934,8 +2934,17 @@ app.delete('/api/projects/:id', async (c) => {
  *  POST /api/projects/:id/pins/purge/:batch/undo  되돌리기 — PIN_PURGE_UNDO_MS 안에서만
  *  삭제 = 기존 /ops delete 와 같은 tombstone({id,_deleted:true,ts}) — 하드 삭제 0, R2 원본·zones·annotations·pin_notes 불변.
  *  배포본마다 낙관적 락(base_version) — 어긋난 배포본만 409 로 보고하고 나머지는 진행(부분 성공을 배포본별로 정직하게).
- *  복원 원본 = pin_bulk_deletes 스냅샷(tombstone 은 다음 전체 저장 PATCH 에 사라질 수 있다 — 거기에 기대지 않는다). */
-const PIN_PURGE_UNDO_MS = 10 * 60 * 1000
+ *  복원 원본 = pin_bulk_deletes 스냅샷(tombstone 은 다음 전체 저장 PATCH 에 사라질 수 있다 — 거기에 기대지 않는다).
+ *
+ * [WO 20261015-bulkdel-undo] 마스터(음성): "핀 일괄 삭제 기능도 구현하고 되돌리기도 기능도 구현해. 삭제했던 걸
+ *   다시 되돌리고 싶을 때 되돌릴 수 있게끔." — 10분은 "나중에" 를 못 담는다. 30일로 늘린다(스냅샷은 핀 JSON 뿐이라
+ *   저장 비용이 작다 · 그 이상은 삭제 기록 화면에서도 더는 보여줄 유인이 적다는 보수적 상한).
+ *   POST /api/projects/:id/pins/bulk-delete        구역/선택 범위 일괄 삭제 — 같은 pin_bulk_deletes 테이블·같은 undo 라우트 재사용.
+ *   GET  /api/projects/:id/pins/purge/history       삭제 기록(batch 단위로 묶음 — 프로젝트 전체/구역/선택 공통). */
+const PIN_BULK_UNDO_MS = 30 * 24 * 60 * 60 * 1000
+const PIN_PURGE_UNDO_MS = PIN_BULK_UNDO_MS   // 하위호환 별칭 — 기존 변수명 참조(이 블록의 프로젝트 전체 삭제) 그대로 둔다
+// 🔴 구역→원본 "이관"(region_pin_migration, WO 20261012-pinsync)의 되돌리기는 이번 지시 범위 밖 — 10분 그대로 유지(별도 상수로 분리, SoT 혼선 방지)
+const PIN_ALIAS_MIGRATE_UNDO_MS = 10 * 60 * 1000
 /** 살아있는 핀(서버 tombstone·id 없는 항목 제외) — 미리보기와 실행이 같은 판정을 쓴다(SoT). */
 function purgeLivePins(pinsJson: any): { all: any[], live: any[] } {
   let all: any[] = []
@@ -2973,6 +2982,10 @@ async function purgeGate(c: any): Promise<{ user?: any, proj?: any, res?: Respon
 }
 async function purgeTableReady(c: any): Promise<boolean> {
   try { await c.env.DB.prepare('SELECT batch_id FROM pin_bulk_deletes LIMIT 1').first(); return true } catch { return false }
+}
+/** [WO 20261015-bulkdel-undo] migration 0046(scope·scope_label 컬럼) 적용 여부 — 미적용이면 구역/선택 삭제는 503(날조 0). */
+async function purgeScopeReady(c: any): Promise<boolean> {
+  try { await c.env.DB.prepare('SELECT scope FROM pin_bulk_deletes LIMIT 1').first(); return true } catch { return false }
 }
 
 app.get('/api/projects/:id/pins/purge', async (c) => {
@@ -3049,7 +3062,7 @@ app.post('/api/projects/:id/pins/purge/:batch/undo', async (c) => {
   const rows: any[] = ((await c.env.DB.prepare('SELECT * FROM pin_bulk_deletes WHERE batch_id = ? AND project_id = ?').bind(batch, pid).all()).results || [])
   if (!rows.length) return c.json({ error: 'not found' }, 404)
   const now = Date.now()
-  if (rows.some((r) => now - Number(r.created_at) > PIN_PURGE_UNDO_MS)) return c.json({ error: '되돌리기 시간(10분)이 지났습니다', expired: true }, 410)
+  if (rows.some((r) => now - Number(r.created_at) > PIN_PURGE_UNDO_MS)) return c.json({ error: '되돌리기 시간(30일)이 지났습니다', expired: true }, 410)
   const results: any[] = []
   for (const row of rows) {
     if (row.restored_at != null) { results.push({ id: row.deployment_id, ok: true, restored: 0, already: true }); continue }
@@ -3086,6 +3099,97 @@ app.post('/api/projects/:id/pins/purge/:batch/undo', async (c) => {
   await logActivity(c, 'pins.purge.undo', { actor: user, targetType: 'project', targetId: pid,
     detail: { batch, undo: true, restored, failed, deployments: results } })
   return c.json({ ok: failed === 0, restored, failed, results }, failed && !results.some((r) => r.ok) ? 409 : 200)
+})
+
+/* ══ [WO 20261015-bulkdel-undo] 구역·선택 범위 일괄 삭제 — 마스터(음성) "핀 일괄 삭제 기능도 구현하고 되돌리기도
+ *   되돌리고 싶을 때 되돌릴 수 있게끔." 같은 기록 테이블(pin_bulk_deletes)·같은 되돌리기 라우트(위 /purge/:batch/undo)를
+ *   재사용한다 — 새 테이블 0, scope/scope_label 컬럼만 추가(0046). 범위 = 지금 열려 있는 배포본 하나(클라가 보낸 depId) 안의
+ *   id 목록. 그 배포본이 핀 연동 별칭(벡터 복사 구역, resolvePinHome)이면 정본인 원본(home)에 쓴다 — 별칭 자기 행에
+ *   쓰면 다음 GET 투영에 묻혀 조용히 사라진다(핀 동기화 설계 S1·S3 와 같은 규칙, PATCH pins 저장 경로와 동일).
+ *   권한 = canBulkDeletePins 와 같은 소유자·super(purgeGate) + 본인 재인증(X-Reauth, 모든 핀 삭제와 동일). */
+app.post('/api/projects/:id/pins/bulk-delete', async (c) => {
+  const g = await purgeGate(c)
+  if (g.res) return g.res
+  const user = g.user, proj = g.proj, pid = String(proj.id)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const depId = String((body && body.deployment_id) || '')
+  const ids: any[] = Array.isArray(body && body.ids) ? body.ids : []
+  if (!depId || !ids.length) return c.json({ error: 'deployment_id, ids required — 0건' }, 400)
+  const rx = c.req.header('X-Reauth')
+  if (!rx || !(await reauthTokenValid(c, rx, user.email))) return c.json({ error: 'reauth required — expired or invalid', reauth_required: true }, 403)
+  if (!(await purgeTableReady(c))) return c.json({ error: 'migration 0039_pin_bulk_deletes 미적용 — 삭제하지 않았습니다' }, 503)
+  if (!(await purgeScopeReady(c))) return c.json({ error: 'migration 0046_pin_bulk_delete_scope 미적용 — 삭제하지 않았습니다' }, 503)
+  const depRow0: any = (await purgeDeploymentsOf(c, pid)).find((d: any) => String(d.id) === depId)
+  if (!depRow0) return c.json({ error: 'not found — 이 프로젝트의 도면이 아닙니다' }, 404)
+  const ph = await resolvePinHome(c, depId, depRow0)
+  if (ph && (ph.kind === 'ambiguous' || ph.kind === 'pending')) {
+    return c.json({ error: '이 구역은 핀 연동 상태가 불확실해 일괄 삭제할 수 없습니다 — 새로고침 후 다시 시도하세요' }, 409)
+  }
+  const targetRow: any = (ph && ph.kind === 'alias') ? ph.home : depRow0
+  const targetId = String(targetRow.id)
+  const title = targetRow.title || targetRow.file_name || ''
+  const cur = targetRow.version != null ? Number(targetRow.version) : 0
+  // 별칭이면 클라가 아는 버전 = 별칭 버전(aliasVersion) — PATCH pins 저장 경로(5378행)와 같은 환산.
+  const expectClient = (ph && ph.kind === 'alias') ? aliasVersion(cur) : cur
+  if (body.base_version != null && Number(body.base_version) !== expectClient) {
+    return c.json({ error: '다른 사용자가 먼저 저장했습니다 — 다시 불러와 다시 시도하세요', conflict: true }, 409)
+  }
+  const scope = (body.scope === 'zone') ? 'zone' : 'selection'
+  const scopeLabel = (body.scope_label != null && body.scope_label !== '') ? String(body.scope_label).slice(0, 200) : null
+  const now = Date.now()
+  const { all, live } = purgeLivePins(targetRow.pins)
+  const want = new Set(ids.map((x: any) => String(x)))
+  const targets = live.filter((p: any) => want.has(String(p.id)))
+  if (!targets.length) return c.json({ ok: true, deleted: 0, batch: null, undo_until: null, failed: 0, results: [{ id: targetId, title, ok: true, status: 200, deleted: 0 }] })
+  const dead = new Set(targets.map((p: any) => String(p.id)))
+  const next = all.map((p: any) => (p && p.id != null && dead.has(String(p.id))) ? { id: p.id, _deleted: true, ts: now } : p)
+  const batch = genId('pbd')
+  const out: any = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO pin_bulk_deletes (batch_id, deployment_id, project_id, actor_email, pins, pin_count, created_at, scope, scope_label)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM deployments WHERE id = ? AND deleted = 0 AND version = ?)`
+    ).bind(batch, targetId, pid, user.email, JSON.stringify(targets), targets.length, now, scope, scopeLabel, targetId, cur),
+    c.env.DB.prepare('UPDATE deployments SET pins = ?, updated_at = ?, version = ? WHERE id = ? AND deleted = 0 AND version = ?')
+      .bind(JSON.stringify(next), now, cur + 1, targetId, cur),
+  ])
+  const changed = Number((out && out[1] && out[1].meta && out[1].meta.changes) || 0)
+  if (!changed) return c.json({ error: '저장 경합(동시 저장) — 다시 시도하세요', conflict: true }, 409)
+  await logActivity(c, 'pins.purge', { actor: user, targetType: 'project', targetId: pid,
+    detail: { batch, undo: false, deleted: targets.length, failed: 0, scope, scope_label: scopeLabel,
+      deployments: [{ id: targetId, ok: true, status: 200, deleted: targets.length }] } })
+  return c.json({ ok: true, deleted: targets.length, failed: 0, batch, undo_until: now + PIN_BULK_UNDO_MS,
+    results: [{ id: targetId, title, ok: true, status: 200, deleted: targets.length, version: cur + 1 }] }, 200)
+})
+
+/** [WO 20261015-bulkdel-undo] 삭제 기록 — 프로젝트 전체·구역·선택 공통(pin_bulk_deletes 를 batch 단위로 묶는다).
+ *  권한 = purgeGate(소유자·super) — 조회는 재인증 불필요(실행만 재인증), 되돌리기는 기존 /purge/:batch/undo 재사용. */
+app.get('/api/projects/:id/pins/purge/history', async (c) => {
+  const g = await purgeGate(c)
+  if (g.res) return g.res
+  const pid = String(g.proj.id)
+  if (!(await purgeTableReady(c))) return c.json({ ready: false, undo_window_ms: PIN_BULK_UNDO_MS, batches: [] })
+  const scopeReady = await purgeScopeReady(c)
+  const rows: any[] = ((await c.env.DB.prepare(
+    `SELECT batch_id, deployment_id, actor_email, pin_count, created_at, restored_at${scopeReady ? ', scope, scope_label' : ''}
+       FROM pin_bulk_deletes WHERE project_id = ? ORDER BY created_at DESC LIMIT 500`
+  ).bind(pid).all()).results || [])
+  const byBatch = new Map<string, any>()
+  for (const r of rows) {
+    const b = byBatch.get(r.batch_id) || { batch: r.batch_id, actor: r.actor_email, created_at: Number(r.created_at),
+      scope: scopeReady ? (r.scope || 'project') : 'project', scope_label: scopeReady ? (r.scope_label || null) : null,
+      pin_count: 0, total: 0, restoredN: 0 }
+    b.created_at = Math.min(b.created_at, Number(r.created_at))
+    b.pin_count += Number(r.pin_count) || 0
+    b.total += 1
+    if (r.restored_at != null) b.restoredN += 1
+    byBatch.set(r.batch_id, b)
+  }
+  const batches = Array.from(byBatch.values())
+    .map((b: any) => ({ batch: b.batch, actor: b.actor, created_at: b.created_at, scope: b.scope, scope_label: b.scope_label,
+      pin_count: b.pin_count, status: b.restoredN === 0 ? 'available' : (b.restoredN === b.total ? 'restored' : 'partial') }))
+    .sort((a: any, b: any) => b.created_at - a.created_at)
+  return c.json({ ready: true, undo_window_ms: PIN_BULK_UNDO_MS, batches })
 })
 
 /* ══ [WO 20261010-revision] 도면 개정(Rev) 관리 ═══════════════════════════════════════════════
@@ -5741,7 +5845,7 @@ app.get('/tables/deployments/:id/pin-alias', async (c) => {
   if (!p) return c.json({ state: 'none', ready })
   return c.json({ state: 'pending', home: String(p.home.id), deck_id: ph.box.deckId, count: p.liveIds.length, inside: p.plan.inside, outside: p.plan.outside,
     renamed: Object.keys(p.plan.idMap).length, dup_numbers: p.dupNos, notes: p.notes.filter((n: any) => !Number(n.deleted)).length,
-    version: Number(dep.version) || 0, undo_window_ms: PIN_PURGE_UNDO_MS, ready })
+    version: Number(dep.version) || 0, undo_window_ms: PIN_ALIAS_MIGRATE_UNDO_MS, ready })
 })
 
 app.post('/tables/deployments/:id/pin-alias', async (c) => {
@@ -5792,7 +5896,7 @@ app.post('/tables/deployments/:id/pin-alias', async (c) => {
   await logActivity(c, 'pins.region_migrate', { actor: user, targetType: 'deployment', targetId: id,
     detail: { migration: mig, home: String(home.id), deck: ph.box.deckId, moved: moved.length, renamed: remapped.length, notes: p.notes.length } })
   return c.json({ ok: true, migration_id: mig, moved: moved.length, inside: p.plan.inside, outside: p.plan.outside, renamed: remapped.length,
-    notes: p.notes.length, home: String(home.id), undo_until: now + PIN_PURGE_UNDO_MS })
+    notes: p.notes.length, home: String(home.id), undo_until: now + PIN_ALIAS_MIGRATE_UNDO_MS })
 })
 
 app.post('/tables/deployments/:id/pin-alias/undo', async (c) => {
@@ -5806,7 +5910,7 @@ app.post('/tables/deployments/:id/pin-alias/undo', async (c) => {
   if (!row) return c.json({ error: 'not found' }, 404)
   if (row.undone_at != null) return c.json({ ok: true, already: true })
   const now = Date.now()
-  if (now - Number(row.migrated_at) > PIN_PURGE_UNDO_MS) return c.json({ error: '되돌리기 시간(10분)이 지났습니다', expired: true }, 410)
+  if (now - Number(row.migrated_at) > PIN_ALIAS_MIGRATE_UNDO_MS) return c.json({ error: '되돌리기 시간(10분)이 지났습니다', expired: true }, 410)
   const home: any = await c.env.DB.prepare('SELECT id, pins, version FROM deployments WHERE id = ? AND deleted = 0').bind(row.home_id).first()
   if (!home) return c.json({ error: '원본 도면이 삭제됨' }, 409)
   const d1Ver = Number(g.dep.version) || 0, homeVer = Number(home.version) || 0

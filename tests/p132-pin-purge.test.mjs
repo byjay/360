@@ -260,13 +260,14 @@ let batchG = null;
   ok(JSON.stringify(await pinsOf(D.main)) === origLive.main, "G5 메인 핀 원상(스냅샷)");
 }
 
-console.log("\n[H. 10분 경과]");
+console.log("\n[H. 30일 경과(WO 20261015-bulkdel-undo — 10분→30일로 늘림)]");
 {
   const pv = (await api(TOK.o, "GET", purgeUrl)).j;
+  ok(pv.undo_window_ms === 30 * 24 * 60 * 60 * 1000, "H0 미리보기 undo_window_ms = 30일", pv.undo_window_ms);
   const r = await api(TOK.o, "POST", purgeUrl, { confirm_name: NAME, base_versions: baseOf(pv) }, { "X-Reauth": await rx("o") });
-  await run("UPDATE pin_bulk_deletes SET created_at = ? WHERE batch_id = ?", [Date.now() - 11 * 60000, r.j.batch]);
+  await run("UPDATE pin_bulk_deletes SET created_at = ? WHERE batch_id = ?", [Date.now() - 31 * 24 * 60 * 60000, r.j.batch]);
   const u = await api(TOK.o, "POST", purgeUrl + "/" + r.j.batch + "/undo");
-  ok(u.status === 410 && u.j.expired === true && (await liveIds(D.main)) === "", "H1 10분 경과 → 410, 삭제 유지", u);
+  ok(u.status === 410 && u.j.expired === true && (await liveIds(D.main)) === "", "H1 30일 경과 → 410, 삭제 유지", u);
 }
 
 console.log("\n[I. 마이그레이션 미적용]");
