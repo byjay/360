@@ -735,6 +735,22 @@
         } });
       items.push({ label: "이름 변경", reason: why,
         run: () => { if (typeof Projects !== "undefined" && Projects.renameDeck) Projects.renameDeck(deck); } });
+      // [WO 20261016-treednd] 🔴 드래그의 키보드 대체 — reason 판정은 TreeDnD.canDrag(SoT)와 같은
+      //   공식(원본 고정·오프라인)을 쓴다(각자 계산하면 갈라진다). 열람자는 이 메뉴 자체가 안 열린다(0).
+      if (typeof TreeDnD !== "undefined") {
+        const decksAll = (typeof Projects !== "undefined" && Projects.decks) || [];
+        const isOriginDeck = !!(mainDepId && String(deck.deployment_id || "") === String(mainDepId) && deck.parent_id == null && !deck.crop);
+        const dragWhy = TreeDnD.canDrag({ isOrigin: isOriginDeck, online: !(typeof navigator !== "undefined" && navigator.onLine === false) }).reason;
+        const moveReason = why || dragWhy || "";
+        const upStep = TreeDnD.computeStep(decksAll, deck.id, "up");
+        const downStep = TreeDnD.computeStep(decksAll, deck.id, "down");
+        items.push({ label: "위로 이동", reason: moveReason || (!upStep ? "이미 맨 위입니다" : ""),
+          run: () => TreeDnD.applyStep(deck, decksAll, "up") });
+        items.push({ label: "아래로 이동", reason: moveReason || (!downStep ? "이미 맨 아래입니다" : ""),
+          run: () => TreeDnD.applyStep(deck, decksAll, "down") });
+        items.push({ label: "다른 구역 아래로 이동…", reason: moveReason,
+          run: () => TreeDnD.moveUnderPrompt(deck, decksAll) });
+      }
       items.push({ label: "이 구역 핀 목록", desc: "이 구역 범위로 전체 핀 목록을 엽니다",
         reason: why, run: async () => {
           if (typeof Projects !== "undefined" && Projects.selectDeck) await Projects.selectDeck(deck);
@@ -1496,6 +1512,18 @@
           if (isCur) { toggleOpen(); return; }
           if (typeof Projects !== "undefined" && Projects.selectDeck) Projects.selectDeck(deck);
         });
+        // [WO 20261016-treednd] 🔴 "끌어서 순서·위치 바꾸기" — 드롭 대상 판정(TreeDnD._nodeUnder)이
+        //   head.dataset.deckId 로 어느 구역/영역 위인지 찾는다. isOrigin 판정 = 서버(PATCH /move)와
+        //   같은 공식(deployment_id === 원본, parent_id NULL, crop 없음) — 각자 계산하면 갈라진다(§SoT).
+        head.dataset.deckId = String(deck.id);
+        if (typeof TreeDnD !== "undefined" && TreeDnD.attach) {
+          const isOriginDeck = !!(mainDepId && String(deck.deployment_id || "") === String(mainDepId) && deck.parent_id == null && !deck.crop);
+          TreeDnD.attach(head, deck, decks, {
+            isReadonly: isReadonlyTree,
+            isOrigin: isOriginDeck,
+            online: !(typeof navigator !== "undefined" && navigator.onLine === false)
+          });
+        }
         g.appendChild(head);
         // [WO 20260930-merge] 지금 열린 구역/영역에만 — 다른 구역 포인트 가져오기(41_RegionMerge.js). 조건 미달이면 null.
         if (loaded && typeof RegionMerge !== "undefined") { const rmB = RegionMerge.treeButton(deck, isCur); if (rmB) g.appendChild(rmB); }

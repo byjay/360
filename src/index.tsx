@@ -2108,6 +2108,38 @@ async function isLiveDeckInProject(db: any, parentId: string, projectId: string)
   const row = await db.prepare('SELECT id FROM decks WHERE id = ? AND project_id = ? AND deleted = 0').bind(parentId, projectId).first()
   return !!row
 }
+/** [WO 20261016-treednd] 🔴 순환 금지(서버) — rootId 자신 + 모든 후손(임의 깊이)의 id 집합.
+ *  "다른 구역 아래로 이동" 대상이 이 집합에 있으면 자기 자신이나 자기 하위로 이동하는 것 — 거부해야 한다.
+ *  PATCH /api/decks/:id/move 단일 호출지점(SoT) — 클라(드래그 중 미리보기 비활성화)도 같은 판정을
+ *  해야 하지만 결정은 서버가 최종이다(§10 신뢰 경계). */
+async function deckSelfAndDescendantIds(db: any, projectId: string, rootId: string): Promise<Set<string>> {
+  const { results } = await db.prepare('SELECT id, parent_id FROM decks WHERE project_id = ? AND deleted = 0').bind(projectId).all()
+  const childrenOf = new Map<string, string[]>()
+  for (const r of (results || []) as any[]) {
+    const p = r.parent_id != null ? String(r.parent_id) : ''
+    if (!childrenOf.has(p)) childrenOf.set(p, [])
+    childrenOf.get(p)!.push(String(r.id))
+  }
+  const out = new Set<string>([String(rootId)])
+  const stack = [String(rootId)]
+  let guard = 0
+  while (stack.length && guard++ < 5000) {
+    const cur = stack.pop()!
+    for (const ch of (childrenOf.get(cur) || [])) { if (!out.has(ch)) { out.add(ch); stack.push(ch) } }
+  }
+  return out
+}
+/** [WO 20261016-treednd] 🔴 공유 지점(SoT) — 한 형제 그룹(같은 project_id+parent_id)의 살아있는 deck id를
+ *  GET /api/projects/:id/decks 와 같은 기준(COALESCE(sort_order, level_no, 999999), created_at)으로 가져온다.
+ *  moveDeck 핸들러가 "삽입 전 순서"를 계산할 때 이 함수 하나만 쓴다(렌더 쪽과 각자 계산하면 갈라진다). */
+async function deckSiblingIds(db: any, projectId: string, parentId: string | null, excludeId?: string): Promise<string[]> {
+  const sql = parentId == null
+    ? 'SELECT id FROM decks WHERE project_id = ? AND parent_id IS NULL AND deleted = 0 ORDER BY COALESCE(sort_order, level_no, 999999), created_at'
+    : 'SELECT id FROM decks WHERE project_id = ? AND parent_id = ? AND deleted = 0 ORDER BY COALESCE(sort_order, level_no, 999999), created_at'
+  const bound = parentId == null ? db.prepare(sql).bind(projectId) : db.prepare(sql).bind(projectId, parentId)
+  const { results } = await bound.all()
+  return ((results || []) as any[]).map((r) => String(r.id)).filter((rid) => rid !== excludeId)
+}
 /** [WO 20260930-fixmode] 🔴 decks.mode 신뢰 경계 — 'checker' | '360' 만 허용. 미전송(undefined)은 "지정 안 함".
  *  그 외(null·빈 문자열·오타 등)는 { error } → 호출부가 400. 조용히 NULL 로 바꾸지 않는다(§10 조용한 실패 금지).
  *  POST(/api/projects/:id/decks)·PUT(/api/decks/:id) 가 공유하는 단일 지점(SoT). */
@@ -2155,6 +2187,8 @@ function mapDeck(r: any) {
   // [WO 20260921] parent_id — NULL = 최상위 구역(도면 바로 아래), 값 있으면 그 구역 안의 영역.
   //   마이그레이션 0025 적용 전 행(컬럼 부재)은 undefined → null 로 정규화(구버전과 동일 취급).
   const out: any = { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, parent_id: r.parent_id ?? null, mode: r.mode ?? null, created_at: r.created_at, updated_at: r.updated_at }
+  // [WO 20261016-treednd] 형제 순서 — NULL(미적용 마이그레이션/미지정)이면 클라가 기존 정렬로 폴백한다.
+  out.sort_order = r.sort_order ?? null
   // [WO 20260930-merge] 원본 상자(0031) — 적용 전 행(컬럼 부재)·레거시는 null(좌표 변환 불가를 클라가 정직하게 표시).
   let srcCrop: any = null
   if (r.src_crop) { try { srcCrop = JSON.parse(r.src_crop) } catch { srcCrop = null } }
@@ -2565,7 +2599,7 @@ async function captureSnapshot(c: any, pid: string, by: string): Promise<number>
        FROM decks d
        LEFT JOIN deployments dp ON dp.id = d.deployment_id AND dp.deleted = 0
       WHERE d.project_id = ? AND d.deleted = 0
-      ORDER BY COALESCE(d.level_no, 999999), d.created_at`
+      ORDER BY COALESCE(d.sort_order, d.level_no, 999999), d.created_at`
   ).bind(pid).all()).results) || []
   const proj: any = await c.env.DB.prepare('SELECT original_deployment_id FROM projects WHERE id = ?').bind(pid).first()
   const orig = proj && proj.original_deployment_id ? String(proj.original_deployment_id) : null
@@ -4736,7 +4770,7 @@ app.get('/api/projects/:id/decks', async (c) => {
        FROM decks d
        LEFT JOIN deployments dp ON dp.id = d.deployment_id AND dp.deleted = 0
       WHERE d.project_id = ? AND d.deleted = 0
-      ORDER BY COALESCE(d.level_no, 999999), d.created_at`
+      ORDER BY COALESCE(d.sort_order, d.level_no, 999999), d.created_at`
   ).bind(pid).all()
   return c.json({ data: (results || []).map(mapDeck) })
 })
@@ -4821,6 +4855,65 @@ app.put('/api/decks/:id', async (c) => {
     'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, mode = ?, src_dep_id = ?, src_page = ?, src_crop = ?, updated_at = ? WHERE id = ?'
   ).bind(name, level, dep, page, crop, parentId, mode, src.dep, src.page, src.crop, Date.now(), id).run()
   return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop }))
+})
+
+// [WO 20261016-treednd] 🔴 트리 구역 드래그 순서/부모 변경 — 전용 PATCH(이름·도면 등 다른 필드는 건드리지 않는다,
+//   src_dep_id/src_crop·mode·deployment_id 등은 UPDATE 문 자체에 없으므로 그대로 보존된다).
+//   요청: { parent_id?: string|null, index: number }. index = "이동 뒤" 형제 목록에서의 0-based 위치.
+//   권한 = 기존 PUT /api/decks/:id 와 같은 canManageProject(SoT). 순환(자기 자신·후손 아래)은 400.
+app.patch('/api/decks/:id/move', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const id = c.req.param('id')
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const row: any = await c.env.DB.prepare('SELECT * FROM decks WHERE id = ? AND deleted = 0').bind(id).first()
+  if (!row) return c.json({ error: 'not found' }, 404)
+  if (!(await canManageProject(c, user, row.project_id))) return c.json({ error: 'forbidden — not a designer of this project' }, 403)
+  const newParentId = body.parent_id !== undefined
+    ? (body.parent_id != null && String(body.parent_id) !== '' ? String(body.parent_id) : null)
+    : (row.parent_id ?? null)
+  const index = Number.isInteger(body.index) && body.index >= 0 ? body.index : 0
+  // 🔴 원본(프로젝트 최초 등록 전체 도면) 고정 — 끌 수 없다(클라 openOriginal/pickOriginalDeck 의 "own" 분기와 같은 판정).
+  const proj: any = await c.env.DB.prepare('SELECT original_deployment_id FROM projects WHERE id = ?').bind(row.project_id).first()
+  const isOrigin = !!(proj && proj.original_deployment_id && row.deployment_id === proj.original_deployment_id
+    && row.parent_id == null && !row.crop)
+  if (isOrigin) return c.json({ error: 'cannot move the origin deck' }, 400)
+  if (newParentId) {
+    if (!(await isLiveDeckInProject(c.env.DB, newParentId, row.project_id))) {
+      return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
+    }
+    // 🔴 순환 금지 — 자기 자신이나 자기 후손(임의 깊이) 아래로는 이동할 수 없다.
+    const selfAndDesc = await deckSelfAndDescendantIds(c.env.DB, row.project_id, id)
+    if (selfAndDesc.has(newParentId)) return c.json({ error: 'cannot move a deck under itself or its own descendant' }, 400)
+    // mode 일관성 — 부모와 다른 mode 로 지정된 구역은 이동 불가(기존 PUT·POST 규칙과 동일 경계).
+    const pr: any = await c.env.DB.prepare('SELECT mode FROM decks WHERE id = ?').bind(newParentId).first()
+    const pm = pr && pr.mode ? String(pr.mode) : null
+    if (pm && row.mode && row.mode !== pm) return c.json({ error: 'mode must match parent deck mode' }, 400)
+  }
+  const oldParentId = row.parent_id ?? null
+  const now = Date.now()
+  const stmts: any[] = []
+  const renumber = (ids: string[]) => { ids.forEach((sid, i) => { stmts.push(c.env.DB.prepare('UPDATE decks SET sort_order = ?, updated_at = ? WHERE id = ?').bind(i * 10, now, sid)) }) }
+  if (String(oldParentId || '') === String(newParentId || '')) {
+    // 같은 형제 그룹 안에서 순서만 바뀜 — 자기 자신을 뺀 목록에 index 위치로 삽입.
+    const siblings = await deckSiblingIds(c.env.DB, row.project_id, newParentId, id)
+    const clamped = Math.max(0, Math.min(index, siblings.length))
+    siblings.splice(clamped, 0, id)
+    renumber(siblings)
+  } else {
+    // 부모가 바뀜 — 옛 형제 그룹(자기 제외)과 새 형제 그룹(자기 포함, index 위치) 둘 다 재번호.
+    const oldSiblings = await deckSiblingIds(c.env.DB, row.project_id, oldParentId, id)
+    renumber(oldSiblings)
+    const newSiblings = await deckSiblingIds(c.env.DB, row.project_id, newParentId, id)
+    const clamped = Math.max(0, Math.min(index, newSiblings.length))
+    newSiblings.splice(clamped, 0, id)
+    renumber(newSiblings)
+    stmts.push(c.env.DB.prepare('UPDATE decks SET parent_id = ? WHERE id = ?').bind(newParentId, id))
+  }
+  await c.env.DB.batch(stmts)
+  const after: any = await c.env.DB.prepare('SELECT * FROM decks WHERE id = ?').bind(id).first()
+  return c.json(mapDeck(after))
 })
 
 // [WO 20260930-merge] 구역 합치기 미리보기 — "같은 위치 중복 핀" Jev 판정(원시 확률만). 디자이너 전용.

@@ -5718,6 +5718,19 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
 .tree-node:hover{background:rgba(201,150,42,.08);}
 .tree-node.active{background:rgba(201,150,42,.16);color:var(--gold-ink);}
 .tree-node svg{flex:0 0 auto;}
+/* [WO 20261016-treednd] 트리 구역 "끌어서 순서·위치 바꾸기"(64_TreeDnD.js, SoT) — 삽입선/강조·드래그 중 표시.
+   색은 기존 .tree-node.active 와 같은 골드 계열(var(--gold) #c9962a)을 재사용(신규 색 0) — 삽입선/테두리는
+   장식(비텍스트) 이라 WCAG 본문 대비 규정 대상은 아니지만, 무효(순환 등) 표시는 기존 danger 톤(#b91c1c,
+   이 파일 여러 곳에서 이미 쓰는 값)을 그대로 재사용해 새 색 쌍을 만들지 않는다. */
+.tree-node-deck.tree-dnd-dragging,.tree-node-region.tree-dnd-dragging{opacity:.45;}
+.tree-dnd-indicator{position:fixed;z-index:9600;pointer-events:none;display:none;}
+.tree-dnd-indicator-line{background:var(--gold);border-radius:1px;}
+.tree-dnd-indicator-line.tree-dnd-invalid{background:#b91c1c;}
+.tree-dnd-indicator-into{background:rgba(201,150,42,.22);border:2px solid var(--gold);border-radius:6px;box-sizing:border-box;}
+.tree-dnd-indicator-into.tree-dnd-invalid{background:rgba(185,28,28,.14);border-color:#b91c1c;}
+body.tree-dnd-active{cursor:grabbing;}
+body.tree-dnd-active .tree-node-deck,body.tree-dnd-active .tree-node-region{cursor:grabbing;}
+.tree-node-deck.tree-dnd-pinned,.tree-node-region.tree-dnd-pinned{cursor:default;}
 /* [WO 20260929-tree-label] 🔴 마스터: "이 트리가 제대로 제목이 안나오잖아" — 1줄 말줄임(…)으로
    긴 구역/영역 이름이 읽을 수 없게 잘렸다. 2줄까지 허용하고(줄바꿈), 그래도 넘치면 그때만 줄임표.
    min-width:0 필수 — flex 아이템 기본 min-width:auto 는 overflow:hidden 을 무시하고 내용 폭만큼
