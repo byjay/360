@@ -4855,16 +4855,30 @@ function mapImage(r: any) {
 }
 
 /** [WO 20261009-readacl] 열람자 응답 = 핀·구역·주석 JSON 안의 작성자 이메일 마스킹. */
-/** [WO 20261011-viewmode] 링크 모드별 pins 필터 — 분류 SoT = PinSeries.seriesOf(== !!pin.checkboard)와 동일 규칙.
- *  mode=null(둘다/비링크)이면 그대로 돌려준다. 파싱 실패·배열 아님도 원본 유지(조용한 데이터 손상 방지). */
+/** [WO 20261015-numunify] 360 열람 대상 판정 SoT — 360 미디어(사진·영상)가 붙은 핀인가.
+ *  번호 통합 후 pin.checkboard 는 "어느 모드에서 만들었나"(생성 이력·색 축)일 뿐 — 체커 핀에도 사진이 붙는다.
+ *  클라 App.pinHasMedia 의 서버측 대응(로컬 전용 pendingOpId/localPreview 제외 — 서버엔 아직 사진이 없다). */
+function pinHas360Media(p: any): boolean {
+  if (!p) return false
+  if (p.imageId || p.videoId) return true
+  if ((typeof p.imageUrl === 'string' && p.imageUrl) || (typeof p.videoUrl === 'string' && p.videoUrl)) return true
+  return pinImageRefs(p).length > 0
+}
+/** [WO 20261011-viewmode → 20261015-numunify] 링크 모드별 핀 필터 정본(배열) — filterPinsByLinkMode·aliasMeta 가 같이 쓴다(§G-2-5).
+ *  mode=null(비링크) · 'checker'(번호 배치도) = 전부 · 그 외('360') = 360 미디어 보유 핀만(pinHas360Media).
+ *  🔴 종전 `!!p.checkboard` 기준은 사진을 일괄 등록한 체커 핀을 360 링크에서 통째로 뺐다(조용한 소실). */
+function filterPinArrByLinkMode(arr: any[], mode: string | null | undefined): any[] {
+  if (!mode || mode === 'checker') return arr
+  return arr.filter((p: any) => pinHas360Media(p))
+}
+/** mode=null 이면 그대로 돌려준다. 파싱 실패·배열 아님도 원본 유지(조용한 데이터 손상 방지). */
 function filterPinsByLinkMode(pinsJson: string | null | undefined, mode: string | null): string {
   const raw = pinsJson || '[]'
-  if (!mode) return raw
+  if (!mode || mode === 'checker') return raw
   let arr: any
   try { arr = JSON.parse(raw) } catch { return raw }
   if (!Array.isArray(arr)) return raw
-  const wantChecker = mode === 'checker'
-  return JSON.stringify(arr.filter((p: any) => !!(p && p.checkboard) === wantChecker))
+  return JSON.stringify(filterPinArrByLinkMode(arr, mode))
 }
 
 function mapDeploymentFor(r: any, mask: boolean, linkMode?: string | null) {
@@ -4955,8 +4969,8 @@ function aliasMeta(o: any, h: PinHome | null, mask: boolean, linkMode?: string |
   if (!h) return o
   if (h.kind === 'ambiguous') { o.pin_alias = 'ambiguous'; return o }
   if (h.kind === 'pending') { o.pin_alias = 'pending'; o.pin_alias_pending = h.count; return o }
-  let base = basePinsMin(parsePins(h.home.pins), h.box.page)
-  if (linkMode) base = base.filter((p: any) => !!p.checkboard === (linkMode === 'checker'))   // = filterPinsByLinkMode 규칙
+  // [WO 20261015-numunify] 링크 필터 = filterPinArrByLinkMode 정본 1곳(복붙 규칙 폐기) — 미디어 판정이 필요해 최소 사본 **전에** 거른다
+  let base = basePinsMin(filterPinArrByLinkMode(parsePins(h.home.pins), linkMode), h.box.page)
   if (mask) base = JSON.parse(maskEmailsIn(JSON.stringify(base)))
   o.pin_alias = 'on'
   o.pin_home = String(h.home.id)
@@ -5829,8 +5843,9 @@ async function pinMigrationPlan(c: any, dep: any, box: AliasBox) {
   const liveIds = d1Pins.filter((p: any) => p && p.id != null && !p._deleted).map((p: any) => String(p.id))
   const notes: any[] = ((await c.env.DB.prepare('SELECT * FROM pin_notes WHERE deployment_id = ? AND pin_id IN (SELECT value FROM json_each(?))')
     .bind(String(dep.id), JSON.stringify(liveIds)).all()).results) || []
-  // 번호 겹침(표시만 — 자동 재채번 금지 규율): 원본 그 페이지의 같은 계열·같은 숫자 라벨
-  const key = (p: any) => (p.checkboard ? 'c:' : 'p:') + String(p.label == null ? '' : p.label).trim()
+  // 번호 겹침(표시만 — 자동 재채번 금지 규율): 원본 그 페이지의 같은 숫자 라벨
+  // [WO 20261015-numunify] 번호 공간 = (배포본, 페이지) 1개 — 계열(c:/p:) 접두 폐기(안 고치면 체커 1·360 1 겹침을 못 잡는다)
+  const key = (p: any) => String(p.label == null ? '' : p.label).trim()
   const used = new Set(homePins.filter((p: any) => p && !p._deleted && (Number(p.page) || 1) === box.page && /^\d+$/.test(String(p.label == null ? '' : p.label).trim())).map(key))
   const dupNos = plan.pins.filter((p: any) => used.has(key(p))).length
   return { home, plan, notes, liveIds, dupNos }

@@ -7,7 +7,7 @@
  * 서버 = src/index.tsx 실 번들 → Miniflare(workerd) + 실 D1(migrations 전부). 목 0.
  *
  *  T1 디자이너가 체커 링크 발급 → auto-entry(lk) → 단건 GET pins = checkboard 만 · view_mode='checker'
- *  T2 360 링크 → pins = content 만 · view_mode='360'
+ *  T2 360 링크 → pins = 360 미디어 보유 핀(체커 핀 포함 — WO 20261015-numunify) · view_mode='360'
  *  T3 옛 링크(?d= 만, lk 없음) → pins 전부(둘다) · view_mode 없음(하위호환)
  *  T4 링크 폐기(revoke) → 그 링크로 auto-entry 재시도 401
  *  T5 목록(GET /api/view-links) 비소유 디자이너 403 · 소유자 200(모드·revoked_at 포함)
@@ -36,6 +36,8 @@ const MUTS = {
   // [WO 20261012-viewlink] 360 강제(LINK_VIEW_MODE)를 끄면 T1·T1e·T3·T6 의 CHECKER 핀이 샌다
   no360:      ["const LINK_VIEW_MODE = '360'", "const LINK_VIEW_MODE: any = null"],
   noOwnGuard: ["if (bound.some((p) => s.pids.has(p))) return null\n  return s.linkMode", "return s.linkMode"],
+  // [WO 20261015-numunify] M4 — 360 필터를 옛 계열 규칙(!!checkboard)으로 되돌리면 사진 붙은 체커 핀이 빠진다
+  linkCheckboard: ["return arr.filter((p: any) => pinHas360Media(p))", "return arr.filter((p: any) => !(p && p.checkboard))"],
 };
 const MUT = process.env.MUT || "";
 const SRC_DIR = path.join(ROOT, "src");
@@ -97,11 +99,15 @@ const D = "dep_p147_a";
 const now = Date.now();
 await run("INSERT INTO projects (id, name, description, owner, created_at, updated_at, deleted, published, published_by) VALUES (?, 'P147', '', ?, ?, ?, 0, 1, ?)", [P, U.o, now, now, U.o]);
 const pins = [
-  { id: 1, x: 1, y: 1, page: 1, checkboard: true, no: 1 },
-  { id: 2, x: 2, y: 2, page: 1, checkboard: true, no: 2 },
-  { id: 3, x: 3, y: 3, page: 1 },   // content(360)
-  { id: 4, x: 4, y: 4, page: 1 },   // content(360)
+  { id: 1, x: 1, y: 1, page: 1, checkboard: true, no: 1 },                       // 체커 · 사진 없음
+  { id: 2, x: 2, y: 2, page: 1, checkboard: true, no: 2, imageId: "img_p147_2" }, // 🔴 체커 · 사진 일괄 등록됨(numunify)
+  { id: 3, x: 3, y: 3, page: 1, imageId: "img_p147_3" },                          // 360 · 사진 있음
+  { id: 4, x: 4, y: 4, page: 1 },                                                 // 360 · 사진 없음
 ];
+// [WO 20261015-numunify] 🔴 계약 변경 — 360 열람 = "360 미디어(사진·영상) 보유 핀"(pin.checkboard 무관).
+//   종전 기대값 "content 2개(id 3·4, checkboard 0건)" → 새 기대값 "미디어 핀 2개(id 2·3)": 사진 붙은 체커 핀(2)이 나와야 하고
+//   사진 없는 핀(1·4)은 계열과 무관하게 빠진다. 뮤테이션 linkCheckboard(옛 !!checkboard 규칙 복구)면 3·4 가 나와 전부 FAIL.
+const media2 = (gp) => Array.isArray(gp) && gp.length === 2 && gp.map((p) => String(p.id)).sort().join(",") === "2,3";
 await run("INSERT INTO deployments (id, title, file_name, pins, zones, annotations, created_at, updated_at, deleted, version, project_id, tenant_id) VALUES (?, 'T', 'a.pdf', ?, '[]', '[]', ?, ?, 0, 1, ?, 'tnt_default')", [D, JSON.stringify(pins), now, now, P]);
 await run("INSERT INTO decks (id, project_id, name, deployment_id, created_at, updated_at, deleted) VALUES ('dk_p147_a', ?, 'dk', ?, ?, ?, 0)", [P, D, now, now]);
 
@@ -120,13 +126,13 @@ console.log("\n[T1 체커로 요청한 링크 — 360 강제(pins=content만 · 
   const g = await api(m.j.token, "GET", "/tables/deployments/" + D);
   const gp = (g.j && g.j.pins) ? JSON.parse(g.j.pins) : null;
   ok(g.status === 200 && g.j.view_mode === "360", "T1c 단건 GET view_mode='360'", g.j && g.j.view_mode);
-  ok(Array.isArray(gp) && gp.length === 2 && gp.every((p) => !p.checkboard), "T1d 🔴 pins = content 2개만(CHECKER 핀 0건)", gp);
+  ok(Array.isArray(gp) && media2(gp), "T1d 🔴 pins = 미디어 핀 2개(사진 붙은 체커 핀 포함 · 사진 없는 핀 0건)", gp);
   // 이미 발급돼 있던 '체커 전용' 링크(0042 시절 DB 행 mode='checker')도 360 강제
   await run("INSERT INTO view_links (id, dep_id, mode, created_by, created_at) VALUES ('lk_p147old_chk1', ?, 'checker', ?, ?)", [D, U.o, Date.now()]);
   const mo = await mint({ lk: "lk_p147old_chk1" });
   const go = await api(mo.j && mo.j.token, "GET", "/tables/deployments/" + D);
   const gpo = (go.j && go.j.pins) ? JSON.parse(go.j.pins) : null;
-  ok(go.status === 200 && Array.isArray(gpo) && gpo.length === 2 && gpo.every((p) => !p.checkboard) && go.j.view_mode === "360", "T1e 🔴 기존 체커 전용 링크(DB mode=checker)도 360 강제", gpo);
+  ok(go.status === 200 && Array.isArray(gpo) && media2(gpo) && go.j.view_mode === "360", "T1e 🔴 기존 체커 전용 링크(DB mode=checker)도 360 강제", gpo);
 }
 
 console.log("\n[T2 360 링크 — pins=content만 · view_mode='360']");
@@ -137,7 +143,7 @@ console.log("\n[T2 360 링크 — pins=content만 · view_mode='360']");
   const g = await api(m.j.token, "GET", "/tables/deployments/" + D);
   const gp = (g.j && g.j.pins) ? JSON.parse(g.j.pins) : null;
   ok(g.j.view_mode === "360", "T2b view_mode='360'", g.j.view_mode);
-  ok(Array.isArray(gp) && gp.length === 2 && gp.every((p) => !p.checkboard), "T2c 🔴 pins = content 2개만(checker 핀 0건)", gp);
+  ok(Array.isArray(gp) && media2(gp), "T2c 🔴 pins = 미디어 핀 2개(id 2 체커+사진 · id 3)", gp);
 }
 
 console.log("\n[T3 모드 미전송 링크·옛 ?d= 링크 — 열리되 360 강제]");
@@ -147,11 +153,11 @@ console.log("\n[T3 모드 미전송 링크·옛 ?d= 링크 — 열리되 360 강
   const m = await mint({ lk: l.j.id });
   const g = await api(m.j.token, "GET", "/tables/deployments/" + D);
   const gp = JSON.parse(g.j.pins);
-  ok(gp.length === 2 && gp.every((p) => !p.checkboard) && g.j.view_mode === "360", "T3b 미전송 링크 → content 2개 · view_mode '360'", [gp.length, g.j.view_mode]);
+  ok(media2(gp) && g.j.view_mode === "360", "T3b 미전송 링크 → 미디어 핀 2개 · view_mode '360'", [gp.length, g.j.view_mode]);
   const m2 = await mint({ d: D });   // 옛 클라이언트(lk 없이 d만)
   const g2 = await api(m2.j.token, "GET", "/tables/deployments/" + D);
   const gp2 = JSON.parse(g2.j.pins);
-  ok(g2.status === 200 && gp2.length === 2 && gp2.every((p) => !p.checkboard) && g2.j.view_mode === "360", "T3c 옛 ?d= 링크(lk 없음) → 열리고(200) 360 강제", [g2.status, gp2.length, g2.j.view_mode]);
+  ok(g2.status === 200 && media2(gp2) && g2.j.view_mode === "360", "T3c 옛 ?d= 링크(lk 없음) → 열리고(200) 360 강제", [g2.status, gp2.length, g2.j.view_mode]);
 }
 
 console.log("\n[T4 링크 폐기]");
@@ -184,7 +190,7 @@ console.log("\n[T6 배포본 목록(GET /tables/deployments)도 같은 필터]")
   const L = await api(m.j.token, "GET", "/tables/deployments");
   const row = (L.j.data || []).find((d) => d.id === D);
   const gp = row ? JSON.parse(row.pins) : null;
-  ok(L.status === 200 && Array.isArray(gp) && gp.length === 2 && gp.every((p) => !p.checkboard), "T6a 목록 응답도 360 강제(content 2개만)", gp);
+  ok(L.status === 200 && Array.isArray(gp) && media2(gp), "T6a 목록 응답도 360 강제(미디어 핀 2개)", gp);
 }
 
 console.log("\n[T7 멤버십(자기 편집 화면) 경로는 필터 없음]");
