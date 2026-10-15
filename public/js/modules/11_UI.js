@@ -722,6 +722,17 @@
       // [WO 20261012-treeexplorer] 탐색기처럼 — 이 구역 아래 다단 하위 구역(이름만, 폴더처럼 상위 도면을 그대로 봄).
       items.push({ label: "+ 하위 구역", desc: "이 구역 아래 새 하위 구역을 만듭니다(이름만)",
         reason: why, run: () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false, parent_id: deck.id }); } });
+      // [WO 20261015-treemap] 🔴 마스터: "구역을 지정하면 그 하부로도 서브구역을 지정 가능하게" —
+      //   이 구역의 도면에서 영역을 드래그해 그 **하위** 구역을 만든다(임의 깊이). 먼저 이 구역을
+      //   열어(selectDeck) 그 도면을 화면에 올린 뒤 기존 extractRegionAsDeck()(SoT, 31_Projects.js
+      //   _cutParentId)를 그대로 호출 — 새 코드경로 없음, parent_id 규칙은 그 함수 한 곳에만 있다.
+      items.push({ label: "영역 지정해 하위 구역 만들기", desc: "이 구역의 도면에서 부분을 드래그해 새 하위 구역(영역)을 만듭니다",
+        reason: why || (deck.deployment_id ? "" : "이 구역에 등록된 도면이 없습니다 — 먼저 '도면 등록'을 하세요"),
+        run: async () => {
+          if (typeof Projects === "undefined") return;
+          if (Projects.selectDeck) await Projects.selectDeck(deck);
+          if (Projects.extractRegionAsDeck) Projects.extractRegionAsDeck();
+        } });
       items.push({ label: "이름 변경", reason: why,
         run: () => { if (typeof Projects !== "undefined" && Projects.renameDeck) Projects.renameDeck(deck); } });
       items.push({ label: "이 구역 핀 목록", desc: "이 구역 범위로 전체 핀 목록을 엽니다",
@@ -1410,7 +1421,15 @@
          별개로 구분하자는 거다". 구역·영역은 모드와 무관하게 한 벌만 렌더한다(중복 0). 모드 분리는
          이 노드가 로드된(hasState) 지점의 맨 안쪽에 CHECKER N / 360 N 두 잎 그룹으로만 존재한다 —
          핀 목록·번호대·일괄삭제 범위는 그 잎 그룹 안에서 계열별로 가른다(SoT: PinSeries.DECK_MODES). */
-      const deckNode = (deck, isRegion) => {
+      /** [WO 20261015-treemap] 🔴 마스터: "그 하부로도 서브구역을 지정 가능하게 트리맵 구조
+       *  명확히 해" — 트리는 이미 임의 깊이로 재귀하지만(위 subDecks.forEach(deckNode(cd, true))가
+       *  깊이와 무관하게 자기 자신을 다시 부른다) 깊이 표시가 없어 3단 이상에서 "몇 단계인지"가
+       *  한눈에 안 보였다. depth(1=최상위 구역)·ancestorPath(루트부터의 이름 경로, 순수 함수) 를
+       *  추가해 레벨 배지 + 경로 툴팁 두 가지로 동시에 드러낸다(마스터 지시의 "레벨 배지 … 또는 경로"
+       *  둘 다 — 비용이 낮고 서로 대체 가능한 표시라 함께 두는 쪽이 더 명확하다). */
+      const deckNode = (deck, isRegion, depth, ancestorPath) => {
+        depth = depth || 1;
+        ancestorPath = ancestorPath || [];
         const isCur = !!(curDeck && String(curDeck.id) === String(deck.id));
         const loaded = hasState(deck);
         const subDecks = allChildrenOf.get(String(deck.id)) || [];
@@ -1443,6 +1462,14 @@
         // [WO 20261001-projectinfo·tree-hierarchy] 🔴 마스터: "단계마다 라벨 접두나 툴팁을 둬서
         // 이름만으로 헷갈리지 않게" — 아이콘(형태)만으로는 약하므로 작은 텍스트 꼬리표를 더한다.
         const kindTag = '<span class="tree-kind-tag">' + (isRegion ? "영역" : "구역") + '</span>';
+        // [WO 20261015-treemap] 레벨 배지(L1/L2/L3…) — 깊어진 트리에서 "몇 단계인지"를 아이콘·
+        //   들여쓰기만으로는 알기 어려워 숫자로 못박는다. 경로(루트부터의 이름 나열)는 head.title
+        //   (아래, innerHTML 밖의 네이티브 툴팁)에만 싣는다 — 🔴 levelTag 자신의 title 에 겹쳐 실으면
+        //   "(이름 없음)" 같은 폴백 문구가 .tree-label 과 무관하게 innerHTML 에 중복 등장해, 그 문구의
+        //   존재 여부로 판정하는 다른 회귀테스트(p65 ③·뮤테이션ⓑ)를 흐린다(§G-2-5, 로직이 아니라
+        //   "문자열이 어디 있나"로 생긴 간섭 — 실측: p65 뮤테이션ⓑ가 이 중복 때문에 FAIL 했었다).
+        const _path = ancestorPath.concat([deck.name || "(이름 없음)"]).join(" › ");
+        const levelTag = '<span class="tree-level-tag" title="트리 깊이">L' + depth + '</span>';
         // [WO 20261002-allmenu §5] 구역 도면 출처(잘라옴 / 별도 등록 · 파일명) — SoT = UI.deckSourceOf.
         //   [WO 20261012-treemenu-viewer] 출처 배지는 디자이너가 도면을 관리할 때 쓰는 편집 정보라
         //   열람자에게는 의미가 없다(도면 등록/교체 메뉴가 그 아래에서 사라지므로 맥락도 없다) — 숨긴다.
@@ -1451,7 +1478,7 @@
           ? '<span class="tree-src-tag tree-src-' + _src.kind + '" title="구역 도면 출처: ' + esc(_src.label) + '">' + esc(_src.label) + '</span>' : "";
         // [WO 20261012-treemenu-viewer] 열람자에겐 ⋯ 메뉴 자체를 렌더하지 않는다(CSS 숨김이 아니라 렌더 생략) — ⑴ 참조.
         const moreTag = isReadonlyTree ? "" : '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
+        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + levelTag + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20261007-qrcov] 촬영 현황 배지(미촬영·오래됨) — 켜졌고 이 구역 도면이 로드됐을 때만(SoT: Coverage.deckSummary → Projects.pinsForDeck)
         const covTag = (typeof Coverage !== "undefined" && Coverage.treeBadgeHtml) ? Coverage.treeBadgeHtml(deck) : "";
@@ -1459,7 +1486,7 @@
         // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
         // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.
-        head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\n원본 도면: " + docName : "");
+        head.title = (deck.name ? deck.name : "(이름 없음)") + "\n경로(레벨 " + depth + "): " + _path + (docName ? "\n원본 도면: " + docName : "");
         // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
         const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
         head.addEventListener("click", (e) => {
@@ -1479,12 +1506,13 @@
         // 3단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck). 🔴 마스터: "구역 아래 영역이
         // 리스트로 나열돼야 한다" — 0개여도 숨기지 않고 "영역 없음"으로 알린다(구역 레벨 한정,
         // 영역 자신의 하위는 데이터가 있을 때만 표시해 기존 4단 방지 회귀(p62)를 건드리지 않는다).
+        const childPath = ancestorPath.concat([deck.name || "(이름 없음)"]);
         if (!isRegion) {
-          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
           else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
           any = true;
         } else if (subDecks.length) {
-          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
           any = true;
         }
         if (loaded) {
@@ -1613,7 +1641,7 @@
       /* ── 2단: 구역(두 모드 공유) — [WO 20260930-moderole] 마스터 2차 지시로 모드 가지(88e52ff)를
          제거하고 구역·영역을 프로젝트 바로 아래 한 벌만 렌더한다(중복 0). 모드 분리는 deckNode()
          안의 잎(CHECKER N/360 N)에서만 일어난다. ─────────────────────────────────────── */
-      rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));
+      rootDecks.forEach((d) => mount.appendChild(deckNode(d, false, 1, [])));
     },
 
     renderPinsOnMap(dropPinId) {

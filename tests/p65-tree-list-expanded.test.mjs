@@ -249,12 +249,14 @@ console.log("\n[Part A' · 프로덕션 재현 — parent_id NULL 40개 전부 �
 {
   console.log("\n[뮤테이션ⓒ] 구역 아래 영역 나열 로직 제거 → ④가 실패해야 함");
   // [WO 20260930-moderole] 마스터 2차 지시로 모드 문맥(ctx) 파라미터가 제거됐다(구역·영역 공유) — 대상 텍스트만 갱신, 치환(나열 제거)은 그대로.
-  const needle = `if (!isRegion) {
-          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+  // [WO 20261015-treemap] deckNode 가 depth·ancestorPath 를 받도록 바뀌어(임의 깊이 레벨 배지) needle 갱신.
+  const needle = `const childPath = ancestorPath.concat([deck.name || "(이름 없음)"]);
+        if (!isRegion) {
+          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
           else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
           any = true;
         } else if (subDecks.length) {
-          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true)); });
+          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
           any = true;
         }`;
   const mut = uiSrc.replace(needle, `if (false) { subDecks.forEach(() => {}); }`);

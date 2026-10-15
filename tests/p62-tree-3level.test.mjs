@@ -232,9 +232,10 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
 /* ── 뮤테이션 ⓐ: 도면 그룹핑 단(.tree-doc)을 되살림 → ①이 실패해야 한다 ─────── */
 {
   console.log("\n[뮤테이션ⓐ] 4단 복원(도면 그룹핑 단 재도입) → ①이 실패해야 함");
-  const needle = "rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));";
+  // [WO 20261015-treemap] deckNode 가 depth·ancestorPath 를 받도록 바뀌어 호출부 리터럴도 바뀌었다(needle 갱신).
+  const needle = "rootDecks.forEach((d) => mount.appendChild(deckNode(d, false, 1, [])));";
   const mut = uiSrc.replace(needle,
-    "rootDecks.forEach((d) => { var w = document.createElement('div'); w.className = 'tree-doc open'; w.appendChild(deckNode(d, false)); mount.appendChild(w); });");
+    "rootDecks.forEach((d) => { var w = document.createElement('div'); w.className = 'tree-doc open'; w.appendChild(deckNode(d, false, 1, [])); mount.appendChild(w); });");
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { host } = runTree(mut, fx());
@@ -260,7 +261,8 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
 /* ── 뮤테이션 ⓒ: head.title 에서 도면 출처 정보를 제거 → ③이 실패해야 한다 ──────── */
 {
   console.log("\n[뮤테이션ⓒ] head.title 의 도면 출처 정보(docName) 삭제 → ③이 실패해야 함");
-  const needle = 'head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\\n원본 도면: " + docName : "");';
+  // [WO 20261015-treemap] head.title 에 경로(레벨 N) 꼬리표가 추가돼 리터럴이 바뀌었다(needle 갱신, 의미는 동일).
+  const needle = 'head.title = (deck.name ? deck.name : "(이름 없음)") + "\\n경로(레벨 " + depth + "): " + _path + (docName ? "\\n원본 도면: " + docName : "");';
   const mut = uiSrc.replace(needle, 'head.title = (deck.name ? deck.name : "(이름 없음)");');
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
@@ -338,10 +340,10 @@ function a2Checks(uiSource) {
 /* ── 뮤테이션 ⓕ: 88e52ff 모드 가지(구역 중복) 재도입 → ①(3단 구조)이 실패해야 한다 ────── */
 {
   console.log("\n[뮤테이션ⓕ] 모드 가지 재도입(구역을 CHECKER/360 두 번 렌더) → ①이 실패해야 함");
-  const needle = "rootDecks.forEach((d) => mount.appendChild(deckNode(d, false)));";
+  const needle = "rootDecks.forEach((d) => mount.appendChild(deckNode(d, false, 1, [])));";
   const mut = uiSrc.replace(needle,
     "[\"checker\",\"360\"].forEach((tag) => { var mw = document.createElement(\"div\"); mw.className = \"tree-mode\"; " +
-    "rootDecks.forEach((d) => mw.appendChild(deckNode(d, false))); mount.appendChild(mw); });");
+    "rootDecks.forEach((d) => mw.appendChild(deckNode(d, false, 1, []))); mount.appendChild(mw); });");
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { host } = runTreeWithSeries(mut, fx());

@@ -270,6 +270,17 @@ try {
     })()`);
     ok(fourthUnderFloor.found, "② '4TH' 가 'FLOOR' 의 하위로(3단) 렌더됨", fourthUnderFloor);
     await shot("02-er-floor-4th");
+
+    // [WO 20261015-treemap] 🔴 깊이 3까지 레벨 배지(L1/L2/L3) + 경로 툴팁 — 마스터: "트리맵 구조 명확히 해".
+    const levels = await evSafe(`(function(){
+      function levelOf(name){ var h = Array.from(document.querySelectorAll('.tree-node-deck,.tree-node-region')).find(function(h){ var l=h.querySelector('.tree-label'); return l && l.textContent.trim()===name; }); var t = h && h.querySelector('.tree-level-tag'); return { text: t ? t.textContent.trim() : null, title: h ? h.title : null }; }
+      return { ER: levelOf('ER'), FLOOR: levelOf('FLOOR'), FOURTH: levelOf('4TH') };
+    })()`);
+    ok(levels.ER && levels.ER.text === "L1", "② 'ER'(최상위) 레벨 배지 = L1", levels.ER);
+    ok(levels.FLOOR && levels.FLOOR.text === "L2", "② 'FLOOR'(ER 하위) 레벨 배지 = L2", levels.FLOOR);
+    ok(levels.FOURTH && levels.FOURTH.text === "L3", "② '4TH'(FLOOR 하위, 3단) 레벨 배지 = L3", levels.FOURTH);
+    ok(levels.FOURTH && typeof levels.FOURTH.title === "string" && levels.FOURTH.title.indexOf("ER") >= 0 && levels.FOURTH.title.indexOf("FLOOR") >= 0,
+      "② '4TH' 툴팁(title)에 경로(ER…FLOOR…4TH)가 담김", levels.FOURTH);
   }
 
   /* ══════════════ ④ 이름 변경 ══════════════ */
@@ -320,10 +331,12 @@ try {
     const anchor = 'if (!await Prompt.confirm("구역 삭제 — 다시 확인", `정말로 \'${name}\' 구역을 삭제합니다. 되돌릴 수 없습니다.`)) return;';
     ok(projectsSrc.includes(anchor), "[뮤테이션 앵커 확인] deleteDeck 2차 확인 라인 존재(31_Projects.js)", { anchorFound: projectsSrc.includes(anchor) });
   }
-  // ── 뮤테이션 증명 ②: extractRegionAsDeck parent_id 공유규칙(src.parent_id||src.id) 보존 확인 ──
+  // ── 뮤테이션 증명 ②: extractRegionAsDeck parent_id 공유규칙(_cutParentId SoT) 보존 확인 ──
+  //   [WO 20261015-treemap] 🔴 1b91358 의 "형제로 붙여 4단 방지" 불변식은 마스터가 뒤집었다 —
+  //   지금은 "지금 구역 자신을 부모로" 가 불변식이다(§31_Projects.js _cutParentId, p56 ⑩에서 실측·뮤테이션 증명).
   {
     const projectsSrc = fs.readFileSync(path.join(ROOT, "public/js/modules/31_Projects.js"), "utf8");
-    ok(/parent_id:\s*src\.parent_id\s*\|\|\s*src\.id/.test(projectsSrc), "[뮤테이션 앵커 확인] extractRegionAsDeck parent_id: src.parent_id||src.id 보존(4단 방지 불변식)");
+    ok(/parent_id:\s*this\._cutParentId\(src\)/.test(projectsSrc), "[뮤테이션 앵커 확인] extractRegionAsDeck parent_id: this._cutParentId(src) 보존(임의 깊이 불변식)");
   }
 
   const jsErrors = [];

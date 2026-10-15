@@ -479,14 +479,15 @@
         const r = await fetch("/api/projects/" + this.currentProject.id + "/decks", {
           method: "POST", headers: Auth.headers(),
           // 복사본: 새 배포본(그 페이지 자체가 영역) · 창 방식: 원본과 같은 도면 + crop(원본 무변경).
-          // [WO 20260921-tree] 🔴 parent_id = 부모 구역 id — 원본이 이미 "영역"(src.parent_id 있음)이어도
-          // 그 부모(루트 구역)에 붙여 트리가 4단(프로젝트>도면>구역>영역)을 넘지 않게 한다.
+          // [WO 20261015-treemap] 🔴 parent_id = 지금 보고 있는 구역(src) 자신 — 그 구역이 이미
+          // 몇 단 내려온 하위 구역이어도 그 **하위**로 붙여 임의 깊이 트리가 되게 한다(_cutParentId SoT).
+          // 이전엔 src.parent_id||src.id 로 형제(조부모 자식)에 붙여 3단 이상을 막았다(마스터가 뒤집음).
           // [WO 20260930-fixmode] 영역 = 부모 구역의 mode 상속(부모 NULL 이면 활성 모드) — PinSeries.withDeckMode SoT.
           body: JSON.stringify(this._withDeckMode(plan.depId
             // [WO 20260930-merge] 복사본은 원본 상자(src_*) 기록 — 합치기 좌표 변환의 전제(_srcBoxFields)
-            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id }, this._srcBoxFields(src, page, crop))
-            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: src.parent_id || src.id },
-            (src.parent_id && (this.decks || []).find((x) => String(x.id) === String(src.parent_id))) || src))
+            ? Object.assign({ name, page: 1, crop: null, deployment_id: plan.depId, level_no: src.level_no != null ? src.level_no : null, parent_id: this._cutParentId(src) }, this._srcBoxFields(src, page, crop))
+            : { name, page, crop, deployment_id: src.deployment_id, level_no: src.level_no != null ? src.level_no : null, parent_id: this._cutParentId(src) },
+            src))
         });
         const d = await r.json();
         if (!r.ok) { Prompt.toast && Prompt.toast((d && d.error) || "영역 추출 실패 — 권한을 확인하세요"); return null; }
@@ -579,6 +580,19 @@
       if (noB && cancelLabel) noB.textContent = cancelLabel;
       try { return !!(await p); }
       finally { if (okB) okB.textContent = prev[0]; if (noB) noB.textContent = prev[1]; }
+    },
+
+    /** [WO 20261015-treemap] 🔴 공유 지점(SoT) — extractRegionAsDeck() 의 벡터 복사·창 두 분기가
+     *  parent_id 를 정하는 규칙을 한 곳에만 둔다(§G-2-5). "지금 보고 있는 구역(src) 안에서 또 영역을
+     *  지정하면 그 구역의 **하위**가 된다"(마스터 2026-10-15: "그 하부로도 서브구역을 지정 가능하게
+     *  트리맵 구조 명확히 해") — 임의 깊이로 반복된다.
+     *  · src 가 "원본"(pickOriginalDeck 의 합성 placeholder — id 없음) 이면 최상위(parent_id=null).
+     *  · 그 외(루트 구역이든 이미 몇 단 내려온 구역이든)는 **src 자신**이 새 구역의 부모다.
+     *  🔴 이전 규칙 `src.parent_id || src.id` 는 이미 하위(parent_id 보유)인 구역에서 또 뽑으면
+     *  그 **형제**(조부모 자식)로 붙여 3단 이상을 막았다(1b91358 의도 — 지금은 마스터가 뒤집음). */
+    _cutParentId(src) {
+      if (!src || src.original || src.id == null) return null;
+      return src.id;
     },
 
     /** [WO 20260930-merge] 벡터 복사 구역의 "원본 상자" 기록(마이그레이션 0031) — 구역 합치기(41_RegionMerge)의 좌표 변환 전제.

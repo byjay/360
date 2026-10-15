@@ -5761,6 +5761,12 @@ body.zone-drawing-active .zone-draft-svg .zd-line{ fill:color-mix(in srgb, var(-
    #9095a0 은 4.19:1(p100 실측, 기준 4.5 미달). 활성 행 전용으로만 더 밝은 톤으로 교체
    (#a0a5ae on rgb(57,51,38) ≈ 5.07:1, 계산 가능). 비활성 상태는 기존 var(--text2) 그대로. */
 .tree-node.active .tree-kind-tag{color:#a0a5ae;}
+/* [WO 20261015-treemap] 트리 깊이 레벨 배지(L1/L2/L3…) — 마스터: "서브구역 … 트리맵 구조
+   명확히 해". 새 색 0 — .tree-kind-tag 와 같은 var(--text2)(이미 감사된 4.5:1+ 다크 톤) +
+   .tree-children 괘선과 같은 var(--border2) 테두리만 재사용한다. */
+.tree-level-tag{font-size:8.5px;font-weight:700;color:var(--text2);border:1px solid var(--border2);
+  border-radius:4px;padding:0 3px;line-height:1.5;flex:0 0 auto;margin-right:2px;}
+.tree-node.active .tree-level-tag{color:#a0a5ae;}
 /* [결함수정] 구역 0개(#side-tree 안 조용한 빈 상태 금지) — 프로젝트는 선택됐지만 구역이
    없을 때의 실제 생성 버튼 안내. 배경을 고정색으로 두므로 글자색도 고정색으로 맞춘다
    (var() 텍스트가 강제 다크모드에서만 밝게 재해석돼 고정 배경과 어긋나는 실사고 재발 방지, 831a127).

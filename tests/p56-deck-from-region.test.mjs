@@ -23,11 +23,14 @@
  *   ⑧ 모바일 겹침 0 — .admin-gate(z-index 9999, position:fixed inset:0) 가
  *      .mobile-dock(z-index 140) 보다 항상 위에 전체화면으로 뜬다(겹침이 아니라 완전히 덮음)
  *   ⑨ 36_Help.js 매뉴얼 항목 + 버튼 배선
- *   ⑩ 🔴 [WO 20260921-tree] extractRegionAsDeck() 이 parent_id 를 부모 구역 id 로 설정한다
- *      (원본이 이미 "영역"이어도 그 부모(루트 구역)에 붙여 트리 4단을 넘지 않게 한다)
+ *   ⑩ 🔴 [WO 20261015-treemap, 1b91358 뮤테이션 b 의미 전복] extractRegionAsDeck() 이 parent_id 를
+ *      **지금 보고 있는 구역(src) 자신**으로 설정한다 — src 가 이미 몇 단 내려온 하위 구역이어도
+ *      그 하위에 또 붙어 임의 깊이가 된다("그 하부로도 서브구역을 지정 가능하게", 마스터 2026-10-15).
+ *      전: parent_id: src.parent_id || src.id(이미 하위인 구역 위에서 뽑으면 형제로 붙어 3단 초과 금지)
+ *      후: parent_id: this._cutParentId(src) = src.id(원본이 아니면 항상 src 자신, 깊이 무제한)
  *
  * 🔴 뮤테이션 4건: ⓐ 선택 분기 제거 → ① 실패 · ⓑ 원본 변형 → ④ 실패 · ⓒ 좌표 재매핑 제거 → ⑥ 실패 ·
- *                 ⓓ parent_id 제거 → ⑩ 실패
+ *                 ⓓ _cutParentId 를 옛 규칙으로 되돌림 → ⑩ 실패
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -383,6 +386,87 @@ console.log("\n[⑥ 좌표 정합 — 영역 안 좌표 ↔ 원본(페이지) �
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ * ⑥b 🔴 [WO 20261015-treemap] _srcBoxFields — 2단 이상에서도 src_crop 이 원본(루트) 기준
+ *    좌표계로 합성되는지(§31_Projects.js, 마스터: "데이터 정합에 중요")
+ * ══════════════════════════════════════════════════════════════════════ */
+console.log("\n[⑥b src_crop 합성 — 2단 이상에서도 원본 기준 좌표로 맞는지]");
+{
+  function extractBalanced(src, needle) {
+    const start = src.indexOf(needle);
+    if (start < 0) throw new Error("needle not found: " + needle);
+    const braceStart = src.indexOf("{", start);
+    let d = 0, i = braceStart;
+    for (; i < src.length; i++) { if (src[i] === "{") d++; else if (src[i] === "}") { d--; if (d === 0) break; } }
+    return src.slice(start, i + 1);
+  }
+  const sb = {
+    console, document: { getElementById: () => null, createElement: () => ({ classList: { add() {}, remove() {}, toggle() {} } }) },
+    navigator: { onLine: true }, Auth: { headers: () => ({}), isDesigner: true }, Prompt: { ask: async () => null, toast() {} },
+  };
+  sb.window = sb;
+  vm.createContext(sb);
+  vm.runInContext(
+    "const MapCtrl = {" + extractBalanced(mapSrc, "pageToDeckCropPct(x, y, crop) {") + "," + extractBalanced(mapSrc, "deckCropPctToPage(x, y, crop) {") + "};\n" +
+    projectsSrc + "\n;globalThis.__P2 = Projects; globalThis.__MapCtrl = MapCtrl;", sb);
+  const P2 = sb.__P2;
+
+  // 레벨1(원본 MAIN, src_dep_id 없음) 에서 BOX1 을 잘라 레벨2(d2) 생성 — d2.src_crop 은 BOX1 자체(비합성, 1단 규칙).
+  const BOX1 = { x: 20, y: 20, w: 40, h: 30 };
+  const d1 = { id: "d1", deployment_id: "dep_main", src_dep_id: null, src_crop: null };
+  const f2 = P2._srcBoxFields(d1, 1, BOX1);
+  ok(f2.src_dep_id === "dep_main" && JSON.stringify(f2.src_crop) === JSON.stringify(BOX1),
+    "⑥b L1→L2: src_crop = 잘라낸 그대로(BOX1), src_dep_id = 원본 dep_main, 실제 " + JSON.stringify(f2));
+  const d2 = { id: "d2", deployment_id: "dep_d2", src_dep_id: f2.src_dep_id, src_page: f2.src_page, src_crop: f2.src_crop };
+
+  // 레벨2(d2, 자기 페이지 % 기준) 안에서 BOX2 를 또 잘라 레벨3(d3) — 합성 공식으로 원본(dep_main) 기준 좌표가 나와야 한다.
+  const BOX2 = { x: 10, y: 10, w: 20, h: 20 };
+  const f3 = P2._srcBoxFields(d2, 1, BOX2);
+  // 수식 검증(순수 계산, MapCtrl.deckCropPctToPage 와 독립적으로 재도출): tl = BOX1.x+(BOX2.x/100)*BOX1.w …
+  const expTl = { x: BOX1.x + (BOX2.x / 100) * BOX1.w, y: BOX1.y + (BOX2.y / 100) * BOX1.h };
+  const expBr = { x: BOX1.x + ((BOX2.x + BOX2.w) / 100) * BOX1.w, y: BOX1.y + ((BOX2.y + BOX2.h) / 100) * BOX1.h };
+  const expCrop = { x: expTl.x, y: expTl.y, w: expBr.x - expTl.x, h: expBr.y - expTl.y };
+  ok(f3.src_dep_id === "dep_main", "⑥b L2→L3: src_dep_id 는 여전히 원본(dep_main) — 중간 단계(d2)를 가리키지 않는다, 실제 " + f3.src_dep_id);
+  ok(Math.abs(f3.src_crop.x - expCrop.x) < 1e-9 && Math.abs(f3.src_crop.y - expCrop.y) < 1e-9 &&
+     Math.abs(f3.src_crop.w - expCrop.w) < 1e-9 && Math.abs(f3.src_crop.h - expCrop.h) < 1e-9,
+    "⑥b L2→L3: src_crop 이 원본(dep_main) 페이지 % 기준으로 합성됨 — 기대 " + JSON.stringify(expCrop) + " 실제 " + JSON.stringify(f3.src_crop));
+
+  // 레벨3(d3)에서 또 한 번 더(레벨4) — 체인이 깊어져도 같은 공식이 재귀적으로 원본 기준을 유지한다.
+  const d3 = { id: "d3", deployment_id: "dep_d3", src_dep_id: f3.src_dep_id, src_page: f3.src_page, src_crop: f3.src_crop };
+  const BOX3 = { x: 5, y: 5, w: 5, h: 5 };
+  const f4 = P2._srcBoxFields(d3, 1, BOX3);
+  const expTl2 = { x: expCrop.x + (BOX3.x / 100) * expCrop.w, y: expCrop.y + (BOX3.y / 100) * expCrop.h };
+  const expBr2 = { x: expCrop.x + ((BOX3.x + BOX3.w) / 100) * expCrop.w, y: expCrop.y + ((BOX3.y + BOX3.h) / 100) * expCrop.h };
+  ok(f4.src_dep_id === "dep_main" &&
+     Math.abs(f4.src_crop.x - expTl2.x) < 1e-9 && Math.abs(f4.src_crop.y - expTl2.y) < 1e-9 &&
+     Math.abs(f4.src_crop.w - (expBr2.x - expTl2.x)) < 1e-9 && Math.abs(f4.src_crop.h - (expBr2.y - expTl2.y)) < 1e-9,
+    "⑥b L3→L4: 4단째도 원본 기준으로 합성(재귀 공식 유지) — 실제 " + JSON.stringify(f4));
+}
+/* ── 뮤테이션ⓖ: _srcBoxFields 의 합성 분기(src.src_dep_id 체인 합성)를 제거 → ⑥b(L2→L3) 가 실패해야 한다 ── */
+{
+  console.log("\n[뮤테이션ⓖ] _srcBoxFields 합성 분기 제거(항상 src 자신 기준) → ⑥b(L2→L3) 가 실패해야 함");
+  const needle = `      const sc = src.src_crop;
+      if (src.src_dep_id && sc && sc.w > 0 && sc.h > 0 && typeof MapCtrl !== "undefined" && MapCtrl.deckCropPctToPage) {
+        const tl = MapCtrl.deckCropPctToPage(crop.x, crop.y, sc);
+        const br = MapCtrl.deckCropPctToPage(crop.x + crop.w, crop.y + crop.h, sc);
+        return { src_dep_id: String(src.src_dep_id), src_page: Number(src.src_page) || 1, src_crop: { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y } };
+      }`;
+  const mut = projectsSrc.replace(needle, "");
+  if (mut === projectsSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const mutSand2 = { console, document: { getElementById: () => null, createElement: () => ({ classList: { add() {}, remove() {}, toggle() {} } }) },
+      navigator: { onLine: true }, Auth: { headers: () => ({}), isDesigner: true }, Prompt: { ask: async () => null, toast() {} } };
+    mutSand2.window = mutSand2;
+    vm.createContext(mutSand2);
+    vm.runInContext(mut + "\n;globalThis.__PM2 = Projects;", mutSand2);
+    const PM2 = mutSand2.__PM2;
+    const BOX1 = { x: 20, y: 20, w: 40, h: 30 }, BOX2 = { x: 10, y: 10, w: 20, h: 20 };
+    const d2m = { id: "d2", deployment_id: "dep_d2", src_dep_id: "dep_main", src_page: 1, src_crop: BOX1 };
+    const got = PM2._srcBoxFields(d2m, 1, BOX2);
+    ok(JSON.stringify(got.src_crop) !== JSON.stringify({ x: 24, y: 23, w: 8, h: 6 }), "뮤테이션 적용 시 ⑥b 가 깨짐(합성 없이 d2 자신 기준으로 잘못 저장) — 실제 " + JSON.stringify(got));
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  * ⑦ 목록에서 두 종류 구분
  * ══════════════════════════════════════════════════════════════════════ */
 console.log("\n[⑦ 구역 목록에서 영역-추출 구역과 업로드 구역이 구분된다]");
@@ -418,25 +502,57 @@ console.log("\n[⑨ 사용자 매뉴얼(36_Help.js) + 배선]");
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- * ⑩ 🔴 [WO 20260921-tree] parent_id — 트리 4단(프로젝트>도면>구역>영역)을 넘지 않는다
+ * ⑩ 🔴 [WO 20261015-treemap] parent_id — 임의 깊이 트리맵(지금 구역 아래 또 하위 구역)
  * ══════════════════════════════════════════════════════════════════════ */
-console.log("\n[⑩ extractRegionAsDeck() 이 parent_id 를 부모 구역 id 로 설정 — 4단 초과 방지]");
+console.log("\n[⑩ extractRegionAsDeck() 이 parent_id 를 '지금 보고 있는 구역' 자신으로 설정 — 임의 깊이]");
 {
-  ok(/parent_id:\s*src\.parent_id\s*\|\|\s*src\.id/.test(projectsSrc),
-    "⑩a extractRegionAsDeck() 이 POST body 에 parent_id: src.parent_id || src.id 를 보낸다");
+  ok(/_cutParentId\(src\)/.test(projectsSrc) && /parent_id:\s*this\._cutParentId\(src\)/.test(projectsSrc),
+    "⑩a extractRegionAsDeck() 이 POST body 에 parent_id: this._cutParentId(src) 를 보낸다(공유 지점 1곳)");
   ok(regionDeck1.parent_id === SRC_DECK,
     "⑩b 루트 구역(SRC_DECK)에서 뽑은 영역의 parent_id = 그 루트 구역 id, 실제 " + regionDeck1.parent_id);
 
-  // 이미 "영역"(parent_id 있음)인 구역 위에서 또 뽑아도 — 손자가 아니라 같은 부모(루트)에 붙는다(4단 유지)
+  // 🔴 [WO 20261015-treemap] 이미 "영역"(parent_id 있음)인 구역 위에서 또 뽑으면 — 형제가 아니라
+  //   그 구역 자신의 하위(3단)가 된다(마스터: "그 하부로도 서브구역을 지정 가능하게"). 전: ⑩c 는
+  //   "조부모를 그대로 가리킨다(손자 체인 금지)"를 검증했다 — 그 금지를 이번 지시로 뒤집는다.
   const dom4 = makeDom();
   const c4 = makeClient(db, dom4);
   await c4.P.loadDecks();
   c4.P.currentDeck = c4.P.decks.find((d) => d.id === regionDeck1.id); // 이미 parent_id 를 가진 "영역" 위에서 작업
   ok(!!c4.P.currentDeck.parent_id, "⑩ 사전조건 — 현재 구역이 이미 parent_id 를 가진 영역이다(" + c4.P.currentDeck.parent_id + ")");
-  const grandPending = c4.P.extractRegionAsDeck({ name: "영역 R1-손자시도", crop: { x: 1, y: 1, w: 5, h: 5 } });
+  const grandPending = c4.P.extractRegionAsDeck({ name: "영역 R1-손자", crop: { x: 1, y: 1, w: 5, h: 5 } });
   const grand = await grandPending;
-  ok(!!grand && grand.parent_id === SRC_DECK,
-    "⑩c 영역 위에서 또 뽑아도 parent_id 는 그 조부모(루트 SRC_DECK)를 그대로 가리킨다(손자 체인 금지), 실제 " + (grand && grand.parent_id));
+  ok(!!grand && grand.parent_id === regionDeck1.id,
+    "⑩c 영역 위에서 또 뽑으면 parent_id 는 그 영역(regionDeck1) 자신을 가리킨다(3단, 손자 체인 허용), 실제 " + (grand && grand.parent_id));
+  ok(grand && grand.parent_id !== SRC_DECK,
+    "⑩d 회귀 없음 확인 — 더는 조부모(루트)로 형제처럼 붙지 않는다");
+
+  // ── 4단째: regionDeck1(2단) 아래 grand(3단) 아래에서 한 번 더 뽑으면 grand 자신이 부모(4단) ──
+  const dom5 = makeDom();
+  const c5 = makeClient(db, dom5);
+  await c5.P.loadDecks();
+  c5.P.currentDeck = c5.P.decks.find((d) => d.id === grand.id);
+  const greatGrand = await c5.P.extractRegionAsDeck({ name: "영역 R1-증손", crop: { x: 2, y: 2, w: 2, h: 2 } });
+  ok(!!greatGrand && greatGrand.parent_id === grand.id,
+    "⑩e 4단째도 같은 규칙 — parent_id = 바로 위 구역(grand) 자신, 실제 " + (greatGrand && greatGrand.parent_id));
+}
+/* ── 뮤테이션ⓔ: _cutParentId 를 옛 규칙(src.parent_id||src.id)으로 되돌림 → ⑩c 가 실패해야 한다 ── */
+{
+  console.log("\n[뮤테이션ⓔ] _cutParentId 를 옛 규칙(src.parent_id||src.id)으로 되돌림 → ⑩c 가 실패해야 함");
+  const needle = "_cutParentId(src) {\n      if (!src || src.original || src.id == null) return null;\n      return src.id;\n    },";
+  const mut = projectsSrc.replace(needle, "_cutParentId(src) {\n      return src.parent_id || src.id;\n    },");
+  if (mut === projectsSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
+  else {
+    const mutSand = { console, document: { getElementById: () => null, createElement: () => ({ classList: { add() {}, remove() {}, toggle() {} } }) },
+      navigator: { onLine: true }, Auth: { headers: () => ({}), isDesigner: true }, Prompt: { ask: async () => null, toast() {} } };
+    mutSand.window = mutSand;
+    vm.createContext(mutSand);
+    vm.runInContext(mut + "\n;globalThis.__PM = Projects;", mutSand);
+    const PM = mutSand.__PM;
+    // regionDeck1 은 이미 parent_id(=SRC_DECK) 를 가진 "하위 구역" — 옛 규칙이면 그 조부모(SRC_DECK)를,
+    // 새 규칙이면 regionDeck1 자신을 반환한다.
+    const got = PM._cutParentId(regionDeck1);
+    ok(got !== regionDeck1.id, "뮤테이션 적용 시 ⑩c 가 깨짐(하위 구역 자신이 아니라 형제로 다시 돌아간다) — 실제 " + got);
+  }
 }
 
 console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED"));

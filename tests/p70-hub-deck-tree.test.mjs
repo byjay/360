@@ -534,10 +534,11 @@ await withBrowser(async (browser) => {
   // [WO 20261002-allmenu §5] needle 갱신(전·후 대조): 전 `... + _tag + zoneCntTag;` → 후 `... + _tag + srcTag + zoneCntTag`
   //   (+ 다음 줄 ⋯ 메뉴). 새 srcTag 는 "잘라옴" 또는 "별도 등록 · 파일명"(자기 도면일 때만) — 같은 도면을 공유하는
   //   이 픽스처(구역·영역 둘 다 dep1)에서는 파일명이 행에 나오지 않는다(①은 그대로 유효). 변형(파일명 부가 라벨 부활)은 그대로.
-  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
+  // [WO 20261015-treemap] needle 갱신 — levelTag(L1/L2/L3 레벨 배지)가 kindTag 앞에 추가됐다(전·후 대조).
+  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + levelTag + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
   const docSrc = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
   const mutated = uiSrc.replace(needle,
-    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
+    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + levelTag + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { m } = await measureSidebarTree(browser, mutated);
@@ -548,7 +549,8 @@ await withBrowser(async (browser) => {
 
 console.log("\n[뮤테이션ⓕ] title 에서 파일명을 제거 → ④가 실패해야 함");
 await withBrowser(async (browser) => {
-  const needle = 'head.title = (deck.name ? deck.name : "(이름 없음)") + (docName ? "\\n원본 도면: " + docName : "");';
+  // [WO 20261015-treemap] needle 갱신 — head.title 에 경로(레벨 N) 꼬리표가 추가됐다(전·후 대조, 의미 동일).
+  const needle = 'head.title = (deck.name ? deck.name : "(이름 없음)") + "\\n경로(레벨 " + depth + "): " + _path + (docName ? "\\n원본 도면: " + docName : "");';
   const mutated = uiSrc.replace(needle, 'head.title = (deck.name ? deck.name : "(이름 없음)");');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
