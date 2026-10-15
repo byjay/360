@@ -60,6 +60,9 @@ function makeApp({ fetchImpl = async () => ({ ok: true, status: 200, json: async
   const State = {
     pins: [], zones: [], annotations: [], checkboardStart: {}, pdfPage: 1, mode,
     fileType: "image", pinTombstones: {}, pinBaseIds: null,
+    // [WO 20261015-bulkdel-undo] deletePins 가 서버 경로를 타려면 autoSaveDepId·depVersion 이 있어야 한다
+    // (열려 있는 배포본이 없으면 "프로젝트·도면을 먼저 여세요" 로 막힌다 — 그 가드는 A 에서 별도 검사).
+    autoSaveDepId: "dep1", depVersion: 5,
     reset() { this.pins = []; this.zones = []; this.annotations = []; this.fileType = null; this.pinTombstones = {}; this.pinBaseIds = null; },
   };
   const sandbox = {
@@ -74,8 +77,11 @@ function makeApp({ fetchImpl = async () => ({ ok: true, status: 200, json: async
       allDraftKeys: async () => Object.keys(drafts),
     },
     // [WO 20261001-bulkreauth] 권한 = projectCanManage(소유자·super). 재인증은 p107 이 검사 — 여기선 통과로 고정.
-    Auth: { headers: () => ({}), r2: (u) => u, isDesigner: true, isAdmin: admin, projectCanManage: admin, readonly: false,
-      ensureReauth: async () => true, reauthHeader: () => ({}), clearReauth() {} },
+    Auth: { headers: (extra) => (extra || {}), r2: (u) => u, isDesigner: true, isAdmin: admin, projectCanManage: admin, readonly: false,
+      // [WO 20261015-bulkdel-undo] deletePins 가 이제 Auth._reauth.token 을 직접 읽는다(reauthHeader() 는 안 씀 —
+      // hasValidReauth() 의 시계 재평가 함정 회피, p107 R5 재현 참조) — 스텁도 그 필드를 채운다.
+      _reauth: { token: "rx1.test" },
+      ensureReauth: async () => true, reauthHeader: () => ({ "X-Reauth": "rx1.test" }), clearReauth() {} },
     Prompt: { toast(m) { calls.toast.push(m); }, confirm: async (t, m) => { calls.confirm.push(m); return confirmAns; } },
     OpLog: { recordCurrent: async (e, a, id) => { calls.oplog.push([e, a, id]); } },
     persistLocalDeployment: async () => { calls.persist++; },
@@ -83,6 +89,20 @@ function makeApp({ fetchImpl = async () => ({ ok: true, status: 200, json: async
     MapCtrl: { applyTransform() {}, fit() {} }, Log: { push() {} },
     // [WO 20261001-startno] _placeCheckboardPin 이 대역 정본(nextInBand · myBand)을 부른다 — 스텁도 같은 표면으로.
     PinSeries: { preferredMode: () => "designer", setPreferredMode() {}, nextSeriesNo: () => 1, myBand: () => null, nextInBand: () => ({ no: 1, full: false, band: 1, lo: 1, hi: 100 }) },
+    // [WO 20261015-bulkdel-undo] deletePins 성공 후 App 이 "typeof PinPurge" 로 느슨 참조해 merge-refresh 한다
+    // (실 번들은 53_PinPurge.js 가 항상 같이 로드되지만, 이 vm 픽스처는 없으므로 최소 스텁으로 흉내).
+    PinPurge: {
+      async _afterServerChange() {
+        if (!State.autoSaveDepId) return;
+        try {
+          const r = await sandbox.fetch("/tables/deployments/" + State.autoSaveDepId, { headers: {} });
+          if (!r.ok) return;
+          const dep = await r.json();
+          if (dep && dep.pins != null) { State.pins = JSON.parse(dep.pins); State.depVersion = dep.version; }
+        } catch (e) {}
+      },
+      _showBar() {},
+    },
     fetch: fetchImpl, URLSearchParams, AbortController,
     setTimeout: (f, ms) => (ms && ms >= 1000 ? 0 : setTimeout(f, ms)), clearTimeout,
     JSON, Array, Map, Set, Date, Promise, Object, Number, String,
@@ -101,6 +121,37 @@ const KEY = "prjX::dckM";
 const P = (id) => ({ id, x: 10, y: 10, page: 1, label: String(id) });
 const res = (status, j) => ({ ok: status >= 200 && status < 300, status, json: async () => j });
 
+/** [WO 20261015-bulkdel-undo] deletePins 가 이제 네트워크를 탄다 — POST .../pins/bulk-delete 와
+ *  그 뒤 PinPurge._afterServerChange 가 부르는 GET /tables/deployments/:id 를 최소로 흉내낸다.
+ *  pins = "서버의 지금 핀"(deep copy) — bulk-delete 가 그 안에서 id 매칭분만 tombstone 한다(실 서버와 같은 판정). */
+function makeBulkDeleteServer(initialPins) {
+  let pins = JSON.parse(JSON.stringify(initialPins || []));
+  let version = 5;
+  const posts = [], gets = [];
+  const fetchImpl = async (url, opt) => {
+    if (opt && opt.method === "POST" && /\/pins\/bulk-delete$/.test(url)) {
+      const body = JSON.parse(opt.body || "{}");
+      posts.push({ url, body, headers: (opt.headers || {}) });
+      if (body.base_version != null && Number(body.base_version) !== version) return res(409, { error: "conflict", conflict: true });
+      const want = new Set((body.ids || []).map(String));
+      const live = pins.filter((p) => p && p.id != null && !p._deleted);
+      const targets = live.filter((p) => want.has(String(p.id)));
+      if (!targets.length) return res(200, { ok: true, deleted: 0, batch: null, undo_until: null, results: [] });
+      const dead = new Set(targets.map((p) => String(p.id)));
+      pins = pins.map((p) => (p && p.id != null && dead.has(String(p.id))) ? { id: p.id, _deleted: true, ts: Date.now() } : p);
+      version++;
+      return res(200, { ok: true, deleted: targets.length, batch: "b1", undo_until: Date.now() + 1000,
+        results: [{ id: body.deployment_id, ok: true, status: 200, deleted: targets.length, version }] });
+    }
+    if ((!opt || !opt.method || opt.method === "GET") && /^\/tables\/deployments\//.test(url)) {
+      gets.push(url);
+      return res(200, { id: "dep1", pins: JSON.stringify(pins), version, zones: "[]", annotations: "[]" });
+    }
+    return res(200, {});
+  };
+  return { fetchImpl, posts, gets, get pins() { return pins; }, get version() { return version; } };
+}
+
 /* ══ A. 권한 · 확인 대화상자 ══ */
 {
   console.log("\n[A. 권한 = Auth.projectCanManage(소유자·super) · Prompt.confirm(개수 명시)]");
@@ -115,36 +166,48 @@ const res = (status, j) => ({ ok: status >= 200 && status < 300, status, json: a
   c.State.pins = [P(1), P(2), P(3)];
   ok((await c.App.deletePins([1, 2, 3])) === 0 && c.State.pins.length === 3, "A 확인 취소 → 삭제 없음");
   ok(/포인트 3개/.test(c.calls.confirm[0] || ""), "A 확인 문구에 개수(3개) 명시 — " + JSON.stringify(c.calls.confirm[0]));
-  const g = makeApp();
+  // [WO 20261015-bulkdel-undo] 관리자 성공 경로 — 이제 서버(POST bulk-delete)를 탄다. 로컬 tombstone 은
+  // 더 쓰지 않는다(서버가 기록·tombstone, 클라는 PinPurge._afterServerChange 로 merge-refresh).
+  const srv = makeBulkDeleteServer([P(1), P(2), P(3)]);
+  const g = makeApp({ fetchImpl: srv.fetchImpl });
   g.State.pins = [P(1), P(2), P(3)];
   const n2 = await g.App.deletePins([1, 3, 999]);
-  ok(n2 === 2 && ids(g.State.pins) === "2", "A 관리자 → 요청 id 중 실재하는 2개만 삭제");
-  ok(g.State.pinTombstones["1"] && g.State.pinTombstones["3"], "A 삭제 핀은 tombstone 기록");
+  ok(n2 === 2, "A 관리자 → 요청 id 중 실재하는 2개만 삭제(서버 응답 deleted=2) — " + n2);
+  // 서버 merge-refresh 는 "서버의 지금 핀"(tombstone 포함) 그대로 받는다 — 살아있는 것만 걸러야 2 하나.
+  ok(ids(g.State.pins.filter((p) => !p._deleted)) === "2", "A 성공 후 merge-refresh 로 State.pins 반영(서버 최신본, 살아있는 핀) → [" + ids(g.State.pins.filter((p) => !p._deleted)) + "]");
+  const sent = srv.posts[0] && srv.posts[0].body;
+  // 999 는 로컬 State.pins 에 없어 클라가 보내는 ids 자체에서 걸러진다(999 를 보내지 않는 것도 정상 동작).
+  ok(sent && sent.deployment_id === "dep1" && sent.ids.slice().sort((x, y) => x - y).join(",") === "1,3" && sent.base_version === 5,
+    "A 서버 요청 본문 = deployment_id·ids(999 는 로컬에 없어 제외)·base_version — " + JSON.stringify(sent));
+  ok(srv.posts[0] && srv.posts[0].headers && srv.posts[0].headers["X-Reauth"] === "rx1.test", "A 재인증 헤더(X-Reauth) 동봉");
 }
 
-/* ══ B. 오프라인 — 단건과 같은 OpLog 경로(핀마다 delete op) + 로컬 스냅샷 ══ */
+/* ══ B. 오프라인 — [WO 20261015-bulkdel-undo] 일괄삭제는 서버 전용(차단) · 단건은 종전 OpLog 경로 ══ */
 {
-  console.log("\n[B. 오프라인 OpLog 재사용]");
+  console.log("\n[B. 오프라인 — 일괄삭제 차단 · 단건 OpLog 재사용]");
   const o = makeApp({ online: false });
   o.State.pins = [P(1), P(2), P(3)];
-  await o.App.deletePins([1, 2]);
-  await tick();
-  ok(JSON.stringify(o.calls.oplog) === JSON.stringify([["pin", "delete", 1], ["pin", "delete", 2]]), "B 핀마다 OpLog delete op — " + JSON.stringify(o.calls.oplog));
-  ok(o.calls.persist === 1, "B persistLocalDeployment 1회");
+  const n = await o.App.deletePins([1, 2]);
+  ok(n === 0 && ids(o.State.pins) === "1,2,3", "B 오프라인 일괄삭제 → 0개, 핀 그대로 — " + ids(o.State.pins));
+  ok(o.calls.oplog.length === 0 && o.calls.persist === 0, "B 오프라인 일괄삭제 → OpLog·로컬저장 호출 없음(서버에 가지도 않음)");
+  ok(/온라인/.test(o.calls.toast[0] || ""), "B 오프라인 안내 토스트 — " + JSON.stringify(o.calls.toast[0]));
   const s = makeApp();
   s.State.pins = [P(7), P(8)];
   await s.App.deletePin(7);
-  ok(s.State.pinTombstones["7"] && ids(s.State.pins) === "8", "B 단건 deletePin 도 같은 경로(_removePins) — tombstone 기록");
+  ok(s.State.pinTombstones["7"] && ids(s.State.pins) === "8", "B 단건 deletePin 은 그대로 로컬(_removePins) — tombstone 기록(오프라인에서도 동작, 종전 불변식 유지)");
 }
 
-/* ══ C. 내가 일괄삭제 → 저장 전 다른 사용자가 저장(서버 더 새로움) → draft 복원/업로드에서 부활 금지 ══ */
+/* ══ C. 로컬 삭제(_removePins) → 저장 전 다른 사용자가 저장(서버 더 새로움) → draft 복원/업로드에서 부활 금지 ══
+ *  [WO 20261015-bulkdel-undo] deletePins(일괄)는 이제 서버 전용이라 이 섹션의 draft/tombstone 경로를 안 탄다.
+ *  이 섹션이 실제로 단위검사하는 것은 _removePins → _autoSave(draft)·_draftVsServer(병합 SoT) — 단건 deletePin도
+ *  같은 _removePins 를 타므로 _removePins 를 직접 불러 그 경로를 그대로 검사한다(대상을 바꾼 것일 뿐 검증 폭은 동일). */
 {
-  console.log("\n[C. 오프라인 draft × 서버 더 새로움(_draftVsServer)]");
+  console.log("\n[C. 로컬 삭제(_removePins) × 오프라인 draft × 서버 더 새로움(_draftVsServer)]");
   const drafts = {};
   const a = makeApp({ drafts });
   a.State.pins = [P(1), P(2), P(3)]; a.State.pinBaseIds = ["1", "2", "3"];
   a.State.autoSaveDepId = "dep1"; a.State.depVersion = 5;
-  await a.App.deletePins([2, 3]);
+  a.App._removePins([2, 3]);
   await tick();
   const d = drafts[KEY];
   ok(d && ids(d.pins) === "1", "C draft 에 남은 핀 1개");
@@ -171,12 +234,14 @@ const res = (status, j) => ({ ok: status >= 200 && status < 300, status, json: a
     };
     return { sent, fetchImpl };
   };
-  // D1 내가 2·3 을 일괄삭제 → 그 사이 C 가 9 를 추가해 v6 저장 → 내 저장 409
+  // D1 내가 2·3 을 로컬 삭제(_removePins — [WO 20261015-bulkdel-undo] 일괄 deletePins 는 이제 서버 전용이라
+  //   이 PATCH 충돌 경로를 안 탄다. 검사 대상은 그대로 _mergeConflict 의 삭제 비부활 규칙) → 그 사이 C 가 9 를
+  //   추가해 v6 저장 → 내 저장 409
   {
     const t = mk({ pins: JSON.stringify([P(1), P(2), P(3), P(9)]), zones: "[]", version: 6 });
     const a = makeApp({ fetchImpl: t.fetchImpl });
     a.State.pins = [P(1), P(2), P(3)]; a.State.pinBaseIds = ["1", "2", "3"]; a.State.depVersion = 5; a.State.autoSaveDepId = "dep1";
-    await a.App.deletePins([2, 3]);
+    a.App._removePins([2, 3]);
     const r = await a.App._patchDeployment("dep1", () => ({ pins: JSON.stringify(a.State.pins) }));
     const retried = t.sent[1] ? JSON.parse(t.sent[1].pins) : [];
     ok(r.ok && ids(retried) === "1,9", "D1 내 삭제: 재시도 본문 = [1,9](2·3 부활 없음) → [" + ids(retried) + "]");

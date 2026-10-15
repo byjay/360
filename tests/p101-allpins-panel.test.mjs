@@ -70,6 +70,22 @@ const server = http.createServer(async (req, res) => {
   if (u === "/api/projects/prjT/bands") return json(res, { band_size: 100, me: { email: "owner@test.local", band: 1, owner: true }, bands: [] });
   const m = u.match(/^\/tables\/deployments\/(.+)$/);
   if (m && req.method === "GET") { const d = db.deps[m[1]]; return d ? json(res, d) : json(res, { error: "nf" }, 404); }
+  // [WO 20261015-bulkdel-undo] deletePins 가 로컬(_removePins) 대신 서버 /pins/bulk-delete 를 탄다 — D 섹션이
+  // "App.deletePins 경로로 실제 삭제" 를 검증하려면 이 목 서버가 실제로 db.deps 핀을 지워야 한다(PinPurge.
+  // _afterServerChange 가 뒤이어 GET 으로 다시 읽어 State.pins 에 반영).
+  if (u === "/api/projects/prjT/pins/bulk-delete" && req.method === "POST") {
+    let body = ""; for await (const c of req) body += c;
+    let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) {}
+    const d = db.deps[b.deployment_id];
+    if (!d) return json(res, { error: "nf" }, 404);
+    let pins = []; try { pins = JSON.parse(d.pins || "[]"); } catch (e) {}
+    const want = new Set((b.ids || []).map(String));
+    const dead = pins.filter((p) => p && p.id != null && !p._deleted && want.has(String(p.id)));
+    pins = pins.map((p) => (p && dead.some((x) => String(x.id) === String(p.id))) ? { id: p.id, _deleted: true, ts: Date.now() } : p);
+    d.pins = JSON.stringify(pins); d.version = Number(d.version || 0) + 1;
+    return json(res, { ok: true, deleted: dead.length, batch: "b1", undo_until: Date.now() + 60000,
+      results: [{ id: b.deployment_id, ok: true, status: 200, deleted: dead.length, version: d.version }] });
+  }
   if (u.startsWith("/api/") || u.startsWith("/tables/")) return json(res, { data: [], settings: {}, value: {} });
   const f = path.join(PUB, u === "/" ? "index.html" : u);
   if (!f.startsWith(PUB) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); res.end("nf"); return; }

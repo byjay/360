@@ -3236,16 +3236,29 @@
       const body = { deployment_id: State.autoSaveDepId, ids: targets.map(p => p.id),
         scope: opts.scope === "zone" ? "zone" : "selection", scope_label: opts.scopeLabel || null,
         base_version: State.depVersion != null ? Number(State.depVersion) : 0 };
-      let res = await this._bulkDeleteReq(proj.id, body, Auth.reauthHeader());
+      // 🔴 Auth.reauthHeader() 가 아니라 방금 ensureReauth() 가 채운 토큰을 직접 읽는다 — reauthHeader() 는
+      //   hasValidReauth()(exp>Date.now()) 를 다시 평가해, 막 발급된 토큰도 "그 사이 시계가 흘러" 만료로 보일 틈을
+      //   만든다(지휘자 재현 p107 R5 — ask 3회로 튐). 막 성공한 ensureReauth() 결과를 그대로 믿는다.
+      const rxHeader = () => (Auth._reauth && Auth._reauth.token) ? { "X-Reauth": Auth._reauth.token } : {};
+      let res = await this._bulkDeleteReq(proj.id, body, rxHeader());
       if (res.status === 403 && res.j && res.j.reauth_required) {
         Auth.clearReauth();
         if (!(await Auth.ensureReauth())) { Prompt.toast("본인 확인이 끝나지 않아 삭제하지 않았습니다"); return 0; }
-        res = await this._bulkDeleteReq(proj.id, body, Auth.reauthHeader());
+        res = await this._bulkDeleteReq(proj.id, body, rxHeader());
       }
       if (res.status !== 200) { Prompt.toast("삭제하지 않았습니다 — " + ((res.j && res.j.error) || res.status)); return 0; }
-      if (typeof PinPurge !== "undefined" && PinPurge._afterServerChange) await PinPurge._afterServerChange();
-      UI.renderPinList(); UI.renderPinsOnMap();
       const deleted = (res.j && res.j.deleted) || 0;
+      // 다음 저장·다음 일괄삭제가 쓸 base_version — 서버가 별칭 공간으로 환산해 돌려준다(PATCH 응답과 같은 규칙).
+      if (res.j && res.j.new_base_version != null) State.depVersion = Number(res.j.new_base_version);
+      // 🔴 성공분은 즉시 로컬에서도 지운다(PinPurge 느슨 참조에만 기대지 않는다 — 그 모듈이 없어도/실패해도
+      //   화면이 서버 결과를 반영해야 한다). id 는 별칭 구역이라도 원본과 같은 값(핀 동기화 설계 S1) → 그대로 유효.
+      if (deleted) {
+        const removedIds = new Set(targets.map(p => String(p.id)));
+        State.pins = (State.pins || []).filter(p => !removedIds.has(String(p.id)));
+        if (State.activePin != null && removedIds.has(String(State.activePin))) State.activePin = null;
+      }
+      try { if (typeof PinPurge !== "undefined" && PinPurge._afterServerChange) await PinPurge._afterServerChange(); } catch (e) {}
+      UI.renderPinList(); UI.renderPinsOnMap();
       Prompt.toast(`포인트 ${deleted}개 삭제됨`);
       if (deleted && typeof PinPurge !== "undefined" && PinPurge._showBar) PinPurge._showBar(proj.id, res.j);
       return deleted;

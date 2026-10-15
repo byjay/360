@@ -155,7 +155,13 @@ async function makeClient(k, { askAns, fb, reauthIntercept } = {}) {
     const u = String(url);
     if (u === "/api/auth/reauth") { try { calls.reauthBodies.push(JSON.parse(opts.body || "{}")); } catch (e) {} if (reauthIntercept) return reauthIntercept(opts); }
     if (/^\/tables\/deployments\//.test(u) && opts.method === "PATCH") calls.patches.push({ xr: (opts.headers || {})["X-Reauth"] || null });
-    const r = await mf.dispatchFetch(BASE + u, { method: opts.method || "GET", headers: opts.headers, body: opts.body });
+    // [WO 20261015-bulkdel-undo] G 섹션은 Auth.idToken 을 "google-session-token"(가짜 문자열)로 바꿔 ensureReauth 의
+    // 분기(local- 접두 아님 → 구글 경로)만 흉내낸다 — 실 서버 Bearer 인증과는 무관했다(deletePins 가 자기 네트워크
+    // 호출을 하지 않던 시절). 이제 deletePins 가 직접 POST(bulk-delete) 를 보내므로, 이 가짜 문자열이 그대로
+    // Authorization 에 실리면 실 서버가 로그인 자체를 거부한다 — 같은 계정(TOK[k])으로 바로잡아 전달한다.
+    const headers = Object.assign({}, opts.headers || {});
+    if (headers.Authorization === "Bearer google-session-token") headers.Authorization = "Bearer " + TOK[k];
+    const r = await mf.dispatchFetch(BASE + u, { method: opts.method || "GET", headers, body: opts.body });
     if (/^\/tables\/deployments\//.test(u) && opts.method === "PATCH") calls.patches[calls.patches.length - 1].status = r.status;
     return r;
   };
@@ -190,6 +196,9 @@ async function makeClient(k, { askAns, fb, reauthIntercept } = {}) {
   await Auth.refresh();
   const list = (await (await mf.dispatchFetch(BASE + "/api/projects", { headers: { Authorization: "Bearer " + TOK[k] } })).json()).data || [];
   Auth.setProjectContext(list.find((p) => p.id === PID) || null);
+  // [WO 20261015-bulkdel-undo] deletePins 가 이제 Projects.currentProject.id 로 서버(/api/projects/:id/pins/bulk-delete)를
+  // 부른다 — 이 클라 realm 은 Projects 를 스텁(고정 null)으로만 두므로 실제 열린 프로젝트를 흉내낸다.
+  sandbox.Projects.currentProject = { id: PID, name: "P107" };
   return { Auth, App, State, calls, clock, sandbox };
 }
 async function loadDep(c, depId) {
@@ -231,7 +240,9 @@ console.log("\n[R. 재인증 → 삭제 / 실패·취소 0건 / 5분 재사용]"
   const c = await makeClient("o", { askAns: { value: PW.o } });
   await loadDep(c, depR);
   const n = await c.App.deletePins([1, 2]);
-  ok(n === 2 && cids(c) === "3,4,5,6,7,8" && c.State.pinTombstones["1"] && c.State.pinTombstones["2"], "R3 비밀번호 일치 → 2개 삭제 + tombstone(기존 _removePins 경로)");
+  // [WO 20261015-bulkdel-undo] 일괄삭제는 이제 서버 전용 — tombstone 은 서버 pin_bulk_deletes/배포본에 남고
+  // (클라 State.pinTombstones 는 더 안 씀), 로컬은 즉시 필터링 반영만 확인한다.
+  ok(n === 2 && cids(c) === "3,4,5,6,7,8" && (await srvIds(depR)) === "3,4,5,6,7,8", "R3 비밀번호 일치 → 2개 삭제(로컬·서버 모두 반영)");
   ok(c.calls.reauthBodies.length === 1 && c.calls.reauthBodies[0].password === PW.o && !("id_token" in c.calls.reauthBodies[0]), "R3b 로컬 계정 → 서버 /api/auth/reauth 에 앱 비밀번호로 검증");
   // R4 5분 이내 → 다시 묻지 않음
   const n2 = await c.App.deletePins([3]);
@@ -247,34 +258,29 @@ console.log("\n[R. 재인증 → 삭제 / 실패·취소 0건 / 5분 재사용]"
   cc.sandbox.Prompt.confirm = async () => false;
   ok((await cc.App.deletePins([5])) === 0 && cc.calls.ask.length === 0, "R6 개수 확인 취소 → 재인증 창 없음, 0건");
 
-  /* ══ P. 저장 — X-Reauth 탑재 · 서버 403 → 재인증 후 재전송 ══ */
-  console.log("\n[P. 저장 PATCH]");
-  await loadDep(c, depR);                      // 서버본(8개)에서 다시 시작
-  c.App._bulkReauthDep = null;
-  ok((await c.App.deletePins([7, 8])) === 2, "P0 일괄삭제 2개(로컬)");
+  /* ══ P. [WO 20261015-bulkdel-undo] 저장 PATCH — 일괄삭제가 이제 자기 재인증을 그 자리에서 끝낸다(전용
+     서버 엔드포인트, R 섹션이 이미 검증) → 다음 평범한 저장(_patchDeployment)에 X-Reauth 를 "이어 태우는"
+     옛 _bulkReauthDep 중계는 더 쓰지 않는다(그 필드는 이제 아무도 세팅하지 않아 항상 null). 재확인만. ══ */
+  console.log("\n[P. 저장 PATCH — 일괄삭제 재인증은 삭제 시점에 끝남, 다음 저장은 평범하게]");
+  // 이 시점 depR 서버 상태(R 섹션에서 1,2,3,4 를 이미 지웠다) = 살아있는 5,6,7,8
+  await loadDep(c, depR);                      // 서버본(현재 라이브 5,6,7,8)에서 다시 시작
+  ok((await c.App.deletePins([7, 8])) === 2 && (await srvIds(depR)) === "5,6", "P0 일괄삭제 2개 — 서버에 즉시 반영(그 자리에서 재인증 끝)");
+  ok(c.App._bulkReauthDep === null, "P1 옛 이어태우기 필드(_bulkReauthDep)는 더 안 쓴다 — 항상 null");
   const r1 = await c.App._patchDeployment(depR, () => ({ pins: JSON.stringify(c.State.pins) }));
   const last = c.calls.patches[c.calls.patches.length - 1] || {};
-  ok(r1.ok && /^rx1\./.test(last.xr || "") && (await srvIds(depR)) === "1,2,3,4,5,6", "P1 일괄삭제 저장 PATCH 에 X-Reauth 탑재 → 200, 서버 [1..6]");
-  ok(c.App._bulkReauthDep === null, "P2 저장 성공 → 일괄삭제 대기 해제");
+  ok(r1.ok && !last.xr && (await srvIds(depR)) === "5,6", "P2 다음 저장은 X-Reauth 없이도 200(평범한 저장) — 서버 [5,6] 유지");
   const r2 = await c.App._patchDeployment(depR, () => ({ pins: JSON.stringify(c.State.pins) }));
-  ok(r2.ok && !(c.calls.patches[c.calls.patches.length - 1] || {}).xr, "P3 일괄삭제 없는 다음 저장 → X-Reauth 없음");
-  // P4 클라는 유효하다고 믿지만 서버에선 만료(시계 차이) → 403 → 재인증 1회 → 재전송 성공
-  await loadDep(c, depR);
-  ok((await c.App.deletePins([6])) === 1, "P4a 일괄삭제 1개(로컬)");
-  c.Auth._reauth.token = forge(U.o, Date.now() - 1000);
-  const askBefore = c.calls.ask.length, pBefore = c.calls.patches.length;
-  const r4 = await c.App._patchDeployment(depR, () => ({ pins: JSON.stringify(c.State.pins) }));
-  const sent = c.calls.patches.slice(pBefore);
-  ok(r4.ok && sent.length === 2 && sent[0].status === 403 && sent[1].status === 200 && c.calls.ask.length === askBefore + 1 && (await srvIds(depR)) === "1,2,3,4,5",
-    "P4 서버 403(만료) → 재인증 다시 묻고 재전송 200 " + JSON.stringify(sent.map((s) => s.status)));
-  // P5 저장 시점 재인증 만료 + 취소 → 보내지 않음
+  ok(r2.ok && !(c.calls.patches[c.calls.patches.length - 1] || {}).xr, "P3 그 다음 저장도 동일(X-Reauth 없음)");
+  // [WO 20261015-bulkdel-undo] P5 — 일괄삭제 뒤 재인증을 지우고 취소해도(이 저장과 무관해졌으므로) 다음
+  //   평범한 저장은 그대로 성공한다(이전엔 _bulkReauthDep 이어태우기가 이 저장을 막았다 — 이제 그 결합이 없다).
   await loadDep(c, depR);
   ok((await c.App.deletePins([5])) === 1, "P5a 일괄삭제 1개(로컬)");
   c.Auth.clearReauth();
   c.sandbox.Prompt.ask = async () => null;
   const pB = c.calls.patches.length;
   const r5 = await c.App._patchDeployment(depR, () => ({ pins: JSON.stringify(c.State.pins) }));
-  ok(!r5.ok && c.calls.patches.length === pB && (await srvIds(depR)) === "1,2,3,4,5", "P5 저장 시 재인증 취소 → PATCH 미전송, 서버 불변");
+  ok(r5.ok && c.calls.patches.length === pB + 1 && !(c.calls.patches[c.calls.patches.length - 1] || {}).xr,
+    "P5 일괄삭제와 무관해진 저장 — 재인증 취소여도 평범히 전송·성공(X-Reauth 없이)");
 }
 
 /* ══ G. Google(Firebase) 계정 분기 — 구글 공식 창 결과(새 ID 토큰)를 서버로, 앱은 비밀번호를 받지 않는다 ══ */
@@ -282,7 +288,10 @@ console.log("\n[G. Google 계정 — Firebase 재인증 분기]");
 {
   const depG = await seedDep(3);
   const mkFb = (impl) => ({ ready: true, calls: [], reauthGoogle: async (email) => impl(email) });
-  const okIntercept = async () => new Response(JSON.stringify({ ok: true, token: "rx1.stub.sig", exp: Date.now() + 300000 }), { status: 200, headers: { "content-type": "application/json" } });
+  // [WO 20261015-bulkdel-undo] deletePins 가 이제 이 토큰을 그대로 실 서버(bulk-delete)에 보낸다 — 가짜 서명(rx1.stub.sig)
+  // 이면 실 서버가 403 으로 거부한다(이전엔 _bulkReauthDep 이어태우기만 쓰고 이 토큰 자체를 보낸 적이 없어 안 걸렸다).
+  // forge() 로 실 서버 SECRET 과 같은 서명을 만든다(토큰 포맷·검증은 실 서버 reauthTokenValid 그대로).
+  const okIntercept = async () => new Response(JSON.stringify({ ok: true, token: forge(U.o, Date.now() + 300000), exp: Date.now() + 300000 }), { status: 200, headers: { "content-type": "application/json" } });
   const fbOk = mkFb(async () => "fresh.id.token");
   const g = await makeClient("o", { fb: fbOk, reauthIntercept: okIntercept });
   g.Auth.idToken = "google-session-token";   // 로컬 세션이 아닌 계정으로 취급(Google)

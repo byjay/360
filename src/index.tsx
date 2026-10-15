@@ -3141,7 +3141,8 @@ app.post('/api/projects/:id/pins/bulk-delete', async (c) => {
   const { all, live } = purgeLivePins(targetRow.pins)
   const want = new Set(ids.map((x: any) => String(x)))
   const targets = live.filter((p: any) => want.has(String(p.id)))
-  if (!targets.length) return c.json({ ok: true, deleted: 0, batch: null, undo_until: null, failed: 0, results: [{ id: targetId, title, ok: true, status: 200, deleted: 0 }] })
+  if (!targets.length) return c.json({ ok: true, deleted: 0, batch: null, undo_until: null, failed: 0, new_base_version: expectClient,
+    results: [{ id: targetId, title, ok: true, status: 200, deleted: 0 }] })
   const dead = new Set(targets.map((p: any) => String(p.id)))
   const next = all.map((p: any) => (p && p.id != null && dead.has(String(p.id))) ? { id: p.id, _deleted: true, ts: now } : p)
   const batch = genId('pbd')
@@ -3158,7 +3159,10 @@ app.post('/api/projects/:id/pins/bulk-delete', async (c) => {
   await logActivity(c, 'pins.purge', { actor: user, targetType: 'project', targetId: pid,
     detail: { batch, undo: false, deleted: targets.length, failed: 0, scope, scope_label: scopeLabel,
       deployments: [{ id: targetId, ok: true, status: 200, deleted: targets.length }] } })
+  // 🔴 client_version(=다음 base_version) 은 "클라가 depId 로 다음에 보낼 값" — 별칭이면 home 의 실제 version 이 아니라
+  //   별칭 공간(aliasVersion) 으로 돌려준다(PATCH pins 응답·GET 투영과 같은 공간, 5378행). 섞으면 다음 호출이 헛 409.
   return c.json({ ok: true, deleted: targets.length, failed: 0, batch, undo_until: now + PIN_BULK_UNDO_MS,
+    new_base_version: (ph && ph.kind === 'alias') ? aliasVersion(cur + 1) : (cur + 1),
     results: [{ id: targetId, title, ok: true, status: 200, deleted: targets.length, version: cur + 1 }] }, 200)
 })
 
