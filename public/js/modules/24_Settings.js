@@ -31,6 +31,8 @@
       }
       // [WO 20261001-gps] 위치 자동 기록 토글 — chk-leader360 행 옆에 런타임 주입(index.html 미수정).
       if (typeof GPS !== "undefined" && GPS.initToggle) GPS.initToggle();
+      // [WO 20261016-pinscale §3] 핀 크기(도면 대비) 슬라이더 — 같은 런타임 주입 패턴.
+      if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.initSlider) PinSizePrefs.initSlider();
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
       const bd = document.querySelector('#settings-modal .admin-gate-backdrop');

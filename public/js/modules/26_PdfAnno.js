@@ -124,10 +124,11 @@
         pl.setAttribute("points", a.pts.map(p => p.x + "," + p.y).join(" "));
         pl.setAttribute("fill", "none");
         pl.setAttribute("stroke", a.color);
-        pl.setAttribute("stroke-width", "3");
+        // [WO 20261016-pinscale §2] 두께는 CSS(.anno-pen-line, calc(3px*var(--anno-scale)))가 전담 —
+        // vector-effect:non-scaling-stroke(화면 고정폭) 폐기, 도면과 비례 + 바닥 보장.
+        pl.classList.add("anno-pen-line");
         pl.setAttribute("stroke-linecap", "round");
         pl.setAttribute("stroke-linejoin", "round");
-        pl.setAttribute("vector-effect", "non-scaling-stroke");
         pl.dataset.aid = a.id;
         return pl;
       }
@@ -142,10 +143,18 @@
       } else {
         rect.setAttribute("fill", "none");
         rect.setAttribute("stroke", a.color);
-        rect.setAttribute("stroke-width", "2.5");
-        rect.setAttribute("vector-effect", "non-scaling-stroke");
+        // [WO 20261016-pinscale §2] 두께는 CSS(.anno-rect-line)가 전담 — pen 과 동일 이유.
+        rect.classList.add("anno-rect-line");
       }
       return rect;
+    },
+    /** [WO 20261016-pinscale §2] 펜·사각형 선 두께 바닥/비례 — Routes.updateLineScale 과 동일 패턴.
+     *  MapCtrl.applyTransform() 이 줌/팬마다 호출. */
+    updateLineScale() {
+      const svg = document.getElementById("anno-svg");
+      if (!svg) return;
+      const s = (typeof MapCtrl !== "undefined" && MapCtrl.lineScreenScale) ? MapCtrl.lineScreenScale(0.4) : 1;
+      if (svg.style && typeof svg.style.setProperty === "function") svg.style.setProperty("--anno-scale", s.toFixed(3));
     },
     _render() {
       const svg = document.getElementById("anno-svg");

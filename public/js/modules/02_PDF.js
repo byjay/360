@@ -400,10 +400,12 @@
      *  이 영역을 대상으로 삼는다(같은 픽셀 예산을 그 영역에 집중). crop 이 없으면 해제
      *  (= 구버전 구역·페이지 전체 구역은 종전대로 visibleDrawingRect 로 동작).
      *  [WO 20260928-crop] 같은 crop 을 MapCtrl 의 "페이지 경계"(클리핑+줌/팬 한계)에도
-     *  전달하는 단일 진입점(§G-2-5) — 호출부(31_Projects.js)를 건드리지 않고 여기서 겸한다. */
-    setDeckCrop(crop) {
+     *  전달하는 단일 진입점(§G-2-5) — 호출부(31_Projects.js)를 건드리지 않고 여기서 겸한다.
+     *  [WO 20261016-pinscale] scaleRef — 벡터 복사 구역(src_crop)의 원본 대비 폭 비율을 그대로
+     *  MapCtrl.setCropBoundary 로 전달해 핀 크기 보정에 쓴다(§G-2-5, 같은 단일 진입점). */
+    setDeckCrop(crop, scaleRef) {
       this._renderState.deckCrop = this.deckCropToFraction(crop);
-      if (typeof MapCtrl !== "undefined" && MapCtrl.setCropBoundary) MapCtrl.setCropBoundary(crop);
+      if (typeof MapCtrl !== "undefined" && MapCtrl.setCropBoundary) MapCtrl.setCropBoundary(crop, scaleRef);
       return this._renderState.deckCrop;
     },
 

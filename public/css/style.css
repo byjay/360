@@ -1474,14 +1474,22 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pin-leader-line { stroke: #dc2626; }
 .pin-leader-arrow { fill: #dc2626; }
 .pin-leader-bubble {
-  /* 중심 정렬은 JS(MapCtrl._applyPinBillboard)의 transform: translate(-50%,-50%) scale(inv)가 담당 —
-     여기서 마진으로 또 보정하면 이중 오프셋이 난다. */
+  /* [WO 20261016-pinscale §4] 중심 정렬+배율 = 정적 CSS(아래) — MapCtrl._applyPinBillboard 가
+     #pins-layer 에 --pin-scale 하나만 세팅하면 ISO 여부와 무관하게 전부 반영된다(마커 전체
+     순회 無 → 핀치/줌 중 매 프레임 재계산 비용 제거). 여기서 마진으로 또 보정하면 이중 오프셋. */
   position: absolute; width: 22px; height: 22px;
   pointer-events: auto; touch-action: manipulation; z-index: 21; cursor: pointer;
+  transform: translate(-50%, -50%) scale(var(--pin-scale, 1));
+  transform-origin: 50% 50%;
 }
 .pin-leader-bubble.draggable { cursor: grab; }
 .pin-leader-bubble.moving { cursor: grabbing; }
 .pin-marker { pointer-events: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+/* [WO 20261016-pinscale §4] 평면(비-ISO) 마커 배율 — #pins-layer.iso-mode 면 JS(ISO 빌보드)가 전담. */
+#pins-layer:not(.iso-mode) > .pin-marker {
+  transform: translate(-50%, calc(-100% + 2px)) scale(var(--pin-scale, 1));
+  transform-origin: 50% 100%;
+}
 /* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭 */
 .pin-marker::after {
   content: ""; position: absolute; left: 50%; top: 0;
@@ -2767,18 +2775,21 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 /* ══════════ 360 동영상 동선(Route) — 얇은 점선 + 진행방향 화살표 ══════════
    [마스터 요청] 핀이 아니라 "선"을 그어 360 동영상을 연결. 도면 배경이 밝든 어둡든
    보이도록 흰 외곽(halo) + 대비색 점선의 2중 stroke 기법 사용(CSS 변수 비의존 — 고정값). */
-.routes-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
+.routes-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; --route-scale: 1; }
 .routes-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+/* [WO 20261016-pinscale §2] vector-effect:non-scaling-stroke(화면 고정폭) 폐기 — 도면과 비례하되
+   Routes.updateLineScale()(MapCtrl.lineScreenScale, 바닥 40%)이 --route-scale 로 바닥을 보장한다.
+   화살표(marker-end, SVG 기본 markerUnits=strokeWidth)는 stroke-width 에 자동 비례해 따로 손대지 않음. */
 .route-line-halo {
-  fill: none; stroke: #fff; stroke-width: 3px; stroke-linecap: round; stroke-linejoin: round;
-  opacity: .85; vector-effect: non-scaling-stroke; pointer-events: none;
+  fill: none; stroke: #fff; stroke-width: calc(3px * var(--route-scale, 1)); stroke-linecap: round; stroke-linejoin: round;
+  opacity: .85; pointer-events: none;
 }
 .route-line {
-  fill: none; stroke: #0a66ff; stroke-width: 1.3px; stroke-dasharray: 3 3; stroke-linecap: round;
-  vector-effect: non-scaling-stroke; pointer-events: auto; cursor: pointer;
+  fill: none; stroke: #0a66ff; stroke-width: calc(1.3px * var(--route-scale, 1)); stroke-dasharray: 3 3; stroke-linecap: round;
+  pointer-events: auto; cursor: pointer;
   marker-end: url(#route-arrow);
 }
-.route-line:hover { stroke-width: 2px; stroke: #e0503e; }
+.route-line:hover { stroke-width: calc(2px * var(--route-scale, 1)); stroke: #e0503e; }
 .route-arrow-head { fill: #0a66ff; }
 .route-dot-start { fill: #0a66ff; stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .route-dot-end   { fill: #ff3b30; stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
@@ -4971,7 +4982,13 @@ html.wm-view-link #screen-projects { display: none !important; }
 .anno-svg {
   position: absolute; inset: 0; width: 100%; height: 100%;
   z-index: 3; overflow: visible; pointer-events: none;
+  --anno-scale: 1;
 }
+/* [WO 20261016-pinscale §2] 주석(펜·사각형) 선 두께 — vector-effect:non-scaling-stroke(화면 고정폭)
+   폐기, 핀·동선과 같은 정책(도면과 비례 + 바닥 40%, PdfAnno.updateLineScale→MapCtrl.lineScreenScale).
+   형광펜(highlight)은 stroke 가 없어(fill 만) 범위 밖 — 판단: 선이 있는 두 종류(펜·사각형)만 적용. */
+.anno-pen-line { stroke-width: calc(3px * var(--anno-scale, 1)); }
+.anno-rect-line { stroke-width: calc(2.5px * var(--anno-scale, 1)); }
 .anno-text-layer {
   position: absolute; inset: 0; z-index: 4; pointer-events: none;
 }

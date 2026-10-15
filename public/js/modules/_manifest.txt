@@ -26,6 +26,7 @@
 22_Auth.js
 23_PinPrefs.js
 23b_PinIcons.js
+23c_PinSizePrefs.js
 24_Settings.js
 24b_NumBand.js
 25_Designers.js

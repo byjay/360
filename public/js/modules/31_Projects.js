@@ -998,7 +998,10 @@
         }
       } catch (e) {}
       const crop = (d && d.crop) || null;
-      if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop);
+      // [WO 20261016-pinscale] 벡터 복사 구역(src_crop) — 원본 도면의 src_crop.w(%) 만큼만 담아
+      // "확대해 그린" 페이지이므로, 그 비율(0~1)을 핀 크기 보정으로 함께 전달한다(crop 창도 동일 진입점).
+      const scaleRef = (d && d.src_crop && d.src_crop.w > 0) ? (d.src_crop.w / 100) : 1;
+      if (typeof PDF !== "undefined" && PDF.setDeckCrop) PDF.setDeckCrop(crop, scaleRef);
       // 🔴 [WO 20260929-fitrace2] 근본원인(실브라우저 호출스택 확정) — 맞춤 시점을 img.complete 로
       //   판정했다. data: URL 도면은 img.complete 가 load 이벤트보다 **먼저** true 가 되므로, 여기서
       //   즉시 fitZone 을 불렀지만 그 순간 #map-viewport 는 아직 hidden(0×0) → fitZone 내부 가드로

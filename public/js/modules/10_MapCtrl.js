@@ -36,8 +36,12 @@
     /** [WO 20260928-crop] 구역 경계를 활성/해제한다. crop 이 {x,y,w,h}(%, w>0,h>0) 면 그
      *  사각형을 "이 페이지의 전체"로 취급(바깥 클리핑 + 줌/팬 경계). crop 이 null/무효면
      *  해제(= 크롭 없는 구버전 구역·일반 도면은 종전대로 전체 페이지 동작, 회귀 0).
-     *  단일 진입점: PDF.setDeckCrop() 이 호출한다(§G-2-5 공유 지점 한 곳). */
-    setCropBoundary(crop) {
+     *  단일 진입점: PDF.setDeckCrop() 이 호출한다(§G-2-5 공유 지점 한 곳).
+     *  [WO 20261016-pinscale] scaleRef(0~1, 원본 도면 폭 대비 이 페이지 폭 비율) — 벡터 복사 구역
+     *  (src_crop, crop 창과 달리 clip 경계가 없는 "복사본 1페이지 전체"도 포함)에서 핀 크기를
+     *  원본 대비 같은 크기로 보정하려고 pinScreenScale() 이 쓴다. 생략/무효면 1(보정 없음). */
+    setCropBoundary(crop, scaleRef) {
+      this._pinScaleRef = (typeof scaleRef === "number" && scaleRef > 0 && scaleRef <= 1) ? scaleRef : 1;
       if (!crop || !(crop.w > 0) || !(crop.h > 0)) {
         this._cropBoundary = null;
         this._boundaryFitZoom = null;
@@ -142,6 +146,10 @@
       this._applyPinBillboard();
       // [마스터] 구역 라벨도 핀처럼 부모 zoom 을 상쇄 → 확대해도 흐려지지 않고 크리스프
       try { if (typeof Zones !== "undefined" && Zones.updateLabelScale) Zones.updateLabelScale(); } catch (e) {}
+      // [WO 20261016-pinscale §2] 360 동선 선 두께·화살표도 핀과 같은 정책(도면과 비례 + 바닥).
+      try { if (typeof Routes !== "undefined" && Routes.updateLineScale) Routes.updateLineScale(); } catch (e) {}
+      // [WO 20261016-pinscale §2] PDF 주석(펜·사각형) 선 두께도 동일 정책 적용.
+      try { if (typeof PdfAnno !== "undefined" && PdfAnno.updateLineScale) PdfAnno.updateLineScale(); } catch (e) {}
       this._updateZoomLabel();
       // ── 벡터 원본 화질 보존: 줌이 오르면 그 배율로 원본을 다시 래스터화 ──
       // [P14 근본원인 2026-09-03] 종전 조건은 `State.mode !== "viewer"` 였다. 진짜 조건은
@@ -358,38 +366,62 @@
      *  · ISO 뷰   : 도면 rotateX(54)·rotateZ(θ) 의 역(rotateZ(-θ)·rotateX(-54))을
      *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
      *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
-    /** [마스터 2026-08-31] 핀 크기 = 도면 대비 "완전 고정"(1/zoom 전체 상쇄)이 아니라
-     *  "부분 보정"(1/zoom 의 지수 k 승)으로 바꿈. 이유: 완전 고정이면 줌아웃 시 핀이
-     *  도면과 함께 작아지지 않아 도면 대비 과도하게 커 보임(마스터 스샷 1번 지적).
-     *  대신 지수 k(0~1)만큼만 상쇄 → 줌아웃하면 핀도 어느 정도 같이 작아지되(k<1이라
-     *  1/zoom 만큼 다 커지진 않음), 줌인해도 너무 작아지지 않는 절충.
-     *  ISO/평면 두 경로가 pinScreenScale() 하나를 공유 → 상수만 바꾸면 전체 반영. */
-    PIN_SCALE: 2,           // 기준 줌(zoom=1)에서의 핀 배율 — 마스터가 "적당하다"고 한 크기
-    PIN_SCALE_EXP: 0.6,     // 줌 보정 지수(0=보정 없음=도면과 완전히 같이 축소, 1=기존처럼 화면상 완전 고정)
-    PIN_MIN_SCALE: 0.8,     // 최종 배율 하한 — 줌인해도 핀이 이보다 작아지지 않음(가독성 하한)
-    PIN_MAX_SCALE: 4.5,     // 최종 배율 상한 — 줌아웃해도 핀이 이보다 커지지 않음(도면 대비 과대 방지)
+    /** [마스터 2026-10-16] 핀 크기 정책 전면 교체 — "부분 역보정"(1/zoom 의 지수 0.6승, 2026-08-31
+     *  절충안)을 폐기하고 "도면과 완전 비례 + 최소 크기 보장"으로 바꾼다.
+     *   · 핀은 도면에 인쇄된 것처럼 줌과 함께 커지고 작아진다: 화면 배율 ∝ zoom(지수 1, 부분보정 없음).
+     *   · 너무 축소돼 안 보이거나 못 누를 때만 "최소 화면 px"에서 멈춘다(바닥, 상한은 두지 않음 —
+     *     과도줌으로 화면을 가리는 것은 사용자 선택이고, 기존 PIN_MAX_SCALE 4.5 상한은 폐기).
+     *   · 원본 도면과 "구역"(벡터 복사 구역의 src_crop·crop 창 둘 다)에서 같은 배율이 되려면, 구역이
+     *     원본의 일부만 담아 "확대해 그린" 몫을 되돌려야 한다 — setCropBoundary(crop, scaleRef) 로
+     *     받은 _pinScaleRef(원본 폭 대비 이 구역 폭 비율, src_crop.w/100)를 zoom 에 곱한다.
+     *   · 기준 배율(PIN_SCALE)은 설정 "핀 크기" 슬라이더(PinSizePrefs, 프로젝트별 저장)로 바뀐다.
+     *     기본값 2 = 이 정책 전환 전 zoom=1 에서의 화면 크기(마스터 지시: "기본값은 지금 zoom 1 에서의
+     *     화면 크기와 비슷하게").
+     *   · ISO/평면 두 경로 + 리더선(11_UI.js refreshLeaders)·360 동선(63_RouteDraw)이 모두 이 함수
+     *     하나(또는 같은 바닥·보정 로직)를 공유 → 상수만 바꾸면 전체 반영(§G-2-5). */
+    PIN_SCALE: 2,              // 기준 줌(zoom=1, 구역 보정 無)에서의 배율 — PinSizePrefs.DEFAULT 와 동일
+    PIN_NATIVE_PX: 40,         // .pin-marker-teardrop .pin-pin svg 세로(style.css ~4762) — 최소 px 환산 기준
+    PIN_MIN_PX_TOUCH: 18,      // 터치 최소 가독/탭 보장(핀 자체에 ::after 44px 터치패드가 별도로 있음)
+    PIN_MIN_PX_MOUSE: 14,      // 마우스는 포인터가 정밀해 더 작은 바닥을 허용
+    _pinScaleRef: 1,           // 구역 보정(0~1) — setCropBoundary(crop, scaleRef) 단일 진입점이 설정
+    _pinIsoPrev: null,         // [성능] flat↔ISO 전환 감지용(전환 시 1회만 인라인 정리)
+    /** 터치 환경 판정(공유 패턴 — 19_PinGrid.js:10 / 20_App.js:11 / 48_GPS.js:18 과 동일). */
+    _coarsePointer() {
+      try { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (e) { return false; }
+    },
     pinScreenScale() {
       const zoom = State.zoom || 1;
-      const raw = this.PIN_SCALE * Math.pow(1 / zoom, this.PIN_SCALE_EXP); // 부분 역스케일
-      return Math.max(this.PIN_MIN_SCALE, Math.min(this.PIN_MAX_SCALE, raw));
+      const base = (typeof PinSizePrefs !== "undefined" && PinSizePrefs.scale) ? PinSizePrefs.scale() : this.PIN_SCALE;
+      const effZoom = zoom * (this._pinScaleRef || 1); // 구역이면 원본 대비 보정
+      const raw = base * effZoom; // 도면과 완전 비례(지수 1)
+      const minPx = this._coarsePointer() ? this.PIN_MIN_PX_TOUCH : this.PIN_MIN_PX_MOUSE;
+      const floor = minPx / this.PIN_NATIVE_PX;
+      return Math.max(raw, floor); // 상한 없음
+    },
+    /** [WO 20261016-pinscale §2] 선(360 동선·주석) 공용 — 핀과 같은 보정(zoom × 구역 scaleRef)을
+     *  쓰되, 바닥은 핀처럼 절대 px 가 아니라 "줌 1 배율 대비 비율"로 둔다(선 종류마다 기준 두께가
+     *  달라 픽셀 바닥 하나로 못 묶는다 — 판단: 지금 모양의 40% 밑으로는 안 가늘어지게). */
+    lineScreenScale(minRatio) {
+      const zoom = State.zoom || 1;
+      const effZoom = zoom * (this._pinScaleRef || 1);
+      return Math.max(effZoom, (typeof minRatio === "number" && minRatio > 0) ? minRatio : 0.4);
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
       if (!layer) return;
       const inv = this.pinScreenScale();
+      // [성능] 핀치/줌 중 매 프레임 재계산 — 마커 전체를 순회해 인라인 transform 을 다시 쓰지 않는다.
+      // CSS 변수 하나(--pin-scale)만 갱신하면 평면 마커·리더 풍선은 정적 스타일시트 규칙
+      // (style.css #pins-layer .pin-marker / .pin-leader-bubble)이 알아서 반영한다(O(1)).
+      if (layer.style && typeof layer.style.setProperty === "function") layer.style.setProperty("--pin-scale", inv.toFixed(4));
       // [WO 20261008-pinstyle §2] 화살촉·선 굵기도 같은 inv 로(풍선과 비례 고정) — SVG 좌표라 UI 쪽에서 재계산.
       if (typeof UI !== "undefined" && UI.refreshLeaders) { try { UI.refreshLeaders(); } catch (e) {} }
       // [WO 20261001-leader] 리더 풍선(.pin-leader-bubble) — 바늘형 핀과 앵커가 다르다(중앙 vs 하단).
-      // ISO 여부와 무관하게 항상 평면 중앙 역스케일만 적용해 화면 기준 크기 고정(요구사항 §3).
-      for (const m of layer.children) {
-        if (m.classList && m.classList.contains("pin-leader-bubble")) {
-          m.style.transformOrigin = "50% 50%";
-          m.style.transform = `translate(-50%, -50%) scale(${inv.toFixed(3)})`;
-          m.style.zIndex = "21";
-        }
-      }
+      // ISO 여부와 무관하게 항상 평면 중앙 역스케일만 적용(요구사항 §3) — 이제 CSS 정적 규칙이 전담.
       const ISO_Z = [-32, 58, 148, 238];
       if (State.isoView) {
+        if (layer.classList) layer.classList.add("iso-mode"); // 평면용 정적 CSS 규칙 비활성화 → 아래 JS 가 전담
+        this._pinIsoPrev = true;
         const z = ISO_Z[State.isoDir % 4];
         // ── [마스터] 진짜 3D 박힌 핀(2D 카드 아님) ──
         //  도면은 rotateX(54)·rotateZ(z)로 기운다. 핀을 화면 정면으로 완전히 눕히면(rotateX(-54))
@@ -402,21 +434,23 @@
           `translate(-50%, calc(-100% + 2px)) rotateZ(${-z}deg) rotateX(-22deg) scale(${(inv * 1.18).toFixed(3)})`;
         layer.style.transformStyle = "preserve-3d";
         for (const m of layer.children) {
-          if (m.classList && m.classList.contains("pin-leader-bubble")) continue; // 위에서 이미 처리(중앙 앵커)
+          if (m.classList && m.classList.contains("pin-leader-bubble")) continue; // CSS 정적 규칙이 전담
           m.style.transformOrigin = "50% 100%";   // 바늘 끝(하단 중앙) = 땅에 박히는 지점
           m.style.transformStyle = "preserve-3d"; // 마커 내부도 3D 보존(머리가 +Z로 솟음)
           m.style.transform = billboard;
           m.style.zIndex = "20";                   // 기울인 도면 위로 핀을 띄움
         }
       } else {
-        // 평면: 역스케일만(화면상 일정 크기 → 또렷 + 줌아웃 시 약간 확대)
-        const flat = `translate(-50%, calc(-100% + 2px)) scale(${inv.toFixed(3)})`;
-        for (const m of layer.children) {
-          if (m.classList && m.classList.contains("pin-leader-bubble")) continue; // 위에서 이미 처리(중앙 앵커)
-          m.style.transformOrigin = "50% 100%";
-          m.style.transform = flat;
-          m.style.zIndex = "";
+        if (layer.classList) layer.classList.remove("iso-mode"); // 정적 CSS 규칙(scale(var(--pin-scale))) 활성화
+        // ISO → 평면으로 막 전환된 그 1회만 이전 인라인 스타일을 지워 정적 규칙이 보이게 한다.
+        // (steady-state 평면 줌/핀치 중에는 이 루프를 돌지 않음 — 그게 이번 성능 개선의 핵심.)
+        if (this._pinIsoPrev) {
+          for (const m of layer.children) {
+            if (m.classList && m.classList.contains("pin-leader-bubble")) continue;
+            m.style.transform = ""; m.style.transformOrigin = ""; m.style.transformStyle = ""; m.style.zIndex = "";
+          }
         }
+        this._pinIsoPrev = false;
       }
     },
 

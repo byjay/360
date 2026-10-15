@@ -206,9 +206,11 @@ console.log("\n[뮤테이션 M2] 팬 clamp 제거(clampPanToBoundary 항등화) 
 
 console.log("\n[뮤테이션 M3] 경계 해제 누락(setCropBoundary(null) 이 _cropBoundary 를 안 지움) → ⑤실패해야 함");
 {
+  // [WO 20261016-pinscale] setCropBoundary(crop, scaleRef) 로 시그니처가 바뀌었다(핀 크기 구역 보정) —
+  // 이 뮤테이션의 대상은 여전히 "경계 해제 분기"(this._cropBoundary=null 등)이므로 새 시그니처로 갱신.
   const mut = mapSrc.replace(
-    '    setCropBoundary(crop) {\n      if (!crop || !(crop.w > 0) || !(crop.h > 0)) {\n        this._cropBoundary = null;\n        this._boundaryFitZoom = null;\n        this._clearBoundaryClip();\n        return null;\n      }',
-    '    setCropBoundary(crop) {\n      if (!crop || !(crop.w > 0) || !(crop.h > 0)) {\n        return null;\n      }'
+    '    setCropBoundary(crop, scaleRef) {\n      this._pinScaleRef = (typeof scaleRef === "number" && scaleRef > 0 && scaleRef <= 1) ? scaleRef : 1;\n      if (!crop || !(crop.w > 0) || !(crop.h > 0)) {\n        this._cropBoundary = null;\n        this._boundaryFitZoom = null;\n        this._clearBoundaryClip();\n        return null;\n      }',
+    '    setCropBoundary(crop, scaleRef) {\n      this._pinScaleRef = (typeof scaleRef === "number" && scaleRef > 0 && scaleRef <= 1) ? scaleRef : 1;\n      if (!crop || !(crop.w > 0) || !(crop.h > 0)) {\n        return null;\n      }'
   );
   ok(mut !== mapSrc, "M3 문자열 치환 적중(소스와 정확히 일치)");
   const ctx = load(pdfSrc, mut);

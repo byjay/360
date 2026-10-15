@@ -220,7 +220,10 @@ console.log("\n[D] 화살촉 역스케일 — 배율 0.15·1·4 에서 화살촉
   const sw = {};
   for (const z of [0.15, 1, 4]) { State.zoom = z; UI.refreshLeaders(); sw[z] = { screen: +line.attrs["stroke-width"] * z, bubble: UI.Leader.BUBBLE_DIAM_PX * MapCtrl.pinScreenScale() * z }; }
   const r1 = sw[1].screen / sw[1].bubble, r4 = sw[4].screen / sw[4].bubble;
-  ok(Math.abs(r1 - r4) < 1e-3 && sw[4].screen < 6, "D5 선 굵기/풍선 비율 1·4배 동일(" + r1.toFixed(4) + "/" + r4.toFixed(4) + ") · 400% 화면 " + sw[4].screen.toFixed(2) + "px");
+  // [WO 20261016-pinscale] PIN_MAX_SCALE(4.5) 상한 폐기(마스터: "도면과 완전 비례, 상한 없음") —
+  // 400% 화면 두께가 전엔 클램프로 <6px 였지만 이제 비례해 더 커진다(의도된 정책 변경, 회귀 아님).
+  // 비율 불변(r1≈r4)은 여전히 핀·리더선·풍선이 같은 pinScreenScale() 을 공유한다는 진짜 불변식이라 유지.
+  ok(Math.abs(r1 - r4) < 1e-3, "D5 선 굵기/풍선 비율 1·4배 동일(" + r1.toFixed(4) + "/" + r4.toFixed(4) + ") · 400% 화면 " + sw[4].screen.toFixed(2) + "px(상한 폐기 반영)");
   ok(Object.values(sw).every((s) => s.screen >= 0.999), "D6 화면 선 굵기 ≥1px(0.15배 " + sw[0.15].screen.toFixed(2) + "px)");
 }
 

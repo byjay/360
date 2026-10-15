@@ -300,6 +300,16 @@
       return best.t;
     },
 
+    /** [WO 20261016-pinscale §2] 선 두께·화살표(marker-end 는 SVG 기본 markerUnits=strokeWidth라
+     *  stroke-width 에 자동 비례 — 별도 코드 불필요) — 핀과 같은 정책(도면과 비례 + 바닥).
+     *  MapCtrl.applyTransform() 이 줌/팬마다 호출(Zones.updateLabelScale 과 같은 자리). */
+    updateLineScale() {
+      const svg = document.getElementById("routes-svg");
+      if (!svg) return;
+      const s = (typeof MapCtrl !== "undefined" && MapCtrl.lineScreenScale) ? MapCtrl.lineScreenScale(0.4) : 1;
+      if (svg.style && typeof svg.style.setProperty === "function") svg.style.setProperty("--route-scale", s.toFixed(3));
+    },
+
     /* ── 렌더: 도면 위 동선(점선+화살표) + 재생위치점 ── */
     render() {
       const page = State.pdfPage || 1;

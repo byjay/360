@@ -170,8 +170,10 @@ function suiteWiring(label, src) {
   //   행동(실제 호출) 검증은 p56③(selectDeck)·p64④(생성 직후)가 실 모듈로 이미 수행한다.
   ok(/this\._applyDeckCropView\(d\)/.test(src),
     "selectDeck 이 크롭 적용 공유 지점(_applyDeckCropView)에 위임");
-  ok(/_applyDeckCropView\(d\)\s*\{[\s\S]*?const crop = \(d && d\.crop\) \|\| null;[\s\S]*?PDF\.setDeckCrop\(crop\)/.test(src),
-    "_applyDeckCropView 가 PDF.setDeckCrop(crop || null) 호출 — 구역 진입마다 렌더 대상 고정/해제");
+  // [WO 20261016-pinscale] PDF.setDeckCrop(crop, scaleRef) — 2번째 인자(src_crop 보정)가 추가됐다.
+  // 1번째 인자(crop||null)로 렌더 대상을 고정/해제하는 본 규약은 그대로라 정규식만 갱신(강도 ↓ 없음).
+  ok(/_applyDeckCropView\(d\)\s*\{[\s\S]*?const crop = \(d && d\.crop\) \|\| null;[\s\S]*?PDF\.setDeckCrop\(crop, scaleRef\)/.test(src),
+    "_applyDeckCropView 가 PDF.setDeckCrop(crop, scaleRef) 호출 — 구역 진입마다 렌더 대상 고정/해제");
 }
 
 console.log("=== 회귀: 구역 표시 = 크롭 영역만 렌더 ===");

@@ -151,9 +151,20 @@ function suiteMarkerStyle(label, sSrc) {
  * ──────────────────────────────────────────────────────────── */
 function suitePinScale(label) {
   console.log("\n[" + label + "]");
-  function makeMarker() { return { style: {} }; }
+  // [WO 20261016-pinscale §4] 평면(비-ISO) 핀 크기는 더는 마커마다 JS 가 inline transform 을 쓰지
+  // 않는다 — #pins-layer 에 CSS 변수(--pin-scale) 하나만 세팅하고, 정적 스타일시트 규칙
+  // (#pins-layer:not(.iso-mode) > .pin-marker { transform: ... scale(var(--pin-scale)) })이
+  // 마커 전체에 똑같이 전파한다(성능: 핀치/줌 중 매 프레임 마커 순회 제거). 그래서 "핀 크기 실제
+  // 적용"은 이제 ① 마커에 inline transform 이 0건(CSS 가 전담) ② --pin-scale 값이 pinScreenScale()
+  // 과 일치 — 두 가지로 검사한다(종전 "transform 문자열에 scale() 포함"보다 더 강한 단언).
+  function makeMarker() { return { style: {}, classList: { contains: () => false } }; }
   const State = { zoom: 1.7, pan: { x: 0, y: 0 }, isoView: false, isoDir: 0 };
-  const layer = { children: [makeMarker(), makeMarker(), makeMarker()] }; // 라벨 길이·콘텐츠 유무와 무관 — 인자 자체가 없음
+  const cssVars = {};
+  const layer = {
+    children: [makeMarker(), makeMarker(), makeMarker()], // 라벨 길이·콘텐츠 유무와 무관 — 인자 자체가 없음
+    classList: { add() {}, remove() {} },
+    style: { setProperty(k, v) { cssVars[k] = v; } }
+  };
   const sandbox = {
     console, State, Math, JSON,
     document: { getElementById: (id) => (id === "pins-layer" ? layer : null) },
@@ -165,8 +176,10 @@ function suitePinScale(label) {
   MapCtrl._applyPinBillboard();
   const transforms = layer.children.map((m) => m.style.transform);
   const allSame = transforms.every((t) => t === transforms[0]);
-  ok(allSame, `핀 3개(핀별 속성 무관) 동일 transform 부여 = ${allSame} → "${transforms[0]}"`);
-  ok(!!transforms[0] && transforms[0].indexOf("scale(") >= 0, "transform 에 scale() 포함(핀 크기 실제 적용 확인)");
+  ok(allSame, `핀 3개(핀별 속성 무관) 동일 transform(0건) = ${allSame} → "${transforms[0]}"`);
+  ok(transforms.every((t) => t === undefined), "평면 모드 — 마커 inline transform 0건(CSS 정적 규칙이 전담, 성능개선)");
+  // zoom=1.7 × PIN_SCALE(2, 구역보정 無) = 3.4(바닥 0.35 보다 훨씬 큼) — 리터럴 기대값(동어반복 회피).
+  ok(cssVars["--pin-scale"] === "3.4000", `--pin-scale="${cssVars["--pin-scale"]}" = zoom(1.7)×PIN_SCALE(2)=3.4(핀 크기 실제 적용 확인)`);
 }
 
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */
