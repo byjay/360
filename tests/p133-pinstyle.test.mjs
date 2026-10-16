@@ -219,11 +219,22 @@ console.log("\n[D] 화살촉 역스케일 — 배율 0.15·1·4 에서 화살촉
   // 화면 선 굵기 = stroke-width × zoom(조상 CSS scale) — 풍선과 같은 비율, 화면 1px 하한
   const sw = {};
   for (const z of [0.15, 1, 4]) { State.zoom = z; UI.refreshLeaders(); sw[z] = { screen: +line.attrs["stroke-width"] * z, bubble: UI.Leader.BUBBLE_DIAM_PX * MapCtrl.pinScreenScale() * z }; }
-  const r1 = sw[1].screen / sw[1].bubble, r4 = sw[4].screen / sw[4].bubble;
-  // [WO 20261016-pinscale] PIN_MAX_SCALE(4.5) 상한 폐기(마스터: "도면과 완전 비례, 상한 없음") —
-  // 400% 화면 두께가 전엔 클램프로 <6px 였지만 이제 비례해 더 커진다(의도된 정책 변경, 회귀 아님).
-  // 비율 불변(r1≈r4)은 여전히 핀·리더선·풍선이 같은 pinScreenScale() 을 공유한다는 진짜 불변식이라 유지.
-  ok(Math.abs(r1 - r4) < 1e-3, "D5 선 굵기/풍선 비율 1·4배 동일(" + r1.toFixed(4) + "/" + r4.toFixed(4) + ") · 400% 화면 " + sw[4].screen.toFixed(2) + "px(상한 폐기 반영)");
+  // [WO 20261016-pinscale2 재도입 이후 — R3 수정] b0d24ad 가 PIN_MAX_PX(48px 상한)를 되살리고
+  // PIN_SCALE 을 2→0.75 로 낮췄다. 풍선(MapCtrl.pinScreenScale, 상한 clamp)과 선(Leader.geometry
+  // strokePx, 화면 1px 절대 하한 LINE_MIN_PX/z)은 서로 다른 종류의 clamp 를 쓰므로 하한이 걸리는
+  // 구간(z=1: 1.2×0.75=0.9 < 1px 하한)에서는 "비율 불변"이 더 이상 참이 아니다(실측: r1=0.0606 ≠
+  // r4=0.0545 — 옛 단언은 거짓 전제였다, PIN_SCALE 2→0.75 변경으로 z=1 이 하한 구간에 처음 들어감).
+  // 진짜 SoT는 Leader.geometry() 의 strokePx 공식 자체이므로, 그 공식을 그대로 재계산해 기대값을
+  // 만들고 렌더된 실제 선 굵기와 직접 비교한다(더 이상 비율 가정에 의존하지 않음).
+  for (const z of [0.15, 1, 4]) {
+    const inv = (() => { const sv = State.zoom; State.zoom = z; const v = MapCtrl.pinScreenScale(); State.zoom = sv; return v; })();
+    const expStrokePx = Math.max(UI.Leader.LINE_MIN_PX / z, UI.Leader.LINE_PX * inv);
+    // geo.strokePx 는 렌더 시 .toFixed(2) 로 속성에 저장된다(11_UI.js _renderLeaderLineOnly) —
+    // 같은 반올림을 거쳐야 부동소수 오차 없이 정확히 일치한다.
+    const expScreen = Number(expStrokePx.toFixed(2)) * z;
+    ok(Math.abs(sw[z].screen - expScreen) < 1e-6,
+      "D5 zoom=" + z + " 선 굵기 화면값 = Leader.geometry strokePx 공식과 일치(실제 " + sw[z].screen.toFixed(4) + "px / 기대 " + expScreen.toFixed(4) + "px)");
+  }
   ok(Object.values(sw).every((s) => s.screen >= 0.999), "D6 화면 선 굵기 ≥1px(0.15배 " + sw[0.15].screen.toFixed(2) + "px)");
 }
 

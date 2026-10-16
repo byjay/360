@@ -2264,6 +2264,7 @@
       { sel: '[data-deleg="btn-zone-circle"]', label: "원" },
       { sel: '[data-deleg="btn-zone-poly"]', label: "다각형" },
       { sel: '[data-deleg="btn-region-extract"]', label: "자르기" },
+      { sel: '[data-deleg="btn-route-draw"]', label: "동선" },
       { sel: '[data-deleg="btn-theta-intake"]', label: "360" },
       { sel: '[data-deleg="btn-checkboard-enter"]', label: "격자" },
       { sel: "#btn-checkboard-renumber", label: "목록" },

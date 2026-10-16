@@ -43,6 +43,8 @@ const MUTS = {
   viewerdraw: ["public/js/modules/63_RouteDraw.js", "if (!this.isDesigner()) return;\n      if (State.drawingRoute)", "if (State.drawingRoute)"],
   // 서버 Range 응답을 206→200으로 바꾸면 <video> 탐색(Range 지원)이 깨진다.
   range206: ["src/index.tsx", "return new Response(obj.body, { status: 206, headers })", "return new Response(obj.body, { status: 200, headers })"],
+  // [WO 20261016-routeminimap] 레이더 미니맵 클릭→탐색 경로를 지우면 실 클릭으로 seek 되지 않는다.
+  minimapseek: ["public/js/modules/07_Radar.js", 'if (typeof PanoViewer !== "undefined" && PanoViewer.seekRatio) PanoViewer.seekRatio(t);', "void t;"],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
 
@@ -271,29 +273,30 @@ try {
   ok(playheadChk && playheadChk.rendered && Math.abs(playheadChk.cx - playheadChk.expectX) < 0.01 && Math.abs(playheadChk.cy - playheadChk.expectY) < 0.01,
     "D2 진행률 0.5 주입 → .route-playhead 가 동선 중앙 좌표에 렌더(진행률↔위치점 일치)", playheadChk);
 
-  /* ══ E. 동선 중간 지점 탐색(Range 206) ══
-   * 🔴 [제품 결함 — 정직 기록, 이 테스트의 범위 밖(발주서는 하네스·이식만 지시)] 63_RouteDraw.js
-   *   의 .route-line click 핸들러는 "PanoViewer.open && isVideo" 일 때만 좌표→비율 변환 후
-   *   seekRatio() 를 부르는 분기를 갖는다(재생 중 동선 위 다른 점을 눌러 탐색하는 의도, 주석 11행).
-   *   그런데 #pano-overlay 는 style.css:1537 `position:fixed;inset:0;z-index:9999;background:#000`
-   *   로 전체화면 불투명 오버레이라 재생 중에는 지도/동선이 화면에 존재하되 클릭 대상에서 가려진다
-   *   (CDP 실측: 동선 위 좌표를 클릭해도 elementFromPoint = #pano-canvas, .route-line 이 받지 못함).
-   *   즉 이 분기는 **실제 화면 클릭으로는 영원히 도달 불가능한 죽은 코드**다(대체 진입점도 없음 —
-   *   07_Radar·08_PanoNav 에 동선 미니맵 없음). 제품 수정은 발주서 범위 밖이라 보고만 하고, 여기서는
-   *   같은 함수(PanoViewer.seekRatio)를 직접 호출해 "탐색→서버 Range 206" 자체의 동작은 검증한다.
+  /* ══ E. 동선 중간 지점 탐색(레이더 미니맵 실 클릭 · Range 206) ══
+   * [R1 결함수정 — WO 20261016-routeminimap] 기존에는 63_RouteDraw.js 의 .route-line click
+   *   핸들러가 "PanoViewer.open && isVideo" 일 때 seekRatio() 를 부르는 분기를 가졌지만,
+   *   #pano-overlay(style.css:1537 fixed·inset:0·z-index:9999)가 재생 중 도면 전체를 가려
+   *   그 분기는 실제 화면 클릭으로 영원히 도달 불가능한 죽은 코드였다(63_RouteDraw.js 에서 제거함).
+   *   대체 진입점 = 07_Radar.js 의 레이더 미니맵(Radar.showRoute, #pano-radar-route) — 재생 중에도
+   *   #pano-radar(z-index:12)가 오버레이 위에 떠 있어 실제로 클릭 가능하다. 여기서는 직접 함수
+   *   호출이 아니라 CDP 실 클릭으로 그 경로(미니맵 클릭 → ratioAtPoint → seekRatio) 전체를 검증한다.
    */
-  console.log("\n[E] 동선 중간 지점 탐색 — 서버 Range(206) [click 분기는 도달 불가 — 함수 직접 호출로 검증]");
-  // [근본원인] MediaRecorder 가 만든 webm 은 큐(seek 인덱스)가 없어, Chrome 이 재생 시작 직후
-  // 메타데이터 확보를 위해 파일을 Range 로 (거의) 전부 내려받는다 — 그 뒤 seek 은 이미 버퍼된
-  // 구간이라 새 네트워크 요청이 0건이다(정상 — 완전 캐시). 그래서 D 이후 누적된 응답까지 함께
-  // 본다: "360 영상 스트리밍에 서버가 206 Partial Content 로 응답한다"는 사실 자체는 이렇게도
-  // 증명된다(이 세션에서 실제로 206 이 나왔는지).
+  console.log("\n[E] 동선 중간 지점 탐색 — 레이더 미니맵 실 클릭(Range 206)");
   const durBefore = await P.evS(`__wm.PanoViewer.videoEl ? __wm.PanoViewer.videoEl.duration : null`);
-  await P.evS(`__wm.PanoViewer.seekRatio(0.75); 1`);
-  await wait(400);
+  const minimapShown = await P.waitFor(`!document.getElementById('pano-radar').classList.contains('hidden') && !document.getElementById('pano-radar-route').classList.contains('hidden')`, 8000);
+  ok(minimapShown >= 0, "E0a 재생 중 레이더 미니맵에 동선이 표시됨(Radar.showRoute, #pano-radar-route)");
+  const seekPt = await P.ev(`(function(){
+    var r0 = __wm.State.routes.find(function(r){return r.id===${JSON.stringify(routeId)}});
+    var p = __wm.Routes.pointAtRatio(r0.points, 0.75);
+    var svg = document.getElementById('pano-radar-route'); var sr = svg.getBoundingClientRect();
+    return { x: sr.left + (p.x/100)*sr.width, y: sr.top + (p.y/100)*sr.height };
+  })()`);
+  await click(P, seekPt.x, seekPt.y);
+  await wait(500);
   const seekChk = await P.evS(`(function(){ var v=__wm.PanoViewer.videoEl; return { duration: v ? v.duration : null, currentTime: v ? v.currentTime : null }; })()`);
   ok(isFinite(durBefore) && durBefore > 0, "E0 영상 duration 획득(실 디코드 성공)", { durBefore });
-  ok(seekChk.currentTime != null && seekChk.currentTime > (durBefore * 0.5), "E1 PanoViewer.seekRatio(0.75) → currentTime 이 그 지점으로 이동", seekChk);
+  ok(seekChk.currentTime != null && seekChk.currentTime > (durBefore * 0.5), "E1 미니맵 실 클릭(ratio≈0.75) → currentTime 이 그 지점으로 이동", seekChk);
   ok(net206.some((s) => s === 206), "E2 360 영상 스트리밍 중 서버가 Range 요청에 206 Partial Content 로 응답(누적)", { statuses: net206 });
 
   /* ══ F. 배포(열람 링크) — 재생 가능 · 그리기(편집) 0 ══ */

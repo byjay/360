@@ -1,11 +1,11 @@
   const Radar = {
     _pin: null,
 
-    /** 현재 핀 기준으로 미니맵(도면 썸네일+핀들) 렌더 */
-    update(pin) {
-      this._pin = pin;
-      const box = document.getElementById("pano-radar");
-      if (!box) return;
+    /** 패널 크롬(접기/더보기/크게보기/방향조절 토글) — 핀 모드(update)·동선 모드(showRoute)
+     *  공용, 1회만 배선(각 바인딩이 자체 *_Bound 플래그로 멱등). [360 동선 R1] 동선 재생은
+     *  핀을 거치지 않고 바로 열릴 수 있어(Routes.play → PanoViewer 직접) update() 호출 없이도
+     *  이 크롬이 배선돼야 한다 — 그래서 update() 에서 추출해 공유한다. */
+    _bindChromeOnce(box) {
       // [마스터 요청 N9] 미니맵 접기/펼치기 토글 (1회 바인딩)
       if (!this._toggleBound) {
         const tb = document.getElementById("pano-radar-toggle");
@@ -81,6 +81,14 @@
           this._dirBound = true;
         }
       }
+    },
+
+    /** 현재 핀 기준으로 미니맵(도면 썸네일+핀들) 렌더 */
+    update(pin) {
+      this._pin = pin;
+      const box = document.getElementById("pano-radar");
+      if (!box) return;
+      this._bindChromeOnce(box);
       // 현재 페이지의 도면 이미지 소스 확보 (뷰어/디자이너 공통)
       const mapSrc = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(this._currentMapSrc()) : this._currentMapSrc();
       if (!mapSrc) { this.hide(); return; }
@@ -409,7 +417,123 @@
       this._buildingKey = null;
     },
 
-    hide() { const b = document.getElementById("pano-radar"); if (b) b.classList.add("hidden"); }
+    hide() {
+      const b = document.getElementById("pano-radar"); if (b) b.classList.add("hidden");
+      // [360 동선 R1] 핀 모드로 복귀할 다음 세션을 위해 동선 모드 흔적을 지운다.
+      this._routeMode = false; this._route = null;
+      const svg = document.getElementById("pano-radar-route"); if (svg) svg.classList.add("hidden");
+      const cone = document.getElementById("pano-radar-cone"); if (cone) cone.classList.remove("hidden");
+      const dirBtn = document.getElementById("pano-radar-dir"); if (dirBtn) dirBtn.classList.remove("hidden");
+    },
+
+    /* ══════════════════════════════════════════════════════════════
+       [WO 20261016-routeminimap] 360 동영상 동선 재생 중 미니맵
+       ──────────────────────────────────────────────────────────────
+       [근본원인 — R1] #pano-overlay 가 fixed·inset:0·z-index:9999 전체화면이라, 재생 중에는
+       도면(#map-viewport) 자체가 클릭 대상이 될 수 없다 — 63_RouteDraw.js 의 도면쪽
+       click-to-seek 분기는 영원히 도달 불가능한 죽은 코드였다(p156-e2e 주석, CDP 실측).
+       대체 진입점 = 이 미니맵(핀 모드와 같은 #pano-radar 패널 재사용, 접기/펼치기·크게보기
+       그대로 상속) — 동선 전체를 표시하고 클릭/드래그하면 그 비율로 PanoViewer.seekRatio().
+       Routes.play()(열람자도 호출 가능 — 재생은 열람자도 허용된 기능)가 호출한다. ══ */
+    showRoute(route) {
+      const box = document.getElementById("pano-radar");
+      if (!box || !route || !(route.points || []).length) return;
+      this._routeMode = true;
+      this._route = route;
+      this._pin = null;
+      // 핀 모드 전용 크롬(접기/더보기/크게보기/방향/줌)은 그대로 재사용 — 1회만 배선.
+      this._bindChromeOnce(box);
+      this._bindRouteSeekOnce();
+      const mapSrc = (typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(this._currentMapSrc()) : this._currentMapSrc();
+      const imgEl = document.getElementById("pano-radar-map");
+      if (mapSrc && imgEl && imgEl.src !== mapSrc) imgEl.src = mapSrc;
+      const pageEl = document.getElementById("pano-radar-page");
+      if (pageEl) pageEl.textContent = "p." + (route.page || 1);
+      const pinsLayer = document.getElementById("pano-radar-pins");
+      if (pinsLayer) pinsLayer.innerHTML = "";
+      // 방향 조절(핀 전용 개념)은 동선 모드에서 의미가 없다 — 숨긴다.
+      const cone = document.getElementById("pano-radar-cone");
+      if (cone) cone.classList.add("hidden");
+      const dirBtn = document.getElementById("pano-radar-dir");
+      if (dirBtn) dirBtn.classList.add("hidden");
+      this._renderRouteSvg();
+      this.updateRoutePlayhead((typeof Routes !== "undefined" && Routes._playRatio) || 0);
+      this._fitRouteView(route);
+      box.classList.remove("hidden");
+    },
+
+    /** 동선 전체(halo+점선+화살표) 를 미니맵 svg 에 그린다 — 재생 중 1회(진행률은 updateRoutePlayhead 가 담당). */
+    _renderRouteSvg() {
+      const svg = document.getElementById("pano-radar-route");
+      if (!svg || !this._routeMode || !this._route) return;
+      const pts = (this._route.points || []).map(p => `${p.x},${p.y}`).join(" ");
+      // 투명 히트 사각형 — SVG 는 pointer-events:visiblePainted 가 기본이라 fill 이 지정된(알파 0 포함)
+      // 영역만 클릭을 받는다. 동선 두께가 가늘어 조준이 어려우므로 미니맵 전체를 클릭 대상으로 넓힌다.
+      svg.innerHTML = `<rect x="0" y="0" width="100" height="100" fill="rgba(0,0,0,0)" class="pano-radar-route-hit"/>`
+        + `<polyline points="${pts}" class="route-line-halo"/>`
+        + `<polyline points="${pts}" class="route-line"/>`;
+      svg.classList.remove("hidden");
+    },
+
+    /** 재생진행률(0~1) → 미니맵 위 재생위치점 이동(Routes.play().onProgress 가 매 tick 호출). */
+    updateRoutePlayhead(t) {
+      if (!this._routeMode || !this._route || typeof Routes === "undefined" || !Routes.pointAtRatio) return;
+      const svg = document.getElementById("pano-radar-route");
+      if (!svg) return;
+      const p = Routes.pointAtRatio(this._route.points, t);
+      if (!p) return;
+      let head = svg.querySelector(".route-playhead");
+      if (!head) {
+        head = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        head.setAttribute("class", "route-playhead");
+        head.setAttribute("r", "2.6");
+        svg.appendChild(head);
+      }
+      head.setAttribute("cx", p.x);
+      head.setAttribute("cy", p.y);
+    },
+
+    /** 동선 전체 bbox 가 패널 안에 꼭 맞도록 stage 확대/이동(핀 모드의 _applyTransform 과 같은
+     *  CSS scale+translate 기법, 동선은 "현재 핀" 개념이 없어 별도 계산). */
+    _fitRouteView(route) {
+      const stage = document.getElementById("pano-radar-stage");
+      const pts = route && route.points;
+      if (!stage || !pts || !pts.length) return;
+      let minX = 100, minY = 100, maxX = 0, maxY = 0;
+      pts.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
+      const pad = 10;
+      const x = Math.max(0, minX - pad), y = Math.max(0, minY - pad);
+      const w = Math.min(100, (maxX - minX) + pad * 2) || 20;
+      const h = Math.min(100, (maxY - minY) + pad * 2) || 20;
+      const s = Math.max(1, Math.min(100 / w, 100 / h));
+      stage.style.transformOrigin = "0 0";
+      stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-x).toFixed(2) + "%, " + (-y).toFixed(2) + "%)";
+    },
+
+    /** 미니맵 전체 영역 클릭/드래그 → 가장 가까운 동선 지점의 비율로 PanoViewer.seekRatio().
+     *  svg 엘리먼트 자체(정적 DOM, innerHTML 재생성 대상이 아님)에 1회만 배선 — 재바인딩 불필요. */
+    _bindRouteSeekOnce() {
+      if (this._routeSeekBound) return;
+      this._routeSeekBound = true;
+      const svg = document.getElementById("pano-radar-route");
+      if (!svg) return;
+      let dragging = false;
+      const seekAt = (clientX, clientY) => {
+        if (!this._routeMode || !this._route || typeof Routes === "undefined") return;
+        const rect = svg.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const px = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+        const py = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
+        const t = Routes.ratioAtPoint(this._route.points, px, py);
+        if (typeof PanoViewer !== "undefined" && PanoViewer.seekRatio) PanoViewer.seekRatio(t);
+      };
+      svg.addEventListener("mousedown", (e) => { dragging = true; seekAt(e.clientX, e.clientY); });
+      document.addEventListener("mousemove", (e) => { if (dragging) seekAt(e.clientX, e.clientY); });
+      document.addEventListener("mouseup", () => { dragging = false; });
+      svg.addEventListener("touchstart", (e) => { dragging = true; const t = e.touches[0]; if (t) seekAt(t.clientX, t.clientY); e.preventDefault(); }, { passive: false });
+      svg.addEventListener("touchmove", (e) => { if (dragging) { const t = e.touches[0]; if (t) seekAt(t.clientX, t.clientY); e.preventDefault(); } }, { passive: false });
+      svg.addEventListener("touchend", () => { dragging = false; });
+    }
   };
 
   /* ══════════════════════════════════════════

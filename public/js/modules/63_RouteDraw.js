@@ -350,13 +350,12 @@
           const id = el.getAttribute("data-route");
           const route = (State.routes || []).find(x => x.id === id);
           if (!route) return;
-          // 이미 이 동선의 영상이 열려 있으면 클릭 지점으로 탐색(seek), 아니면 재생 시작
-          if (this._activeId === id && typeof PanoViewer !== "undefined" && PanoViewer.open && PanoViewer.isVideo) {
-            const pct = MapCtrl.viewportToPercent(e.clientX, e.clientY);
-            if (pct) PanoViewer.seekRatio(this.ratioAtPoint(route.points, pct.x, pct.y));
-          } else {
-            this.play(id);
-          }
+          // [R1 결함수정 — WO 20261016-routeminimap] 이 도면 위 click-to-seek 분기는 죽은 코드였다:
+          // 재생 중에는 #pano-overlay(fixed·inset:0·z-index:9999)가 도면 전체를 가려
+          // elementFromPoint 가 이 .route-line 을 절대 집지 못한다(p156-e2e 실측, CDP). 재생 중
+          // 탐색은 이제 07_Radar.js 의 레이더 미니맵(Radar.showRoute → 클릭/드래그 → seekRatio)이
+          // 전담한다 — 이 핸들러는 재생 시작/재시작만 한다(도면이 보이는 시점 = 재생 중이 아닐 때뿐).
+          this.play(id);
         });
       });
       layer.querySelectorAll("[data-rdel]").forEach(b => {
@@ -376,9 +375,16 @@
       this._activeId = id; this._playRatio = 0;
       const src = "/api/r2/object/" + route.videoId;
       if (typeof PanoViewer !== "undefined") {
-        PanoViewer.onProgress = (t) => { this._playRatio = t; this.render(); };
+        PanoViewer.onProgress = (t) => {
+          this._playRatio = t; this.render();
+          // [360 동선 미니맵 — R1] 도면이 재생 오버레이에 가려 있는 동안의 실제 탐색 UI.
+          if (typeof Radar !== "undefined" && Radar.updateRoutePlayhead) Radar.updateRoutePlayhead(t);
+        };
         PanoViewer.loadMedia((typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(src) : src, route.name || "동선", true);
       }
+      // [360 동선 미니맵 — R1] 재생 중 도면이 전체화면 오버레이에 가려지므로, 동선 전체+재생위치점을
+      // 레이더 미니맵(핀 모드와 같은 #pano-radar 패널)에 표시하고 클릭/드래그로 탐색 가능하게 한다.
+      if (typeof Radar !== "undefined" && Radar.showRoute) Radar.showRoute(route);
     },
 
     /** 사이드바 목록 */

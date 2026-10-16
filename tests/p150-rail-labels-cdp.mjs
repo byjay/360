@@ -5,9 +5,11 @@
  * [재현] R1 (지휘자 CDP 실측, 발주서 동일): #side-toolbar .stb-btn 11개 전부 textLen=0,
  *   근본원인 style.css `.side-toolbar .stb-group::before{content:none}`(데스크톱 ≥761px).
  *   이 파일이 그 재현 겸 회귀 테스트다.
+ *   [WO 20261016-routeminimap] R2 — "동선" 레일 버튼(data-deleg="btn-route-draw") 1개 추가로
+ *   11→12개(index.html "영역" 그룹, RailLabels.LABELS 11_UI.js 에 라벨 등록).
  *
  * 검증:
- *   ① 버튼 11개 전부 .stb-label 텍스트 길이 > 0
+ *   ① 버튼 12개 전부 .stb-label 텍스트 길이 > 0
  *   ② hover 시 .stb-tip 풍선이 보이고 텍스트가 data-rail-desc(옛 title)와 일치
  *   ③ 라벨 색 대비 >= 4.5:1 (실 computed style 로 계산)
  *   ④ 뮤테이션 모드(P150_MUTATE=1): .stb-label 강제 숨김 -> ①이 다시 실패해야 한다
@@ -91,9 +93,9 @@ const labelInfo = await page.evaluate(() => {
 });
 ok(!labelInfo.error, "#side-toolbar 존재 :: " + JSON.stringify(labelInfo.error || "ok"));
 if (!labelInfo.error) {
-  ok(labelInfo.length === 11, "버튼 11개 :: count=" + labelInfo.length);
+  ok(labelInfo.length === 12, "버튼 12개 :: count=" + labelInfo.length);
   const zeroLen = labelInfo.filter((r) => r.labelLen === 0);
-  ok(zeroLen.length === 0, "① 11개 전부 라벨 텍스트 길이 > 0 :: zeroLenCount=" + zeroLen.length + (zeroLen.length ? (" ids=" + zeroLen.map((r) => r.id).join(",")) : ""));
+  ok(zeroLen.length === 0, "① 12개 전부 라벨 텍스트 길이 > 0 :: zeroLenCount=" + zeroLen.length + (zeroLen.length ? (" ids=" + zeroLen.map((r) => r.id).join(",")) : ""));
   const noDesc = labelInfo.filter((r) => !r.hasDesc);
   ok(noDesc.length === 0, "data-rail-desc(옛 title) 보존 확인 :: noDescCount=" + noDesc.length);
 }

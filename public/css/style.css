@@ -1627,6 +1627,11 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 /* 핀 레이어를 부채꼴/중심점보다 위로 — DOM 순서상 cone 이 뒤라 현재 핀의 번호가 중심점(.pano-radar-dot)에
    가려지던 문제. 부채꼴은 반투명 시야 표시라 핀 아래에 있는 편이 판독에 유리하다. */
 .pano-radar-pins { position: absolute; inset: 0; z-index: 3; }
+/* [360 동선 R1, WO 20261016-routeminimap] 동영상 재생 중 동선+재생위치점 미니맵 —
+   .route-line/.route-line-halo/.route-playhead 는 메인 도면(#routes-svg, 2783행)과 동일 클래스를
+   재사용(새 색·두께 규칙 0 — 이미 감사된 값 그대로). 이 svg 는 동선 모드에서만 보인다(hidden 토글). */
+.pano-radar-route-svg { position: absolute; inset: 0; z-index: 4; cursor: pointer; }
+.pano-radar-route-svg.hidden { display: none !important; }
 .pano-radar-pin {
   position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px;
   border-radius: 50%; background: rgba(107,100,87,.85);
