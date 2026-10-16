@@ -222,7 +222,16 @@ try {
   await shot(P, "route-drawn");
 
   /* ══ C. 새로고침 후 복원 ══ */
+  // [근본원인 — 하네스] B 구간은 route.videoId 설정(onVideoPicked 끝)과 동시에 App._autoSave() 를
+  //   1회 호출하지만, 서버 반영은 AUTO_SYNC_DEBOUNCE_MS=1500ms 뒤에야 PATCH 가 나간다(20_App.js:5746).
+  //   종전 테스트는 B4 통과 직후(스크린샷 roundtrip 수백ms) 바로 새로고침해 그 디바운스가 끝나기 전에
+  //   페이지를 떠났다 — p146(05_SyncQueue._onReconnect 등)의 기존 관행과 같이(P.wait(1500) 반복 사용,
+  //   offline-matrix-cdp.mjs) 자동저장이 실제로 끝났다는 신호(App._dirty===false && !App.autoSaving)를
+  //   기다린 뒤 새로고침한다. 이러면 정상 경로(디바운스 PATCH)로 저장되고, 복원도 느린 보조경로
+  //   (부팅 1.5s 타이머 SyncQueue._onReconnect → draft 이미지 재업로드+PATCH, 실측 4~7s)에 의존하지 않는다.
   console.log("\n[C] 새로고침 후 복원");
+  const settled = await P.waitFor(`typeof __wm.App !== "undefined" && __wm.App._dirty === false && !__wm.App.autoSaving`, 8000);
+  ok(settled >= 0, "C0 자동저장 디바운스 완료(App._dirty===false) — 새로고침 전 선행조건", { settled });
   await P.send("Page.navigate", { url: BASE + "/" });
   await P.waitFor(`window.__wm && __wm.ProjectHub && __wm.ProjectHub.list && __wm.ProjectHub.list.some(function(p){return p.id==='${PID}'})`, 20000);
   await P.ev(`(async function(){ var p=__wm.ProjectHub.list.find(function(x){return x.id==='${PID}'}); await __wm.ProjectHub.openProject(p); return 1; })()`, 30000);
@@ -304,6 +313,11 @@ try {
   const pub = await api("POST", "/api/projects/" + PID + "/publish", null, sTok);
   const tok = pub.j && pub.j.project && pub.j.project.share_path ? pub.j.project.share_path.split("/").pop() : "";
   ok(pub.s === 200 && !!tok, "F0 배포 성공 — 열람 링크 토큰 발급", { s: pub.s });
+  // [근본원인 — 하네스, 0e41cc5 viewmail 합류] 이 프로젝트의 "첫" 공유 토큰 발급(ensureShareToken
+  // newLinkEmailAuth)은 이메일 인증을 기본 ON 으로 깐다(src/index.tsx:4232, 마스터: "고른 사람만 열람").
+  // 이 F 구간은 이메일 인증과 무관한 익명 재생/편집차단 시나리오이므로, 디자이너 API로 이 프로젝트의
+  // 정책을 명시적으로 끈다(실사용자도 쓰는 /api/projects/:id/viewer-access 토글, §G-2-5 — 제품코드 0터치).
+  await api("PUT", "/api/projects/" + PID + "/viewer-access", { email_auth: false }, sTok);
 
   // [근본원인 — 하네스] 같은 탭에서 이어 쓰면 디자이너 로그인(wm_local_token)이 localStorage 에
   // 남아 열람 링크 진입 시에도 Auth 가 그 토큰을 세션으로 복원해 isDesigner=true 가 된다
