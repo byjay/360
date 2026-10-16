@@ -173,13 +173,15 @@ function suitePinScale(label) {
   vm.createContext(sandbox);
   vm.runInContext(mapSrc + "\n;globalThis.__MAP = MapCtrl;", sandbox);
   const MapCtrl = sandbox.__MAP;
+  // 🔴 [b0d24ad 재도입] 기대값은 리터럴이 아니라 MapCtrl.pinScreenScale()(바닥·상한 포함 산식) 호출
+  // 결과로 계산한다 — PIN_SCALE·PIN_MAX_PX 등 상수가 또 바뀌어도 이 테스트가 따라간다(하드코딩 금지).
+  const expectScale = MapCtrl.pinScreenScale();
   MapCtrl._applyPinBillboard();
   const transforms = layer.children.map((m) => m.style.transform);
   const allSame = transforms.every((t) => t === transforms[0]);
   ok(allSame, `핀 3개(핀별 속성 무관) 동일 transform(0건) = ${allSame} → "${transforms[0]}"`);
   ok(transforms.every((t) => t === undefined), "평면 모드 — 마커 inline transform 0건(CSS 정적 규칙이 전담, 성능개선)");
-  // zoom=1.7 × PIN_SCALE(2, 구역보정 無) = 3.4(바닥 0.35 보다 훨씬 큼) — 리터럴 기대값(동어반복 회피).
-  ok(cssVars["--pin-scale"] === "3.4000", `--pin-scale="${cssVars["--pin-scale"]}" = zoom(1.7)×PIN_SCALE(2)=3.4(핀 크기 실제 적용 확인)`);
+  ok(cssVars["--pin-scale"] === expectScale.toFixed(4), `--pin-scale="${cssVars["--pin-scale"]}" = pinScreenScale()(zoom=1.7)=${expectScale.toFixed(4)}(핀 크기 실제 적용 확인)`);
 }
 
 /* ── 실행: 정상 소스 ─────────────────────────────────────────── */

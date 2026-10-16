@@ -65,6 +65,7 @@
 58_BackGuard.js
 59_PinAlias.js
 60_PhotoFolder.js
+67_PinMultiPhoto.js
 61_NumReset.js
 62_PersonBlur.js
 63_RouteDraw.js

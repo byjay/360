@@ -268,6 +268,13 @@
         if (!canDel) { del.title = "소유자·관리자 전용 — 프로젝트 소유자·슈퍼관리자만 일괄 삭제할 수 있습니다"; del.setAttribute("aria-disabled", "true"); }
         else if (offline) { del.title = "온라인에서만 — 일괄 삭제는 오프라인에서 실행하지 않습니다"; del.setAttribute("aria-disabled", "true"); }
         out.push(del);
+        // [WO 20261016-multiselect] 핀 멀티선택 ↔ 사진 멀티선택(폴더 아님) 일괄 등록 — 60_PhotoFolder
+        // 매칭 함수를 재사용하는 67_PinMultiPhoto.js 진입점. 선택 0개면 비활성(조용히 실패 금지).
+        const photoBtn = mk("선택한 핀에 360 사진 넣기", "pin-bulk-photo", () => {
+          if (typeof PinMultiPhoto !== "undefined") PinMultiPhoto.openForSelection(Array.from(s.ids));
+        }, "선택한 포인트에만, 선택한 사진들을 번호 기준으로 매칭해 등록합니다");
+        photoBtn.disabled = n === 0 || typeof PinMultiPhoto === "undefined";
+        out.push(photoBtn);
       }
       const scope = Array.isArray(opts.scopePins) ? opts.scopePins : null;
       if (canDel && scope && scope.length) {

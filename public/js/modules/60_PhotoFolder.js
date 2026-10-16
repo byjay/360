@@ -430,7 +430,9 @@
       } catch (e) { return new Set(); }
     },
 
-    async _registerEntry(pin, entry, source) {
+    /** @param {boolean} [overwrite=false] [WO 20261016-multiselect] 기본 false(기존 845a081 동작 불변) —
+     *  67_PinMultiPhoto.js(핀 멀티선택 ↔ 파일 멀티선택 등록)만 true 를 넘긴다(§SoT, 업로드 경로는 1곳). */
+    async _registerEntry(pin, entry, source, overwrite) {
       const file = await entry.getFile();
       const row = { file: file, name: entry.name, sortKey: Number.isFinite(file.lastModified) ? file.lastModified : NaN, timeSource: "폴더 매칭", is360: null, w: 0, h: 0 };
       await new Promise((resolve) => {
@@ -438,7 +440,7 @@
         App._detect360(file, (is360, w, h) => { row.is360 = is360; row.w = w; row.h = h; resolve(); });
       });
       const usedNames = (typeof PhotoBatch !== "undefined" && PhotoBatch._usedPhotoNames) ? PhotoBatch._usedPhotoNames() : new Set();
-      const r = (typeof PhotoBatch !== "undefined" && PhotoBatch._uploadOneRow) ? await PhotoBatch._uploadOneRow(pin, row, false, usedNames, source) : { status: "fail", reason: "PhotoBatch 미로드" };
+      const r = (typeof PhotoBatch !== "undefined" && PhotoBatch._uploadOneRow) ? await PhotoBatch._uploadOneRow(pin, row, !!overwrite, usedNames, source) : { status: "fail", reason: "PhotoBatch 미로드" };
       if (r.status === "done") {
         try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
         try { App._updateSyncBadge && App._updateSyncBadge(); } catch (e) {}
