@@ -44,9 +44,7 @@
     /** 현재 페이지 핀 목록(번호는 renderPinsOnMap 과 동일 규칙: 페이지 내 순번) */
     _currentPins() {
       if (typeof State === "undefined" || !State.pins) return [];
-      const totalPages = State.mode === "viewer"
-        ? (State.viewerPages ? State.viewerPages.length : 1)
-        : State.pdfPages;
+      const totalPages = (typeof App !== "undefined" && App._totalPages ? App._totalPages() : 0);   // [WO 20261016-multisheet] 페이지 수 SoT
       const curPage = State.pdfPage || 1;
       const isMulti = totalPages > 1;
       // [WO 20260930-fixmode] 모드 = 작업공간 — 활성 모드 핀만(SoT: PinSeries.modePins)

@@ -50,7 +50,7 @@
         else { App.focusPin(pin, false); if (typeof Inspector !== "undefined") Inspector.showPin(pin); }
       });
       $("pap-move") && $("pap-move").addEventListener("click", () => {
-        const pin = this._pin(); if (!pin) return;
+        const pin = this._clicked(); if (!pin) return;   // [WO 20261016-multisheet] 이동 = 이 도면의 그 핀(연결 멤버면 멤버 좌표)
         State.pinEditUnlocked = pin.id;
         this.close();
         UI.renderPinsOnMap();
@@ -61,7 +61,7 @@
       // [WO 20260929] 🔴 "수정 / 사진 추가" 버튼 제거(중복 정리) — 하던 일(라벨 입력 포커스 안내)은
       //   등록 탭이 대신하므로 기능 유실 없음(라벨 입력은 항상 보임 → 바로 클릭 가능).
       $("pap-del") && $("pap-del").addEventListener("click", async () => {
-        const pin = this._pin(); if (!pin) return;
+        const pin = this._clicked(); if (!pin) return;   // [WO 20261016-multisheet] 삭제 = 누른 핀(대표면 묶음 전체 — App.deletePin 판정)
         if (await App.deletePin(pin.id)) this.close();
       });
       // ── 등록정보(위치명) / 번호 수정 — 저장은 명시 버튼(자동저장 OFF, 미저장 표시만) ──
@@ -193,6 +193,8 @@
       if (cat === "url" || cat === "video") { const u = $("pap-photo-url"); if (u) u.focus(); }
     },
     _pin() { return (State.pins || []).find(p => p.id === this._pinId) || null; },
+    /** [WO 20261016-multisheet P3] 도면에서 실제로 누른 핀 — 연결 멤버면 _pin()(내용 = 대표)과 다르다. 이동·삭제·연결 해제는 이 핀. */
+    _clicked() { return (State.pins || []).find(p => p.id === this._clickedId) || this._pin(); },
 
     /** 🔴 [WO 20261006-oplog2] 편집 확정의 공유 지점(라벨·사진·URL·문서 4곳) — 자동저장 OFF 정책 그대로:
      *  미저장 표시(App._markDirty) + 로컬 보관(App._keepLocal: 도면 draft · 번들 스냅샷 · 오프라인이면 oplog). 서버 저장 0.
@@ -213,18 +215,21 @@
     open(pinId) {
       const el = document.getElementById("pin-action-pop");
       if (!el) return;
-      const pin = (State.pins || []).find(p => p.id === pinId);
-      if (!pin) return;
-      this._pinId = pinId;
+      const clicked = (State.pins || []).find(p => p.id === pinId);
+      if (!clicked) return;
+      // [WO 20261016-multisheet P3] 🔴 연결 멤버 = 내용(사진·노트·라벨·AI)은 대표에서 — 사진은 대표에만 있다("사진 없음"이면 결함).
+      const pin = (typeof PinLink !== "undefined" && PinLink.headOf) ? PinLink.headOf(State.pins, clicked) : clicked;
+      this._clickedId = clicked.id;
+      this._pinId = pin.id;
       this._applyLayoutOnce();
       // [WO 20260929-tree1] 🔴 번호 SoT = PinSeries.numbers/formatNo(01b_PinSeries.js) — 도면
       //   마커·미니맵·트리와 같은 번호(CHECKER=숫자 / 360=P접두)를 쓴다. 예전엔 여기서만
       //   samePage.indexOf 로 독자 채번해(계열 무시) 트리·마커와 다른 번호가 나왔다(§10 SoT).
-      const page = pin.page || 1;
+      const page = clicked.page || 1;
       const numMap = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
-      const meta = numMap.get(pin.id) || null;
+      const meta = numMap.get(clicked.id) || null;
       const no = meta ? meta.no : 0;
-      const noLabel = meta ? PinSeries.formatNo(meta.no, meta.series) : "?";
+      const noLabel = meta ? (PinSeries.textOf ? PinSeries.textOf(meta) : PinSeries.formatNo(meta.no, meta.series)) : "?";
       const hasContent = App.pinHasContent(pin);
       const $ = (id) => document.getElementById(id);
       $("pap-no").textContent = "#" + noLabel;
@@ -241,7 +246,7 @@
         metaHtml += ` <span class="pin-issue-badge" title="미해결 이슈 ${openIssues}건">${openIssues}</span>`;
       }
       const isDup = (typeof PinSeries !== "undefined" && PinSeries.duplicateCheckboardIds)
-        ? PinSeries.duplicateCheckboardIds(State.pins, page).has(pin.id) : false;
+        ? PinSeries.duplicateCheckboardIds(State.pins, page).has(clicked.id) : false;
       if (isDup) {
         metaHtml += ' <span class="pin-dup-badge" title="번호 중복 — 현장 확인 후 직접 수정하세요">중복</span>';
       }
@@ -265,6 +270,8 @@
         }
       }
       $("pap-meta").innerHTML = metaHtml;
+      // [WO 20261016-multisheet P3] 연결된 핀 — [다른 도면에서 보기] 이동 버튼(열람자도 보기·이동 가능, 해제는 편집자만)
+      if (typeof PinLink !== "undefined" && PinLink.renderPopRow) { try { PinLink.renderPopRow($("pap-meta"), clicked); } catch (e) {} }
       // 360° 보기 버튼은 미디어 있을 때 강조
       const viewBtn = $("pap-view");
       if (viewBtn) viewBtn.classList.toggle("dim", !hasContent);
@@ -346,7 +353,10 @@
           return; // 저장하지 않는다 — 조용한 실패 금지(이유를 보여주고 중단)
         }
       }
-      if (pin.checkboard && String(pin.label) !== v) pin.labelManual = true; // [WO 20260930-numdup] 직접 고친 번호 — 동시 생성 재채번 제외
+      const _manual = pin.checkboard && String(pin.label) !== v; // [WO 20260930-numdup] 직접 고친 번호 — 동시 생성 재채번 제외
+      // [WO 20261016-multisheet P3] label 쓰기 = PinLink.setLabel(연결 묶음 전원 같은 번호)
+      if (typeof PinLink !== "undefined" && PinLink.setLabel) PinLink.setLabel(State.pins, pin, v, { manual: _manual });
+      else if (_manual) pin.labelManual = true;
       pin.label = v;
       PinActionPop._commitLocal();
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
@@ -355,7 +365,7 @@
       const page = pin.page || 1;
       const numMap2 = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers(State.pins, page) : new Map();
       const meta2 = numMap2.get(pin.id) || null;
-      const noLabel2 = meta2 ? PinSeries.formatNo(meta2.no, meta2.series) : "?";
+      const noLabel2 = meta2 ? (PinSeries.textOf ? PinSeries.textOf(meta2) : PinSeries.formatNo(meta2.no, meta2.series)) : "?";
       $("pap-title").textContent = this._titleFor(pin, noLabel2);
       const hint = $("pap-label-hint");
       if (hint) hint.textContent = "미저장 변경 — '저장하기'(포인트 편집 패널) 또는 자동저장 이벤트 발생 시 서버에 반영됩니다.";

@@ -324,8 +324,17 @@
     },
 
     _totalPages() {
-      return State.mode === "viewer" && State.viewerPages
+      return this._imagePaged()
         ? State.viewerPages.length : State.pdfPages;
+    },
+    /** 🔴 [WO 20261016-multisheet] 페이지 = 배포본 스냅샷 이미지(viewerPages)인가 — 판정 SoT(페이지 수·페이지 전환·미니맵 원본 7곳 공유).
+     *  종전 판정은 "뷰어 모드"뿐이라, 편집 모드로 서버 배포본을 열면(loadDeckDrawing: fileType="image", pdfDoc 없음)
+     *  여러 쪽 도면인데도 페이지 수 0 → _gotoPage 가 아무것도 안 해 시트(SECTION·ELEVATION 구역)를 눌러도 1쪽이 떴다
+     *  (p161b 실측: S3(3쪽) 선택 후 pdfPage=1 · total=0). PDF 가 실제로 열려 있으면(pdfDoc) 종전 그대로 PDF 경로. */
+    _imagePaged() {
+      if (!State.viewerPages) return false;
+      if (State.mode === "viewer") return !!State.viewerPages;
+      return State.fileType === "image" && !State.pdfDoc && Array.isArray(State.viewerPages) && State.viewerPages.length > 0;
     },
 
     _changePage(dir) { return this._gotoPage(State.pdfPage + dir); },
@@ -361,7 +370,7 @@
       if (State.checkboard) this._updateCheckboardQuickStatus(next); // 페이지 전환 시 "사진 폴더 연동" 버튼·안내문 갱신
       this._pageRendering = true;
       try {
-        if (State.mode === "viewer" && State.viewerPages) {
+        if (this._imagePaged()) {
           const imgEl = UI.$("map-image");
           await new Promise((res) => {
             imgEl.onload = () => res();
@@ -1696,8 +1705,12 @@
       result.changes.forEach((c) => {
         const pin = byId.get(c.id);
         if (!pin) return;
+        // [WO 20261016-multisheet P3] label 쓰기 = PinLink.setLabel(연결 묶음 전원) · manual = 동시 생성 재채번 대상 아님
+        if (typeof PinLink !== "undefined" && PinLink.setLabel) PinLink.setLabel(State.pins, pin, c.newLabel, { manual: true });
+        else {   // PinLink 미로드(단독 테스트) — 종전 그대로(p44 뮤테이션ⓒ 대상 문자열 유지)
         pin.label = c.newLabel;
         pin.labelManual = true;   // [WO 20260930-numdup] 사용자가 정한 번호 — 동시 생성 재채번(resolveConcurrentNos) 대상 아님
+        }
         // [WO 20260918] 🔴 id 는 절대 건드리지 않는다 — 사진/노트는 pin.id 로 연결되므로
         // 라벨(표시 번호)만 바뀌어도 연결 불변. 아래 로그는 그 사실을 재확인용으로 남긴다.
         if (typeof Log !== "undefined") Log.push("pin.renumber", pin.id, { oldLabel: c.oldLabel, newLabel: c.newLabel, page: page });
@@ -1733,13 +1746,16 @@
       const _auth0 = this._pinAuthor();
       // 🔴 [WO 20260930-numdup] 다음 번호 = 로드된 전원 핀 최댓값+1 — 작성자별로 보면 남의 번호와 겹쳤다(p93 B4).
       // 🔴 [WO 20261001-startno] 단, 내 대역 안에서만(다른 대역 핀 무시). 가득 차면 핀을 만들지 않고 확인창.
-      const nx = PinSeries.nextInBand(State.pins, curPage, series, this._numBand(), start);
-      if (nx.full) { this._bandFull(nx); return null; }
-      const no = nx.no;
+      // [WO 20261016-multisheet P3] [기존 번호에 연결] 모드 — 채번하지 않고 대표의 번호·계열을 그대로(PinLink.link).
+      const _linkHead = (typeof PinLink !== "undefined" && PinLink.takePending) ? PinLink.takePending(State.pins, curPage) : null;
+      const nx = _linkHead ? null : PinSeries.nextInBand(State.pins, curPage, series, this._numBand(), start);
+      if (nx && nx.full) { this._bandFull(nx); return null; }
       // [WO 20260929-createdAt] 생성시각 명시 저장(PinSeries.createdAt 이 우선 사용 — id 파생은 구버전 폴백)
       const _now0 = Date.now();
-      const pin = { id: _now0, createdAt: _now0, x: pct.x, y: pct.y, page: curPage, label: String(no) };
-      if (series === "checkboard") pin.checkboard = true;
+      // [P5] label = 접두 포함 전체 문자열(nextInBand.label — 접두 없으면 String(no) = 종전)
+      const pin = { id: _now0, createdAt: _now0, x: pct.x, y: pct.y, page: curPage, label: nx ? (nx.label != null ? nx.label : String(nx.no)) : "" };
+      if (_linkHead) PinLink.link(State.pins, _linkHead, pin);
+      else if (series === "checkboard") pin.checkboard = true;
       if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
@@ -1756,6 +1772,10 @@
       this._autoSave && this._autoSave();
       this._updateCheckboardQuickStatus(curPage);
       if (typeof NumBand !== "undefined" && NumBand.render) NumBand.render(); // 상단 "다음 N" 갱신
+      if (_linkHead && typeof PinLink !== "undefined") {
+        PinLink.advance(curPage);
+        if (Prompt.toast) { const _ms = PinLink.members(State.pins, pin); Prompt.toast(PinLink._textOf(pin) + " 를 " + PinLink._sheetName(curPage) + " 에 연결했습니다 (" + _ms.length + "개 도면)"); }
+      }
       // 🔴 [WO 20260929 마스터 정정] 이 함수는 항상 "번호 핀만" 만든다 — 폼·팝업·파일창·확인창·
       //   토스트 스팸 없음("체크보드 빈 곳 클릭 = 다른 반응 없음"). 사진 즉시등록(photo 모드)은
       //   호출부(_handlePlaceClick)가 반환된 pin 으로 별도 _openPinMediaPicker() 를 부른다.
@@ -1834,9 +1854,11 @@
       const nx = PinSeries.nextInBand(State.pins, pg, series, this._numBand(), this._checkboardStart(pg, series));
       if (hint && State.checkboard) {
         hint.textContent = cnt
-          ? ((series === "checkboard" ? this.CHECKER_PHOTO_NOTE + " · " : "") + "대역 " + PinSeries.bandLabel(nx.band) + " · " + cnt + "개 찍음 · " + (nx.full ? "대역 가득" : ("다음 " + PinSeries.formatNo(nx.no, series) + "번")) + " (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
+          ? ((series === "checkboard" ? this.CHECKER_PHOTO_NOTE + " · " : "") + "대역 " + PinSeries.bandLabel(nx.band) + " · " + cnt + "개 찍음 · " + (nx.full ? "대역 가득" : ("다음 " + (nx.label != null ? nx.label : PinSeries.formatNo(nx.no, series)) + "번")) + " (계속 클릭)" + (series === "content" && avail ? (" · 사진 " + avail + "장 대기") : ""))
           : emptyHint;
       }
+      // [WO 20261016-multisheet P3] 연결 묶음 안이면 [새 번호]/[기존 번호에 연결] 바(배치 중에만 — 그 외 숨김)
+      if (typeof PinLink !== "undefined" && PinLink.renderBar) { try { PinLink.renderBar(); } catch (e) {} }
       // [WO 20260930-autophoto] "사진 다시 선택" 버튼 — 360 모드에서 대기 사진이 있을 때만 노출.
       const reselect = UI.$("btn-photo-reselect");
       if (reselect) reselect.classList.toggle("hidden", !(series === "content" && avail && State.checkboard));
@@ -1863,7 +1885,8 @@
       //   어느 쪽이든 핀은 유지된다(조용히 삭제 금지).
       if (State.regMode === "photo") {
         const pin = this._placeCheckboardPin(pct);
-        if (pin) {
+        // [WO 20261016-multisheet P3] 연결 멤버는 사진을 받지 않는다(사진은 대표에만 — 팝업에서 대표에 등록)
+        if (pin && !(typeof PinLink !== "undefined" && PinLink.isMember(pin))) {
           const fallback = () => {
             if (typeof PhotoBatch !== "undefined" && PhotoBatch.autoConnectPin) PhotoBatch.autoConnectPin(pin);
             else this._openPinMediaPicker(pin); // PhotoBatch 미로드 시 기존 단일선택 폴백(조용한 실패 금지)
@@ -2510,7 +2533,8 @@
       const pin = editing && existing
         ? existing // [WO 20260917 멀티유저 ②] 편집은 기존 pin.author 를 건드리지 않는다(편집자≠원작성자)
         : (() => { const _auth2 = this._pinAuthor(); const _now2 = Date.now(); const np = { id: _now2, createdAt: _now2, x: State.pending.x, y: State.pending.y, page: State.pdfPage, label }; if (_auth2) np.author = _auth2; return np; })();
-      pin.label = label;
+      if (editing && existing && typeof PinLink !== "undefined" && PinLink.setLabel) PinLink.setLabel(State.pins, pin, label);   // [WO 20261016-multisheet] 연결 묶음 전원
+      else pin.label = label;
       if (note) pin.note = note; else if (editing) delete pin.note;
       // [마스터 요청] 핀(호스팟)별 아이콘 캡처 — number(기본)면 속성 제거(하위호환)
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
@@ -3190,7 +3214,9 @@
       if (!pin) return;
       const focused = State.activePin === pin.id;
       if (!focused) { this.focusPinIso(pin); return; }
-      if (this.pinHasContent(pin)) this.openPano(pin);
+      // [WO 20261016-multisheet P3] 연결 멤버 = 대표의 사진(내용은 대표에만)
+      const _head = (typeof PinLink !== "undefined" && PinLink.headOf) ? PinLink.headOf(State.pins, pin) : pin;
+      if (this.pinHasContent(_head)) this.openPano(_head);
       else if (State.mode === "designer" && typeof PinActionPop !== "undefined") PinActionPop.open(pin.id);
       // [WO 20261001-viewreq] 뷰어: 미디어 없는 포인트(CHECKER 등) = 볼 것이 없으니 그 포인트 요청·질문 창(안내 문구 포함)
       else if (typeof Requests !== "undefined" && Requests.openViewer) Requests.openViewer({ pin, noMedia: true });
@@ -3203,7 +3229,7 @@
       const targetPage = pin.page || 1;
       if (targetPage !== State.pdfPage) {
         State.pdfPage = targetPage;
-        if (State.mode === "viewer" && State.viewerPages) {
+        if (this._imagePaged()) {   // [WO 20261016-multisheet] 편집 모드 스냅샷 이미지 도면도 같은 경로(SoT _imagePaged)
           const imgEl = UI.$("map-image");
           // [버그수정 BUG5] onerror도 resolve — 이미지 로드 실패 시 Promise 미해결로 focusPin 영구 행 방지
           await new Promise(res => { imgEl.onload = res; imgEl.onerror = res; imgEl.src = Auth.r2(State.viewerPages[targetPage - 1]); });
@@ -3223,8 +3249,11 @@
     async deletePin(id) {
       const removed = State.pins.find(p => p.id === id);
       if (!removed) return false;
+      // [WO 20261016-multisheet P3] 🔴 대표 삭제 = 연결 묶음 전체(종속만 남으면 내용 없는 유령 핀) · 멤버 삭제 = 그 멤버만
+      const ids = (typeof PinLink !== "undefined" && PinLink.deleteIds) ? PinLink.deleteIds(State.pins, removed) : [id];
       if (!await Prompt.confirm("포인트 삭제", `'${removed.label}' 포인트를 삭제할까요?\n(첨부된 사진·노트·문서 정보도 함께 제거됩니다)`)) return false;
-      this._removePins([id]);
+      if (ids.length > 1 && !await Prompt.confirm("연결된 포인트 삭제", `이 핀은 ${ids.length}개 도면에 연결돼 있습니다 — 전부 삭제됩니다.`)) return false;
+      this._removePins(ids);
       Prompt.toast("'" + removed.label + "' 삭제됨");
       return true;
     },
@@ -3461,6 +3490,12 @@
       // [WO 20260930-numdup] 🔴 병합 = 동시 생성 번호 충돌이 생기는 유일한 지점 — 409 재시도(_mergeConflict)와
       //   오프라인 복귀(_draftVsServer: 화면 복원·flush) 둘 다 여기를 지나므로 한 번만 고친다(§G-2-5).
       this._renumberConcurrent(out, base ? baseIds : null, srvPins);
+      // [WO 20261016-multisheet P3] 연결 정합화 — 대표가 사라진 묶음의 내용 없는 멤버 제거(tombstone 기록 = 부활 금지) · 번호 정렬. 결정적.
+      if (typeof PinLink !== "undefined" && PinLink.repair) {
+        const rp = PinLink.repair(out);
+        if (rp.removed.length) { const tomb = this._pinTombstones(); const t = Date.now(); rp.removed.forEach(id => { tomb[String(id)] = tomb[String(id)] || t; }); }
+        return this._pinsSeen(rp.pins);
+      }
       return this._pinsSeen(out);   // [WO 20260930-lww] 병합 결과(재채번 포함)가 새 기준 — 재채번은 수정으로 찍지 않는다
     },
     /** [WO 20260930-lww] 서버본·draft·병합 결과를 State 에 올릴 때 — 이 내용이 수정 감지 기준(PinSeries.baseline). */
@@ -3495,6 +3530,8 @@
 
     /** 기존 포인트 편집 — 플로팅 폼을 기존 값으로 채워 연다 */
     editPin(id) {
+      // [WO 20261016-multisheet P3] 연결 멤버의 편집(사진·노트·라벨) = 대표에 — 내용은 대표에만 둔다
+      if (typeof PinLink !== "undefined" && PinLink.isMember) { const _p0 = State.pins.find(p => p.id === id); if (_p0 && PinLink.isMember(_p0)) id = PinLink.headOf(State.pins, _p0).id; }
       const pin = State.pins.find(p => p.id === id);
       if (pin == null) return;
       // [WO 20260930-moderole] 🔴 마스터: "체커는 사진을 등록하지 않을 거야" — 이 구식 첨부 폼
@@ -3640,6 +3677,8 @@
 
     /* ── 360° 팝업 열기 (클라우드 저장본 / 영상 / URL) ── */
     async openPano(pin) {
+      // [WO 20261016-multisheet P3] 연결 멤버로 열어도 대표(사진·노트 보유)를 연다 — 연결 없는 핀은 그대로
+      if (typeof PinLink !== "undefined" && PinLink.headOf && pin) pin = PinLink.headOf(State.pins, pin);
       // 현재 핀 기록 + 레이더/네비게이션 갱신 (3DVista radar · 핀 이동 핫스팟)
       State.activePin = pin.id;
       PanoViewer._currentPin = pin;

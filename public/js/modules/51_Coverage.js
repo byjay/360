@@ -66,7 +66,9 @@
     deckSummary(deck, now) {
       if (!deck || !deck.deployment_id || String(deck.deployment_id) !== String(State.currentDeploymentId || "")) return null;
       const pins = Projects.pinsForDeck(State.pins || [], deck);
-      return this.summarize(pins, now != null ? now : Date.now(), this.staleDays());
+      // [WO 20261016-multisheet P4] 연결 멤버는 사진이 없어 "미촬영"으로 이중 집계된다 — 논리 핀 1개(대표)로
+      const logical = (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(pins) : pins;
+      return this.summarize(logical, now != null ? now : Date.now(), this.staleDays());
     },
 
     /** 토글 비활성 사유("" = 사용 가능). CHECKER 모드 = 사진 미등록 정책. */
@@ -112,7 +114,9 @@
       const now = Date.now(), days = this.staleDays();
       const byId = new Map((State.pins || []).map((p) => [String(p.id), p]));
       document.querySelectorAll("#pins-layer .pin-marker").forEach((m) => {
-        const pin = byId.get(String(m.dataset.id));
+        const pin0 = byId.get(String(m.dataset.id));
+        // [WO 20261016-multisheet P4] 연결 멤버 마커 = 대표의 촬영 상태(사진은 대표에만)
+        const pin = (pin0 && typeof PinLink !== "undefined" && PinLink.headOf) ? PinLink.headOf(State.pins, pin0) : pin0;
         if (!this.isTarget(pin)) return;
         const state = this.classify(pin, now, days);
         m.dataset.cov = state;
@@ -170,7 +174,8 @@
         }
       }
       const now = Date.now(), days = this.staleDays();
-      const scope = Projects.pinsForDeck(State.pins || [], Projects.currentDeck || null);
+      const scope0 = Projects.pinsForDeck(State.pins || [], Projects.currentDeck || null);
+      const scope = (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(scope0) : scope0;   // [WO 20261016-multisheet P4]
       const c = this.summarize(scope, now, days);
       this.STATES.forEach((s) => {
         const st = this.STYLE[s];

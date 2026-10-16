@@ -483,9 +483,7 @@
       badge.classList.remove("hidden");
       if (State.mode === "designer") this.show("section-export");
 
-      const totalPages = State.mode === "viewer"
-        ? (State.viewerPages ? State.viewerPages.length : 1)
-        : State.pdfPages;
+      const totalPages = (typeof App !== "undefined" && App._totalPages ? App._totalPages() : 0);   // [WO 20261016-multisheet] 페이지 수 SoT = App._totalPages(편집 모드 스냅샷 이미지 포함)
 
       // 다중 페이지 도면: 현재 페이지의 핀만 목록에 표시(페이지별 완벽 구분)
       const curPage = State.pdfPage || 1;
@@ -726,6 +724,8 @@
       items.push({ label, desc: "PDF·이미지 — 메인 PDF 는 바뀌지 않습니다",
         reason: why || (src.kind === "main" ? "메인 도면 — 원본 ⋯ → [메인 도면 교체](소유자·관리자)" : ""),
         run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "deck", deck }); } });
+      // [WO 20261016-multisheet P3·P5] ☐ 도면 간 핀 번호 연결 · 번호 접두사 — 판정·실행은 66_PinLink(SoT)
+      if (typeof PinLink !== "undefined" && PinLink.deckMenuItems) PinLink.deckMenuItems(deck, why).forEach((it) => items.push(it));
       // [WO 20261012-treeexplorer] 탐색기처럼 — 이 구역 아래 다단 하위 구역(이름만, 폴더처럼 상위 도면을 그대로 봄).
       items.push({ label: "+ 하위 구역", desc: "이 구역 아래 새 하위 구역을 만듭니다(이름만)",
         reason: why, run: () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false, parent_id: deck.id }); } });
@@ -1070,7 +1070,7 @@
     },
     copyPin(pin) {
       const meta = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, pin.page || 1).get(pin.id) : null;
-      const no = meta ? PinSeries.formatNo(meta.no, meta.series) : (pin.label || "");
+      const no = meta ? (PinSeries.textOf ? PinSeries.textOf(meta) : PinSeries.formatNo(meta.no, meta.series)) : (pin.label || "");
       this._pinClip = { checkboard: !!pin.checkboard, icon: pin.icon || null, leader: this.Leader.wants(pin), no };
       const txt = "#" + no + " x=" + (+pin.x).toFixed(3) + "% y=" + (+pin.y).toFixed(3) + "% page=" + (pin.page || 1);
       let done = false;
@@ -1118,7 +1118,7 @@
         this.openTreeMenu(at, onHub ? "프로젝트 목록" : "SEASTAR 360", this._fmCtx(onHub ? "hub" : "page"), { focus: true });
       } else if (tg.kind === "pin") {
         const meta = PinSeries.numbers(State.pins, tg.pin.page || 1).get(tg.pin.id);
-        this.openTreeMenu(at, "포인트 " + (meta ? PinSeries.formatNo(meta.no, meta.series) : (tg.pin.label || "")), this.pinCtxItems(tg.pin), { focus: true });
+        this.openTreeMenu(at, "포인트 " + (meta ? (PinSeries.textOf ? PinSeries.textOf(meta) : PinSeries.formatNo(meta.no, meta.series)) : (tg.pin.label || "")), this.pinCtxItems(tg.pin), { focus: true });
       } else if (tg.kind === "outline") {
         const proj = this._treeProject ? this._treeProject() : null;
         const pick = (Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(Projects.decks || [], proj) : null;
@@ -1392,9 +1392,7 @@
         return;
       }
       const curPage = State.pdfPage || 1;
-      const totalPages = State.mode === "viewer"
-        ? (State.viewerPages ? State.viewerPages.length : 1)
-        : (State.pdfPages || 1);
+      const totalPages = (typeof App !== "undefined" && App._totalPages ? App._totalPages() : 0) || 1;   // [WO 20261016-multisheet] 페이지 수 SoT
       const showPageTag = totalPages > 1;
       const pageTag = (pg) => showPageTag ? ' <span class="tree-label-sub">P' + (pg || 1) + '</span>' : "";
       /* [WO 20260928-tree-pinlist] 🔴 번호 SoT = PinSeries.numbers()(01b_PinSeries.js) —
@@ -1416,7 +1414,7 @@
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
         const meta = numMap ? numMap.get(p.id) : null;
         // [WO 20260930-fixmode] 표시 번호 포맷 SoT = PinSeries.formatNo(CHECKER "1" / 360 "P1") — 핀 패널 헤더(27_PinActionPop)와 같은 표기.
-        const noTxt = meta ? ((PinSeries.formatNo ? PinSeries.formatNo(meta.no, meta.series) : String(meta.no))) : "";
+        const noTxt = meta ? ((PinSeries.textOf ? PinSeries.textOf(meta) : String(meta.no))) : "";   // [WO 20261016-multisheet P6] 접두 포함(A12)
         const noLabel = meta ? '<span class="tree-pin-no">#' + esc(noTxt) + '</span>' : "";
         // [WO 20260930-pinstyle] 모드별 아이콘(형태 단서) — 판정 SoT = pin.checkboard(PinSeries.seriesOf 와 동일 기준).
         n.innerHTML = (isCheckerPin ? ICO.pinChecker : ICO.pin) + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
@@ -1744,7 +1742,7 @@
         const dispNo = meta.no;
         // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo(트리/핀패널과 동일:
         //   CHECKER "1" / 360 "P1"). dataset.no 는 채번 원본값 그대로 유지(회귀테스트 p4/p12 가 숫자로 비교).
-        const dispLabel = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(meta.no, meta.series) : String(dispNo);
+        const dispLabel = (typeof PinSeries !== "undefined" && PinSeries.textOf) ? PinSeries.textOf(meta) : String(dispNo);   // [WO 20261016-multisheet P6] 접두 포함(A12)
         marker.dataset.no = dispNo;
         marker.dataset.kind = meta.kind;
         marker.dataset.filled = _st.filled ? "1" : "0"; // 사진 등록 여부(미니맵과 동일 판정 검증용)
@@ -1965,6 +1963,13 @@
             App.onPinTap(pin);
           });
         }
+        // [WO 20261016-multisheet P3] 도면 간 연결 핀 — 작은 연결 글리프(진한 남색 #0B1F33 위 흰 글자 = 16.1:1). 열람자에게도 보인다.
+        if (typeof PinLink !== "undefined" && PinLink.isLinked && PinLink.isLinked(pin) && PinLink.members(State.pins, pin).length > 1) {
+          marker.classList.add("pin-linked"); marker.dataset.link = String(pin.linkId);
+          const g = document.createElement("span"); g.className = "pin-link-glyph"; g.setAttribute("aria-hidden", "true"); g.textContent = "∞";
+          marker.appendChild(g);
+          marker.title = (marker.title ? marker.title + " · " : "") + "다른 도면과 연결된 번호";
+        }
         layer.appendChild(marker);
         // [WO 20261008-pinstyle §1] 🔴 핀 표현 1종 — 기본은 마커(핀)만. 리더선은 핀별 선택(Leader.wants SoT)일
         //   때만 그리고, 그때는 마커를 감춘다(두 표현 동시 금지). 마커는 DOM 에 남겨 클릭 배선(풍선 → marker.click)
@@ -2121,8 +2126,7 @@
     },
 
     updatePdfPagination() {
-      const total = State.mode === "viewer" && State.viewerPages
-        ? State.viewerPages.length : State.pdfPages;
+      const total = (typeof App !== "undefined" && App._totalPages ? App._totalPages() : 0);   // [WO 20261016-multisheet] 페이지 수 SoT — 편집 모드 여러 쪽 스냅샷도 페이지 이동
       if (total > 1) {
         this.$("pdf-pagination").classList.remove("hidden");
         const jump = this.$("input-page-jump");

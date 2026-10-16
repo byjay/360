@@ -39,7 +39,9 @@
       const deck = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
       const scoped = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(all, deck) : all;
       const pg = this._page();
-      return (scoped || []).filter((p) => p && !p._deleted && (p.page || 1) === pg);
+      // [WO 20261016-multisheet P2] 도면 간 번호 연결 묶음이면 묶음 전체(scopePages) — 연결 OFF 면 [pg] = 종전
+      const scope = (typeof PinSeries !== "undefined" && PinSeries.scopePages) ? PinSeries.scopePages(pg) : [pg];
+      return (scoped || []).filter((p) => p && !p._deleted && scope.indexOf(p.page || 1) >= 0);
     },
 
     _scopeName() {
@@ -115,9 +117,9 @@
       }
       apply.disabled = false; apply.style.opacity = "";
       const LIMIT = 60;
-      const oldTxt = (c) => (Number.isFinite(c.oldNo) ? PinSeries.formatNo(c.oldNo) : (c.oldLabel || "(없음)"));
+      const oldTxt = (c) => (c.oldText ? c.oldText : (Number.isFinite(c.oldNo) ? PinSeries.formatNo(c.oldNo) : (c.oldLabel || "(없음)")));   // [WO 20261016-multisheet P6] 접두 포함
       prev.innerHTML = plan.changes.slice(0, LIMIT).map((c) =>
-        '<span class="allpins-arn-pair" data-id="' + esc(c.id) + '">' + esc(oldTxt(c)) + " → " + esc(PinSeries.formatNo(c.newLabel)) + "</span>"
+        '<span class="allpins-arn-pair" data-id="' + esc(c.id) + '">' + esc(oldTxt(c)) + " → " + esc(c.newLabel) + "</span>"
       ).join("") + (plan.changes.length > LIMIT ? '<span class="allpins-arn-more">외 ' + (plan.changes.length - LIMIT) + "개</span>" : "");
       coll.classList.toggle("hidden", !plan.collisions.size);
       if (plan.collisions.size) coll.textContent = "⚠ 범위 밖 같은 페이지 핀 " + plan.collisions.size + "개와 새 번호가 겹칩니다 — 적용하면 중복(빨강)으로 표시됩니다";
@@ -195,5 +197,126 @@
       if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
       if (typeof AllPins !== "undefined" && AllPins.open && AllPins.render) { try { AllPins.render(); } catch (e) {} }
       if (typeof NumBand !== "undefined" && NumBand.render) { try { NumBand.render(); } catch (e) {} }
+    },
+
+    /* ══ [WO 20261016-bulkedit] 번호 일괄 편집 — 앞 글자 · 뒤 글자 · 제거 · 다시 매기기(조합) ══════════════
+       마스터(음성): "핀 일괄 (수정) 순서대로 앞에 글자나 뒤에 글자 넣는 기능 구현".
+       계산 = PinSeries.bulkEditPlan(순수) · 적용·되돌리기 = 리셋과 같은 정본(applyReset → pin.numReset 스냅샷 →
+       [번호 리셋 되돌리기]/토스트 [되돌리기]) · label 쓰기 = PinLink.setLabel(applyReset 내부, 연결 묶음 전원).
+       범위 = 넘겨받은 핀(전체 포인트 선택) 또는 지금 구역(_targets). 권한·오프라인·열람자 사유 = reason()(리셋과 같다). */
+    _editTargets: null,
+    _editPlan: null,
+
+    _ensureEditSheet() {
+      let m = document.getElementById("numedit-sheet");
+      if (m) return m;
+      m = document.createElement("div");
+      m.id = "numedit-sheet";
+      m.className = "numband-sheet hidden";
+      m.innerHTML =
+        '<div class="numband-backdrop" data-nes-close></div>' +
+        '<div class="numband-panel" role="dialog" aria-modal="true" aria-labelledby="nes-title">' +
+          '<div class="numband-head"><h3 id="nes-title" class="numband-title">번호 일괄 편집</h3>' +
+          '<button type="button" class="numband-x" data-nes-close aria-label="닫기">&times;</button></div>' +
+          '<p id="nes-sub" class="numband-sub"></p>' +
+          '<div class="allpins-arn-row" role="radiogroup" aria-label="순서 기준">' +
+            '<label><input type="radio" name="nes-order" value="no" checked /> 기존 번호순</label>' +
+            '<label><input type="radio" name="nes-order" value="pos" /> 도면 위치순(위→아래, 왼→오)</label>' +
+          '</div>' +
+          '<div class="allpins-arn-row"><label>앞 글자 <input id="nes-pre" type="text" maxlength="7" placeholder="예: A" style="width:70px" /></label>' +
+            '<label><input id="nes-strip-pre" type="checkbox" /> 기존 앞 글자 제거</label></div>' +
+          '<div class="allpins-arn-row"><label>뒤 글자 <input id="nes-suf" type="text" maxlength="7" placeholder="예: -F" style="width:70px" /></label>' +
+            '<label><input id="nes-strip-suf" type="checkbox" /> 기존 뒤 글자 제거</label></div>' +
+          '<div class="allpins-arn-row"><label><input id="nes-renum" type="checkbox" /> 순서대로 다시 매기기</label>' +
+            '<label>시작 <input id="nes-start" type="number" min="0" value="1" style="width:64px" /></label>' +
+            '<label>증가 <input id="nes-step" type="number" min="1" value="1" style="width:56px" /></label></div>' +
+          '<div id="nes-preview" class="allpins-arn-preview" aria-live="polite"></div>' +
+          '<p id="nes-block" class="numband-status hidden"></p>' +
+          '<p id="nes-warn" class="numband-status hidden"></p>' +
+          '<div class="allpins-arn-actions"><button type="button" class="numband-apply" data-nes-close>취소</button>' +
+          '<button id="nes-apply" type="button" class="numband-apply">적용</button></div>' +
+        '</div>';
+      document.body.appendChild(m);
+      m.addEventListener("click", (e) => { if (e.target && e.target.closest && e.target.closest("[data-nes-close]")) this.closeEdit(); });
+      m.querySelectorAll("input").forEach((el) => { el.addEventListener("input", () => this._renderEditPreview()); el.addEventListener("change", () => this._renderEditPreview()); });
+      m.querySelector("#nes-apply").addEventListener("click", () => this.confirmAndApplyEdit());
+      m.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeEdit(); });
+      return m;
+    },
+    closeEdit() {
+      const m = document.getElementById("numedit-sheet");
+      if (m) m.classList.add("hidden");
+      this._editPlan = null; this._editTargets = null;
+    },
+    /** 시트 입력 → bulkEditPlan 옵션. */
+    _editOpts() {
+      const m = document.getElementById("numedit-sheet");
+      const v = (id) => { const el = m && m.querySelector("#" + id); return el ? el.value : ""; };
+      const c = (id) => { const el = m && m.querySelector("#" + id); return !!(el && el.checked); };
+      const ord = m && m.querySelector('input[name="nes-order"]:checked');
+      return { targets: this._editTargets || this._targets(), order: ord ? ord.value : "no", addPrefix: v("nes-pre"), addSuffix: v("nes-suf"),
+        stripPrefix: c("nes-strip-pre"), stripSuffix: c("nes-strip-suf"), renumber: c("nes-renum") ? { start: v("nes-start"), step: v("nes-step") } : null };
+    },
+    /** 미리보기 = 옛 → 새 전부(60개 초과분은 개수만) · 🔴 중복/형식 오류는 빨강 + 적용 차단 · 뒤 글자 숫자 경고. */
+    _renderEditPreview() {
+      const m = document.getElementById("numedit-sheet");
+      if (!m) return null;
+      const plan = PinSeries.bulkEditPlan(State.pins, this._page(), this._editOpts());
+      this._editPlan = plan;
+      const esc = (s) => (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(String(s)) : String(s);
+      const LIMIT = 60;
+      const RED = "color:#B91C1C;border-color:#B91C1C;font-weight:700";   // 흰 패널 위 6.47:1
+      m.querySelector("#nes-preview").innerHTML = (plan.changes || []).slice(0, LIMIT).map((c) =>
+        '<span class="allpins-arn-pair' + (c.conflict || c.invalid ? " nes-bad" : "") + '" data-id="' + esc(c.id) + '"' + (c.conflict || c.invalid ? ' style="' + RED + '"' : "") + ">" +
+          esc(c.oldText || c.oldLabel || "(없음)") + " → " + esc(c.newLabel) + (c.conflict ? " (중복)" : c.invalid ? " (형식)" : "") + "</span>"
+      ).join("") + ((plan.changes || []).length > LIMIT ? '<span class="allpins-arn-more">외 ' + (plan.changes.length - LIMIT) + "개</span>" : "");
+      const block = m.querySelector("#nes-block"), warn = m.querySelector("#nes-warn"), apply = m.querySelector("#nes-apply");
+      block.classList.toggle("hidden", plan.ok);
+      block.textContent = plan.ok ? "" : ("⚠ " + (plan.reason || "적용할 수 없습니다"));
+      if (!plan.ok) block.setAttribute("style", "color:#B91C1C;font-weight:700"); else block.removeAttribute("style");
+      const wtxt = (plan.warnSuffixDigit ? "⚠ 뒤 글자에 숫자가 있습니다 — 사진 파일명 끝 숫자로 찾는 폴더 매칭이 이 핀을 다른 번호로 읽을 수 있습니다. " : "") +
+        (plan.skipped && plan.skipped.length ? ("번호가 아닌 이름 " + plan.skipped.length + "개는 그대로 둡니다.") : "");
+      warn.classList.toggle("hidden", !wtxt); warn.textContent = wtxt;
+      apply.disabled = !plan.ok; apply.style.opacity = plan.ok ? "" : ".5";
+      return plan;
+    },
+    /** 진입 — targets 생략 = 지금 구역(리셋과 같은 범위). 권한·오프라인 사유가 있으면 토스트만. */
+    openEdit(targets) {
+      const why = this.reason();
+      if (why) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("번호 일괄 편집 — " + why); return false; }
+      // 번호 공간(이 페이지 또는 연결 묶음) 밖 선택은 제외하고 그 수를 밝힌다(조용히 빼지 않는다 — 중복 검사가 번호 공간 단위라서)
+      const scope = PinSeries.scopePages(this._page());
+      const sel = Array.isArray(targets) && targets.length ? targets.slice() : null;
+      const inSel = sel ? sel.filter((p) => p && scope.indexOf(p.page || 1) >= 0) : null;
+      const outside = sel ? sel.length - inSel.length : 0;
+      this._editTargets = inSel;
+      const m = this._ensureEditSheet();
+      const n = (this._editTargets || this._targets()).length;
+      m.querySelector("#nes-sub").textContent = (this._editTargets ? "선택한 핀 " : this._scopeName() + "의 핀 ") + n + "개 번호에 앞·뒤 글자를 넣거나 빼고, 필요하면 순서대로 다시 매깁니다." +
+        (outside ? " (다른 페이지 선택 " + outside + "개는 제외 — 그 페이지에서 다시 실행하세요)" : "");
+      m.classList.remove("hidden");
+      this._renderEditPreview();
+      return true;
+    },
+    /** [적용] → 확인 2회 → applyReset(스냅샷·setLabel 정본) → 저장 → 토스트 [되돌리기]. @returns 바뀐 핀 수 */
+    async confirmAndApplyEdit() {
+      const why = this.reason();
+      if (why) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("번호 일괄 편집 — " + why); return 0; }
+      const plan = this._renderEditPreview();
+      if (!plan || !plan.ok) return 0;
+      const ex = plan.changes.find((c) => c.oldLabel !== c.newLabel) || plan.changes[0];
+      const ok1 = await Prompt.confirm("번호 일괄 편집 (1/2)", "핀 " + plan.changes.length + "개 번호를 바꿉니다(실제로 바뀌는 핀 " + plan.changed + "개).\n예: " + (ex ? (ex.oldLabel + " → " + ex.newLabel) : ""), { okText: "다음", cancelText: "취소" });
+      if (!ok1) return 0;
+      const ok2 = await Prompt.confirm("번호 일괄 편집 (2/2) — 마지막 확인", "이미 붙은 사진·노트 연결은 그대로입니다.\n기능 메뉴 [번호 리셋 되돌리기] 또는 토스트 [되돌리기]로 옛 번호를 복원할 수 있습니다." + (plan.warnSuffixDigit ? "\n⚠ 뒤 글자의 숫자 때문에 사진 폴더 매칭이 달라질 수 있습니다." : ""), { okText: "적용", cancelText: "취소" });
+      if (!ok2) return 0;
+      const why2 = this.reason();
+      if (why2) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("번호 일괄 편집 — " + why2); return 0; }
+      const batch = "ne" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const changed = PinSeries.applyReset(State.pins, plan, batch);
+      changed.forEach((pin) => { if (typeof Log !== "undefined" && Log.push) Log.push("pin.renumber", pin.id, { oldLabel: pin.numReset.from, newLabel: pin.label, page: pin.page || 1, reason: "bulk-edit", batch: batch }); });
+      this._persist();
+      this.closeEdit();
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("번호 일괄 편집 " + changed.length + "개", 6000, { action: { label: "되돌리기", onClick: () => this.undo(true) } });
+      return changed.length;
     }
   };

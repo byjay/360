@@ -86,7 +86,8 @@
       const out = [];
       depIds.forEach((depId) => {
         const dep = deps[depId];
-        const pins = this._live(dep.pins);
+        // [WO 20261016-multisheet P4] 논리 핀 1개 = 보고서 행 1개(연결 멤버 제외 — 대표 1행)
+        const pins = (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(this._live(dep.pins)) : this._live(dep.pins);
         const zones = this._live(dep.zones);
         const ds = list.filter((d) => String(d.deployment_id) === depId);
         const isChild = (d) => d.parent_id != null && ds.some((x) => String(x.id) === String(d.parent_id));
@@ -150,7 +151,7 @@
           const pin = it.pin;
           const n = numOf(pin);
           const series = n.series || PinSeries.seriesOf(pin);
-          const noText = n.no != null ? PinSeries.formatNo(n.no, series) : "?";
+          const noText = n.no != null ? (PinSeries.textOf ? PinSeries.textOf(n) : PinSeries.formatNo(n.no, n.series)) : "?";   // [WO 20261016-multisheet P6] 접두 포함(A12)
           const key = "s" + si + "-" + pinsOut.length;
           const pg = pin.page || 1;
           if (!pagesMap.has(pg)) pagesMap.set(pg, []);

@@ -255,7 +255,7 @@
     _numOf(pin) {
       try {
         const info = PinSeries.numbers(State.pins, pin.page || 1).get(pin.id);
-        return info ? PinSeries.formatNo(info.no, info.series) : "";
+        return info ? (PinSeries.textOf ? PinSeries.textOf(info) : PinSeries.formatNo(info.no, info.series)) : "";   // [WO 20261016-multisheet P6] 인쇄 라벨 = 접두 포함(A12) — URL 은 pin.id 그대로
       } catch (e) { return ""; }
     },
 
@@ -290,8 +290,11 @@
       return "";
     },
     deckPins(deck) {
-      const pins = (Projects.pinsForDeck ? Projects.pinsForDeck(State.pins || [], deck) : (State.pins || [])).filter((p) => p && !p._deleted);
-      return pins.slice().sort((a, b) => ((a.page || 1) - (b.page || 1)) || String(this._numOf(a)).localeCompare(String(this._numOf(b)), "ko", { numeric: true }));
+      const pins0 = (Projects.pinsForDeck ? Projects.pinsForDeck(State.pins || [], deck) : (State.pins || [])).filter((p) => p && !p._deleted);
+      // [WO 20261016-multisheet P4] 🔴 연결 멤버는 QR 인쇄 대상에서 제외(대표 1장만 — 멤버마다 다른 QR 이 나오면 현장 태그가 갈라진다)
+      const pins = (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(pins0) : pins0;
+      // [P5] 정렬 SoT = PinSeries.byNumber(순수 숫자 먼저 · 접두 사전순 · A2 < A10) — 형제(numeric localeCompare) 통일
+      return pins.slice().sort((a, b) => ((a.page || 1) - (b.page || 1)) || (PinSeries.byNumber ? PinSeries.byNumber(a, b) : String(this._numOf(a)).localeCompare(String(this._numOf(b)), "ko", { numeric: true })));
     },
     printDeck(deck) {
       const why = this.deckReason(deck);

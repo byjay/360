@@ -2180,6 +2180,34 @@ function parseDeckSrcBox(body: any): { set?: { dep: string | null; page: number 
   if (!c || !fin(c.x) || !fin(c.y) || !fin(c.w) || !fin(c.h) || !(c.w > 0) || !(c.h > 0)) return { error: 'src_crop must be {x,y,w,h} with w,h > 0' }
   return { set: { dep, page, crop: JSON.stringify({ x: c.x, y: c.y, w: c.w, h: c.h }) } }
 }
+/** [WO 20261016-multisheet P2·P5] 🔴 decks.sheet_link / num_prefix 신뢰 경계 — POST·PUT 공유 단일 지점(SoT, parseDeckMode 선례).
+ *  미전송(undefined) = "지정 안 함". sheet_link: 0/1/false/true/null 외 400. num_prefix: null·"" = 지움(순수 숫자),
+ *  그 외는 PinSeries.parseLabel 이 무손실로 되읽을 수 있는 모양만 — 글자만(구분자 선택) 또는 글자+숫자(구분자 필수, "B2-").
+ *  "B2"(구분자 없이 숫자로 끝남)는 "B25" 가 B·25 로 되읽혀 왕복이 깨지므로 400. 조용히 NULL 로 바꾸지 않는다(§10). */
+const NUM_PREFIX_RE = /^(?:[A-Za-z]{1,6}[-_]?|[A-Za-z][A-Za-z0-9]{0,5}[-_])$/
+function parseDeckSheetOpts(body: any): { set: { sheet_link?: number | null; num_prefix?: string | null }; error?: string } {
+  const set: { sheet_link?: number | null; num_prefix?: string | null } = {}
+  if (body && body.sheet_link !== undefined) {
+    const v = body.sheet_link
+    if (v === null) set.sheet_link = null
+    else if (v === 1 || v === true) set.sheet_link = 1
+    else if (v === 0 || v === false) set.sheet_link = 0
+    else return { set, error: 'sheet_link must be 0, 1 or null' }
+  }
+  if (body && body.num_prefix !== undefined) {
+    const v = body.num_prefix
+    if (v === null || v === '') set.num_prefix = null
+    else if (typeof v === 'string' && NUM_PREFIX_RE.test(v.trim())) set.num_prefix = v.trim()
+    else return { set, error: "num_prefix must be letters (A, ER, ER-) or letters+digits with a separator (B2-), max 6 + separator" }
+  }
+  return { set }
+}
+/** 보낸 필드만 UPDATE — 0049 미적용 DB 에서도 기존 POST/PUT 은 이 문장을 타지 않는다(구역 생성·수정 무영향). */
+async function applyDeckSheetOpts(db: any, id: string, set: { sheet_link?: number | null; num_prefix?: string | null }): Promise<void> {
+  const cols = Object.keys(set)
+  if (!cols.length) return
+  await db.prepare('UPDATE decks SET ' + cols.map((k) => k + ' = ?').join(', ') + ' WHERE id = ?').bind(...cols.map((k) => (set as any)[k]), id).run()
+}
 function mapDeck(r: any) {
   // [WO 20260916] 구역=도면의 한 조각(page+crop). NULL(구버전)이면 그대로 null → 페이지 전체 취급.
   let crop: any = null
@@ -2189,6 +2217,9 @@ function mapDeck(r: any) {
   const out: any = { id: r.id, project_id: r.project_id, name: r.name, level_no: r.level_no, deployment_id: r.deployment_id, page: r.page ?? null, crop, parent_id: r.parent_id ?? null, mode: r.mode ?? null, created_at: r.created_at, updated_at: r.updated_at }
   // [WO 20261016-treednd] 형제 순서 — NULL(미적용 마이그레이션/미지정)이면 클라가 기존 정렬로 폴백한다.
   out.sort_order = r.sort_order ?? null
+  // [WO 20261016-multisheet] 시트 묶음 번호 연결·접두(0049) — 미적용 DB·레거시 행은 null(= 종전 동작). 응답 필드 추가 전용.
+  out.sheet_link = r.sheet_link ?? null
+  out.num_prefix = r.num_prefix ?? null
   // [WO 20260930-merge] 원본 상자(0031) — 적용 전 행(컬럼 부재)·레거시는 null(좌표 변환 불가를 클라가 정직하게 표시).
   let srcCrop: any = null
   if (r.src_crop) { try { srcCrop = JSON.parse(r.src_crop) } catch { srcCrop = null } }
@@ -4803,6 +4834,9 @@ app.post('/api/projects/:id/decks', async (c) => {
   const sb = parseDeckSrcBox(body)
   if (sb.error) return c.json({ error: sb.error }, 400)
   const src = sb.set || { dep: null, page: null, crop: null }
+  // [WO 20261016-multisheet] sheet_link / num_prefix — 형식 오류 400(INSERT 전에 판정 — 반쯤 만든 구역 금지)
+  const so = parseDeckSheetOpts(body)
+  if (so.error) return c.json({ error: so.error }, 400)
   // [WO 20260929-parent-guard] 🔴 신뢰 경계 — 같은 프로젝트의 살아있는 deck 이 아니면 400.
   //   조용히 null 로 바꾸지 않는다(다른 프로젝트/삭제된 deck 을 가리키는 고아 생성을 서버에서 차단).
   if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, pid))) {
@@ -4812,7 +4846,8 @@ app.post('/api/projects/:id/decks', async (c) => {
     `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, mode, src_dep_id, src_page, src_crop, created_at, updated_at, deleted)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
   ).bind(id, pid, name, body.level_no ?? null, body.deployment_id || null, page, crop, parentId, mode, src.dep, src.page, src.crop, now, now).run()
-  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop, created_at: now, updated_at: now }))
+  await applyDeckSheetOpts(c.env.DB, id, so.set)
+  return c.json(mapDeck({ id, project_id: pid, name, level_no: body.level_no ?? null, deployment_id: body.deployment_id || null, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop, created_at: now, updated_at: now, ...so.set }))
 })
 
 // 데크 수정 (디자이너) — 배포본 연결/이름/층번호
@@ -4851,10 +4886,14 @@ app.put('/api/decks/:id', async (c) => {
   const sb = parseDeckSrcBox(body)
   if (sb.error) return c.json({ error: sb.error }, 400)
   const src = sb.set || { dep: row.src_dep_id ?? null, page: row.src_page ?? null, crop: row.src_crop ?? null }
+  // [WO 20261016-multisheet] sheet_link / num_prefix 부분 수정 — 미전송이면 기존값 유지. 형식 오류 400(쓰기 전 판정).
+  const so = parseDeckSheetOpts(body)
+  if (so.error) return c.json({ error: so.error }, 400)
   await c.env.DB.prepare(
     'UPDATE decks SET name = ?, level_no = ?, deployment_id = ?, page = ?, crop = ?, parent_id = ?, mode = ?, src_dep_id = ?, src_page = ?, src_crop = ?, updated_at = ? WHERE id = ?'
   ).bind(name, level, dep, page, crop, parentId, mode, src.dep, src.page, src.crop, Date.now(), id).run()
-  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop }))
+  await applyDeckSheetOpts(c.env.DB, id, so.set)
+  return c.json(mapDeck({ ...row, name, level_no: level, deployment_id: dep, page, crop, parent_id: parentId, mode, src_dep_id: src.dep, src_page: src.page, src_crop: src.crop, ...so.set }))
 })
 
 // [WO 20261016-treednd] 🔴 트리 구역 드래그 순서/부모 변경 — 전용 PATCH(이름·도면 등 다른 필드는 건드리지 않는다,

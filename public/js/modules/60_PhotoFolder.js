@@ -125,6 +125,59 @@
       return (entries || []).filter((e) => e && e.name && this._EXT_RE.test(e.name) && this.isMatch(pinNo, e.name, existingNumbers));
     },
 
+    /** [WO 20261016-multisheet P5] 파일명 숫자 앞 접두 토큰(FPX) — A012.jpg→"A", ER_A012.JPG→"A", B2-05.jpg→"B2", 012.jpg→"". 순수. */
+    _filePrefix(filename) {
+      const base = String(filename || "").replace(/\.[^.]+$/, "");
+      const m = /(\d+)$/.exec(base);
+      if (!m) return "";
+      const before = base.slice(0, m.index).replace(/[-_]+$/, "");
+      const t = /([A-Za-z][A-Za-z0-9]{0,5})$/.exec(before);
+      return t ? t[1] : "";
+    },
+    /** [P5] 🔴 마스터 규칙 유지 + 충돌 시에만 접두 요구 — 숫자 매칭(findMatches, 불변) 위 레이어.
+     *  peers = 같은 번호 공간의 논리 핀 [{no, prefix}]. 같은 숫자 번호를 가진 핀이 1개(접두 없는 프로젝트 전부)면 종전 그대로.
+     *  2개 이상(A12·B12 공존)이면 파일 접두가 이 핀 접두와 같은 것만 매칭 — 없으면 매칭하지 않고, 다른 핀 접두에 속하지
+     *  않는 파일(012.jpg)은 ambiguous 로 돌려 선택창에 띄운다(조용한 오등록 금지).
+     *  @returns {{matches:Array, ambiguous:Array}} */
+    rankMatches(pinNo, prefix, entries, peers, existingNumbers) {
+      const base = this.findMatches(pinNo, entries, existingNumbers);
+      const n = parseInt(pinNo, 10);
+      const same = (peers || []).filter((q) => q && q.no === n);
+      if (same.length < 2) return { matches: base, ambiguous: [] };
+      const K = (s) => (typeof PinSeries !== "undefined" && PinSeries.prefixKey) ? PinSeries.prefixKey(s) : String(s || "").replace(/[-_]$/, "").toUpperCase();
+      const mine = K(prefix || "");
+      const fk = (e) => K(this._filePrefix(e.name));
+      const keep = base.filter((e) => fk(e) === mine);
+      if (keep.length) return { matches: keep, ambiguous: [] };
+      const claimed = new Set(same.map((q) => K(q.prefix || "")));
+      return { matches: [], ambiguous: base.filter((e) => !claimed.has(fk(e))) };
+    },
+    /** 번호 공간(시트 묶음 — PinSeries.scopePages, 연결 OFF 면 그 페이지) 논리 핀의 {id,no,prefix} — rankMatches peers. */
+    _peers(page) {
+      try {
+        if (typeof PinSeries === "undefined" || !PinSeries.numbers) return [];
+        const pins = (typeof State !== "undefined" ? State.pins : []) || [];
+        const scope = PinSeries.scopePages ? PinSeries.scopePages(page, pins) : [page];
+        const units = new Set(), out = [];
+        scope.forEach((sp) => PinSeries.numbers(pins, sp).forEach((info, id) => {
+          const p = pins.find((q) => q && q.id === id);
+          const u = (p && p.linkId != null && p.linkId !== "") ? "L" + String(p.linkId) : "I" + String(id);
+          if (units.has(u)) return;
+          units.add(u);
+          out.push({ id: id, no: info.no, prefix: info.prefix || "" });
+        }));
+        return out;
+      } catch (e) { return []; }
+    },
+    /** 핀 표시 번호(접두 포함 A12) — 표시 전용(매칭은 .no). */
+    _labelFor(pin, no) {
+      try { const m = PinSeries.numbers(State.pins, (pin && pin.page) || State.pdfPage || 1).get(pin.id); if (m) return PinSeries.textOf(m); } catch (e) {}
+      return (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
+    },
+    _prefixFor(pin) {
+      try { const m = PinSeries.numbers(State.pins, (pin && pin.page) || State.pdfPage || 1).get(pin.id); return (m && m.prefix) || ""; } catch (e) { return ""; }
+    },
+
     /* ══ 구역 키 · 상태 저장소 ══════════════════════════════════════════════════════ */
 
     _deckKey(deck) { return (deck && deck.id != null) ? String(deck.id) : "__root__"; },
@@ -411,7 +464,8 @@
     _pinNo(pin) {
       try {
         if (typeof PinSeries === "undefined" || !PinSeries.numbers) return null;
-        const page = (typeof State !== "undefined" ? (State.pdfPage || 1) : 1);
+        // [WO 20261016-multisheet] 핀 자신의 페이지(연결 대표는 다른 시트에 있을 수 있다) — 배치 직후 핀은 지금 페이지와 같다
+        const page = (pin && pin.page) || (typeof State !== "undefined" ? (State.pdfPage || 1) : 1);
         const map = PinSeries.numbers(State.pins, page);
         const info = map.get(pin.id);
         return info ? info.no : null;
@@ -423,9 +477,11 @@
     _existingNumbers(page) {
       try {
         if (typeof PinSeries === "undefined" || !PinSeries.numbers) return new Set();
-        const map = PinSeries.numbers((typeof State !== "undefined" ? State.pins : []), page);
+        const pins = (typeof State !== "undefined" ? State.pins : []);
         const set = new Set();
-        map.forEach((info) => { if (info && Number.isFinite(info.no)) set.add(info.no); });
+        // [WO 20261016-multisheet P2] 번호 공간 전체(시트 묶음) — 연결 OFF 면 [page] = 종전
+        const scope = PinSeries.scopePages ? PinSeries.scopePages(page, pins) : [page];
+        scope.forEach((sp) => PinSeries.numbers(pins, sp).forEach((info) => { if (info && Number.isFinite(info.no)) set.add(info.no); }));
         return set;
       } catch (e) { return new Set(); }
     },
@@ -490,7 +546,7 @@
     _showConfirmModal(pin, no, entry, key) {
       this._ensureConfirmModal();
       const modal = document.getElementById("photofolder-confirm-modal");
-      const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
+      const label = this._labelFor(pin, no);
       document.getElementById("photofolder-confirm-msg").textContent = label + " ← " + entry.name + " — 이 사진을 등록할까요?";
       const close = () => modal.classList.add("hidden");
       document.getElementById("photofolder-confirm-register").onclick = async () => {
@@ -531,7 +587,7 @@
       const modal = document.getElementById("photofolder-pick-modal");
       const list = document.getElementById("photofolder-pick-list");
       list.innerHTML = "";
-      const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
+      const label = this._labelFor(pin, no);
       document.getElementById("photofolder-pick-title").textContent = label + " — 일치하는 사진이 여러 개입니다. 선택하세요";
       candidates.forEach((entry) => {
         const b = document.createElement("button"); b.type = "button"; b.textContent = entry.name; b.className = "photofolder-pick-item";
@@ -564,8 +620,11 @@
         if (no == null) return false;
         const page = (typeof State !== "undefined") ? (State.pdfPage || 1) : 1;
         const entries = await this._listEntries(key);
-        const candidates = this.findMatches(no, entries, this._existingNumbers(page));
-        const label = (typeof PinSeries !== "undefined" && PinSeries.formatNo) ? PinSeries.formatNo(no, "content") : String(no);
+        // [WO 20261016-multisheet P5] 같은 숫자 번호가 둘 이상(A12·B12)일 때만 접두 일치 요구 — 아니면 종전 findMatches 그대로
+        const rk = this.rankMatches(no, this._prefixFor(pin), entries, this._peers(page), this._existingNumbers(page));
+        const label = this._labelFor(pin, no);
+        if (!rk.matches.length && rk.ambiguous.length) { this._showPickModal(pin, no, rk.ambiguous); return true; }
+        const candidates = rk.matches;
         if (!candidates.length) {
           if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("폴더에 " + label + " 사진이 없습니다");
           return false;
@@ -598,7 +657,11 @@
       const pins = (typeof State !== "undefined" && State.pins) || [];
       const page = (typeof State !== "undefined") ? (State.pdfPage || 1) : 1;
       const scoped = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(pins, deck) : pins;
-      return (scoped || []).filter((p) => p && !p._deleted && (p.page || 1) === page
+      // [WO 20261016-multisheet P4] 연결 멤버 → 대표(사진은 대표에만) · 논리 핀 1개 = 대상 1개. 연결 없는 핀은 자기 자신(종전).
+      const PL = (typeof PinLink !== "undefined" && PinLink.headOf) ? PinLink : null;
+      const onPage = (scoped || []).filter((p) => p && !p._deleted && (p.page || 1) === page);
+      const heads = PL ? PL.dedupe(onPage.map((p) => PL.headOf(pins, p))) : onPage;
+      return heads.filter((p) => p && !p._deleted
         && !(typeof PinSeries !== "undefined" && PinSeries.mediaOf && PinSeries.mediaOf(p)));
     },
 
@@ -609,16 +672,25 @@
       const entries = await this._listEntries(folderKey);
       const targets = this._batchTargets(deck);
       const page = (typeof State !== "undefined") ? (State.pdfPage || 1) : 1;
-      const numbers = (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers((typeof State !== "undefined" ? State.pins : []), page) : new Map();
+      // [WO 20261016-multisheet] 핀 자신의 페이지 번호(연결 대표는 다른 시트일 수 있다) — 연결 OFF 면 전부 지금 페이지(종전)
+      const byPage = new Map();
+      const numOf = (pin) => {
+        const pg = (pin && pin.page) || page;
+        if (!byPage.has(pg)) byPage.set(pg, (typeof PinSeries !== "undefined" && PinSeries.numbers) ? PinSeries.numbers((typeof State !== "undefined" ? State.pins : []), pg) : new Map());
+        return byPage.get(pg).get(pin.id);
+      };
       const existing = this._existingNumbers(page);
+      const peers = this._peers(page);
       return targets.map((pin) => {
-        const info = numbers.get(pin.id);
+        const info = numOf(pin);
         const no = info ? info.no : null;
         if (no == null) return { pin: pin, no: null, key: null, candidates: [], status: "번호없음" };
         const mk = this._matchKey(no);
-        const candidates = this.findMatches(no, entries, existing);
+        const rk = this.rankMatches(no, (info && info.prefix) || "", entries, peers, existing);   // [P5] 충돌 시에만 접두 요구
+        const candidates = rk.matches.length ? rk.matches : rk.ambiguous;
         let status;
-        if (!candidates.length) status = "없음";
+        if (!rk.matches.length && rk.ambiguous.length) status = "다중/확인필요";
+        else if (!candidates.length) status = "없음";
         else if (candidates.length > 1) status = "다중/확인필요";
         else status = "일치";
         return { pin: pin, no: no, key: mk, candidates: candidates, status: status };

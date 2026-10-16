@@ -686,6 +686,65 @@
       return this._pinsWithinCrop(pins, deck.page, deck.crop);
     },
 
+    /* ══ [WO 20261016-multisheet P2] 시트 묶음 어댑터 — PinSeries.scopePages / prefixFor 가 부르는 유일한 판정 지점 ══
+       묶음 = 자기 또는 가장 가까운 조상 중 sheet_link=1 인 구역. 번호 공간 = 그 묶음(자기 포함 하위 전체) 중
+       **지금 열린 배포본과 같은 deployment_id** 인 구역들의 page 집합(같은 PDF 의 다른 페이지 — 설계 §2-3 제약). */
+    _deckChain(deck) {
+      const byId = new Map((this.decks || []).map((x) => [String(x.id), x]));
+      const out = [];
+      let cur = deck, guard = 0;
+      while (cur && guard++ < 50) {
+        out.push(cur);
+        cur = cur.parent_id != null ? byId.get(String(cur.parent_id)) : null;
+      }
+      return out;
+    },
+    sheetBundleOf(deck) {
+      return this._deckChain(deck).find((d) => Number(d.sheet_link) === 1) || null;
+    },
+    _loadedDepId() {
+      return (typeof State !== "undefined" && State) ? (State.currentDeploymentId || State.autoSaveDepId || null) : null;
+    },
+    /** 묶음(자기 포함 하위 전체) 중 그 배포본 구역들 — 순수(decks 배열 기준). */
+    _sheetDecksIn(bundle, depId) {
+      const all = this.decks || [];
+      const kids = new Map();
+      all.forEach((d) => { if (d && d.parent_id != null) { const k = String(d.parent_id); if (!kids.has(k)) kids.set(k, []); kids.get(k).push(d); } });
+      const out = [];
+      const walk = (d, g) => {
+        if (!d || g > 50) return;
+        if (d.deployment_id != null && String(d.deployment_id) === String(depId)) out.push(d);
+        (kids.get(String(d.id)) || []).forEach((c) => walk(c, g + 1));
+      };
+      walk(bundle, 0);
+      return out;
+    },
+    /** @returns {number[]} 번호 공간 페이지 목록. 연결 OFF·묶음 없음·도면 미로드 = [page](종전과 같다). */
+    sheetPagesOf(page) {
+      const pg = page || 1;
+      const cur = this.currentDeck, depId = this._loadedDepId();
+      if (!cur || !depId) return [pg];
+      const bundle = this.sheetBundleOf(cur);
+      if (!bundle) return [pg];
+      const pages = Array.from(new Set(this._sheetDecksIn(bundle, depId).map((d) => d.page || 1))).sort((a, b) => a - b);
+      return pages.indexOf(pg) >= 0 && pages.length > 1 ? pages : [pg];
+    },
+    /** 연결 묶음 안 그 페이지의 시트 구역(이동·이름 표시용) — crop 없는 시트 우선. 없으면 null. */
+    sheetDeckForPage(page) {
+      const pg = page || 1;
+      const cur = this.currentDeck, depId = this._loadedDepId();
+      const bundle = cur ? this.sheetBundleOf(cur) : null;
+      if (!bundle || !depId) return null;
+      const hits = this._sheetDecksIn(bundle, depId).filter((d) => (d.page || 1) === pg);
+      return hits.find((d) => !d.crop) || hits[0] || null;
+    },
+    /** [P5] 자동 채번 접두(구분자 포함) — 자기 또는 가장 가까운 조상의 num_prefix. 없으면 ""(순수 숫자). */
+    numPrefixOf(deck) {
+      const d0 = deck === undefined ? this.currentDeck : deck;
+      const hit = this._deckChain(d0).find((d) => d.num_prefix != null && String(d.num_prefix) !== "");
+      return hit ? String(hit.num_prefix) : "";
+    },
+
     /** [WO 20260928 → 20260929 이음매 수정] "도면이 화면에 로드돼 있는가" 상태 판정.
      *  🔴 [WO 20260929·마스터 실사고] 원래 조건은 `decks.length === 0`(구역이 아예 없을 때)만
      *  전제해 "이미 다른 구역이 있는 프로젝트에서, 아직 저장 전인 도면을 화면에 띄워 놓고

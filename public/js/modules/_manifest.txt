@@ -70,6 +70,7 @@
 62_PersonBlur.js
 63_RouteDraw.js
 64_TreeDnD.js
-49_AiVision.js
 65_Sheets.js
+66_PinLink.js
+49_AiVision.js
 99_footer.js

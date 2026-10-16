@@ -186,7 +186,83 @@
     //  🔴 [WO 20261015-numunify] "P" 접두 폐기 — 마스터: "체크 모드와 360 모드 번호를 하나로 합치고 … 번호는 공통적으로 하나로 관리".
     //  번호 공간이 (배포본, 페이지) 1개가 되어 계열 구분 접두가 필요 없다. 화면 = "1","2","3"(한 자리 그대로).
     //  시그니처(no, series)는 유지 — 호출부 20곳 수정 0. 🔴 매칭(사진 파일명)에는 쓰지 마라 — 정본 = PhotoFolder.matchKey(no).
+    //  [WO 20261016-multisheet P5] 접두 표시는 _fmtText/textOf 가 맡는다 — formatNo 는 순수 숫자 표기 그대로(시그니처·값 불변).
     formatNo(no, series) { return String(no); },
+    /** 접두(구분자 포함)·자릿수 반영 표시 — 접두 없으면 formatNo 그대로(= 종전과 바이트 동일). numbers() 의 meta.text 생성 1곳. */
+    _fmtText(no, series, prefix, pad, suffix) {
+      if (!prefix && !suffix) return this.formatNo(no, series);
+      return String(prefix || "") + (pad ? String(no).padStart(pad, "0") : String(no)) + String(suffix || "");
+    },
+    /** numbers() 메타 → 표시 문자열(A12 / 12). 표시 호출부 12곳이 이 한 함수만 부른다(§3-4 SoT, T6 정적 검사). */
+    textOf(meta) {
+      if (!meta) return "";
+      if (meta.text != null) return String(meta.text);
+      return this.formatNo(meta.no, meta.series);
+    },
+
+    /* ══ [WO 20261016-multisheet P5] 영숫자 번호(A1 / A001 / ER-12 / B2-05) — label 이 전체 문자열(SoT), 접두는 파생 ══
+       🔴 greedy 함정: 1갈래는 글자만([A-Za-z]{1,6}) — "A12" 가 "A1"+"2" 로 쪼개지지 않는다. 글자+숫자 접두는 구분자 필수(2갈래).
+       왕복 무손실: parseLabel(s).text === s.trim() (설계 §3-1 실측 8/8). 순수 숫자는 prefix "" — 모든 경로가 종전과 같다. */
+    //  [WO 20261016-bulkedit] 뒤 글자(접미) — 구분자 필수([-_] + 글자 시작, 예 1-F · 12_R2). "A1B2"·"2ND" 는 종전처럼 null(자유 텍스트).
+    LABEL_RX: /^\s*(?:([A-Za-z]{1,6})([-_]?)|([A-Za-z][A-Za-z0-9]{0,5})([-_]))?(\d{1,6})([-_][A-Za-z][A-Za-z0-9]{0,5})?\s*$/,
+    parseLabel(raw) {
+      const m = this.LABEL_RX.exec(String(raw == null ? "" : raw));
+      if (!m) return null;
+      const prefix = m[1] != null ? m[1] : (m[3] != null ? m[3] : "");
+      const sep = m[1] != null ? (m[2] || "") : (m[3] != null ? (m[4] || "") : "");
+      const digits = m[5];
+      const no = parseInt(digits, 10);
+      const pad = (digits.length > 1 && digits.charAt(0) === "0") ? digits.length : 0;
+      const suffix = m[6] || "";
+      return { prefix: prefix, sep: sep, no: no, pad: pad, suffix: suffix, text: prefix + sep + (pad ? String(no).padStart(pad, "0") : String(no)) + suffix };
+    },
+    /** 접두 비교 키 — 대소문자·구분자 무시("ER-" = "er" = "ER"). 순수 숫자 = "". */
+    prefixKey(prefix) { return String(prefix == null ? "" : prefix).replace(/[-_]$/, "").toUpperCase(); },
+    /** 핀 label 의 (접두키, 번호) — 순수 숫자는 종전 판정(/^\d+$/) 그대로, 접두 있는 번호만 parseLabel. 번호가 아니면 null. */
+    noKeyOf(label) {
+      const raw = String(label == null ? "" : label).trim();
+      if (/^\d+$/.test(raw)) return { key: "", no: parseInt(raw, 10), prefix: "", sep: "" };
+      const pl = this.parseLabel(raw);
+      if (!pl || !(pl.prefix || pl.suffix)) return null;
+      // 접미가 있으면 키에 포함(1-F 와 1-R 은 다른 번호) — 접두만 있으면 종전 키 그대로
+      return { key: this.prefixKey(pl.prefix) + (pl.suffix ? "~" + pl.suffix.slice(1).toUpperCase() : ""), no: pl.no, prefix: pl.prefix, sep: pl.sep, suffix: pl.suffix };
+    },
+    /** 접두(구분자 포함, 예 "A" / "ER-") + 번호 → label. 접두 없으면 String(no) = 종전. */
+    labelOf(prefix, no, suffix) { return (prefix ? String(prefix) : "") + String(no) + (suffix ? String(suffix) : ""); },
+    /** 정렬 SoT — 순수 숫자 먼저, 그다음 접두 사전순, 같은 접두 안에서는 번호 오름차순(A2 < A10 < B1). map = numbers() 결과(선택). */
+    byNumber(a, b, map) {
+      const m = (p) => {
+        const i = map && p && map.get ? map.get(p.id) : null;
+        if (i) return { k: this.prefixKey(i.prefix || ""), no: Number.isFinite(i.no) ? i.no : Infinity };
+        const nk = p ? this.noKeyOf(p.label) : null;
+        return nk ? { k: nk.key, no: nk.no } : { k: "￿", no: Infinity };
+      };
+      const x = m(a), y = m(b);
+      if (x.k !== y.k) return x.k === "" ? -1 : (y.k === "" ? 1 : (x.k < y.k ? -1 : 1));
+      return x.no - y.no;
+    },
+
+    /* ══ [WO 20261016-multisheet P2] 번호 공간 = 시트 묶음 — 단일 지점 ══════════════════════════════
+       scopePages(page) 가 [page] 를 돌려주면 numbers·nextInBand·duplicateNoIds·resolveConcurrentNos·resetPlan 계산은
+       종전과 바이트 단위로 같다(연결 OFF / 묶음 없음 / Projects 미정의 / 다른 배열 = 전부 [page]). 묶음 판정은
+       어댑터 Projects.sheetPagesOf(page) 한 곳(31_Projects)에만 있다.
+       pins 를 넘겼는데 그게 State.pins 가 아니면(납품·합치기 미리보기 등 다른 배포본 배열) 항상 [page] — 로드된 도면의 묶음을 섞지 않는다. */
+    scopePages(page, pins) {
+      const pg = page || 1;
+      if (pins !== undefined && !(typeof State !== "undefined" && State && pins === State.pins)) return [pg];
+      let s = null;
+      try { if (typeof Projects !== "undefined" && Projects && Projects.sheetPagesOf) s = Projects.sheetPagesOf(pg); } catch (e) { s = null; }
+      if (!Array.isArray(s) || !s.length || s.indexOf(pg) < 0) return [pg];
+      return s;
+    },
+    /** 자동 채번 접두(구분자 포함, 예 "A" / "ER-") — 어댑터 Projects.numPrefixOf() 1곳. 없거나 다른 배열이면 ""(= 순수 숫자, 종전). */
+    prefixFor(pins) {
+      if (pins !== undefined && !(typeof State !== "undefined" && State && pins === State.pins)) return "";
+      try { if (typeof Projects !== "undefined" && Projects && Projects.numPrefixOf) return Projects.numPrefixOf() || ""; } catch (e) {}
+      return "";
+    },
+    /** 연결 묶음 키(같은 linkId = 같은 논리 핀) — PinLink 미로드 시에도 동작(순수). */
+    _unitKey(p) { return (p && p.linkId != null && p.linkId !== "") ? "L" + String(p.linkId) : "I" + String(p && p.id); },
 
     /** 부류별 색상 세트 (도면 마커 SVG · 미니맵 점 공용)
      *  @param {string} kind   부류(content/empty/checkboard)
@@ -213,6 +289,9 @@
      * @returns {{kind:string, filled:boolean, colors:object, dash:string, border:string}}
      */
     markerStyle(pin) {
+      // [WO 20261016-multisheet P3] 🔴 연결 멤버는 대표의 사진·내용으로 판정한다(사진은 대표에만 — "사진 없음"으로 보이면 결함).
+      //   연결 없는 핀 = headOf 가 자기 자신을 돌려준다(종전 그대로).
+      pin = (typeof PinLink !== "undefined" && PinLink && PinLink.headOf && typeof State !== "undefined" && State) ? PinLink.headOf(State.pins, pin) : pin;
       const kind = this.kindOf(pin);
       const filled = this.hasContent(pin);
       const pat = this.PATTERN[this.patternOf(kind, filled)] || this.PATTERN.solid;
@@ -236,27 +315,49 @@
       const map = new Map();
       const pg = page || 1;
       let n = 0;   // [WO 20261015-numunify] 단일 카운터(계열별 2카운터 폐기)
+      // [WO 20261016-multisheet P2] 번호 공간 = 시트 묶음(scopePages) — 연결 OFF 면 [pg] 라 종전과 같다.
+      //   묶음 전체로 세되 결과(map)에는 요청 페이지 핀만 싣는다(소비자 12곳의 "그 페이지 핀만" 가정 불변).
+      const scope = this.scopePages(pg, pins);
+      const inScope = scope.length === 1 ? null : new Set(scope);
+      const onScope = (p) => inScope ? inScope.has(p.page || 1) : (p.page || 1) === pg;
       // [WO 20261012-pinsync] 구역(별칭) 화면 = 원본 그 페이지 핀 집합 기준으로 센다(같은 핀 = 같은 번호). 원본 화면은 base 없음 → 종전 그대로.
       const all = this._withBase(pins, pg, base);
       const mine = all === pins ? null : new Set((pins || []).filter((p) => p && p.id != null).map((p) => String(p.id)));
+      const full = inScope ? new Map() : null;   // 묶음 안 전원(연결 멤버 정렬용) — 연결 OFF 면 만들지 않는다
       all.forEach((p) => {
         if (!p) return;
-        if ((p.page || 1) !== pg) return;
+        if (!onScope(p)) return;
         const series = this.seriesOf(p);
-        let no;
+        let no, pre = "", pad = 0, suf = "";
+        const raw = String(p.label == null ? "" : p.label).trim();
+        const pl0 = /^\d+$/.test(raw) ? null : this.parseLabel(raw);   // [P5] 접두·접미 번호(A12 · 1-F)만 — 순수 숫자는 종전 판정 그대로
+        const pl = (pl0 && (pl0.prefix || pl0.suffix)) ? pl0 : null;
+        if (pl) { pre = pl.prefix + pl.sep; pad = pl.pad; suf = pl.suffix; }
         n++;
         if (series === "checkboard") {
           const lbl = parseInt(p.label, 10);
           no = Number.isFinite(lbl) ? lbl : n;
+          if (pl) no = pl.no;   // [P5] 접두 번호(A12) — parseInt 는 NaN 이라 위에서 순번이 됐다
+        } else if (pl) { no = pl.no;
         } else {
           // [WO 20261001-startno] 360 도 대역 번호(P101…)를 보여야 한다 — label 이 순수 숫자면 그 값,
           //   아니면(자유 텍스트 이름·label 없음) 종전 페이지 내 순번. prod 360 핀 8개(label "1"~"8")는 실측상
           //   순번과 label 이 같아 표시 번호가 바뀌지 않는다(.tmp 조회 diff 0).
-          const raw = String(p.label == null ? "" : p.label).trim();
           no = /^\d+$/.test(raw) ? parseInt(raw, 10) : n;
         }
+        const meta = { no: no, kind: this.kindOf(p), series: series, prefix: pl ? pl.prefix : "", sep: pl ? pl.sep : "", pad: pad, suffix: suf, text: this._fmtText(no, series, pre, pad, suf) };
+        if (full) full.set(String(p.id), { p: p, meta: meta });
+        if ((p.page || 1) !== pg) return;
         if (mine && !mine.has(String(p.id))) return;   // 원본에만 있는(구역 상자 밖) 핀은 결과에 싣지 않는다 — 순번 계산에만 쓴다
-        map.set(p.id, { no: no, kind: this.kindOf(p), series: series });
+        map.set(p.id, meta);
+      });
+      // [P3] 연결 멤버 = 대표와 같은 번호(label 이 자유 텍스트여도 순번이 갈라지지 않게) — 대표가 묶음 안에 있을 때만.
+      if (full) map.forEach((meta, id) => {
+        const me = full.get(String(id));
+        const lk = me && me.p.linkId != null && me.p.linkId !== "" ? String(me.p.linkId) : null;
+        if (!lk || lk === String(id)) return;
+        const head = full.get(lk);
+        if (head && !head.p._deleted) map.set(id, Object.assign({}, head.meta, { kind: meta.kind, series: meta.series }));
       });
       return map;
     },
@@ -335,14 +436,21 @@
     },
     bandLabel(k) { const r = this.bandRange(k); return r.lo + "–" + r.hi; },
     /** 대역 안 다음 번호. @returns {{no:number|null, full:boolean, band:number, lo:number, hi:number}} */
-    nextInBand(pins, page, series, band, floor, base) {
+    nextInBand(pins, page, series, band, floor, base, prefix) {
       const pg = page || 1;
       // [WO 20261015-numunify] series 인자는 시그니처 하위호환용 — 번호 공간은 계열 무관 1개(체커 101 · 360 102 → 다음 103)
       const r = this.bandRange(band);
+      // [WO 20261016-multisheet P2] 묶음 전체(scopePages) — 연결 OFF 면 [pg] 라 종전과 같다.
+      const scope = this.scopePages(pg, pins);
+      const inScope = scope.length === 1 ? null : new Set(scope);
+      // [P5] 접두(구분자 포함) — 미지정이면 구역 설정(prefixFor). "" = 순수 숫자(아래 종전 분기 그대로).
+      const pre = prefix === undefined ? this.prefixFor(pins) : String(prefix || "");
+      const pk = this.prefixKey(pre);
       let maxNo = 0;
       // [WO 20261012-pinsync] 구역(별칭) 화면 = 원본 그 페이지 전체(상자 밖 포함) 최댓값 — 상자 밖 원본 번호와 겹치지 않게(_withBase)
       this._withBase(pins, pg, base).forEach(p => {
-        if (!p || (p.page || 1) !== pg) return;               // 삭제 표식 핀도 센다 — 구멍 재사용 금지(종전 규칙)
+        if (!p || (inScope ? !inScope.has(p.page || 1) : (p.page || 1) !== pg)) return;   // 삭제 표식 핀도 센다 — 구멍 재사용 금지(종전 규칙)
+        if (pk) { const k = this.noKeyOf(p.label); if (k && k.key === pk && k.no >= r.lo && k.no <= r.hi && k.no > maxNo) maxNo = k.no; return; }   // [P5] 같은 접두 안에서만
         const n = parseInt(p.label, 10);                       // label 이 숫자가 아니면(NaN) 무시
         if (Number.isFinite(n) && n >= r.lo && n <= r.hi && n > maxNo) maxNo = n; // 다른 대역 핀 무시
       });
@@ -350,7 +458,7 @@
       const f = parseInt(floor, 10);
       if (Number.isFinite(f) && f >= r.lo && f <= r.hi && f > no) no = f;  // 하한은 대역 안일 때만
       const full = no > r.hi;
-      return { no: full ? null : no, full: full, band: r.band, lo: r.lo, hi: r.hi };
+      return { no: full ? null : no, full: full, band: r.band, lo: r.lo, hi: r.hi, prefix: pre, label: full ? null : this.labelOf(pre, no) };
     },
     /** 대역 사용 현황(칩 표시용) — 그 대역 안 핀 수와 작성자별 개수.
      *  [WO 20261015-numunify] 계열 무관(번호 공간 1개) — series 인자는 시그니처 하위호환용. */
@@ -379,17 +487,30 @@
      *  @returns {Set<number|string>} 중복인 핀들의 id */
     duplicateNoIds(pins, page, base) {
       const pg = page || 1;
+      // [WO 20261016-multisheet P2] 묶음 전체(scopePages) — 연결 OFF 면 [pg]. [P3] 같은 linkId = 논리 핀 1개(중복 아님).
+      //   [P5] 키 = 접두키|번호 — A12 / B12 / 12 는 서로 중복이 아니다. 순수 숫자 키는 종전(String(parseInt)) 그대로.
+      const scope = this.scopePages(pg, pins);
+      const inScope = scope.length === 1 ? null : new Set(scope);
       const byLabel = new Map();
+      const add = (p) => {
+        const nk = this.noKeyOf(p.label);
+        if (!nk) return;
+        const key = nk.key ? (nk.key + "|" + nk.no) : String(nk.no);
+        if (!byLabel.has(key)) byLabel.set(key, []);
+        byLabel.get(key).push(p);
+      };
       this._withBase(pins, pg, base).forEach(p => {   // [WO 20261012-pinsync] 구역 화면도 원본 기준 중복 판정
         if (!p || p._deleted || (p.page || 1) !== pg) return;
-        const raw = String(p.label == null ? "" : p.label).trim();
-        if (!/^\d+$/.test(raw)) return;
-        const key = String(parseInt(raw, 10));
-        if (!byLabel.has(key)) byLabel.set(key, []);
-        byLabel.get(key).push(p.id);
+        add(p);
       });
+      // 묶음의 다른 시트 핀(연결 OFF 면 inScope=null → 이 줄은 아무것도 하지 않는다)
+      if (inScope) (pins || []).forEach(p => { if (p && !p._deleted && (p.page || 1) !== pg && inScope.has(p.page || 1)) add(p); });
       const dup = new Set();
-      byLabel.forEach(ids => { if (ids.length > 1) ids.forEach(id => dup.add(id)); });
+      byLabel.forEach(list => {
+        if (list.length < 2) return;
+        const units = new Set(list.map(p => this._unitKey(p)));
+        if (units.size > 1) list.forEach(p => { if ((p.page || 1) === pg) dup.add(p.id); });
+      });
       return dup;
     },
     /** 구명 별칭(호출부 11_UI·27_PinActionPop·41_RegionMerge·테스트) — 정본 duplicateNoIds 하나만 둔다(§10 SoT). */
@@ -424,36 +545,52 @@
       const at = (p) => { const t = this.createdAt(p); return Number.isFinite(t) ? t : Infinity; };
       const byAge = (a, b) => (at(a) - at(b)) || (String(a.id) < String(b.id) ? -1 : (String(a.id) > String(b.id) ? 1 : 0));
       const groups = new Map(), maxByBand = new Map();
+      // [WO 20261016-multisheet P2] 페이지 축 = 묶음 키(scopePages) — 연결 OFF 면 페이지 번호 그대로(종전 키와 같은 값).
+      const scopeKeyOf = new Map();
+      const skOf = (pg) => { if (!scopeKeyOf.has(pg)) { const s = this.scopePages(pg); scopeKeyOf.set(pg, s.length === 1 ? String(pg) : s.join(",")); } return scopeKeyOf.get(pg); };
       pins.forEach(p => {
         if (!p || p._deleted) return;
         const ser = "n";   // [WO 20261015-numunify] 번호 공간 1개 — 묶음 키에서 계열 축 제거(체커 5 · 360 5 동시 생성도 충돌)
-        const lbl = String(p.label == null ? "" : p.label).trim();
-        if (!/^\d+$/.test(lbl)) return;
-        const pg = p.page || 1, n = parseInt(lbl, 10);
+        const nk = this.noKeyOf(p.label);   // [P5] 순수 숫자 = 종전 /^\d+$/ 판정 그대로, 접두 번호는 접두키로 분리
+        if (!nk) return;
+        const n = nk.no;
+        const pg = skOf(p.page || 1) + (nk.key ? "#" + nk.key : "");   // 묶음 키(연결 OFF = 페이지 번호 그대로) + 접두 — 순수 숫자 = 종전 키와 같은 문자열
         const bk = ser + "|" + pg + "|" + this.bandOf(n);
         maxByBand.set(bk, Math.max(maxByBand.get(bk) || 0, n));
         const k = ser + "|" + pg + "|" + n;
-        if (!groups.has(k)) groups.set(k, { ser: ser, pg: pg, n: n, bk: bk, list: [] });
+        if (!groups.has(k)) groups.set(k, { ser: ser, pg: pg, sk: pg, n: n, bk: bk, pfx: nk.prefix + nk.sep, list: [] });
         groups.get(k).list.push(p);
       });
       const changes = [];
+      const PL = (typeof PinLink !== "undefined" && PinLink && PinLink.setLabel) ? PinLink : null;
       Array.from(groups.values())
         .filter(g => g.list.length > 1)
-        .sort((a, b) => (a.ser < b.ser ? -1 : (a.ser > b.ser ? 1 : 0)) || (a.pg - b.pg) || (a.n - b.n))
+        .sort((a, b) => (a.ser < b.ser ? -1 : (a.ser > b.ser ? 1 : 0)) || (a.sk < b.sk ? -1 : (a.sk > b.sk ? 1 : 0)) || (a.n - b.n))
         .forEach(g => {
-          const inBase = g.list.filter(p => base.has(String(p.id))).length;
-          if (inBase === g.list.length || inBase > 1) return;   // 이미 저장돼 있던 중복 → 표시만
-          g.list.sort(byAge);
-          const keep = g.list.find(p => p.labelManual) || g.list[0];
+          // [P3] 같은 linkId = 논리 핀 1개 — 묶음 안 멤버끼리는 충돌이 아니다. 단위(unit) = 연결 묶음(없으면 핀 자신).
+          const units = new Map();
+          g.list.forEach(p => { const u = this._unitKey(p); if (!units.has(u)) units.set(u, []); units.get(u).push(p); });
+          if (units.size < 2) return;
+          const ulist = Array.from(units.values()).map(ms => {
+            const rep = ms.find(p => p.linkId != null && String(p.linkId) === String(p.id)) || ms.slice().sort(byAge)[0];
+            return { rep: rep, ms: ms, manual: ms.some(p => p.labelManual), inBase: ms.some(p => base.has(String(p.id))) };
+          });
+          const inBase = ulist.filter(u => u.inBase).length;
+          if (inBase === ulist.length || inBase > 1) return;   // 이미 저장돼 있던 중복 → 표시만
+          ulist.sort((a, b) => byAge(a.rep, b.rep));
+          const keep = ulist.find(u => u.manual) || ulist[0];
           const hi = this.bandRange(this.bandOf(g.n)).hi;
-          g.list.forEach(p => {
-            if (p === keep || p.labelManual) return;
+          ulist.forEach(u => {
+            if (u === keep || u.manual) return;
             const to = (maxByBand.get(g.bk) || 0) + 1;
             if (to > hi) return;                                  // 대역 가득 → 옮기지 않음(중복 표시만)
             maxByBand.set(g.bk, to);
-            changes.push({ id: p.id, page: g.pg, series: this.seriesOf(p), from: String(p.label), to: String(to) });
-            p.renumberedFrom = String(p.label);
-            p.label = String(to);
+            const toLabel = this.labelOf(g.pfx, to);
+            const from = String(u.rep.label);
+            // 🔴 label 쓰기 = PinLink.setLabel 1곳(연결 그룹 전원) — PinLink 미로드(단독 테스트)면 이 단위 멤버에 직접.
+            const members = PL ? PL.setLabel(pins, u.rep, toLabel) : (u.ms.forEach(p => { p.label = toLabel; }), u.ms);
+            members.forEach(p => { p.renumberedFrom = from; });
+            changes.push({ id: u.rep.id, page: u.rep.page || 1, series: this.seriesOf(u.rep), from: from, to: toLabel });
           });
         });
       return changes;
@@ -603,25 +740,130 @@
       const pg = page || 1;
       const start = Number.isFinite(parseInt(o.start, 10)) && parseInt(o.start, 10) >= 1 ? parseInt(o.start, 10) : 1;
       const src = Array.isArray(o.targets) ? o.targets : (pins || []);
-      const list = src.filter((p) => p && !p._deleted && p.id != null && (p.page || 1) === pg);
+      // [WO 20261016-multisheet P2] 대상 = 묶음(scopePages) — 연결 OFF 면 [pg]. [P3] 연결 묶음 = 논리 핀 1개 = 변경 1행.
+      const scope = this.scopePages(pg, pins);
+      const inScope = scope.length === 1 ? null : new Set(scope);
+      const onScope = (p) => inScope ? inScope.has(p.page || 1) : (p.page || 1) === pg;
+      const seenUnit = new Set();
+      const list = src.filter((p) => {
+        if (!(p && !p._deleted && p.id != null && onScope(p))) return false;
+        const u = this._unitKey(p);
+        if (seenUnit.has(u)) return false;
+        seenUnit.add(u);
+        return true;
+      });
       if (!list.length) return { ok: false, reason: "이 화면에는 번호를 다시 매길 핀이 없습니다", changes: [], changed: 0, collisions: new Set() };
-      const map = this.numbers(pins, pg, o.base);
-      const noOf = (p) => { const i = map.get(p.id); return i && Number.isFinite(i.no) ? i.no : Infinity; };
+      const metas = new Map();
+      scope.forEach((sp) => this.numbers(pins, sp, o.base).forEach((v, k) => metas.set(k, v)));
+      const noOf = (p) => { const i = metas.get(p.id); return i && Number.isFinite(i.no) ? i.no : Infinity; };
       const ordered = list.slice().sort(o.order === "no"
         ? (a, b) => (noOf(a) - noOf(b)) || this.byPosition(a, b)
         : (a, b) => this.byPosition(a, b));
-      const changes = ordered.map((p, i) => ({ id: p.id, oldLabel: p.label == null ? "" : String(p.label), oldNo: noOf(p), newLabel: String(start + i) }));
+      // [P5] 🔴 접두 유지 — 접두 그룹마다 독립으로 start 부터(A5,A9,B3 → A1,A2,B1). 순수 숫자 그룹 = 종전 String(start+i) 그대로.
+      // [WO 20261016-bulkedit] 접미(1-F)도 그룹 키·유지 대상 — 접두·접미 없는 그룹 = 종전
+      const pfxOf = (p) => { const i = metas.get(p.id); return (i && (i.prefix || i.suffix)) ? { key: this.prefixKey(i.prefix) + "~" + String(i.suffix || "").toUpperCase(), text: (i.prefix || "") + (i.sep || ""), sfx: i.suffix || "" } : { key: "", text: "", sfx: "" }; };
+      const sfxText = new Map();
+      const counters = new Map(), pfxText = new Map();
+      const changes = ordered.map((p) => {
+        const pf = pfxOf(p);
+        if (!pfxText.has(pf.key)) { pfxText.set(pf.key, pf.text); sfxText.set(pf.key, pf.sfx); }
+        const i = counters.get(pf.key) || 0;
+        counters.set(pf.key, i + 1);
+        const meta = metas.get(p.id);
+        return { id: p.id, oldLabel: p.label == null ? "" : String(p.label), oldNo: noOf(p), oldText: meta ? this.textOf(meta) : "", prefix: pfxText.get(pf.key), newLabel: this.labelOf(pfxText.get(pf.key), start + i, sfxText.get(pf.key)) };
+      });
       // 대상 밖 같은 페이지 핀(구역 화면이면 원본의 상자 밖 핀까지 — _withBase)과 겹치는 새 번호 → 표시(차단 아님)
-      const want = new Set(changes.map((c) => c.newLabel));
-      const tid = new Set(list.map((p) => String(p.id)));
+      const keyOfLabel = (l) => { const k = this.noKeyOf(l); return k ? (k.key + "|" + k.no) : null; };
+      const want = new Set(changes.map((c) => keyOfLabel(c.newLabel)));
+      const tid = new Set();
+      list.forEach((p) => { const u = this._unitKey(p); (pins || []).forEach((q) => { if (q && this._unitKey(q) === u) tid.add(String(q.id)); }); tid.add(String(p.id)); });
       const collisions = new Set();
       this._withBase(pins, pg, o.base).forEach((p) => {
-        if (!p || p._deleted || p.id == null || (p.page || 1) !== pg || tid.has(String(p.id))) return;
-        const raw = String(p.label == null ? "" : p.label).trim();
-        if (/^\d+$/.test(raw) && want.has(String(parseInt(raw, 10)))) collisions.add(p.id);
+        if (!p || p._deleted || p.id == null || !onScope(p) || tid.has(String(p.id))) return;
+        const k = keyOfLabel(p.label);
+        if (k && want.has(k)) collisions.add(p.id);
       });
       const changed = changes.filter((c) => c.oldLabel.trim() !== c.newLabel).length;
       return { ok: true, changes: changes, changed: changed, collisions: collisions };
+    },
+
+    /** [WO 20261016-bulkedit] 🔴 번호 일괄 편집 미리보기(pins 무변형) — 마스터: "핀 일괄 (수정) 순서대로 앞에 글자나 뒤에 글자 넣는 기능".
+     *  범위·정렬·연결 묶음 규칙은 resetPlan 과 같다(묶음 = scopePages · 논리 핀 1개 = 1행 · order "no"(기본)|"pos").
+     *  opts: { targets, order, addPrefix, addSuffix, stripPrefix, stripSuffix, renumber:{start, step}|null, base }
+     *   · 앞 글자 = addPrefix + (stripPrefix ? "" : 기존 접두) · 뒤 글자 = (stripSuffix ? "" : 기존 접미) + addSuffix
+     *   · 숫자 = renumber ? start + i*step : 기존 숫자(자릿수 그대로)
+     *   · 번호가 아닌 자유 텍스트 핀은 renumber 가 없으면 건너뛴다(skipped — 지어내지 않는다).
+     *  🔴 결과 label 이 parseLabel 로 같은 번호로 되읽히지 않으면 invalid, 같은 번호 공간에 중복이 생기면 conflict — 둘 중 하나라도 있으면 ok=false(적용 차단).
+     *  ⚠ 뒤 글자에 숫자가 들어가면 사진 파일명(끝 숫자열) 매칭이 깨질 수 있다 → warnSuffixDigit.
+     *  @returns {{ok, reason?, changes:Array<{id,oldLabel,oldText,newLabel,conflict,invalid}>, conflicts:Set, invalid:Array, skipped:Array, changed:number, warnSuffixDigit:boolean}} */
+    bulkEditPlan(pins, page, opts) {
+      const o = opts || {};
+      const pg = page || 1;
+      const RXP = /^(?:[A-Za-z]{1,6}[-_]?|[A-Za-z][A-Za-z0-9]{0,5}[-_])$/, RXS = /^[-_][A-Za-z][A-Za-z0-9]{0,5}$/;
+      const addP = String(o.addPrefix || "").trim(), addS = String(o.addSuffix || "").trim();
+      const empty = { ok: false, changes: [], conflicts: new Set(), invalid: [], skipped: [], changed: 0, warnSuffixDigit: false };
+      if (addP && !/^[A-Za-z][A-Za-z0-9]*[-_]?$/.test(addP)) return Object.assign(empty, { reason: "앞 글자는 알파벳으로 시작해야 합니다(예: A, ER-, B2-)" });
+      if (addS && !RXS.test(addS)) return Object.assign(empty, { reason: "뒤 글자는 - 또는 _ 로 시작하고 알파벳이 이어져야 합니다(예: -F, _R2)" });
+      const rn = o.renumber ? { start: parseInt(o.renumber.start, 10), step: parseInt(o.renumber.step, 10) } : null;
+      if (rn && (!Number.isFinite(rn.start) || rn.start < 0 || !Number.isFinite(rn.step) || rn.step < 1)) return Object.assign(empty, { reason: "시작 번호(0 이상)와 증가 폭(1 이상)을 숫자로 입력하세요" });
+      if (!addP && !addS && !o.stripPrefix && !o.stripSuffix && !rn) return Object.assign(empty, { reason: "바꿀 내용을 하나 이상 고르세요(앞 글자 · 뒤 글자 · 제거 · 다시 매기기)" });
+      const scope = this.scopePages(pg, pins);
+      const inScope = scope.length === 1 ? null : new Set(scope);
+      const onScope = (p) => inScope ? inScope.has(p.page || 1) : (p.page || 1) === pg;
+      const src = Array.isArray(o.targets) ? o.targets : (pins || []);
+      const seenUnit = new Set();
+      const list = src.filter((p) => {
+        if (!(p && !p._deleted && p.id != null && onScope(p))) return false;
+        const u = this._unitKey(p);
+        if (seenUnit.has(u)) return false;
+        seenUnit.add(u);
+        return true;
+      });
+      if (!list.length) return Object.assign(empty, { reason: "이 화면에는 번호를 바꿀 핀이 없습니다" });
+      const metas = new Map();
+      scope.forEach((sp) => this.numbers(pins, sp, o.base).forEach((v, k) => metas.set(k, v)));
+      const noOf = (p) => { const i = metas.get(p.id); return i && Number.isFinite(i.no) ? i.no : Infinity; };
+      const ordered = list.slice().sort(o.order === "pos" ? (a, b) => this.byPosition(a, b) : (a, b) => (noOf(a) - noOf(b)) || this.byPosition(a, b));
+      const changes = [], skipped = [], invalid = [];
+      let warn = false, i = 0;
+      ordered.forEach((p) => {
+        const oldLabel = p.label == null ? "" : String(p.label);
+        const pl = this.parseLabel(oldLabel.trim());
+        if (!pl && !rn) { skipped.push(p.id); return; }   // 번호 아님(자유 텍스트) — 다시 매기기 없이는 손대지 않는다
+        const curP = pl ? pl.prefix + pl.sep : "", curS = pl ? pl.suffix : "";
+        const numTxt = rn ? String(rn.start + (i++) * rn.step) : (pl.pad ? String(pl.no).padStart(pl.pad, "0") : String(pl.no));
+        const newP = addP + (o.stripPrefix ? "" : curP), newS = (o.stripSuffix ? "" : curS) + addS;
+        const newLabel = newP + numTxt + newS;
+        const back = this.parseLabel(newLabel);
+        const bad = !back || back.no !== parseInt(numTxt, 10) || (newP && !RXP.test(newP)) || (newS && !RXS.test(newS));
+        if (/\d/.test(newS)) warn = true;
+        const meta = metas.get(p.id);
+        const c = { id: p.id, oldLabel: oldLabel, oldText: meta ? this.textOf(meta) : oldLabel, newLabel: newLabel, conflict: false, invalid: !!bad };
+        if (bad) invalid.push(p.id);
+        changes.push(c);
+      });
+      // 🔴 중복 검사 — 바뀐 결과끼리 + 대상 밖 같은 번호 공간 핀(연결 멤버는 그 묶음 1건)
+      const keyOf = (l) => { const k = this.noKeyOf(l); return k ? (k.key + "|" + k.no) : null; };
+      const tid = new Set();
+      list.forEach((p) => { const u = this._unitKey(p); (pins || []).forEach((q) => { if (q && this._unitKey(q) === u) tid.add(String(q.id)); }); });
+      skipped.forEach((id) => tid.delete(String(id)));
+      const count = new Map();
+      const bump = (k) => { if (k) count.set(k, (count.get(k) || 0) + 1); };
+      const outUnits = new Set();
+      (pins || []).forEach((q) => {
+        if (!q || q._deleted || !onScope(q) || tid.has(String(q.id))) return;
+        const u = this._unitKey(q);
+        if (outUnits.has(u)) return;
+        outUnits.add(u);
+        bump(keyOf(q.label));
+      });
+      changes.forEach((c) => bump(keyOf(c.newLabel)));
+      const conflicts = new Set();
+      changes.forEach((c) => { const k = keyOf(c.newLabel); if (k && count.get(k) > 1) { c.conflict = true; conflicts.add(c.id); } });
+      const changed = changes.filter((c) => c.oldLabel.trim() !== c.newLabel).length;
+      const reason = invalid.length ? ("번호로 읽을 수 없는 결과 " + invalid.length + "개 — 앞·뒤 글자를 줄이거나 바꾸세요")
+        : (conflicts.size ? ("같은 번호 공간에 중복 " + conflicts.size + "개 — 적용할 수 없습니다") : (!changes.length ? "바꿀 번호 핀이 없습니다(자유 텍스트만)" : ""));
+      return { ok: !reason, reason: reason || undefined, changes: changes, conflicts: conflicts, invalid: invalid, skipped: skipped, changed: changed, warnSuffixDigit: warn };
     },
 
     /** 리셋 적용 — plan.changes 대로 라벨을 바꾸고 핀마다 되돌리기 스냅샷을 남긴다. @returns 바뀐 핀 배열 */
@@ -630,13 +872,21 @@
       const t = Number.isFinite(now) ? now : Date.now();
       const byId = new Map((pins || []).filter((p) => p && p.id != null).map((p) => [String(p.id), p]));
       const out = [];
+      const PL = (typeof PinLink !== "undefined" && PinLink && PinLink.members) ? PinLink : null;
       plan.changes.forEach((c) => {
-        const pin = byId.get(String(c.id));
-        if (!pin) return;
+        const head = byId.get(String(c.id));
+        if (!head) return;
+        // [WO 20261016-multisheet P3] 연결 묶음 전원 — 되돌리기 스냅샷은 멤버마다(각자 옛 label·수동 표시)
+        const members = PL ? PL.members(pins, head) : [head];
+        for (const pin of members) {   // (들여쓰기 고정 — p155 뮤테이션 대상 문자열)
         pin.numReset = { batch: String(batch), from: pin.label == null ? null : pin.label, fromManual: !!pin.labelManual, to: c.newLabel, at: t };
+        }
+        if (PL && PL.setLabel) PL.setLabel(pins, head, c.newLabel, { manual: true });
+        else for (const pin of members) {   // PinLink 미로드(단독 테스트) — 종전 그대로
         pin.label = c.newLabel;
         pin.labelManual = true;   // [WO 20260930-numdup] 사용자가 정한 번호 — 동시 생성 재채번(resolveConcurrentNos) 대상 아님
-        out.push(pin);
+        }
+        members.forEach((m) => out.push(m));
       });
       return out;
     },
@@ -644,15 +894,18 @@
     /** 그 페이지에서 가장 최근 리셋 묶음(되돌리기 대상). 없으면 null. */
     lastResetBatch(pins, page) {
       const pg = page || 1;
+      // [WO 20261016-multisheet P2] 리셋 대상이 묶음이면 되돌리기도 묶음 — 연결 OFF 면 [pg]
+      const scope = this.scopePages(pg, pins);
+      const on = (p) => scope.length === 1 ? (p.page || 1) === pg : scope.indexOf(p.page || 1) >= 0;
       let best = null;
       (pins || []).forEach((p) => {
-        const r = p && !p._deleted && (p.page || 1) === pg ? p.numReset : null;
+        const r = p && !p._deleted && on(p) ? p.numReset : null;
         if (!r || r.batch == null) return;
         const at = Number(r.at) || 0;
         if (!best || at > best.at) best = { batch: String(r.batch), at: at, count: 0 };
       });
       if (!best) return null;
-      (pins || []).forEach((p) => { if (p && !p._deleted && (p.page || 1) === pg && p.numReset && String(p.numReset.batch) === best.batch) best.count++; });
+      (pins || []).forEach((p) => { if (p && !p._deleted && on(p) && p.numReset && String(p.numReset.batch) === best.batch) best.count++; });
       return best;
     },
 
@@ -691,9 +944,18 @@
       const pg = page || 1;
       const lbl = String(newLabel == null ? "" : newLabel).trim();
       if (!lbl) return { ok: false, reason: "번호를 입력하세요" };
-      if (!/^\d+$/.test(lbl)) return { ok: false, reason: "체크보드 번호는 숫자만 가능합니다" };
+      // [WO 20261016-multisheet P5] 숫자 또는 접두+숫자(A12 / ER-12 / B2-05 — parseLabel 정본)
+      if (!/^\d+$/.test(lbl) && !(this.parseLabel(lbl) && (this.parseLabel(lbl).prefix || this.parseLabel(lbl).suffix))) return { ok: false, reason: "번호는 숫자 또는 알파벳+숫자(예: 12, A12, ER-12, 1-F)만 가능합니다" };
+      // [P2] 묶음 전체(scopePages — 연결 OFF 면 [pg]) · [P3] 같은 연결 묶음(linkId) 멤버는 같은 번호가 정상 · [P5] A12 = A-12 = a12
+      const scope = this.scopePages(pg, pins);
+      const me = (pins || []).find((p) => p && p.id === pinId);
+      const myUnit = me ? this._unitKey(me) : null;
+      const nk = this.noKeyOf(lbl);
+      const keyOf = (l) => { const k = this.noKeyOf(l); return k && k.key ? (k.key + "|" + k.no) : null; };
+      const want = nk && nk.key ? (nk.key + "|" + nk.no) : null;
       // [WO 20261015-numunify] 계열 무관 — 360 핀이 쓰는 번호도 이미 사용 중이다
-      const dup = (pins || []).some((p) => p && !p._deleted && p.id !== pinId && (p.page || 1) === pg && String(p.label == null ? "" : p.label).trim() === lbl);
+      const dup = (pins || []).some((p) => p && !p._deleted && p.id !== pinId && scope.indexOf(p.page || 1) >= 0 && !(myUnit && this._unitKey(p) === myUnit)
+        && (String(p.label == null ? "" : p.label).trim() === lbl || (want != null && keyOf(p.label) === want)));
       if (dup) return { ok: false, reason: "이미 사용 중인 번호입니다(" + lbl + ") — 다른 번호를 입력하세요" };
       return { ok: true, newLabel: lbl };
     },

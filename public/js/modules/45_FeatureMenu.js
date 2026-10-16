@@ -121,6 +121,9 @@
       // [WO 20261015-numunify] 마스터 "번호 리셋기능도 구현하고" — 구역(페이지) 핀 번호 1부터 연속 재부여(미리보기 → 확인 2회) + 되돌리기.
       { id: "num-reset", group: "checker", icon: "1↻", label: "번호 리셋(1부터)", desc: "이 구역·페이지 핀 번호를 위치순/기존 순서로 1부터 다시(미리보기·확인 2회·되돌리기)", needs: "drawing", danger: true, mod: "NumReset",
         why: () => NumReset.reason(), run: () => NumReset.open() },
+      // [WO 20261016-bulkedit] 앞 글자·뒤 글자·제거·다시 매기기(조합) — 미리보기(중복 빨강·적용 차단) → 확인 2회 → 되돌리기
+      { id: "num-edit", group: "checker", icon: "A1", label: "번호 일괄 편집(앞·뒤 글자)", desc: "이 구역 핀 번호에 앞 글자(A1)·뒤 글자(1-F)를 넣거나 빼고 순서대로 다시 매김(미리보기·확인 2회·되돌리기)", needs: "drawing", mod: "NumReset",
+        why: () => NumReset.reason(), run: () => NumReset.openEdit() },
       { id: "num-reset-undo", group: "checker", icon: "↺", label: "번호 리셋 되돌리기", desc: "가장 최근 번호 리셋을 옛 번호로 복원", needs: "drawing", mod: "NumReset",
         why: () => NumReset.undoReason(), run: () => NumReset.undo() },
       { id: "all-pins", group: "checker", icon: "≡", label: "전체 포인트 목록", keys: "P", desc: "검색·정렬·선택", needs: "drawing", mod: "AllPins",

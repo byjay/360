@@ -129,7 +129,7 @@
           // CSS 클래스(.pano-radar-pin-checkboard=dashed)만으로는 등록/미등록이 같아진다 → 인라인으로 덮어쓴다.
           dot.style.borderStyle = _st.border;
           dot.style.borderWidth = (_st.border === "solid") ? "1px" : "1.4px";
-          const dispNo = meta.no;
+          const dispNo = (PinSeries.textOf ? PinSeries.textOf(meta) : meta.no);   // [WO 20261016-multisheet P6] 접두 포함(A12) — 도면 마커와 같은 표기
           const no = document.createElement("span");
           no.className = "pano-radar-pin-no";
           no.textContent = dispNo;
@@ -354,7 +354,7 @@
     /** 현재 표시 중인 도면(페이지) 이미지 src */
     _currentMapSrc() {
       // 뷰어 모드: 배포본 페이지 이미지
-      if (State.mode === "viewer" && State.viewerPages && State.viewerPages.length) {
+      if ((typeof App !== "undefined" && App._imagePaged ? App._imagePaged() : State.mode === "viewer") && State.viewerPages && State.viewerPages.length) {   // [WO 20261016-multisheet] 스냅샷 이미지 판정 SoT
         const idx = (State.pdfPage || 1) - 1;
         return State.viewerPages[idx] || State.viewerPages[0] || null;
       }

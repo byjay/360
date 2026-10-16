@@ -328,6 +328,7 @@
       const list = [];
       (pins || []).forEach((p) => {
         if (!p || (p.page || 1) !== (page || 1)) return;
+        if (typeof PinLink !== "undefined" && PinLink.isMember && PinLink.isMember(p)) return;   // [WO 20261016-multisheet P4] 사진은 대표에만 — 연결 멤버는 일괄 대상 아님
         const info = map.get(p.id);
         if (!info || (ser !== "all" && info.series !== ser)) return;
         list.push({ pin: p, no: info.no });

@@ -131,7 +131,9 @@
     _scopedPins() {
       const all = State.pins || [];
       const deck = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
-      return (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(all, deck) : all;
+      const scoped = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(all, deck) : all;
+      // [WO 20261016-multisheet P4] 도면 간 연결 핀 = 논리 핀 1개(대표 1행) — 개수·목록·촬영현황이 이중 집계되지 않게
+      return (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(scoped) : scoped;
     },
 
     /** [WO 20261001-allpins] 현재 탭(계열)의 핀만 — 페이지 구분 없이 전체(탭 = 작업공간). */
@@ -192,7 +194,7 @@
       const band = App._numBand();
       const start = App._checkboardStart ? App._checkboardStart(State.pdfPage || 1, ser) : PinSeries.bandRange(band).lo;
       const nx = PinSeries.nextInBand(State.pins, State.pdfPage || 1, ser, band, start);
-      btn.textContent = "대역 " + PinSeries.bandLabel(band) + (nx.full ? " · 가득" : " · 다음 " + PinSeries.formatNo(nx.no, ser));
+      btn.textContent = "대역 " + PinSeries.bandLabel(band) + (nx.full ? " · 가득" : " · 다음 " + (nx.label != null ? nx.label : PinSeries.formatNo(nx.no, ser)));
     },
 
     /** 전체선택/선택해제/"N개 선택됨" — 검색 중이면 "보이는 항목만" 명시. */
@@ -225,6 +227,21 @@
       if (renBtn) {
         renBtn.classList.toggle("hidden", !canRen);
         renBtn.textContent = "번호 다시 매기기" + (n ? " (" + n + "개)" : "");
+        // [WO 20261016-bulkedit] 형제 버튼 [번호 일괄 편집] — 선택한 핀(없으면 지금 구역) · index.html 비점유(JS 생성, 같은 클래스)
+        let edBtn = document.getElementById("allpins-btn-bulkedit");
+        if (!edBtn && renBtn.parentNode && typeof document.createElement === "function") {
+          edBtn = document.createElement("button");
+          edBtn.id = "allpins-btn-bulkedit"; edBtn.type = "button"; edBtn.className = "allpins-action-btn";
+          edBtn.addEventListener("click", () => {
+            const sel = (State.pins || []).filter((p) => this.selected.has(p.id));
+            if (typeof NumReset !== "undefined" && NumReset.openEdit) NumReset.openEdit(sel.length ? sel : null);
+          });
+          renBtn.parentNode.insertBefore(edBtn, renBtn.nextSibling);
+        }
+        if (edBtn) {
+          edBtn.classList.toggle("hidden", !canRen || typeof NumReset === "undefined");
+          edBtn.textContent = "번호 일괄 편집" + (n ? " (" + n + "개)" : "");
+        }
       }
     },
 
@@ -250,8 +267,7 @@
       if (!rows.length) { emptyEl.classList.remove("hidden"); return; }
       emptyEl.classList.add("hidden");
 
-      const totalPages = State.mode === "viewer"
-        ? (State.viewerPages ? State.viewerPages.length : 1) : State.pdfPages;
+      const totalPages = (typeof App !== "undefined" && App._totalPages ? App._totalPages() : 0);   // [WO 20261016-multisheet] 페이지 수 SoT
       const canSelect = this._canSelect();
 
       rows.forEach(({ pin, idx }) => {
@@ -259,7 +275,8 @@
         const hasMedia = App.pinHasContent(pin);
         const pageTag = totalPages > 1 ? `P${pin.page || 1}` : "";
         const info = this._numFor(pin);
-        const noText = info ? PinSeries.formatNo(info.no, info.series) : String(idx + 1);
+        const noText = info ? (PinSeries.textOf ? PinSeries.textOf(info) : PinSeries.formatNo(info.no, info.series)) : String(idx + 1);   // [WO 20261016-multisheet P6] 접두 포함
+        const linkTag = (typeof PinLink !== "undefined" && PinLink.isLinked(pin) && PinLink.members(State.pins, pin).length > 1) ? " · 연결 " + PinLink.members(State.pins, pin).length + "도면" : "";
         const isSel = this.selected.has(pin.id);
         const row = document.createElement("div");
         row.className = "allpins-item allpins-mode-" + ser + (State.activePin === pin.id ? " active" : "") + (isSel ? " selected" : "");
@@ -276,7 +293,7 @@
             <span class="allpins-name">${UI.escapeHtml(pin.label || "(이름 없음)")}</span>
             <span class="allpins-sub">
               <span class="allpins-kind ${badge.cls}">${badge.txt}</span>
-              ${pageTag ? `<span class="allpins-page">${pageTag}</span>` : ""}
+              ${pageTag ? `<span class="allpins-page">${pageTag}</span>` : ""}${linkTag ? `<span class="allpins-page">${UI.escapeHtml(linkTag.replace(/^ · /, ""))}</span>` : ""}
             </span>
           </span>
           <span class="allpins-go" title="이동 + 보기">
@@ -459,8 +476,12 @@
         const pin = byId.get(c.id);
         if (!pin) return;
         snapshot.push({ id: pin.id, label: pin.label, labelManual: !!pin.labelManual });
+        // [WO 20261016-multisheet P3] label 쓰기 = PinLink.setLabel(연결 묶음 전원) — 수동 번호(동시 생성 재채번 대상 아님)
+        if (typeof PinLink !== "undefined" && PinLink.setLabel) PinLink.setLabel(State.pins, pin, c.newLabel, { manual: true });
+        else {   // PinLink 미로드(단독 테스트) — 종전 그대로
         pin.label = c.newLabel;
         pin.labelManual = true;   // [WO 20260930-numdup] 수동 번호 — 동시 생성 재채번 대상 아님
+        }
         if (typeof Log !== "undefined") Log.push("pin.renumber", pin.id, { oldLabel: c.oldLabel, newLabel: c.newLabel, page: pin.page || 1 });
         if (!navigator.onLine && typeof OpLog !== "undefined" && OpLog.recordCurrent) { try { OpLog.recordCurrent("pin", "upsert", pin.id, pin); } catch (e) {} }
       });
@@ -478,7 +499,8 @@
       (snapshot || []).forEach((s) => {
         const pin = byId.get(s.id);
         if (!pin) return;
-        pin.label = s.label;
+        if (typeof PinLink !== "undefined" && PinLink.setLabel) PinLink.setLabel(State.pins, pin, s.label);   // [WO 20261016-multisheet] 연결 묶음 전원
+        else pin.label = s.label;
         pin.labelManual = s.labelManual;
       });
       App._markDirty && App._markDirty();

@@ -6280,3 +6280,13 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
    입력창은 대상 밖(붙여넣기 메뉴 유지). 안드로이드는 contextmenu preventDefault 로 같은 결과. */
 img, a, .hub-card, .tree-node, #pano-overlay, #map-viewport { -webkit-touch-callout: none; }
 .tree-pop-foot { margin: 6px 0 0; font-size: 11px; text-align: center; }
+
+/* [WO 20261016-multisheet P3] 도면 간 연결 핀 글리프(66_PinLink · 11_UI.renderPinsOnMap) — 진한 남색 #0B1F33 위 흰 글자 = 16.1:1(AA).
+   마커 박스 우상단에 겹친다(포인터 이벤트 없음 — 핀 탭 판정 불변). 3파일(style/tokens/3d-skin) 에 .pin-marker 자식 일괄 덮어쓰기 규칙 없음 확인. */
+.pin-marker .pin-link-glyph {
+  position: absolute; top: -4px; right: -6px; z-index: 2;
+  min-width: 13px; height: 13px; padding: 0 2px; border-radius: 7px;
+  background: #0B1F33; color: #FFFFFF; border: 1px solid #FFFFFF;
+  font-size: 10px; line-height: 12px; font-weight: 800; text-align: center;
+  pointer-events: none;
+}

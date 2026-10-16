@@ -125,7 +125,7 @@
       const band = (typeof App !== "undefined" && App._numBand) ? App._numBand() : 1;
       const start = (typeof App !== "undefined" && App._checkboardStart) ? App._checkboardStart(this._page(), series) : PinSeries.bandRange(band).lo;
       const nx = PinSeries.nextInBand((typeof State !== "undefined" && State.pins) || [], this._page(), series, band, start);
-      return { series: series, band: band, label: PinSeries.bandLabel(band), nx: nx, next: nx.full ? null : PinSeries.formatNo(nx.no, series) };
+      return { series: series, band: band, label: PinSeries.bandLabel(band), nx: nx, next: nx.full ? null : (nx.label != null ? nx.label : PinSeries.formatNo(nx.no, series)) };   // [WO 20261016-multisheet P5] 접두 포함
     },
 
     render() {
