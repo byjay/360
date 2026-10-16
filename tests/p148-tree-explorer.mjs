@@ -7,7 +7,14 @@
  *   ⑤ 구역 메뉴 — 삭제 2회 확인
  *   ⑥ 구역 메뉴 — 하위 구역이 있으면 삭제 거부(데이터유실 방지 안내)
  *
- * 실 Chrome(헤드리스 CDP) + wrangler pages dev(.tmp/localdev-state 기존 시드 D1 재사용) — 목 0.
+ * 실 Chrome(헤드리스 CDP) + wrangler pages dev — 목 0.
+ * [WO 20261016-fixharness] 🔴 격리 빌드(WORK)로 전환 — 종전엔 ROOT 에서 직접
+ *   assemble.py→stamp-version→vite build 를 실행해 public/js/main.js·js/main.js·
+ *   index.html·css/style.css(메인 트리 공유 파일)를 재생성하는 부작용이 있었다
+ *   (다른 팀이 동시에 그 파일들을 고치는 중이면 충돌·흡수 — p149/p144 와 동일한
+ *   WORK 격리 패턴으로 통일). 또 .tmp/localdev-state 를 직접 공유해써 썼는데 이후
+ *   추가된 마이그레이션(0048 sort_order 등)이 반영되지 않아 GET /decks 가 500을
+ *   내는 근본원인이 있었다 — STATE 사본에 0042+ 마이그레이션을 파일 단위로 적용한다.
  * 실행: P148=1 TEMP=<repo>\.tmp TMP=<repo>\.tmp node tests/p148-tree-explorer.mjs
  *   (P148 != "1" 이면 SKIP)
  */
@@ -26,9 +33,12 @@ if (process.env.P148 !== "1") {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TMP = path.join(ROOT, ".tmp");
 const OUT = path.join(TMP, "p148");
-const STATE = path.join(TMP, "localdev-state"); // 기존 시드 재사용(계정만 — 이 테스트는 자기 프로젝트를 새로 만든다)
+const WORK = path.join(OUT, "work");
+const STATE_SRC = path.join(TMP, "localdev-state"); // 기존 시드 재사용(계정만 — 이 테스트는 자기 프로젝트를 새로 만든다)
+const STATE = path.join(OUT, "state"); // 격리 사본(마이그레이션 0042+ 적용)
 fs.mkdirSync(OUT, { recursive: true });
 const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const NM = path.join(ROOT, "node_modules");
 
 let failed = 0;
 const fails = [];
@@ -38,25 +48,38 @@ const ok = (cond, label, detail) => {
 };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-if (!fs.existsSync(STATE)) { console.log("FAIL .tmp/localdev-state 없음 — 먼저 node build-tools/local-dev.mjs && node build-tools/seed-local.mjs 를 실행하세요."); process.exit(2); }
+if (!fs.existsSync(STATE_SRC)) { console.log("FAIL .tmp/localdev-state 없음 — 먼저 node build-tools/local-dev.mjs && node build-tools/seed-local.mjs 를 실행하세요."); process.exit(2); }
 if (!fs.existsSync(CHROME)) { console.log("FAIL Chrome 없음: " + CHROME); process.exit(2); }
 
-function sh(cmd) {
-  console.log("[p148] $ " + cmd);
-  execSync(cmd, { stdio: "inherit", cwd: ROOT, env: { ...process.env, TEMP: TMP, TMP: TMP } });
+// ── 격리 빌드(작업트리 모듈 → WORK, 메인 트리 파일 0 터치) + 상태 사본(마이그레이션 보강) ──
+fs.rmSync(WORK, { recursive: true, force: true });
+fs.mkdirSync(WORK, { recursive: true });
+for (const f of ["public", "src", "migrations"]) fs.cpSync(path.join(ROOT, f), path.join(WORK, f), { recursive: true, filter: (s) => !/[\\/]public[\\/]js[\\/]main\.js$/.test(s) });
+for (const f of ["vite.config.ts", "package.json", "tsconfig.json", "wrangler.jsonc"]) fs.copyFileSync(path.join(ROOT, f), path.join(WORK, f));
+{
+  const wj = path.join(WORK, "wrangler.jsonc");
+  const txt = fs.readFileSync(wj, "utf8").replace(/,(\s*\/\/[^\r\n]*)*\s*"ai"\s*:\s*\{[^}]*\}/, "");
+  if (/"ai"\s*:/.test(txt)) { console.log("FAIL 격리 사본 AI 바인딩 제거 실패"); process.exit(2); }
+  fs.writeFileSync(wj, txt);
 }
-sh("python build-tools/assemble.py");
-sh("node build-tools/stamp-version.mjs");
-for (const [src, dst] of [["public/js/main.js", "js/main.js"], ["public/index.html", "index.html"], ["public/css/style.css", "css/style.css"]]) {
-  fs.copyFileSync(path.join(ROOT, src), path.join(ROOT, dst));
+const man = fs.readFileSync(path.join(WORK, "public/js/modules/_manifest.txt"), "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+fs.writeFileSync(path.join(WORK, "public/js/main.js"), man.map((f) => fs.readFileSync(path.join(WORK, "public/js/modules", f), "utf8")).join("\n"));
+const env = { ...process.env, TEMP: TMP, TMP: TMP };
+execSync(`node --max-old-space-size=640 "${path.join(NM, "vite/bin/vite.js")}" build`, { cwd: WORK, env, stdio: "pipe" });
+fs.rmSync(STATE, { recursive: true, force: true });
+fs.cpSync(STATE_SRC, STATE, { recursive: true });
+const wr = (args) => execSync(`node "${path.join(NM, "wrangler/bin/wrangler.js")}" ${args}`, { cwd: WORK, env, stdio: "pipe" });
+// 공유 상태(localdev-state)는 마이그레이션 추적표가 어긋나 있다(0004 중복 컬럼 실측, p149 와 동일 근거)
+// → 이 작업이 의존하는 0042~(0048 sort_order 포함) 만 파일 단위로 적용(멱등 CREATE·ALTER 는 이미 있으면 건너뜀)
+for (const mf of fs.readdirSync(path.join(WORK, "migrations")).filter((f) => /^\d+_.*\.sql$/.test(f) && f >= "0042")) {
+  try { wr(`d1 execute webapp-production --local --persist-to "${STATE}" --file "migrations/${mf}"`); } catch (e) { /* ALTER 중복 = 이미 적용 */ }
 }
-sh('node --max-old-space-size=640 node_modules/vite/bin/vite.js build');
 
 const PORT = process.env.P148_PORT || "18798";
 const wrangler = spawn(
   "node",
-  ["node_modules/wrangler/bin/wrangler.js", "pages", "dev", "dist", "--d1=webapp-production", "--local", "--persist-to", STATE, "--ip", "127.0.0.1", "--port", PORT],
-  { cwd: ROOT, env: { ...process.env, TEMP: TMP, TMP: TMP }, stdio: ["ignore", "pipe", "pipe"] }
+  [path.join(NM, "wrangler/bin/wrangler.js"), "pages", "dev", "dist", "--d1=webapp-production", "--local", "--persist-to", STATE, "--ip", "127.0.0.1", "--port", PORT],
+  { cwd: WORK, env, stdio: ["ignore", "pipe", "pipe"] }
 );
 let wranglerLog = "";
 wrangler.stdout.on("data", (d) => { wranglerLog += d; });
