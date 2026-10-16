@@ -367,22 +367,26 @@
      *               각 핀에 적용 → 핀 머리는 항상 위, 바늘은 항상 아래로 "서 있음".
      *    핀 tip(바늘 끝, viewBox 18/64 ≒ 하단)이 좌표에 박히도록 transform-origin 도 하단 중앙. */
     /** [마스터 2026-10-16] 핀 크기 정책 전면 교체 — "부분 역보정"(1/zoom 의 지수 0.6승, 2026-08-31
-     *  절충안)을 폐기하고 "도면과 완전 비례 + 최소 크기 보장"으로 바꾼다.
+     *  절충안)을 폐기하고 "도면과 완전 비례 + 최소 크기 보장 + 최대 크기 상한"으로 바꾼다.
      *   · 핀은 도면에 인쇄된 것처럼 줌과 함께 커지고 작아진다: 화면 배율 ∝ zoom(지수 1, 부분보정 없음).
-     *   · 너무 축소돼 안 보이거나 못 누를 때만 "최소 화면 px"에서 멈춘다(바닥, 상한은 두지 않음 —
-     *     과도줌으로 화면을 가리는 것은 사용자 선택이고, 기존 PIN_MAX_SCALE 4.5 상한은 폐기).
+     *   · 너무 축소돼 안 보이거나 못 누를 때만 "최소 화면 px"에서 멈춘다(바닥).
+     *   · [WO 20261016-pinscale2, 마스터 "핀이 너무 커지는 거 아니니"] 과도줌으로 도면을 가리는 것을
+     *     막으려 "최대 화면 px"(PIN_MAX_PX)에서도 멈춘다(상한) — 2026-08-31 PIN_MAX_SCALE 4.5 폐기
+     *     때 없앤 상한을 절대 px 기준으로 재도입.
+     *   · 기준 배율(PIN_SCALE)을 2 → 0.75 로 낮춤: zoom=1 화면 높이가 기존 80px → 약 30px(40×0.75).
+     *     PinSizePrefs.DEFAULT 도 동일(슬라이더는 이 기준값만 조절, 바닥·상한은 그대로 둘러쌈).
      *   · 원본 도면과 "구역"(벡터 복사 구역의 src_crop·crop 창 둘 다)에서 같은 배율이 되려면, 구역이
      *     원본의 일부만 담아 "확대해 그린" 몫을 되돌려야 한다 — setCropBoundary(crop, scaleRef) 로
      *     받은 _pinScaleRef(원본 폭 대비 이 구역 폭 비율, src_crop.w/100)를 zoom 에 곱한다.
-     *   · 기준 배율(PIN_SCALE)은 설정 "핀 크기" 슬라이더(PinSizePrefs, 프로젝트별 저장)로 바뀐다.
-     *     기본값 2 = 이 정책 전환 전 zoom=1 에서의 화면 크기(마스터 지시: "기본값은 지금 zoom 1 에서의
-     *     화면 크기와 비슷하게").
      *   · ISO/평면 두 경로 + 리더선(11_UI.js refreshLeaders)·360 동선(63_RouteDraw)이 모두 이 함수
-     *     하나(또는 같은 바닥·보정 로직)를 공유 → 상수만 바꾸면 전체 반영(§G-2-5). */
-    PIN_SCALE: 2,              // 기준 줌(zoom=1, 구역 보정 無)에서의 배율 — PinSizePrefs.DEFAULT 와 동일
+     *     하나(또는 같은 바닥·상한·보정 로직)를 공유 → 상수만 바꾸면 전체 반영(§G-2-5).
+     *   · 상한을 적용해도 translate(앵커 좌표)는 그대로 — CSS 변수(--pin-scale)만 바뀌고 마커의
+     *     위치(픽셀 anchor)는 별도 로직(도면 좌표→화면 변환)이라 scale 상한과 무관(§4 유지 확인). */
+    PIN_SCALE: 0.75,           // 기준 줌(zoom=1, 구역 보정 無)에서의 배율 — PinSizePrefs.DEFAULT 와 동일
     PIN_NATIVE_PX: 40,         // .pin-marker-teardrop .pin-pin svg 세로(style.css ~4762) — 최소 px 환산 기준
     PIN_MIN_PX_TOUCH: 18,      // 터치 최소 가독/탭 보장(핀 자체에 ::after 44px 터치패드가 별도로 있음)
     PIN_MIN_PX_MOUSE: 14,      // 마우스는 포인터가 정밀해 더 작은 바닥을 허용
+    PIN_MAX_PX: 48,            // [WO 20261016-pinscale2] 화면 최대 핀 높이(px) — 과도줌 시 도면 가림 방지 상한
     _pinScaleRef: 1,           // 구역 보정(0~1) — setCropBoundary(crop, scaleRef) 단일 진입점이 설정
     _pinIsoPrev: null,         // [성능] flat↔ISO 전환 감지용(전환 시 1회만 인라인 정리)
     /** 터치 환경 판정(공유 패턴 — 19_PinGrid.js:10 / 20_App.js:11 / 48_GPS.js:18 과 동일). */
@@ -396,15 +400,21 @@
       const raw = base * effZoom; // 도면과 완전 비례(지수 1)
       const minPx = this._coarsePointer() ? this.PIN_MIN_PX_TOUCH : this.PIN_MIN_PX_MOUSE;
       const floor = minPx / this.PIN_NATIVE_PX;
-      return Math.max(raw, floor); // 상한 없음
+      const ceil = this.PIN_MAX_PX / this.PIN_NATIVE_PX; // [WO 20261016-pinscale2] 상한
+      return Math.min(Math.max(raw, floor), ceil);
     },
-    /** [WO 20261016-pinscale §2] 선(360 동선·주석) 공용 — 핀과 같은 보정(zoom × 구역 scaleRef)을
-     *  쓰되, 바닥은 핀처럼 절대 px 가 아니라 "줌 1 배율 대비 비율"로 둔다(선 종류마다 기준 두께가
-     *  달라 픽셀 바닥 하나로 못 묶는다 — 판단: 지금 모양의 40% 밑으로는 안 가늘어지게). */
+    /** [WO 20261016-pinscale §2, pinscale2] 선(360 동선·주석) 공용 — 핀과 같은 보정(zoom × 구역
+     *  scaleRef)을 쓰되, 바닥은 핀처럼 절대 px 가 아니라 "줌 1 배율 대비 비율"로 둔다(선 종류마다
+     *  기준 두께가 달라 픽셀 바닥 하나로 못 묶는다 — 판단: 지금 모양의 40% 밑으로는 안 가늘어지게).
+     *  상한(LINE_MAX_RATIO=1)도 같은 이유로 비율 기준: 제일 두꺼운 기준선(route-line 3px, style.css
+     *  ~2784)이 ratio=1 일 때 3px 그대로라 "최대 3px 정도"를 만족(더 얇은 anno-rect-line 2.5px 는
+     *  ratio=1 에서 2.5px로 자동으로 더 작음). */
+    LINE_MAX_RATIO: 1,
     lineScreenScale(minRatio) {
       const zoom = State.zoom || 1;
       const effZoom = zoom * (this._pinScaleRef || 1);
-      return Math.max(effZoom, (typeof minRatio === "number" && minRatio > 0) ? minRatio : 0.4);
+      const floor = (typeof minRatio === "number" && minRatio > 0) ? minRatio : 0.4;
+      return Math.min(Math.max(effZoom, floor), this.LINE_MAX_RATIO);
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
