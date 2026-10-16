@@ -193,6 +193,9 @@ console.log("\n[T6 열람 링크 — GET 에 routes 포함(재생 가능) · ops
   // auto-entry(lk) 는 "배포(published) + 그 스냅샷에 이 배포본이 있을 때"만 유효(viewLinkScope) — 먼저 1회 배포.
   const pre = await api(TOK.o, "POST", `/api/projects/${P}/publish`, {});
   ok(pre.status === 200, "T6-pre 사전 배포(링크 유효화) 200", pre.status, pre.j);
+  // [WO 20261016-viewmail] 새 링크 = 이메일 인증 기본 ON → 이 블록은 무인증 링크 재생 계약 → 옵션 OFF 명시(assertion 불변 · 이메일 경로는 p163)
+  const vaOff = await api(TOK.o, "PUT", `/api/projects/${P}/viewer-access`, { email_auth: false });
+  ok(vaOff.status === 200, "T6-pre2 이메일 인증 OFF(무인증 링크 호환 모드) 200", vaOff.status);
   const l = await api(TOK.o, "POST", "/api/view-links", { dep_id: D, mode: "360" });
   ok(l.status === 200 && l.j && l.j.id, "T6a 링크 발급 200", l.status);
   const m = await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer", lk: l.j.id });

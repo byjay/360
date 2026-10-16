@@ -6015,6 +6015,7 @@
         B("btn-copy-link", "#10b981", "링크 복사") + B("btn-deploy-qr", "#93c5fd", "QR 보기") +
         B("btn-deploy-update", "#fbbf24", "다시 배포(업데이트)") + B("btn-deploy-rotate", "#c4b5fd", "새 링크 발급") +
         B("btn-deploy-cancel", "#f87171", "배포 취소") + B("btn-view-manual", "#fbbf24", "매뉴얼 보기") +
+        B("btn-deploy-viewers", "#34d399", "열람자 기록") + "<br><span id='deploy-viewer-auth' style='color:#cbd5e1;font-size:12px'></span>" +   // [WO 20261016-viewmail]
         "<div id='deploy-qr-box' style='width:140px;height:140px;margin-top:8px;display:none;background:#fff;padding:6px;border-radius:6px'></div>";
       status.classList.remove("hidden", "error");
       const $ = (id) => document.getElementById(id);
@@ -6041,6 +6042,9 @@
       });
       const man = $("btn-view-manual");
       if (man) man.addEventListener("click", () => window.open("/manual/viewer-360.html", "_blank"));
+      // [WO 20261016-viewmail] 열람자 이메일 인증·기록 — 상태 줄 + 관리 화면(68_ViewerAuth.js)
+      const vw = $("btn-deploy-viewers");
+      if (vw && typeof ViewerAuth !== "undefined") { vw.addEventListener("click", () => ViewerAuth.openManager(o.project)); ViewerAuth.decorateDeployStatus(o.project); }
     },
 
     /** [WO 20261012-viewlink] 🔴 배포 취소 SoT — 확인 2번(마스터 지시) → POST unpublish. 허브 카드 [배포 취소]도 이 함수 하나를 쓴다.

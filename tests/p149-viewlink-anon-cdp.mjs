@@ -163,6 +163,9 @@ try {
   const tok = sp ? sp.split("/").pop() : "";
   ok(pub.s === 200 && /^\/v\/[a-z2-7]{16}$/.test(sp || ""), "A1 배포 → 링크 = /v/<불투명 토큰 16자>(이름·슬러그 0)", sp);
   ok(!!sp && !decodeURIComponent(sp).includes("로컬") && !decodeURIComponent(sp).includes("테스트"), "A1b 링크 경로에 프로젝트명 0", decodeURIComponent(sp || ""));
+  // [WO 20261016-viewmail] 새 링크 = 이메일 인증 기본 ON → 이 테스트는 **무인증 링크(기존 방식)** 계약을 본다 → 링크 옵션 OFF 명시(assertion 불변 · 이메일 경로는 p163b)
+  const vaOff = await api("PUT", "/api/projects/" + PID + "/viewer-access", { email_auth: false }, sTok);
+  ok(vaOff.s === 200, "A1c 이메일 인증 OFF(무인증 링크 호환 모드)", vaOff.s);
   const sh = await api("GET", "/api/share/" + tok);
   ok(sh.s === 200 && sh.j.project && sh.j.project.id === PID && !sh.text.includes(PROJ_NAME) && !("name" in sh.j.project), "A2 공개 /api/share/:t = 이름 없음(id·배포본만)", sh.j);
   const sg = await api("GET", "/api/share-gate?t=" + tok);

@@ -165,6 +165,10 @@ try {
   // [WO 20261009-readacl] 열람 토큰은 **배포된 프로젝트의 열람 링크(?d=)** 로만 발급된다 → 배포 후 dep1 링크로 발급.
   const pub = await api("o", "POST", "/api/projects/prj_R/publish", {});
   ok(pub.status === 200, "전제: 프로젝트 배포(열람 링크 활성) — " + pub.status);
+  // [WO 20261016-viewmail] 새 링크 = 이메일 인증 기본 ON → 이 테스트는 **무인증 링크(기존 방식)** 열람자 계약을 본다 → 링크별 옵션 OFF 로 명시.
+  //   (이메일 인증 경로는 p163/p163b 가 검증. 여기 assertion 은 바꾸지 않았다)
+  const vaOff = await api("o", "PUT", "/api/projects/prj_R/viewer-access", { email_auth: false });
+  ok(vaOff.status === 200, "전제: 이메일 인증 OFF(무인증 링크 호환 모드) — " + vaOff.status);
   const anon1 = (await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer", d: dep1 })).j.token;
   const anon2 = (await api(null, "POST", "/api/auth/auto-entry", { kind: "viewer", d: dep1 })).j.token;
   ok(typeof anon1 === "string" && anon1.startsWith("ae1.") && anon1 !== anon2, "전제: 공유 링크 열람전용 토큰 2개 발급");

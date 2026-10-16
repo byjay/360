@@ -693,7 +693,14 @@
       try {
         // [WO 20261009-readacl] 열람 토큰은 링크가 있어야 발급된다 — 서버가 링크로 범위(프로젝트)를 정해 서명한다.
         const r = await fetch("/api/auth/auto-entry", { method: "POST", headers, body: JSON.stringify(Object.assign({ kind }, this._viewLinkParams() || {})) });
-        if (!r.ok) return null;
+        if (!r.ok) {
+          // [WO 20261016-viewmail] 이메일 인증 링크 — 링크 토큰만으로는 통행증이 없다(서버 401) → 초대받은 이메일 인증(통과할 때까지 대기)
+          if (r.status === 401 && kind === "viewer" && typeof ViewerAuth !== "undefined") {
+            const j401 = await r.json().catch(() => null);
+            if (j401 && j401.email_auth_required) return await ViewerAuth.ensure(this._viewLinkParams());
+          }
+          return null;
+        }
         const j = await r.json();
         return (j && typeof j.token === "string" && j.token) || null;
       } catch (e) { return null; }   // 오프라인/구버전 서버 → 정직하게 실패, 열람전용 폴백

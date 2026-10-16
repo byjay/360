@@ -152,7 +152,8 @@ const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
 // [WO 20261001-viewreq] '/api/notes' = 열람자(공유/배포 링크 포함)의 요청·질문 접수 통로(마스터: "보기만 + 요청은 가능").
 //   🔴 가드를 통과시키는 대신 노트 라우트 자체가 열람전용 세션을 따로 판정한다(noteActor):
 //   작성은 kind=request|question·status=open 으로 강제, 수정·삭제는 수정키(X-Note-Key) 일치 본인만, 답변·상태변경은 디자이너만.
-const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify', '/api/inquiries', '/api/notes']
+// [WO 20261016-viewmail] '/api/view-auth/' = 열람자 이메일 인증(메일 요청·완료)·열람 기록 통로 — 권한을 얻는 통로 자체. 디자이너 관리 API 는 /api/projects/:id/viewer-access(가드 대상).
+const READONLY_ALLOWED_WRITE_PREFIXES = ['/api/signup/', '/api/invite/', '/api/auth/', '/api/client-log', '/api/share/verify', '/api/view-auth/', '/api/inquiries', '/api/notes']
 
 const b64u = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const b64uDec = (s: string) => atob(s.replace(/-/g, '+').replace(/_/g, '/'))
@@ -189,7 +190,7 @@ async function hmacB64u(secret: string, msg: string): Promise<string> {
  *  [P63] gatePid 를 주면 그 프로젝트의 **초대코드 게이트를 통과했다**는 클레임(g)이 실린다.
  *    🔴 게이트 통과는 열람 자격일 뿐이다 — kind 는 언제나 'viewer'(열람 전용)로 강제한다.
  *    서명이 붙으므로 클라이언트가 g 를 위조할 수 없다(기존 HMAC 경로 재사용 = SoT). */
-async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string, m?: string, l?: string }): Promise<{ token: string, exp: number } | null> {
+async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?: string, scope?: { p: string[], d?: string, th?: string, m?: string, l?: string }, ident?: { e: string, ep: number }): Promise<{ token: string, exp: number } | null> {
   const secret = await autoEntrySecret(c)
   if (!secret) return null
   if (gatePid) kind = 'viewer'   // [불변식] 게이트 통과가 쓰기 권한이 되는 경로를 원천 차단
@@ -205,6 +206,8 @@ async function mintAutoEntryToken(c: any, kind: 'designer' | 'viewer', gatePid?:
     if (scope.m) body.m = String(scope.m)
     if (scope.l) body.l = String(scope.l)   // [WO 20261012-viewlink] 발급 링크 id — 폐기 즉시 무효(validLinkPids) + 열람자 코멘트 출처 기록
   }
+  // [WO 20261016-viewmail] 이메일 통행증 — 메일 링크로 소유를 증명한 이메일(e) + 발급 시점 수신자 세대(ep). 검증은 요청마다(viewEmailGate).
+  if (ident && kind === 'viewer') { body.e = String(ident.e); body.ep = Number(ident.ep) || 0 }
   const payload = b64u(JSON.stringify(body))
   return { token: AUTO_ENTRY_PREFIX + payload + '.' + (await hmacB64u(secret, payload)), exp }
 }
@@ -239,9 +242,18 @@ async function autoEntryFromToken(c: any, token: string): Promise<any | null> {
     scope = { p: ps, d: (typeof p.d === 'string' && p.d) ? p.d : null, th: (typeof p.th === 'string' && p.th) ? p.th : null, m: (typeof p.m === 'string' && p.m) ? p.m : null,
               l: (typeof p.l === 'string' && p.l) ? p.l : null }
   }
+  // [WO 20261016-viewmail] 🔴 이메일 인증 정책이 켜진 프로젝트 = 이메일 통행증(e·ep)만 유효. 링크 토큰만 가진 통행증·차단·삭제된 이메일은
+  //   **요청마다** 여기서 무효(차단 즉시 401). 신원은 email 이 아니라 _viewerEmail 에 싣는다 — email 은 빈값 유지(권한 판정 fail-closed 불변식).
+  let viewerEmail: string | null = null
+  if (p.k === 'viewer') {
+    const fail = await viewEmailGate(c, scope.p, p.e, typeof p.ep === 'number' ? p.ep : -1)
+    if (fail) { c.set('__viewAuthFail', fail); return null }
+    if (typeof p.e === 'string' && p.e) viewerEmail = p.e
+  }
   // [P63] _gate = 초대코드를 통과한 프로젝트 id(없으면 null). 🔴 쓰기 권한과 무관하다.
   // [WO 20261012-viewlink] 열람 토큰 = 사람 신원 없음(VIEW_LINK_USER). 편집 공용석 토큰만 예약 계정 신원을 쓴다.
-  return { ...(p.k === 'designer' ? AUTO_DESIGNER_USER : VIEW_LINK_USER), _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null, _scope: scope }
+  return { ...(p.k === 'designer' ? AUTO_DESIGNER_USER : VIEW_LINK_USER), _auto: true, _readonly: p.k !== 'designer', _gate: (typeof p.g === 'string' && p.g) ? p.g : null, _scope: scope,
+    ...(viewerEmail ? { name: viewerEmail, _viewerEmail: viewerEmail } : {}) }
 }
 
 function superAdmin(c: any): string {
@@ -755,9 +767,35 @@ app.use('*', async (c, next) => {
   const p = c.req.path
   if (!LINK_DATA_PREFIXES.some((x) => p.startsWith(x))) return next()
   const user = await getUser(c)
+  // [WO 20261016-viewmail] 🔴 이메일 인증 링크인데 통행증이 없거나(링크 토큰만 재전달) 차단·삭제된 이메일 = 401(데이터 0)
+  if (!user && c.get('__viewAuthFail')) return c.json({ error: 'email verification required — 초대받은 이메일로 인증하세요.', email_auth_required: true, reason: c.get('__viewAuthFail') }, 401)
   if (!user || !user._auto || !user._readonly || !user._scope) return next()
   if ((await validLinkPids(c, user, user._scope, { ignoreGate: true })).size) return next()
   return c.json({ error: 'gone — this view link is no longer deployed', withdrawn: true }, 410)
+})
+
+/* ══ [WO 20261016-viewmail] 이메일 통행증 열람 기록(서버 측) — 구역(배포본 단건)·사진·동영상(R2) 읽기가 성공하면 이메일별로 남긴다.
+ * 클라이언트 훅 없이 서버가 실제로 내려준 것만 기록(지어내지 않는다). 같은 대상 반복(동영상 Range·재열람)은 VIEW_EVENT_DEDUPE_MS 에 1건. */
+app.use('*', async (c, next) => {
+  await next()
+  if (c.req.method.toUpperCase() !== 'GET') return
+  const st = c.res ? c.res.status : 0
+  if (st !== 200 && st !== 206 && st !== 304) return
+  const p = c.req.path
+  let kind: string | null = null, target: string | null = null
+  const md = p.match(/^\/tables\/deployments\/([^/]+)$/)
+  if (md) { kind = 'zone'; target = decodeURIComponent(md[1]) }
+  else if (p.startsWith('/api/r2/object/')) {
+    const key = decodeURIComponent(p.slice('/api/r2/object/'.length))
+    if (/thumb/i.test(key)) return
+    if (/\.(mp4|webm|mov|m4v)$/i.test(key)) kind = 'video'
+    else if (/\.(jpe?g|png|webp|avif)$/i.test(key)) kind = 'photo'
+    target = key
+  }
+  if (!kind) return
+  const user = await getUser(c)
+  if (!user || !user._viewerEmail || !user._scope || !Array.isArray(user._scope.p) || !user._scope.p.length) return
+  await runLater(c, recordViewerEvent(c, String(user._scope.p[0]), String(user._viewerEmail), kind, { targetType: kind, targetId: target, dedupe: true }))
 })
 
 /* ══ [P63] 🔴 열람 차단 단일 지점 — 초대코드 게이트 ═══════════════════════════
@@ -826,11 +864,439 @@ app.post('/api/auth/auto-entry', async (c) => {
   if (kind === 'viewer') {
     const sc = await viewLinkScope(c, body)
     if (!sc) return c.json({ error: 'view link required — 유효한 열람 링크로만 열람할 수 있습니다.' }, 401)
+    // [WO 20261016-viewmail] 🔴 이메일 인증 링크 = 링크 토큰만으로는 통행증을 주지 않는다 → 클라가 이메일 인증 화면을 띄운다.
+    if (await viewEmailGate(c, sc.p, null, null)) return c.json({ error: 'email verification required — 초대받은 이메일로 인증하세요.', email_auth_required: true, method: viewAuthMethod(c) }, 401)
     scope = sc
   }
   const minted = await mintAutoEntryToken(c, kind, undefined, scope)
   if (!minted) return c.json({ error: 'auto entry unavailable' }, 503)
   return c.json({ token: minted.token, kind, exp: minted.exp, readonly: kind !== 'designer' })
+})
+
+/* ══ [WO 20261016-viewmail] 🔴 열람 링크 이메일 인증 + 이메일별 열람 기록 ═══════════════════════════════════
+ * 마스터 2026-10-16: "본인 이메일로 보안코드 받고 그 사람, 즉 메일 주소별 사용자 사용 로그를 구현하자"
+ *                    "메일로 받은 링크가 진짜인 거지" — 목적: 마스터가 고른 사람만 열람, 링크를 재전달해도 무효.
+ * 모델:
+ *   · 정책(viewer_access_policy) = 프로젝트 단위. 켜지면 그 프로젝트로 들어오는 **모든** 익명 링크 경로(/v · /srview · ?d= · ?lk= ·
+ *     초대코드 통행증)와 로그인 계정의 링크 열람(S1)이 이메일 판정(viewEmailGate)을 지난다 — 경로 하나만 막으면 나머지가 우회로가 된다.
+ *     새 링크(첫 공유 토큰 발급 = ensureShareToken) = 기본 ON. 정책 행 없음(기존 링크) = 종전 무인증 — 디자이너가 켜기 전까지 유지.
+ *   · 이메일 소유 증명 = 메일 속 링크. 발송 수단 우선순위: (a) RESEND/SENDGRID 키 → 자체 1회용 매직링크(#va=<id>.<비밀> — 해시만 저장)
+ *     (b) 없으면 Firebase 이메일 링크 로그인(무료 · 클라 sendSignInLinkToEmail) → 서버는 Firebase ID 토큰(aud=FIREBASE_PROJECT_ID ·
+ *     email_verified · auth_time 신선)만 믿는다 (c) 둘 다 없으면 503 — 🔴 dev-fallback(코드·링크를 응답에 싣기) 절대 없음.
+ *   · 통행증 = 기존 ae1 viewer 토큰 + e(이메일)·ep(수신자 세대) 클레임(7일). 요청마다 수신자 목록 active·세대 일치를 다시 본다 →
+ *     차단(status blocked + 세대+1)·삭제 즉시 401. 배포 취소 = validLinkPids → 410(종전 그대로). 스냅샷 읽기 경로는 손대지 않았다.
+ *   · 이메일 존재 여부 비노출: 메일 요청의 응답·레이트리밋·지연(발송은 waitUntil)이 수신자 여부와 무관하게 같다.
+ * 개인정보: 원본 IP 저장 0(국가 CF-IPCountry + 서버비밀 HMAC 해시). 비수신자 이메일은 원문 저장 0(해시만 — 레이트리밋용).
+ *   🔴 보관 기간 = PERSONAL_LOG_RETENTION_DAYS(365일) — viewer_events·viewer_auth_challenges 정리 배치를 붙일 때 반드시 그 상수를 쓴다
+ *   (자동 삭제 배치는 마스터 확인 전이라 만들지 않았다 — activity_log 와 같은 정책). */
+const VIEW_AUTH_REQUEST_TTL_MS = 30 * 60 * 1000           // 열람자가 직접 요청한 매직링크 유효
+const VIEW_AUTH_INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000   // 디자이너 초대 메일 링크 유효
+const VIEW_AUTH_FB_FRESH_S = 60 * 60                      // Firebase 로그인(auth_time) 신선도 — 오래된 패밀리 앱 세션 토큰 재사용 차단
+const VIEW_AUTH_RATE_WINDOW_MS = 15 * 60 * 1000
+const VIEW_AUTH_SEND_PER_EMAIL = 3                        // 창(15분)당 같은 이메일로 메일 요청 상한
+const VIEW_AUTH_SEND_PER_IP = 10                          // 창(15분)당 같은 IP(해시) 메일 요청 상한
+const VIEW_EVENT_MAX_PER_MIN = 60
+const VIEW_EVENT_DEDUPE_MS = 10 * 60 * 1000               // 같은 대상(구역·사진·동영상) 반복 열람은 10분에 1건만
+const VIEW_RECIPIENTS_MAX = 300
+const VIEW_EVENT_CLIENT_KINDS = ['open', 'close', 'pin']
+const VIEW_AUTH_SENT_MSG = '초대받은 이메일이면 열람 링크를 보냈습니다. 메일함(스팸함 포함)에서 링크를 눌러 주세요.'
+const VIEW_AUTH_NO_PROVIDER_MSG = '메일 발송 수단이 설정되지 않아 이메일 인증을 진행할 수 없습니다. 링크를 보내 준 담당자에게 문의하세요.'
+const VIEW_AUTH_FAIL_MSG = '인증 링크가 만료되었거나 올바르지 않습니다. 이메일을 다시 입력해 새 링크를 받으세요.'
+const VIEW_AUTH_NOT_INVITED_MSG = '이 이메일은 이 링크의 열람자로 초대되지 않았습니다. 링크를 보내 준 담당자에게 문의하세요.'
+
+function isMissingTable(e: any): boolean { return /no such table/i.test(String((e && e.message) || e)) }
+
+/** 프로젝트 이메일 인증 정책(요청당 메모). 행 없음 = 종전(무인증). 테이블 부재(마이그레이션 전) = 정책 없음.
+ *  🔴 그 밖의 DB 오류 = 켜진 것으로 본다(fail-closed — 일시 오류로 링크가 열리면 안 된다). */
+async function viewPolicyOn(c: any, pid: string): Promise<boolean> {
+  const memo: Map<string, boolean> = c.get('__vpol') || new Map()
+  if (memo.has(pid)) return memo.get(pid) as boolean
+  let on = true
+  try {
+    const r: any = await c.env.DB.prepare('SELECT email_auth FROM viewer_access_policy WHERE project_id = ?').bind(pid).first()
+    on = !!(r && Number(r.email_auth) === 1)
+  } catch (e) { on = !isMissingTable(e) }
+  memo.set(pid, on)
+  c.set('__vpol', memo)
+  return on
+}
+
+async function viewRecipient(c: any, pid: string, email: string): Promise<any | null> {
+  const e = normEmail(email)
+  if (!e) return null
+  try { return await c.env.DB.prepare('SELECT email, status, auth_epoch FROM viewer_recipients WHERE project_id = ? AND email = ?').bind(pid, e).first() }
+  catch { return null }
+}
+
+/** 🔴 이메일 인증 판정 단일 지점 — 통행증 검증(요청마다 · autoEntryFromToken)·auto-entry 발급·로그인 링크 열람(S1)이 공유한다.
+ *  반환 null = 통과, 문자열 = 거부 사유. ep=null 이면 세대 비교 생략(로그인 계정·발급 전 판정). 이메일은 소문자 정규화 후 비교. */
+async function viewEmailGate(c: any, pids: string[], email: any, ep: any): Promise<string | null> {
+  for (const pid of (pids || [])) {
+    if (!(await viewPolicyOn(c, String(pid)))) continue
+    const e = typeof email === 'string' ? normEmail(email) : ''
+    if (!e) return 'email_required'
+    const r = await viewRecipient(c, String(pid), e)
+    if (!r) return 'not_recipient'
+    if (r.status !== 'active') return 'blocked'
+    if (ep !== null && ep !== undefined && Number(r.auth_epoch) !== Number(ep)) return 'revoked'
+  }
+  return null
+}
+
+/** 메일 발송 수단(우선순위 SoT). null = 없음 → 503(dev-fallback 없음). */
+function viewAuthMethod(c: any): 'server' | 'firebase' | null {
+  if (c.env?.RESEND_API_KEY || c.env?.SENDGRID_API_KEY) return 'server'
+  const fp = c.env?.FIREBASE_PROJECT_ID
+  if (typeof fp === 'string' && fp.trim()) return 'firebase'
+  return null
+}
+
+/** 기기·브라우저 요약(원문 UA 저장 0). */
+function uaSummary(ua: string): string {
+  const u = String(ua || '')
+  const os = /Android/i.test(u) ? 'Android' : /iPhone|iPad|iPod/i.test(u) ? 'iOS' : /Windows/i.test(u) ? 'Windows'
+    : /Mac OS X|Macintosh/i.test(u) ? 'macOS' : /Linux/i.test(u) ? 'Linux' : '기타'
+  const br = /Edg\//.test(u) ? 'Edge' : /SamsungBrowser/.test(u) ? 'Samsung' : /Whale/.test(u) ? 'Whale' : /KAKAOTALK/i.test(u) ? 'KakaoTalk'
+    : /Chrome\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : '기타'
+  return os + ' · ' + br + (/Mobi|Android|iPhone/i.test(u) ? ' · 모바일' : '')
+}
+
+/** 요청 출처 메타 — 🔴 원본 IP 는 반환·저장하지 않는다(서버비밀 HMAC 해시 + 국가만). */
+async function viewClientMeta(c: any): Promise<{ ip_hash: string | null, country: string | null, device: string }> {
+  const ip = String(rateLimitKey(c)).split(',')[0].trim()
+  const secret = await autoEntrySecret(c)
+  const ip_hash = (ip && secret) ? (await hmacB64u(secret, 'viewer-ip:' + ip)).slice(0, 22) : null
+  const raw: any = c.req.raw
+  const cc = c.req.header('CF-IPCountry') || (raw && raw.cf && raw.cf.country) || null
+  return { ip_hash, country: cc ? String(cc).slice(0, 4) : null, device: uaSummary(c.req.header('User-Agent') || '') }
+}
+
+/** 이메일별 열람 기록 1건. dedupe = 같은 (이메일·종류·대상) 이 VIEW_EVENT_DEDUPE_MS 안에 있으면 건너뜀(단일 SQL). 실패는 본 요청을 막지 않되 로그에 남긴다. */
+async function recordViewerEvent(c: any, pid: string, email: string, kind: string, opts: { targetType?: string | null, targetId?: string | null, detail?: any, dedupe?: boolean } = {}): Promise<void> {
+  try {
+    const m = await viewClientMeta(c)
+    const now = Date.now()
+    const detail = opts.detail == null ? null : JSON.stringify(opts.detail).slice(0, 1000)
+    const vals = [String(pid), normEmail(email), now, kind, opts.targetType || null, opts.targetId == null ? null : String(opts.targetId).slice(0, 200), detail, m.device, m.country, m.ip_hash]
+    if (opts.dedupe && opts.targetId != null) {
+      await c.env.DB.prepare(
+        `INSERT INTO viewer_events (project_id, email, ts, kind, target_type, target_id, detail, device, country, ip_hash)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS
+           (SELECT 1 FROM viewer_events WHERE project_id = ? AND email = ? AND kind = ? AND target_id = ? AND ts > ?)`
+      ).bind(...vals, vals[0], vals[1], kind, vals[5], now - VIEW_EVENT_DEDUPE_MS).run()
+    } else {
+      await c.env.DB.prepare(
+        'INSERT INTO viewer_events (project_id, email, ts, kind, target_type, target_id, detail, device, country, ip_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(...vals).run()
+    }
+  } catch (e: any) { console.error('[viewmail] event insert failed', kind, String((e && e.message) || e).slice(0, 120)) }
+}
+
+/** 요청 본문 → 링크 식별자(viewLinkScope 입력). 클라가 보낸 값은 "어느 링크인가"만 — 범위는 서버가 DB 로 정한다. */
+function viewLinkParamsOf(body: any): { v?: string, t?: string, lk?: string, d?: string } | null {
+  const pick = (k: string) => (body && typeof body[k] === 'string' && body[k].trim()) ? body[k].trim().slice(0, 120) : ''
+  const v = pick('v'), t = pick('t'), lk = pick('lk'), d = pick('d')
+  if (lk) return { lk }
+  if (d) return { d }
+  if (t) return { t }
+  if (v) return { v }
+  return null
+}
+/** 메일에 싣는 열람 주소(같은 출처) — 링크 종류별 정본 경로. 클라이언트가 보낸 URL 을 쓰지 않는다(오픈 리다이렉트 차단). */
+function viewLinkUrl(c: any, lp: { v?: string, t?: string, lk?: string, d?: string }): string {
+  const origin = new URL(c.req.url).origin
+  if (lp.v || lp.t) return origin + viewPath(String(lp.v || lp.t))
+  if (lp.lk) return origin + '/?lk=' + encodeURIComponent(lp.lk)
+  return origin + '/?d=' + encodeURIComponent(String(lp.d || ''))
+}
+
+/** 서버 매직링크 1건 생성 — 비밀 원문은 메일에만, DB 엔 해시만(초대 토큰과 같은 규칙). */
+async function createViewChallenge(c: any, o: { pid: string, email: string | null, emailHash: string, method: string, ttl: number, ipHash: string | null }): Promise<{ id: string, secret: string }> {
+  const id = randToken('vac_').slice(0, 36)
+  const secret = randToken('')
+  const now = Date.now()
+  await c.env.DB.prepare(
+    'INSERT INTO viewer_auth_challenges (id, project_id, email, email_hash, method, secret_hash, ip_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, o.pid, o.email, o.emailHash, o.method, (o.method === 'server' && o.email) ? await sha256Hex('vac:' + secret) : null, o.ipHash, now, now + o.ttl).run()
+  return { id, secret }
+}
+
+/** 열람 초대/로그인 메일(서버 발송 수단 전용) — postMail(SoT) 재사용. 🔴 null(키 없음)이면 실패로 닫는다 — 링크를 응답에 싣지 않는다. */
+async function sendViewAuthMail(c: any, to: string, link: string, invite: boolean): Promise<{ sent: boolean, error?: string }> {
+  const esc = escapeHtmlServer
+  const subject = invite ? '[SEASTAR 360°] 도면 열람 초대' : '[SEASTAR 360°] 열람 로그인 링크'
+  const text = `${invite ? '도면 열람에 초대되었습니다.' : '요청하신 열람 로그인 링크입니다.'}\n아래 링크를 눌러 열람하세요(본인 전용 · 1회용).\n\n${link}\n\n이 링크는 ${invite ? '3일' : '30분'} 동안 유효합니다. 다른 사람에게 전달하면 열리지 않습니다. 본인이 요청하지 않았다면 무시하세요.`
+  const html = `<div style="font-family:sans-serif;max-width:520px;margin:0 auto">
+    <h2 style="color:#0b3a5b">SEASTAR 360° 도면 열람</h2>
+    <p>${invite ? '도면 열람에 초대되었습니다.' : '요청하신 열람 로그인 링크입니다.'} 아래 버튼을 눌러 열람하세요(본인 전용 · 1회용).</p>
+    <p><a href="${esc(link)}" style="display:inline-block;background:#0b3a5b;color:#ffffff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:700">열람하기</a></p>
+    <p style="color:#475569;font-size:13px">이 링크는 <strong>${invite ? '3일' : '30분'}</strong> 동안 유효합니다. 다른 사람에게 전달하면 열리지 않습니다. 본인이 요청하지 않았다면 무시하세요.</p>
+  </div>`
+  const r = await postMail(c, { to, subject, html, text })
+  if (r === null) return { sent: false, error: 'no mail provider configured' }
+  if (r.sent) return { sent: true }
+  console.error('[viewmail] send failed', r.error.status, r.error.summary)
+  return { sent: false, error: 'mail send failed (' + (r.error.status ?? 'network') + ')' }
+}
+
+function runLater(c: any, job: Promise<any>): Promise<any> | void {
+  try { if (c.executionCtx && c.executionCtx.waitUntil) { c.executionCtx.waitUntil(job); return } } catch {}
+  return job
+}
+
+/** 열람자 — 초대받은 이메일 입력 → 메일 요청. 🔴 응답·레이트리밋은 수신자 여부와 무관하게 같다(이메일 존재 비노출). */
+app.post('/api/view-auth/start', async (c) => {
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const email = normEmail(body && body.email)
+  if (!isValidEmail(email) || email.length > 200) return c.json({ error: '이메일 형식이 올바르지 않습니다.' }, 400)
+  const lp = viewLinkParamsOf(body)
+  const sc = lp ? await viewLinkScope(c, lp) : null
+  if (!sc || !sc.p.length) return c.json({ error: '유효한 열람 링크가 아닙니다.' }, 404)
+  const pid = String(sc.p[0])
+  if (!(await viewPolicyOn(c, pid))) return c.json({ error: '이 링크는 이메일 인증을 쓰지 않습니다.', email_auth_required: false }, 409)
+  const method = viewAuthMethod(c)
+  if (!method) return c.json({ error: VIEW_AUTH_NO_PROVIDER_MSG, no_mail_provider: true }, 503)
+  const meta = await viewClientMeta(c)
+  const emailHash = (await sha256Hex('viewer-email:' + email)).slice(0, 32)
+  const since = Date.now() - VIEW_AUTH_RATE_WINDOW_MS
+  try {
+    const byEmail: any = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM viewer_auth_challenges WHERE email_hash = ? AND created_at > ?').bind(emailHash, since).first()
+    const byIp: any = meta.ip_hash ? await c.env.DB.prepare('SELECT COUNT(*) AS n FROM viewer_auth_challenges WHERE ip_hash = ? AND created_at > ?').bind(meta.ip_hash, since).first() : { n: 0 }
+    if (Number(byEmail?.n || 0) >= VIEW_AUTH_SEND_PER_EMAIL || Number(byIp?.n || 0) >= VIEW_AUTH_SEND_PER_IP) {
+      return c.json({ error: '요청이 너무 잦습니다. 15분 뒤에 다시 시도하세요.', rate_limited: true }, 429)
+    }
+  } catch (e) {
+    return c.json({ error: '이메일 인증을 준비하지 못했습니다(저장소 오류). 잠시 후 다시 시도하세요.' }, 503)
+  }
+  const rec = await viewRecipient(c, pid, email)
+  const member = !!(rec && rec.status === 'active')
+  let ch: { id: string, secret: string }
+  try {
+    ch = await createViewChallenge(c, { pid, email: member ? email : null, emailHash, method, ttl: VIEW_AUTH_REQUEST_TTL_MS, ipHash: meta.ip_hash })
+  } catch (e) {
+    return c.json({ error: '이메일 인증을 준비하지 못했습니다(저장소 오류). 잠시 후 다시 시도하세요.' }, 503)
+  }
+  if (member) {
+    // 발송은 응답 뒤(waitUntil) — 수신자만 메일을 보내므로 응답 지연으로 수신자 여부가 새지 않게 한다.
+    const job = (async () => {
+      if (method === 'server') {
+        const r = await sendViewAuthMail(c, email, viewLinkUrl(c, lp!) + '#va=' + ch.id + '.' + ch.secret, false)
+        await recordViewerEvent(c, pid, email, r.sent ? 'auth_request' : 'mail_failed', { detail: { method, ...(r.error ? { error: r.error } : {}) } })
+      } else {
+        await recordViewerEvent(c, pid, email, 'auth_request', { detail: { method } })
+      }
+    })()
+    await runLater(c, job)
+  }
+  return c.json({ ok: true, method, message: VIEW_AUTH_SENT_MSG, ...(method === 'firebase' ? { firebase_project: String(c.env.FIREBASE_PROJECT_ID) } : {}) })
+})
+
+/** 열람자 — 메일 링크 완료 → 이메일 통행증. challenge(서버 매직링크) 또는 firebase_id_token(Firebase 이메일 링크). */
+app.post('/api/view-auth/complete', async (c) => {
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const lp = viewLinkParamsOf(body)
+  const sc = lp ? await viewLinkScope(c, lp) : null
+  if (!sc || !sc.p.length) {
+    const t = lp ? String(lp.v || lp.t || lp.lk || '') : ''
+    if (t && await viewTokenWithdrawn(c, t)) return c.json({ error: 'gone — this view link is no longer deployed', withdrawn: true }, 410)
+    return c.json({ error: '유효한 열람 링크가 아닙니다.' }, 404)
+  }
+  const pid = String(sc.p[0])
+  let email = ''
+  let method = ''
+  if (typeof body.challenge === 'string' && body.challenge.includes('.')) {
+    const [id, secret] = body.challenge.split('.', 2)
+    const row: any = await c.env.DB.prepare('SELECT id, project_id, email, method, secret_hash, expires_at, used_at FROM viewer_auth_challenges WHERE id = ?').bind(String(id).slice(0, 64)).first().catch(() => null)
+    const want = row && row.secret_hash ? String(row.secret_hash) : ''
+    const got = await sha256Hex('vac:' + String(secret || ''))
+    if (row && row.method === 'server' && row.email && String(row.project_id) === pid && !row.used_at && Number(row.expires_at) > Date.now() && safeEqualStr(want, got)) {
+      // 1회용 — 경합 시 한 요청만 성공(조건부 UPDATE)
+      const u: any = await c.env.DB.prepare('UPDATE viewer_auth_challenges SET used_at = ? WHERE id = ? AND used_at IS NULL').bind(Date.now(), row.id).run()
+      if (u && u.meta && u.meta.changes === 1) { email = normEmail(row.email); method = 'server' }
+    }
+  } else if (typeof body.firebase_id_token === 'string' && body.firebase_id_token) {
+    const fp = String(c.env?.FIREBASE_PROJECT_ID || '').trim()
+    if (!fp) return c.json({ error: VIEW_AUTH_NO_PROVIDER_MSG, no_mail_provider: true }, 503)
+    const pl: any = await verifyFirebaseToken(body.firebase_id_token, fp)
+    const fresh = pl && Number(pl.auth_time) > 0 && (Date.now() / 1000 - Number(pl.auth_time)) <= VIEW_AUTH_FB_FRESH_S
+    if (pl && pl.aud === fp && pl.email_verified === true && fresh) { email = normEmail(pl.email); method = 'firebase' }
+  }
+  if (!email) return c.json({ error: VIEW_AUTH_FAIL_MSG }, 401)
+  const rec = await viewRecipient(c, pid, email)
+  if (!rec || rec.status !== 'active') return c.json({ error: VIEW_AUTH_NOT_INVITED_MSG, not_invited: true }, 403)
+  const minted = await mintAutoEntryToken(c, 'viewer', undefined, sc, { e: email, ep: Number(rec.auth_epoch) || 0 })
+  if (!minted) return c.json({ error: 'auto entry unavailable' }, 503)
+  await recordViewerEvent(c, pid, email, 'auth', { detail: { method } })
+  return c.json({ ok: true, token: minted.token, exp: minted.exp, email })
+})
+
+/** 열람자 — 열람 시작·종료·핀 열람 기록(구역·사진·동영상은 서버가 읽기 요청에서 직접 남긴다). 이메일 통행증만. */
+app.post('/api/view-auth/event', async (c) => {
+  const user = await getUser(c)
+  if (!user || !user._viewerEmail || !user._scope) return c.json({ error: 'email pass required' }, 401)
+  const pids = await validLinkPids(c, user, user._scope, { ignoreGate: true })
+  if (!pids.size) return c.json({ error: 'gone — this view link is no longer deployed', withdrawn: true }, 410)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const kind = String(body && body.kind || '')
+  if (!VIEW_EVENT_CLIENT_KINDS.includes(kind)) return c.json({ error: 'invalid kind' }, 400)
+  const pid = Array.from(pids)[0]
+  const email = String(user._viewerEmail)
+  try {
+    const n: any = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM viewer_events WHERE project_id = ? AND email = ? AND ts > ?').bind(pid, email, Date.now() - 60_000).first()
+    if (Number(n?.n || 0) >= VIEW_EVENT_MAX_PER_MIN) return c.json({ error: 'too many events' }, 429)
+  } catch {}
+  const tid = body.target_id == null ? null : String(body.target_id).slice(0, 120)
+  const label = body.label == null ? null : String(body.label).slice(0, 120)
+  await recordViewerEvent(c, pid, email, kind, { targetType: kind === 'pin' ? 'pin' : null, targetId: tid, detail: label ? { label } : null, dedupe: kind === 'pin' })
+  return c.json({ ok: true })
+})
+
+/* ── 디자이너 — 열람자 이메일 관리·초대·차단·기록. 쓰기는 readOnlyGuard(전역) + requireDesigner + canManageProject. ── */
+async function viewerAccessActor(c: any): Promise<{ user: any, pid: string } | Response> {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const pid = c.req.param('id')
+  if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  return { user, pid }
+}
+function parseEmailList(v: any): string[] {
+  const arr = Array.isArray(v) ? v : String(v || '').split(/[\s,;]+/)
+  return Array.from(new Set(arr.map((x: any) => normEmail(String(x || ''))).filter(Boolean)))
+}
+
+app.get('/api/projects/:id/viewer-access', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  const pol: any = await c.env.DB.prepare('SELECT email_auth, updated_by, updated_at FROM viewer_access_policy WHERE project_id = ?').bind(a.pid).first().catch(() => null)
+  const recs: any[] = ((await c.env.DB.prepare('SELECT email, status, invited_by, invited_at, last_invite_at, blocked_at FROM viewer_recipients WHERE project_id = ? ORDER BY invited_at, email').bind(a.pid).all().catch(() => ({ results: [] }))).results) || []
+  const stats: any[] = ((await c.env.DB.prepare(
+    `SELECT email, MAX(ts) AS last_seen, SUM(CASE WHEN kind = 'open' THEN 1 ELSE 0 END) AS opens, SUM(CASE WHEN kind = 'auth' THEN 1 ELSE 0 END) AS auths, COUNT(*) AS events
+       FROM viewer_events WHERE project_id = ? GROUP BY email`
+  ).bind(a.pid).all().catch(() => ({ results: [] }))).results) || []
+  const sm = new Map(stats.map((s: any) => [String(s.email), s]))
+  const proj: any = await c.env.DB.prepare('SELECT published, share_token FROM projects WHERE id = ? AND deleted = 0').bind(a.pid).first()
+  return c.json({
+    email_auth: !!(pol && Number(pol.email_auth) === 1), policy_set: !!pol, method: viewAuthMethod(c),
+    share_path: proj && proj.share_token ? viewPath(String(proj.share_token)) : null, published: !!(proj && Number(proj.published)),
+    recipients: recs.map((r: any) => { const s: any = sm.get(String(r.email)) || {}; return { ...r, last_seen: s.last_seen || null, opens: Number(s.opens || 0), auths: Number(s.auths || 0), events: Number(s.events || 0) } }),
+  })
+})
+
+app.put('/api/projects/:id/viewer-access', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  if (typeof body.email_auth !== 'boolean') return c.json({ error: 'email_auth(boolean) required' }, 400)
+  await c.env.DB.prepare(
+    `INSERT INTO viewer_access_policy (project_id, email_auth, updated_by, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(project_id) DO UPDATE SET email_auth = excluded.email_auth, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
+  ).bind(a.pid, body.email_auth ? 1 : 0, String(a.user.email || ''), Date.now()).run()
+  await logActivity(c, 'viewer_access.policy', { actor: a.user, targetType: 'project', targetId: a.pid, detail: { email_auth: body.email_auth } })
+  return c.json({ ok: true, email_auth: body.email_auth })
+})
+
+app.post('/api/projects/:id/viewer-access/recipients', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const list = parseEmailList(body.emails)
+  const invalid = list.filter((e) => !isValidEmail(e) || e.length > 200)
+  const valid = list.filter((e) => !invalid.includes(e))
+  const cnt: any = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM viewer_recipients WHERE project_id = ?').bind(a.pid).first()
+  if (Number(cnt?.n || 0) + valid.length > VIEW_RECIPIENTS_MAX) return c.json({ error: `열람자는 프로젝트당 ${VIEW_RECIPIENTS_MAX}명까지입니다.` }, 400)
+  const added: string[] = [], exists: string[] = []
+  const now = Date.now()
+  for (const e of valid) {
+    // 이미 있는 이메일(차단 포함)은 손대지 않는다 — 차단 해제는 [재초대]로만.
+    const r: any = await c.env.DB.prepare(
+      "INSERT INTO viewer_recipients (project_id, email, status, auth_epoch, invited_by, invited_at) VALUES (?, ?, 'active', 0, ?, ?) ON CONFLICT(project_id, email) DO NOTHING"
+    ).bind(a.pid, e, String(a.user.email || ''), now).run()
+    if (r && r.meta && r.meta.changes === 1) added.push(e); else exists.push(e)
+  }
+  return c.json({ ok: true, added, exists, invalid })
+})
+
+app.delete('/api/projects/:id/viewer-access/recipients/:email', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  const email = normEmail(decodeURIComponent(c.req.param('email')))
+  await c.env.DB.prepare('DELETE FROM viewer_recipients WHERE project_id = ? AND email = ?').bind(a.pid, email).run()
+  await recordViewerEvent(c, a.pid, email, 'removed', { detail: { by: String(a.user.email || '') } })
+  return c.json({ ok: true })
+})
+
+/** 🔴 차단 = status blocked + 세대+1 → 그 이메일로 이미 발급된 통행증이 다음 요청부터 401(viewEmailGate). */
+app.post('/api/projects/:id/viewer-access/recipients/:email/block', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  const email = normEmail(decodeURIComponent(c.req.param('email')))
+  const r: any = await c.env.DB.prepare("UPDATE viewer_recipients SET status = 'blocked', auth_epoch = auth_epoch + 1, blocked_at = ? WHERE project_id = ? AND email = ?").bind(Date.now(), a.pid, email).run()
+  if (!(r && r.meta && r.meta.changes === 1)) return c.json({ error: 'not found' }, 404)
+  await recordViewerEvent(c, a.pid, email, 'blocked', { detail: { by: String(a.user.email || '') } })
+  return c.json({ ok: true })
+})
+
+/** 초대 메일 — 서버 수단이면 1회용 링크를 직접 보내고, Firebase 수단이면 보낼 이메일·링크를 돌려준다(디자이너 브라우저가 sendSignInLinkToEmail). */
+async function sendViewerInvites(c: any, a: { user: any, pid: string }, emails: string[]): Promise<Response> {
+  const proj: any = await c.env.DB.prepare('SELECT published, share_token FROM projects WHERE id = ? AND deleted = 0').bind(a.pid).first()
+  if (!proj || !Number(proj.published) || !proj.share_token) return c.json({ error: '먼저 [뷰어로 배포] 해야 초대 메일을 보낼 수 있습니다.' }, 409)
+  const method = viewAuthMethod(c)
+  if (!method) return c.json({ error: VIEW_AUTH_NO_PROVIDER_MSG, no_mail_provider: true }, 503)
+  const link = viewLinkUrl(c, { v: String(proj.share_token) })
+  const targets: string[] = []
+  for (const e of emails) { const r = await viewRecipient(c, a.pid, e); if (r && r.status === 'active') targets.push(normEmail(e)) }
+  const sent: string[] = [], failed: { email: string, error: string }[] = []
+  const now = Date.now()
+  for (const e of targets) {
+    if (method === 'server') {
+      const ch = await createViewChallenge(c, { pid: a.pid, email: e, emailHash: (await sha256Hex('viewer-email:' + e)).slice(0, 32), method, ttl: VIEW_AUTH_INVITE_TTL_MS, ipHash: null })
+      const r = await sendViewAuthMail(c, e, link + '#va=' + ch.id + '.' + ch.secret, true)
+      if (!r.sent) { failed.push({ email: e, error: r.error || 'failed' }); await recordViewerEvent(c, a.pid, e, 'mail_failed', { detail: { method, by: String(a.user.email || ''), error: r.error } }); continue }
+    }
+    sent.push(e)
+    await c.env.DB.prepare('UPDATE viewer_recipients SET last_invite_at = ? WHERE project_id = ? AND email = ?').bind(now, a.pid, e).run()
+    await recordViewerEvent(c, a.pid, e, 'invite', { detail: { method, by: String(a.user.email || '') } })
+  }
+  return c.json({ ok: true, method, link, sent, failed, skipped: emails.map(normEmail).filter((e) => !targets.includes(e)) })
+}
+
+app.post('/api/projects/:id/viewer-access/invite', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  let emails = parseEmailList(body.emails)
+  if (!emails.length) {
+    const all: any[] = ((await c.env.DB.prepare("SELECT email FROM viewer_recipients WHERE project_id = ? AND status = 'active'").bind(a.pid).all()).results) || []
+    emails = all.map((r: any) => String(r.email))
+  }
+  return await sendViewerInvites(c, a, emails)
+})
+
+/** 재초대 = 차단 해제(active) + 초대 메일. 세대는 차단 때 이미 올라갔으므로 옛 통행증은 계속 무효. */
+app.post('/api/projects/:id/viewer-access/recipients/:email/reinvite', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  const email = normEmail(decodeURIComponent(c.req.param('email')))
+  const r: any = await c.env.DB.prepare("UPDATE viewer_recipients SET status = 'active', blocked_at = NULL WHERE project_id = ? AND email = ?").bind(a.pid, email).run()
+  if (!(r && r.meta && r.meta.changes === 1)) return c.json({ error: 'not found' }, 404)
+  return await sendViewerInvites(c, a, [email])
+})
+
+app.get('/api/projects/:id/viewer-access/log', async (c) => {
+  const a = await viewerAccessActor(c)
+  if (a instanceof Response) return a
+  const email = normEmail(c.req.query('email') || '')
+  const q = email
+    ? c.env.DB.prepare('SELECT ts, email, kind, target_type, target_id, detail, device, country FROM viewer_events WHERE project_id = ? AND email = ? ORDER BY ts DESC, id DESC LIMIT 500').bind(a.pid, email)
+    : c.env.DB.prepare('SELECT ts, email, kind, target_type, target_id, detail, device, country FROM viewer_events WHERE project_id = ? ORDER BY ts DESC, id DESC LIMIT 500').bind(a.pid)
+  const rows: any[] = ((await q.all().catch(() => ({ results: [] }))).results) || []
+  return c.json({ data: rows.map((r: any) => { let d: any = null; try { d = r.detail ? JSON.parse(r.detail) : null } catch {} return { ...r, detail: d } }) })
 })
 
 async function isDesigner(c: any, email: string): Promise<boolean> {
@@ -2521,6 +2987,11 @@ async function computeReadScope(c: any, user: any): Promise<ReadScope> {
   if (!user._auto && !user._readonly) {
     const sc = await viewLinkScope(c, {})
     if (sc) { linkPids = await validLinkPids(c, user, { p: sc.p, d: sc.d || null, th: sc.th || null, l: sc.l || null }); linkMode = LINK_VIEW_MODE }
+    // [WO 20261016-viewmail] 🔴 로그인 계정이 링크로 읽는 경우도 이메일 인증 정책을 따른다 — 그 계정의 **인증된 이메일**이 수신자 목록에 있을 때만.
+    //   (막지 않으면 아무 구글 계정으로 로그인해 링크를 여는 우회로가 된다)
+    for (const pid of Array.from(linkPids)) {
+      if (await viewEmailGate(c, [pid], user._emailVerified ? email : null, null)) linkPids.delete(pid)
+    }
     for (const pid of pids) linkPids.delete(pid)
   }
   return { all: !!TEMP_OPEN_ALL_TENANTS, pids, linkOnly: false, designer, unattachedTenant, mask: !designer, email, linkPids, linkMode }
@@ -3743,7 +4214,7 @@ app.post('/api/projects/:id/subdomain', async (c) => {
 /** 프로젝트에 공유 토큰이 없으면 1회 발급한다(있으면 손대지 않는다 = 링크 영속).
  *  유니크 인덱스 충돌(천문학적 확률이지만 조용히 실패하면 안 된다) 시 최대 5회 재시도.
  *  @returns 현재 유효한 토큰. 실패하면 null(호출부가 정직하게 null 을 응답에 싣는다). */
-async function ensureShareToken(c: any, pid: string): Promise<string | null> {
+async function ensureShareToken(c: any, pid: string, opts?: { newLinkEmailAuth?: boolean }): Promise<string | null> {
   const cur: any = await c.env.DB.prepare('SELECT share_token FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
   if (cur && cur.share_token) return String(cur.share_token)
   for (let i = 0; i < 5; i++) {
@@ -3753,7 +4224,16 @@ async function ensureShareToken(c: any, pid: string): Promise<string | null> {
         .bind(tok, Date.now(), pid).run()
     } catch (e) { continue }   // UNIQUE 충돌 → 새 토큰으로 재시도
     const after: any = await c.env.DB.prepare('SELECT share_token FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
-    if (after && after.share_token) return String(after.share_token)
+    if (after && after.share_token) {
+      // [WO 20261016-viewmail] 새 링크 = 이메일 인증 기본 ON(마스터: 고른 사람만 열람). 이미 정책 행이 있으면 손대지 않는다.
+      //   🔴 "새 링크" = 한 번도 배포된 적 없는 프로젝트의 첫 링크만(호출부 판정 newLinkEmailAuth). 이미 `?d=` 등 옛 링크로 배포 중이던
+      //   프로젝트가 처음 공유 토큰을 받는 경우는 기존 링크 — 켜면 살아있는 옛 링크가 즉시 죽는다(기존 링크는 마스터가 켜기 전까지 유지).
+      if (String(after.share_token) === tok && opts && opts.newLinkEmailAuth) {
+        await c.env.DB.prepare("INSERT OR IGNORE INTO viewer_access_policy (project_id, email_auth, updated_by, updated_at) VALUES (?, 1, 'default:new-link', ?)")
+          .bind(pid, Date.now()).run().catch((e: any) => console.error('[viewmail] default policy insert failed', String(e && e.message || e).slice(0, 120)))
+      }
+      return String(after.share_token)
+    }
   }
   return null
 }
@@ -4716,6 +5196,9 @@ app.post('/api/projects/:id/publish', async (c) => {
   if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
   const pid = c.req.param('id')
   if (!(await canManageProject(c, user, pid))) return c.json({ error: 'forbidden' }, 403)
+  // [WO 20261016-viewmail] 한 번도 배포된 적 없는(published·published_at·share_token 모두 없음) 프로젝트 = 새 링크 → 이메일 인증 기본 ON
+  const prevPub: any = await c.env.DB.prepare('SELECT published, published_at, share_token FROM projects WHERE id = ? AND deleted = 0').bind(pid).first()
+  const firstLink = !!prevPub && !Number(prevPub.published) && !prevPub.published_at && !prevPub.share_token
   // [WO 20260921 publish-guard] 공유할 도면이 없는 배포는 "배포됨"인데 주소가 없는 모순을 만든다
   // (뷰어 딥링크 ?d= 는 deployment_id 를 가진 decks 에서만 파생된다 — 12_ProjectHub._deployUrl 참조).
   // → 배포 전에 최소 1개 도면(구역) 등록을 강제한다. 이유는 message 로 그대로 클라이언트에 전달.
@@ -4732,7 +5215,7 @@ app.post('/api/projects/:id/publish', async (c) => {
   //   🔴 재배포/이름변경에서 **절대 재발급하지 않는다**: 이미 고객에게 나간 링크가 죽으면 안 된다.
   //   slug 는 저장하지 않는다(응답 시 name 에서 파생) → 이름을 바꾸면 주소의 이름 부분만 따라 바뀌고
   //   토큰은 그대로이므로 옛 링크·새 링크가 **둘 다** 열린다.
-  await ensureShareToken(c, pid)
+  await ensureShareToken(c, pid, { newLinkEmailAuth: firstLink })
   // [WO 20261012-viewlink] 🔴 배포 = 그 시점 스냅샷 동결(최초·다시 배포(업데이트)·취소 후 재배포 모두 같은 지점).
   //   같은 공유 토큰(링크)은 그대로 두고 내용만 이 시점으로 교체된다. 동결 실패 = 배포 실패(작업본을 내보내지 않는다).
   let snapDeps = 0
@@ -6482,6 +6965,8 @@ app.post('/api/notes', async (c) => {
     const contact = String(body.contact || '').trim()
     if (contact && (contact.length > NOTE_CONTACT_MAX || !isValidEmail(contact))) return c.json({ error: '회신 이메일 형식이 올바르지 않습니다.' }, 400)
     author_contact = contact || null
+    // [WO 20261016-viewmail] 이메일 통행증 = 작성자는 인증된 이메일(자기 신고 이름·회신 주소보다 우선 — 서명된 값만)
+    if (a.user && a.user._viewerEmail) { author = String(a.user._viewerEmail); author_contact = String(a.user._viewerEmail) }
     // 🔴 초대코드 게이트 — 읽기와 같은 판정(shareGateLockedPid). 코드 미통과 링크 세션은 쓰지도 못한다.
     const locked = await shareGateLockedPid(c, a.user, await projectIdsOfDeployment(c, deployment_id))
     if (locked) return c.json({ error: 'gate required — invite code', gate_required: true, project_id: locked }, 403)
