@@ -887,8 +887,9 @@ app.post('/api/auth/auto-entry', async (c) => {
  *     차단(status blocked + 세대+1)·삭제 즉시 401. 배포 취소 = validLinkPids → 410(종전 그대로). 스냅샷 읽기 경로는 손대지 않았다.
  *   · 이메일 존재 여부 비노출: 메일 요청의 응답·레이트리밋·지연(발송은 waitUntil)이 수신자 여부와 무관하게 같다.
  * 개인정보: 원본 IP 저장 0(국가 CF-IPCountry + 서버비밀 HMAC 해시). 비수신자 이메일은 원문 저장 0(해시만 — 레이트리밋용).
- *   🔴 보관 기간 = PERSONAL_LOG_RETENTION_DAYS(365일) — viewer_events·viewer_auth_challenges 정리 배치를 붙일 때 반드시 그 상수를 쓴다
- *   (자동 삭제 배치는 마스터 확인 전이라 만들지 않았다 — activity_log 와 같은 정책). */
+ *   🔴 보관 기간 = PERSONAL_LOG_RETENTION_DAYS(365일, viewer_events) · 7일(viewer_auth_challenges, 만료 후) —
+ *   [20261018-p164] maybeCleanupViewerLogs() 가 /api/view-auth/start 요청에 1% 확률로 편승해 정리한다(별도 크론 0).
+ *   디자이너 [열람자 기록] 화면(68_ViewerAuth.js)에 보관 기간을 표시한다. */
 const VIEW_AUTH_REQUEST_TTL_MS = 30 * 60 * 1000           // 열람자가 직접 요청한 매직링크 유효
 const VIEW_AUTH_INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000   // 디자이너 초대 메일 링크 유효
 const VIEW_AUTH_FB_FRESH_S = 60 * 60                      // Firebase 로그인(auth_time) 신선도 — 오래된 패밀리 앱 세션 토큰 재사용 차단
@@ -905,6 +906,29 @@ const VIEW_AUTH_FAIL_MSG = '인증 링크가 만료되었거나 올바르지 않
 const VIEW_AUTH_NOT_INVITED_MSG = '이 이메일은 이 링크의 열람자로 초대되지 않았습니다. 링크를 보내 준 담당자에게 문의하세요.'
 
 function isMissingTable(e: any): boolean { return /no such table/i.test(String((e && e.message) || e)) }
+
+/* [20261018-p164] 🔴 보관 정리 — 설계 메모(위 주석, 2026-10-16)의 "정리 배치를 붙일 때 PERSONAL_LOG_RETENTION_DAYS
+ * 를 쓴다"를 이행. 별도 Cron Trigger는 이 프로젝트에 없다(wrangler.toml 에 [triggers] 0건, activity_log 도 같은
+ * 전례로 수동 정리만 있었다) → 가장 자주 불리는 열람 인증 요청 경로(/api/view-auth/start)에 확률 1%로 편승해
+ * waitUntil 로 지연 없이 정리한다(응답을 막지 않음 · 실패해도 요청은 그대로 진행).
+ *   viewer_auth_challenges = 만료(expires_at) 후 7일(짧은 인증토큰 — 365일을 끌 이유 없음, 신규 결정).
+ *   viewer_events          = 365일(PERSONAL_LOG_RETENTION_DAYS, 주석 SoT 그대로). */
+const VIEW_AUTH_CHALLENGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const VIEW_EVENT_RETENTION_MS = PERSONAL_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000
+const VIEW_LOG_CLEANUP_PROB = 0.01
+const VIEW_LOG_CLEANUP_LIMIT = 500
+async function maybeCleanupViewerLogs(c: any): Promise<void> {
+  try {
+    if (Math.random() >= VIEW_LOG_CLEANUP_PROB) return
+    const now = Date.now()
+    await c.env.DB.prepare(
+      'DELETE FROM viewer_auth_challenges WHERE id IN (SELECT id FROM viewer_auth_challenges WHERE expires_at < ? LIMIT ?)'
+    ).bind(now - VIEW_AUTH_CHALLENGE_RETENTION_MS, VIEW_LOG_CLEANUP_LIMIT).run()
+    await c.env.DB.prepare(
+      'DELETE FROM viewer_events WHERE id IN (SELECT id FROM viewer_events WHERE ts < ? LIMIT ?)'
+    ).bind(now - VIEW_EVENT_RETENTION_MS, VIEW_LOG_CLEANUP_LIMIT).run()
+  } catch (e: any) { console.error('[viewmail] cleanup failed', String((e && e.message) || e).slice(0, 120)) }
+}
 
 /** 프로젝트 이메일 인증 정책(요청당 메모). 행 없음 = 종전(무인증). 테이블 부재(마이그레이션 전) = 정책 없음.
  *  🔴 그 밖의 DB 오류 = 켜진 것으로 본다(fail-closed — 일시 오류로 링크가 열리면 안 된다). */
@@ -1046,6 +1070,7 @@ function runLater(c: any, job: Promise<any>): Promise<any> | void {
 
 /** 열람자 — 초대받은 이메일 입력 → 메일 요청. 🔴 응답·레이트리밋은 수신자 여부와 무관하게 같다(이메일 존재 비노출). */
 app.post('/api/view-auth/start', async (c) => {
+  runLater(c, maybeCleanupViewerLogs(c))   // [20261018-p164] 보관 정리 1% 편승(응답 지연 0)
   let body: any = {}
   try { body = await c.req.json() } catch {}
   const email = normEmail(body && body.email)
@@ -1180,6 +1205,8 @@ app.get('/api/projects/:id/viewer-access', async (c) => {
   const proj: any = await c.env.DB.prepare('SELECT published, share_token FROM projects WHERE id = ? AND deleted = 0').bind(a.pid).first()
   return c.json({
     email_auth: !!(pol && Number(pol.email_auth) === 1), policy_set: !!pol, method: viewAuthMethod(c),
+    // [20261018-p164] 보관 기간 명시 — 디자이너 [열람자 기록] 화면에 표시(정책 주석 SoT 그대로, 날짜 하드코딩 0)
+    retention_days: PERSONAL_LOG_RETENTION_DAYS, auth_challenge_retention_days: Math.round(VIEW_AUTH_CHALLENGE_RETENTION_MS / 86400000),
     share_path: proj && proj.share_token ? viewPath(String(proj.share_token)) : null, published: !!(proj && Number(proj.published)),
     recipients: recs.map((r: any) => { const s: any = sm.get(String(r.email)) || {}; return { ...r, last_seen: s.last_seen || null, opens: Number(s.opens || 0), auths: Number(s.auths || 0), events: Number(s.events || 0) } }),
   })
@@ -2668,6 +2695,20 @@ function parseDeckSheetOpts(body: any): { set: { sheet_link?: number | null; num
   }
   return { set }
 }
+/** [20261018-p164] 🔴 설계 .tmp/design-multisheet.md §2-5/Phase4 — 조상 체인(자기 포함) 중 sheet_link=1 인
+ *  구역 id. 시트 묶음과 그 하위에서 영역 잘라오기(벡터복사·크롭)를 서버가 거부하는 유일한 판정 지점(SoT) —
+ *  클라(11_UI.js deckMenuItems)의 Projects.sheetBundleOf 와 같은 규칙(조상 체인 워크). 최대 깊이 50(순환 방지). */
+async function sheetBundleAncestorId(db: any, deckId: string | null): Promise<string | null> {
+  let cur = deckId, guard = 0
+  while (cur && guard++ < 50) {
+    const r: any = await db.prepare('SELECT id, sheet_link, parent_id FROM decks WHERE id = ?').bind(cur).first()
+    if (!r) return null
+    if (Number(r.sheet_link) === 1) return String(r.id)
+    cur = r.parent_id || null
+  }
+  return null
+}
+const SHEET_BUNDLE_EXTRACT_DENY = '시트 묶음(도면 간 번호 연결) 구역과 그 하위에서는 영역 잘라오기를 지원하지 않습니다 — 다른 시트의 연결된 핀이 반쪽 그룹으로 잘릴 수 있습니다. 묶음을 해제한 뒤 다시 시도하세요.'
 /** 보낸 필드만 UPDATE — 0049 미적용 DB 에서도 기존 POST/PUT 은 이 문장을 타지 않는다(구역 생성·수정 무영향). */
 async function applyDeckSheetOpts(db: any, id: string, set: { sheet_link?: number | null; num_prefix?: string | null }): Promise<void> {
   const cols = Object.keys(set)
@@ -5317,6 +5358,13 @@ app.post('/api/projects/:id/decks', async (c) => {
   const sb = parseDeckSrcBox(body)
   if (sb.error) return c.json({ error: sb.error }, 400)
   const src = sb.set || { dep: null, page: null, crop: null }
+  // [20261018-p164] 🔴 영역 잘라오기(벡터복사 src_crop · 창 방식 crop) — 시트 묶음과 그 하위면 거부.
+  //   클라만 막으면 우회로가 된다(§ 서버가 최종 판정). "+ 하위 구역"(이름만, crop·src 없음)은 그대로 허용.
+  const isExtract = crop != null || !!(src && src.crop)
+  if (isExtract && parentId) {
+    const bundleId = await sheetBundleAncestorId(c.env.DB, parentId)
+    if (bundleId) return c.json({ error: SHEET_BUNDLE_EXTRACT_DENY }, 400)
+  }
   // [WO 20261016-multisheet] sheet_link / num_prefix — 형식 오류 400(INSERT 전에 판정 — 반쯤 만든 구역 금지)
   const so = parseDeckSheetOpts(body)
   if (so.error) return c.json({ error: so.error }, 400)

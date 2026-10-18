@@ -87,9 +87,14 @@
       depIds.forEach((depId) => {
         const dep = deps[depId];
         // [WO 20261016-multisheet P4] 논리 핀 1개 = 보고서 행 1개(연결 멤버 제외 — 대표 1행)
-        const pins = (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(this._live(dep.pins)) : this._live(dep.pins);
+        const rawPins = this._live(dep.pins);
+        const pins = (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(rawPins) : rawPins;
         const zones = this._live(dep.zones);
         const ds = list.filter((d) => String(d.deployment_id) === depId);
+        // [20261018-p164] 시트 이름(페이지 → 구역명) — 연결 핀 위치 칸에 "PLAN / ELEV" 를 병기하기 위함.
+        //   dep.pins 는 대표 1행만 남아 다른 시트의 좌표를 잃는다 → rawPins(연결 전 전체)를 따로 들고 간다.
+        const pageNameOf = new Map();
+        ds.forEach((d) => { if (d && d.page != null && d.name) pageNameOf.set(d.page, d.name); });
         const isChild = (d) => d.parent_id != null && ds.some((x) => String(x.id) === String(d.parent_id));
         const owners = byArea(ds.filter((d) => !isChild(d)));
         const children = byArea(ds.filter(isChild));
@@ -103,7 +108,7 @@
               crop: owner && this._hasCrop(owner) ? owner.crop : null,
               cropPage: owner && this._hasCrop(owner) ? (owner.page || 1) : null,
               order: owner ? list.indexOf(owner) : 1e9,
-              items: [], allPins: pins
+              items: [], allPins: pins, rawPins, pageNameOf
             });
           }
           return groups.get(key);
@@ -177,10 +182,26 @@
               assignee: mask(nn.assignee || ""), author: mask(nn.author || ""), created: nn.created_at || null
             }));
           const gps = pin.gps && pin.gps.lat != null && pin.gps.lng != null ? { lat: pin.gps.lat, lng: pin.gps.lng, acc: pin.gps.acc != null ? pin.gps.acc : null } : null;
+          // [20261018-p164] 연결 핀(§2) 위치 칸 — 각 시트 좌표를 "<시트명> N쪽 · X.. · Y.." 로 병기(대표 1행에).
+          //   연결 없음(멤버 1개) = 종전 포맷 그대로(사유: 기존 단일시트 보고서 바이트 불변).
+          const _locMembers = (typeof PinLink !== "undefined" && PinLink.members && sec.rawPins) ? PinLink.members(sec.rawPins, pin) : [pin];
+          const _fmtXY = (v) => (Number.isFinite(Number(v)) ? Number(v).toFixed(1) : "?");
+          const _sheetLabel = (m) => {
+            const mp = m.page || 1;
+            const nm = sec.pageNameOf && sec.pageNameOf.get(mp);
+            const kind = nm && typeof Sheets !== "undefined" && Sheets.kindOf ? Sheets.kindOf(nm) : null;
+            const badge = kind && typeof Sheets !== "undefined" && Sheets.KIND_BADGE ? Sheets.KIND_BADGE[kind] : null;
+            return badge || nm || null;
+          };
+          const locText = _locMembers.length > 1
+            ? _locMembers.slice().sort((a, b) => (a.page || 1) - (b.page || 1))
+                .map((m) => (_sheetLabel(m) ? _sheetLabel(m) + " " : "") + (m.page || 1) + "쪽 · X " + _fmtXY(m.x) + "% · Y " + _fmtXY(m.y) + "%")
+                .join(" / ")
+            : (pg + "쪽 · X " + _fmtXY(pin.x) + "% · Y " + _fmtXY(pin.y) + "%");
           const entry = {
             key, section: sec.title, sectionKey: sec.key, area: it.area || "", noText, series,
             seriesLabel: series === "checkboard" ? "CHECKER" : "360", label: pin.label != null ? String(pin.label) : "",
-            page: pg, x: Number(pin.x), y: Number(pin.y),
+            page: pg, x: Number(pin.x), y: Number(pin.y), locText,
             shotAt: Number.isFinite(pin.shotAt) ? pin.shotAt : null, shotSrc: pin.shotSrc || "",
             cov: Coverage.isTarget(pin) ? Coverage.classify(pin, now, days) : null,
             gps, photos, notes: pinNotes, author: mask(pin.author || "")
@@ -366,7 +387,7 @@
         }
         const cov = p.cov ? chip("background:" + covSt[p.cov].color + ";color:#ffffff", covSt[p.cov].label) : "";
         const meta = '<table><tbody><tr><th style="width:22%">촬영시각</th><td>' + e(p.shotAt ? this.localDateTime(p.shotAt) + (p.shotSrc ? " (" + p.shotSrc + ")" : "") : "기록 없음") + " " + cov + "</td></tr>" +
-          "<tr><th>도면 위치</th><td>" + e(p.page + "쪽 · X " + (Number.isFinite(p.x) ? p.x.toFixed(1) : "?") + "% · Y " + (Number.isFinite(p.y) ? p.y.toFixed(1) : "?") + "%") + "</td></tr>" +
+          "<tr><th>도면 위치</th><td>" + e(p.locText || (p.page + "쪽 · X " + (Number.isFinite(p.x) ? p.x.toFixed(1) : "?") + "% · Y " + (Number.isFinite(p.y) ? p.y.toFixed(1) : "?") + "%")) + "</td></tr>" +
           (p.gps ? "<tr><th>GPS</th><td>" + e(this._fmtGps(p.gps)) + "</td></tr>" : "") + "</tbody></table>";
         let notesTbl = "";
         if (p.notes.length) {

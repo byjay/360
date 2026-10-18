@@ -328,7 +328,11 @@
         const r = await this._api("GET", base);
         if (!r.ok) { say((r.j && r.j.error) || ("불러오기 실패(HTTP " + r.status + ")"), true); return; }
         $("#va-mgr-on").checked = !!r.j.email_auth;
-        $("#va-mgr-method").textContent = "메일 발송 수단: " + (this.METHOD_LABEL[r.j.method] || "⚠ 설정 없음 — 초대·인증 메일을 보낼 수 없습니다") + (r.j.published ? "" : " · 아직 배포 전");
+        // [20261018-p164] 보관 기간 표시 — 서버 PERSONAL_LOG_RETENTION_DAYS(열람 기록)·인증 요청(짧은 토큰) SoT 그대로
+        const rdays = Number.isFinite(r.j.retention_days) ? r.j.retention_days : null;
+        const adays = Number.isFinite(r.j.auth_challenge_retention_days) ? r.j.auth_challenge_retention_days : null;
+        $("#va-mgr-method").textContent = "메일 발송 수단: " + (this.METHOD_LABEL[r.j.method] || "⚠ 설정 없음 — 초대·인증 메일을 보낼 수 없습니다") + (r.j.published ? "" : " · 아직 배포 전") +
+          (rdays ? (" · 열람 기록 보관 " + rdays + "일(자동 삭제)") : "") + (adays ? " · 인증 요청 기록 " + adays + "일" : "");
         const recs = r.j.recipients || [];
         $("#va-mgr-list").innerHTML = recs.length
           ? "<table style='width:100%;border-collapse:collapse;font-size:13px;color:#e6edf7'><tr style='color:#9fb0c9;text-align:left'><th style='padding:4px 8px'>이메일</th><th style='padding:4px 8px'>상태</th><th style='padding:4px 8px'>최근 접속</th><th style='padding:4px 8px'>열람</th><th></th></tr>" +

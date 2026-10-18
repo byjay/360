@@ -729,12 +729,18 @@
       // [WO 20261012-treeexplorer] 탐색기처럼 — 이 구역 아래 다단 하위 구역(이름만, 폴더처럼 상위 도면을 그대로 봄).
       items.push({ label: "+ 하위 구역", desc: "이 구역 아래 새 하위 구역을 만듭니다(이름만)",
         reason: why, run: () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false, parent_id: deck.id }); } });
+      // [20261018-p164] 🔴 설계 .tmp/design-multisheet.md §2-5/Phase4 — 시트 묶음(도면 간 번호 연결)
+      //   구역과 그 하위에서는 영역 잘라오기(벡터복사·창)를 비활성화한다: crop 상자가 다른 시트의
+      //   연결된 핀을 걸러내 "반쪽 그룹"을 만들 수 있다(resolvePinHome/projectPins 전제 붕괴).
+      //   서버도 같은 사유로 거부한다(POST /api/projects/:id/decks, src/index.tsx) — 클라만 막으면 우회로.
+      const bundle = (typeof Projects !== "undefined" && Projects.sheetBundleOf) ? Projects.sheetBundleOf(deck) : null;
+      const bundleWhy = bundle ? "시트 묶음(도면 간 번호 연결) 구역과 그 하위에서는 영역 잘라오기를 지원하지 않습니다 — 다른 시트의 연결된 핀이 반쪽 그룹으로 잘릴 수 있습니다. 묶음을 해제하면 다시 사용할 수 있습니다." : "";
       // [WO 20261015-treemap] 🔴 마스터: "구역을 지정하면 그 하부로도 서브구역을 지정 가능하게" —
       //   이 구역의 도면에서 영역을 드래그해 그 **하위** 구역을 만든다(임의 깊이). 먼저 이 구역을
       //   열어(selectDeck) 그 도면을 화면에 올린 뒤 기존 extractRegionAsDeck()(SoT, 31_Projects.js
       //   _cutParentId)를 그대로 호출 — 새 코드경로 없음, parent_id 규칙은 그 함수 한 곳에만 있다.
       items.push({ label: "영역 지정해 하위 구역 만들기", desc: "이 구역의 도면에서 부분을 드래그해 새 하위 구역(영역)을 만듭니다",
-        reason: why || (deck.deployment_id ? "" : "이 구역에 등록된 도면이 없습니다 — 먼저 '도면 등록'을 하세요"),
+        reason: why || bundleWhy || (deck.deployment_id ? "" : "이 구역에 등록된 도면이 없습니다 — 먼저 '도면 등록'을 하세요"),
         run: async () => {
           if (typeof Projects === "undefined") return;
           if (Projects.selectDeck) await Projects.selectDeck(deck);
@@ -744,7 +750,7 @@
       //   65_Sheets.openMultiRegion 이 부모 선택(기본값=이 구역) + 반복 드래그 + 일괄 등록을 지휘한다.
       if (typeof Sheets !== "undefined" && Sheets.openMultiRegion) {
         items.push({ label: "원본에서 여러 영역 지정해 이 구역 아래로", desc: "원본 도면에서 영역 여러 개를 연속 드래그해 한 번에 등록합니다",
-          reason: why, run: async () => { if (typeof Projects !== "undefined" && Projects.openOriginal) await Projects.openOriginal(); await Sheets.openMultiRegion(deck); } });
+          reason: why || bundleWhy, run: async () => { if (typeof Projects !== "undefined" && Projects.openOriginal) await Projects.openOriginal(); await Sheets.openMultiRegion(deck); } });
       }
       // [WO 20261016-multisheet] 마스터: "A데크 안에는 도면을 낱장 기준으로 여러 장을 동시에 등록".
       if (typeof Sheets !== "undefined" && Sheets.openRegisterSheets) {
