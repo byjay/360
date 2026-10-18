@@ -5,9 +5,10 @@
  * Part A — 순수 함수(public/js/modules/64_TreeDnD.js, vm 평가 — I/O 0).
  * Part B — 실제 워커(src/index.tsx) + 실제 Miniflare D1(SQLite, 0048 마이그레이션 포함) — PATCH /api/decks/:id/move.
  *
- * 뮤테이션 3건(순환 검사 제거·sort_order 저장 제거·원본 고정 해제)은 이 파일에 내장하지 않는다 —
- * 지휘자가 src/index.tsx 를 직접 일시 수정 → 이 파일 재실행(EXIT=1 확인) → 원복(§G-2-5)하는 방식으로
- * 수행했다(착지 보고에 명령/EXIT 인용). 이 파일 자체는 정상 경로(뮤테이션 없음)만 검사한다.
+ * 뮤테이션 4건(순환 검사 제거·sort_order 저장 제거·원본 고정 해제·⑦ 시트묶음 가드를 이동에 적용)은
+ * 이 파일에 내장하지 않는다 — 지휘자가 src/index.tsx 를 직접 일시 수정 → 이 파일 재실행(EXIT=1 확인)
+ * → 원복(§G-2-5)하는 방식으로 수행했다(착지 보고에 명령/EXIT 인용, ⑦은 해당 assertion 부근 주석 참조).
+ * 이 파일 자체는 정상 경로(뮤테이션 없음)만 검사한다.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -194,7 +195,16 @@ async function run() {
       ["INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
         ["dck_d1", "prj_t158", "D1", null, null, null, null, "dck_d", now - 40, now - 40]],
       ["INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
-        ["dck_d1a", "prj_t158", "D1a", null, null, null, null, "dck_d1", now - 30, now - 30]]
+        ["dck_d1a", "prj_t158", "D1a", null, null, null, null, "dck_d1", now - 30, now - 30]],
+      // [20261018-p158-regress] 시트 묶음(sheet_link=1) + 그 하위 시트 2개 — "영역 잘라오기" 거부 가드
+      // (sheetBundleAncestorId, src/index.tsx POST /decks)가 이동/정렬에는 걸리지 않아야 함을 확인(⑦).
+      // parent_id=dck_d(루트 아님) — 루트 목록(①)의 created_at 폴백 정렬 검사를 오염시키지 않는다.
+      ["INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, sheet_link, created_at, updated_at, deleted) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)",
+        ["dck_bundle", "prj_t158", "묶음", null, "dep_t158_b", 1, null, "dck_d", 1, now - 20, now - 20]],
+      ["INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+        ["dck_s1", "prj_t158", "묶음-시트1", null, "dep_t158_b", 1, null, "dck_bundle", now - 10, now - 10]],
+      ["INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, created_at, updated_at, deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+        ["dck_s2", "prj_t158", "묶음-시트2", null, "dep_t158_b", 2, null, "dck_bundle", now - 5, now - 5]]
     ];
     for (const [q, a] of seed) await db.prepare(q).bind(...a).run();
     const B = "http://p158.test";
@@ -260,6 +270,20 @@ async function run() {
     /* ⑥ 열람자(디자이너 아님) — 403, 서버 쓰기 권한 경계(열람자는 0) */
     const mv6 = await move("dck_a", { index: 0 }, H2);
     ok(mv6.status === 403, "⑥ 디자이너 아닌 세션 — 403, 실제 " + mv6.status);
+
+    /* ⑦ [20261018-p158-regress] 시트 묶음(sheet_link=1) 하위에서 드래그 순서 변경은 막히면 안 된다 —
+     *  "영역 잘라오기" 전용 가드(sheetBundleAncestorId)가 이동 경로를 함께 거부하면 이 테스트가 400 을 본다.
+     *  뮤테이션(지휘자 직접 수행, 이 파일에 내장하지 않음 — 파일 상단 주석과 같은 방식):
+     *    src/index.tsx moveDeck 핸들러 안 newParentId 분기 맨 앞에 아래 한 줄을 넣고 재실행 → EXIT=1 확인 → 원복.
+     *      if (await sheetBundleAncestorId(c.env.DB, newParentId)) return c.json({ error: 'bundle' }, 400)
+     *    실측(2026-10-18): 삽입 후 이 파일 재실행 → "⑦ 시트 묶음 하위 — PATCH 200" FAIL(실제 400) → EXIT=1.
+     *    원복 후 재실행 → EXIT=0 로 복귀 확인. */
+    const mv7 = await move("dck_s2", { parent_id: "dck_bundle", index: 0 });
+    ok(mv7.status === 200, "⑦ 시트 묶음 하위 — PATCH 200(이동은 거부되면 안 됨), 실제 " + mv7.status);
+    const after7 = await getDecks();
+    const bundleKids7 = after7.filter((d) => d.parent_id === "dck_bundle").map((d) => d.id);
+    ok(JSON.stringify(bundleKids7) === JSON.stringify(["dck_s2", "dck_s1"]),
+      "⑦ 시트 묶음 하위 순서 변경이 즉시 반영(S2가 S1 앞으로), 실제 " + JSON.stringify(bundleKids7));
 
     return { ok: true };
   } finally {

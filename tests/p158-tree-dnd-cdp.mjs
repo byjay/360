@@ -196,14 +196,24 @@ try {
   await shot(P, "dragging-over-M");
 
   await mouseStep(P, "mouseReleased", rM.cx, targetY, 0);
-  await wait(800);
-  const dragging2 = await P.evS(`document.body.classList.contains('tree-dnd-active')`);
-  ok(dragging2 === false, "②c 드롭 후 드래그 세션 종료");
+  const dropEndedAt = await P.waitFor("!document.body.classList.contains('tree-dnd-active')", 5000);
+  ok(dropEndedAt >= 0, "②c 드롭 후 드래그 세션 종료");
 
-  /* ══ ③ 즉시 반영 — 순서가 A, B, M 으로(드래그 없인 절대 A,M,B 순서를 못 바꾼다) ══ */
-  const roots3 = (await api("GET", "/api/projects/" + PID + "/decks", null, sTok)).j.data.filter((d) => d.parent_id == null);
-  const idxA = roots3.findIndex((d) => d.id === dA.id), idxM = roots3.findIndex((d) => d.id === dM.id), idxB = roots3.findIndex((d) => d.id === dB.id);
-  ok(idxA >= 0 && idxB === idxA + 1 && idxM === idxB + 1, "③ 서버 순서 — 드래그로 B 가 A 와 M 사이로 즉시 반영(A,B,M)", { idxA, idxB, idxM });
+  /* ══ ③ 즉시 반영 — 순서가 A, B, M 으로(드래그 없인 절대 A,M,B 순서를 못 바꾼다) ══
+   * 🔴 고정 sleep(옛 800ms) 대신 폴링 — 로컬 wrangler/D1 쓰기+응답 지연이 기기 상태(디스크 I/O·동시
+   * 프로세스)마다 달라 고정 대기는 거짓 FAIL 을 낸다(실측: 수정 전 커밋 7d60fe4 사본에서도 같은 800ms
+   * margin 으로 동일하게 FAIL 재현 — 기능 버그가 아니라 테스트의 레이스였다). "즉시"는 초 단위 캡(8s)
+   * 안에서 polling 으로 검사해 기계 노이즈를 흡수하면서도 응답 없는 회귀는 여전히 타임아웃→FAIL 한다. */
+  let roots3 = [], idxA = -1, idxB = -1, idxM = -1;
+  const t3 = Date.now();
+  while (Date.now() - t3 < 8000) {
+    roots3 = (await api("GET", "/api/projects/" + PID + "/decks", null, sTok)).j.data.filter((d) => d.parent_id == null);
+    idxA = roots3.findIndex((d) => d.id === dA.id); idxM = roots3.findIndex((d) => d.id === dM.id); idxB = roots3.findIndex((d) => d.id === dB.id);
+    if (idxA >= 0 && idxB === idxA + 1 && idxM === idxB + 1) break;
+    await wait(150);
+  }
+  const t3ms = Date.now() - t3;
+  ok(idxA >= 0 && idxB === idxA + 1 && idxM === idxB + 1, "③ 서버 순서 — 드래그로 B 가 A 와 M 사이로 반영(A,B,M, " + t3ms + "ms 내)", { idxA, idxB, idxM, ms: t3ms });
 
   /* ══ ④ 새로고침 후에도 유지 ══ */
   console.log("\n[④] 새로고침 후에도 순서 유지");
