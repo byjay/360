@@ -294,14 +294,16 @@ try {
     ok(fourthUnderFloor.found, "② '4TH' 가 'FLOOR' 의 하위로(3단) 렌더됨", fourthUnderFloor);
     await shot("02-er-floor-4th");
 
-    // [WO 20261015-treemap] 🔴 깊이 3까지 레벨 배지(L1/L2/L3) + 경로 툴팁 — 마스터: "트리맵 구조 명확히 해".
+    // [WO 20261019-treeexplorer 전·후 대조] 🔴 마스터 재지시: "폴더구조와 같은 방식으로" — 행에 보이는
+    // L1/L2/L3 텍스트 배지(.tree-level-tag)는 탐색기 문법에 없어 제거됐다(종전 WO 20261015-treemap).
+    // 깊이 정보는 유실 0 — title(네이티브 툴팁)의 "경로(레벨 N): ..." 문구로만 확인한다(표시 위치 이동).
     const levels = await evSafe(`(function(){
-      function levelOf(name){ var h = Array.from(document.querySelectorAll('.tree-node-deck,.tree-node-region')).find(function(h){ var l=h.querySelector('.tree-label'); return l && l.textContent.trim()===name; }); var t = h && h.querySelector('.tree-level-tag'); return { text: t ? t.textContent.trim() : null, title: h ? h.title : null }; }
+      function levelOf(name){ var h = Array.from(document.querySelectorAll('.tree-node-deck,.tree-node-region')).find(function(h){ var l=h.querySelector('.tree-label'); return l && l.textContent.trim()===name; }); return { levelTagGone: !(h && h.querySelector('.tree-level-tag')), title: h ? h.title : null }; }
       return { ER: levelOf('ER'), FLOOR: levelOf('FLOOR'), FOURTH: levelOf('4TH') };
     })()`);
-    ok(levels.ER && levels.ER.text === "L1", "② 'ER'(최상위) 레벨 배지 = L1", levels.ER);
-    ok(levels.FLOOR && levels.FLOOR.text === "L2", "② 'FLOOR'(ER 하위) 레벨 배지 = L2", levels.FLOOR);
-    ok(levels.FOURTH && levels.FOURTH.text === "L3", "② '4TH'(FLOOR 하위, 3단) 레벨 배지 = L3", levels.FOURTH);
+    ok(levels.ER && levels.ER.levelTagGone && levels.ER.title && levels.ER.title.indexOf("레벨 1") >= 0, "② 'ER'(최상위) — 텍스트 배지 0, title 에 '레벨 1'", levels.ER);
+    ok(levels.FLOOR && levels.FLOOR.levelTagGone && levels.FLOOR.title && levels.FLOOR.title.indexOf("레벨 2") >= 0, "② 'FLOOR'(ER 하위) — 텍스트 배지 0, title 에 '레벨 2'", levels.FLOOR);
+    ok(levels.FOURTH && levels.FOURTH.levelTagGone && levels.FOURTH.title && levels.FOURTH.title.indexOf("레벨 3") >= 0, "② '4TH'(FLOOR 하위, 3단) — 텍스트 배지 0, title 에 '레벨 3'", levels.FOURTH);
     ok(levels.FOURTH && typeof levels.FOURTH.title === "string" && levels.FOURTH.title.indexOf("ER") >= 0 && levels.FOURTH.title.indexOf("FLOOR") >= 0,
       "② '4TH' 툴팁(title)에 경로(ER…FLOOR…4TH)가 담김", levels.FOURTH);
   }

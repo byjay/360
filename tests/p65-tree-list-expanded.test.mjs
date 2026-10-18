@@ -20,7 +20,9 @@
  *  ② 접기/펼치기 동작 유지 — 클릭으로 토글되고, 재렌더에도 사용자가 닫은 상태가 유지된다
  *  ③ 🔴 구역 이름이 표시된다 — 이름 있으면 그대로, 없으면(빈 문자열/undefined) "이름 없음"
  *  ④ 구역 아래 영역이 리스트로 나열된다
- *  ⑤ 영역 0개면 "영역 없음"으로 표시(숨기지 않음)
+ *  ⑤ [WO 20261019-treeexplorer 전·후 대조 — 마스터 재지시 "폴더구조와 같은 방식으로": 탐색기는
+ *     빈 폴더를 문구로 알리지 않는다] 영역 0개인 구역은 "영역 없음" 문구 없이, 캐럿(화살표)도
+ *     없이 렌더된다(빈 폴더 = 펼칠 게 없다는 뜻을 화살표 부재로 드러낸다, 숨김이 아니라 침묵)
  *  ⑥ 구역·영역 시각 구분(.tree-node-deck vs .tree-node-region, 아이콘 다름)
  *  ⑦ 🔴 parent_id NULL 인 deck 40개가 전부 구역으로 표시(데이터 유실 0)
  *  ⑧ 모바일 375x812 실브라우저 — #side-tree scrollHeight > clientHeight, 스크롤 끝 도달
@@ -29,7 +31,9 @@
  * 뮤테이션 3건, 각 EXIT=1 확인 후 원복:
  *  ⓐ 기본 접힘으로 되돌림 → ①이 실패해야 함
  *  ⓑ "이름 없음" 대체문구 제거 → ③이 실패해야 함
- *  ⓒ 구역 아래 영역 나열 로직 제거 → ④가 실패해야 함
+ *  ⓒ' [WO 20261019-treeexplorer 갱신] 빈 폴더 캐럿 억제(expandable) 로직 제거 → ⑤가 실패해야 함
+ *     (종전 ⓒ "구역 아래 영역 나열 로직 제거 → ④"는 그 로직이 그대로 남아 있어 더는 뮤테이션
+ *     대상이 아니다 — ④ 자체는 subDecks.forEach 호출이 살아있으면 항상 성립, 전·후 대조 완료)
  *
  * 목(mock) 범위: Part A/뮤테이션은 실제 11_UI.js 소스를 vm 에 그대로 평가(DOM만 최소 목,
  * p62 와 동일 패턴). Part C 는 실제 Chrome(Puppeteer)에서 실제 public/css/style.css 와
@@ -188,9 +192,14 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
   // ④ 구역 아래 영역 리스트
   ok(!!region1 && /평면도/.test(region1._children[0].innerHTML), "④ 구역(메인데크) 아래 영역(평면도)이 리스트로 나열된다");
 
-  // ⑤ 영역 0개 표시
-  ok(/영역 없음/.test(flat(kidsOf(d2))), "⑤ 영역이 0개인 구역(브릿지)은 '영역 없음'을 표시한다(숨기지 않음)");
-  ok(/영역 없음/.test(flat(kidsOf(d3))), "⑤ 이름 없는 구역도 영역 0개면 '영역 없음' 표시");
+  // ⑤ [WO 20261019-treeexplorer] 영역 0개 — 문구 0 + 캐럿 0(빈 폴더, 침묵)
+  ok(!kidsOf(d2), "⑤ 영역이 0개인 구역(브릿지)은 하위 컨테이너(.tree-children) 자체가 없다(빈 폴더)");
+  ok(!/영역 없음/.test(flat(d2)), "⑤ '영역 없음' 문구가 전혀 없다(브릿지)");
+  ok(!/tree-caret/.test(d2._children[0].innerHTML), "⑤ 캐럿(화살표)이 없다(브릿지 — 펼칠 게 없음)");
+  ok(!kidsOf(d3), "⑤ 이름 없는 구역도 영역 0개면 하위 컨테이너가 없다");
+  ok(!/영역 없음/.test(flat(d3)), "⑤ '영역 없음' 문구가 전혀 없다(이름 없는 구역)");
+  ok(!/tree-caret/.test(d3._children[0].innerHTML), "⑤ 캐럿이 없다(이름 없는 구역)");
+  ok(/tree-caret/.test(d1._children[0].innerHTML), "⑤(대조) 하위가 있는 구역(메인데크)은 캐럿이 있다");
 
   // ⑥ 시각 구분
   ok(d1._children[0].classList.contains("tree-node-deck") && region1._children[0].classList.contains("tree-node-region"),
@@ -245,33 +254,22 @@ console.log("\n[Part A' · 프로덕션 재현 — parent_id NULL 40개 전부 �
   }
 }
 
-/* ── 뮤테이션 ⓒ: 구역 아래 영역 나열 로직 제거 → ④가 실패해야 한다 ───── */
+/* ── 뮤테이션 ⓒ' [WO 20261019-treeexplorer 갱신]: 빈 폴더 캐럿 억제(expandable) 제거 → ⑤가 실패해야 한다 ───── */
 {
-  console.log("\n[뮤테이션ⓒ] 구역 아래 영역 나열 로직 제거 → ④가 실패해야 함");
-  // [WO 20260930-moderole] 마스터 2차 지시로 모드 문맥(ctx) 파라미터가 제거됐다(구역·영역 공유) — 대상 텍스트만 갱신, 치환(나열 제거)은 그대로.
-  // [WO 20261015-treemap] deckNode 가 depth·ancestorPath 를 받도록 바뀌어(임의 깊이 레벨 배지) needle 갱신.
-  const needle = `const childPath = ancestorPath.concat([deck.name || "(이름 없음)"]);
-        if (!isRegion) {
-          if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
-          else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
-          any = true;
-        } else if (subDecks.length) {
-          subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
-          any = true;
-        }`;
-  const mut = uiSrc.replace(needle, `if (false) { subDecks.forEach(() => {}); }`);
+  console.log("\n[뮤테이션ⓒ'] expandable 억제 로직 제거(항상 펼칠 수 있다고 계산) → ⑤가 실패해야 함");
+  const needle = `const expandable = subDecks.length > 0 || loadedHasContent;`;
+  const mut = uiSrc.replace(needle, `const expandable = true;`);
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { UI, registry } = makeUI(mut, fx());
     UI.renderTree();
     const host = registry["side-tree"];
     const proj = pick(host, "tree-project")[0];
-    const d1 = pick(kidsOf(proj), "tree-deck").find((d) => /메인데크/.test(d._children[0].innerHTML));
-    const regions = kidsOf(d1) ? pick(kidsOf(d1), "tree-region") : [];
-    ok(regions.length === 0, "뮤테이션 적용 시 ④가 깨짐(구역 아래 영역 리스트가 사라진다)");
+    const rootDecks = pick(kidsOf(proj), "tree-deck");
+    const d2 = rootDecks.find((d) => /브릿지/.test(d._children[0].innerHTML));
+    ok(!!kidsOf(d2), "뮤테이션 적용 시 ⑤가 깨짐(빈 폴더인 '브릿지'에도 하위 컨테이너/캐럿이 생긴다)");
   }
 }
-
 /* ══════════════════════════════════════════════════════════════════════
  * Part C — 실제 Chrome(Puppeteer) 375x812 — 실제 CSS + 실제 11_UI.js 로드
  *  (다른 팀이 WIP 중인 main.js/20_App.js/31_Projects.js 는 로드하지 않는다)
@@ -367,7 +365,7 @@ if (!puppeteer) {
     " decksTop=" + m.decksTop + " regions=" + m.regions + " emptyMsgs=" + m.emptyMsgs + " missingNames=" + m.missingNames);
   ok(m.decksTop === 40, "⑦ 실 브라우저에서 parent_id NULL 구역 40개가 전부 렌더된다 — 실제 " + m.decksTop);
   ok(m.regions === 2, "④ 실 브라우저에서 영역(평면도·측면도) 2개가 구역 아래 나열된다");
-  ok(m.emptyMsgs === 39, "⑤ 실 브라우저에서 영역 없는 구역(39개) 마다 '영역 없음' 표시(실제 " + m.emptyMsgs + "개)");
+  ok(m.emptyMsgs === 0, "⑤ [WO 20261019-treeexplorer] 실 브라우저에서 '영역 없음' 문구가 0개(탐색기는 빈 폴더를 침묵으로 표시) — 실제 " + m.emptyMsgs + "개");
   ok(m.missingNames === 6, "③ 실 브라우저에서 이름 빈 구역(6개)이 '이름 없음'으로 표시(실제 " + m.missingNames + "개)");
   ok(m.clientHeight >= 160, "⑧ #side-tree 가 0 으로 짓눌리지 않는다(clientHeight=" + m.clientHeight + " ≥ 160)");
   ok(m.scrollHeight > m.clientHeight, "⑧ scrollHeight(" + m.scrollHeight + ") > clientHeight(" + m.clientHeight + ") — 스크롤 발생");

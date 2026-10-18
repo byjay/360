@@ -529,16 +529,14 @@ await withBrowser(async (browser) => {
 
 console.log("\n[뮤테이션ⓔ] srcTag(도면 출처 부가 라벨)를 되살림 → ①이 실패해야 함");
 await withBrowser(async (browser) => {
-  // [WO 20261001-projectinfo·tree-hierarchy] 마스터 지시로 kindTag("구역"/"영역" 꼬리표)를 추가했다
-  // (전·후 대조: kindTag 삽입 1건, srcTag 관련 구조는 그대로) — needle 을 그 줄에 맞춰 갱신.
-  // [WO 20261002-allmenu §5] needle 갱신(전·후 대조): 전 `... + _tag + zoneCntTag;` → 후 `... + _tag + srcTag + zoneCntTag`
-  //   (+ 다음 줄 ⋯ 메뉴). 새 srcTag 는 "잘라옴" 또는 "별도 등록 · 파일명"(자기 도면일 때만) — 같은 도면을 공유하는
-  //   이 픽스처(구역·영역 둘 다 dep1)에서는 파일명이 행에 나오지 않는다(①은 그대로 유효). 변형(파일명 부가 라벨 부활)은 그대로.
-  // [WO 20261015-treemap] needle 갱신 — levelTag(L1/L2/L3 레벨 배지)가 kindTag 앞에 추가됐다(전·후 대조).
-  const needle = "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + levelTag + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
+  // [WO 20261001-projectinfo·tree-hierarchy → 20261019-treeexplorer] 전·후 대조: kindTag("구역"/
+  //   "영역")·levelTag(L1/L2…) 텍스트 배지는 "폴더구조와 같은 방식으로"(마스터 재지시) 행에서 빠졌고
+  //   아이콘이 종류별(ICO.deck/ICO.region)에서 열림/닫힘(ICO.folderOpen/folderClosed) + 캐럿 조건부
+  //   (expandable) 로 바뀌었다 — needle 을 그 줄에 맞춰 갱신(이 뮤테이션 자체의 의도=①은 그대로 유효).
+  const needle = "head.innerHTML = (expandable ? C : \"\") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
   const docSrc = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
   const mutated = uiSrc.replace(needle,
-    "head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + levelTag + kindTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
+    "head.innerHTML = (expandable ? C : \"\") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { m } = await measureSidebarTree(browser, mutated);

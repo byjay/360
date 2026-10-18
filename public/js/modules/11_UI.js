@@ -1238,6 +1238,17 @@
         deck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
         // 영역(crop) — 구역 내부를 잘라낸 프레임 모양(구역의 갈래 아이콘과 실루엣부터 다르다).
         region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
+        // [WO 20261019-treeexplorer] 🔴 마스터: "폴더구조와 같은 방식으로" — 프로젝트·구역·영역
+        // 모두 "폴더"(탐색기 문법엔 하위 종류별 아이콘이 없다, Windows/VS Code 모두 폴더 1종 +
+        // 열림/닫힘만 구분). deck/region/project(위) 는 다른 코드가 참조할 수 있어 남겨두되(죽은 코드
+        // 아님 — 실사용은 아래 두 키로 교체) 트리 렌더는 이 두 키만 쓴다. closed = ICO.project 와
+        // 같은 실루엣(이미 ≥3:1 감사 완료, 새 모양 0) · open = 표준 "열린 폴더"(펼친 서류꼴).
+        // 내부 path 만 따로 둔다 — toggleOpen(아래)이 전체 <svg> 를 다시 만들지 않고 이 내용만
+        // innerHTML 교체해 즉시(다음 전체 renderTree() 전에) 아이콘을 바꾼다(SoT 하나, 문자열 중복 0).
+        folderClosedInner: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+        folderOpenInner: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7a2 2 0 0 0-1.94 1.5L3 18V7z"/><path d="M5 10h15.19a2 2 0 0 1 1.94 2.5l-1.4 5.5A2 2 0 0 1 18.79 20H5a2 2 0 0 1-2-2v-6.5A2 2 0 0 1 5 10z"/>',
+        get folderClosed() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">' + this.folderClosedInner + '</svg>'; },
+        get folderOpen() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">' + this.folderOpenInner + '</svg>'; },
         pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
         // [WO 20260930-pinstyle] CHECKER 핀 트리 아이콘 = 둥근사각 번호 배지(도면 마커와 같은 형태
         // 언어). 360(티어드롭)과 실루엣부터 다르게 — 색맹 대비 1차 단서.
@@ -1275,17 +1286,20 @@
         n.className = "tree-node tree-node-origin";
         const moreHtml = isReadonlyTree ? "" : ' <span class="tree-more" role="button" tabindex="0" aria-label="원본 도면 메뉴" title="원본 도면 메뉴 — 열기·메인 도면 교체">⋯</span>';
         const canSet = !!(proj && proj.can_manage_members);
+        // [WO 20261019-treeexplorer] 🔴 마스터: "폴더구조와 같은 방식으로" — 종류 꼬리표("원본")는
+        // 탐색기 문법에 없다(폴더/파일 아이콘 + 들여쓰기로 종류를 드러낸다). 문구는 title(네이티브
+        // 툴팁)에만 남긴다(지어내지 않음·정보 유실 0 — 아래 title 대입에 그대로 있음).
         if (pick) {
           const label = (pick.deployment_id ? docLabel(pick.deployment_id) : null) || pick.name || "원본 도면";
-          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">' + esc(label) + '</span>' + moreHtml;
-          n.title = "원본 전체 도면 열기";
+          n.innerHTML = ICO.origin + '<span class="tree-label">' + esc(label) + '</span>' + moreHtml;
+          n.title = "원본 도면\n원본 전체 도면 열기";
         } else if (!proj && State.currentDeploymentId) {
-          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">' + esc(State.fileName || "지금 열린 도면") + '</span>' + moreHtml;
-          n.title = "프로젝트 정보를 아직 불러오지 못했습니다 — 지금 열린 도면";
+          n.innerHTML = ICO.origin + '<span class="tree-label">' + esc(State.fileName || "지금 열린 도면") + '</span>' + moreHtml;
+          n.title = "원본 도면\n프로젝트 정보를 아직 불러오지 못했습니다 — 지금 열린 도면";
         } else {
-          n.innerHTML = ICO.origin + '<span class="tree-kind-tag">원본</span><span class="tree-label">미지정</span>'
+          n.innerHTML = ICO.origin + '<span class="tree-label">미지정</span>'
             + (canSet ? ' <span class="btn-mini tree-origin-set" data-origin-set="1" role="button" tabindex="0">지정</span>' : "") + moreHtml;
-          n.title = canSet ? "현재 열린 도면을 원본으로 지정할 수 있습니다" : "원본 전체 도면이 아직 지정되지 않았습니다";
+          n.title = "원본 도면\n" + (canSet ? "현재 열린 도면을 원본으로 지정할 수 있습니다" : "원본 전체 도면이 아직 지정되지 않았습니다");
         }
         n.addEventListener("click", (e) => {
           if (e && e.stopPropagation) e.stopPropagation();
@@ -1312,7 +1326,10 @@
         pw.className = "tree-project open";
         const ph = document.createElement("button");
         ph.className = "tree-node tree-node-project";
-        ph.innerHTML = C + ICO.project + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span>'
+        // [WO 20261019-treeexplorer] 프로젝트는 항상 .open(위 pw.className) 로 마운트된다 — 폴더는
+        // 열림 아이콘으로 통일(닫힘 아이콘 분기는 deckNode 와 달리 불필요, 실사용 상태와 어긋나는
+        // 아이콘을 보일 일이 없다).
+        ph.innerHTML = C + ICO.folderOpen + '<span class="tree-label">' + esc(proj.name || "프로젝트") + '</span>'
           + (rootCount != null ? '<span class="tree-cnt" title="구역 수">' + rootCount + '</span>' : "");
         ph.addEventListener("click", (e) => {
           if (e && e.target && e.target.closest && e.target.closest(".tree-caret")) { pw.classList.toggle("open"); return; }
@@ -1473,6 +1490,14 @@
         const subDecks = allChildrenOf.get(String(deck.id)) || [];
         // [WO 20260928-tree-expand] 🔴 기본 펼침 — 사용자가 직접 닫은 적이 없으면 항상 open.
         const collapseKey = String(deck.id);
+        // [WO 20261019-treeexplorer] 🔴 마스터: "폴더구조와 같은 방식으로" — 탐색기는 펼칠 내용이
+        // 없는 폴더엔 화살표를 보이지 않는다("영역 없음" 문구도 함께 제거, 아래). subDecks 는 이미
+        // 알고 있고, loaded 된 구역/영역은 영역(zone)·핀 중 하나라도 있으면 펼칠 내용이 있다(zone이
+        // 있어도 핀이 0개면 렌더 안 함 — 아래 renderScopedPins 의 "핀 없는 영역은 그리지 않는다"와
+        // 동일 기준, 0 날조 금지).
+        const loadedHasContent = loaded && (((State.zones || []).length > 0) || ((State.pins || []).length > 0));
+        const expandable = subDecks.length > 0 || loadedHasContent;
+        const isOpenNow = !collapsed.has(collapseKey); // [p65①] g.className 과 같은 판정(아래 줄과 동일 조건, 문구만 분리)
         const g = document.createElement("div");
         g.className = (isRegion ? "tree-region" : "tree-deck") + (collapsed.has(collapseKey) ? "" : " open");
         const head = document.createElement("button");
@@ -1497,17 +1522,11 @@
         //   인라인 리터럴 색(#ffffff/#b91c1c 6.5:1) — 트리 테마 변수와 무관하게 대비 고정.
         const _reqN = (State.mode === "designer" && typeof Requests !== "undefined" && Requests.openCountForDeck) ? Requests.openCountForDeck(deck.id) : 0;
         const reqTag = _reqN > 0 ? '<span class="tree-req-badge" data-req-deck="' + esc(String(deck.id)) + '" title="미처리 요청 ' + _reqN + '건" style="margin-left:4px;min-width:16px;padding:0 5px;border-radius:8px;background:#b91c1c;color:#ffffff;font-size:10.5px;font-weight:700;line-height:16px;text-align:center">' + _reqN + '</span>' : "";
-        // [WO 20261001-projectinfo·tree-hierarchy] 🔴 마스터: "단계마다 라벨 접두나 툴팁을 둬서
-        // 이름만으로 헷갈리지 않게" — 아이콘(형태)만으로는 약하므로 작은 텍스트 꼬리표를 더한다.
-        const kindTag = '<span class="tree-kind-tag">' + (isRegion ? "영역" : "구역") + '</span>';
-        // [WO 20261015-treemap] 레벨 배지(L1/L2/L3…) — 깊어진 트리에서 "몇 단계인지"를 아이콘·
-        //   들여쓰기만으로는 알기 어려워 숫자로 못박는다. 경로(루트부터의 이름 나열)는 head.title
-        //   (아래, innerHTML 밖의 네이티브 툴팁)에만 싣는다 — 🔴 levelTag 자신의 title 에 겹쳐 실으면
-        //   "(이름 없음)" 같은 폴백 문구가 .tree-label 과 무관하게 innerHTML 에 중복 등장해, 그 문구의
-        //   존재 여부로 판정하는 다른 회귀테스트(p65 ③·뮤테이션ⓑ)를 흐린다(§G-2-5, 로직이 아니라
-        //   "문자열이 어디 있나"로 생긴 간섭 — 실측: p65 뮤테이션ⓑ가 이 중복 때문에 FAIL 했었다).
+        // [WO 20261019-treeexplorer] 🔴 마스터: "폴더구조와 같은 방식으로" — kindTag("구역"/"영역")·
+        //   levelTag(L1/L2…) 텍스트 배지를 행에서 뺐다(탐색기엔 그런 꼬리표가 없다 — 깊이는 들여쓰기·
+        //   안내선으로, 종류는 폴더/문서 아이콘으로 드러난다). 정보 유실 0 — 경로는 title(아래)에 그대로
+        //   남는다(이전 WO 20261015-treemap 의 의도 그대로, 표시 위치만 이동).
         const _path = ancestorPath.concat([deck.name || "(이름 없음)"]).join(" › ");
-        const levelTag = '<span class="tree-level-tag" title="트리 깊이">L' + depth + '</span>';
         // [WO 20261002-allmenu §5] 구역 도면 출처(잘라옴 / 별도 등록 · 파일명) — SoT = UI.deckSourceOf.
         //   [WO 20261012-treemenu-viewer] 출처 배지는 디자이너가 도면을 관리할 때 쓰는 편집 정보라
         //   열람자에게는 의미가 없다(도면 등록/교체 메뉴가 그 아래에서 사라지므로 맥락도 없다) — 숨긴다.
@@ -1516,7 +1535,7 @@
           ? '<span class="tree-src-tag tree-src-' + _src.kind + '" title="구역 도면 출처: ' + esc(_src.label) + '">' + esc(_src.label) + '</span>' : "";
         // [WO 20261012-treemenu-viewer] 열람자에겐 ⋯ 메뉴 자체를 렌더하지 않는다(CSS 숨김이 아니라 렌더 생략) — ⑴ 참조.
         const moreTag = isReadonlyTree ? "" : '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
-        head.innerHTML = C + (isRegion ? ICO.region : ICO.deck) + levelTag + kindTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
+        head.innerHTML = (expandable ? C : "") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20261007-qrcov] 촬영 현황 배지(미촬영·오래됨) — 켜졌고 이 구역 도면이 로드됐을 때만(SoT: Coverage.deckSummary → Projects.pinsForDeck)
         const covTag = (typeof Coverage !== "undefined" && Coverage.treeBadgeHtml) ? Coverage.treeBadgeHtml(deck) : "";
@@ -1525,8 +1544,16 @@
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
         // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.
         head.title = (deck.name ? deck.name : "(이름 없음)") + "\n경로(레벨 " + depth + "): " + _path + (docName ? "\n원본 도면: " + docName : "");
-        // [WO 20260928-tree-expand] 열림/닫힘 토글 시 세션 메모리에 반영(사용자가 닫은 항목만 기억).
-        const toggleOpen = () => { if (g.classList.toggle("open")) collapsed.delete(collapseKey); else collapsed.add(collapseKey); };
+        // [WO 20260928-tree-expand→20261019-treeexplorer] 열림/닫힘 토글 시 세션 메모리에 반영
+        // (사용자가 닫은 항목만 기억) + 🔴 폴더 아이콘도 그 자리에서 즉시 바꾼다(탐색기처럼 —
+        // 종전엔 다음 전체 renderTree() 전까지 아이콘이 그대로였다, CDP 실측으로 발견). 캐럿이
+        // 있을 때만 toggleOpen 이 호출되므로(아래 클릭 핸들러) 이 시점엔 폴더 아이콘이 항상 있다.
+        const toggleOpen = () => {
+          const nowOpen = g.classList.toggle("open");
+          if (nowOpen) collapsed.delete(collapseKey); else collapsed.add(collapseKey);
+          const icoEl = head.querySelector("svg:not(.tree-caret)");
+          if (icoEl) icoEl.innerHTML = nowOpen ? ICO.folderOpenInner : ICO.folderClosedInner;
+        };
         head.addEventListener("click", (e) => {
           const more = e && e.target && e.target.closest ? e.target.closest(".tree-more") : null;
           if (more) { if (e.stopPropagation) e.stopPropagation(); this.openTreeMenu(more, (isRegion ? "영역 " : "구역 ") + (deck.name || "(이름 없음)"), this.deckMenuItems(deck, mainDepId)); return; }
@@ -1552,18 +1579,15 @@
 
         const kids = document.createElement("div");
         kids.className = "tree-children";
-        let any = false;
-        // 3단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck). 🔴 마스터: "구역 아래 영역이
-        // 리스트로 나열돼야 한다" — 0개여도 숨기지 않고 "영역 없음"으로 알린다(구역 레벨 한정,
-        // 영역 자신의 하위는 데이터가 있을 때만 표시해 기존 4단 방지 회귀(p62)를 건드리지 않는다).
+        // 3단 — 이 구역 안의 영역(parent_id = 이 구역 id 인 deck). [WO 20261019-treeexplorer] 🔴
+        // 마스터 재지시: "폴더구조와 같은 방식으로" — 탐색기는 빈 폴더를 "영역 없음" 같은 문구로
+        // 알리지 않는다(화살표 자체가 없으면 비어있다는 뜻). 0개면 조용히 아무것도 추가하지 않는다
+        // (위 expandable 이 캐럿·g.appendChild(kids) 게이트를 이미 맡는다 — 이 분기는 내용만 채운다).
         const childPath = ancestorPath.concat([deck.name || "(이름 없음)"]);
         if (!isRegion) {
           if (subDecks.length) subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
-          else { const eEl = document.createElement("p"); eEl.className = "tree-empty"; eEl.textContent = "영역 없음"; kids.appendChild(eEl); }
-          any = true;
         } else if (subDecks.length) {
           subDecks.forEach((cd) => { kids.appendChild(deckNode(cd, true, depth + 1, childPath)); });
-          any = true;
         }
         if (loaded) {
           const zones = State.zones || []; // 전체 페이지(필터 없음)
@@ -1671,9 +1695,8 @@
               kids.appendChild(mw);
             });
           }
-          any = true;
         }
-        if (any) g.appendChild(kids);
+        if (expandable) g.appendChild(kids);
         return g;
       };
 
@@ -1692,6 +1715,55 @@
          제거하고 구역·영역을 프로젝트 바로 아래 한 벌만 렌더한다(중복 0). 모드 분리는 deckNode()
          안의 잎(CHECKER N/360 N)에서만 일어난다. ─────────────────────────────────────── */
       rootDecks.forEach((d) => mount.appendChild(deckNode(d, false, 1, [])));
+      // [WO 20261019-treeexplorer] 키보드 탐색(↑↓←→ Enter F2) — host(#side-tree)는 renderTree()
+      // 가 매번 innerHTML="" 로 비우지만 host 자신(DOM 엘리먼트)은 재사용되므로, 리스너는 1회만
+      // 바인딩한다(host.dataset 플래그 — 중복 바인딩 0, 매 렌더 재부착 불필요).
+      if (!host.dataset.kbdBound) { host.dataset.kbdBound = "1"; host.addEventListener("keydown", (e) => this._treeKeyNav(e)); }
+    },
+
+    /** [WO 20261019-treeexplorer] 마스터: "탐색기처럼 동작" — ↑↓ 이동 · ←→ 접기/펼치기 ·
+     *  Enter 열기 · F2 이름변경(기존 rename 재사용, 새 로직 0). 새 코드경로 0 — 캐럿 토글은
+     *  기존 .tree-caret 클릭 핸들러를 그대로 재사용(가짜 클릭 디스패치), 이름변경은 기존
+     *  ⋯ 메뉴가 호출하는 Projects.renameDeck(deck) 을 그대로 호출한다(SoT 하나). */
+    _treeKeyNav(e) {
+      const KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "F2"];
+      if (KEYS.indexOf(e.key) < 0) return;
+      const host = e.currentTarget;
+      const target = e.target && e.target.closest ? e.target.closest(".tree-node") : null;
+      if (!target || !host.contains(target)) return;
+      const visible = Array.from(host.querySelectorAll(".tree-node")).filter((el) => el.offsetParent !== null || el === target);
+      const idx = visible.indexOf(target);
+      if (e.key === "ArrowDown") { e.preventDefault(); const n = visible[idx + 1]; if (n) n.focus(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); const p = visible[idx - 1]; if (p) p.focus(); return; }
+      if (e.key === "Enter") { e.preventDefault(); target.click(); return; }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const caret = target.querySelector(".tree-caret");
+        const container = target.closest(".tree-deck,.tree-region,.tree-project,.tree-zone,.tree-mode-leaf");
+        if (caret && container && !container.classList.contains("open")) { caret.dispatchEvent(new MouseEvent("click", { bubbles: true })); return; }
+        if (container) { const kid = container.querySelector(".tree-children .tree-node"); if (kid) kid.focus(); }
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const caret = target.querySelector(".tree-caret");
+        const container = target.closest(".tree-deck,.tree-region,.tree-project,.tree-zone,.tree-mode-leaf");
+        if (caret && container && container.classList.contains("open")) { caret.dispatchEvent(new MouseEvent("click", { bubbles: true })); return; }
+        const parentContainer = container && container.parentElement ? container.parentElement.closest(".tree-deck,.tree-region,.tree-project") : null;
+        const parentHead = parentContainer ? parentContainer.querySelector(".tree-node") : null;
+        if (parentHead) parentHead.focus();
+        return;
+      }
+      if (e.key === "F2") {
+        // 열람자(읽기 전용)는 이름변경 기능이 없다(⋯ 메뉴 자체가 렌더되지 않는 것과 동일 판정, SoT 재사용).
+        if (typeof App !== "undefined" && App._readonlySession && App._readonlySession()) return;
+        const deckId = target.dataset && target.dataset.deckId;
+        if (!deckId) return;
+        e.preventDefault();
+        const decksAll = (typeof Projects !== "undefined" && Projects.decks) || [];
+        const deck = decksAll.find((d) => String(d.id) === String(deckId));
+        if (deck && typeof Projects !== "undefined" && Projects.renameDeck) Projects.renameDeck(deck);
+      }
     },
 
     renderPinsOnMap(dropPinId) {
