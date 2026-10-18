@@ -365,7 +365,19 @@ function attachDom(booted) {
   booted.sandbox.PanoViewer = { load: (url, name) => uiCalls.panoLoad.push({ url, name }) };
   booted.sandbox.Prompt = { toast: (m) => uiCalls.toasts.push(m) };
   booted.sandbox.CaptureSession = { current: () => null };
+  booted.sandbox.navigator = { onLine: true };
+  booted.sandbox.SyncQueue = { count: async () => 0 };
+  booted.sandbox.Prompt.confirm = async () => true;
   return { doc, uiCalls };
+}
+/** fake 엘리먼트 트리에서 className 포함 노드 전부(재귀) — querySelectorAll 대체. */
+function collectByClass(node, cls) {
+  const out = [];
+  (node.children || []).forEach((c) => {
+    if (c.classList && c.classList.contains(cls)) out.push(c);
+    out.push(...collectByClass(c, cls));
+  });
+  return out;
 }
 {
   const booted = boot();
@@ -374,7 +386,7 @@ function attachDom(booted) {
   const r = booted.TO.open();
   ok(r === "install" && uiCalls.apkOpen === 1 && !doc.getElementById("theta-osc-screen"), "⑭-1 웹에서 [THETA] 진입 → 화면 안 열고 ApkInstall.open() 안내");
 }
-{
+await (async () => {
   const booted = boot();
   const { doc } = attachDom(booted);
   const r = booted.TO.open();
@@ -383,9 +395,11 @@ function attachDom(booted) {
   const labels = tabsBar.children.map((b) => b.textContent);
   ok(labels.join(",") === "폰 사진,카메라 사진,프로젝트 등록,설정", "⑭-3 4탭 정확히(폰 사진/카메라 사진/프로젝트 등록/설정)");
   ok(!doc.getElementById("theta-osc-screen").classList.contains("hidden"), "⑭-4 화면이 보임(hidden 해제)");
+  await booted.TO._refreshStatus(); // open() 의 _renderStatus() 는 비동기(폴링 시작) — 1회분 반영을 기다린다
   const status = doc.getElementById("to-status");
   ok(/Wi-Fi 연결됨|연결 안 됨/.test(status.textContent) && /모바일 데이터/.test(status.textContent), "⑭-5 상태줄 '카메라: … · 인터넷: 모바일 데이터' 형식");
-}
+  booted.TO._stopStatusPolling();
+})();
 {
   const { TO } = boot();
   const session = { pins: [{ id: "a", no: 1 }, { id: "b", no: 2 }], index: 0 };
@@ -398,9 +412,22 @@ await (async () => {
   const booted = boot();
   const { doc, uiCalls } = attachDom(booted);
   booted.TO.open();
-  booted.TO._session = { pins: [{ id: "a", no: 5 }], index: 0 };
   doc.getElementById("to-shutter-fab").click();
-  ok(uiCalls.toasts.some((t) => /다음 핀 촬영.*5/.test(t)), "⑭-9 FAB 클릭(세션 중) → '다음 핀 촬영: 5' 토스트");
+  ok(uiCalls.toasts.some((t) => /카메라 연결 안 됨/.test(t)) && !doc.getElementById("to-live-shoot"), "⑭-9a 카메라 미연결 — FAB 눌러도 라이브뷰 안 열림, 안내만");
+})();
+await (async () => {
+  const booted = boot("online");
+  const { doc, uiCalls } = attachDom(booted);
+  booted.TO.open();
+  const mock = createOscMock({ vendor: "theta" });
+  booted.TO._cli = booted.TO.client({ fetchImpl: mock.fetchImpl });
+  booted.TO._serial = "YJ30142118";
+  booted.TO._session = { pins: [{ id: "a", no: 5 }], index: 0 };
+  booted.TO._onShutter(); // FAB → 라이브뷰 화면
+  ok(!!doc.getElementById("to-live-shoot") && !!doc.getElementById("to-live-img"), "⑭-9b FAB(연결됨) → 라이브뷰 화면(이미지+[촬영]버튼) 오픈");
+  await booted.TO._doCapture(); // [촬영] 버튼과 같은 핸들러
+  ok(uiCalls.toasts.some((t) => /핀 5 등록 완료/.test(t)), "⑭-9c [촬영] → 다운로드 → 세션 현재 핀(5)에 즉시 연결 완료 토스트");
+  booted.TO._stopLivePreviewUi();
 })();
 {
   // 라이브뷰 — Insta360(liveview:false)이면 PanoViewer.load 를 호출하지 않는다(호출부가 adapter.liveview 를 먼저 봄).
@@ -423,6 +450,84 @@ await (async () => {
   const cs = rd("public/js/modules/69_CaptureSession.js");
   ok(/ThetaOSC\.open\(\{\s*session:\s*s\s*\}\)/.test(cs), "⑭-15 CaptureSession [카메라로 촬영] → ThetaOSC.open({session}) 연동(함수 경계)");
 }
+
+/* ══ ⑮ 탭 실연동 — 카메라사진(목록/날짜그룹/가져오기/핀연결) · 설정(옵션필터) · 상태줄 ══════════ */
+await (async () => {
+  const booted = boot("online");
+  const { doc, uiCalls } = attachDom(booted);
+  const nativeCalls = [];
+  booted.sandbox.window.Capacitor = { nativePromise: async (p, m, a) => { nativeCalls.push({ p, m, a }); return {}; } };
+  booted.TO.open();
+  const mock = createOscMock({
+    vendor: "theta", serial: "YJ30142118",
+    files: [
+      { name: "R0010001.JPG", fileUrl: "http://192.168.1.1/files/100RICOH/R0010001.JPG", dateTime: "2024:11:10 09:00:00" },
+      { name: "R0010002.JPG", fileUrl: "http://192.168.1.1/files/100RICOH/R0010002.JPG", dateTime: "2024:11:11 09:00:00" },
+    ],
+  });
+  booted.TO._cli = booted.TO.client({ fetchImpl: mock.fetchImpl });
+  booted.TO._serial = "YJ30142118";
+  const body = doc.getElementById("to-body");
+  const entries = [
+    { name: "R0010001.JPG", fileUrl: "http://192.168.1.1/files/100RICOH/R0010001.JPG" },
+    { name: "R0010002.JPG", fileUrl: "http://192.168.1.1/files/100RICOH/R0010002.JPG" },
+  ];
+  await booted.TO._renderCameraGallery(body);
+  let groups = collectByClass(body, "to-dategroup");
+  let thumbs = collectByClass(body, "to-thumb");
+  ok(groups.length === 2, "⑮-1 카메라 사진 탭 — 날짜 그룹 2개(2024/11/10, 2024/11/11)");
+  ok(thumbs.length === 2, "⑮-2 카메라 사진 탭 — 목록 2장 렌더(listFiles 결과 그대로)");
+  const findByUrl = (list, url) => list.find((c) => c.dataset.fileUrl === url);
+  const cellA = findByUrl(thumbs, entries[0].fileUrl); // R0010001 — 핀 1번과 매칭될 파일(끝 3자리 폴백)
+  cellA.dataset.selected = "true"; cellA.classList.add("sel");
+  await booted.TO._importSelectedCameraEntries(entries); // 완료 후 탭을 다시 그린다(아래에서 새 노드를 다시 조회)
+  ok(nativeCalls.some((c) => c.p === "Filesystem" && c.m === "writeFile"), "⑮-3 [가져오기] — Filesystem.writeFile 재사용(새 저장 로직 없음)");
+  ok(booted.TO.isTransferred("YJ30142118", entries[0].fileUrl), "⑮-4 가져온 파일은 전송 이력에 즉시 기록(재방문 시 '가져옴' 배지)");
+
+  const pins = [{ id: "pin1", no: 1 }];
+  booted.sandbox.State = { pins };
+  // _importSelectedCameraEntries 내부의 재렌더(this._renderTabBody, fire-and-forget)는 타이밍에 의존하지
+  // 않게 직접 다시 그려 결정적으로 새 노드를 얻는다(프로덕션 동작은 그대로, 테스트만 명시적으로 대기).
+  body.innerHTML = "";
+  await booted.TO._renderCameraGallery(body);
+  thumbs = collectByClass(doc.getElementById("to-body"), "to-thumb");
+  findByUrl(thumbs, entries[0].fileUrl).dataset.selected = "true";
+  await booted.TO._linkSelectedCameraEntries(entries);
+  ok(booted.calls.uploadOneRow.length === 1 && booted.calls.uploadOneRow[0].pin === pins[0], "⑮-5 [도면 핀에 연결] — 60_PhotoFolder 매칭(1번) → PhotoBatch._uploadOneRow 등록");
+})();
+await (async () => {
+  const booted = boot();
+  const { doc } = attachDom(booted);
+  booted.TO.open();
+  const mock = createOscMock({ vendor: "theta", supportedOptionNames: ["iso", "shutterSpeed"] });
+  await booted.TO._connectActive("YJ30142118", { fetchImpl: mock.fetchImpl });
+  booted.TO._setTab("settings");
+  const optEl = doc.getElementById("to-options");
+  ok(optEl && optEl.textContent.indexOf("iso") !== -1 && optEl.textContent.indexOf("shutterSpeed") !== -1 && optEl.textContent.indexOf("whiteBalance") === -1, "⑮-6 설정 탭 — getOptions 가 돌려준 값만 노출(요청 목록 중 미지원 제외)");
+})();
+await (async () => {
+  const booted = boot();
+  const { doc } = attachDom(booted);
+  booted.TO.open();
+  const mock = createOscMock({ vendor: "insta360" });
+  await booted.TO._connectActive("INSTA-1", { fetchImpl: mock.fetchImpl });
+  booted.TO._setTab("settings");
+  const warn = doc.getElementById("to-adapter-warn");
+  ok(!!warn && /노출/.test(warn.textContent), "⑮-7 설정 탭 — Insta360 노출조정불가 제약 안내 표시");
+})();
+await (async () => {
+  const booted = boot();
+  const { doc } = attachDom(booted);
+  booted.TO.open();
+  booted.TO._cli = {};
+  booted.sandbox.navigator.onLine = true;
+  let r = await booted.TO._refreshStatus();
+  ok(doc.getElementById("to-status").textContent === "카메라: Wi-Fi 연결됨 · 인터넷: 모바일 데이터", "⑮-8 상태줄 갱신 — 연결됨+온라인");
+  booted.sandbox.navigator.onLine = false;
+  booted.sandbox.SyncQueue.count = async () => 3;
+  r = await booted.TO._refreshStatus();
+  ok(doc.getElementById("to-status").textContent === "카메라: Wi-Fi 연결됨 · 인터넷: 오프라인 — 큐 3건 대기", "⑮-9 상태줄 갱신 — 오프라인+큐 대기건수 표시");
+})();
 
 console.log(failed === 0 ? "\nALL PASS" : "\n" + failed + " FAILED");
 process.exitCode = failed === 0 ? 0 : 1;

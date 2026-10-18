@@ -599,6 +599,8 @@
       const el = document.getElementById("theta-osc-screen");
       if (el) el.classList.add("hidden");
       if (this._liveUrl) { try { URL.revokeObjectURL(this._liveUrl); } catch (e) {} this._liveUrl = null; }
+      this._stopLivePreviewUi();
+      this._stopStatusPolling();
     },
 
     _ensureScreen() {
@@ -642,28 +644,199 @@
       else if (id === "project") this._renderProjectTab(body);
       else this._renderSettingsTab(body);
     },
-    _renderStatus() {
-      const el = document.getElementById("to-status");
+    /** 상태줄 문구(연결·네트워크 모두 반영) — 순수. online=navigator.onLine, queueCount=SyncQueue 대기건수. */
+    statusLineText2(connected, online, queueCount) {
+      const net = online ? "모바일 데이터" : (queueCount > 0 ? ("오프라인 — 큐 " + queueCount + "건 대기") : "오프라인");
+      return "카메라: " + (connected ? "Wi-Fi 연결됨" : "연결 안 됨") + " · 인터넷: " + net;
+    },
+    /** OscCamera.status()(네이티브) 또는 this._cli 존재(mock/테스트)로 1차 판정 — 비동기 반영. */
+    async _refreshStatus() {
+      let connected = !!this._cli;
       const cap = this._cap();
-      if (el) el.textContent = this.statusLineText(!!(cap)); // 실연결 여부는 OscCamera.status() 가 비동기라 — 간단화: 플러그인 유무로 1차 표시, §미완(체크리스트)
+      if (cap) { try { const s = await cap.nativePromise("OscCamera", "status", {}); connected = !!(s && s.connected); } catch (e) { connected = false; } }
+      let online = true;
+      try { online = (typeof navigator !== "undefined") ? !!navigator.onLine : true; } catch (e) {}
+      let queueCount = 0;
+      try { if (typeof SyncQueue !== "undefined" && SyncQueue.count) queueCount = await SyncQueue.count(); } catch (e) {}
+      const el = document.getElementById("to-status");
+      if (el) el.textContent = this.statusLineText2(connected, online, queueCount);
+      return { connected, online, queueCount };
+    },
+    _renderStatus() {
+      this._refreshStatus();
+      if (this._statusTimer) { try { clearInterval(this._statusTimer); } catch (e) {} }
+      if (typeof setInterval !== "undefined") this._statusTimer = setInterval(() => this._refreshStatus(), 3000);
+    },
+    _stopStatusPolling() { if (this._statusTimer) { try { clearInterval(this._statusTimer); } catch (e) {} this._statusTimer = null; } },
+
+    /** 카메라 사진 탭 — listFiles → 날짜그룹 3열 그리드(리틀플래닛 썸네일) + 다중선택([가져오기]/[도면 핀에 연결]). */
+    async _renderCameraGallery(body) {
+      if (!this._cli) { const d = document.createElement("div"); d.id = "to-cam-noconn"; d.textContent = "카메라 연결 안 됨 — [설정] 탭에서 연결하세요"; body.appendChild(d); return; }
+      let entries = [];
+      try { entries = await this.listFiles(this._cli); }
+      catch (e) { const d = document.createElement("div"); d.textContent = "목록을 가져오지 못했습니다: " + e.message; body.appendChild(d); return; }
+      const serial = this._serial;
+      entries = entries.map((e) => Object.assign({}, e, { transferred: serial ? this.isTransferred(serial, e.fileUrl || e.url) : false }));
+      const wrap = document.createElement("div"); wrap.id = "to-camgallery";
+      this.groupByDate(entries).forEach((g) => {
+        const h = document.createElement("div"); h.className = "to-dategroup"; h.textContent = g.date; wrap.appendChild(h);
+        const grid = document.createElement("div"); grid.className = "to-grid3"; grid.setAttribute("style", "display:grid;grid-template-columns:repeat(3,1fr);gap:4px;");
+        g.items.forEach((entry) => {
+          const cell = document.createElement("div"); cell.className = "to-thumb"; cell.dataset.fileUrl = entry.fileUrl || entry.url || entry.name; cell.dataset.selected = "false";
+          const badge = document.createElement("span"); badge.className = "to-badge"; badge.textContent = entry.transferred ? "가져옴" : "";
+          cell.appendChild(badge);
+          cell.addEventListener("click", () => { const sel = cell.dataset.selected === "true"; cell.dataset.selected = sel ? "false" : "true"; cell.classList.toggle("sel", !sel); });
+          grid.appendChild(cell);
+        });
+        wrap.appendChild(grid);
+      });
+      body.appendChild(wrap);
+      const bar = document.createElement("div"); bar.id = "to-cam-actionbar";
+      const importBtn = document.createElement("button"); importBtn.id = "to-cam-import"; importBtn.type = "button"; importBtn.textContent = "가져오기";
+      importBtn.addEventListener("click", () => this._importSelectedCameraEntries(entries));
+      const linkBtn = document.createElement("button"); linkBtn.id = "to-cam-link"; linkBtn.type = "button"; linkBtn.textContent = "도면 핀에 연결";
+      linkBtn.addEventListener("click", () => this._linkSelectedCameraEntries(entries));
+      bar.appendChild(importBtn); bar.appendChild(linkBtn);
+      body.appendChild(bar);
+    },
+    /** #to-camgallery 안에서 선택(dataset.selected="true")된 파일만 — fileUrl 집합으로 entries 중 매칭 반환. */
+    _selectedCameraEntries(entries) {
+      const wrap = document.getElementById("to-camgallery");
+      if (!wrap) return [];
+      const selected = new Set();
+      (function walk(node) { (node.children || []).forEach((c) => { if (c.className === "to-thumb" || (c.classList && c.classList.contains && c.classList.contains("to-thumb"))) { if (c.dataset.selected === "true") selected.add(c.dataset.fileUrl); } walk(c); }); })(wrap);
+      return (entries || []).filter((e) => selected.has(e.fileUrl || e.url || e.name));
+    },
+    /** [가져오기] — 선택 파일을 다운로드해 폰에 저장(@capacitor/filesystem 재사용, 38c_ApkInstall._installDownloadShim
+     *  과 같은 cap.nativePromise("Filesystem","writeFile",…) 호출 방식) + "이미 받은 파일" 표시(markTransferred). */
+    async _importSelectedCameraEntries(entries) {
+      const sel = this._selectedCameraEntries(entries);
+      if (!sel.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("선택한 사진이 없습니다"); return; }
+      const cap = this._cap();
+      let done = 0;
+      for (const entry of sel) {
+        const fileUrl = entry.fileUrl || entry.url;
+        try {
+          const r = await this._cli.fetchImpl(fileUrl);
+          if (!r.ok) continue;
+          const blob = await r.blob();
+          if (cap) {
+            const buf = await blob.arrayBuffer();
+            const b64 = this._bytesToBase64(new Uint8Array(buf));
+            try { await cap.nativePromise("Filesystem", "writeFile", { path: entry.name, data: b64, directory: "DOCUMENTS" }); } catch (e) {}
+          }
+          this.markTransferred(this._serial, fileUrl, null);
+          done++;
+        } catch (e) {}
+      }
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(done + "장 가져옴");
+      this._renderTabBody(this._tab);
+      return done;
+    },
+    /** [도면 핀에 연결] — 60_PhotoFolder 매칭(matchEntriesToPins 재사용) → 미리보기(확인) → connectSelectedEntries. */
+    async _linkSelectedCameraEntries(entries) {
+      const sel = this._selectedCameraEntries(entries);
+      if (!sel.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("선택한 사진이 없습니다"); return; }
+      const pins = (typeof State !== "undefined" && State.pins) || [];
+      const matches = this.matchEntriesToPins(pins, sel);
+      if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("번호가 일치하는 핀이 없습니다"); return; }
+      if (typeof Prompt !== "undefined" && Prompt.confirm) {
+        const ok = await Prompt.confirm("도면 핀에 연결", matches.length + "건 매칭 — 연결할까요?");
+        if (!ok) return;
+      }
+      const results = await this.connectSelectedEntries(this._cli, this._serial, matches, "THETA갤러리연결");
+      const done = results.filter((r) => r.status === "done").length;
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(done + "건 연결 완료");
+      this._renderTabBody(this._tab);
+      return results;
     },
 
-    /** 카메라 사진 탭 — listFiles 결과를 날짜그룹/필터/배지로 그린다(최소 DOM, canvas 썸네일은 createThumbEl 분리). */
-    _renderCameraGallery(body) {
-      const title = document.createElement("div"); title.textContent = "카메라 사진(와이파이 연결 후 표시)";
-      body.appendChild(title);
+    /** 폰 사진 탭 — 등록된 핀(360 미디어) + 미등록(ThetaIntake 대기 트레이), 필터(날짜/등록여부/구역). */
+    _devicePhotoEntries() {
+      const out = [];
+      const pins = (typeof State !== "undefined" && State.pins) || [];
+      pins.forEach((p) => {
+        if (typeof PinSeries === "undefined" || !PinSeries.mediaOf || !PinSeries.mediaOf(p)) return;
+        out.push({ name: p.imageName || ("핀 " + p.no), registered: true, pinNo: p.no, zone: p.deckId || "", dateTime: p.shotAt || null, pin: p });
+      });
+      try {
+        if (typeof ThetaIntake !== "undefined" && Array.isArray(ThetaIntake._pending)) {
+          ThetaIntake._pending.forEach((f) => out.push({ name: f.name, registered: false, pinNo: null, zone: "", dateTime: null }));
+        }
+      } catch (e) {}
+      return out;
     },
     _renderDeviceGallery(body) {
-      const title = document.createElement("div"); title.textContent = "폰 사진(이 프로젝트에 등록된 360 사진)";
-      body.appendChild(title);
+      const filter = this._deviceFilter || {};
+      const all = this._devicePhotoEntries();
+      const shown = this.filterEntries(all, filter);
+      const wrap = document.createElement("div"); wrap.id = "to-devicegallery";
+      this.groupByDate(shown).forEach((g) => {
+        const h = document.createElement("div"); h.className = "to-dategroup"; h.textContent = g.date; wrap.appendChild(h);
+        g.items.forEach((entry) => {
+          const row = document.createElement("div"); row.className = "to-devicerow"; row.textContent = entry.name + " — " + this.badgeFor(entry);
+          wrap.appendChild(row);
+        });
+      });
+      body.appendChild(wrap);
     },
+
+    /** 프로젝트 등록 탭 — 사진이 연결된 핀 목록(theta360 클라우드 탭 대체). 누르면 App.focusPin 재사용. */
     _renderProjectTab(body) {
-      const title = document.createElement("div"); title.textContent = "프로젝트 등록 사진(theta360 클라우드 탭 대체)";
-      body.appendChild(title);
+      const pins = ((typeof State !== "undefined" && State.pins) || []).filter((p) => typeof PinSeries !== "undefined" && PinSeries.mediaOf && PinSeries.mediaOf(p));
+      const list = document.createElement("div"); list.id = "to-projectlist";
+      pins.forEach((p) => {
+        const row = document.createElement("button"); row.type = "button"; row.className = "to-projectrow"; row.dataset.pinId = p.id; row.textContent = "핀 " + p.no + (p.imageName ? (" — " + p.imageName) : "");
+        row.addEventListener("click", () => { if (typeof App !== "undefined" && App.focusPin) App.focusPin(p, true); });
+        list.appendChild(row);
+      });
+      body.appendChild(list);
     },
+
+    /** 설정 탭 — 카메라 등록/선택/연결 · 기종/배터리 · 옵션(지원 값만) · Insta360 제약 안내. */
     _renderSettingsTab(body) {
-      const title = document.createElement("div"); title.textContent = "카메라 등록 · 옵션(노출/셀프타이머/인터벌)";
-      body.appendChild(title);
+      const camList = document.createElement("div"); camList.id = "to-camlist";
+      this.listCameras().forEach((c) => {
+        const row = document.createElement("button"); row.type = "button"; row.className = "to-camrow"; row.dataset.serial = c.serial;
+        row.textContent = (c.label || c.serial) + (this.selectedCamera() === c.serial ? " (선택됨)" : "");
+        row.addEventListener("click", () => { this.selectCamera(c.serial); this._connectActive(c.serial).then(() => this._renderTabBody(this._tab)); });
+        camList.appendChild(row);
+      });
+      body.appendChild(camList);
+      if (this._camInfo) {
+        const caps = this.capabilitiesFromInfo(this._camInfo);
+        const info = document.createElement("div"); info.id = "to-caminfo";
+        info.textContent = (caps.model || "기종 미확인") + (this._camStatus && this._camStatus.batteryLevel != null ? (" · 배터리 " + Math.round(this._camStatus.batteryLevel * 100) + "%") : "");
+        body.appendChild(info);
+      }
+      if (this._adapter && this._adapter.exposureAdjustable === false) {
+        const warn = document.createElement("div"); warn.id = "to-adapter-warn"; warn.textContent = this._adapter.exposureReason || "이 기종은 노출 조정을 지원하지 않습니다";
+        body.appendChild(warn);
+      }
+      if (this._options) {
+        const opt = document.createElement("div"); opt.id = "to-options";
+        opt.textContent = "지원 옵션: " + Object.keys(this._options).join(", ");
+        body.appendChild(opt);
+      }
+    },
+    /** 설정 탭 [연결] — connectWifi → client 생성(opts.fetchImpl 로 테스트/네이티브 모두 주입 가능) →
+     *  info/state/옵션까지 1회 조회해 캐시한다(§SoT — 연결 성공 지점 1곳). */
+    async _connectActive(serial, opts) {
+      opts = opts || {};
+      const r = await this.connectWifi(serial);
+      if (!r.ok && opts.requireNative) return r;
+      let fetchImpl = opts.fetchImpl;
+      if (!fetchImpl) { const cap = this._cap(); if (cap) fetchImpl = this.nativeFetchAdapter(cap); }
+      if (!fetchImpl) { this._cli = null; return r; }
+      this._cli = this.client({ fetchImpl });
+      this._serial = serial;
+      try {
+        this._camInfo = await this._cli.info();
+        this._adapter = this.detectAdapter(this._camInfo);
+        this._camStatus = this.statusFromState(await this._cli.state());
+        this._options = await this.supportedOptions(this._cli, ["exposureProgram", "iso", "shutterSpeed", "exposureCompensation", "whiteBalance", "exposureDelay", "_captureInterval", "captureMode"]);
+      } catch (e) {}
+      return r;
     },
 
     /** 라이브뷰 1프레임 반영 — 06_PanoViewer.load() 재사용(새 텍스처 로더 없음). Insta360 등
@@ -680,18 +853,60 @@
       } catch (e) { return false; }
     },
 
-    /** 셔터 FAB 클릭 — 세션 중이면 다음 핀 촬영, 아니면 자유 촬영(간단 토스트만, 실제 캡처 와이어링은
-     *  카메라 클라이언트가 준비된 뒤 §미완 — 체크리스트 참조). */
+    /** 셔터 FAB 클릭 — 라이브뷰 화면을 연다(연결 안 됐으면 안내만). [촬영] 은 그 화면의 버튼. */
     _onShutter() {
-      const action = this.fabAction(this._session);
-      if (action.mode === "nextPin") {
-        this.advanceSession(this._session);
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("다음 핀 촬영: " + (action.pin && action.pin.no));
-      } else if (action.mode === "sessionDone") {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("세션의 모든 핀을 촬영했습니다");
+      if (!this._cli) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("카메라 연결 안 됨 — [설정] 탭에서 연결하세요"); return; }
+      this._openLiveView();
+    },
+    _openLiveView() {
+      const body = document.getElementById("to-body");
+      if (!body) return;
+      body.innerHTML = "";
+      const img = document.createElement("img"); img.id = "to-live-img";
+      body.appendChild(img);
+      if (this._adapter && this._adapter.liveview === false) {
+        const reason = document.createElement("div"); reason.id = "to-live-reason"; reason.textContent = this._adapter.liveviewReason || "라이브뷰 미지원";
+        body.appendChild(reason);
       } else {
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("촬영(자유 모드) — 카메라 연결 후 사용");
+        this._startLivePreviewUi(img);
       }
+      const shoot = document.createElement("button"); shoot.id = "to-live-shoot"; shoot.type = "button"; shoot.textContent = "촬영";
+      shoot.addEventListener("click", () => this._doCapture());
+      const back = document.createElement("button"); back.id = "to-live-back"; back.type = "button"; back.textContent = "닫기";
+      back.addEventListener("click", () => { this._stopLivePreviewUi(); this._renderTabBody(this._tab); });
+      body.appendChild(shoot); body.appendChild(back);
+    },
+    /** 라이브뷰 프레임 루프 시작 — mock/실기기 공용(livePreviewFrames). 끊김 재연결은 그 제너레이터가 처리. */
+    _startLivePreviewUi(imgEl) {
+      this._liveActive = true;
+      const gen = this.livePreviewFrames(this._cli, {});
+      (async () => {
+        try {
+          for await (const frame of gen) {
+            if (!this._liveActive) break;
+            this._showLiveFrame(frame);
+            if (imgEl) imgEl.src = this._liveUrl;
+          }
+        } catch (e) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("라이브뷰 오류: " + e.message); }
+      })();
+    },
+    _stopLivePreviewUi() { this._liveActive = false; },
+    /** [촬영] — 세션 중이면 현재 핀에 즉시 연결(captureToPin 재사용), 아니면 촬영+다운로드만. 결과 토스트. */
+    async _doCapture() {
+      const action = this.fabAction(this._session);
+      const toast = (m) => { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(m); };
+      try {
+        if (action.mode === "nextPin") {
+          const r = await this.captureToPin(this._cli, this._serial, action.pin, "THETA촬영");
+          this.advanceSession(this._session);
+          toast(r.status === "done" ? ("핀 " + action.pin.no + " 등록 완료" + (r.offline ? "(오프라인 큐)" : "")) : ("실패: " + r.reason));
+        } else if (action.mode === "sessionDone") {
+          toast("세션의 모든 핀을 촬영했습니다");
+        } else {
+          const fileUrl = await this.takePicture(this._cli);
+          toast("촬영 완료 — 세션을 시작하면 핀에 바로 연결됩니다 (" + String(fileUrl).split("/").pop() + ")");
+        }
+      } catch (e) { toast("촬영 실패: " + e.message); }
     },
 
     /* ══ 진입점 와이어링 — 레일 칩(data-deleg="btn-theta-osc") 대상 버튼 1개만 생성(index.html 비점유).

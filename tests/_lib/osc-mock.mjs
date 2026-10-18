@@ -118,7 +118,8 @@ export function createOscMock(opts) {
       return errorExecResponse(name, "미지원 명령: " + name, 400);
     }
     if (u.indexOf("/files/") !== -1) {
-      return { ok: true, status: 200, headers: { get: () => "image/jpeg" }, blob: async () => ({ type: "image/jpeg", size: 10 }) };
+      const bytes = new TextEncoder().encode("JPEGDATA-" + u.split("/").pop());
+      return { ok: true, status: 200, headers: { get: () => "image/jpeg" }, blob: async () => new Blob([bytes], { type: "image/jpeg" }) };
     }
     return jsonResponse({ error: "not found" }, 404);
   }
