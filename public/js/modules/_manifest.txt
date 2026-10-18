@@ -75,4 +75,7 @@
 68_ViewerAuth.js
 69_CaptureSession.js
 49_AiVision.js
+70_Scale.js
+71_XlsxExport.js
+72_DesignCompare.js
 99_footer.js

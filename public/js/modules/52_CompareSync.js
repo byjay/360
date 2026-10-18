@@ -16,6 +16,7 @@
     _dragSide: null, _lx: 0, _ly: 0,
     _pinch: { left: null, right: null },
     _busy: false, _bound: false,
+    _designMode: false, _designPin: null, _designOverlayOn: false,
 
     /** 열기 — TimeLapse의 시점(사진 이력)이 2개 이상이고 양쪽 다 정적 이미지일 때만 성공.
      *  반환 true = 360 동기 비교로 열림, false = 호출측(Compare.open)이 평면 모드로 대체해야 함. */
@@ -63,6 +64,126 @@
       if (labelA) labelA.textContent = a.label;
       if (labelB) labelB.textContent = b.label;
       return true;
+    },
+
+    /* ══════════════════════════════════════════
+       [WO 20261019-gap1 R1] 설계 360 비교 — TimeLapse 시점 대신 핀의 현장 사진(imageId)과
+       설계 360(designImageId, 72_DesignCompare.js 가 등록)을 좌우에 띄운다. 위의 open()과
+       같은 뷰어 코어·캔버스·드래그/동기화 로직을 그대로 재사용(새 수식 0) — 여기서 다른 점은
+       "시점 두 개를 어디서 가져오는가"와 요(yaw) 오프셋을 핀에 저장하는 것뿐이다.
+       열람자는 비교만(오프셋 저장은 _canEdit 체크, 등록은 PinActionPop 쪽에서 이미 막는다). ══════ */
+    async openDesign(pin) {
+      if (this._busy) return false;
+      if (typeof window === "undefined" || !window.THREE) return false;
+      if (!pin || !pin.imageId || !pin.designImageId) {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("현장 사진과 설계 360 이 모두 등록돼야 비교할 수 있습니다.");
+        return false;
+      }
+      this._busy = true;
+      try {
+        const [fieldSrc, designSrc] = await Promise.all([
+          (typeof Cloud !== "undefined" && Cloud.fetchImage) ? Cloud.fetchImage(pin.imageId) : null,
+          (typeof Cloud !== "undefined" && Cloud.fetchImage) ? Cloud.fetchImage(pin.designImageId) : null
+        ]);
+        if (!fieldSrc || !designSrc) {
+          this._busy = false;
+          if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이미지를 불러오지 못했습니다.");
+          return false;
+        }
+        const ov = document.getElementById("pano-compare-360");
+        if (!ov) { this._busy = false; return false; }
+        if (!this._left) this._left = PanoViewer.createViewerCore(document.getElementById("cmp360-canvas-a"));
+        if (!this._right) this._right = PanoViewer.createViewerCore(document.getElementById("cmp360-canvas-b"));
+        if (!this._left || !this._right) { this._busy = false; return false; }
+        await Promise.all([this._left.loadImage(fieldSrc), this._right.loadImage(designSrc)]);
+        this._designMode = true; this._designPin = pin; this._shots = [];
+        this._offsetLon = Number.isFinite(pin.designYawOffset) ? pin.designYawOffset : 0;
+        this._left.setState({ lon: 0, lat: 0, fov: 75 });
+        this._right.setState({ lon: this._offsetLon, lat: 0, fov: 75 });
+        const labelA = document.getElementById("cmp360-label-a"), labelB = document.getElementById("cmp360-label-b");
+        if (labelA) labelA.textContent = "현장 최신";
+        if (labelB) labelB.textContent = "설계 360";
+        ov.classList.remove("hidden");
+        this._sync = true;
+        this._ensureDesignControls();
+        this._applyDesignUI(true);
+        this._bind();
+        this._left.resize(); this._right.resize();
+        this._left.start(); this._right.start();
+        this._busy = false;
+        return true;
+      } catch (e) {
+        this._busy = false;
+        return false;
+      }
+    },
+
+    /** 비교 바(.cmp360-bar) 안에 요 오프셋 슬라이더 + 겹쳐보기 투명도 + 저장 버튼을 1회 런타임 주입
+     *  (index.html 미수정 — 19_PinGrid/47_Report 와 같은 관례). */
+    _ensureDesignControls() {
+      if (document.getElementById("cmp360-design-bar")) return;
+      const bar = document.querySelector(".cmp360-bar");
+      if (!bar) return;
+      const wrap = document.createElement("div");
+      wrap.id = "cmp360-design-bar";
+      wrap.setAttribute("style", "display:none;align-items:center;gap:10px;flex-wrap:wrap;width:100%;color:#fff;font-size:12px;padding-top:6px;");
+      const mkLabel = (text) => { const l = document.createElement("label"); l.textContent = text; l.setAttribute("style", "display:flex;align-items:center;gap:6px;"); return l; };
+      const yawLabel = mkLabel("방향 비슷기걸(단급) 이로달이");
+      const yaw = document.createElement("input"); yaw.type = "range"; yaw.id = "cmp360-yaw"; yaw.min = "-180"; yaw.max = "180"; yaw.step = "1"; yaw.value = "0";
+      yawLabel.appendChild(yaw);
+      const toggleBtn = document.createElement("button"); toggleBtn.type = "button"; toggleBtn.id = "cmp360-overlay-toggle"; toggleBtn.className = "cmp360-btn"; toggleBtn.textContent = "🪄 겹쳐보기";
+      const opLabel = mkLabel("겹쳐보기 파끼름");
+      const op = document.createElement("input"); op.type = "range"; op.id = "cmp360-opacity"; op.min = "0"; op.max = "100"; op.step = "1"; op.value = "50"; op.disabled = true;
+      opLabel.appendChild(op);
+      const saveBtn = document.createElement("button"); saveBtn.type = "button"; saveBtn.id = "cmp360-yaw-save"; saveBtn.className = "cmp360-btn"; saveBtn.textContent = "방향 보정 저장";
+      wrap.appendChild(yawLabel); wrap.appendChild(toggleBtn); wrap.appendChild(opLabel); wrap.appendChild(saveBtn);
+      bar.appendChild(wrap);
+      yaw.addEventListener("input", (e) => {
+        const deg = parseFloat(e.target.value) || 0;
+        this._offsetLon = deg;
+        if (this._right) this._right.setState({ lon: (this._left ? this._left.S.lon : 0) + deg, lat: this._right.S.lat, fov: this._right.S.fov });
+      });
+      toggleBtn.addEventListener("click", () => this._toggleDesignOverlay());
+      op.addEventListener("input", (e) => {
+        const b = document.getElementById("cmp360-canvas-b");
+        if (b) b.style.opacity = String((parseFloat(e.target.value) || 0) / 100);
+      });
+      saveBtn.addEventListener("click", () => this._saveDesignYaw());
+    },
+
+    /** 비교 모드 전환 — 설계 모드면 시점 선택/평면 전환 UI를 숨기고 보정 바를 보인다. */
+    _applyDesignUI(on) {
+      ["cmp360-sel-a", "cmp360-sel-b", "btn-cmp360-flat"].forEach((id) => { const el = document.getElementById(id); if (el) el.classList.toggle("hidden", on); });
+      const bar = document.getElementById("cmp360-design-bar");
+      if (bar) bar.style.display = on ? "flex" : "none";
+      const yaw = document.getElementById("cmp360-yaw"); if (yaw) yaw.value = String(this._offsetLon || 0);
+      if (!on) this._toggleDesignOverlay(false);
+    },
+
+    /** [겹쳐보기] — 두 캔버스를 같은 위치에 겹치고 위(설계)쪽 투명도를 슬라이더로 조절(Three.js 변경 0, CSS만). */
+    _toggleDesignOverlay(force) {
+      const paneB = document.getElementById("cmp360-canvas-b");
+      const op = document.getElementById("cmp360-opacity");
+      this._designOverlayOn = (force != null) ? !!force : !this._designOverlayOn;
+      if (!paneB) return;
+      if (this._designOverlayOn) {
+        paneB.style.position = "absolute"; paneB.style.left = "0"; paneB.style.top = "0"; paneB.style.zIndex = "5";
+        paneB.style.opacity = String((parseFloat(op && op.value) || 50) / 100);
+        if (op) op.disabled = false;
+      } else {
+        paneB.style.position = ""; paneB.style.left = ""; paneB.style.top = ""; paneB.style.zIndex = ""; paneB.style.opacity = "";
+        if (op) op.disabled = true;
+      }
+      if (this._right) this._right.resize();
+    },
+
+    /** 요 오프셋을 핀에 저장(미저장 상태 — 기존 "저장" 버튼으로 서버 반영, PinActionPop._commitLocal 과 동일 경로). */
+    _saveDesignYaw() {
+      if (!this._designPin) return;
+      this._designPin.designYawOffset = this._offsetLon || 0;
+      if (typeof PinActionPop !== "undefined" && PinActionPop._commitLocal) PinActionPop._commitLocal();
+      else if (typeof App !== "undefined" && App._autoSave) App._autoSave({});
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("방향 보정이 저장됐습니다(저장 버튼으로 서비에 반영하세요).");
     },
 
     /** 시점 선택 드롭다운 — 모든 시점 목록, 날짜 라벨(TimeLapse._fmtDate 재사용 = SoT 1개). */
@@ -193,8 +314,10 @@
     close() {
       const ov = document.getElementById("pano-compare-360");
       if (ov) ov.classList.add("hidden");
+      if (this._designMode) { try { this._applyDesignUI(false); } catch (e) {} }
       if (this._left) { this._left.dispose(); this._left = null; }
       if (this._right) { this._right.dispose(); this._right = null; }
       this._shots = []; this._dragSide = null; this._busy = false;
+      this._designMode = false; this._designPin = null; this._designOverlayOn = false;
     },
   };

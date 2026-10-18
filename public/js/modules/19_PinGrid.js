@@ -24,6 +24,8 @@
       if (search) search.addEventListener("input", (e) => { this.query = (e.target.value || "").trim().toLowerCase(); this.render(); });
       // [WO 20261002-gap ★1] 보고서 범위 선택 + 인쇄 버튼을 CSV 버튼 옆에 런타임 주입(index.html 미수정).
       if (typeof Report !== "undefined" && Report.init) Report.init();
+      // [WO 20261019-gap1] 도면 축척 측정 툴바 — 같은 런타임 주입 관례(index.html 미수정).
+      if (typeof Scale !== "undefined" && Scale.init) Scale.init();
     },
 
     setCollapsed(v) {

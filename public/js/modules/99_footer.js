@@ -55,6 +55,9 @@
       Voice: (typeof Voice !== "undefined" ? Voice : null),
       PhotoFolder: (typeof PhotoFolder !== "undefined" ? PhotoFolder : null),
       NumReset: (typeof NumReset !== "undefined" ? NumReset : null),   // [WO 20261015-numunify]
+      Scale: (typeof Scale !== "undefined" ? Scale : null),   // [WO 20261019-gap1] 도면 축척 측정
+      XlsxExport: (typeof XlsxExport !== "undefined" ? XlsxExport : null),
+      DesignCompare: (typeof DesignCompare !== "undefined" ? DesignCompare : null),
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

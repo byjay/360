@@ -194,6 +194,19 @@
       if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("CSV 보고서 내보내기 완료");
     },
 
+    /** [WO 20261019-gap1 R3] XLSX 내보내기 — csv() 와 같은 _rows/COLUMNS 를 71_XlsxExport 로 직렬화.
+     *  새 의존성 0개(SpreadsheetML XML, 71_XlsxExport.js 헤더 주석 참조). */
+    async xlsx(scope) {
+      scope = scope || "page";
+      if (typeof XlsxExport === "undefined") { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("XLSX 모듈을 불러오지 못했습니다."); return; }
+      const { pins, notes, decks, role } = await this._gather(scope);
+      if (!pins.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("내보낼 포인트가 없습니다."); return; }
+      const rows = this._rows(pins, notes, decks, role);
+      const scopeTag = scope === "project" ? "전체" : (scope === "deck" ? "구역" : ("P" + ((typeof State !== "undefined" && State.pdfPage) || 1)));
+      XlsxExport.download("seastar_report_" + scopeTag, "점검보고서", this.COLUMNS, rows);
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("XLSX 보고서 내보내기 완료");
+    },
+
     _esc(s) { return (typeof UI !== "undefined" && UI.escapeHtml) ? UI.escapeHtml(s) : String(s == null ? "" : s); },
 
     /** 인쇄용 HTML 문서 전체(새 창에 그대로 씀).
@@ -268,9 +281,17 @@
       printBtn.title = "인쇄 보고서";
       printBtn.setAttribute("aria-label", "인쇄 보고서");
       printBtn.innerHTML = '<i class="fa-solid fa-print"></i>';
+      const xlsxBtn = document.createElement("button");
+      xlsxBtn.id = "rpt-xlsx-btn";
+      xlsxBtn.type = "button";
+      xlsxBtn.className = csvBtn.className;
+      xlsxBtn.title = "XLSX 내보내기";
+      xlsxBtn.setAttribute("aria-label", "XLSX 내보내기");
+      xlsxBtn.innerHTML = '<i class="fa-solid fa-file-excel"></i>';
       csvBtn.insertAdjacentElement("afterend", sel);
       sel.insertAdjacentElement("afterend", printBtn);
       printBtn.addEventListener("click", () => this.print(sel.value));
+      xlsxBtn.addEventListener("click", () => this.xlsx(sel.value));
       // [WO 20261010-delivery] 납품 보고서(인쇄→PDF) · 오프라인 묶음(zip) — 같은 범위 선택(#rpt-scope)을 쓴다
       const mk = (id, icon, label, fn) => {
         const b = document.createElement("button");
@@ -284,6 +305,7 @@
       const zBtn = mk("rpt-bundle-btn", "fa-file-zipper", "오프라인 묶음(zip)", (s) => Delivery.bundle(s));
       printBtn.insertAdjacentElement("afterend", dBtn);
       dBtn.insertAdjacentElement("afterend", zBtn);
+      zBtn.insertAdjacentElement("afterend", xlsxBtn);
       // 🔴 csvBtn 자체 클릭 바인딩은 19_PinGrid.init()이 이미 가지고 있다(SoT 1곳) —
       //   여기서 또 bind 하면 클릭 1번에 CSV 2개가 나온다. PinGrid.exportCsv()가
       //   이 select(#rpt-scope)의 값을 읽어 Report.csv(scope)로 위임한다.

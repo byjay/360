@@ -388,7 +388,8 @@ console.log("\n[T5 label 쓰기 지점 = PinLink.setLabel · T6 표시 호출부
   ok(/c\.oldText/.test(R("61_NumReset.js")) && /esc\(c\.newLabel\)/.test(R("61_NumReset.js")), "T6 번호 리셋 미리보기 = 접두 포함 문자열");
   ok(/PinLink\.deckMenuItems\(deck, why\)/.test(ui) && /PinLink\.renderPopRow\(/.test(pap), "UX 구역 ⋯ 메뉴 체크 · 핀 팝업 [다른 도면에서 보기] 배선");
   const manifest = rd(M + "_manifest.txt");
-  ok(/66_PinLink\.js/.test(manifest) && /49_AiVision\.js\n99_footer\.js/.test(manifest), "고아 금지 — _manifest 등록 + 49_AiVision→99_footer 인접 유지");
+  // [WO 20261019-gap1] p127 과 같은 교정 — AiVision 등록 + footer 마지막 줄(진짜 불변)만 본다.
+  ok(/66_PinLink\.js/.test(manifest) && /49_AiVision\.js/.test(manifest) && /\n99_footer\.js\s*$/.test(manifest), "고아 금지 — _manifest 등록 + 99_footer.js 마지막 줄 유지");
 }
 
 /* ══ UX — 메뉴 사유(다른 파일) · 열람자 ══ */

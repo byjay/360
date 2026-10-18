@@ -288,7 +288,10 @@ console.log("\n[F. 360 마커 — 임시 레이어, 저장 버튼]");
 /* ══ G. 배선 — 실제 소스 대조 ══ */
 console.log("\n[G. 배선 — 06_PanoViewer / 20_App / 27_PinActionPop / 99_footer / index.html / 45_FeatureMenu / 36_Help / manifest]");
 {
-  ok(/49_AiVision\.js\n99_footer\.js/.test(MANIFEST), "G _manifest.txt 에 49_AiVision.js(99_footer 앞)");
+  // [WO 20261019-gap1] 🔴 70_Scale/71_XlsxExport/72_DesignCompare(+ 73_ThetaOSC, 동시 팀)이 합류하며
+  // manifest 가 더 길어졌다 — "AiVision 바로 다음이 footer" 는 그 시점의 우연한 순서였을 뿐, 진짜 불변은
+  // "AiVision 이 등록돼 있고 footer 가 마지막 줄"이다(고아 금지 — 의미는 그대로, 과적합 정규식만 교정).
+  ok(/49_AiVision\.js/.test(MANIFEST) && /\n99_footer\.js\s*$/.test(MANIFEST), "G _manifest.txt 에 49_AiVision.js 등록 + 99_footer.js 가 마지막 줄");
   ok(/setAiSpots\(pinId, spots\)/.test(PV_SRC) && /spots = spots\.concat\(this\._aiSpots\)/.test(PV_SRC), "G 06_PanoViewer.renderSpots 가 _aiSpots 를 합쳐 그림(기존 마커 레이어 재사용)");
   ok(/_closeImmediate\(\) \{[\s\S]{0,400}this\._aiSpots = null/.test(PV_SRC) && /AiVision\.onPanoClose\(\)/.test(PV_SRC), "G 뷰어 닫힘 → 임시 AI 마커·패널 정리");
   ok(/AiVision\.onPanoOpen\(pin\)/.test(APP_SRC), "G App.openPano → AiVision.onPanoOpen(새 핀마다 초기화)");

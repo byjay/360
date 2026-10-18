@@ -41,7 +41,10 @@ const F_P3B = mkPano("p-3.png");     // 핀 P3과 다중후보②(png, 구분자
 const MODS = fs.readFileSync(path.join(PUB, "js/modules/_manifest.txt"), "utf8").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 const rdMod = (f) => fs.readFileSync(path.join(PUB, "js/modules", f), "utf8").replace(/\r\n/g, "\n");
 ok(MODS.includes("60_PhotoFolder.js"), "사전 — _manifest.txt 에 60_PhotoFolder.js 등록");
-ok(/49_AiVision\.js\n99_footer\.js/.test(fs.readFileSync(path.join(PUB, "js/modules/_manifest.txt"), "utf8")), "사전 — 49_AiVision→99_footer 인접(p127 제약 불변)");
+{ // [WO 20261019-gap1] p127 과 같은 교정 — AiVision 등록 + footer 마지막 줄(진짜 불변)만 본다.
+  const mf = fs.readFileSync(path.join(PUB, "js/modules/_manifest.txt"), "utf8");
+  ok(/49_AiVision\.js/.test(mf) && /\n99_footer\.js\s*$/.test(mf), "사전 — 49_AiVision 등록 + 99_footer.js 마지막 줄(p127 불변 교정판)");
+}
 const bundle = MODS.map((f) => rdMod(f)).join("\n"); // 99_footer.js 가 이미 __wm 에 PhotoFolder 를 담아 노출(수정 0, 재노출 불필요)
 
 const CT = { ".html": "text/html", ".css": "text/css", ".js": "application/javascript", ".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".webmanifest": "application/json" };

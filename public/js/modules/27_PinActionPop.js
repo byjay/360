@@ -414,6 +414,11 @@
         const urlInput = $("pap-photo-url"); if (urlInput) urlInput.value = "";
         const fileInput = $("pap-photo-file"); if (fileInput) fileInput.value = "";
       }
+      // [WO 20261019-gap1 R1] 설계 360 등록/비교 — index.html 수정 금지 관례(§위 metaEl 과 동일) 그대로,
+      // registerBox 옆에 런타임 주입. 72_DesignCompare.js 가 실제 업로드/비교 호출을 담당(SoT 1곳).
+      if (registerBox && typeof registerBox.insertAdjacentElement === "function" && typeof DesignCompare !== "undefined") {
+        DesignCompare.renderPinBox(pin, canEdit, registerBox);
+      }
     },
 
     /** 미리보기 이미지 소스 해석 — 21_AllPins.js._loadThumb 과 같은 캐시/조회 경로 재사용 */
