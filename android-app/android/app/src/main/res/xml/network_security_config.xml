@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  🔴 cleartext(http://)는 전역 허용하지 않는다 — base-config 를 두지 않으므로 이 파일 밖 모든
+  도메인(scan.seastar.work 등)은 여전히 HTTPS 전용이다(기존 capacitor.config.json cleartext:false
+  와 동급 보안 유지). 예외는 THETA 카메라 AP IP 하나뿐이다.
+
+  보안 근거: 192.168.1.1 은 RFC1918 사설 주소이고, THETA 카메라가 자기 자신을 AP(THETAxxxxx.OSC)로
+  열었을 때만 그 주소가 응답한다 — 휴대폰이 그 와이파이에 물리적으로 접속하지 않으면 이 경로는
+  존재하지 않는다(공인 인터넷 어디서도 192.168.1.1 로 라우팅되지 않음, RFC1918). 또한 이 설정은
+  OscCameraPlugin(네이티브, Network#openConnection 로 카메라 전용 네트워크에만 묶어 요청)에서만
+  쓰이고, WebView 는 이 IP 를 전혀 호출하지 않는다(cleartext 허용과 WebView mixed-content 차단은
+  서로 다른 계층 — WebView 는 여전히 모든 http:// 를 막는다, capacitor.config.json 변경 없음).
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.1.1</domain>
+    </domain-config>
+</network-security-config>

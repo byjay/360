@@ -34,7 +34,7 @@ function boot(uploadBehavior) {
   const calls = { uploadOneRow: [], attachToPin: [], enqueue: [] };
   const sandbox = {
     console, setTimeout, Promise, Uint8Array, Uint8ClampedArray, TextEncoder, TextDecoder, Object, Array, Math, JSON, Date, Error, Symbol, String, Number, Boolean, isNaN,
-    File: globalThis.File, Blob: globalThis.Blob,
+    File: globalThis.File, Blob: globalThis.Blob, btoa: globalThis.btoa, atob: globalThis.atob,
     localStorage: makeLocalStorage(),
     Install: { isNativeApp: () => true },
     App: { _detect360: (file, cb) => cb(true, 6720, 3360) },
@@ -168,7 +168,8 @@ await (async () => {
   const cli = TO.client({ fetchImpl: mock.fetchImpl });
   const info = await cli.info();
   const adapter = TO.detectAdapter(info);
-  ok(adapter.vendor === "insta360" && adapter.liveview === false && /\[Uncertain\]/.test(adapter.liveviewReason), "⑦-1 Insta360 판정 — 라이브뷰 미지원 + [Uncertain] 사유(문서 미확인 명시)");
+  ok(adapter.vendor === "insta360" && adapter.liveview === false && /공식 문서/.test(adapter.liveviewReason), "⑦-1 Insta360 판정 — 라이브뷰 미지원(공식 문서 확인된 사유)");
+  ok(adapter.exposureAdjustable === false && adapter.videoSupported === false, "⑦-1b Insta360 — 노출조정 불가·동영상(OSC) 미지원 플래그(공식 문서 확인)");
   const opts2 = await TO.supportedOptions(cli, ["iso", "shutterSpeed"]);
   ok(typeof opts2 === "object", "⑦-2 공통 OSC(getOptions)는 기종 불문 동작");
   let threw = null;
@@ -234,6 +235,90 @@ await (async () => {
   const r = await TO.connectWifi("YJ30142118");
   ok(r.ok === false && r.mode === "manual" && r.ssid === "THETAYJ30142118.OSC" && r.password === "30142118", "⑪-1 네이티브 플러그인 없음 → 수동 안내(SSID/PW 그대로 반환, UI 복사버튼용)");
 })();
+
+/* ══ ⑫ 네이티브 경로(OscCameraPlugin) — WiFi 연결 / HTTP 어댑터 / 라이브뷰 이벤트 ══════════
+   🔴 [마스터 현장 이슈] bindProcessToNetwork 금지 — 카메라 요청만 Network#openConnection 로
+   개별 바인딩(실제 네이티브 코드는 android-app/android/.../OscCameraPlugin.java). 여기서는
+   cap.nativePromise/cap.nativeCallback 호출 "인터페이스"와 라우팅 분리만 단위검증한다(JS 쪽
+   책임 — 네이티브 쪽 소켓 동작은 실기기 전까지 [Uncertain], .tmp/theta-sc-fieldtest.md 참조). */
+await (async () => {
+  const { TO, sandbox } = boot();
+  const nativeCalls = [];
+  sandbox.window.Capacitor = {
+    nativePromise: async (plugin, method, args) => { nativeCalls.push({ plugin, method, args }); return { ok: true }; },
+  };
+  const r = await TO.connectWifi("YJ30142118");
+  ok(r.ok === true && r.mode === "native", "⑫-1 네이티브 플러그인 있으면 그 경로로 연결");
+  ok(nativeCalls.length === 1 && nativeCalls[0].plugin === "OscCamera" && nativeCalls[0].method === "connect" && nativeCalls[0].args.ssid === "THETAYJ30142118.OSC", "⑫-2 OscCamera.connect(ssid,password) 호출(bindProcessToNetwork 아님 — 카메라 전용 네트워크만 요청)");
+})();
+await (async () => {
+  const { TO, sandbox } = boot();
+  sandbox.window.Capacitor = { nativePromise: async () => { throw new Error("와이파이 거부(mock)"); } };
+  const r = await TO.connectWifi("YJ30142118");
+  ok(r.ok === false && r.mode === "native" && /거부/.test(r.reason), "⑫-3 네이티브 연결 실패 → 사유와 함께 실패 보고(수동 폴백은 호출부가 안내)");
+})();
+await (async () => {
+  const { TO, sandbox } = boot();
+  sandbox.window.Capacitor = {
+    nativePromise: async (plugin, method, args) => {
+      if (method === "request") {
+        const bodyText = args.bodyBase64 ? Buffer.from(args.bodyBase64, "base64").toString("utf8") : null;
+        if (String(args.url).endsWith("/osc/info")) return { status: 200, contentType: "application/json", bodyBase64: Buffer.from(JSON.stringify({ model: "RICOH THETA SC" })).toString("base64") };
+        if (bodyText && JSON.parse(bodyText).name === "camera.takePicture") return { status: 200, contentType: "application/json", bodyBase64: Buffer.from(JSON.stringify({ name: "camera.takePicture", id: "1", state: "done", results: { fileUrl: "http://192.168.1.1/files/x.jpg" } })).toString("base64") };
+        return { status: 404, contentType: "application/json", bodyBase64: Buffer.from("{}").toString("base64") };
+      }
+      throw new Error("미지원 메서드: " + method);
+    },
+  };
+  const cap = sandbox.window.Capacitor;
+  const fetchImpl = TO.nativeFetchAdapter(cap);
+  const cli = TO.client({ fetchImpl });
+  const info = await cli.info();
+  ok(info.model === "RICOH THETA SC", "⑫-4 nativeFetchAdapter — GET(JSON) 라운드트립(base64↔객체)");
+  const exec = await cli.execute("camera.takePicture", {});
+  ok(exec.state === "done" && exec.results.fileUrl.indexOf("192.168.1.1") !== -1, "⑫-5 nativeFetchAdapter — POST(JSON body) 라운드트립");
+})();
+await (async () => {
+  const { TO, sandbox } = boot();
+  let frameListener = null, errorListener = null, startCount = 0;
+  sandbox.window.Capacitor = {
+    nativeCallback: (plugin, method, args, cb) => { if (args.eventName === "previewFrame") frameListener = cb; if (args.eventName === "previewError") errorListener = cb; },
+    nativePromise: async (plugin, method) => {
+      if (method === "startPreview") {
+        startCount++;
+        setTimeout(() => {
+          if (startCount === 1) { frameListener({ dataBase64: TO._bytesToBase64(new TextEncoder().encode("F1")) }); errorListener({ message: "중간 끊김(mock)" }); }
+          else { frameListener({ dataBase64: TO._bytesToBase64(new TextEncoder().encode("F2")) }); }
+        }, 0);
+        return {};
+      }
+      return {};
+    },
+  };
+  const cap = sandbox.window.Capacitor;
+  const frames = [];
+  let n = 0;
+  for await (const f of TO.livePreviewFramesNative(cap, { maxRetries: 2 })) {
+    frames.push(new TextDecoder().decode(f));
+    n++;
+    if (n === 2) break;
+  }
+  ok(frames.join(",") === "F1,F2", "⑫-6 네이티브 프레임 이벤트 — 중간 오류 후 자동 재연결(startPreview 2회)로 F1,F2 수신");
+  ok(startCount === 2, "⑫-7 끊김 1회 → startPreview 재호출 1회(재연결 로직)");
+})();
+
+/* ══ ⑬ network_security_config.xml 정적 검사 — 카메라 IP(192.168.1.1) 한 곳만 cleartext 허용 ══ */
+{
+  const nscPath = path.join(ROOT, "android-app/android/app/src/main/res/xml/network_security_config.xml");
+  const xml = fs.readFileSync(nscPath, "utf8");
+  const domainConfigs = xml.match(/<domain-config[^>]*cleartextTrafficPermitted="true"[\s\S]*?<\/domain-config>/g) || [];
+  ok(domainConfigs.length === 1, "⑬-1 cleartext 허용 domain-config 는 정확히 1개");
+  const domains = (domainConfigs[0] || "").match(/<domain[^>]*>([^<]+)<\/domain>/g) || [];
+  ok(domains.length === 1 && /192\.168\.1\.1/.test(domains[0]), "⑬-2 그 1개 domain-config 안의 도메인도 정확히 1개(192.168.1.1)");
+  ok(!/<base-config[^>]*cleartextTrafficPermitted="true"/.test(xml), "⑬-3 base-config(전역) cleartext 허용은 없음 — 그 외 모든 도메인은 여전히 HTTPS 전용");
+  const manifestXml = fs.readFileSync(path.join(ROOT, "android-app/android/app/src/main/AndroidManifest.xml"), "utf8");
+  ok(/android:networkSecurityConfig="@xml\/network_security_config"/.test(manifestXml), "⑬-4 AndroidManifest 가 이 설정을 실제로 참조");
+}
 
 console.log(failed === 0 ? "\nALL PASS" : "\n" + failed + " FAILED");
 process.exitCode = failed === 0 ? 0 : 1;

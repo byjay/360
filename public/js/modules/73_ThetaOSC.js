@@ -63,21 +63,86 @@
     isAvailable() { try { return typeof Install !== "undefined" && Install.isNativeApp && !!Install.isNativeApp(); } catch (e) { return false; } },
     webDisabledReason() { return this.isAvailable() ? "" : "APK 에서 사용 가능 — 웹(브라우저)에서는 비활성"; },
 
-    /* ══ WiFi 연결(네이티브 플러그인 있으면 사용, 없으면 수동 안내) ═══ */
+    /** 이 페이지(WebView)에 실제 Capacitor 네이티브 브리지가 있는가 — SoT: 38c_ApkInstall._cap() 과
+     *  같은 판정(cap.nativePromise 함수 존재 + Install.isNativeApp()). */
+    _cap() {
+      try {
+        const cap = (typeof window !== "undefined") ? window.Capacitor : null;
+        const isNative = (typeof Install !== "undefined" && Install.isNativeApp) ? Install.isNativeApp() : false;
+        return (cap && typeof cap.nativePromise === "function" && isNative) ? cap : null;
+      } catch (e) { return null; }
+    },
+
+    /* ══ WiFi 연결 — OscCameraPlugin(네이티브, android/.../OscCameraPlugin.java)이 있으면 그 경로,
+       없거나 실패하면 SSID/PW 수동 안내(복사 버튼용) ══════════════════════════════════════════
+       🔴 [마스터 현장 이슈] bindProcessToNetwork 로 앱 전체를 카메라망에 묶지 않는다 — 그러면 업로드까지
+       끊긴다. OscCameraPlugin.connect() 는 ConnectivityManager.requestNetwork(WifiNetworkSpecifier)로
+       "로컬 전용(인터넷 없음)" 네트워크만 따로 열어 보관하고, 이후 모든 카메라 요청은
+       Network#openConnection(url) 로 그 네트워크에만 개별 바인딩한다(앱의 기본 네트워크/업로드는
+       그대로 셀룰러·기존 와이파이). */
     async connectWifi(serial) {
       const ssid = this.ssidOf(serial), password = this.passwordOf(serial);
-      let cap = null;
-      try { cap = (typeof window !== "undefined") ? window.Capacitor : null; } catch (e) {}
-      if (cap && typeof cap.nativePromise === "function" && cap.Plugins && cap.Plugins.WifiConnect) {
-        try { await cap.nativePromise("WifiConnect", "connect", { ssid, password }); return { ok: true, mode: "native", ssid, password }; }
+      const cap = this._cap();
+      if (cap) {
+        try { await cap.nativePromise("OscCamera", "connect", { ssid, password }); return { ok: true, mode: "native", ssid, password }; }
         catch (e) { return { ok: false, mode: "native", reason: (e && e.message) || String(e), ssid, password }; }
       }
-      return { ok: false, mode: "manual", reason: "네이티브 WiFi 연결 플러그인 없음 — 휴대폰 와이파이 설정에서 수동 연결 필요", ssid, password };
+      return { ok: false, mode: "manual", reason: "네이티브 카메라 플러그인 없음(Android10 미만 포함) — 휴대폰 와이파이 설정에서 수동 연결 필요", ssid, password };
+    },
+    async disconnectWifi() {
+      const cap = this._cap();
+      if (cap) { try { await cap.nativePromise("OscCamera", "disconnect", {}); } catch (e) {} }
     },
 
     async _sleep(ms) { return new Promise((res) => setTimeout(res, ms)); },
 
-    /* ══ OSC HTTP 클라이언트(전송 주입 — 테스트는 mock fetchImpl) ══════ */
+    /* ══ base64 ↔ 바이트(네이티브 브리지 전송용) — 순수 ══════════════════════════════ */
+    _bytesToBase64(bytes) {
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    },
+    _base64ToBytes(b64) {
+      if (!b64) return new Uint8Array(0);
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    },
+
+    /** OscCameraPlugin.request() 를 fetch 와 같은 모양으로 감싼 어댑터 — 73_ThetaOSC.js 의 client()가
+     *  fetchImpl 로 그대로 주입받는다(§재사용 — 네이티브 경로용 별도 클라이언트 구현 없음).
+     *  🔴 스트리밍(getLivePreview) 은 이 어댑터로 안 된다 — request() 는 요청 1건이 끝나야 응답하는
+     *  구조(네이티브 플러그인 호출 자체가 1회 Promise)라 끝나지 않는 MJPEG 스트림을 돌릴 수 없다.
+     *  라이브뷰는 livePreviewFramesNative() 가 별도 네이티브 이벤트("previewFrame")로 받는다. */
+    nativeFetchAdapter(cap) {
+      const self = this;
+      return async function nativeFetch(url, init) {
+        init = init || {};
+        const headers = {};
+        if (init.headers) Object.keys(init.headers).forEach((k) => { headers[k] = init.headers[k]; });
+        const bodyBase64 = (init.body != null) ? self._bytesToBase64(new TextEncoder().encode(init.body)) : undefined;
+        let res;
+        try {
+          res = await cap.nativePromise("OscCamera", "request", { method: init.method || "GET", url: String(url), bodyBase64, headers });
+        } catch (e) {
+          return { ok: false, status: 0, headers: { get: () => null }, json: async () => ({}), blob: async () => new Blob([]) };
+        }
+        const status = res.status || 0;
+        const bytes = self._base64ToBytes(res.bodyBase64);
+        const contentType = res.contentType || "";
+        return {
+          ok: status >= 200 && status < 300,
+          status,
+          headers: { get: (k) => (String(k).toLowerCase() === "content-type" ? contentType : null) },
+          json: async () => { try { return JSON.parse(new TextDecoder().decode(bytes)); } catch (e) { return {}; } },
+          blob: async () => new Blob([bytes], { type: contentType || "application/octet-stream" }),
+          body: null, // 버퍼링 응답(요청 1건 종료 후 전달) — 스트리밍 바디 없음, getLivePreviewStream 은 이 경로를 쓰지 않는다
+        };
+      };
+    },
+
+    /* ══ OSC HTTP 클라이언트(전송 주입 — 테스트는 mock fetchImpl, 실기기는 nativeFetchAdapter) ══ */
     client(opts) {
       opts = opts || {};
       const baseUrl = opts.baseUrl || this.BASE_URL;
@@ -161,14 +226,22 @@
       const mfr = String(info.manufacturer || "").toLowerCase();
       const model = String(info.model || "").toLowerCase();
       if (mfr.indexOf("ricoh") !== -1 || model.indexOf("theta") !== -1) {
-        return { vendor: "theta", liveview: true, liveviewReason: "" };
+        return { vendor: "theta", liveview: true, liveviewReason: "", exposureAdjustable: true, exposureReason: "", videoSupported: true, videoReason: "" };
       }
       if (mfr.indexOf("insta360") !== -1 || mfr.indexOf("arashi") !== -1 || model.indexOf("insta360") !== -1) {
-        // [Uncertain] Insta360 공식 문서 미확인(도구 없음) — 공식 발표(라이브 피드는 별도 SDK, OSC 로는
-        // 불가)를 발주 배경사실로만 반영. 실제 지원 명령 목록은 실기기/문서 확인 전까지 보수적으로 제한.
-        return { vendor: "insta360", liveview: false, liveviewReason: "Insta360 은 OSC 라이브뷰 미지원(공식 SDK 별도·승인 필요) — [Uncertain] 문서 미확인, 셔터·설정·파일가져오기만 지원" };
+        // [코디네이터 확인 2026-10-19, onlinemanual.insta360.com/developer/en-us/resource/integration]
+        // OSC 는 와이파이 전용(블루투스 불가) · 라이브 피드 불가(별도 Media SDK, 승인 필요) · 사진은
+        // 카메라 내부 스티칭 ON 필요 · 동영상은 내부 스티칭 불가(Media SDK 필요) · OSC 설정은 카메라
+        // 화면 설정과 일치해야 하며 노출 파라미터는 조정 불가. 이 4가지는 "확인됨"(Uncertain 아님).
+        // SSID·IP·엔드포인트는 그 문서에 없음 — /osc/info 로 판별, [Uncertain] 유지.
+        return {
+          vendor: "insta360",
+          liveview: false, liveviewReason: "Insta360 OSC 는 라이브 피드 미지원(공식 문서 확인 — 별도 Media SDK·승인 필요)",
+          exposureAdjustable: false, exposureReason: "Insta360 OSC 설정은 카메라 화면 설정과 일치해야 함(노출 파라미터 조정 불가, 공식 문서 확인)",
+          videoSupported: false, videoReason: "동영상은 카메라 내부 스티칭이 불가(Media SDK 필요, 공식 문서 확인) — OSC 로는 사진만",
+        };
       }
-      return { vendor: "unknown", liveview: false, liveviewReason: "기종 미확인 — 공통 OSC 명령만 시도" };
+      return { vendor: "unknown", liveview: false, liveviewReason: "기종 미확인 — 공통 OSC 명령만 시도", exposureAdjustable: true, exposureReason: "", videoSupported: true, videoReason: "" };
     },
 
     /* ══ 촬영 ═══════════════════════════════════════════════════════ */
@@ -341,6 +414,39 @@
           await this._sleep(this.RECONNECT.delayMs);
           continue;
         }
+      }
+    },
+
+    /** 실기기 네이티브 경로 — OscCameraPlugin 이 자체 소켓으로 멀티파트를 파싱해 "previewFrame"
+     *  이벤트로 프레임(바이트)을 push 한다(브리지가 끝나지 않는 스트림을 전달할 수 없어서, request()
+     *  의 1회 Promise 대신 이벤트로 받는다). cap: window.Capacitor(_cap() 로 얻은 것). */
+    async *livePreviewFramesNative(cap, opts) {
+      opts = opts || {};
+      const maxRetries = opts.maxRetries != null ? opts.maxRetries : this.RECONNECT.max;
+      const baseUrl = opts.baseUrl || this.BASE_URL;
+      const self = this;
+      let queue = [], waiters = [];
+      const push = (item) => { if (waiters.length) waiters.shift()(item); else queue.push(item); };
+      const next = () => new Promise((resolve) => { if (queue.length) resolve(queue.shift()); else waiters.push(resolve); });
+      cap.nativeCallback("OscCamera", "addListener", { eventName: "previewFrame" }, (data) => push({ type: "frame", bytes: self._base64ToBytes(data && data.dataBase64) }));
+      cap.nativeCallback("OscCamera", "addListener", { eventName: "previewError" }, (data) => push({ type: "error", message: (data && data.message) || "스트림 오류" }));
+      let attempt = 0;
+      try {
+        for (;;) {
+          try { await cap.nativePromise("OscCamera", "startPreview", { url: baseUrl + "/osc/commands/execute" }); }
+          catch (e) { attempt++; if (attempt > maxRetries) throw e; await this._sleep(this.RECONNECT.delayMs); continue; }
+          let reconnect = false;
+          while (!reconnect) {
+            const item = await next();
+            if (item.type === "frame") { attempt = 0; yield item.bytes; continue; }
+            attempt++;
+            if (attempt > maxRetries) throw new Error(item.message);
+            await this._sleep(this.RECONNECT.delayMs);
+            reconnect = true;
+          }
+        }
+      } finally {
+        try { await cap.nativePromise("OscCamera", "stopPreview", {}); } catch (e) {}
       }
     },
 

@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SeastarNativePlugin.class);
+        registerPlugin(OscCameraPlugin.class); // THETA/OSC 카메라 전용 네트워크 I/O(73_ThetaOSC.js 짝)
         super.onCreate(savedInstanceState);
     }
 }
