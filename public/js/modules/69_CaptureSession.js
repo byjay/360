@@ -386,6 +386,9 @@
         body: (s.mode === "tap" ? ("정지점 " + s.taps.length + "개 기록됨") : "동선 모드") + " — 사진을 선택해 일괄 등록하거나 세션을 종료하세요.",
         actions: [
           { label: "📷 사진 선택 → 일괄 등록", primary: true, run: () => { const inp = document.getElementById("input-capture-session"); if (inp) inp.click(); } },
+          // [WO THETA-OSC 20261019] 세션 중 [카메라로 촬영] — 73_ThetaOSC.js 에 세션을 넘겨 FAB가
+          // "다음 핀 촬영"으로 동작하게 한다(함수 경계로만 연결, CaptureSession 내부 재구현 없음).
+          { label: "📡 카메라로 촬영", run: () => { if (typeof ThetaOSC !== "undefined" && ThetaOSC.open) ThetaOSC.open({ session: s }); else this._toast("카메라 모듈을 불러오지 못했습니다"); } },
           { label: "↩ 세션 되돌리기(생성 핀 전부 취소)", run: () => this.undo().then((r) => this._toast(r.removed + "개 핀 되돌림")) },
           { label: "닫기", run: () => {} }
         ]

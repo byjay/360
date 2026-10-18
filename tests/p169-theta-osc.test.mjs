@@ -29,6 +29,40 @@ function makeLocalStorage() {
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), clear: () => m.clear() };
 }
 
+/** 최소 fake DOM(p121-theta-app-handoff.test.mjs makeEl 과 같은 방식) — UI(⑭) 섹션 전용. */
+function makeFakeDocument() {
+  const registry = new Map();
+  function makeElement(tag) {
+    const set = new Set();
+    const el = {
+      tagName: tag, _id: "", attrs: {}, style: {}, dataset: {}, children: [], parentNode: null, _l: {}, textContent: "",
+      get id() { return el._id; },
+      set id(v) { if (el._id) registry.delete(el._id); el._id = v; if (v) registry.set(v, el); },
+      set innerHTML(v) { if (v === "") el.children = []; },
+      classList: {
+        add: (...c) => c.forEach((x) => set.add(x)), remove: (...c) => c.forEach((x) => set.delete(x)), contains: (c) => set.has(c),
+        toggle(c, f) { if (f === undefined) f = !set.has(c); if (f) set.add(c); else set.delete(c); return f; },
+      },
+      get className() { return Array.from(set).join(" "); },
+      set className(v) { set.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => set.add(c)); },
+      appendChild(c) { el.children.push(c); c.parentNode = el; return c; },
+      insertBefore(n, ref) { const i = el.children.indexOf(ref); if (i >= 0) el.children.splice(i, 0, n); else el.children.push(n); n.parentNode = el; return n; },
+      setAttribute(k, v) { el.attrs[k] = String(v); }, getAttribute(k) { return el.attrs[k]; },
+      addEventListener(t, f) { (el._l[t] = el._l[t] || []).push(f); },
+      click() { (el._l.click || []).slice().forEach((f) => f({})); },
+      querySelector() { return null; },
+    };
+    return el;
+  }
+  const body = makeElement("body");
+  const doc = {
+    createElement: (tag) => makeElement(tag),
+    getElementById: (id) => registry.get(id) || null,
+    body,
+  };
+  return { doc, registry };
+}
+
 /** 격리된 샌드박스 하나 생성 + 70_ThetaOSC.js 평가. uploadBehavior: PhotoBatch._uploadOneRow 스텁 동작 조정. */
 function boot(uploadBehavior) {
   const calls = { uploadOneRow: [], attachToPin: [], enqueue: [] };
@@ -318,6 +352,76 @@ await (async () => {
   ok(!/<base-config[^>]*cleartextTrafficPermitted="true"/.test(xml), "⑬-3 base-config(전역) cleartext 허용은 없음 — 그 외 모든 도메인은 여전히 HTTPS 전용");
   const manifestXml = fs.readFileSync(path.join(ROOT, "android-app/android/app/src/main/AndroidManifest.xml"), "utf8");
   ok(/android:networkSecurityConfig="@xml\/network_security_config"/.test(manifestXml), "⑬-4 AndroidManifest 가 이 설정을 실제로 참조");
+}
+
+/* ══ ⑭ [THETA] 화면 UI — 4탭 렌더 · FAB→세션/라이브뷰 · 웹 안내 · 진입점 연동(정적) ══════════ */
+function attachDom(booted) {
+  const { doc } = makeFakeDocument();
+  booted.sandbox.document = doc;
+  booted.sandbox.window.document = doc;
+  booted.sandbox.URL = { createObjectURL: () => "blob://x", revokeObjectURL: () => {} };
+  const uiCalls = { apkOpen: 0, panoLoad: [], toasts: [] };
+  booted.sandbox.ApkInstall = { open: () => { uiCalls.apkOpen++; } };
+  booted.sandbox.PanoViewer = { load: (url, name) => uiCalls.panoLoad.push({ url, name }) };
+  booted.sandbox.Prompt = { toast: (m) => uiCalls.toasts.push(m) };
+  booted.sandbox.CaptureSession = { current: () => null };
+  return { doc, uiCalls };
+}
+{
+  const booted = boot();
+  const { doc, uiCalls } = attachDom(booted);
+  booted.sandbox.Install.isNativeApp = () => false; // 웹(PWA)
+  const r = booted.TO.open();
+  ok(r === "install" && uiCalls.apkOpen === 1 && !doc.getElementById("theta-osc-screen"), "⑭-1 웹에서 [THETA] 진입 → 화면 안 열고 ApkInstall.open() 안내");
+}
+{
+  const booted = boot();
+  const { doc } = attachDom(booted);
+  const r = booted.TO.open();
+  ok(r === "open", "⑭-2 APK에서는 open() 이 화면을 연다");
+  const tabsBar = doc.getElementById("to-tabs");
+  const labels = tabsBar.children.map((b) => b.textContent);
+  ok(labels.join(",") === "폰 사진,카메라 사진,프로젝트 등록,설정", "⑭-3 4탭 정확히(폰 사진/카메라 사진/프로젝트 등록/설정)");
+  ok(!doc.getElementById("theta-osc-screen").classList.contains("hidden"), "⑭-4 화면이 보임(hidden 해제)");
+  const status = doc.getElementById("to-status");
+  ok(/Wi-Fi 연결됨|연결 안 됨/.test(status.textContent) && /모바일 데이터/.test(status.textContent), "⑭-5 상태줄 '카메라: … · 인터넷: 모바일 데이터' 형식");
+}
+{
+  const { TO } = boot();
+  const session = { pins: [{ id: "a", no: 1 }, { id: "b", no: 2 }], index: 0 };
+  ok(TO.fabAction(session).mode === "nextPin" && TO.fabAction(session).pin.no === 1, "⑭-6 세션 중 FAB → '다음 핀 촬영'(라이브뷰/자유촬영 아님)");
+  ok(TO.fabAction(null).mode === "freeShot", "⑭-7 세션 없으면 FAB → 자유 촬영");
+  const done = { pins: [{ id: "a", no: 1 }], index: 1 };
+  ok(TO.fabAction(done).mode === "sessionDone", "⑭-8 세션의 핀을 모두 촬영하면 '완료'");
+}
+await (async () => {
+  const booted = boot();
+  const { doc, uiCalls } = attachDom(booted);
+  booted.TO.open();
+  booted.TO._session = { pins: [{ id: "a", no: 5 }], index: 0 };
+  doc.getElementById("to-shutter-fab").click();
+  ok(uiCalls.toasts.some((t) => /다음 핀 촬영.*5/.test(t)), "⑭-9 FAB 클릭(세션 중) → '다음 핀 촬영: 5' 토스트");
+})();
+{
+  // 라이브뷰 — Insta360(liveview:false)이면 PanoViewer.load 를 호출하지 않는다(호출부가 adapter.liveview 를 먼저 봄).
+  const booted = boot();
+  const { uiCalls } = attachDom(booted);
+  const adapterTheta = booted.TO.detectAdapter({ manufacturer: "RICOH", model: "RICOH THETA SC" });
+  const adapterInsta = booted.TO.detectAdapter({ manufacturer: "Insta360", model: "Insta360 X5" });
+  if (adapterTheta.liveview) booted.TO._showLiveFrame(new Uint8Array([1, 2, 3]));
+  ok(uiCalls.panoLoad.length === 1, "⑭-10 THETA(liveview:true) → PanoViewer.load 호출(라이브뷰 재사용)");
+  ok(adapterInsta.liveview === false, "⑭-11 Insta360(liveview:false) → 호출부가 _showLiveFrame 을 안 부르므로 PanoViewer 호출 0(설계상 가드)");
+}
+{
+  // 진입점 연동(정적 검사) — index.html 레일 칩 · RailLabels 라벨 · FeatureMenu 항목 · CaptureSession 연동.
+  const idx = rd("public/index.html");
+  ok(/data-deleg="btn-theta-osc"/.test(idx), "⑭-12 index.html 레일 칩(btn-theta-osc) 존재");
+  const ui11 = rd("public/js/modules/11_UI.js");
+  ok(/data-deleg="btn-theta-osc"[^}]*label:\s*"카메라"/.test(ui11), "⑭-13 RailLabels 가 그 칩에 '카메라' 라벨 등록");
+  const fm = rd("public/js/modules/45_FeatureMenu.js");
+  ok(/id:\s*"theta-osc"[\s\S]{0,200}ThetaOSC\.open\(\)/.test(fm), "⑭-14 FeatureMenu 항목이 ThetaOSC.open() 을 호출");
+  const cs = rd("public/js/modules/69_CaptureSession.js");
+  ok(/ThetaOSC\.open\(\{\s*session:\s*s\s*\}\)/.test(cs), "⑭-15 CaptureSession [카메라로 촬영] → ThetaOSC.open({session}) 연동(함수 경계)");
 }
 
 console.log(failed === 0 ? "\nALL PASS" : "\n" + failed + " FAILED");

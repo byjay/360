@@ -2344,6 +2344,7 @@
       { sel: '[data-deleg="btn-region-extract"]', label: "자르기" },
       { sel: '[data-deleg="btn-route-draw"]', label: "동선" },
       { sel: '[data-deleg="btn-theta-intake"]', label: "360" },
+      { sel: '[data-deleg="btn-theta-osc"]', label: "카메라" },
       { sel: '[data-deleg="btn-checkboard-enter"]', label: "격자" },
       { sel: "#btn-checkboard-renumber", label: "목록" },
       { sel: "#btn-photobatch", label: "사진" }

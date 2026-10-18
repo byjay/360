@@ -140,6 +140,8 @@
         run: () => FieldCapture.open(), covers: ["mdock-field-capture"] },
       { id: "field-capture-method", group: "pano", icon: "⇄", label: "현장 촬영 방식 변경", desc: "THETA 공유·갤러리·카메라·안드로이드 앱 중 다시 고릅니다", perm: "designer", needs: "drawing", mod: "FieldCapture",
         run: () => FieldCapture.open(true) },
+      { id: "theta-osc", group: "pano", icon: "📡", label: "THETA 카메라 직접 제어", desc: "와이파이로 카메라 연결 → 설정·촬영·갤러리를 이 앱에서(APK 전용, 웹에서는 설치 안내)", perm: "designer", needs: "drawing", mod: "ThetaOSC",
+        run: () => ThetaOSC.open() },
       { id: "photo-batch", group: "pano", icon: "▣", label: "사진 폴더 일괄 매칭", help: "photo-batch", perm: "designer", needs: "drawing", mode: "photo", click: "btn-photobatch", covers: ["btn-photobatch", "mdock-photobatch"] },
       // [WO 20261015-photofolder2] 구역마다 폴더를 지정하고 일괄/하나씩 등록을 체크박스로 고르는 화면(60_PhotoFolder.js openDeckManager)
       { id: "photo-folder-deck", group: "pano", icon: "📁", label: "구역별 사진 폴더 지정", desc: "구역마다 폴더를 지정하고 일괄/하나씩 등록 방식을 고릅니다", perm: "designer", needs: "project", mod: "PhotoFolder",

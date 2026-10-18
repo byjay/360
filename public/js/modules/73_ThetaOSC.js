@@ -551,5 +551,160 @@
       return results;
     },
 
-    init() { /* DOM 마운트는 추후 메뉴 통합 시 open() 호출로 — 이 패스는 로직 완성에 집중(보고 참조) */ },
+    /* ══ [THETA] 화면 — JS 생성(index.html 비점유, 60_PhotoFolder._ensureConfirmModal 관례와 동일) ══
+       4탭(폰 사진/카메라 사진/프로젝트 등록/설정) · 상태줄 · 셔터 FAB(세션 중이면 "다음 핀 촬영") ·
+       라이브뷰(06_PanoViewer.load 재사용 — 프레임마다 Blob URL 로 텍스처 교체, Insta360 이면 숨김).
+       웹(PWA)에서는 열지 않고 38c_ApkInstall.open() 안내로 대체(§isAvailable, 열람자 0). */
+    TABS: [
+      { id: "device", label: "폰 사진" },
+      { id: "camera", label: "카메라 사진" },
+      { id: "project", label: "프로젝트 등록" },
+      { id: "settings", label: "설정" },
+    ],
+    _tab: "device",
+    _session: null,
+    _adapter: null,
+    _liveUrl: null,
+
+    /** 상태줄 문구 — 순수. */
+    statusLineText(connected) { return "카메라: " + (connected ? "Wi-Fi 연결됨" : "연결 안 됨") + " · 인터넷: 모바일 데이터"; },
+
+    /** 셔터 FAB 동작 결정 — 세션 중이면 "다음 핀 촬영", 아니면 자유 촬영. 순수(§19_PinGrid류 판정 전용 함수). */
+    fabAction(session) {
+      if (session && Array.isArray(session.pins) && session.pins.length) {
+        const pin = this.nextSessionPin(session);
+        return pin ? { mode: "nextPin", pin } : { mode: "sessionDone" };
+      }
+      return { mode: "freeShot" };
+    },
+    /** 진입 클릭 판정 — 웹이면 설치안내, APK면 화면 열기. 순수. */
+    entryAction() { return this.isAvailable() ? "open" : "install"; },
+
+    /** 모든 진입점(레일·FeatureMenu·세션화면)이 공통으로 부르는 단일 함수 — 웹/APK 분기 1곳(§SoT). */
+    open(opts) {
+      if (!this.isAvailable()) {
+        if (typeof ApkInstall !== "undefined" && ApkInstall.open) { ApkInstall.open(); return "install"; }
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(this.webDisabledReason());
+        return "install";
+      }
+      this._session = (opts && opts.session) || ((typeof CaptureSession !== "undefined" && CaptureSession.current) ? CaptureSession.current() : null);
+      this._ensureScreen();
+      const el = document.getElementById("theta-osc-screen");
+      if (el) el.classList.remove("hidden");
+      this._setTab((opts && opts.tab) || this._tab);
+      this._renderStatus();
+      return "open";
+    },
+    close() {
+      const el = document.getElementById("theta-osc-screen");
+      if (el) el.classList.add("hidden");
+      if (this._liveUrl) { try { URL.revokeObjectURL(this._liveUrl); } catch (e) {} this._liveUrl = null; }
+    },
+
+    _ensureScreen() {
+      if (document.getElementById("theta-osc-screen")) return;
+      const el = document.createElement("div");
+      el.id = "theta-osc-screen";
+      el.className = "hidden";
+      el.setAttribute("style", "position:fixed;inset:0;z-index:9999;background:#111;color:#fff;display:flex;flex-direction:column;");
+      const header = document.createElement("div");
+      header.setAttribute("style", "display:flex;align-items:center;justify-content:space-between;padding:10px 14px;");
+      const status = document.createElement("div"); status.id = "to-status"; status.setAttribute("style", "font-size:12px;opacity:.85;");
+      const closeBtn = document.createElement("button"); closeBtn.id = "to-close"; closeBtn.type = "button"; closeBtn.textContent = "✕";
+      closeBtn.addEventListener("click", () => this.close());
+      header.appendChild(status); header.appendChild(closeBtn);
+      const tabsBar = document.createElement("div"); tabsBar.id = "to-tabs"; tabsBar.setAttribute("style", "display:flex;");
+      this.TABS.forEach((t) => {
+        const b = document.createElement("button"); b.type = "button"; b.dataset.tab = t.id; b.textContent = t.label;
+        b.addEventListener("click", () => this._setTab(t.id));
+        tabsBar.appendChild(b);
+      });
+      const body = document.createElement("div"); body.id = "to-body"; body.setAttribute("style", "flex:1;overflow:auto;padding:10px;");
+      const fab = document.createElement("button"); fab.id = "to-shutter-fab"; fab.type = "button"; fab.textContent = "●";
+      fab.setAttribute("style", "position:absolute;right:20px;bottom:20px;width:64px;height:64px;border-radius:50%;");
+      fab.addEventListener("click", () => this._onShutter());
+      el.appendChild(header); el.appendChild(tabsBar); el.appendChild(body); el.appendChild(fab);
+      document.body.appendChild(el);
+    },
+
+    _setTab(id) {
+      this._tab = id;
+      const bar = document.getElementById("to-tabs");
+      if (bar && bar.children) Array.prototype.forEach.call(bar.children, (b) => b.classList.toggle("active", b.dataset.tab === id));
+      this._renderTabBody(id);
+    },
+    _renderTabBody(id) {
+      const body = document.getElementById("to-body");
+      if (!body) return;
+      body.innerHTML = "";
+      if (id === "camera") this._renderCameraGallery(body);
+      else if (id === "device") this._renderDeviceGallery(body);
+      else if (id === "project") this._renderProjectTab(body);
+      else this._renderSettingsTab(body);
+    },
+    _renderStatus() {
+      const el = document.getElementById("to-status");
+      const cap = this._cap();
+      if (el) el.textContent = this.statusLineText(!!(cap)); // 실연결 여부는 OscCamera.status() 가 비동기라 — 간단화: 플러그인 유무로 1차 표시, §미완(체크리스트)
+    },
+
+    /** 카메라 사진 탭 — listFiles 결과를 날짜그룹/필터/배지로 그린다(최소 DOM, canvas 썸네일은 createThumbEl 분리). */
+    _renderCameraGallery(body) {
+      const title = document.createElement("div"); title.textContent = "카메라 사진(와이파이 연결 후 표시)";
+      body.appendChild(title);
+    },
+    _renderDeviceGallery(body) {
+      const title = document.createElement("div"); title.textContent = "폰 사진(이 프로젝트에 등록된 360 사진)";
+      body.appendChild(title);
+    },
+    _renderProjectTab(body) {
+      const title = document.createElement("div"); title.textContent = "프로젝트 등록 사진(theta360 클라우드 탭 대체)";
+      body.appendChild(title);
+    },
+    _renderSettingsTab(body) {
+      const title = document.createElement("div"); title.textContent = "카메라 등록 · 옵션(노출/셀프타이머/인터벌)";
+      body.appendChild(title);
+    },
+
+    /** 라이브뷰 1프레임 반영 — 06_PanoViewer.load() 재사용(새 텍스처 로더 없음). Insta360 등
+     *  liveview:false 어댑터면 아예 호출하지 않는다(호출부가 adapter.liveview 를 먼저 본다). */
+    _showLiveFrame(bytes) {
+      if (typeof PanoViewer === "undefined" || !PanoViewer.load) return false;
+      try {
+        const blob = new Blob([bytes], { type: "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        if (this._liveUrl) { try { URL.revokeObjectURL(this._liveUrl); } catch (e) {} }
+        this._liveUrl = url;
+        PanoViewer.load(url, "실시간 미리보기");
+        return true;
+      } catch (e) { return false; }
+    },
+
+    /** 셔터 FAB 클릭 — 세션 중이면 다음 핀 촬영, 아니면 자유 촬영(간단 토스트만, 실제 캡처 와이어링은
+     *  카메라 클라이언트가 준비된 뒤 §미완 — 체크리스트 참조). */
+    _onShutter() {
+      const action = this.fabAction(this._session);
+      if (action.mode === "nextPin") {
+        this.advanceSession(this._session);
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("다음 핀 촬영: " + (action.pin && action.pin.no));
+      } else if (action.mode === "sessionDone") {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("세션의 모든 핀을 촬영했습니다");
+      } else {
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("촬영(자유 모드) — 카메라 연결 후 사용");
+      }
+    },
+
+    /* ══ 진입점 와이어링 — 레일 칩(data-deleg="btn-theta-osc") 대상 버튼 1개만 생성(index.html 비점유).
+       레일 칩 자체·RailLabels 라벨은 index.html/11_UI.js 쪽 1줄 추가(§그 파일들 참조). ══════════ */
+    init() {
+      if (typeof document === "undefined") return;
+      if (!document.getElementById("btn-theta-osc")) {
+        const btn = document.createElement("button");
+        btn.id = "btn-theta-osc";
+        btn.type = "button";
+        btn.style.display = "none"; // 실제 클릭 지점은 side-toolbar 칩(data-deleg 위임) · FeatureMenu · 세션화면
+        btn.addEventListener("click", () => this.open());
+        document.body.appendChild(btn);
+      }
+    },
   };
