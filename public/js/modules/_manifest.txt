@@ -78,4 +78,5 @@
 70_Scale.js
 71_XlsxExport.js
 72_DesignCompare.js
+73_ThetaOSC.js
 99_footer.js
