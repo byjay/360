@@ -6,6 +6,9 @@
  * vendor: "theta" | "insta360" | "unknown" — /osc/info 의 manufacturer/model 분기.
  * previewFailFirst: getLivePreview 처음 N회 500 실패(재연결 테스트).
  * previewMidStreamDisconnectAfter: 프레임 N개 받은 뒤 스트림 1회 끊김(재연결 테스트).
+ * chaos: { takePictureEvery, statusEvery, downloadEvery } — 결정적 "무작위" 끊김(참으로 랜덤이면
+ *  CI 플레이키 — N번째 호출마다 실패해 ~1/N 비율을 재현 가능하게 흉내낸다). 명령이 "카메라에 닿기
+ *  전" 실패를 흉내내므로(요청 자체를 throw) 재시도가 안전하다 — takeState 를 건드리기 전에 끊는다.
  */
 export function createOscMock(opts) {
   opts = opts || {};
@@ -21,11 +24,21 @@ export function createOscMock(opts) {
   const previewFailFirst = opts.previewFailFirst || 0;
   const previewMidStreamDisconnectAfter = opts.previewMidStreamDisconnectAfter;
   const previewFrameCount = opts.previewFrameCount != null ? opts.previewFrameCount : 3;
+  const chaos = opts.chaos || null;
+  const chaosN = { takePicture: 0, status: 0, download: 0 };
+  function chaosFail(kind) {
+    if (!chaos) return false;
+    const every = chaos[kind + "Every"];
+    if (!every) return false;
+    chaosN[kind]++;
+    return (chaosN[kind] % every) === 0;
+  }
 
   let takeState = null;
   let previewCallCount = 0;
   let disconnectedOnce = false;
   const calls = []; // 호출 로그(테스트 assertion 용)
+  const stats = { takePictureSent: 0 }; // "실제로 카메라(mock)에 닿은" 촬영 명령 수 — 중복촬영 검증용
 
   function jsonResponse(obj, status) {
     status = status || 200;
@@ -74,6 +87,7 @@ export function createOscMock(opts) {
     }
     if (u.endsWith("/osc/state")) return jsonResponse({ state: { _batteryLevel: battery }, fingerprint: "FIG_0001" });
     if (u.endsWith("/osc/commands/status")) {
+      if (chaosFail("status")) throw new Error("네트워크 끊김(mock chaos — 상태조회)");
       const body = JSON.parse(init.body || "{}");
       if (takeState && takeState.id === body.id) {
         if (takeState.state === "inProgress") { takeState.state = "done"; return jsonResponse({ id: body.id, state: "done", results: { fileUrl: takeState.fileUrl } }); }
@@ -85,8 +99,10 @@ export function createOscMock(opts) {
       const body = JSON.parse(init.body || "{}");
       const name = body.name;
       if (name === "camera.takePicture") {
+        if (chaosFail("takePicture")) throw new Error("네트워크 끊김(mock chaos — 촬영명령, 카메라 닿기 전)");
+        stats.takePictureSent++;
         const id = "0001";
-        const fileUrl = "http://192.168.1.1/files/100RICOH/R" + (1000000 + calls.length) + ".JPG";
+        const fileUrl = "http://192.168.1.1/files/100RICOH/R" + (1000000 + stats.takePictureSent) + ".JPG";
         takeState = { id, state: "inProgress", fileUrl };
         return jsonResponse({ name, id, state: "inProgress" });
       }
@@ -118,11 +134,39 @@ export function createOscMock(opts) {
       return errorExecResponse(name, "미지원 명령: " + name, 400);
     }
     if (u.indexOf("/files/") !== -1) {
-      const bytes = new TextEncoder().encode("JPEGDATA-" + u.split("/").pop());
-      return { ok: true, status: 200, headers: { get: () => "image/jpeg" }, blob: async () => new Blob([bytes], { type: "image/jpeg" }) };
+      const bytesAll = new TextEncoder().encode("JPEGDATA-" + u.split("/").pop() + "-".padEnd(32, "x"));
+      const rangeHeader = init.headers && (init.headers.Range || init.headers.range);
+      if (rangeHeader) {
+        const m = /bytes=(\d+)-/.exec(rangeHeader);
+        const start = m ? parseInt(m[1], 10) : 0;
+        const remaining = bytesAll.slice(start);
+        return {
+          ok: true, status: 206,
+          headers: { get: (k) => { k = String(k).toLowerCase(); if (k === "content-range") return "bytes " + start + "-" + (bytesAll.length - 1) + "/" + bytesAll.length; if (k === "content-length") return String(remaining.length); return null; } },
+          blob: async () => new Blob([remaining]),
+          body: { [Symbol.asyncIterator]: async function* () { yield remaining; } },
+        };
+      }
+      if (chaosFail("download")) {
+        // 끊김 흉내 — 전체 크기는 Content-Length 로 알리지만 바이트는 절반만 준다(스트림 중단).
+        // downloadFileResumable 이 크기불일치로 재시도 → Range 로 이어받기를 타게 된다.
+        const half = bytesAll.slice(0, Math.max(1, Math.floor(bytesAll.length / 2)));
+        return {
+          ok: true, status: 200,
+          headers: { get: (k) => (String(k).toLowerCase() === "content-length" ? String(bytesAll.length) : null) },
+          blob: async () => new Blob([half]),
+          body: { [Symbol.asyncIterator]: async function* () { yield half; } },
+        };
+      }
+      return {
+        ok: true, status: 200,
+        headers: { get: (k) => { k = String(k).toLowerCase(); if (k === "content-length") return String(bytesAll.length); if (k === "content-type") return "image/jpeg"; return null; } },
+        blob: async () => new Blob([bytesAll]),
+        body: { [Symbol.asyncIterator]: async function* () { yield bytesAll; } },
+      };
     }
     return jsonResponse({ error: "not found" }, 404);
   }
 
-  return { fetchImpl, calls, _optionsStore: optionsStore };
+  return { fetchImpl, calls, stats, _optionsStore: optionsStore };
 }

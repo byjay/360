@@ -62,8 +62,12 @@
          LOCATION  - 48_GPS 의 navigator.geolocation (WebView 위치 요청 시 Capacitor 가 런타임 권한을 묻는다).
          CAMERA 는 선언하지 않는다 - <input capture> 는 시스템 카메라 앱(ACTION_IMAGE_CAPTURE)으로 찍어
          권한이 필요 없다. 선언하면 오히려 권한 미승인 시 촬영이 막힌다(Capacitor BridgeWebChromeClient.isMediaCaptureSupported).
-         사진 선택은 시스템 파일 선택기(SAF)라 저장소 권한이 필요 없다. -->
+         사진 선택은 시스템 파일 선택기(SAF)라 저장소 권한이 필요 없다.
+         CHANGE_WIFI_STATE - OscCameraPlugin.acquireWifiLock(WifiManager.WifiLock, 일반 권한·런타임
+         프롬프트 없음) — THETA 세션 중 와이파이 라디오 절전으로 인한 끊김을 줄인다(WifiNetworkSpecifier
+         연결 자체는 ACCESS_FINE_LOCATION 없이도 동작, Android 10+ 로컬 네트워크 요청 특례). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 </manifest>

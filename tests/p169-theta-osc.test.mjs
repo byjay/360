@@ -529,5 +529,35 @@ await (async () => {
   ok(doc.getElementById("to-status").textContent === "카메라: Wi-Fi 연결됨 · 인터넷: 오프라인 — 큐 3건 대기", "⑮-9 상태줄 갱신 — 오프라인+큐 대기건수 표시");
 })();
 
+/* ══ ⑯ 끊김 내성(§마스터 "와이파이 자주 끊김") — 중복촬영 금지 · 10회 연속 촬영/다운로드/핀연결 ══ */
+await (async () => {
+  // 정밀 단위검증: id 를 받은 "뒤" 실패(status 폴링 소진)는 절대 camera.takePicture 를 재전송하지 않는다.
+  const { TO } = boot();
+  const execCalls = [];
+  const cli = {
+    async execute(name) { execCalls.push(name); if (name === "camera.takePicture") return { id: "x1", state: "inProgress" }; return {}; },
+    async waitDone() { throw new Error("상태 폴링 소진(mock)"); }, // id 를 받은 뒤의 실패 — 재전송 금지 대상
+  };
+  let threw = null;
+  try { await TO.takePicture(cli); } catch (e) { threw = e; }
+  ok(threw instanceof Error, "⑯-1 상태 폴링이 끝내 실패하면 예외로 표면화(조용한 실패 아님)");
+  ok(execCalls.filter((n) => n === "camera.takePicture").length === 1, "⑯-2 id 획득 후 실패해도 camera.takePicture 재전송 0회(중복 촬영 방지 — 핵심 불변식)");
+})();
+await (async () => {
+  // 10회 연속 촬영→다운로드→핀연결 — "요청 실패(명령 전송 전 끊김)·다운로드 중단" 혼재 모드.
+  const { TO, calls } = boot("online");
+  TO._sleep = async () => {}; // 백오프 대기를 생략(테스트 속도) — 재시도 로직 자체는 그대로
+  const mock = createOscMock({ vendor: "theta", chaos: { takePictureEvery: 4, downloadEvery: 3 } });
+  const cli = TO.client({ fetchImpl: mock.fetchImpl });
+  const results = [];
+  for (let i = 0; i < 10; i++) {
+    const pin = { id: "pin" + i, no: i + 1 };
+    results.push(await TO.captureToPin(cli, "YJ30142118", pin, "THETA촬영"));
+  }
+  ok(results.every((r) => r.status === "done"), "⑯-3 10회 전부 성공(촬영→다운로드→핀연결, 20%대 요청실패/다운로드중단 속에서도)");
+  ok(mock.stats.takePictureSent === 10, "⑯-4 중복 촬영 0 — 카메라(mock)에 실제로 닿은 촬영 명령이 정확히 10건(그 이상 아님)");
+  ok(calls.uploadOneRow.length === 10, "⑯-5 핀 연결도 10건 전부(PhotoBatch._uploadOneRow 재사용)");
+})();
+
 console.log(failed === 0 ? "\nALL PASS" : "\n" + failed + " FAILED");
 process.exitCode = failed === 0 ? 0 : 1;

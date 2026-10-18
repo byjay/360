@@ -28,6 +28,13 @@
     SELECTED_KEY: "theta_osc_selected_v1",
     TRANSFER_KEY: "theta_osc_transferred_v1",
     RECONNECT: { max: 3, delayMs: 1200 },
+    KEEPALIVE_MS: 30000,
+    SLEEP_OPTION_NAMES: ["sleepDelay", "offDelay"],
+    // 🔴 [마스터 현장 이슈 2026-10-20] "와이파이가 자주 끊긴다" — 와이파이 재연결(네이티브)·명령
+    // 재시도·라이브뷰 재연결이 전부 같은 공식을 쓴다(SoT 1곳, 1,2,4,8,16초→30초 캡. 네이티브쪽
+    // OscCameraPlugin.backoffMs 는 같은 값을 독립 보관 — 플랫폼이 달라 코드 공유는 안 되지만 공식은
+    // 반드시 같게 유지한다). 순수.
+    backoffDelayMs(attempt) { return Math.min(30000, 1000 * Math.pow(2, Math.max(0, Math.min(attempt, 5)))); },
 
     /* ══ 저장소(순수 I/O 래퍼) ══════════════════════════════════════ */
     _storage() { try { return (typeof localStorage !== "undefined") ? localStorage : null; } catch (e) { return null; } },
@@ -142,6 +149,25 @@
       };
     },
 
+    /** 멱등(읽기/같은 값 재설정) 명령만 자동 재시도한다 — takePicture/startCapture/stopCapture/delete 는
+     *  제외(카메라에 이미 도달했는지 알 수 없는 상태에서 다시 보내면 중복 실행 위험, §4). */
+    _IDEMPOTENT_COMMANDS: ["camera.getOptions", "camera.setOptions", "camera.listFiles"],
+    /** 네트워크 레벨 실패(끊김)에 한해 백오프 재시도. 카메라가 "정상 응답"한 오류(state:"error")는
+     *  이 래퍼가 아니라 호출부(execute 등)에서 이미 던진 뒤라 여기 재시도 대상이 아니다. */
+    async _retryable(fn, opts) {
+      opts = opts || {};
+      const retries = opts.retries != null ? opts.retries : 2;
+      let attempt = 0;
+      for (;;) {
+        try { return await fn(); }
+        catch (e) {
+          attempt++;
+          if (attempt > retries) throw e;
+          await this._sleep(this.backoffDelayMs(attempt - 1));
+        }
+      }
+    },
+
     /* ══ OSC HTTP 클라이언트(전송 주입 — 테스트는 mock fetchImpl, 실기기는 nativeFetchAdapter) ══ */
     client(opts) {
       opts = opts || {};
@@ -152,30 +178,43 @@
       return {
         baseUrl, fetchImpl,
         async info() {
-          const r = await fetchImpl(baseUrl + "/osc/info");
-          if (!r.ok) throw new Error("osc/info " + r.status);
-          return r.json();
+          return self._retryable(async () => {
+            const r = await fetchImpl(baseUrl + "/osc/info");
+            if (!r.ok) throw new Error("osc/info " + r.status);
+            return r.json();
+          }, { retries: 2 });
         },
         async state() {
-          const r = await fetchImpl(baseUrl + "/osc/state", { method: "POST" });
-          if (!r.ok) throw new Error("osc/state " + r.status);
-          return r.json();
+          return self._retryable(async () => {
+            const r = await fetchImpl(baseUrl + "/osc/state", { method: "POST" });
+            if (!r.ok) throw new Error("osc/state " + r.status);
+            return r.json();
+          }, { retries: 2 });
         },
         async execute(name, parameters) {
-          const r = await fetchImpl(baseUrl + "/osc/commands/execute", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, parameters: parameters || {} }),
-          });
-          const j = await r.json().catch(() => ({}));
-          if (j && j.state === "error") throw new Error((j.error && j.error.message) || "카메라 오류");
-          if (!r.ok && !(j && j.state)) throw new Error((j && j.error && j.error.message) || ("osc/commands/execute " + r.status));
-          return j;
+          const run = async () => {
+            const r = await fetchImpl(baseUrl + "/osc/commands/execute", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, parameters: parameters || {} }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (j && j.state === "error") throw new Error((j.error && j.error.message) || "카메라 오류");
+            if (!r.ok && !(j && j.state)) throw new Error((j && j.error && j.error.message) || ("osc/commands/execute " + r.status));
+            return j;
+          };
+          if (self._IDEMPOTENT_COMMANDS.indexOf(name) !== -1) return self._retryable(run, { retries: 2 });
+          return run(); // 비멱등 명령 — 자동 재시도 없음(§4, takePicture 쪽은 호출부가 in-flight 가드)
         },
         async status(id) {
-          const r = await fetchImpl(baseUrl + "/osc/commands/status", {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-          });
-          return r.json();
+          // 같은 id 재조회는 안전(멱등) — "네트워크 자체가 끊긴 경우"만 재시도한다. 카메라가 실제로
+          // 응답한 내용(ok:false 포함, 예: state:"error")은 정상 응답이라 재시도 대상이 아니다 —
+          // r.ok 로 재시도를 걸면 카메라의 정상 오류 응답(404 등)까지 불필요하게 재시도하게 된다.
+          return self._retryable(async () => {
+            const r = await fetchImpl(baseUrl + "/osc/commands/status", {
+              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+            });
+            return r.json();
+          }, { retries: 3 });
         },
         /** execute 응답이 inProgress 면 status 를 폴링해 done/error 까지 기다린다. */
         async waitDone(execResp, pollMs, maxPolls) {
@@ -244,18 +283,77 @@
       return { vendor: "unknown", liveview: false, liveviewReason: "기종 미확인 — 공통 OSC 명령만 시도", exposureAdjustable: true, exposureReason: "", videoSupported: true, videoReason: "" };
     },
 
-    /* ══ 촬영 ═══════════════════════════════════════════════════════ */
+    /* ══ 촬영 — 중복 촬영 방지(§4): in-flight 가드 + id 를 받은 뒤로는 절대 재전송하지 않음 ══ */
     async takePicture(cli) {
-      const exec = await cli.execute("camera.takePicture", {});
-      const done = await cli.waitDone(exec);
-      const fileUrl = done && done.results && done.results.fileUrl;
-      if (!fileUrl) throw new Error("fileUrl 없음(촬영 결과 이상)");
-      return fileUrl;
+      if (this._captureInFlight) throw new Error("이미 촬영 진행 중 — 중복 촬영 방지");
+      this._captureInFlight = true;
+      try {
+        let exec, attempt = 0;
+        for (;;) {
+          try { exec = await cli.execute("camera.takePicture", {}); break; }
+          catch (e) {
+            // id 를 아직 못 받은 단계 실패만 재시도한다 — 카메라에 명령이 닿았는지 모르는 상태에서
+            // id 를 받은 "뒤"에는 절대 이 블록을 다시 타지 않는다(위 break 로 탈출, 재호출 경로 없음).
+            attempt++;
+            if (attempt > 3) throw e;
+            await this._sleep(this.backoffDelayMs(attempt - 1));
+          }
+        }
+        const done = await cli.waitDone(exec); // status 폴링은 같은 id 재조회(멱등) — client().status() 가 자체 재시도
+        const fileUrl = done && done.results && done.results.fileUrl;
+        if (!fileUrl) throw new Error("fileUrl 없음(촬영 결과 이상)");
+        return fileUrl;
+      } finally { this._captureInFlight = false; }
     },
     async downloadFile(cli, fileUrl) {
       const r = await cli.fetchImpl(fileUrl);
       if (!r.ok) throw new Error("다운로드 실패 " + r.status);
       return r.blob();
+    },
+    /** 청크 읽기 → 바이트 전부 모음(스트림/버퍼 응답 공용). */
+    async _readAllBytes(r) {
+      if (r.body) {
+        let out = new Uint8Array(0);
+        for await (const chunk of this._iterateBody(r.body)) out = this._concatBytes(out, chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+        return out;
+      }
+      const blob = await r.blob();
+      const buf = await blob.arrayBuffer();
+      return new Uint8Array(buf);
+    },
+    /** 다운로드 — 끊기면 Range 로 이어받기(서버가 Range 미지원이면 처음부터 재다운로드), 크기 검증
+     *  후 Blob 반환. §4 "다운로드는 끊기면 이어받는다. Range 지원하면 쓰고, 아니면 재다운로드 후
+     *  크기 검증". 순수 재시도 로직 — 몇 번째든 "최종 바이트 수가 기대값과 같다"만 성공 조건. */
+    async downloadFileResumable(cli, fileUrl, opts) {
+      opts = opts || {};
+      const maxRetries = opts.maxRetries != null ? opts.maxRetries : 5;
+      let received = new Uint8Array(0);
+      let expectedLen = null;
+      let attempt = 0;
+      for (;;) {
+        try {
+          const headers = received.length ? { Range: "bytes=" + received.length + "-" } : {};
+          const r = await cli.fetchImpl(fileUrl, { headers });
+          if (!r.ok && r.status !== 206) throw new Error("다운로드 실패 " + r.status);
+          const clHeader = r.headers && r.headers.get ? r.headers.get("content-length") : null;
+          const crHeader = r.headers && r.headers.get ? r.headers.get("content-range") : null;
+          if (r.status === 206 && crHeader) {
+            const m = /\/(\d+)$/.exec(crHeader);
+            if (m) expectedLen = parseInt(m[1], 10);
+            const chunkBytes = await this._readAllBytes(r);
+            received = this._concatBytes(received, chunkBytes);
+          } else {
+            if (clHeader) expectedLen = parseInt(clHeader, 10);
+            received = await this._readAllBytes(r); // Range 미지원 — 처음부터
+          }
+          if (expectedLen != null && received.length !== expectedLen) throw new Error("크기 불일치(다운로드 손상) — 재시도");
+          return new Blob([received], { type: "image/jpeg" });
+        } catch (e) {
+          attempt++;
+          if (attempt > maxRetries) throw e;
+          await this._sleep(this.backoffDelayMs(attempt - 1));
+        }
+      }
     },
 
     /* ══ 옵션 — 지원하는 값만 노출(getOptions 응답 그대로, 하드코딩 금지) ══ */
@@ -306,16 +404,56 @@
       const usedNames = (typeof PhotoBatch._usedPhotoNames === "function") ? PhotoBatch._usedPhotoNames() : new Set();
       return PhotoBatch._uploadOneRow(pin, row, false, usedNames, source || "THETA촬영");
     },
-    /** 세션 촬영 1건 전체 흐름: 촬영→다운로드→(새 핀이면 GPS 부착)→핀 연결→전송이력 기록. */
+    /** 세션 촬영 1건 전체 흐름: 촬영→다운로드(이어받기)→로컬 즉시 보관(§4 유실 0)→
+     *  (새 핀이면 GPS 부착)→핀 연결→전송이력 기록→로컬 보관 정리. */
     async captureToPin(cli, serial, pin, source) {
       const fileUrl = await this.takePicture(cli);
-      const blob = await this.downloadFile(cli, fileUrl);
+      const blob = await this.downloadFileResumable(cli, fileUrl);
       const filename = String(fileUrl).split("/").pop() || ("theta_" + Date.now() + ".jpg");
+      const draftKey = "theta_recv_" + fileUrl;
+      try { if (typeof SyncQueue !== "undefined" && SyncQueue.saveDraft) await SyncQueue.saveDraft(draftKey, { fileUrl, pinId: pin && pin.id, filename, receivedAt: Date.now() }); } catch (e) {}
       try { if (typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin); } catch (e) {}
       const r = await this.attachBlobToPin(pin, blob, filename, source);
-      if (r && r.status === "done") this.markTransferred(serial, fileUrl, pin && pin.id);
+      if (r && r.status === "done") {
+        this.markTransferred(serial, fileUrl, pin && pin.id);
+        try { if (typeof SyncQueue !== "undefined" && SyncQueue.removeDraft) await SyncQueue.removeDraft(draftKey); } catch (e) {}
+      }
       return Object.assign({ fileUrl }, r);
     },
+
+    /* ══ 카메라 수면 방지 + keepalive(§2) — SC 지원 옵션명·값은 getOptions 로만 확인(하드코딩 금지) ══
+       🔴 [Uncertain] sleepDelay/offDelay 를 "비활성"으로 두는 가치(0)는 OSC 통용 관례이지 SC 실측
+       확인이 아니다 — 카메라가 그 값을 거부하면(setOptions 오류) 원래 값을 그대로 두고 failed 에
+       기록한다(지어내지 않음, §10). 세션 종료 시 복원 실패도 그대로 기록한다(§2 "복원 실패 시에도
+       기록"). */
+    async preventSleep(cli) {
+      const current = await this.supportedOptions(cli, this.SLEEP_OPTION_NAMES);
+      const restore = {}, failed = [];
+      for (const name of Object.keys(current)) {
+        try { await this.setOptions(cli, { [name]: 0 }); restore[name] = current[name]; }
+        catch (e) { failed.push({ name, reason: (e && e.message) || String(e) }); }
+      }
+      this._sleepRestore = restore;
+      return { changed: Object.keys(restore), failed };
+    },
+    async restoreSleep(cli) {
+      const restore = this._sleepRestore;
+      this._sleepRestore = null;
+      if (!restore || !Object.keys(restore).length) return { restored: [], failed: [] };
+      const restored = [], failed = [];
+      for (const name of Object.keys(restore)) {
+        try { await this.setOptions(cli, { [name]: restore[name] }); restored.push(name); }
+        catch (e) { failed.push({ name, reason: (e && e.message) || String(e) }); }
+      }
+      this._restoreFailLog = failed.length ? failed : null; // 복원 실패해도 기록(조용히 버리지 않음)
+      return { restored, failed };
+    },
+    startKeepalive(cli) {
+      this.stopKeepalive();
+      if (typeof setInterval === "undefined") return;
+      this._keepaliveTimer = setInterval(() => { try { cli.state(); } catch (e) {} }, this.KEEPALIVE_MS);
+    },
+    stopKeepalive() { if (this._keepaliveTimer) { try { clearInterval(this._keepaliveTimer); } catch (e) {} this._keepaliveTimer = null; } },
 
     /* ══ 카메라 갤러리 번호매칭(60_PhotoFolder 순수 매칭 재사용, 재구현 금지) ══ */
     matchEntriesToPins(pins, entries, existingNumbers) {
@@ -601,6 +739,8 @@
       if (this._liveUrl) { try { URL.revokeObjectURL(this._liveUrl); } catch (e) {} this._liveUrl = null; }
       this._stopLivePreviewUi();
       this._stopStatusPolling();
+      this.stopKeepalive();
+      if (this._cli) { Promise.resolve(this.restoreSleep(this._cli)).catch(() => {}); } // 최선형 복원(§2) — close() 자체는 동기 유지
     },
 
     _ensureScreen() {
@@ -644,23 +784,28 @@
       else if (id === "project") this._renderProjectTab(body);
       else this._renderSettingsTab(body);
     },
-    /** 상태줄 문구(연결·네트워크 모두 반영) — 순수. online=navigator.onLine, queueCount=SyncQueue 대기건수. */
-    statusLineText2(connected, online, queueCount) {
+    /** 상태줄 문구(연결·네트워크·재연결 모두 반영) — 순수. online=navigator.onLine, queueCount=SyncQueue
+     *  대기건수. reconnecting=true 면 "카메라 재연결 중…(n회)"(§1, 사용자 조작 불필요 — 안내만). */
+    statusLineText2(connected, online, queueCount, reconnecting, attempt) {
       const net = online ? "모바일 데이터" : (queueCount > 0 ? ("오프라인 — 큐 " + queueCount + "건 대기") : "오프라인");
-      return "카메라: " + (connected ? "Wi-Fi 연결됨" : "연결 안 됨") + " · 인터넷: " + net;
+      const cam = reconnecting ? ("재연결 중…(" + (attempt || 0) + "회)") : (connected ? "Wi-Fi 연결됨" : "연결 안 됨");
+      return "카메라: " + cam + " · 인터넷: " + net;
     },
     /** OscCamera.status()(네이티브) 또는 this._cli 존재(mock/테스트)로 1차 판정 — 비동기 반영. */
     async _refreshStatus() {
-      let connected = !!this._cli;
+      let connected = !!this._cli, reconnecting = false, attempt = 0;
       const cap = this._cap();
-      if (cap) { try { const s = await cap.nativePromise("OscCamera", "status", {}); connected = !!(s && s.connected); } catch (e) { connected = false; } }
+      if (cap) {
+        try { const s = await cap.nativePromise("OscCamera", "status", {}); connected = !!(s && s.connected); reconnecting = !!(s && s.reconnecting); attempt = (s && s.attempt) || 0; }
+        catch (e) { connected = false; }
+      }
       let online = true;
       try { online = (typeof navigator !== "undefined") ? !!navigator.onLine : true; } catch (e) {}
       let queueCount = 0;
       try { if (typeof SyncQueue !== "undefined" && SyncQueue.count) queueCount = await SyncQueue.count(); } catch (e) {}
       const el = document.getElementById("to-status");
-      if (el) el.textContent = this.statusLineText2(connected, online, queueCount);
-      return { connected, online, queueCount };
+      if (el) el.textContent = this.statusLineText2(connected, online, queueCount, reconnecting, attempt);
+      return { connected, online, queueCount, reconnecting, attempt };
     },
     _renderStatus() {
       this._refreshStatus();
@@ -835,6 +980,7 @@
         this._adapter = this.detectAdapter(this._camInfo);
         this._camStatus = this.statusFromState(await this._cli.state());
         this._options = await this.supportedOptions(this._cli, ["exposureProgram", "iso", "shutterSpeed", "exposureCompensation", "whiteBalance", "exposureDelay", "_captureInterval", "captureMode"]);
+        if (!opts.skipSleepGuard) { this._sleepGuardResult = await this.preventSleep(this._cli); this.startKeepalive(this._cli); }
       } catch (e) {}
       return r;
     },

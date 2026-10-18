@@ -1,11 +1,15 @@
 package work.seastar.scan360;
 
+import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkSpecifier;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -49,14 +53,30 @@ public class OscCameraPlugin extends Plugin {
 
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final String BOUNDARY_HEADER = "boundary=";
+    private static final int MAX_BACKOFF_MS = 30000;
 
     private ConnectivityManager.NetworkCallback networkCallback;
     private Network cameraNetwork;
     private final AtomicBoolean previewRunning = new AtomicBoolean(false);
     private Thread previewThread;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private WifiManager.WifiLock wifiLock;
+
+    // 🔴 [마스터 현장 이슈 2026-10-20] "와이파이가 자주 끊긴다" — onLost/onUnavailable 이 오면
+    // 사용자 조작 없이 지수 백오프(1,2,4,8,16,30s 캡 — JS 73_ThetaOSC.js backoffDelayMs 와 같은
+    // 공식, 값만 각자 보관)로 requestNetwork 를 다시 건다. 상태는 status() 로 노출해 JS 상태줄이
+    // "카메라 재연결 중…(n회)" 를 보이게 한다.
+    private String lastSsid, lastPassword;
+    private volatile boolean reconnecting = false;
+    private volatile int reconnectAttempt = 0;
+    private boolean autoReconnect = true; // disconnect() 호출 시 false — 사용자가 끈 연결은 자동 재시도하지 않는다
 
     private ConnectivityManager cm() {
-        return (ConnectivityManager) getContext().getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+        return (ConnectivityManager) getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+    }
+    private static long backoffMs(int attempt) {
+        long ms = 1000L << Math.max(0, Math.min(attempt, 5)); // 1,2,4,8,16,32→캡
+        return Math.min(MAX_BACKOFF_MS, ms);
     }
 
     /** 카메라 와이파이 연결 — 앱 전용 로컬 네트워크(인터넷 없음, 기본 네트워크 대체 안 함). */
@@ -66,7 +86,12 @@ public class OscCameraPlugin extends Plugin {
         String password = call.getString("password");
         if (ssid == null || password == null) { call.reject("ssid/password 필요", "BAD_ARGS"); return; }
         if (Build.VERSION.SDK_INT < 29) { call.reject("Android 10 미만 — WifiNetworkSpecifier 미지원, 수동 연결 필요", "UNSUPPORTED_SDK"); return; }
-        disconnectInternal();
+        lastSsid = ssid; lastPassword = password; autoReconnect = true; reconnectAttempt = 0;
+        requestCameraNetwork(ssid, password, call);
+    }
+
+    private void requestCameraNetwork(String ssid, String password, PluginCall call) {
+        disconnectInternal(false);
         WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
             .setWpa2Passphrase(password)
@@ -79,38 +104,85 @@ public class OscCameraPlugin extends Plugin {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 cameraNetwork = network;
-                JSObject ret = new JSObject();
-                ret.put("ok", true);
-                try { call.resolve(ret); } catch (Exception ignored) {} // onAvailable 1회만 resolve
+                reconnecting = false; reconnectAttempt = 0;
+                acquireWifiLock();
+                if (call != null) { JSObject ret = new JSObject(); ret.put("ok", true); try { call.resolve(ret); } catch (Exception ignored) {} }
             }
             @Override public void onUnavailable() {
-                try { call.reject("카메라 와이파이 연결 실패(타임아웃) — 수동 연결 필요", "UNAVAILABLE"); } catch (Exception ignored) {}
+                if (call != null) { try { call.reject("카메라 와이파이 연결 실패(타임아웃) — 수동 연결 필요", "UNAVAILABLE"); } catch (Exception ignored) {} }
+                scheduleReconnect();
             }
             @Override public void onLost(Network network) {
-                if (network.equals(cameraNetwork)) cameraNetwork = null;
+                if (network.equals(cameraNetwork)) { cameraNetwork = null; releaseWifiLock(); scheduleReconnect(); }
             }
         };
         cm().requestNetwork(request, networkCallback, CONNECT_TIMEOUT_MS);
     }
 
+    /** 끊김 자동 복구 — 사용자 조작 0, 백오프로 재시도. 사용자가 disconnect() 를 부르면(autoReconnect=false) 멈춘다. */
+    private void scheduleReconnect() {
+        if (!autoReconnect || lastSsid == null) return;
+        reconnecting = true;
+        final int attempt = reconnectAttempt++;
+        mainHandler.postDelayed(() -> {
+            if (!autoReconnect || lastSsid == null) return;
+            requestCameraNetwork(lastSsid, lastPassword, null);
+        }, backoffMs(attempt));
+    }
+
     @PluginMethod
     public void disconnect(PluginCall call) {
-        disconnectInternal();
+        autoReconnect = false;
+        disconnectInternal(true);
         call.resolve();
     }
-    private void disconnectInternal() {
+    private void disconnectInternal(boolean full) {
         stopPreviewInternal();
         if (networkCallback != null) {
             try { cm().unregisterNetworkCallback(networkCallback); } catch (Exception ignored) {}
             networkCallback = null;
         }
         cameraNetwork = null;
+        releaseWifiLock();
+        if (full) { reconnecting = false; reconnectAttempt = 0; lastSsid = null; lastPassword = null; }
+    }
+
+    /** WifiManager.WifiLock — 세션 동안 와이파이 레이디오가 절전으로 끊기지 않게(API 수준별 모드). */
+    private void acquireWifiLock() {
+        try {
+            if (wifiLock != null) return;
+            WifiManager wm = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm == null) return;
+            int mode = (Build.VERSION.SDK_INT >= 29) ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+            wifiLock = wm.createWifiLock(mode, "SeastarThetaLock");
+            wifiLock.setReferenceCounted(false);
+            wifiLock.acquire();
+        } catch (Exception ignored) {}
+    }
+    private void releaseWifiLock() {
+        try { if (wifiLock != null && wifiLock.isHeld()) wifiLock.release(); } catch (Exception ignored) {}
+        wifiLock = null;
+    }
+
+    /** 세션 중 화면 꺼짐 방지(옵션) — 꺼지면 OS 가 와이파이도 절전으로 끊을 수 있다. */
+    @PluginMethod
+    public void keepScreenOn(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", true));
+        try {
+            if (getActivity() != null) {
+                if (enabled) getActivity().getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                else getActivity().getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        } catch (Exception ignored) {}
+        call.resolve();
     }
 
     @PluginMethod
     public void status(PluginCall call) {
         JSObject ret = new JSObject();
         ret.put("connected", cameraNetwork != null);
+        ret.put("reconnecting", reconnecting);
+        ret.put("attempt", reconnectAttempt);
         call.resolve(ret);
     }
 
@@ -281,7 +353,8 @@ public class OscCameraPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
-        disconnectInternal();
+        autoReconnect = false;
+        disconnectInternal(true);
         super.handleOnDestroy();
     }
 }
