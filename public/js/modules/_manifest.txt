@@ -73,5 +73,6 @@
 65_Sheets.js
 66_PinLink.js
 68_ViewerAuth.js
+69_CaptureSession.js
 49_AiVision.js
 99_footer.js
