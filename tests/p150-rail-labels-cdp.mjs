@@ -93,7 +93,8 @@ const labelInfo = await page.evaluate(() => {
 });
 ok(!labelInfo.error, "#side-toolbar 존재 :: " + JSON.stringify(labelInfo.error || "ok"));
 if (!labelInfo.error) {
-  ok(labelInfo.length === 12, "버튼 12개 :: count=" + labelInfo.length);
+  // 12→13개: 64a44ce 가 [카메라](btn-theta-osc) 레일 버튼을 추가했다.
+  ok(labelInfo.length === 13, "버튼 13개 :: count=" + labelInfo.length);
   const zeroLen = labelInfo.filter((r) => r.labelLen === 0);
   ok(zeroLen.length === 0, "① 12개 전부 라벨 텍스트 길이 > 0 :: zeroLenCount=" + zeroLen.length + (zeroLen.length ? (" ids=" + zeroLen.map((r) => r.id).join(",")) : ""));
   const noDesc = labelInfo.filter((r) => !r.hasDesc);
