@@ -1768,6 +1768,27 @@
       }
     },
 
+    /** [WO 20261019-pinscale3-label, 마스터 "라벨이 약 8px 이면 같은 결함이다"] 핀 머리 번호
+     *  배지(흰 원판 + 숫자)의 폰트·반경을 "자릿수"에 맞게 정한다 — SoT 단일 진입점(main 티어드롭·
+     *  CHECKER 간소화 배지 두 템플릿이 공유, §G-2-5).
+     *  [재현/실측] 라이브 CDP(.tmp/probe-label.mjs, Segoe UI Bold, 실제 style.css 로드)로 font-size
+     *  (SVG viewBox 단위) → 실제 렌더 bbox px 관계를 쟀다: height_px ≈ fontSize × 0.625 × (pinScale/0.75).
+     *  맞춤 상태(pinScale=MapCtrl.PIN_SCALE=0.75)에서 1자리=12px·2자리=11.25px·3자리=10.5px —
+     *  전부 "11px 이상(목표 12~13)"·"긴 라벨은 줄이되 바닥 10px"(§발주) 충족을 실측으로 확인했다.
+     *  폭(width)도 같은 CDP 로 재 — 기존 원판(r=8.6)은 2자리부터 이미 잘린다(실측: "12" 폭 9.33 >
+     *  disc 8.06) → 자릿수별로 원판을 타원(ellipse)으로 넓힌다(배지 자체 CSS 박스 크기는 불변 —
+     *  모바일 알림배지가 숫자 늘면 알약형이 되는 것과 같은 패턴, 머리 링(headR/ringR)은 고정해
+     *  기존 1자리 모양 회귀 0, 긴 라벨만 흰 판이 링을 살짝 넘어 넓어진다).
+     *  pinScreenScale() 연동 — "비례": 반환 fs 는 마커 전체와 함께 --pin-scale 로 똑같이 스케일되므로
+     *  확대·축소에 자동 비례(추가 코드 불필요). "하한": 자릿수가 늘수록 fs 자체를 낮춰(바닥 10px
+     *  근접까지) 폭을 확보 — 그 밑으로는 핀 폭(disc)을 넓히는 쪽으로 해결(발주 §3 두 전략 그대로). */
+    _numberBadgeGeom(dispLabel) {
+      const len = String(dispLabel == null ? "" : dispLabel).length;
+      if (len <= 1) return { fs: 20, rx: 8.6, ry: 8.6 };   // 맞춤 상태 ≈12px(목표 12~13 충족)
+      if (len === 2) return { fs: 18, rx: 13.4, ry: 8.6 }; // ≈11.25px(≥11 충족), 폭 확보로 원판 확장
+      return { fs: 16, rx: 17.6, ry: 8.6 };                // 3자+ ≈10.5px(§3 바닥 10px 충족), 원판 최대폭
+    },
+
     renderPinsOnMap(dropPinId) {
       const layer = this.$("pins-layer");
       layer.innerHTML = "";
@@ -1851,13 +1872,21 @@
         // [WO 2026-09-21] 마스터 직접 제안("동그라미를 겹친다든가") — photo(사진/영상)만
         // 원 2개를 겹쳐 그린다. empty 는 원 1개만 유지해 photo/empty 가 더는 "완전히 같은 원"이
         // 아니게 된다(이전엔 둘 다 단일 원이라 filled/hollow 머리색만으로 구분해야 했다).
-        // 🔴 p9 discTag 판정은 class="pin-tier-disc" 가 붙은 첫 번째 요소의 태그만 본다(circle
-        // 그대로) → 회귀 없음. 겹치는 두 번째 원은 표식용(클래스 없음)이라 판정에 관여하지 않는다.
+        // [WO 20261019-pinscale3-label] 번호 배지 폰트/반경 — 자릿수 SoT(_numberBadgeGeom). 1자리는
+        // rx===ry(8.6)라 <circle r=8.6>(원문과 bit-identical) → p9 discTag 판정 회귀 0. 2자리+는
+        // rx>ry 라 <ellipse>로 넓어진다(p9 고정 fixture 는 전부 1자리라 영향 없음 — 아래 주석 유지).
+        const labelGeom = this._numberBadgeGeom(dispLabel);
+        const _discTag = labelGeom.rx === labelGeom.ry ? "circle" : "ellipse";
+        const _discGeomAttr = (cx, cy) => _discTag === "circle"
+          ? `cx="${cx}" cy="${cy}" r="${labelGeom.rx}"`
+          : `cx="${cx}" cy="${cy}" rx="${labelGeom.rx}" ry="${labelGeom.ry}"`;
+        // 🔴 p9 discTag 판정은 class="pin-tier-disc" 가 붙은 첫 번째 요소의 태그만 본다(circle/rect/
+        // ellipse) → 회귀 없음. 겹치는 두 번째 원은 표식용(클래스 없음)이라 판정에 관여하지 않는다.
         const tierDisc = (tier === "content")
-          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`
+          ? `<rect class="pin-tier-disc" x="${(18 - labelGeom.rx).toFixed(1)}" y="${(15 - labelGeom.ry).toFixed(1)}" width="${(labelGeom.rx * 2).toFixed(1)}" height="${(labelGeom.ry * 2).toFixed(1)}" rx="3" fill="#ffffff" opacity="0.99"/>`
           : (tier === "photo")
-            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`
-            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;
+            ? `<${_discTag} class="pin-tier-disc" ${_discGeomAttr(18, 15)} fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`
+            : `<${_discTag} class="pin-tier-disc" ${_discGeomAttr(18, 15)} fill="#ffffff" opacity="0.99"/>`;
         // [WO 20260929] 체크보드 모드에서는 체크보드 핀의 번호만 보이게 — 장식(펄스·그라디언트·
         // 그림자·티어 원판 모양 구분·아이콘 오버라이드) 최소화. 앵커(tip 18,60)는 원본과 동일
         // 유지해 좌표 위치가 어긋나지 않는다. 대비 쌍(흰 원판+txtFill)도 기존 검증값 그대로 재사용.
@@ -1869,8 +1898,8 @@
                    메달리온)과 형태부터 다르게. 앵커(tip 18,60)는 원본과 동일(회귀 없음). -->
               <path d="M15.3 27 L18 60 L20.7 27 Z" fill="${headFill2}"/>
               <rect x="5.6" y="2.6" width="24.8" height="24.8" rx="6" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
-              <rect x="9.4" y="6.4" width="17.2" height="17.2" rx="3.4" fill="#ffffff"/>
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
+              <rect x="${(18 - labelGeom.rx).toFixed(1)}" y="${(15 - labelGeom.ry).toFixed(1)}" width="${(labelGeom.rx * 2).toFixed(1)}" height="${(labelGeom.ry * 2).toFixed(1)}" rx="3.4" fill="#ffffff"/>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
             </svg>
           </div>` : `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
@@ -1914,7 +1943,7 @@
                    대비 ≥4.5:1 이미 보장된 값이라 별도 실측 불필요 — ≥3:1 요구보다 넉넉함). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
+              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")
                 ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`
                 : ""}

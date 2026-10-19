@@ -262,7 +262,9 @@ suiteExistingAxesIntact("⑦ 기존 축 회귀 없음", seriesSrc, uiSrc);
 /* 뮤테이션ⓑ: 3상태 구분 제거(모두 단일 원) → ⑤ 실패 */
 {
   console.log("\n[뮤테이션ⓑ] tierDisc 를 전부 단일 원으로 통일 → ⑤가 실패해야 함");
-  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : (tier === "photo")\n            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`\n            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
+  // [2026-10-19 WO 20261019-pinscale3-label 갱신] tierDisc 가 labelGeom(자릿수별 반경) 기반이 됐다
+  // (이 테스트 fixture 는 전부 1자리라 rx===ry=8.6, 결과는 원문과 동일 — discTag/형태 판정 회귀 0).
+  const needle = "const tierDisc = (tier === \"content\")\n          ? `<rect class=\"pin-tier-disc\" x=\"${(18 - labelGeom.rx).toFixed(1)}\" y=\"${(15 - labelGeom.ry).toFixed(1)}\" width=\"${(labelGeom.rx * 2).toFixed(1)}\" height=\"${(labelGeom.ry * 2).toFixed(1)}\" rx=\"3\" fill=\"#ffffff\" opacity=\"0.99\"/>`\n          : (tier === \"photo\")\n            ? `<${_discTag} class=\"pin-tier-disc\" ${_discGeomAttr(18, 15)} fill=\"#ffffff\" opacity=\"0.99\"/><circle cx=\"22.6\" cy=\"10.4\" r=\"4.2\" fill=\"#ffffff\" opacity=\"0.99\" stroke=\"#1a1a1a\" stroke-width=\"0.8\"/>`\n            : `<${_discTag} class=\"pin-tier-disc\" ${_discGeomAttr(18, 15)} fill=\"#ffffff\" opacity=\"0.99\"/>`;";
   const mutated = uiSrc.replace(needle, 'const tierDisc = `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {

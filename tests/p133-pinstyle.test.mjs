@@ -3,7 +3,12 @@
  *   [포인트] 버튼 자동시작 확인(R5) · CHECKER 사진 안내 배너(R4).
  * 실행: node tests/p133-pinstyle.test.mjs
  * 뮤테이션(실제 소스를 바꿔 같은 단언을 다시 돌린다 — 반드시 EXIT=1):
- *   P133_MUT=dual|nohide|noinv|stroke|alignall|autotoggle|touchstart|nonote|noctx|ctxinput|nofab|r7|r8|r8css|r9 node tests/p133-pinstyle.test.mjs
+ *   P133_MUT=dual|nohide|noinv|stroke|alignall|autotoggle|touchstart|nonote|noctx|ctxinput|nofab|r7|r8|r8css|r9|labelsmall node tests/p133-pinstyle.test.mjs
+ *
+ * [L] WO 20261019-pinscale3-label(마스터 "라벨이 약 8px 이면 같은 결함이다") — 맞춤 상태에서
+ *   번호 배지 글자 높이가 ≥11px(1~2자리)·≥10px(3자리+, §3 바닥)가 되는지 UI._numberBadgeGeom() 값을
+ *   실측 변환식(height_px ≈ fs × 0.625 × pinScreenScale()/PIN_SCALE, .tmp/probe-label.mjs 라이브 CDP로
+ *   잰 상수)으로 검증. P133_MUT=labelsmall 로 구 리터럴(13/9)로 되돌리면 반드시 EXIT=1.
  *
  * [재현] 0b4d262(라이브) CDP 실측(.tmp/fixpinstyle/r4-*-0b4d262-report.json):
  *   R1 CHECKER 핀 2개 = 마커 표시 + 리더 g 2 + 풍선 2(동시 두 표현) · 1280 zoom .41 화살촉 15.6px/풍선 30.8px,
@@ -49,6 +54,11 @@ const MUTS = {
   r8css: ["style.css", "#map-area:has(> #crosshair-overlay:not(.hidden)) .deck-outline-label", "#map-viewport:has(#crosshair-overlay:not(.hidden)) .deck-outline-label"],
   // R4 되돌림: CHECKER 배너에 사진 안내 없음
   nonote: ["20_App.js", "if (State.regMode === \"checkboard\") return this.CHECKER_PHOTO_NOTE;", "if (State.regMode === \"checkboard\") return \"도면 위 원하는 위치를 클릭하세요\";"],
+  // [WO 20261019-pinscale3-label] 되돌림: 번호 배지 폰트를 구 리터럴(길이<3→13, 길이>=3→9)로 — 맞춤
+  // 상태 라벨 높이가 다시 ~8px 로 떨어진다(마스터 "라벨이 약 8px 이면 같은 결함").
+  labelsmall: ["11_UI.js",
+    "if (len <= 1) return { fs: 20, rx: 8.6, ry: 8.6 };   // 맞춤 상태 ≈12px(목표 12~13 충족)\n      if (len === 2) return { fs: 18, rx: 13.4, ry: 8.6 }; // ≈11.25px(≥11 충족), 폭 확보로 원판 확장\n      return { fs: 16, rx: 17.6, ry: 8.6 };                // 3자+ ≈10.5px(§3 바닥 10px 충족), 원판 최대폭",
+    "if (len <= 1) return { fs: 13, rx: 8.6, ry: 8.6 };\n      if (len === 2) return { fs: 13, rx: 8.6, ry: 8.6 };\n      return { fs: 9, rx: 8.6, ry: 8.6 };"],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
 const rd = (p) => {
@@ -472,6 +482,29 @@ console.log("\n[H] R7 프로젝트 단위 편집 권한 · R8 윤곽 라벨 통�
   State.regMode = "photo";
   App._togglePlacing();
   ok(State.placing === true && PG.collapsed === true, "H8 R9 모바일 포인트 모드 진입 → 리스트 패널 접힘(숨김 아님 — 다시 열기 그대로)");
+}
+
+console.log("\n[L] 번호 배지 가독성(WO 20261019-pinscale3-label) — 맞춤 상태 라벨 bbox 높이");
+{
+  const { UI, MapCtrl, State } = uiEnv();
+  State.zoom = 1; // 이 하니스는 viewport.clientWidth 가 없어 computeFitZoom()→null→폴백 1
+                  // (p159 와 동일 전제) → pinScreenScale()=PIN_SCALE = "맞춤 상태"와 동일 비율.
+  // [실측] 라이브 CDP(.tmp/probe-label.mjs, 실제 public/css/style.css + Segoe UI Bold 로드,
+  // --pin-scale 0.75 적용 후 getBoundingClientRect)로 잰 변환 상수: height_px ≈ fontSize(viewBox
+  // 단위) × 0.625 × (pinScreenScale()/MapCtrl.PIN_SCALE). 실측 원값: fs13→8.25px, fs18→11.25px,
+  // fs20→12px, fs22→13.5px(기울기 0.6136~0.6346, 평균 0.625 채택).
+  const K = 0.625;
+  const heightPx = (label) => UI._numberBadgeGeom(label).fs * K * (MapCtrl.pinScreenScale() / MapCtrl.PIN_SCALE);
+  const h1 = heightPx("1"), h2 = heightPx("12"), h3 = heightPx("123"), hA = heightPx("A12");
+  ok(h1 >= 11, `L1 1자리 "1" 맞춤 상태 라벨 높이=${h1.toFixed(2)}px ≥11px(목표 12~13) — 마스터 재현(종전 fs13→8.25px)`);
+  ok(h2 >= 11, `L2 2자리 "12" 맞춤 상태 라벨 높이=${h2.toFixed(2)}px ≥11px`);
+  ok(h3 >= 10, `L3 3자리 "123" 맞춤 상태 라벨 높이=${h3.toFixed(2)}px ≥10px(바닥, §3 긴 라벨은 줄이되 바닥 10px)`);
+  ok(hA >= 10, `L4 접두사 "A12" 맞춤 상태 라벨 높이=${hA.toFixed(2)}px ≥10px(바닥)`);
+  // [비례] 맞춤의 1.3배로 확대하면 라벨도 정확히 1.3배 커진다(마커 전체 --pin-scale 공유 — 추가
+  // 코드 없이 구조적 보장. 1.3배는 PIN_MAX_PX 상한(ceil, zoom≈1.87배부터 clamp)에 안 걸리는 구간).
+  State.zoom = 1.3;
+  const h1x13 = heightPx("1");
+  ok(Math.abs(h1x13 - h1 * 1.3) < 1e-6, `L5 zoom=맞춤×1.3 → "1" 라벨 높이=${h1x13.toFixed(3)}px = 맞춤×1.3=${(h1 * 1.3).toFixed(3)}px(비례 확인)`);
 }
 
 console.log(failed === 0 ? "\n✅ p133 전체 PASS" : `\n❌ p133 ${failed}건 FAIL`);

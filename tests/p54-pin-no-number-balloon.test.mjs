@@ -294,9 +294,11 @@ suiteRadarParity("⑧ 미니맵 정합 (정상 소스)", seriesSrc, radarSrc);
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션ⓐ] 아이콘 핀 번호를 폴백(||)으로 되돌림(9/29 재회귀 재현) → ①이 실패해야 함");
-  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>\n              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")\n                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`\n                : ""}';
+  // [2026-10-19 WO 20261019-pinscale3-label 갱신] font-size 리터럴(9/13)이 labelGeom.fs(자릿수 SoT)로
+  // 바뀌었다 — needle/치환 양쪽을 그 리터럴과 일치시킨다.
+  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>\n              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")\n                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`\n                : ""}';
   const mutated = uiSrc.replace(needle,
-    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${String(dispLabel).length >= 3 ? 9 : 13}" font-weight="900" fill="${txtFill}">${dispLabel}</text>`}');
+    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>`}');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const fixture = FIXTURE();
@@ -325,7 +327,9 @@ suiteRadarParity("⑧ 미니맵 정합 (정상 소스)", seriesSrc, radarSrc);
  * ──────────────────────────────────────────────────────────── */
 {
   console.log("\n[뮤테이션ⓒ] 형태 구분 제거·색만 다르게 → ③이 실패해야 함");
-  const needle = 'const tierDisc = (tier === "content")\n          ? `<rect class="pin-tier-disc" x="9.8" y="6.8" width="16.4" height="16.4" rx="3" fill="#ffffff" opacity="0.99"/>`\n          : (tier === "photo")\n            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`\n            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;';
+  // [2026-10-19 WO 20261019-pinscale3-label 갱신] tierDisc 가 labelGeom 기반 — 이 테스트 fixture 는
+  // 전부 1자리라 rx===ry=8.6, 결과는 원문과 동일(회귀 0).
+  const needle = "const tierDisc = (tier === \"content\")\n          ? `<rect class=\"pin-tier-disc\" x=\"${(18 - labelGeom.rx).toFixed(1)}\" y=\"${(15 - labelGeom.ry).toFixed(1)}\" width=\"${(labelGeom.rx * 2).toFixed(1)}\" height=\"${(labelGeom.ry * 2).toFixed(1)}\" rx=\"3\" fill=\"#ffffff\" opacity=\"0.99\"/>`\n          : (tier === \"photo\")\n            ? `<${_discTag} class=\"pin-tier-disc\" ${_discGeomAttr(18, 15)} fill=\"#ffffff\" opacity=\"0.99\"/><circle cx=\"22.6\" cy=\"10.4\" r=\"4.2\" fill=\"#ffffff\" opacity=\"0.99\" stroke=\"#1a1a1a\" stroke-width=\"0.8\"/>`\n            : `<${_discTag} class=\"pin-tier-disc\" ${_discGeomAttr(18, 15)} fill=\"#ffffff\" opacity=\"0.99\"/>`;";
   const mutated = uiSrc.replace(needle,
     'const tierDisc = (tier === "content")\n          ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffcc00" opacity="0.99"/>`\n          : (tier === "photo")\n            ? `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#00ccff" opacity="0.99"/>`\n            : `<circle class="pin-tier-disc" cx="18" cy="15" r="8.6" fill="#ffffff" opacity="0.99"/>`;');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
