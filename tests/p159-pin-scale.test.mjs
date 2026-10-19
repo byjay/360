@@ -56,6 +56,8 @@
  *   P159_MUT=nocrop       → 구역 보정(scaleRef) 무시
  *   P159_MUT=nofit        → fitZoom 나누기 제거(zoom 직접 기준)
  *   P159_MUT=notapk       → 탭 패드 역스케일 인자를 종전 --pin-scale 값으로 되돌림
+ *   P159_MUT=nominzoom    → [재현 R4] 줌 하한을 fitZoom 기반에서 고정 MIN_ZOOM(0.2)으로 되돌림
+ *                           (맞춤 fitZoom < 0.2 인 큰 PDF에서 [축소]가 오히려 확대로 역행하는 회귀)
  */
 import { openRealMap } from "./_lib/real-map-page.mjs";
 
@@ -76,6 +78,7 @@ const MUTS = {
   nocrop: ["10_MapCtrl.js", "const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);", "const scaleRef = 1;"],
   nofit: ["10_MapCtrl.js", "return (zoom / fitZoom) * scaleRef;", "return zoom * scaleRef;"],
   notapk: ["10_MapCtrl.js", 'layer.style.setProperty("--pin-screen-k", (px / this.PIN_NATIVE_PX).toFixed(4));', 'layer.style.setProperty("--pin-screen-k", inv.toFixed(4));'],
+  nominzoom: ["10_MapCtrl.js", "return (fitZoom > 0) ? Math.min(this.MIN_ZOOM, fitZoom * 0.25) : this.MIN_ZOOM;", "return this.MIN_ZOOM;"],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
 let mutHit = !MUT;
@@ -170,6 +173,18 @@ try {
   const hv = await head(zv * 10);
   ok(near(hv, 30, 0.5), `벡터 복사 zoom=맞춤×10 머리=${hv}px = 30px (원본 맞춤과 동일)`);
   await ev("__T.PDF.setDeckCrop(null, 1); 1");
+
+  console.log("\n[⑪ 재현 R4 — fitZoom < MIN_ZOOM(0.2) 인 큰 도면에서 [축소]가 더 작아져야 한다(역행 금지)]");
+  const fitZ3 = await ev("__T.MapCtrl.computeFitZoom()");
+  ok(fitZ3 < 0.2, `사전조건: 이 캔버스(8000×6000) fitZoom=${fitZ3.toFixed(4)} < 0.2(고정 MIN_ZOOM) — ga.pdf 와 같은 자릿수`);
+  await ev(`__M.zoom(${fitZ3})`);
+  const z1 = await ev("__T.MapCtrl.zoomBy(0.5); __T.State.zoom");
+  ok(z1 < fitZ3, `맞춤 상태에서 [축소](×0.5) → zoom=${z1.toFixed(4)} < 맞춤 ${fitZ3.toFixed(4)} (역행 아님)`);
+  ok(near(z1, fitZ3 * 0.5, 1e-6), `축소 1회 결과 = 맞춤×0.5 = ${(fitZ3 * 0.5).toFixed(4)} (실측 ${z1.toFixed(4)})`);
+  await ev(`__M.zoom(${fitZ3})`);
+  const z2 = await ev("__T.MapCtrl.zoomBy(0.1); __T.State.zoom");
+  ok(z2 < fitZ3, `맞춤 상태에서 [축소](×0.1, 하한 진입) → zoom=${z2.toFixed(4)} < 맞춤 ${fitZ3.toFixed(4)} (역행 아님)`);
+  ok(near(z2, fitZ3 * 0.25, 1e-6), `하한 = 맞춤×0.25 = ${(fitZ3 * 0.25).toFixed(4)} (실측 ${z2.toFixed(4)})`);
 } finally {
   await page.close();
 }

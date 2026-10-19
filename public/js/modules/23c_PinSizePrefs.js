@@ -128,7 +128,7 @@
       const buttons = OPTS.map(([val, text]) => {
         const b = document.createElement("button");
         b.type = "button"; b.textContent = text; b.dataset.pinlabelOpt = val;
-        b.style.cssText = "flex:1;min-height:32px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;cursor:pointer;font-size:12px;";
+        b.style.cssText = "flex:1;min-height:32px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;color:inherit;cursor:pointer;font-size:12px;";
         b.addEventListener("click", () => { this.set(val); paint(); });
         return b;
       });

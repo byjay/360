@@ -10,6 +10,10 @@
     // 도면 판독(치수선·작은 글자)에 부족하다는 마스터 지적. zoomBy/handleWheel/pinchTransform 공유.
     MIN_ZOOM: 0.2,
     MAX_ZOOM: 16,
+    // [재현 R4, WO 20261019-pinscale4 회귀수정] 고정 MIN_ZOOM(0.2)이 큰 PDF(ga.pdf fitZoom≈0.125)
+    // 보다 커서, 화면맞춤 상태에서 [축소]를 누르면 오히려 0.2 로 확대되는 역행이 났다(실측
+    // tests/p172-pin-screen-px-cdp.mjs). fitZoom 기반으로 하한을 낮춰 맞춤보다 항상 더 축소할
+    // 여지를 둔다 — zoomBy/pinchTransform/handleWheel 공유 SoT(§G-2-5 단일 진입점).
 
     init(viewport, transform) {
       this.viewport = viewport; this.transform = transform;
@@ -441,6 +445,12 @@
       const z = Math.min(vw / size.w, vh / size.h) * this.FIT_PAD;
       return (z > 0) ? z : null;
     },
+    /** [재현 R4] 줌 하한 SoT — 고정 MIN_ZOOM(0.2)과 "화면맞춤의 1/4" 중 더 작은 값. fitZoom 을
+     *  모르면(로드 전·테스트) 고정값 그대로(회귀 0). zoomBy/pinchTransform/handleWheel 공유. */
+    minZoom() {
+      const fitZoom = this.computeFitZoom();
+      return (fitZoom > 0) ? Math.min(this.MIN_ZOOM, fitZoom * 0.25) : this.MIN_ZOOM;
+    },
     /** [WO 20261019-pinpx] 상위 transform 상쇄의 SoT — #map-transform 은 `scale(State.zoom)` 이고
      *  #pins-layer·#routes-svg·#anno-svg·#leader-layer·#zones-layer 는 전부 그 자손이라, 자손에 준 로컬
      *  크기에는 이 값이 한 번 더 곱해져 화면에 나온다. "화면 px" 로 정한 크기를 로컬 단위로 바꿀 때는
@@ -595,7 +605,7 @@
       const rect = this.viewport.getBoundingClientRect();
       const mx = (cx != null ? cx : rect.left + rect.width / 2) - rect.left;
       const my = (cy != null ? cy : rect.top + rect.height / 2) - rect.top;
-      const newZoom = Math.max(this.MIN_ZOOM, Math.min(this.MAX_ZOOM, State.zoom * factor));
+      const newZoom = Math.max(this.minZoom(), Math.min(this.MAX_ZOOM, State.zoom * factor));
       const f = newZoom / State.zoom;
       State.pan.x = mx - f * (mx - State.pan.x);
       State.pan.y = my - f * (my - State.pan.y);
@@ -613,7 +623,7 @@
     pinchTransform(pan, zoom, rectLeft, rectTop, prevMidX, prevMidY, curMidX, curMidY, distRatio) {
       const r = (distRatio && isFinite(distRatio) && distRatio > 0) ? distRatio : 1;
       const rawZoom = zoom * r;
-      const newZoom = Math.max(this.MIN_ZOOM, Math.min(this.MAX_ZOOM, rawZoom));
+      const newZoom = Math.max(this.minZoom(), Math.min(this.MAX_ZOOM, rawZoom));
       const actualRatio = zoom > 0 ? newZoom / zoom : 1;
       const prevLocalX = prevMidX - rectLeft, prevLocalY = prevMidY - rectTop;
       const curLocalX = curMidX - rectLeft, curLocalY = curMidY - rectTop;
@@ -691,7 +701,7 @@
       e.preventDefault();
       this.cancelFly();
       const delta = -e.deltaY * 0.001;
-      const newZoom = Math.max(0.3, Math.min(this.MAX_ZOOM, State.zoom + delta * State.zoom));
+      const newZoom = Math.max(this.minZoom(), Math.min(this.MAX_ZOOM, State.zoom + delta * State.zoom));
       const rect = this.viewport.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;

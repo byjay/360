@@ -296,9 +296,11 @@ suiteRadarParity("⑧ 미니맵 정합 (정상 소스)", seriesSrc, radarSrc);
   console.log("\n[뮤테이션ⓐ] 아이콘 핀 번호를 폴백(||)으로 되돌림(9/29 재회귀 재현) → ①이 실패해야 함");
   // [2026-10-19 WO 20261019-pinscale3-label 갱신] font-size 리터럴(9/13)이 labelGeom.fs(자릿수 SoT)로
   // 바뀌었다 — needle/치환 양쪽을 그 리터럴과 일치시킨다.
-  const needle = '<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>\n              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")\n                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`\n                : ""}';
+  // [2026-10-19 WO 20261019-pinscale4 갱신] ae36a91 이 번호 <text> 에 class="pin-num-text" 를
+  // 추가했다(LABEL_HIDE_PX 자동숨김용 셀렉터) — needle/치환 양쪽을 그 클래스와 일치시킨다.
+  const needle = '<text class="pin-num-text" x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>\n              ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")\n                ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`\n                : ""}';
   const mutated = uiSrc.replace(needle,
-    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>`}');
+    '${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number" && PinIcons.headMarkup(pin.icon, txtFill, 15))\n                || `<text class="pin-num-text" x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="\'Segoe UI\',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>`}');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const fixture = FIXTURE();
