@@ -141,7 +141,8 @@ function loadEnv({ owner = true } = {}) {
   ok(!!UI._alignCapture, "B1 도크 [정렬 ↕] → 정렬 대기(도면 클릭 캡처)");
   viewportEl.dispatch("click", { clientX: 500, clientY: 80, stopPropagation() {}, preventDefault() {} });
   const got = State.pins.filter((p) => p.callout).map((p) => p.id).join(",");
-  ok(got === "1,2,3", "B2 정렬 대상 = 창 안 CHECKER 리더선 핀 1,2,3 (창 밖·360·다른 페이지·핀 표현 제외) → " + got);
+  // 🔴 [WO 20261019-unifymode] 전: 1,2,3(360 계열 5 제외 — 모드 범위) / 후: 1,2,3,5(체커 메타 무관 — 핀은 하나). 창 밖(4)·다른 페이지(6)·핀 표현(7) 제외는 그대로.
+  ok(got === "1,2,3,5", "B2 정렬 대상 = 창 안 리더선 핀 1,2,3,5 (체커 메타 무관 · 창 밖·다른 페이지·핀 표현 제외) → " + got);
   ok(c1.callout.x === 50 && c2.callout.x === 50 && c3.callout.x === 50 && c2.callout.y > c1.callout.y, "B3 세로 등간격(x 동일·번호순)");
   ok(c1.x === 20 && c1.y === 20, "B4 화살촉(대상 x,y) 불변");
   UI.undoAlign();

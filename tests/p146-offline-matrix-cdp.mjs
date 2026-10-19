@@ -153,7 +153,7 @@ export default async function explore(P) {
     const n0 = loads.length, t0 = Date.now();
     await send("Page.navigate", { url: BASE + "/" });
     while (loads.length === n0 && Date.now() - t0 < 120000) await P.wait(100);
-    return waitFor("window.__T && document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
+    return waitFor("window.__T && document.querySelector('.hub-tree-deck[data-act=deck-open]')", 90000);
   };
   await openHub();
   await waitFor("navigator.serviceWorker && navigator.serviceWorker.controller", 90000);
@@ -166,9 +166,9 @@ export default async function explore(P) {
   await evSafe("__T.GPS && __T.GPS.setEnabled(true); 1");
 
   const openLeaf = async (E = evSafe, tapFn = tapSel) => {
-    const has = await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 15000);
+    const has = await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 15000);
     let how = "leaf";
-    if (has >= 0) { await E("(function(){var e=document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); e&&e.scrollIntoView({block:'center'}); return 1;})()"); await P.wait(400); await tapFn("[data-act=mode-open][data-mode-reg=checkboard]"); }
+    if (has >= 0) { await E("(function(){var e=document.querySelector('.hub-tree-deck[data-act=deck-open]'); e&&e.scrollIntoView({block:'center'}); return 1;})()"); await P.wait(400); await tapFn(".hub-tree-deck[data-act=deck-open]"); }
     else { how = "thumb"; await E("(function(){var e=document.querySelector('.hub-card-thumb'); e&&e.scrollIntoView({block:'center'}); return 1;})()"); await P.wait(400); await tapFn(".hub-card-thumb"); }
     let ms = await waitFor(drawn, 60000);
     if (ms < 0) { how += "+selectDeck"; await E("(async function(){ var P = __T.Projects; var d = (P.decks || [])[0]; if (d && P.selectDeck) await P.selectDeck(d); return 1; })()"); ms = await waitFor(drawn, 60000); }
@@ -444,10 +444,10 @@ export default async function explore(P) {
     await s.ev(`localStorage.setItem("wm_local_token", ${J(TOKB)}); 1`);
     await s.send("Page.navigate", { url: BASE + "/" });
     const waitB = async (cond, to) => { const t0 = Date.now(); while (Date.now() - t0 < to) { const v = await s.evSafe("(function(){try{return !!(" + cond + ")}catch(e){return false}})()"); if (v === true) return Date.now() - t0; await P.wait(150); } return -1; };
-    await waitB("window.__T && document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
+    await waitB("window.__T && document.querySelector('.hub-tree-deck[data-act=deck-open]')", 90000);
     // [WO 20261011-offmerge] 허브가 첫 렌더 직후 다시 그려지면 그 사이 클릭이 떨어진 노드에 간다(실측: del 단계가 첫 B 진입일 때 허브에 머묾,
     //   스크린샷 p146-deviceB-fail) — 같은 클릭을 최대 5회(매번 새로 찾은 노드)까지 반복한다. 앱 동작은 그대로(사용자 재클릭과 같다).
-    const clickLeafB = "(function(){ var e = document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); if (!e) return 0; e.scrollIntoView({block:'center'}); e.click(); return 1; })()";
+    const clickLeafB = "(function(){ var e = document.querySelector('.hub-tree-deck[data-act=deck-open]'); if (!e) return 0; e.scrollIntoView({block:'center'}); e.click(); return 1; })()";
     let okB = -1;
     for (let i = 0; i < 5 && okB < 0; i++) { await s.evSafe(clickLeafB); okB = await waitB(drawn, i < 4 ? 12000 : 40000); }
     if (okB < 0) { await shot("deviceB-fail", s.send); log("device B 본문", await s.evSafe("({ decks: window.__T && __T.Projects ? (__T.Projects.decks || []).length : -1, cur: window.__T && __T.Projects && __T.Projects.currentProject ? __T.Projects.currentProject.id : null, mode: window.__T && __T.State.mode, toasts: (window.__M ? __M.toasts : []).slice(-5).map(function(t){ return t.text; }), body: (document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 400) })")); }

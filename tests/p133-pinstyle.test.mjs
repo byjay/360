@@ -275,8 +275,9 @@ console.log("\n[E] 일괄 켜기/끄기(설정·전체 기능 메뉴) — 핀별
   State.regMode = "checkboard";
   State.pins = [{ id: "e1", x: 10, y: 10, page: 1, checkboard: true, label: "1" }, { id: "e2", x: 20, y: 20, page: 1, checkboard: true, label: "2" }, { id: "e3", x: 30, y: 30, page: 1, label: "P1" }];
   const n = UI.bulkLeader(true);
-  ok(n === 2 && State.pins[0].leader === true && State.pins[1].leader === true && State.pins[2].leader === undefined, "E1 일괄 켜기 = 현재 모드(CHECKER) 범위만 → 2개");
-  ok(leaderLayer.children.length === 2 && dirty.length >= 1, "E2 리더 2개 렌더 + 미저장 표시(LWW 경로)");
+  // 🔴 [WO 20261019-unifymode] 전: 현재 모드(CHECKER) 범위만 → 2개(360 e3 제외) / 후: 이 구역·페이지 핀 전부 → 3개(체커 메타 무관 — 핀은 하나)
+  ok(n === 3 && State.pins.every((p) => p.leader === true), "E1 일괄 켜기 = 이 구역 핀 전부(체커 메타 무관) → 3개");
+  ok(leaderLayer.children.length === 3 && dirty.length >= 1, "E2 리더 3개 렌더 + 미저장 표시(LWW 경로)");
   UI.bulkLeader(false);
   ok(leaderLayer.children.length === 0 && State.pins[0].leader === false, "E3 일괄 끄기 → leader:false, 리더 0");
 }
@@ -327,9 +328,12 @@ function appEnv(opt) {
   const { App, State, msg } = appEnv();
   State.regMode = "checkboard";
   App._autoStartPlacing();
-  ok(/CHECKER: 번호만 · 사진은 폴더 일괄로/.test(msg.textContent), "F7 CHECKER 배치 배너 = \"" + msg.textContent + "\"");   // [WO 20261015-numunify] 문구 갱신(종전 "사진은 360 모드에서")
+  // [WO 20261019-unifymode] 모드 이름 → 등록 방식 이름. 전: "CHECKER: 번호만 · 사진은 폴더 일괄로" / 후: "번호 먼저: 탭 = 번호만 · 사진은 일괄로"
+  ok(/^번호 먼저: 탭 = 번호만 · 사진은 일괄로$/.test(msg.textContent) && !/CHECKER/.test(msg.textContent), "F7 [번호 먼저] 배치 배너 = \"" + msg.textContent + "\"");
+  ok(msg.textContent.length <= 26, "F7b 배너 nowrap — 375px 안(26자 이하) → " + msg.textContent.length);
   State.regMode = "photo"; App._syncPlacingUi();
-  ok(/^360:/.test(msg.textContent) && !/CHECKER/.test(msg.textContent), "F8 360 배너 = \"" + msg.textContent + "\"");
+  // 전: "360: 클릭 = 번호 핀 + 사진 선택" / 후: "바로 사진: 탭 = 번호 핀 + 사진 선택"
+  ok(/^바로 사진: /.test(msg.textContent) && !/CHECKER|^360/.test(msg.textContent), "F8 [바로 사진] 배너 = \"" + msg.textContent + "\"");
   ok(msg.textContent.length <= 26, "F9 배너는 nowrap — 375px 안(26자 이하) → " + msg.textContent.length);
 }
 {
@@ -350,7 +354,11 @@ function appEnv(opt) {
   const hub = rd("public/js/modules/12_ProjectHub.js");
   const i = hub.indexOf("async openProjectAtDeck(");
   const body = hub.slice(i, hub.indexOf("closeModeSelect()", i));
-  ok(/App\._autoStartPlacing\(\)/.test(body) && !/if \(deckId == null\) return;/.test(body), "F10 허브 잎 진입도 같은 모드면 자동 시작(구역 없는 경로 포함)");
+  // 🔴 [WO 20261019-unifymode] 허브 모드 잎 폐기 — 전: 잎(regMode) 진입 = _setRegMode + 배치 자동 시작 / 후: regMode 인자·자동 시작 없음,
+  //   구역 진입 = Projects.selectDeck(→ App._syncRegMethod 로 그 구역 등록 방식 복원). 실행 검증은 p173 T2~T4(CDP).
+  const proj = rd("public/js/modules/31_Projects.js");
+  const sd = proj.slice(proj.indexOf("async selectDeck(d) {"), proj.indexOf("async selectDeck(d) {") + 400);
+  ok(!/regMode/.test(body) && !/_autoStartPlacing|_setRegMode/.test(body) && /Projects\.selectDeck\(deck\)/.test(body) && /App\._syncRegMethod\(\)/.test(sd), "F10 허브 구역 진입 = selectDeck(구역 등록 방식 복원) · 모드 인자/자동 시작 없음");
 }
 
 console.log("\n[G] 우클릭 = 앱 메뉴 · 권한 비활성+사유 · 입력창 제외 · 팝업 위치(FAB 회피)");
@@ -396,9 +404,10 @@ const reasonOf = (items, re) => { const it = items.find((i) => re.test(i.label))
   ok(reasonOf(di, /^수정/) === "" && reasonOf(di, /^리더선/) === "" && reasonOf(di, /^삭제/) === "", "G3 디자이너 = 편집 항목 사용 가능");
   ok(reasonOf(vi, /^열기/) === "" && /디자이너\(편집\) 전용/.test(reasonOf(vi, /^수정/)) && /디자이너\(편집\) 전용/.test(reasonOf(vi, /^삭제/)) && /디자이너\(편집\) 전용/.test(reasonOf(vi, /^리더선/)), "G4 열람자 = 열기만 활성, 편집 항목은 비활성 + 사유(숨김 0 — 항목 수 " + vi.length + "=" + di.length + ")");
   ok(vi.length === di.length, "G5 열람자도 항목을 숨기지 않는다");
-  ok(/CHECKER 는 사진을 등록하지 않습니다/.test(reasonOf(di, /^AI 분석/)), "G6 CHECKER 핀 AI 분석 = 비활성 + 사유");
+  // [WO 20261019-unifymode] 전: 체커 메타 핀 = "CHECKER 는 사진을 등록하지 않습니다" / 후: 그 사유 폐기 — 사진 없음 사유는 AiVision.buttonState 정본(여기선 미로드 = "준비 중")
+  ok(!/CHECKER/.test(reasonOf(di, /^AI 분석/)) && reasonOf(di, /^AI 분석/) !== "", "G6 사진 없는 핀 AI 분석 = 비활성 + 사유(구 CHECKER 사유 아님) — " + reasonOf(di, /^AI 분석/));
   const dm = D.UI.mapCtxItems({ x: 10, y: 10 }, { x: 1, y: 1 }), vm2 = V.UI.mapCtxItems({ x: 10, y: 10 }, { x: 1, y: 1 });
-  ok(["여기에 핀 추가(CHECKER)", "붙여넣기", "정렬 시작 ↕", "정렬 시작 ↔", "화면 맞춤", "촬영 현황 보기 켜기/끄기", "전체 기능 메뉴 열기"].every((w) => labels(dm).includes(w)), "G7 빈 도면 메뉴 = " + labels(dm).join(" · "));
+  ok(["여기에 핀 추가(번호 먼저)", "붙여넣기", "정렬 시작 ↕", "정렬 시작 ↔", "화면 맞춤", "촬영 현황 보기 켜기/끄기", "전체 기능 메뉴 열기"].every((w) => labels(dm).includes(w)), "G7 빈 도면 메뉴 = " + labels(dm).join(" · "));
   ok(/복사한 포인트가 없습니다/.test(reasonOf(dm, /^붙여넣기/)), "G8 붙여넣기 = 복사한 핀이 없으면 비활성 + 사유");
   D.UI.copyPin(pin);
   ok(reasonOf(D.UI.mapCtxItems({ x: 10, y: 10 }, { x: 1, y: 1 }), /^붙여넣기/) === "", "G9 핀 복사 후 붙여넣기 활성");

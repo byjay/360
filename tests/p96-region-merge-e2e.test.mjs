@@ -288,10 +288,12 @@ ok(cands.some((d) => d.id === zone1.id) && !cands.some((d) => d.id === zone2.id)
 const prep = await A.RM.prepare(zone2, zone1, { photos: true });
 const pl = prep.plan;
 console.log("   측정: total=" + pl.total + " items=" + pl.items.length + " outside=" + pl.outside + " already=" + pl.already + " otherMode=" + pl.otherMode + " dups=" + JSON.stringify(prep.dups));
-ok(pl.total === 2 && pl.items.length === 1 && pl.outside === 1, "⑨ 범위 밖 1개는 가져오지 않고 개수 표시(total 2 · 가져옴 1 · 밖 1)");
+// 🔴 [WO 20261019-unifymode] 핀 계열(모드) 거름 폐기 — 전: CHECKER 대상엔 체크 2 중 범위 안 1 · 360 핀 제외(otherMode 1)
+//   후: 범위 안 핀 전부(b1 + 360 메타 핀 777001) · 범위 밖(b2) 1 · otherMode 0. 좌표 변환·번호 유지·멱등·되돌리기 불변식은 그대로.
+ok(pl.total === 3 && pl.items.length === 2 && pl.outside === 1, "⑨ 범위 밖 1개는 가져오지 않고 개수 표시(total 3 · 가져옴 2 · 밖 1)");
 const np = prep.pins[0];
 ok(!!np && Math.abs(np.x - 25) < 1e-9 && Math.abs(np.y - 25) < 1e-9 && np.page === 1, "⑨ 변환 좌표 = 원본 경유 기대값(25,25) — " + (np && [np.x, np.y]));
-ok(pl.otherMode === 1 && !prep.pins.some((p) => !p.checkboard), "모드 분리 — CHECKER 대상엔 360 핀을 가져오지 않음(otherMode=1)");
+ok(pl.otherMode === 0 && prep.pins.some((p) => p.srcPinId === "777001" && p.imageId === "img-360-a"), "모드 통일 — 등록 방식과 무관하게 360 메타 핀도 함께(otherMode=0 · imageId 참조 공유)");
 ok(!!np && np.label === b1.label && np.srcDeckId === String(zone1.id) && np.srcPinId === String(b1.id) && !!np.mergeBatchId && typeof np.id === "string",
   "번호 원본 유지 · srcDeckId/srcPinId/mergeBatchId · 문자열 id");
 // Jev 폴백: 로컬 워커엔 OPENROUTER_API_KEY 없음 → no-key → 거리 규칙
@@ -305,7 +307,7 @@ ok(viewerDeny.status === 403, "서버 라우트: 비설계자 403 (" + viewerDen
 
 // 사용자가 "같은 위치 의심"을 다시 켜서 가져온다(확정은 사람)
 const batch = A.RM.apply(prep, prep.pins.map(() => true));
-ok(batch.ids.length === 1 && A.State.pins.some((p) => p.id === batch.ids[0]), "M 적용 — State 에 1개 추가");
+ok(batch.ids.length === 2 && batch.ids.every((id) => A.State.pins.some((p) => p.id === id)), "M 적용 — State 에 2개 추가");
 ok(await save(A), "M 저장");
 const srvAfter = live(await srvPins(zone2.deployment_id));
 ok(srvAfter.some((p) => p.srcPinId === String(b1.id) && p.mergeBatchId === batch.batchId), "M 서버 대상 배포본에 반영(srcPinId·mergeBatchId 포함)");
@@ -317,7 +319,7 @@ console.log("\n[⑩] 같은 원본을 두 번 합치기");
 {
   const p2 = await A.RM.prepare(zone2, zone1, { photos: true });
   console.log("   측정: 두 번째 items=" + p2.plan.items.length + " already=" + p2.plan.already);
-  ok(p2.plan.items.length === 0 && p2.plan.already === 1, "⑩ 두 번째 합치기 신규 0건(already 1)");
+  ok(p2.plan.items.length === 0 && p2.plan.already === 2, "⑩ 두 번째 합치기 신규 0건(already 2)");
   // 증분: B 가 구역1 에 새 핀을 추가하면 그것만 들어온다
   await B.App.loadDeckDrawing(zone1.deployment_id);
   const b3 = await place(B, 60, 60);
@@ -331,21 +333,23 @@ console.log("\n[⑪] 되돌리기 → 합치기 전과 동일");
 {
   const n = await A.RM.undo(batch);
   const afterUndo = snapPins(A.State.pins);
-  ok(n === 1 && afterUndo === before, "⑪ State 핀 = 합치기 전(" + n + "개 제거)");
+  ok(n === 2 && afterUndo === before, "⑪ State 핀 = 합치기 전(" + n + "개 제거)");
   ok(await save(A), "⑪ 저장");
   const srvUndo = snapPins(await srvPins(zone2.deployment_id));
   ok(srvUndo === beforeSrv, "⑪ 서버 대상 배포본 살아있는 핀 = 합치기 전");
 }
 
 /* ══════════ 360 모드 — 360 핀만 ══════════ */
-console.log("\n[모드] 360 모드에서는 360 핀만");
+console.log("\n[등록 방식] [바로 사진]이어도 같은 결과(모드 통일)");
 {
+  const p4c = await A.RM.prepare(zone2, zone1, { photos: true });
   A.State.regMode = "photo";
   const p4 = await A.RM.prepare(zone2, zone1, { photos: true });
-  ok(p4.plan.items.length === 1 && !p4.pins[0].checkboard && p4.pins[0].imageId === "img-360-a" && p4.plan.otherMode === 3,
-    "모드 분리 — 360 모드 = 360 핀 1개(imageId 참조 공유), 체크 3개 제외 (otherMode=" + p4.plan.otherMode + ")");
+  const ids = (x) => x.plan.items.map((it) => String(it.src.id)).sort().join(",");
+  ok(ids(p4) === ids(p4c) && p4.plan.otherMode === 0 && p4.pins.some((p) => p.imageId === "img-360-a"),
+    "등록 방식 무관 — 번호 먼저/바로 사진 가져오는 핀 동일([" + ids(p4) + "]) · otherMode 0 · 사진 참조 공유");
   const p5 = await A.RM.prepare(zone2, zone1, { photos: false });
-  ok(p5.pins.length === 1 && p5.pins[0].imageId === undefined && p5.pins[0].is360 === undefined, "사진 끔 → 사진 필드 미복사");
+  ok(p5.pins.length === p4.pins.length && p5.pins.every((p) => p.imageId === undefined && p.is360 === undefined), "사진 끔 → 사진 필드 미복사(" + p5.pins.length + "개 전부)");
   A.State.regMode = "checkboard";
 }
 
@@ -356,7 +360,7 @@ console.log("\n[레거시] src 기록 없는 구역");
   ok(!A.RM.canTransform(legacy, zone2), "레거시 구역(src 기록 NULL) → 좌표 변환 불가");
   const p6 = await A.RM.prepare(zone2, legacy, { raw: true });
   const same = p6.pins.every((p) => { const s = p6.plan.items.find((it) => String(it.src.id) === p.srcPinId).src; return p.x === s.x && p.y === s.y; });
-  ok(p6.plan.items.length === 3 && same, "그대로 얹기 — 화면 상대 위치 그대로(" + p6.plan.items.length + "개)");
+  ok(p6.plan.items.length === 4 && same, "그대로 얹기 — 화면 상대 위치 그대로(" + p6.plan.items.length + "개 — 계열 무관 전부)");
 }
 
 /* ══════════ 노트 옵션 — 저장 후 복사 · 되돌리기 시 삭제 ══════════ */

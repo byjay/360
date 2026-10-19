@@ -38,7 +38,7 @@ export default async function explore(P) {
   const n0 = loads.length, t0 = Date.now();
   await send("Page.navigate", { url: BASE + "/" });
   while (loads.length === n0 && Date.now() - t0 < 120000) await P.wait(100);
-  await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
+  await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 90000);
   await waitFor("navigator.serviceWorker && navigator.serviceWorker.controller", 90000);
   await P.wait(3000);
 
@@ -58,9 +58,9 @@ export default async function explore(P) {
   if (dl < 0) { X.fatal = "다운로드 실패"; P.ok(false, "[X] 다운로드"); saveReport(); return; }
 
   /* 3. 도면 열기 → 온라인 핀 1개 */
-  await evSafe("(function(){var e=document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); e&&e.scrollIntoView({block:'center'}); return 1;})()");
+  await evSafe("(function(){var e=document.querySelector('.hub-tree-deck[data-act=deck-open]'); e&&e.scrollIntoView({block:'center'}); return 1;})()");
   await P.wait(400);
-  await tapSel("[data-act=mode-open][data-mode-reg=checkboard]");
+  await tapSel(".hub-tree-deck[data-act=deck-open]");
   rec("open-drawing", { ms: await waitFor(drawn, 120000) });
   await P.wait(1500);
   if (!(await evSafe("!!__T.State.placing"))) { await tapSel("#mobile-dock [data-act=place]"); await P.wait(800); }
@@ -93,7 +93,7 @@ export default async function explore(P) {
     await send("Page.reload", { ignoreCache: false });
     while (loads.length === nr && Date.now() - tr < 90000) await P.wait(150);
     let dd = await waitFor(drawn + " && __T.State.pins.length > 0", 30000);
-    if (dd < 0) { await evSafe("(function(){var e=document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')||document.querySelector('.hub-card-thumb'); e&&e.scrollIntoView({block:'center'}); return 1;})()"); await P.wait(500); await tapSel("[data-act=mode-open][data-mode-reg=checkboard], .hub-card-thumb"); dd = await waitFor(drawn + " && __T.State.pins.length > 0", 60000); }
+    if (dd < 0) { await evSafe("(function(){var e=document.querySelector('.hub-tree-deck[data-act=deck-open]')||document.querySelector('.hub-card-thumb'); e&&e.scrollIntoView({block:'center'}); return 1;})()"); await P.wait(500); await tapSel(".hub-tree-deck[data-act=deck-open], .hub-card-thumb"); dd = await waitFor(drawn + " && __T.State.pins.length > 0", 60000); }
     await P.wait(2500); }
   const afterReload = await stLocal();
   rec("R1 after-offline-reload", afterReload);

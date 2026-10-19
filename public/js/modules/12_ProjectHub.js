@@ -463,33 +463,22 @@
       if (!decks.length) {
         return '<div class="hub-card-tree">' + originHtml + '<p class="hub-tree-empty">구역 없음</p></div>';
       }
-      /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
-         구역·영역은 두 모드가 공유하는 한 벌만 렌더한다(중복 0). 모드 분리는 트리 맨 안쪽(더 이상
-         하위 영역이 없는 지점 — 영역, 또는 영역이 없는 구역)에 CHECKER/360 두 잎으로만 존재한다.
-         허브 카드는 실시간 핀 수를 모르므로(로드된 구역 아님) 개수 배지는 붙이지 않는다(§5 날조 금지).
-         SoT = PinSeries.DECK_MODES. */
-      const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
-      const leafModesHtml = (node) => {
-        if (!MODES.length) return "";
-        return '<ul class="hub-tree-leaf-modes">' + MODES.map((m) =>
-          '<li class="hub-tree-leaf-mode hub-tree-leaf-mode-' + esc(m.tag) + '" data-act="mode-open" data-deck-id="' + esc(node.id) + '" data-mode-reg="' + esc(m.regMode) + '" tabindex="0" role="button" title="' + esc(m.label) + ' 작업공간으로 열기(이 구역/영역)">'
-          + '<span class="hub-tree-mode-label">' + esc(m.label) + '</span></li>'
-        ).join("") + '</ul>';
-      };
+      /* 🔴 [WO 20261019-unifymode] 잎(CHECKER/360) 폐기 — 마스터 "360 과 체커 통일". 구역·영역 한 벌만, 클릭 = 그 구역 열기
+         (등록 방식은 그 구역에 저장된 값으로 — Projects.selectDeck → App._syncRegMethod). 허브 카드는 실시간 핀 수를 모르므로
+         개수 배지 없음(§5 날조 금지). */
       const decksHtml = (list) => {
         const { roots, childrenOf } = UI.groupDecksByParent(list);
         const regionsHtml = (deck) => {
           const kids = childrenOf.get(String(deck.id)) || [];
           if (!kids.length) return "";
           return '<ul class="hub-tree-regions">' + kids.map((r) =>
-            '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + leafModesHtml(r) + '</li>'
+            '<li class="hub-tree-region" data-act="deck-open" data-deck-id="' + esc(r.id) + '" title="' + titleOf(r) + '" tabindex="0" role="button">' + UI.deckLabelHtml(r) + '</li>'
           ).join("") + '</ul>';
         };
         if (!roots.length) return '<p class="hub-tree-empty">구역 없음</p>';
         return '<ul class="hub-tree-decks">' + roots.map((d) => {
-          const hasRegions = (childrenOf.get(String(d.id)) || []).length > 0;
           return '<li class="hub-tree-deck" data-act="deck-open" data-deck-id="' + esc(d.id) + '" title="' + titleOf(d) + '" tabindex="0" role="button">'
-            + UI.deckLabelHtml(d) + regionsHtml(d) + (hasRegions ? "" : leafModesHtml(d)) + '</li>';
+            + UI.deckLabelHtml(d) + regionsHtml(d) + '</li>';
         }).join("") + '</ul>';
       };
       return '<div class="hub-card-tree">' + originHtml + decksHtml(decks) + '</div>';
@@ -692,17 +681,16 @@
           const openDeckNode = (e) => {
             // [WO 20261002-allmenu §5] 원본 줄 = 프로젝트 진입(기존 openProject — 진입 시 원본을 연다).
             if (e.target.closest("[data-origin]")) { e.stopPropagation(); this.openProject(p); return; }
-            const node = e.target.closest("[data-deck-id],[data-mode-reg]");
+            const node = e.target.closest("[data-deck-id]");
             if (!node) return;
             e.stopPropagation();
-            // [WO 20260930-fixmode] 어느 모드 가지 아래를 눌렀는지 = 진입 모드(구역은 NULL 이면 양쪽에 있으므로 가지로 판정).
-            const modeLi = node.closest("[data-mode-reg]");
-            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"), modeLi ? modeLi.getAttribute("data-mode-reg") : null);
+            // [WO 20261019-unifymode] 모드 잎 폐기 — 구역 열기만(등록 방식 = 그 구역 저장값)
+            this.openProjectAtDeck(p, node.getAttribute("data-deck-id"));
           };
           treeEl.addEventListener("click", openDeckNode);
           treeEl.addEventListener("keydown", (e) => {
             if (e.key !== "Enter" && e.key !== " ") return;
-            if (!e.target.closest("[data-deck-id],[data-mode-reg],[data-origin]")) return;
+            if (!e.target.closest("[data-deck-id],[data-origin]")) return;
             e.preventDefault();
             openDeckNode(e);
           });
@@ -758,20 +746,16 @@
      *  (기존 "구역 열기" 정본, 31_Projects.js)을 그대로 호출한다.
      *  requireDesigner 게이트가 열려(로그인 대기) 편집모드 진입이 아직 안 끝났으면 여기서
      *  멈춘다 — 로그인 완료 후에는 기존 동작(최신 배포본 진입)으로 이어진다(회귀 없음). */
-    async openProjectAtDeck(p, deckId, regMode) {
+    //  [WO 20261019-unifymode] 구 regMode 인자(모드 잎) 폐기 — 등록 방식은 Projects.selectDeck 이 그 구역 저장값으로 맞춘다.
+    async openProjectAtDeck(p, deckId) {
       await this.openProject(p);
       if (!Auth.isDesigner) return;
       try {
-        // [WO 20260930-fixmode] 모드 전환 SoT = App._setRegMode(상단 세그먼트·사이드바 트리와 같은 함수)
-        if (regMode && typeof App !== "undefined" && App._setRegMode && State.regMode !== regMode) App._setRegMode(regMode);
         if (deckId != null) {
           await Projects.loadDecks();
           const deck = (Projects.decks || []).find((d) => String(d.id) === String(deckId));
           if (deck && Projects.selectDeck) await Projects.selectDeck(deck);
         }
-        // [WO 20261008-pinstyle R5] 잎(CHECKER/360)으로 들어오면 그 모드 배치를 시작한다 — 이미 같은 모드면
-        //   _setRegMode 를 건너뛰어 배치가 꺼진 채 "클릭하면 사진 선택창" 안내만 떠 있었다(0b4d262 재현: placing=false).
-        if (regMode && typeof App !== "undefined" && App._autoStartPlacing) App._autoStartPlacing();
       } catch (e) {}
     },
     closeModeSelect() {

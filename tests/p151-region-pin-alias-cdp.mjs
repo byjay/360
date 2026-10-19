@@ -58,11 +58,11 @@ export default async function explore(P) {
   const n0 = loads.length, t0 = Date.now();
   await send("Page.navigate", { url: BASE + "/" });
   while (loads.length === n0 && Date.now() - t0 < 120000) await P.wait(100);
-  await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
+  await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 90000);
   await P.wait(1500);
-  await evSafe("(function(){var e=document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); e&&e.scrollIntoView({block:'center'}); return 1;})()");
+  await evSafe("(function(){var e=document.querySelector('.hub-tree-deck[data-act=deck-open]'); e&&e.scrollIntoView({block:'center'}); return 1;})()");
   await P.wait(400);
-  await tapSel("[data-act=mode-open][data-mode-reg=checkboard]");
+  await tapSel(".hub-tree-deck[data-act=deck-open]");
   await waitFor(drawn, 120000);
   await P.wait(1500);
 

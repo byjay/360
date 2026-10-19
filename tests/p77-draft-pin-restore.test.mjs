@@ -192,7 +192,16 @@ const okRes = (j) => ({ ok: true, status: 200, json: async () => j });
   // 여전히 _setRegMode() 로 위임한다 — [보기] 제거로 "checkboard ↔ view 토글"이던 동작이
   // "checkboard 로 진입(단방향)"으로 바뀌었을 뿐, 단일 SoT(_setRegMode) 경로는 그대로다.
   const toggleDelegates = /const enterCheckboard = \(\) => \{ this\._setRegMode\("checkboard"\); \};/.test(appSrc);
-  const setRegModeKeepsDrawing = /_setRegMode\(next\) \{[\s\S]{0,600}?this\.openApp\([^;]*?\{[^}]*keepDrawing: true/.test(appSrc);
+  // [WO 20261019-unifymode] 시그니처 _setRegMode(next) → _setRegMode(next, opts)(persist/autoStart 옵션) + 저장 1줄 — 정적 검사 범위를 시그니처·길이만 넓히고,
+  //   같은 사실을 실제 호출로도 확인한다(아래 behave). 전: 정규식만 / 후: 정규식 + 실행(openApp 인자 keepDrawing === true)
+  const RX_KEEP = /_setRegMode\(next(?:, opts)?\) \{[\s\S]{0,1200}?this\.openApp\([^;]*?\{[^}]*keepDrawing: true/;
+  const setRegModeKeepsDrawing = RX_KEEP.test(appSrc);
+  const rec = []; const _oa = App.openApp;
+  App.openApp = (m, o) => rec.push([m, !!(o && o.keepDrawing)]); App._autoStartPlacing = () => {};
+  State.mode = "designer"; State.placing = false;
+  App._setRegMode("photo", { autoStart: false });
+  App.openApp = _oa;
+  ok(rec.length === 1 && rec[0][0] === "photo" && rec[0][1] === true, "⑤ 실행: _setRegMode('photo') → openApp('photo', {keepDrawing:true}) — " + JSON.stringify(rec));
   ok(toggleDelegates, "⑤ CHECKER 진입 버튼(enterCheckboard)이 단일 SoT _setRegMode() 로 귀결됨");
   ok(setRegModeKeepsDrawing, "⑤ _setRegMode() 가 keepDrawing:true 로 openApp 호출(도면 재로드 없음 보장)");
 
@@ -202,7 +211,7 @@ const okRes = (j) => ({ ok: true, status: 200, json: async () => j });
     "{ project: (typeof Projects !== \"undefined\" && Projects.currentProject) || null });"
   );
   ok(mutatedNoKeep !== appSrc, "뮤테이션⑤ 치환 적중(소스와 정확히 일치)");
-  const setRegModeKeepsDrawingMutated = /_setRegMode\(next\) \{[\s\S]{0,600}?this\.openApp\([^;]*?\{[^}]*keepDrawing: true/.test(mutatedNoKeep);
+  const setRegModeKeepsDrawingMutated = RX_KEEP.test(mutatedNoKeep);
   ok(!setRegModeKeepsDrawingMutated, "뮤테이션 적용 시 keepDrawing:true 검사가 실패함(⑤가 깨짐을 증명)");
 }
 

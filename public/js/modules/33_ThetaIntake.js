@@ -236,7 +236,8 @@
     _awaitTap(row) {
       this._closeSheet();
       this._endTap();
-      if (typeof State !== "undefined" && State.regMode !== "photo" && typeof App !== "undefined" && App._setRegMode) App._setRegMode("photo");
+      // [WO 20261019-unifymode] 흐름이 잠깐 빌리는 전환 — 이 구역의 등록 방식 저장값은 바꾸지 않는다(persist:false). 배치 자동 시작은 종전 그대로(모바일 takeTap 경로)
+      if (typeof State !== "undefined" && State.regMode !== "photo" && typeof App !== "undefined" && App._setRegMode) App._setRegMode("photo", { persist: false });
       const vp = document.getElementById("map-viewport");
       if (!vp) { this._toast("도면이 열려 있지 않습니다"); return; }
       const banner = document.createElement("div");

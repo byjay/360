@@ -928,6 +928,8 @@
     /** 구역 선택 — 해당 구역에 연결된 도면(배포 스냅샷)이 있으면 불러옴 */
     async selectDeck(d) {
       this.currentDeck = d;
+      // [WO 20261019-unifymode] 등록 방식(번호 먼저/바로 사진)은 구역(시트 묶음)별 저장 — 구역을 바꾸면 그 구역 값으로(공유 지점 1곳)
+      if (typeof App !== "undefined" && App._syncRegMethod) { try { App._syncRegMethod(); } catch (e) {} }
       this._renderDecks();
       // [WO offline2-R3] 마지막으로 연 구역 기억(SoT 키는 setCurrentProject와 공유 — LS_LAST_OPEN).
       try {

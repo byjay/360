@@ -134,11 +134,15 @@ function suiteMarkerStyle(label, sSrc) {
     "등록/미등록 markerStyle.colors 가 서로 다른 값");
   ok(stF.dash !== stE.dash, `형태(ring dash) 도 다르다: "${stF.dash}" vs "${stE.dash}"`);
 
-  // WCAG 실측: 등록↔미등록 상호 분리도(비텍스트 UI 요소, head/head2 — 시각적으로 지배적인 부분)
-  const sepHead = contrast(stF.colors.head, stE.colors.head);
-  const sepHead2 = contrast(stF.colors.head2, stE.colors.head2);
-  ok(sepHead >= 3, `등록↔미등록 head 상호 분리도 = ${sepHead.toFixed(2)}:1 (WCAG 1.4.11 비텍스트 3:1 이상)`);
-  ok(sepHead2 >= 3, `등록↔미등록 head2 상호 분리도 = ${sepHead2.toFixed(2)}:1 (WCAG 1.4.11 비텍스트 3:1 이상)`);
+  // 🔴 [WO 20261019-unifymode] G-4⑧ 대조 — 전: 체커 전용 주황 쌍(CHECKBOARD_COLOR/EMPTY)의 head·head2 상호 분리 ≥3:1
+  //   후: 체커 메타는 색 축이 아니다 → 등록 = 사용자 팔레트(PinPrefs, 6종), 미등록 = EMPTY_COLOR. 팔레트 6종 전부와 head 3:1 을 동시에
+  //   만족하는 색은 흰 도면 위 3:1 과 양립 불가(계산: 팔레트 head2 L 0.14 대 → 미등록 L ≥0.53 필요, 흰 도면 3:1 은 L ≤0.30).
+  //   그래서 등록/미등록 구분은 ① 형태(채운 메달리온 vs 빈 링 — p9 ⑧ · p54 ⑤) ② 링 패턴(실선 vs 점선, 아래) ③ needle 명도 분리 ≥1.8
+  //   (미니맵 점 = needle, p9 ⑥ 와 같은 기준)으로 보장한다. head/head2 3:1 두 줄은 이 세 줄로 대체(약화 아님 — 같은 사실을 색 외 단서로).
+  ok(stF.dash === "" && stE.dash !== "", `형태 단서: 등록 실선("${stF.dash}") · 미등록 점선("${stE.dash}")`);
+  const sepNeedle = contrast(stF.colors.needle, stE.colors.needle);
+  ok(sepNeedle >= 1.8, `등록↔미등록 needle 상호 분리도 = ${sepNeedle.toFixed(2)}:1 (≥1.8 — 미니맵 점 명도차)`);
+  ok(stE.colors === undefined || JSON.stringify(stE.colors) !== JSON.stringify(PS.CHECKBOARD_EMPTY_COLOR), "미등록 = EMPTY_COLOR(구 체커 주황 쌍 아님 — 체커 메타 무관)");
   // 흰 도면 위 자체 시인성(라이트/다크 공통 — 리터럴 hex)
   const WHITE = "#ffffff";
   ok(contrast(stE.colors.head2, WHITE) >= 3, `미등록 head2 ↔ 흰 도면 = ${contrast(stE.colors.head2, WHITE).toFixed(2)}:1 (≥3:1)`);
@@ -236,9 +240,10 @@ console.log("\n[뮤테이션B] NaN 필터 제거(Number.isFinite 체크 삭제 �
 
 console.log("\n[뮤테이션C] 콘텐츠 등록/미등록 색 분기 제거 → ⑥ 실패해야 함");
 {
-  const needle = 'if (kind === "checkboard") return (filled === false) ? this.CHECKBOARD_EMPTY_COLOR : this.CHECKBOARD_COLOR;';
+  // [WO 20261019-unifymode] 대상 이관 — markerStyle 경로의 등록/미등록 색 분기 = empty 분기(체커 쌍 분기는 경로에서 빠졌다)
+  const needle = 'if (kind === "empty") return this.EMPTY_COLOR;';
   ok(seriesSrc.indexOf(needle) >= 0, "뮤테이션C 대상 라인 존재 확인");
-  const mutated = seriesSrc.replace(needle, 'if (kind === "checkboard") return this.CHECKBOARD_COLOR;');
+  const mutated = seriesSrc.replace(needle, '');
   ok(mutated !== seriesSrc, "뮤테이션C 적용 확인(치환 발생)");
   const PS = loadSeries(mutated);
   const stF = PS.markerStyle({ id: "f1", page: 1, checkboard: true, imageId: "img1" });

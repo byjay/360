@@ -123,26 +123,30 @@ await page.evaluate(() => document.querySelector('.hub-tree-deck[data-deck-id="d
 await page.waitForFunction(() => window.__T.State.currentDeploymentId === "dep1" && (window.__T.State.pins || []).length === 6, { timeout: 20000 });
 await sleep(400);
 
-/* ══ A. 모드 탭 — 기본 활성 모드 + 카운트 + 탭=모드전환 ══ */
+/* ══ A. 필터 탭 — 🔴 [WO 20261019-unifymode] 계약 변경
+ *   전: 모드 탭 2개(CHECKER 4 / 360 2) · 기본 = 활성 모드 · 탭 클릭 = App._setRegMode(모드 전환)
+ *   후: 필터 탭 3개 [전체 6][사진 있음 2][사진 없음 4] · 기본 = 전체 · 탭 클릭 = PinSeries.setPhotoFilter(도면·트리와 같은 상태),
+ *       등록 방식(regMode)은 바뀌지 않는다. B·C 는 종전 "CHECKER 탭"(C1·C2·C3·CD) 대신 같은 4개인 [사진 없음] 탭에서 그대로 검사. ══ */
 await page.evaluate(() => document.getElementById("btn-all-pins").click());
 await page.waitForFunction(() => document.getElementById("allpins-drawer").classList.contains("on"), { timeout: 8000 });
 await sleep(250);
 {
   const t = await page.evaluate(() => {
-    const tabs = Array.from(document.querySelectorAll("#allpins-tabs [data-series]"));
-    return { n: tabs.length, active: tabs.find((b) => b.classList.contains("active"))?.dataset.series, cnts: tabs.map((b) => b.textContent.trim()) };
+    const tabs = Array.from(document.querySelectorAll("#allpins-tabs [data-pfilter]"));
+    return { n: tabs.length, old: document.querySelectorAll("#allpins-tabs [data-series]").length, active: tabs.find((b) => b.classList.contains("active"))?.dataset.pfilter, cnts: tabs.map((b) => b.textContent.trim()) };
   });
-  ok(t.n === 2, "A 모드 탭 2개(CHECKER/360) — " + t.n);
-  ok(t.active === "checkboard", "A 기본 탭 = 현재 활성 모드(checkboard) — " + t.active);
-  ok(/4/.test(t.cnts[0] || ""), "A CHECKER 탭 카운트 4(C1·C2·C3·CD) — " + JSON.stringify(t.cnts));
+  ok(t.n === 3 && t.old === 0, "A 필터 탭 3개(전체/사진 있음/사진 없음) · 구 모드 탭 0 — " + JSON.stringify(t));
+  ok(t.active === "all", "A 기본 탭 = 전체 — " + t.active);
+  ok(/6/.test(t.cnts[0] || "") && /2/.test(t.cnts[1] || "") && /4/.test(t.cnts[2] || ""), "A 탭 카운트 전체 6 · 사진 있음 2(N1·N2) · 사진 없음 4(C1·C2·C3·CD) — " + JSON.stringify(t.cnts));
 }
-// 탭 전환 → App._setRegMode 가 실제로 State.regMode 를 바꾼다(SoT 재사용 확인)
-await page.evaluate(() => document.querySelector('#allpins-tabs [data-series="content"]').click());
+// 탭 전환 = 같은 사진 필터(PinSeries.photoFilter) — 등록 방식은 그대로
+const reg0 = await page.evaluate(() => window.__T.State.regMode);
+await page.evaluate(() => document.querySelector('#allpins-tabs [data-pfilter="photo"]').click());
 await page.waitForFunction(() => document.getElementById("allpins-drawer").classList.contains("on"), { timeout: 8000 }).catch(() => {});
 await sleep(400);
-ok((await page.evaluate(() => window.__T.State.regMode)) === "photo", "A 탭 클릭 = App._setRegMode('photo') 로 실제 모드 전환(SoT 통일)");
-ok((await page.evaluate(() => document.getElementById("allpins-count").textContent)) === "2", "A 360 탭 카운트 2(N1·N2)");
-await page.evaluate(() => document.querySelector('#allpins-tabs [data-series="checkboard"]').click());
+ok((await page.evaluate(() => window.__T.State.regMode)) === reg0 && (await page.evaluate(() => window.__T.PinSeries.photoFilter())) === "photo", "A 탭 클릭 = 사진 필터만 바뀜(등록 방식 " + reg0 + " 그대로 · 도면 칩과 같은 상태)");
+ok((await page.evaluate(() => document.getElementById("allpins-count").textContent)) === "2", "A 사진 있음 탭 카운트 2(N1·N2)");
+await page.evaluate(() => document.querySelector('#allpins-tabs [data-pfilter="nophoto"]').click());
 await page.waitForFunction(() => document.getElementById("allpins-drawer").classList.contains("on"), { timeout: 8000 }).catch(() => {});
 await sleep(400);
 

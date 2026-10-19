@@ -5,6 +5,7 @@
      상태: none(미촬영) / stale(오래됨: 기준 N일 **초과**) / fresh(최신) / unknown(사진은 있으나 촬영 시각 기록 없음 —
        지어내지 않고 "시각 미상"으로 정직하게). 기준 N = 프로젝트 정보 info_json.staleDays(기본 14, 1~365).
      대상 = 360 모드 핀만(PinSeries.seriesOf === "content"). CHECKER 는 사진을 등록하지 않는다(마스터) → 토글 비활성 + 사유.
+     🔴 [WO 20261019-unifymode] 모드 통일 — 대상 = 모든 핀(번호만 찍은 핀 = "✕미촬영"이 곧 일괄 등록할 남은 일). 등록 방식과 무관하게 켠다.
      표시: 토글(기본 끔)을 켜면 도면 핀에 색 링 + 모양·글리프 배지(숨김 0, 색만으로 구분 금지) + 범례 칩.
        요약 = 트리 구역 배지(로드된 구역만 — 미로드 구역은 핀을 모르니 0 날조 금지) · 전체 포인트 패널 한 줄.
        구역 집계 = Projects.pinsForDeck(0f78d34 SoT) 재사용.
@@ -53,9 +54,9 @@
       return (now - t) > n * this.DAY_MS ? "stale" : "fresh";
     },
 
-    isTarget(pin) { return !!pin && !pin._deleted && (typeof PinSeries === "undefined" || PinSeries.seriesOf(pin) === "content"); },
+    isTarget(pin) { return !!pin && !pin._deleted; },
 
-    /** 순수 집계 — 360 핀만. */
+    /** 순수 집계 — 이 범위의 모든 핀(핀은 하나). */
     summarize(pins, now, days) {
       const c = { none: 0, stale: 0, fresh: 0, unknown: 0, total: 0 };
       (pins || []).forEach((p) => { if (!this.isTarget(p)) return; c[this.classify(p, now, days)]++; c.total++; });
@@ -71,10 +72,9 @@
       return this.summarize(logical, now != null ? now : Date.now(), this.staleDays());
     },
 
-    /** 토글 비활성 사유("" = 사용 가능). CHECKER 모드 = 사진 미등록 정책. */
+    /** 토글 비활성 사유("" = 사용 가능). [WO 20261019-unifymode] 구 "CHECKER 는 사진 미등록" 사유 폐기 — 도면만 있으면 사용. */
     reason() {
       if (typeof State === "undefined" || !State.fileType) return "도면을 먼저 여세요";
-      if (State.mode === "designer" && State.regMode === "checkboard") return "CHECKER 는 사진을 등록하지 않습니다 — 360 모드에서 사용";
       return "";
     },
 
@@ -90,7 +90,7 @@
       if (typeof UI !== "undefined") { try { UI.renderPinsOnMap(); } catch (e) {} try { UI.renderTree(); } catch (e) {} }
       if (typeof AllPins !== "undefined" && AllPins.open) { try { AllPins.render(); } catch (e) {} }
     },
-    /** 켜져 있어도 CHECKER 로 바뀌면 효력 없음(표시 안 함) — 상태 판정 한 곳 */
+    /** 켜져 있어도 사유가 생기면(도면 닫힘) 효력 없음(표시 안 함) — 상태 판정 한 곳 */
     active() { return this.on && !this.reason(); },
 
     _badge(state) {
@@ -151,7 +151,7 @@
       t.style.cssText = "padding:4px 9px;border-radius:999px;font:700 11.5px/1.2 sans-serif;cursor:pointer;white-space:nowrap;" +
         (why ? "background:#1e293b;color:#cbd5e1;border:1px dashed #94a3b8"
              : this.active() ? "background:#ffffff;color:#0f172a;border:1px solid #ffffff" : "background:#1e293b;color:#ffffff;border:1px solid #94a3b8");
-      t.textContent = why ? "◔ 현황 · 360 전용" : (this.active() ? "◔ 현황 끄기" : "◔ 촬영 현황");
+      t.textContent = why ? "◔ 현황 · 도면 필요" : (this.active() ? "◔ 현황 끄기" : "◔ 촬영 현황");
       t.title = why || ("촬영 현황 — 핀별 최신 촬영 시각, 기준 " + this.staleDays() + "일 초과 = 오래됨");
       t.setAttribute("aria-label", why ? "촬영 현황(사용 불가): " + why : "촬영 현황 " + (this.active() ? "끄기" : "켜기"));
       if (why) t.setAttribute("aria-disabled", "true");
@@ -237,7 +237,7 @@
       }
       const days = this.staleDays();
       const c = this.summarize(scopePins, Date.now(), days);
-      el.textContent = "촬영 현황(360 · 이 구역) — ✕미촬영 " + c.none + " · !오래됨 " + c.stale + " · ✓최신 " + c.fresh + " · ?시각 미상 " + c.unknown + " (기준 " + days + "일)";
+      el.textContent = "촬영 현황(이 구역) — ✕미촬영 " + c.none + " · !오래됨 " + c.stale + " · ✓최신 " + c.fresh + " · ?시각 미상 " + c.unknown + " (기준 " + days + "일)";
     },
 
     /** 화면 폭이 모바일 ↔ 데스크톱으로 바뀌면(회전·창 크기) 범례 위치를 다시 정한다. */

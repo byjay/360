@@ -25,12 +25,9 @@
   ══════════════════════════════════════════ */
   const PinSeries = {
     KINDS: ["content", "empty", "checkboard"],
-    LABELS: { content: "360", empty: "미배치", checkboard: "CHECKER" },
+    LABELS: { content: "360", empty: "미배치", checkboard: "CHECKER", all: "전체" },   // all = [WO 20261019-unifymode] 통일 후 대상 범위
     FILTER_KEY: "wm-pin-filter",
-    /* [WO 20260929 addendum, 지휘자 정정] "체크보드랑 360모드랑 2개 해" — 핀 필터 바는 KINDS
-       (3종, 색상/marker용과 별개)이 아니라 이 2종(모드와 1:1)만 쓴다. seriesOf()가 이미
-       정확히 이 2값을 반환하므로 그대로 재사용(§10 SoT — 별도 분류를 새로 만들지 않는다). */
-    SERIES: ["checkboard", "content"],
+    /* [WO 20261019-unifymode] 구 SERIES(필터 바 2칩 = CHECKER/360) 폐기 — 필터는 PHOTO_FILTERS(사진 유무 3종). */
 
     /* [WO 20260929 2모드 전환, 지휘자 정정] 편집화면 진입 기본 모드 = CHECKER(checkboard).
        구 3버튼(보기/체크보드/사진등록) 중 [보기]가 세그먼트에서 제거되며, 과거 이 값에
@@ -40,22 +37,60 @@
        호출부들은 전부 preferredMode()를 참조하고, 하드코딩된 값을 직접 쓰지 않는다.
        🔴 저장된 기존 핀의 checkboard/kind 해석은 이 값과 무관 — 이건 오직
           "새 배치 시작 시 어느 모드로 열리는가"만 결정한다. */
-    PREFERRED_MODE_KEY: "wm_pin_default_mode",
-    DEFAULT_MODE: "checkboard",
-    preferredMode() {
+    /* 🔴 [WO 20261019-unifymode] 마스터: "360 과 체커 통일하고, 번호만 매긴 후 사진 일괄 등록할지, 현장에서 번호
+       매기고 사진 등록할지를 결정하게 해. 옵션으로." — CHECKER/360 "모드(작업공간)" 구분을 폐기하고 핀은 하나로 합친다.
+       남는 것은 **등록 방식** 하나(탭했을 때 사진 선택창을 여느냐)뿐이다. 내부 값 State.regMode('checkboard'|'photo')는
+       이 방식의 인코딩으로만 남긴다(클릭 분기·도크 버튼 등 호출부 수십 곳 불변 — 이름만 옛것).
+         batch : [번호 먼저 → 사진은 나중에 일괄] = regMode "checkboard" — 탭 = 번호 핀만(60 폴더·67 다중·69 촬영 세션으로 일괄)
+         each  : [찍을 때마다 사진]              = regMode "photo"      — 탭 = 번호 핀 + 즉시 사진 선택(autoConnectPin·60 하나씩·THETA)
+       저장 단위 = 구역(시트 묶음): 지금 구역의 sheet_link 묶음 → 없으면 최상위 구역(영역은 부모 구역을 따른다) → 구역이
+       없으면 프로젝트. 기기별 localStorage(마이그레이션 0 — 현장 작업 습관은 사람·기기마다 달라 서버 공유 기본값이 오히려
+       남의 흐름을 바꾼다). 기본값 = batch(근거: ① 종전 편집 진입 기본 = CHECKER(DEFAULT_MODE) ② 탭마다 파일창이 뜨지 않아
+       오조작·모바일 user-activation 실패가 없다 ③ 사진은 언제든 일괄로 채울 수 있지만, 사진창이 먼저 뜨면 번호 배치가 끊긴다). */
+    REG_METHODS: [
+      { key: "batch", regMode: "checkboard", label: "번호 먼저", desc: "번호만 먼저 찍고 사진은 나중에 일괄 등록" },
+      { key: "each",  regMode: "photo",      label: "바로 사진", desc: "찍을 때마다 그 자리에서 사진 등록" }
+    ],
+    DEFAULT_REG_METHOD: "batch",
+    REG_METHOD_PREFIX: "wm-reg-method:",
+    _regMethodBy(key, val) { return this.REG_METHODS.find((m) => m[key] === val) || null; },
+    /** 저장 단위 키 = 프로젝트 + 구역(시트 묶음 → 최상위 구역). 구역 없음 = "-". */
+    regScopeKey(deck) {
+      const pid = (typeof State !== "undefined" && State && State.currentProjectId)
+        || (typeof Projects !== "undefined" && Projects && Projects.currentProject && Projects.currentProject.id) || "-";
+      let d = deck !== undefined ? deck : ((typeof Projects !== "undefined" && Projects) ? Projects.currentDeck : null);
+      let sid = "-";
       try {
-        const v = localStorage.getItem(this.PREFERRED_MODE_KEY);
-        // [WO 20260929] 구 "designer"(=[보기]) 저장값은 checkboard 로 정규화 — view 는
-        // 디자이너 UI에서 더 이상 도달 가능한 목적지가 아니다.
-        if (v === "checkboard") return v;
-        if (v === "designer") return "checkboard";
-      } catch (e) {}
-      return this.DEFAULT_MODE;
+        if (d && typeof Projects !== "undefined" && Projects) {
+          const bundle = Projects.sheetBundleOf ? Projects.sheetBundleOf(d) : null;
+          const chain = Projects._deckChain ? Projects._deckChain(d) : [d];
+          const top = bundle || chain[chain.length - 1] || d;
+          if (top && top.id != null) sid = String(top.id);
+        } else if (d && d.id != null) sid = String(d.id);
+      } catch (e) { sid = (d && d.id != null) ? String(d.id) : "-"; }
+      return String(pid) + ":" + sid;
     },
-    setPreferredMode(mode) {
-      if (mode !== "designer" && mode !== "checkboard") return;
-      try { localStorage.setItem(this.PREFERRED_MODE_KEY, mode); } catch (e) {}
+    /** 등록 방식 key("batch"|"each") — 저장값이 없거나 비정상이면 DEFAULT_REG_METHOD. */
+    regMethod(scopeKey) {
+      const k = this.REG_METHOD_PREFIX + (scopeKey || this.regScopeKey());
+      let v = null;
+      try { v = localStorage.getItem(k); } catch (e) { v = null; }
+      if (v == null) v = this._mem[k];
+      return this._regMethodBy("key", v) ? v : this.DEFAULT_REG_METHOD;
     },
+    setRegMethod(method, scopeKey) {
+      if (!this._regMethodBy("key", method)) return null;
+      const k = this.REG_METHOD_PREFIX + (scopeKey || this.regScopeKey());
+      this._mem[k] = method;
+      try { localStorage.setItem(k, method); } catch (e) {}
+      return method;
+    },
+    regModeOfMethod(method) { const m = this._regMethodBy("key", method); return m ? m.regMode : "checkboard"; },
+    methodOfRegMode(regMode) { const m = this._regMethodBy("regMode", regMode); return m ? m.key : this.DEFAULT_REG_METHOD; },
+    /** 편집 진입 시 열 regMode = 지금 구역에 저장된 등록 방식(App.openApp 호출부 전부가 이 값 하나만 쓴다). */
+    preferredMode() { return this.regModeOfMethod(this.regMethod()); },
+    /** 하위호환(구 호출부) — "checkboard"/"photo" 를 지금 구역의 등록 방식으로 저장. 구 "designer" 값은 무시. */
+    setPreferredMode(mode) { if (mode === "checkboard" || mode === "photo") this.setRegMethod(this.methodOfRegMode(mode)); },
 
     /* ── 색상 정본 ────────────────────────────────────────────
        머리색(head/head2) · 바늘끝(needle) · 숫자 글자색(text).
@@ -65,7 +100,10 @@
          empty  #991b1b         : 8.27 : 1
          checkboard #1e3a8a     : 10.49 : 1
        ⚠ 색만으로 구분하지 않는다(색맹 8%) — ring 패턴(solid/dotted/dashed)을 함께 준다. */
-    EMPTY_COLOR: { head: "#ef4444", head2: "#b91c1c", needle: "#7f1d1d", text: "#991b1b" },
+    /* [WO 20261019-unifymode] needle #7f1d1d → #dc2626 — 통일 후 "사진 없음" 핀이 구 체커 핀까지 맡는다(주황 쌍 폐기). 미니맵 점 배경 = needle 이라
+       사진 있음(콘텐츠 팔레트 needle, 흰 숫자 8.96~13.0:1 → L 0.03~0.067)과 명도로도 갈려야 한다(p9 등록↔미등록 분리 ≥1.8 — 구 체커 쌍 요건 계승).
+       실측(WCAG 2.1): #dc2626 ↔ 흰 숫자 4.83:1(≥4.5) · ↔ 흰 도면 4.83:1(≥3) · 팔레트 needle 6종과 분리 1.86~2.69:1(≥1.8). 종전 #7f1d1d 는 1.03:1(초록과 같은 명도). */
+    EMPTY_COLOR: { head: "#ef4444", head2: "#b91c1c", needle: "#dc2626", text: "#991b1b" },
     /* [WO 20260930-pinstyle, 지휘자 발주] "핀 색이나 형태를 모드별로 구분" — CHECKER(체크보드)는
        360(콘텐츠)의 블루/그린 계열과 확실히 갈리도록 주황/앰버 계열로 재색상화(구 인디고 블루 폐기).
        도면 마커(11_UI)가 CHECKER 전용 둥근사각 배지 프레임도 함께 그려 형태도 같이 구분한다.
@@ -127,10 +165,11 @@
       return !!(pin && (pin.imageId || pin.imageUrl || pin.videoId));
     },
 
-    /** 색상/필터 부류 (3종) */
+    /** 색상 부류 — [WO 20261019-unifymode] 🔴 핀 상태는 사진(콘텐츠) 유무 하나로만 보인다(content = 사진 있음 / empty =
+     *  번호만). 구 pin.checkboard 는 읽기 전용 메타 — 색·형태·필터 판정에 쓰지 않는다(같은 핀이 생성 모드에 따라 달라 보이면
+     *  "통일"이 아니다). colorsOf("checkboard") 는 구 호출부·테스트 호환으로만 남는다. */
     kindOf(pin) {
       if (!pin) return "empty";
-      if (pin.checkboard) return "checkboard";
       return this.hasContent(pin) ? "content" : "empty";
     },
 
@@ -143,21 +182,11 @@
        ↔ 표시 이름의 유일한 대응표다. 지도 마커·미니맵·필터 칩·핀 목록·사이드바 트리·허브 카드 트리가
        전부 아래 함수만 부른다(각자 판정하면 반드시 갈라진다 — §10 SoT).
        decks.mode = NULL(마이그레이션 0029 이전 기존 구역)은 두 모드 모두에 보인다(유실 0). */
-    DECK_MODES: [
-      { tag: "checker", regMode: "checkboard", series: "checkboard", label: "CHECKER" },
-      { tag: "360",     regMode: "photo",      series: "content",    label: "360" }
-    ],
-    _modeBy(key, val) { return this.DECK_MODES.find((m) => m[key] === val) || null; },
-    /** 현재 활성 모드(편집화면 CHECKER/360). 뷰어·구 view 모드는 null(=분리 없음, 전부 표시). */
-    activeMode() {
-      if (typeof State === "undefined" || State.mode !== "designer") return null;
-      return this._modeBy("regMode", State.regMode);
-    },
-    /** 활성 모드의 핀 계열 — null 이면 모드 분리 없음 */
-    activeSeries() { const m = this.activeMode(); return m ? m.series : null; },
-    /** 새 구역·영역에 붙일 decks.mode 태그 — null 이면 태그 안 함(서버 NULL) */
-    deckModeTag() { const m = this.activeMode(); return m ? m.tag : null; },
-    /** 핀이 (지정 계열 또는) 활성 모드 작업공간에 속하는가.
+    /*  🔴 [WO 20261019-unifymode] 위 "모드 = 작업공간" 표(DECK_MODES)·activeMode/activeSeries/deckModeTag/withDeckMode/
+        deckInMode 를 폐기했다 — 트리 모드 잎·허브 모드 잎·AllPins 모드 탭·RegionMerge 계열 거름이 그 유일한 소비자였고
+        전부 [전체/사진 있음/사진 없음] 필터(PHOTO_FILTERS)로 대체됐다. 구역 생성 태그는 이미 moderole 에서 no-op
+        (31_Projects._withDeckMode). decks.mode 컬럼(0029)·서버 검증은 비파괴로 남는다(클라이언트가 보내지 않음). */
+    /** 핀이 지정 계열에 속하는가(구 메타 기준 — 묶음 표시용, 숨김 판정 아님).
      *  🔴 [WO 20261015-numunify] 활성 모드는 더 이상 가시성을 잠그지 않는다(설계 §1-1 — CHECKER 에서 찍은 핀이
      *  360 에서 안 보이면 사진 폴더 일괄 등록 대상이 0건이 된다). 모드 = "클릭 시 사진창 여부"만.
      *  series 를 **명시**하면(트리 모드 잎 묶음 등) 생성 계열로 가른다 — 숨김이 아니라 묶음 표시용. */
@@ -167,15 +196,6 @@
     },
     /** 활성 모드 작업공간의 핀만 */
     modePins(pins) { return (pins || []).filter((p) => p && this.inMode(p)); },
-    /** 구역이 모드 tag 작업공간에 보이는가 — NULL(기존 구역)은 양쪽 모두(유실 0) */
-    deckInMode(deck, tag) { return !!deck && (deck.mode == null || deck.mode === "" || deck.mode === tag); },
-    /** 구역 생성 요청 body 에 활성 모드 태그를 붙인다(31_Projects.js POST 3곳 공유 지점).
-     *  영역은 부모 구역의 mode 를 상속 — 부모가 태그돼 있으면 그 값, NULL 이면 활성 모드. */
-    withDeckMode(body, parentDeck) {
-      const tag = (parentDeck && parentDeck.mode) || this.deckModeTag();
-      if (tag) body.mode = tag;
-      return body;
-    },
 
     /** [WO 20260929 addendum] 🔴 표시 번호 포맷 정본 — CHECKER 계열은 숫자 그대로, 360 계열은
      *  "P" 접두(마스터: "번호체계도 다르게 해"). 마커 머리(11_UI)·미니맵(07_Radar)·트리 행(11_UI)
@@ -659,14 +679,15 @@
      *  (마스터: "번호 일괄 변경도 현재 모드 핀만 대상"). */
     renumberCheckboardRange(pins, page, newStart, targetIds, series) {
       const pg = page || 1;
-      const ser = series === "content" ? "content" : "checkboard";
+      // [WO 20261019-unifymode] "all" = 페이지 전 핀(통일 후 UI 는 항상 "all" — 모드별 대상 구분 없음). 생략 시 checkboard(하위호환).
+      const ser = series === "all" ? "all" : (series === "content" ? "content" : "checkboard");
       const s = parseInt(newStart, 10);
       if (!Number.isFinite(s) || s < 1) return { ok: false, changes: [], reason: "시작 번호를 올바르게 입력하세요(1 이상 숫자)" };
       const map = this.numbers(pins, pg);
       const wantIds = targetIds ? new Set(targetIds) : null;
-      const matches = (p) => this.seriesOf(p) === ser;
+      const matches = (p) => ser === "all" || this.seriesOf(p) === ser;
       const targets = (pins || []).filter((p) => p && (p.page || 1) === pg && matches(p) && (!wantIds || wantIds.has(p.id)));
-      if (!targets.length) return { ok: false, changes: [], reason: ser === "checkboard" ? "이 페이지에는 체크보드 핀이 없습니다" : "이 페이지에는 360 핀이 없습니다" };
+      if (!targets.length) return { ok: false, changes: [], reason: ser === "all" ? "이 페이지에는 핀이 없습니다" : (ser === "checkboard" ? "이 페이지에는 체크보드 핀이 없습니다" : "이 페이지에는 360 핀이 없습니다") };
       targets.sort((a, b) => {
         const ai = map.get(a.id), bi = map.get(b.id);
         return (ai ? ai.no : 0) - (bi ? bi.no : 0);
@@ -695,10 +716,10 @@
      *  @param {string} series   'checkboard' | 'content'
      *  @returns {{ok:boolean, changes:Array<{id,page:number,oldLabel,newLabel:string}>, duplicateIds:Set, reason?:string}} */
     renumberSelection(allPins, targets, newStart, series) {
-      const ser = series === "content" ? "content" : "checkboard";
+      const ser = series === "all" ? "all" : (series === "content" ? "content" : "checkboard");   // [WO 20261019-unifymode] "all" = 대상 전부
       const s = parseInt(newStart, 10);
       if (!Number.isFinite(s) || s < 1) return { ok: false, changes: [], duplicateIds: new Set(), reason: "시작 번호를 올바르게 입력하세요(1 이상 숫자)" };
-      const list = (targets || []).filter((p) => p && this.seriesOf(p) === ser);
+      const list = (targets || []).filter((p) => p && (ser === "all" || this.seriesOf(p) === ser));
       if (!list.length) return { ok: false, changes: [], duplicateIds: new Set(), reason: "대상 핀이 없습니다" };
       const targetIdSet = new Set(list.map((p) => p.id));
       const changes = list.map((p, i) => ({ id: p.id, page: p.page || 1, oldLabel: p.label, newLabel: String(s + i) }));
@@ -962,26 +983,49 @@
 
     /* ══ 표시 필터 ══════════════════════════════════════════
        숨김 = 표시만 감춘다. 저장 데이터·번호 계열은 필터와 무관하게 불변. */
-    _filter: null,
 
-    /** 현재 필터 상태 { checkboard, content } — 이 탭의 열람 세션 동안만 유지.
-     *  🔴 [WO 20260921 근본수정] 예전엔 localStorage(wm-pin-filter, 전역 키)에 영구 저장했다 —
-     *  프로젝트/배포본 구분이 없는 전역 키라, 한 프로젝트에서 "체크보드" 계열을 껐다 나가면
-     *  그 값이 브라우저에 남아 완전히 다른(새) 프로젝트를 열 때도 조용히 적용되어, 그 프로젝트의
-     *  핀이 전부(또는 한 계열이 전부) 안 보이는 유령 결함이 됐다(마스터 신고: "체크보드 모드일 때
-     *  핀이 안 생긴다"). 새로 열 때마다 항상 전체 표시로 시작하는 게 안전하므로 영구저장을 끊는다
-     *  (이 값은 이제 페이지 스크립트가 살아있는 동안의 메모리 상태일 뿐 — 새로고침/새 프로젝트=항상 전체표시).
-     *  [WO 20260929 addendum] 키가 KINDS(3종) → SERIES(2종: checkboard/content)로 바뀌었다 —
-     *  필터 바가 이제 모드(CHECKER/360)와 1:1인 2칩뿐이라 "미배치(empty)"는 별도 칩이 없다
-     *  (content 칩 하나가 kindOf 상 content+empty 를 모두 포함 — seriesOf 기준이므로 자연히 그렇다). */
-    filter() {
-      // [WO 20260930-fixmode] 🔴 모드 = 작업공간 — 활성 모드(CHECKER/360)가 있으면 표시 계열은 그 모드
-      // 하나로 고정된다(지도 마커·미니맵이 쓰는 isVisible() 이 이 값 하나만 본다 — 판정 지점 1곳).
-      // 세션 칩 상태(_filter)는 건드리지 않는다 — 뷰어(모드 없음)로 돌아가면 종전 칩 필터 그대로.
-      // 🔴 [WO 20261015-numunify] 위 잠금 폐기 — 활성 모드가 있어도 세션 칩 필터만 본다(전 핀 보임이 기본).
-      if (!this._filter) this._filter = { checkboard: true, content: true };
-      return this._filter;
+    /** [WO 20261019-unifymode] 🔴 표시 필터 = [전체 / 사진 있음 / 사진 없음] 3종(배타 선택) — 구 [CHECKER][360] 계열 칩·트리 모드 잎·
+     *  AllPins 모드 탭을 대체한다. 판정 = mediaOf(사진·영상 — 연결 멤버는 대표 기준), 열람 링크 360 필터(서버 pinHas360Media)와 같은 축.
+     *  상태는 이 탭의 메모리에만(영구저장 금지 — WO 20260921 고스트 필터 재발 방지: 새로 열면 항상 "전체"). */
+    PHOTO_FILTERS: [
+      { key: "all",     label: "전체" },
+      { key: "photo",   label: "사진 있음" },
+      { key: "nophoto", label: "사진 없음" }
+    ],
+    _photoFilter: "all",
+    photoFilter() { return this._photoFilter || "all"; },
+    setPhotoFilter(key) {
+      if (!this.PHOTO_FILTERS.some((f) => f.key === key)) return this.photoFilter();
+      this._photoFilter = key;
+      return key;
     },
+    /** 핀에 사진(360/영상)이 있는가 — 연결 멤버는 대표의 사진으로(사진은 대표에만 둔다, multisheet P3). */
+    hasPhoto(pin) {
+      const h = (pin && typeof PinLink !== "undefined" && PinLink && PinLink.headOf && typeof State !== "undefined" && State) ? PinLink.headOf(State.pins, pin) : pin;
+      return !!h && this.mediaOf(h);
+    },
+    /** 필터 key 에 맞는가(생략 = 현재 필터). */
+    matchesPhotoFilter(pin, key) {
+      const k = key || this.photoFilter();
+      if (k === "photo") return this.hasPhoto(pin);
+      if (k === "nophoto") return !this.hasPhoto(pin);
+      return true;
+    },
+    /** 필터별 개수 { all, photo, nophoto } — 칩·트리·AllPins 공용. page 생략 = 전 페이지. */
+    photoCounts(pins, page) {
+      const c = { all: 0, photo: 0, nophoto: 0 };
+      (pins || []).forEach((p) => {
+        if (!p || p._deleted || (page && (p.page || 1) !== page)) return;
+        c.all++; c[this.hasPhoto(p) ? "photo" : "nophoto"]++;
+      });
+      return c;
+    },
+    /** 사진 필터를 적용한 부분집합. */
+    filterByPhoto(pins, key) { return (pins || []).filter((p) => p && this.matchesPhotoFilter(p, key)); },
+
+    /** 등록 방식 판정 등에 쓰는 "번호 핀" — 구 체커 메타가 있거나 label 이 번호(12 · A12 · 1-F)면 번호 핀(번호 중복 검증 대상).
+     *  자유 텍스트 이름 label(구 360 폼으로 만든 "기관실" 등)만 번호 검증에서 빠진다(종전 동작 유지). */
+    isNumberPin(pin) { return !!pin && (!!pin.checkboard || this.noKeyOf(pin.label) != null); },
 
     /** 핀의 아이콘 종류 id (없으면 기본 number) — PinIcons.SET 의 id 와 1:1 */
     iconOf(pin) { return (pin && pin.icon) || "number"; },
@@ -1035,25 +1079,13 @@
     /** [WO 20260921] 더 이상 저장하지 않는다(위 iconFilter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
     _persistIcon() {},
 
-    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (계열 필터 × 종류 필터 AND).
-     *  [WO 20260929 addendum] kindOf(3종) 대신 seriesOf(2종)로 필터 판정 — 필터 바 칩이
-     *  이제 CHECKER/360 2개뿐이라 필터 상태 키도 그 2종과 정확히 일치해야 한다. */
-    isVisible(pin) { return !!this.filter()[this.seriesOf(pin)] && this.isIconVisible(pin); },
+    /** 🔴 도면 마커·미니맵 점이 공통으로 쓰는 표시 여부 판정 (사진 필터 × 종류 필터 AND).
+     *  [WO 20261019-unifymode] 계열(seriesOf) 칩 → 사진 유무 필터(matchesPhotoFilter). */
+    isVisible(pin) { return this.matchesPhotoFilter(pin) && this.isIconVisible(pin); },
 
-    isAll() { const f = this.filter(); return this.SERIES.every(k => f[k]); },
+    isAll() { return this.photoFilter() === "all"; },
 
-    toggle(series) {
-      const f = this.filter();
-      if (this.SERIES.indexOf(series) < 0) return;
-      const next = Object.assign({}, f, {});
-      next[series] = !f[series];
-      // 마지막 하나를 끄는 건 전체 숨김 → 그 하나만 보기로 해석(단독 선택)
-      if (!this.SERIES.some(k => next[k])) { this.SERIES.forEach(k => next[k] = (k === series)); }
-      this.SERIES.forEach(k => f[k] = next[k]);
-      this._persist();
-    },
-
-    showAll() { const f = this.filter(); this.SERIES.forEach(k => f[k] = true); this._persist(); },
+    showAll() { this._photoFilter = "all"; this._persist(); },
 
     /** [WO 20260921] 더 이상 저장하지 않는다(위 filter() 주석 참조) — 호출부 호환을 위해 메서드는 유지. */
     _persist() {},
@@ -1103,11 +1135,14 @@
     _lsSet(key, n) { this._mem[key] = String(n); try { localStorage.setItem(key, String(n)); } catch (e) {} },
     myBand(author) { return this._lsNum(this.BAND_CACHE_PREFIX + this._scope(author)); },
     setMyBand(author, k) { const b = this.bandRange(k).band; this._lsSet(this.BAND_CACHE_PREFIX + this._scope(author), b); return b; },
-    userStart(author, series) { return this._lsNum(this.START_KEY_PREFIX + this._scope(author) + ":" + (series === "content" ? "content" : "checkboard")); },
+    /*  [WO 20261019-unifymode] 직접 입력 하한도 계열 무관 1개 — 핀이 하나로 합쳐져 "어느 계열의 시작값"이 더는 없다.
+        키 접미는 구 기본 모드(CHECKER) 키 ":checkboard" 를 그대로 쓴다(이미 저장된 값 유지 · 마이그레이션 0). series 인자는 시그니처 호환. */
+    _startKey(author) { return this.START_KEY_PREFIX + this._scope(author) + ":checkboard"; },
+    userStart(author, series) { return this._lsNum(this._startKey(author)); },
     setUserStart(author, series, value) {
       let n = parseInt(value, 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
-      this._lsSet(this.START_KEY_PREFIX + this._scope(author) + ":" + (series === "content" ? "content" : "checkboard"), n);
+      this._lsSet(this._startKey(author), n);
       return n;
     },
 
@@ -1119,7 +1154,7 @@
      *  — 이 배지는 SVG 밖 별도 코너에 얹힐 뿐이라 구조적으로 충돌하지 않는다(11_UI.js 참조). */
     userMark(pin, no) {
       if (!pin) return null;
-      if (pin.checkboard && Number.isFinite(no)) {
+      if (this.isNumberPin(pin) && Number.isFinite(no)) {   // [WO 20261019-unifymode] 구 체커 메타 → 번호 핀(통일)
         const band = this.bandOf(no) - 1; // 0=1~100, 1=101~200 … "100번대/200번대" 그룹 (BAND_SIZE 정본)
         const color = this.USER_MARK_PALETTE[band % this.USER_MARK_PALETTE.length];
         return { color: color, initial: String(band + 1), author: pin.author || null, band: band };
@@ -1149,74 +1184,37 @@
       return "empty";
     },
 
-    /** 페이지 내 부류별 핀 개수 (kindOf 3종 기준 — 이 함수 자체는 필터 바에서 더 쓰지 않지만
-     *  하위호환을 위해 남겨둔다. 필터 바는 아래 seriesCounts()(2종)를 쓴다). */
-    counts(pins, page) {
-      const pg = page || 1;
-      const c = { content: 0, empty: 0, checkboard: 0, all: 0 };
-      (pins || []).forEach((p) => {
-        if (!p || (p.page || 1) !== pg) return;
-        c[this.kindOf(p)]++; c.all++;
-      });
-      return c;
-    },
-
-    /** [WO 20260929 addendum] 필터 바 칩 개수(2종: checkboard/content=360). */
-    seriesCounts(pins, page) {
-      const pg = page || 1;
-      const c = { checkboard: 0, content: 0, all: 0 };
-      (pins || []).forEach((p) => {
-        if (!p || (p.page || 1) !== pg) return;
-        c[this.seriesOf(p)]++; c.all++;
-      });
-      return c;
-    },
-
     /* ── 필터 칩 UI (도면 좌상단) — 기존 구역페이저 칩 스타일(.zpager-tab) 재사용 ──
-       [WO 20260929 addendum, 지휘자 정정] 마스터 원문: "그냥 체크보드랑 360모드랑 2개 해 —
-       내가 시킨 것만 하고". 구 3종(콘텐츠/미배치/체크보드) kind 칩 + 별도 아이콘(종류) 필터
-       칩 그룹 + 중복 "전체" 칩을 전부 없애고, 모드와 1:1인 [CHECKER][360] 2칩만 남긴다.
-       두 칩은 독립 토글(기본 둘 다 on = 전부 보임) — 별도 "전체" 칩 불필요(SERIES.length===2
-       라 하나만 꺼도 나머지 하나가 곧 "그것만 보기"가 된다). 상태는 세션 메모리에만
-       (filter() 주석 참조 — 고스트 필터 재발 방지, 영구저장 금지 유지). */
+       [WO 20261019-unifymode] 🔴 구 [CHECKER][360] 2칩(생성 계열 독립 토글) → [전체][사진 있음][사진 없음] 3칩(배타 선택, aria-pressed).
+       개수 = 지금 페이지(창 구역이면 그 크롭 안 — Projects.pinsForDeck SoT) 기준. 핀이 0개여도 편집 화면은 칩을 보인다(어디서
+       찍었는지와 무관하게 같은 3칩 — 열람자도 같은 칩, 표시만 바꾸고 데이터는 건드리지 않는다). 뷰어는 핀이 있을 때만. */
     renderChips() {
       if (typeof document === "undefined") return;
       const host = document.getElementById("pin-filter-bar");
       if (!host) return;
       const page = (typeof State !== "undefined" && State.pdfPage) || 1;
       const allPins = (typeof State !== "undefined" && State.pins) || [];
-      // [WO 46_DeckOutline 수정] 지금 로드된 구역이 창(crop) 구역이면 그 크롭 안의 핀만 센다 —
-      // SoT: Projects.pinsForDeck(§31_Projects.js, §G-2-5 — 트리·AllPins 탭과 같은 함수 재사용).
       const curDeck = (typeof Projects !== "undefined") ? Projects.currentDeck : null;
       const pins = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(allPins, curDeck) : allPins;
-      // [WO 20260930-badge] 🔴 카운트는 페이지 전체(두 계열) 기준으로 센다 — modePins()로 먼저
-      // 거르면 활성 모드가 아닌 계열은 항상 0으로 계산되고(칩 자체가 못 뜸), 활성 모드 핀이
-      // 0개면 c.all 도 0이 되어 칩바 전체가 숨어버린다(재현: 360 모드에서 콘텐츠 핀 0개일 때
-      // 칩 영역이 완전히 빈다 — 지휘자 라이브 보고). seriesCounts 는 항상 전체 기준으로 센다.
-      const c = this.seriesCounts(pins, page);
-      // [WO 20261015-numunify] 모드는 가시성을 잠그지 않는다 — 편집 화면도 뷰어와 같은 2칩(독립 토글). 종전 "활성 모드 칩 1개(표시 전용)" 폐기.
-      const f = this.filter();
-      const chip = (series, label, n, on) =>
-        '<button type="button" class="zpager-tab pinfilter-chip pf-' + series + (on ? " active" : "") +
-        '" data-series="' + series + '" aria-pressed="' + (on ? "true" : "false") +
-        '" title="' + label + ' 핀만 보기"><span class="pinfilter-dot"></span>' + label +
-        '<span class="zpager-cnt">' + n + '</span></button>';
-      let html = "";
-      // 2칩(생성 계열별 개수). 편집 화면(활성 모드 있음)은 0개여도 두 칩 대칭 표시(마스터 재현 "360 0" 유지 — 종전
-      // fixmode 대칭 규칙 계승), 뷰어는 개수가 있는 계열만(회귀 없음).
-      const showAll = !!this.activeSeries();
-      if (!c.all && !showAll) { host.classList.add("hidden"); host.innerHTML = ""; return; }
+      const c = this.photoCounts(pins, page);
+      const isDesigner = typeof State !== "undefined" && State.mode === "designer";
+      if (!c.all && !isDesigner) { host.classList.add("hidden"); host.innerHTML = ""; return; }
       host.classList.remove("hidden");
-      this.SERIES.forEach(s => { if (showAll || c[s]) html += chip(s, this.LABELS[s], c[s] || 0, !!f[s]); });
-
-      host.innerHTML = html;
+      const cur = this.photoFilter();
+      host.innerHTML = this.PHOTO_FILTERS.map((f) => {
+        const on = f.key === cur;
+        return '<button type="button" class="zpager-tab pinfilter-chip pf-' + f.key + (on ? " active" : "") +
+          '" data-pfilter="' + f.key + '" aria-pressed="' + (on ? "true" : "false") +
+          '" title="' + (f.key === "all" ? "모든 핀 보기" : f.label + " 핀만 보기") + '"><span class="pinfilter-dot"></span>' + f.label +
+          '<span class="zpager-cnt">' + (c[f.key] || 0) + '</span></button>';
+      }).join("");
       if (!this._chipsBound) {
         this._chipsBound = true;
         host.addEventListener("click", (e) => {
-          const btn = e.target && e.target.closest ? e.target.closest("[data-series]") : null;
+          const btn = e.target && e.target.closest ? e.target.closest("[data-pfilter]") : null;
           if (!btn) return;
           e.stopPropagation();
-          this.toggle(btn.dataset.series);
+          this.setPhotoFilter(btn.dataset.pfilter);
           this.apply(); // UI.renderPinsOnMap()이 renderChips()도 함께 호출해 칩 active 상태를 갱신한다
         });
       }
@@ -1225,6 +1223,9 @@
     /** 필터 변경 후 도면 마커 + 미니맵 점을 함께 다시 그린다(한쪽만 걸리면 거짓말이 된다) */
     apply() {
       try { if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap(); } catch (e) {}
+      // [WO 20261019-unifymode] 같은 필터를 트리(구역·영역 아래 핀)·전체 포인트 패널도 쓴다 — 한쪽만 바뀌면 거짓말이 된다.
+      try { if (typeof UI !== "undefined" && UI.renderTree) UI.renderTree(); } catch (e) {}
+      try { if (typeof AllPins !== "undefined" && AllPins.open && AllPins.render) AllPins.render(); } catch (e) {}
       try {
         const box = (typeof document !== "undefined") && document.getElementById("pano-radar");
         if (box && !box.classList.contains("hidden") && typeof Radar !== "undefined" && Radar._pin && Radar.update) {

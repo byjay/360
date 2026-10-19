@@ -286,7 +286,7 @@ async function runFlow(vw, vh, tag) {
     await sleep(200);
     await measure("allpins-tab1-sort-name");
     const switched = await page.evaluate(() => {
-      const b = document.querySelector('#allpins-tabs [data-series]:not(.active)');
+      const b = document.querySelector('#allpins-tabs [data-pfilter]:not(.active)');   // [WO 20261019-unifymode] 탭 = 사진 필터(구 data-series 모드 탭)
       if (b) { b.click(); return true; }
       return false;
     });

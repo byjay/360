@@ -5,8 +5,7 @@
      🔴 단일 SoT = 아래 FEATURES 배열 하나. 데스크톱 상단바 [☰ 전체 기능] 패널과 모바일 도크 [더보기] 시트가
         같은 배열에서 같은 렌더 함수(renderInto)로 파생된다(두 벌 금지).
      🔴 숨김 금지 — 권한·모드·기기가 안 맞아도 목록에서 빼지 않는다. 비활성 + 사유 글자("소유자·관리자 전용",
-        "360 뷰어에서 사용", "휴대폰에서 사용")를 항목 안에 보인다. 모드(CHECKER/360)만 다르면 비활성이 아니라
-        누를 때 그 모드로 전환(App._setRegMode — 상단 세그먼트와 같은 SoT) 후 실행한다.
+        "360 뷰어에서 사용", "휴대폰에서 사용")를 항목 안에 보인다. [WO 20261019-unifymode] 모드 통일 — 등록 방식과 무관하게 실행.
      🔴 실행 = 기존 진입점 재사용(click: 기존 버튼 .click() 위임 / run: 기존 모듈 함수). 새 기능 로직 0.
      문구 SoT: help 키가 있으면 설명 = 36_Help.CONTENT 그 키의 첫 문장(도움말과 공유). 반대로 Help.get(기능 id)도
         이 배열의 desc 를 돌려준다(36_Help.get 폴백). 권한 사유 문구 SoT = UI.permCheck(11_UI.js).
@@ -16,8 +15,8 @@
     GROUPS: [
       { id: "project", label: "프로젝트" },
       { id: "drawing", label: "도면·구역" },
-      { id: "checker", label: "포인트 (CHECKER)" },
-      { id: "pano", label: "360" },
+      { id: "checker", label: "포인트·번호" },   // [WO 20261019-unifymode] 모드 이름 폐기(group id 는 호환 유지)
+      { id: "pano", label: "사진·360" },
       { id: "collab", label: "협업·요청" },
       { id: "report", label: "보고·내보내기" },
       { id: "offline", label: "오프라인" },
@@ -27,7 +26,7 @@
     ],
 
     /* 필드: id · group · label · icon(글리프) · desc(1줄) 또는 help(36_Help 키) · keys(단축) · perm(any|login|designer|owner|admin|super)
-       · mode(checkboard|photo — 다르면 전환 후 실행) · needs(project|drawing|deck|pano|mobile|pin|soon|module:<이름>)
+       · (구 mode 필드 — [WO 20261019-unifymode] 폐기: 모드 통일로 "전환 후 실행"이 없다) · needs(project|drawing|deck|pano|mobile|pin|soon|module:<이름>)
        · click(기존 버튼 id 로 위임) 또는 run() · covers(이 기능의 기존 진입점 버튼 id — 전수 검사용) */
     FEATURES: [
       /* ── 프로젝트 ── */
@@ -51,10 +50,11 @@
         why: () => PinPurge.historyReason(), run: () => PinPurge.openHistory() },
       { id: "edit-mode", group: "project", icon: "✎", label: "편집 모드로 전환", desc: "디자이너 권한이 있을 때 편집 화면으로", perm: "login",
         click: "btn-enter-edit", covers: ["btn-enter-edit", "btn-go-edit", "btn-exit-edit"] },
-      { id: "mode-checker", group: "project", icon: "#", label: "CHECKER 모드", help: "checkerboard", perm: "designer", needs: "drawing",
-        run: () => App._setRegMode("checkboard"), covers: ["btn-regmode-checkboard", "btn-checkboard-enter"] },
-      { id: "mode-360", group: "project", icon: "◎", label: "360 모드", desc: "핀을 만들면 바로 360 사진 선택창", perm: "designer", needs: "drawing",
-        run: () => App._setRegMode("photo"), covers: ["btn-regmode-photo"] },
+      // [WO 20261019-unifymode] 구 CHECKER/360 모드 → 등록 방식(구역별 저장). id 는 호환 유지.
+      { id: "mode-checker", group: "project", icon: "#", label: "등록 방식: 번호 먼저", help: "checkerboard", perm: "designer", needs: "drawing",
+        run: () => App._setRegMode("checkboard"), covers: ["btn-regmode-checkboard", "btn-checkboard-enter", "btn-settings-regmethod-batch"] },
+      { id: "mode-360", group: "project", icon: "◎", label: "등록 방식: 바로 사진", desc: "탭할 때마다 번호 핀 + 곧바로 사진 선택(이 구역)", perm: "designer", needs: "drawing",
+        run: () => App._setRegMode("photo"), covers: ["btn-regmode-photo", "btn-settings-regmethod-each"] },
 
       /* ── 도면·구역 ── */
       { id: "drawing-upload", group: "drawing", icon: "⇪", label: "도면 등록", help: "drawing-upload", perm: "designer", needs: "project",
@@ -103,14 +103,14 @@
       { id: "anno-clear", group: "drawing", icon: "⌫", label: "주석 — 이 페이지 모두 삭제", perm: "designer", needs: "drawing", danger: true, click: "tb-anno-clear", covers: ["tb-anno-clear"] },
       { id: "sidebar", group: "drawing", icon: "☰", label: "사이드바(트리) 열기/닫기", desc: "프로젝트 → 원본 → 구역 → 영역 → 포인트", click: "tq-menu", covers: ["tq-menu", "stb-toggle", "btn-sidebar-collapse"] },
 
-      /* ── 포인트 (CHECKER) ── */
+      /* ── 포인트·번호 ── */
       { id: "pin-add", group: "checker", icon: "⊕", label: "포인트 추가", help: "pin-place", perm: "designer", needs: "drawing", click: "btn-place", covers: ["btn-place", "tq-place", "btn-next-point"] },
-      { id: "pin-quick", group: "checker", icon: "⊕", label: "빠른 포인트(CHECKER 순차 배치)", desc: "번호 핀을 1번부터 연속으로", perm: "designer", needs: "drawing", mode: "checkboard", click: "btn-quickpoint", covers: ["btn-quickpoint"] },
+      { id: "pin-quick", group: "checker", icon: "⊕", label: "빠른 포인트(순차 배치)", desc: "번호 핀을 1번부터 연속으로(등록 방식대로)", perm: "designer", needs: "drawing", click: "btn-quickpoint", covers: ["btn-quickpoint"] },
       { id: "pin-edit-mode", group: "checker", icon: "✎", label: "포인트 수정 모드", desc: "켠 뒤 핀을 눌러 수정·이동·삭제", perm: "designer", needs: "drawing", click: "tb-pin-edit", covers: ["tb-pin-edit"] },
       { id: "pin-mark", group: "checker", icon: "M", label: "포인트 마킹", keys: "M", perm: "designer", needs: "drawing", click: "tb-mark", covers: ["tb-mark"] },
-      { id: "align-v", group: "checker", icon: "↕", label: "리더선 정렬 — 세로", desc: "선택(없으면 이 구역·영역) 리더선 포인트의 풍선을 클릭 위치 기준 등간격 — 리더선 핀만(pinstyle)", perm: "designer", needs: "drawing", mode: "checkboard",
+      { id: "align-v", group: "checker", icon: "↕", label: "리더선 정렬 — 세로", desc: "선택(없으면 이 구역·영역) 리더선 포인트의 풍선을 클릭 위치 기준 등간격 — 리더선 핀만(pinstyle)", perm: "designer", needs: "drawing",
         run: () => UI._startAlign("v") },
-      { id: "align-h", group: "checker", icon: "↔", label: "리더선 정렬 — 가로", desc: "선택(없으면 이 구역·영역) 리더선 포인트의 풍선을 클릭 위치 기준 등간격 — 리더선 핀만(pinstyle)", perm: "designer", needs: "drawing", mode: "checkboard",
+      { id: "align-h", group: "checker", icon: "↔", label: "리더선 정렬 — 가로", desc: "선택(없으면 이 구역·영역) 리더선 포인트의 풍선을 클릭 위치 기준 등간격 — 리더선 핀만(pinstyle)", perm: "designer", needs: "drawing",
         run: () => UI._startAlign("h") },
       { id: "align-undo", group: "checker", icon: "↶", label: "리더선 정렬 되돌리기", desc: "직전 정렬 1회", perm: "designer", needs: "drawing", run: () => UI.undoAlign() },
       { id: "pin-select", group: "checker", icon: "☑", label: "포인트 여러 개 선택", desc: "정렬·삭제할 포인트를 고릅니다", perm: "designer", needs: "drawing",
@@ -119,7 +119,7 @@
         run: () => { UI.setPinSelectMode(true); if (UI.togglePinList) UI.togglePinList(true); FeatureMenu._toast("삭제할 포인트를 고른 뒤 [선택 삭제]"); } },
       { id: "num-band", group: "checker", icon: "№", label: "번호 대역", desc: "100번 단위로 사람마다 번호대를 나눠 씁니다", perm: "designer", mod: "NumBand",
         run: () => NumBand.open(), covers: ["btn-numband", "btn-settings-numband", "allpins-band-btn"] },
-      { id: "renumber", group: "checker", icon: "⇅", label: "번호 다시 매기기", help: "checkboard-renumber", perm: "designer", needs: "drawing", mode: "checkboard",
+      { id: "renumber", group: "checker", icon: "⇅", label: "번호 다시 매기기", help: "checkboard-renumber", perm: "designer", needs: "drawing",
         click: "btn-checkboard-renumber", covers: ["btn-checkboard-renumber", "btn-settings-checkboard-renumber", "allpins-btn-renumber"] },
       // [WO 20261015-numunify] 마스터 "번호 리셋기능도 구현하고" — 구역(페이지) 핀 번호 1부터 연속 재부여(미리보기 → 확인 2회) + 되돌리기.
       { id: "num-reset", group: "checker", icon: "1↻", label: "번호 리셋(1부터)", desc: "이 구역·페이지 핀 번호를 위치순/기존 순서로 1부터 다시(미리보기·확인 2회·되돌리기)", needs: "drawing", danger: true, mod: "NumReset",
@@ -134,18 +134,21 @@
       { id: "pin-list", group: "checker", icon: "≣", label: "포인트 리스트 패널", desc: "현재 페이지 포인트", needs: "drawing", click: "tq-pins", covers: ["tq-pins", "pin-list-toggle", "pin-grid-toggle", "pin-grid-reopen"] },
 
       /* ── 360 ── */
-      { id: "theta-app", group: "pano", icon: "📷", label: "RICOH THETA 앱 열기", desc: "THETA 앱에서 촬영 → 돌아와 사진 선택", perm: "designer", needs: "mobile", mode: "photo",
+      { id: "theta-app", group: "pano", icon: "📷", label: "RICOH THETA 앱 열기", desc: "THETA 앱에서 촬영 → 돌아와 사진 선택", perm: "designer", needs: "mobile",
         run: () => ThetaIntake.openApp({ pinId: State.activePin }) },
       { id: "theta-received", group: "pano", icon: "⇩", label: "받은 사진 등록", desc: "THETA 에서 공유받아 보관된 360 사진 → 어디에 등록? → 포인트 탭", perm: "designer", needs: "drawing", mod: "ThetaIntake",
         run: () => ThetaIntake.startFromPending() },
-      { id: "theta-intake", group: "pano", icon: "⇩", label: "THETA 360 사진 가져오기", desc: "갤러리의 R* 360 사진 → 도면에 위치 지정", perm: "designer", needs: "drawing", mode: "photo", click: "btn-theta-intake", covers: ["btn-theta-intake", "theta-tray-close"] },
-      { id: "field-capture", group: "pano", icon: "📷", label: "현장 촬영", desc: "사진을 바로 찍어 도면에 위치 등록(THETA 공유·갤러리·카메라·안드로이드 앱 중 선택)", perm: "designer", needs: "drawing", mode: "photo", mod: "FieldCapture",
+      { id: "theta-intake", group: "pano", icon: "⇩", label: "THETA 360 사진 가져오기", desc: "갤러리의 R* 360 사진 → 도면에 위치 지정", perm: "designer", needs: "drawing", click: "btn-theta-intake", covers: ["btn-theta-intake", "theta-tray-close"] },
+      { id: "field-capture", group: "pano", icon: "📷", label: "현장 촬영", desc: "사진을 바로 찍어 도면에 위치 등록(THETA 공유·갤러리·카메라·안드로이드 앱 중 선택)", perm: "designer", needs: "drawing", mod: "FieldCapture",
         run: () => FieldCapture.open(), covers: ["mdock-field-capture"] },
       { id: "field-capture-method", group: "pano", icon: "⇄", label: "현장 촬영 방식 변경", desc: "THETA 공유·갤러리·카메라·안드로이드 앱 중 다시 고릅니다", perm: "designer", needs: "drawing", mod: "FieldCapture",
         run: () => FieldCapture.open(true) },
       { id: "theta-osc", group: "pano", icon: "📡", label: "THETA 카메라 직접 제어", desc: "와이파이로 카메라 연결 → 설정·촬영·갤러리를 이 앱에서(APK 전용, 웹에서는 설치 안내)", perm: "designer", needs: "drawing", mod: "ThetaOSC",
         run: () => ThetaOSC.open() },
-      { id: "photo-batch", group: "pano", icon: "▣", label: "사진 폴더 일괄 매칭", help: "photo-batch", perm: "designer", needs: "drawing", mode: "photo", click: "btn-photobatch", covers: ["btn-photobatch", "mdock-photobatch"] },
+      // [WO 20261019-unifymode] 촬영 세션 = [번호 먼저] 의 일괄 등록 도구 중 하나 — 모바일 도크 칩([바로 사진] 때만 보임)과 별개로 어느 방식에서도 진입
+      { id: "capture-session", group: "pano", icon: "🧭", label: "촬영 세션", desc: "탭 또는 동선으로 정지점을 기록하고 사진을 일괄 등록(등록 방식 무관)", perm: "designer", needs: "drawing", mod: "CaptureSession",
+        run: () => CaptureSession.open(), covers: ["mdock-capture-session"] },
+      { id: "photo-batch", group: "pano", icon: "▣", label: "사진 폴더 일괄 매칭", help: "photo-batch", perm: "designer", needs: "drawing", click: "btn-photobatch", covers: ["btn-photobatch", "mdock-photobatch"] },
       // [WO 20261015-photofolder2] 구역마다 폴더를 지정하고 일괄/하나씩 등록을 체크박스로 고르는 화면(60_PhotoFolder.js openDeckManager)
       { id: "photo-folder-deck", group: "pano", icon: "📁", label: "구역별 사진 폴더 지정", desc: "구역마다 폴더를 지정하고 일괄/하나씩 등록 방식을 고릅니다", perm: "designer", needs: "project", mod: "PhotoFolder",
         run: () => PhotoFolder.openDeckManager() },
@@ -250,7 +253,7 @@
     },
     ctxItems(kind) {
       return (this.CTX[kind] || []).map((id) => this._f(id)).filter(Boolean)
-        .map((f) => ({ label: f.label, reason: this.reasonOf(f), desc: this.modeHint(f) || "", danger: !!f.danger, run: () => this.run(f) }));
+        .map((f) => ({ label: f.label, reason: this.reasonOf(f), desc: "", danger: !!f.danger, run: () => this.run(f) }));
     },
 
     /* ─── 판정 ─── */
@@ -315,13 +318,8 @@
       if (typeof f.why === "function") { try { const w = f.why(); if (w) return w; } catch (e) { return "준비 중"; } }
       return "";
     },
-    modeHint(f) {
-      if (!f.mode || typeof State === "undefined") return "";
-      if (State.regMode === f.mode) return "";
-      return (f.mode === "checkboard" ? "CHECKER" : "360") + " 모드로 전환 후 실행";
-    },
 
-    /** 실행 — 사유가 있으면 토스트(실행 0). 모드가 다르면 App._setRegMode 로 전환 후 실행. */
+    /** 실행 — 사유가 있으면 토스트(실행 0). [WO 20261019-unifymode] 모드 전환 없음(바로 실행). */
     run(id) {
       const f = typeof id === "string" ? this._f(id) : id;
       if (!f) return false;
@@ -333,10 +331,7 @@
           else if (f.run) f.run();
         } catch (e) { this._toast(f.label + " 실행 실패: " + ((e && e.message) || e)); }
       };
-      if (f.mode && State.regMode !== f.mode && typeof App !== "undefined" && App._setRegMode) {
-        App._setRegMode(f.mode);
-        setTimeout(exec, 120);   // _setRegMode 가 openApp 으로 화면을 다시 그린 뒤 실행
-      } else exec();
+      exec();
       this.close();
       return true;
     },
@@ -364,7 +359,6 @@
         sec.appendChild(h);
         items.forEach((f) => {
           const why = this.reasonOf(f);
-          const hint = why ? "" : this.modeHint(f);
           const b = document.createElement("button");
           b.type = "button";
           b.className = "fm-item" + (why ? " is-disabled" : "") + (f.danger ? " danger" : "");
@@ -373,7 +367,7 @@
           b.innerHTML = '<span class="fm-ico" aria-hidden="true">' + esc(f.icon || "•") + '</span>'
             + '<span class="fm-main"><span class="fm-label">' + esc(f.label) + (f.keys ? ' <kbd class="fm-keys">' + esc(f.keys) + '</kbd>' : "") + '</span>'
             + (this.descOf(f) ? '<span class="fm-desc">' + esc(this.descOf(f)) + '</span>' : "")
-            + (why ? '<span class="fm-why">' + esc(why) + '</span>' : (hint ? '<span class="fm-mode">' + esc(hint) + '</span>' : ""))
+            + (why ? '<span class="fm-why">' + esc(why) + '</span>' : "")   // [WO 20261019-unifymode] 구 "모드로 전환 후 실행"(fm-mode) 폐기
             + '</span>';
           // 이벤트 전파는 막지 않는다 — 모바일 [더보기] 시트는 안의 버튼 클릭으로 닫힌다(06_PanoViewer 배선 재사용).
           b.addEventListener("click", () => this.run(f));

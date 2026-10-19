@@ -261,12 +261,16 @@ function runRender(regMode, pins) {
   return registry["pins-layer"]._children;
 }
 
-console.log("\n[C1] 체크보드 모드 — 체크보드 핀은 번호만(펄스·그라디언트 장식 없음)");
+// 🔴 [WO 20261019-unifymode] C1 계약 반전 — 전: CHECKER 모드 + 체커 메타 핀 = 간소화 사각 배지(그라디언트 없음)
+//   후: 그 분기 폐기 — 등록 방식(번호 먼저)·체커 메타와 무관하게 같은 메달리온(C3 와 같은 구조). 사진 없음 = 펄스 없음은 그대로.
+console.log("\n[C1] [번호 먼저] 방식 — 체커 메타 핀도 같은 메달리온(간소화 분기 없음)");
 {
   const markers = runRender("checkboard", [{ id: "p1", x: 5, y: 5, page: 1, label: "3", checkboard: true }]);
   const html = markers[0]._html;
-  ok(!/pin-pulse/.test(html), "pin-pulse 없음");
-  ok(!/pgbody/.test(html), "그라디언트(defs) 없음 — 단순 도형만");
+  ok(!/pin-pulse/.test(html), "pin-pulse 없음(사진 없음)");
+  ok(/pgbody/.test(html) && !/<rect x="5\.6" y="2\.6" width="24\.8" height="24\.8" rx="6"/.test(html), "메달리온 구조(defs 그라디언트) · 간소화 사각 배지(rx 6) 없음");
+  const photoHtml = runRender("photo", [{ id: "p1", x: 5, y: 5, page: 1, label: "3", checkboard: true }])[0]._html;
+  ok(html === photoHtml, "등록 방식(checkboard/photo)과 무관하게 같은 마커 HTML");
   ok(/>3</.test(html), "번호(3)는 그대로 표시됨 → " + html.replace(/\s+/g, " ").slice(0, 160));
 }
 
@@ -290,13 +294,15 @@ console.log("\n[C3] 사진등록·보기 모드에서는 체크보드 핀도 기
 console.log("\n[D1] index.html — [보기] 세그먼트 버튼 DOM에 없음, CHECKER/360 라벨");
 {
   ok(!/id="btn-regmode-view"/.test(htmlSrc), "btn-regmode-view 요소 없음");
-  ok(/<button id="btn-regmode-checkboard"[^>]*>CHECKER<\/button>/.test(htmlSrc), "체크보드 버튼 라벨=CHECKER");
-  ok(/<button id="btn-regmode-photo"[^>]*>360<\/button>/.test(htmlSrc), "사진등록 버튼 라벨=360");
+  // [WO 20261019-unifymode] 전: CHECKER / 360(모드) → 후: 번호 먼저 / 바로 사진(등록 방식) · 그룹 이름 = 등록 방식
+  ok(/<button id="btn-regmode-checkboard"[^>]*>번호 먼저<\/button>/.test(htmlSrc), "체크보드 버튼 라벨=번호 먼저");
+  ok(/<button id="btn-regmode-photo"[^>]*>바로 사진<\/button>/.test(htmlSrc), "사진등록 버튼 라벨=바로 사진");
+  ok(/id="regmode-seg"[^>]*aria-label="등록 방식/.test(htmlSrc) && !/>CHECKER<\/button>/.test(htmlSrc), "세그먼트 = 등록 방식 · CHECKER 버튼 라벨 0");
 }
 
 console.log("\n[뮤테이션C] [보기] 버튼을 세그먼트에 되살리면 — D1이 실패해야 함");
 {
-  const needle = '<button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="CHECKER — 도면 클릭 시 번호 핀만 생성">CHECKER</button>';
+  const needle = '<button id="btn-regmode-checkboard" class="regmode-btn" type="button" title="번호 먼저 — 탭하면 번호 핀만 찍힙니다. 사진은 나중에 폴더·촬영 세션으로 일괄 등록">번호 먼저</button>';
   if (!htmlSrc.includes(needle)) { console.log("  FAIL 뮤테이션C 대상 못 찾음(소스 변경?)"); failed++; }
   else {
     const mutated = htmlSrc.replace(needle,
@@ -331,14 +337,15 @@ console.log("\n[E2] PinSeries.preferredMode() — 구 저장값 'designer'(구 [
   ok(PS.preferredMode() === "checkboard", "정규화됨 → " + PS.preferredMode());
 }
 
-console.log("\n[뮤테이션D] DEFAULT_MODE 를 'view' 로 되돌리면 — E1이 실패해야 함");
+// [WO 20261019-unifymode] 기본값 SoT 이관(DEFAULT_MODE → DEFAULT_REG_METHOD) — 같은 의미의 뮤테이션 = 기본 등록 방식을 바꾼다
+console.log("\n[뮤테이션D] 기본 등록 방식을 each(바로 사진)로 바꾸면 — E1이 실패해야 함");
 {
-  const needle = 'DEFAULT_MODE: "checkboard",';
+  const needle = 'DEFAULT_REG_METHOD: "batch",';
   if (!seriesSrc.includes(needle)) { console.log("  FAIL 뮤테이션D 대상 못 찾음(소스 변경?)"); failed++; }
   else {
-    const mutated = seriesSrc.replace(needle, 'DEFAULT_MODE: "view",');
+    const mutated = seriesSrc.replace(needle, 'DEFAULT_REG_METHOD: "each",');
     const PSm = makeSeriesSandbox(mutated, undefined);
-    ok(PSm.preferredMode() !== "checkboard", "뮤테이션 적용 시 기본값이 'view' 로 샘(E1이 깨짐을 증명) → " + PSm.preferredMode());
+    ok(PSm.preferredMode() !== "checkboard", "뮤테이션 적용 시 기본값이 photo 로 샘(E1이 깨짐을 증명) → " + PSm.preferredMode());
   }
 }
 
@@ -386,8 +393,9 @@ console.log("\n[뮤테이션E] 뷰어 가드를 지우면 — F1이 실패해야
    ══════════════════════════════════════════════════════════════ */
 console.log("\n[G1] 세그먼트/설정 블록/필터칩/도움말 — 구 모드 명칭 잔존 0");
 {
-  ok(!/<span class="checkboard-menu-title">체크보드<\/span>/.test(htmlSrc), "메뉴 타이틀 '체크보드' 문자열 없음(CHECKER로 교체됨)");
-  ok(/<span class="checkboard-menu-title">CHECKER<\/span>/.test(htmlSrc), "메뉴 타이틀 = CHECKER");
+  ok(!/<span class="checkboard-menu-title">체크보드<\/span>/.test(htmlSrc), "메뉴 타이틀 '체크보드' 문자열 없음");
+  // [WO 20261019-unifymode] 전: CHECKER(모드 이름) → 후: 번호 먼저 등록(등록 방식 이름)
+  ok(/<span class="checkboard-menu-title">번호 먼저 등록<\/span>/.test(htmlSrc), "메뉴 타이틀 = 번호 먼저 등록");
   // [WO 20261001-startno] 전: <label for="settings-checkboard-start">CHECKER 시작 번호 · 후: 시작번호 입력이 번호 대역 시트로
   //   일원화되어 블록 제목은 모드 공통 "번호 대역"(CHECKER·360 같은 대역) — 구 모드 명칭 잔존 0 취지는 아래 줄이 그대로 본다.
   ok(/<span id="settings-checkboard-start-label"[^>]*>번호 대역<\/span>/.test(htmlSrc), "설정 블록 제목(정적 기본값) = 번호 대역(모드 공통)");
@@ -396,7 +404,8 @@ console.log("\n[G1] 세그먼트/설정 블록/필터칩/도움말 — 구 모�
   ok(!appSrc.includes('"체크보드 모드"'), "20_App.js 문자열 리터럴 '체크보드 모드' 잔존 0");
   ok(!appSrc.includes('"사진 등록 모드"'), "20_App.js 문자열 리터럴 '사진 등록 모드' 잔존 0");
   const helpSrc = rd("public/js/modules/36_Help.js");
-  ok(helpSrc.includes('"CHECKER 모드 — 버튼 한 번으로'), "36_Help.js checkerboard 도움말 = CHECKER 모드");
+  // [WO 20261019-unifymode] 전: "CHECKER 모드 — …" → 후: "등록 방식 — [번호 먼저] … [바로 사진] …"(모드 이름 잔존 0)
+  ok(helpSrc.includes('"checkerboard": "등록 방식 — [번호 먼저]') && !helpSrc.includes('"CHECKER 모드 — '), "36_Help.js checkerboard 도움말 = 등록 방식(번호 먼저/바로 사진)");
   ok(!helpSrc.includes('"체크보드 모드 — 버튼 한 번으로'), "36_Help.js 구 표기 없음");
 }
 

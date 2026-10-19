@@ -277,7 +277,7 @@ try {
   }
 
   // ── 메인(크롭 없는 A구역-1영역) 칩 = 5(비크롭 구역은 영향 없음, 회귀 확인) ──
-  const mainChip = await evSafe(`(function(){ var el = document.querySelector('#pin-filter-bar .pinfilter-chip.pf-checkboard .zpager-cnt'); return el ? el.textContent : null; })()`);
+  const mainChip = await evSafe(`(function(){ var el = document.querySelector('#pin-filter-bar .pinfilter-chip.pf-all .zpager-cnt'); return el ? el.textContent : null; })()`);
   ok(mainChip === "5", "회귀 — 크롭 없는 구역(A구역-1영역)의 CHECKER 칩은 그대로 5(전체)", mainChip);
 
   // ── R3: B구역 진입 → 칩 = 2(크롭 안 핀만, SoT: Projects.pinsForDeck) ──
@@ -286,10 +286,10 @@ try {
   await wait(1000);
   await shot("inside-b");
   const after = await evSafe(`(function(){
-    var chip = document.querySelector('#pin-filter-bar .pinfilter-chip.pf-checkboard .zpager-cnt');
-    var treeLeaf = document.querySelector('.tree-node-mode-leaf.active .tree-cnt');
+    var chip = document.querySelector('#pin-filter-bar .pinfilter-chip.pf-all .zpager-cnt');
+    var treeLeaf = String(document.querySelectorAll('#side-tree .tree-node-pin').length);   // [WO 20261019-unifymode] 모드 잎 폐기 — 트리 핀 수(같은 pinsForDeck SoT)
     var markers = document.querySelectorAll('.pin-marker').length;
-    return { chip: chip ? chip.textContent : null, treeLeaf: treeLeaf ? treeLeaf.textContent : null, markers: markers };
+    return { chip: chip ? chip.textContent : null, treeLeaf: treeLeaf, markers: markers };
   })()`);
   ok(after.chip === "2", "R3 — B구역(crop) 진입 후 필터 칩 = 2(크롭 안 핀만)", after);
   ok(after.treeLeaf === "2", "R3 — 트리 모드잎 칩도 동일 SoT로 2(필터칩과 일치)", after);

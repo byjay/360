@@ -131,7 +131,8 @@
       if (_ml) {
         _ml.innerHTML = _modeIcon;
         _ml.style.color = accentVar;
-        _ml.title = isCheckboard ? "CHECKER 모드" : isPhoto ? "360 모드" : (isDesigner ? "편집모드" : "뷰어 모드");
+        // [WO 20261019-unifymode] 모드 이름(CHECKER/360) 폐기 — 편집 화면 하나 + 등록 방식(번호 먼저/바로 사진)
+        _ml.title = isQuickTool ? ("편집 모드 · 등록 방식: " + (isPhoto ? "바로 사진" : "번호 먼저")) : (isDesigner ? "편집모드" : "뷰어 모드");
         _ml.style.display = "inline-flex"; _ml.style.alignItems = "center";
       }
 
@@ -148,7 +149,7 @@
         const cbEnter = UI.$("btn-checkboard-enter");
         const cbEnterLbl = UI.$("btn-checkboard-enter-label");
         if (cbEnter) cbEnter.classList.toggle("active", isCheckboard);
-        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "CHECKER 모드 사용 중" : "CHECKER 모드 시작";
+        if (cbEnterLbl) cbEnterLbl.textContent = isCheckboard ? "번호 먼저 등록 사용 중" : "번호 먼저 등록";
         if (isCheckboard) App._updateCheckboardQuickStatus(State.pdfPage || 1);
         // [마스터 요청 2026-09-03] 배치 전 종류 선택 그리드 — 체크보드 상설 메뉴가 보일 때 렌더
         //   (isDesigner 이면 항상, quickpoint/checkboard-enter 진입 전에도 미리 준비되게).
@@ -232,7 +233,7 @@
       const cbBtn = UI.$("btn-checkboard-enter");
       if (cbBtn) cbBtn.classList.toggle("active", isCheckboard);
       const cbLabel = UI.$("btn-checkboard-enter-label");
-      if (cbLabel) cbLabel.textContent = isCheckboard ? "CHECKER 모드 사용 중" : "CHECKER 모드 시작";
+      if (cbLabel) cbLabel.textContent = isCheckboard ? "번호 먼저 등록 사용 중" : "번호 먼저 등록";
       const placeBtn = UI.$("btn-place");
       if (placeBtn) placeBtn.textContent = isPhoto ? "+ 번호 핀 + 사진" : isCheckboard ? "+ 번호 핀 찍기" : "+ 위치 포인트 추가";
       const placeHint = UI.$("place-hint");
@@ -756,20 +757,34 @@
      *  모두 이 함수로 귀결된다 — 상태를 여러 곳에서 따로 세팅하면 반드시 갈라진다
      *  (전역 CLAUDE.md §10 SoT). openApp(keepDrawing:true) 재사용 — 도면 재로드 없음
      *  (WO 20260928-pinloss 교훈, 모드 전환 시 핀 소실 재발 방지). */
-    _setRegMode(next) {
+    /*  🔴 [WO 20261019-unifymode] 이 함수는 이제 "모드 전환"이 아니라 **등록 방식** 전환이다(checkboard = 번호 먼저 /
+     *  photo = 바로 사진). 사용자가 고르면 지금 구역(시트 묶음)의 방식으로 저장한다(PinSeries.setRegMethod).
+     *  opts.persist === false — 흐름이 잠깐 빌리는 전환(THETA 탭 등록)은 구역 기본값을 바꾸지 않는다.
+     *  opts.autoStart === false — 구역 이동에 따른 복원(_syncRegMethod)은 배치를 저절로 켜지 않는다. */
+    _setRegMode(next, opts) {
+      opts = opts || {};
       if (next !== "view" && next !== "checkboard" && next !== "photo") return;
       if (State.mode !== "designer") return; // 편집 화면 전용(뷰어 앱에는 세그먼트가 없음)
       if (State.placing) this._togglePlacing();
-      if (typeof PinSeries !== "undefined" && PinSeries.setPreferredMode) {
-        PinSeries.setPreferredMode(next === "checkboard" ? "checkboard" : "designer");
+      if (opts.persist !== false && next !== "view" && typeof PinSeries !== "undefined" && PinSeries.setRegMethod) {
+        PinSeries.setRegMethod(PinSeries.methodOfRegMode(next));
       }
       this.openApp(next === "view" ? "designer" : next,
         { project: (typeof Projects !== "undefined" && Projects.currentProject) || null, keepDrawing: true });
-      if (next !== "view") {
+      if (next !== "view" && opts.autoStart !== false) {
         // [WO 20260929 마스터 정정] 체크보드/사진등록은 클릭 즉시 동작하는 도구 — 진입과 동시에
         //   배치모드를 자동 시작한다(기존 체크보드 진입 패턴 그대로 재사용).
         setTimeout(() => this._autoStartPlacing(), 60);
       }
+    },
+
+    /** [WO 20261019-unifymode] 구역(시트 묶음)을 옮기면 그 구역에 저장된 등록 방식으로 맞춘다 — Projects.selectDeck 이
+     *  currentDeck 을 바꾼 직후 부른다(공유 지점 1곳). 같으면 무동작 · 저장값을 다시 쓰지 않는다 · 배치를 저절로 켜지 않는다. */
+    _syncRegMethod() {
+      if (typeof State === "undefined" || State.mode !== "designer" || !State.checkboard) return;
+      if (typeof PinSeries === "undefined" || !PinSeries.preferredMode) return;
+      const want = PinSeries.preferredMode();
+      if (want !== State.regMode) this._setRegMode(want, { persist: false, autoStart: false });
     },
 
     /** [WO 20261008-pinstyle R5] 🔴 근본원인(0b4d262 CDP 재현): 모드 전환이 배치를 "자동으로" 켠 뒤 사용자가
@@ -796,11 +811,13 @@
     /** 포인트 모드 안내문 SoT — 지도 위 배너(.crosshair-msg)와 사이드 #place-hint 가 같은 문장을 쓴다.
      *  [WO 20261008-pinstyle R4] CHECKER 는 사진을 등록하지 않는다(마스터 2026-10-01) — 숨기지 말고 문장으로 보인다. */
     //  [WO 20261015-numunify] 체커 핀도 사진 폴더 일괄 등록 대상 — "360 모드에서" 문구 폐기(배너 2곳 자동 전파).
-    CHECKER_PHOTO_NOTE: "CHECKER: 번호만 · 사진은 폴더 일괄로",
+    //  [WO 20261019-unifymode] 모드 이름 폐기 → 등록 방식 이름(번호 먼저 / 바로 사진). 이름(CHECKER_PHOTO_NOTE)은 호출부 호환으로 유지.
+    CHECKER_PHOTO_NOTE: "번호 먼저: 탭 = 번호만 · 사진은 일괄로",
+    EACH_PHOTO_NOTE: "바로 사진: 탭 = 번호 핀 + 사진 선택",
     _placeBannerText() {
       // 배너는 nowrap(style.css .crosshair-msg) — 375px 폭 안에 들도록 짧게 둔다(실측 대상).
       if (State.regMode === "checkboard") return this.CHECKER_PHOTO_NOTE;
-      if (State.regMode === "photo") return "360: 클릭 = 번호 핀 + 사진 선택";
+      if (State.regMode === "photo") return this.EACH_PHOTO_NOTE;
       return "도면 위 원하는 위치를 클릭하세요";
     },
     /** 배치 상태 표시 SoT — 모든 [포인트] 버튼의 활성 표시 + 배너 문구/표시를 State.placing 에서 파생한다
@@ -847,6 +864,8 @@
           if (thetaChip && thetaChip.classList) thetaChip.classList.remove("hidden");
         }
       } catch (e) {}
+      // [WO 20261019-unifymode] 설정 패널 등록 방식 버튼 — 같은 렌더 지점(두 표시가 갈라지지 않게)
+      if (typeof Settings !== "undefined" && Settings._renderRegMethod) { try { Settings._renderRegMethod(); } catch (e) {} }
       // [WO 20261001-startno] 모드 전환·편집 진입 = 상단 [번호 대역] 표시(현재 모드 계열의 다음 번호) 갱신 지점
       if (typeof NumBand !== "undefined" && NumBand.render) { try { NumBand.render(); } catch (e) {} }
       // [WO 20261002-allmenu §2] CHECKER 툴바 [정렬 ↕][정렬 ↔] 표시 — 같은 렌더 지점(모드 전환 SoT)에서 동기화.
@@ -865,7 +884,7 @@
       //   여기 한 곳만 막으면 어느 버튼으로 들어와도 view 모드에서 생성이 불가능하다.
       if (!State.placing && State.regMode === "view") {
         if (typeof Prompt !== "undefined" && Prompt.toast) {
-          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — CHECKER/360 모드로 전환하세요");
+          Prompt.toast("보기 모드에서는 포인트를 생성할 수 없습니다 — 편집 화면에서 등록 방식(번호 먼저/바로 사진)을 고르세요");
         }
         return;
       }
@@ -1694,12 +1713,14 @@
      *  [WO 20260929 addendum, 지휘자 정정] series 생략 시 "checkboard"(하위호환, 기존
      *  #btn-checkboard-renumber 무인자 호출 그대로 동작) — 마스터: "번호 일괄 변경도 현재
      *  모드 핀만 대상"이라 24_Settings.js 가 현재 모드(State.regMode)를 넘겨 호출한다. */
+    //  🔴 [WO 20261019-unifymode] 기본 대상 = 페이지 전 핀("all") — 핀이 하나로 합쳐져 "현재 모드 핀만"이 없다.
+    //  "checkboard"/"content" 를 명시한 구 호출만 그 메타로 좁힌다(하위호환).
     async _renumberCheckboard(series) {
-      const ser = series === "content" ? "content" : "checkboard";
-      const seriesLabel = (typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[ser]) || ser;
+      const ser = (series === "content" || series === "checkboard") ? series : "all";
+      const seriesLabel = ser === "all" ? "핀" : ((typeof PinSeries !== "undefined" && PinSeries.LABELS && PinSeries.LABELS[ser]) || ser);
       const page = State.pdfPage || 1;
       const cur = PinSeries.numbers(State.pins, page);
-      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && PinSeries.seriesOf(p) === ser);
+      const curTargets = (State.pins || []).filter((p) => p && (p.page || 1) === page && (ser === "all" || PinSeries.seriesOf(p) === ser));
       if (!curTargets.length) { Prompt.toast && Prompt.toast("이 페이지에는 " + seriesLabel + " 핀이 없습니다"); return; }
       let curMin = Infinity, curMax = -Infinity;
       curTargets.forEach((p) => { const info = cur.get(p.id); if (info) { curMin = Math.min(curMin, info.no); curMax = Math.max(curMax, info.no); } });
@@ -1750,9 +1771,12 @@
      *  각 계열끼리만 채번한다(nextSeriesNo, §10 SoT). photo(360) 핀은 pin.checkboard 필드
      *  자체를 생략한다(마스터: "기존 데이터: checkboard 플래그 없는 핀 = 360 계열로 간주" —
      *  이 표현과 정확히 일치시킨다, 거짓 false 를 쓰지 않는다). */
+    //  🔴 [WO 20261019-unifymode] 핀은 하나 — 등록 방식(번호 먼저/바로 사진)과 무관하게 같은 핀을 만든다. pin.checkboard 는
+    //  더 이상 쓰지 않는다(구 핀의 읽기 전용 메타 — 마이그레이션 0). 사진 즉시등록 여부는 호출부(_handlePlaceClick)의 몫.
+    //  series = 새 핀의 계열(seriesOf 결과 "content") — 번호 공간은 numunify 에서 이미 계열 무관 1개다.
     _placeCheckboardPin(pct) {
       const curPage = State.pdfPage || 1;
-      const series = (State.regMode === "photo") ? "content" : "checkboard";
+      const series = "content";
       // 🔴 채번 정본 = PinSeries. 계열마다 독립으로 "페이지 내 그 계열 핀 수"로 증가한다.
       const start = this._checkboardStart(curPage, series);
       const _auth0 = this._pinAuthor();
@@ -1767,14 +1791,13 @@
       // [P5] label = 접두 포함 전체 문자열(nextInBand.label — 접두 없으면 String(no) = 종전)
       const pin = { id: _now0, createdAt: _now0, x: pct.x, y: pct.y, page: curPage, label: nx ? (nx.label != null ? nx.label : String(nx.no)) : "" };
       if (_linkHead) PinLink.link(State.pins, _linkHead, pin);
-      else if (series === "checkboard") pin.checkboard = true;
       if (_auth0) pin.author = _auth0; // [WO 20260917 멀티유저 ②]
       // [마스터 요청 2026-09-03] 배치 전 고른 종류(State.pendingIcon)로 연속 배치.
       //   폼(20_App.js:1846/1972)과 동일 규칙 — 기본값(number)이면 필드 자체를 생략(하위호환).
       if (State.pendingIcon && State.pendingIcon !== "number") pin.icon = State.pendingIcon;
       State.pins.push(pin);
       if (typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin); // [WO 20261001-gps] 자동 위치 기록(비동기·저장 안 막음)
-      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, checkboard: series === "checkboard" });
+      if (typeof Log !== "undefined") Log.push("pin.add", pin.id, { label: pin.label, page: pin.page, regMethod: State.regMode === "photo" ? "each" : "batch" });
       State.activePin = pin.id;
       if (typeof Zones !== "undefined") Zones.refreshPinLinks();
       UI.renderPinList();
@@ -1832,8 +1855,8 @@
      *  이미 체크보드 모드면 배치 토글(#btn-place)만 위임한다. */
     _quickCheckboardEntry() {
       if (!State.checkboard) {
-        const cb = UI.$("btn-checkboard-enter");
-        if (cb) cb.click(); // 기존 toggleCheckboard 재사용 — 체크보드 진입 + 배치 자동 시작
+        // [WO 20261019-unifymode] 진입 = 지금 구역의 등록 방식(구 "무조건 CHECKER" 폐기 — 사용자가 고른 방식을 덮어쓰지 않는다)
+        this._setRegMode((typeof PinSeries !== "undefined" && PinSeries.preferredMode) ? PinSeries.preferredMode() : "checkboard", { persist: false });
       } else {
         const bp = UI.$("btn-place");
         if (bp) bp.click();
@@ -1852,8 +1875,9 @@
       // [WO 20261013-photofolder] 폴더 지정 상태바 노출 토글(360/체크보드 모드 전환마다 갱신).
       if (typeof PhotoFolder !== "undefined" && PhotoFolder.syncUI) { try { PhotoFolder.syncUI(); } catch (e) {} }
       const pg = page || State.pdfPage || 1;
+      // [WO 20261019-unifymode] series = 등록 방식(each = 사진 안내 / batch = 번호 안내) — 개수는 페이지 전 핀(계열 구분 없음)
       const series = (State.regMode === "photo") ? "content" : "checkboard";
-      const cnt = (State.pins || []).filter((p) => p && (p.page || 1) === pg && PinSeries.seriesOf(p) === series).length;
+      const cnt = (State.pins || []).filter((p) => p && !p._deleted && (p.page || 1) === pg).length;
       const hint = UI.$("place-hint");
       // [WO 20260930-autophoto] 남은 360 후보 사진 수를 함께 보여준다(PhotoBatch 세션 SoT).
       const avail = (series === "content" && typeof PhotoBatch !== "undefined" && PhotoBatch._autoRowsRemaining) ? PhotoBatch._autoRowsRemaining() : 0;
@@ -3552,7 +3576,10 @@
       // open() — #pap-bottom 등록 섹션 숨김)으로 위임해 사진 등록 경로를 원천 차단한다(유실 0 —
       // 번호·위치명 수정은 PinActionPop 에도 있다).
       // [WO 20261015-numunify] 위임은 유지(설계 §5 #2 🔒) — 단 PinActionPop 은 이제 체커 핀에도 등록 섹션을 연다(사진 경로 = 패널·폴더 일괄).
-      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+      // 🔴 [WO 20261019-unifymode] 판정 = 생성 모드 메타(pin.checkboard)가 아니라 "번호 핀"(PinSeries.isNumberPin — 구 체커 메타 또는
+      //   번호 label). 통일 후 새 핀은 체커 메타가 없으므로 메타로 가르면 같은 번호 핀이 생성 시점에 따라 다른 편집기로 갈린다.
+      //   번호 핀 = 번호 패널(PinActionPop: 번호·사진·360·문서·노트) · 자유 텍스트 이름의 구 360 핀만 구 폼(종전 그대로).
+      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.isNumberPin) ? PinSeries.isNumberPin(pin) : false;
       if (isChecker) {
         if (typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(id);
         return;

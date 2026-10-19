@@ -239,7 +239,8 @@ function runApp(src) {
   const State = {
     pins: [
       { id: "chk1", page: 1, x: 1, y: 1, checkboard: true, label: "1" },
-      { id: "p3601", page: 1, x: 2, y: 2, label: "2" }
+      { id: "p3601", page: 1, x: 2, y: 2, label: "2" },
+      { id: "p360t", page: 1, x: 3, y: 3, label: "기관실" }   // [WO 20261019-unifymode] 자유 텍스트 이름의 구 360 핀
     ],
     placing: false, editingPinId: "unset", regMode: "checkboard"
   };
@@ -259,13 +260,19 @@ function runApp(src) {
   App.editPin("chk1");
   ok(papCalls.join() === "chk1" && State.editingPinId === "unset",
     "②-1 CHECKER 핀 editPin → PinActionPop.open('chk1') 위임, 구식 폼 경로 미진입(editingPinId 그대로) — papCalls=" + papCalls.join());
+  // 🔴 [WO 20261019-unifymode] ②-2 계약 변경 — 판정 = 생성 모드 메타가 아니라 "번호 핀"(PinSeries.isNumberPin).
+  //   전: 메타 없는 번호 핀(p3601, label "2") → 구식 폼 / 후: 번호 핀이면 메타와 무관하게 번호 패널(PinActionPop) — 통일 후 새 핀은
+  //   메타가 없으므로 메타로 가르면 [번호 먼저]로 찍은 새 핀이 구식 폼으로 빠진다. 자유 텍스트 이름의 구 360 핀(p360t)만 구식 폼(종전 그대로).
   App.editPin("p3601");
-  ok(papCalls.join() === "chk1" && State.editingPinId === "p3601",
-    "②-2 360 핀 editPin → 기존 구식 폼 경로 그대로 진입(회귀 없음, editingPinId=p3601) — papCalls=" + papCalls.join());
+  ok(papCalls.join() === "chk1,p3601" && State.editingPinId === "unset",
+    "②-2 메타 없는 번호 핀(p3601) editPin → PinActionPop 위임(체커 메타 핀과 같은 경로) — papCalls=" + papCalls.join());
+  App.editPin("p360t");
+  ok(papCalls.join() === "chk1,p3601" && State.editingPinId === "p360t",
+    "②-3 자유 텍스트 이름의 구 360 핀 editPin → 기존 구식 폼 경로 그대로(회귀 없음, editingPinId=p360t) — papCalls=" + papCalls.join());
 }
 {
   console.log("\n[뮤테이션②] CHECKER 위임 가드 제거 → ②-1 이 실패해야 함");
-  const needle = `      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : false;
+  const needle = `      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.isNumberPin) ? PinSeries.isNumberPin(pin) : false;
       if (isChecker) {
         if (typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(id);
         return;

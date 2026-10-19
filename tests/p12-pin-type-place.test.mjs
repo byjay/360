@@ -242,7 +242,8 @@ console.log("\n[뮤테이션①] 선택 종류 전달(_placeCheckboardPin 의 pi
 console.log("\n[뮤테이션④] 미니맵(07_Radar)이 종류 필터를 건너뛰고 계열 필터만 확인하면 ④가 실패해야 함");
 {
   const needle = "if (p.id !== pin.id && !PinSeries.isVisible(p)) return;";
-  const mutatedRadar = radarSrc.replace(needle, "if (p.id !== pin.id && !(PinSeries.filter()[PinSeries.kindOf(p)])) return;");
+  // [WO 20261019-unifymode] 뮤테이션 = 사진 필터만 보고 종류(아이콘) 필터를 건너뜀(구 PinSeries.filter() 계열 맵은 폐기 — 같은 의미로 이관)
+  const mutatedRadar = radarSrc.replace(needle, "if (p.id !== pin.id && !PinSeries.matchesPhotoFilter(p)) return;");
   if (mutatedRadar === radarSrc) { console.log("  FAIL 뮤테이션 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const pins = FIXTURE_ICON();
@@ -269,7 +270,9 @@ console.log("\n[뮤테이션④] 미니맵(07_Radar)이 종류 필터를 건너�
  * ("그냥 체크보드랑 360모드랑 2개 해 ... 내가 시킨 것만 하고").
  * ══════════════════════════════════════════════════════════════ */
 {
-  console.log("\n[⑥ CHECKER/360 계열 필터 × 종류(아이콘) 필터 AND 동작 — 아이콘 필터 칩 UI는 제거]");
+  // 🔴 [WO 20261019-unifymode] 계약 변경 — 전: 계열 필터(checkboard 숨김) × 아이콘(number 숨김) → cam1,cam2 · 칩 data-series 2종
+  //   후: 사진 필터("photo" — 사진 있는 핀만) × 아이콘(number 숨김) → cam1 · 칩 data-pfilter 3종(AND 불변식은 그대로)
+  console.log("\n[⑥ 사진 필터 × 종류(아이콘) 필터 AND 동작 — 아이콘 필터 칩 UI는 제거]");
   const pins = FIXTURE_ICON();
   const { document, registry } = makeDoc();
   const State = { pins, pdfPage: 1, mode: "viewer", activePin: null, zoneView: null, zones: [] };
@@ -278,22 +281,21 @@ console.log("\n[뮤테이션④] 미니맵(07_Radar)이 종류 필터를 건너�
   vm.createContext(sandbox);
   vm.runInContext(iconsSrc + "\n" + seriesSrc + "\n" + uiSrc + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
   const PS = sandbox.__PS;
-  // 계열: checkboard 숨김 — warn1(checkboard)이 빠진다. n2(empty 부류)는 이제 content 계열이라 남는다.
-  PS._filter = { checkboard: false, content: true };
+  // 사진 필터: 사진 있는 핀만 — n1·cam1 만 남는다(n2·cam2·warn1 은 사진 없음, 체커 메타 무관).
+  PS.setPhotoFilter("photo");
   // icon: number 만 숨김 — n1(content/number)·n2(content/number 기본값)가 빠진다.
   PS.toggleIconFilter("number", Object.keys(PS.iconCounts(pins, 1)));
   sandbox.__UI.renderPinsOnMap();
   const markers = registry["pins-layer"]._children;
   const shown = markers.map(m => m.dataset.id).sort();
-  // 기대: n1(계열ok/icon 숨김→제외), n2(계열ok/icon 숨김→제외), cam1(계열ok/icon ok→표시),
-  //       cam2(계열ok/icon ok→표시), warn1(계열 숨김→제외)
-  ok(shown.join(",") === "cam1,cam2",
-    "⑥ 계열(체크보드 숨김) × 종류(number 숨김) AND 적용 → 표시 = [" + shown.join(",") + "] (기대 cam1,cam2)");
+  // 기대: n1(사진ok/icon 숨김→제외), n2(사진 없음→제외), cam1(사진ok/icon ok→표시), cam2(사진 없음→제외), warn1(사진 없음→제외)
+  ok(shown.join(",") === "cam1",
+    "⑥ 사진(있음만) × 종류(number 숨김) AND 적용 → 표시 = [" + shown.join(",") + "] (기대 cam1)");
 
-  // 칩 바에는 이제 CHECKER/360 계열 칩 2종만 — 아이콘 필터 칩 그룹은 렌더되지 않는다.
+  // 칩 바 = [전체][사진 있음][사진 없음] 3종 — 구 CHECKER/360 칩·아이콘 필터 칩 그룹은 렌더되지 않는다.
   const bar = registry["pin-filter-bar"];
-  ok(/data-series="content"/.test(bar.innerHTML) && /data-series="checkboard"/.test(bar.innerHTML),
-    "⑥ CHECKER/360 계열 칩 2종만 렌더됨");
+  ok(/data-pfilter="all"/.test(bar.innerHTML) && /data-pfilter="photo"/.test(bar.innerHTML) && /data-pfilter="nophoto"/.test(bar.innerHTML) && !/data-series=/.test(bar.innerHTML),
+    "⑥ 사진 필터 칩 3종만 렌더됨(구 계열 칩 0)");
   ok(!/data-icon=/.test(bar.innerHTML),
     "⑥ [WO 20260929 addendum] 아이콘 종류 필터 칩은 더 이상 렌더되지 않음(UI 제거 — 기능(PS.toggleIconFilter)은 API로 유지)");
 }

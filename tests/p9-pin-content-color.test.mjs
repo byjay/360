@@ -197,9 +197,12 @@ function suiteCheckboardColor(label, sSrc, rSrc) {
     "사진 없는 체크보드끼리는 같은 색(bB == bC)");
   ok(rdr.bA.bg !== rdr.bB.bg,
     `미니맵 체크보드 점 색: 사진O ${rdr.bA.bg} ≠ 사진X ${rdr.bB.bg}`);
-  // 계열 정체성 유지 — 체크보드는 여전히 checkboard 부류(번호·필터 계열 불변)
-  ok(ui.bA.kind === "checkboard" && ui.bB.kind === "checkboard" && ui.bC.kind === "checkboard",
-    "체크보드 계열 정체성 유지(kind = checkboard) — 필터 칩·채번 계열 불변");
+  // 🔴 [WO 20261019-unifymode] 계약 반전 — 전: 체커 메타 핀은 kind = checkboard(주황 계열 정체성) 유지
+  //   후: 체커 메타는 색 축이 아니다 — 사진 있으면 content(c1 과 같은 색), 없으면 empty(e1 과 같은 색). 위 "사진 유무로 갈린다"는 그대로.
+  ok(ui.bA.kind === "content" && ui.bB.kind === "empty" && ui.bC.kind === "empty",
+    `체커 메타 핀 kind = 사진 유무(bA content · bB/bC empty) — ${ui.bA.kind}/${ui.bB.kind}/${ui.bC.kind}`);
+  ok(ui.bA.head2 === ui.c1.head2 && ui.bB.head2 === ui.e1.head2 && rdr.bA.bg === rdr.c1.bg && rdr.bB.bg === rdr.e1.bg,
+    "같은 상태면 체커 메타와 무관하게 같은 색(도면·미니맵) — bA=c1 · bB=e1");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -304,9 +307,11 @@ function suiteContrast(label, sSrc, rSrc) {
     const r = contrast(rdr[id].bg, WHITE);
     ok(r >= 4.5, `[본문 4.5:1] 미니맵 ${id} 점 ${rdr[id].bg} ↔ 흰 숫자 #fff = ${r.toFixed(2)}:1`);
   });
-  // 등록/미등록 상호 분리도 — 눈으로 구분 가능한 명도차인지
+  // 등록/미등록 상호 분리도 — 눈으로 구분 가능한 명도차인지([WO 20261019-unifymode] 대상 = 통일 핀의 사진 있음/없음 — 체커 메타 bA/bB 와 일반 c1/e1 둘 다)
   const sep = contrast(ui.bA.needle, ui.bB.needle);
-  ok(sep >= 1.8, `체크보드 등록↔미등록 상호 분리도 = ${sep.toFixed(2)}:1 (눈에 띄는 명도차)`);
+  ok(sep >= 1.8, `등록↔미등록 상호 분리도(체커 메타 bA/bB) = ${sep.toFixed(2)}:1 (눈에 띄는 명도차)`);
+  const sepN = contrast(ui.c1.needle, ui.e1.needle);
+  ok(sepN >= 1.8, `등록↔미등록 상호 분리도(일반 c1/e1) = ${sepN.toFixed(2)}:1 (구 360 쌍은 1.03:1 — EMPTY needle #dc2626 로 상향)`);
   // 테마 변수 함정 방지: 핀 색 정본에 var(--x) 가 섞이면 실행 시 값이 달라진다
   ok(!/EMPTY_COLOR[\s\S]{0,400}var\(--/.test(sSrc) && !/var\(--/.test(
       (sSrc.match(/CHECKBOARD_EMPTY_COLOR:[^\n]*\n/) || [""])[0]),
@@ -340,10 +345,10 @@ function suiteBlackWhiteOnly(label, sSrc, rSrc) {
   ok(rdr.c1.border !== rdr.e1.border,
     `[일반] 색 무시·미니맵 테두리만: 등록 ${rdr.c1.border} ≠ 미등록 ${rdr.e1.border}`);
 
-  // 이 스위트가 계열(kind) 축을 건드리지 않았음을 재확인(회귀)
-  ok(ui.bA.kind === "checkboard" && ui.bB.kind === "checkboard" &&
+  // 이 스위트가 kind 축을 건드리지 않았음을 재확인(회귀) — [WO 20261019-unifymode] kind = 사진 유무(체커 메타 무관)
+  ok(ui.bA.kind === "content" && ui.bB.kind === "empty" &&
      ui.c1.kind === "content" && ui.e1.kind === "empty",
-    "계열(kind) 불변 회귀: checkboard/content/empty 그대로");
+    "kind 회귀: 사진 유무 축(bA/c1 content · bB/e1 empty)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -437,9 +442,10 @@ suiteContentTier("⑬~⑯ 콘텐츠 3상태(사진/내용만/빈 포인트) (정
  * 뮤테이션 A: 체크보드 안의 콘텐츠 분기를 제거하면 ①이 실패해야 한다
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션A] 체크보드 색상 분기 제거(사진 유무 무시) → ①이 실패해야 함");
-  const needle = 'if (kind === "checkboard") return (filled === false) ? this.CHECKBOARD_EMPTY_COLOR : this.CHECKBOARD_COLOR;';
-  const mutated = seriesSrc.replace(needle, 'if (kind === "checkboard") return this.CHECKBOARD_COLOR;');
+  // [WO 20261019-unifymode] 대상 이관 — 체커 쌍 분기(colorsOf "checkboard")는 markerStyle 경로에서 빠졌다. 같은 의미(사진 유무 무시)는 empty 분기 제거.
+  console.log("\n[뮤테이션A] 사진 없음(empty) 색 분기 제거(사진 유무 무시) → ①이 실패해야 함");
+  const needle = 'if (kind === "empty") return this.EMPTY_COLOR;';
+  const mutated = seriesSrc.replace(needle, '');
   if (mutated === seriesSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const fixture = FIXTURE();

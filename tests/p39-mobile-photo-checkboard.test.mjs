@@ -158,17 +158,23 @@ function makePinSeriesSandbox(initialStore) {
 {
   // [WO 20260929 2모드 전환, 지휘자 정정] "모드는 360과 CHECKER" — [보기](구 "designer" 값)
   // 세그먼트가 제거되며 기본값도 CHECKER(checkboard)로 바뀌었다(구 WO 20260918 정정을 대체).
-  const { PS } = makePinSeriesSandbox({}); // 새 사용자(저장된 선호 없음)
+  const { PS, store } = makePinSeriesSandbox({}); // 새 사용자(저장된 선호 없음)
   ok(PS.preferredMode() === "checkboard", "③ 저장된 선호 없을 때 기본값 = checkboard(CHECKER), 실제 " + PS.preferredMode());
-  ok(PS.DEFAULT_MODE === "checkboard", "③ DEFAULT_MODE 리터럴 = checkboard(SoT)");
+  // 🔴 [WO 20261019-unifymode] 전: DEFAULT_MODE 리터럴(구 모드 기본값) · 전역 키 wm_pin_default_mode
+  //   후: 등록 방식 기본값 DEFAULT_REG_METHOD = "batch"(번호 먼저 = regMode checkboard) · 구역별 키 wm-reg-method:<프로젝트>:<구역>
+  ok(PS.DEFAULT_REG_METHOD === "batch" && PS.regModeOfMethod(PS.DEFAULT_REG_METHOD) === "checkboard", "③ 등록 방식 기본값 = batch(번호 먼저 → checkboard) SoT");
 
-  // 사용자가 checkboard 로 전환하면 그 선택이 유지되는지(기본값보다 우선)
+  // 사용자가 [바로 사진]으로 바꾸면 그 선택이 유지되는지(기본값보다 우선) — 저장 키 = 등록 방식 키
+  PS.setPreferredMode("photo");
+  const k = PS.REG_METHOD_PREFIX + PS.regScopeKey(null);
+  const { PS: PS2 } = makePinSeriesSandbox({ [k]: "each" });
+  ok(store[k] === "each", "[바로 사진] 선택이 localStorage 에 기록됨(" + k + " = " + store[k] + ")");
+  ok(PS.preferredMode() === "photo" && PS2.preferredMode() === "photo", "사용자가 [바로 사진] 전환 후 유지 확인 — 저장된 선택이 기본값보다 우선(" + k + ")");
   PS.setPreferredMode("checkboard");
-  const { PS: PS2 } = makePinSeriesSandbox({ wm_pin_default_mode: "checkboard" });
-  ok(PS2.preferredMode() === "checkboard", "사용자가 checkboard 전환 후 유지 확인 — 저장된 선택이 기본값보다 우선");
 
   // ④ 기존 저장 핀의 kind 해석은 preferredMode 와 무관(회귀) — 체크보드 핀/콘텐츠 핀/빈 핀
-  ok(PS.kindOf({ checkboard: true }) === "checkboard", "④ 기존 체크보드 핀 kindOf 불변");
+  // [WO 20261019-unifymode] 전: 체커 메타 핀 kindOf = checkboard / 후: 사진 유무만(메타는 읽기 전용 — 색 축 아님) → empty
+  ok(PS.kindOf({ checkboard: true }) === "empty" && PS.kindOf({ checkboard: true, imageId: "i" }) === "content", "④ 기존 체크보드 핀 kindOf = 사진 유무(empty / 사진 있으면 content)");
   ok(PS.kindOf({ imageId: "img1" }) === "content", "④ 기존 콘텐츠(360 등록) 핀 kindOf 불변");
   ok(PS.kindOf({}) === "empty", "④ 기존 빈 핀 kindOf 불변");
   // preferredMode 를 바꿔도 kindOf 결과가 달라지지 않아야 한다(완전 독립)

@@ -15,7 +15,7 @@
     //   기존 14개 인덱스는 전혀 바뀌지 않는다(§10 SoT — 호출부가 인덱스로 읽는 곳이 깨지지 않게).
     // [WO offline2-R6] 🔴 14열 계약(p119) 유지 — 끝에 3열(lat,lng,gps_acc)만 추가해 17열로.
     //   기존 14개 인덱스는 전혀 바뀌지 않는다(§10 SoT — 호출부가 인덱스로 읽는 곳이 깨지지 않게).
-    COLUMNS: ["구역", "영역", "모드", "번호", "라벨", "촬영시각", "시각출처", "사진명", "첨부수", "노트수", "미해결수", "작성자", "X%", "Y%", "lat", "lng", "gps_acc"],
+    COLUMNS: ["구역", "영역", "사진", "번호", "라벨", "촬영시각", "시각출처", "사진명", "첨부수", "노트수", "미해결수", "작성자", "X%", "Y%", "lat", "lng", "gps_acc"],
     ACC_WARN_M: 50, // (GPS 모듈과 같은 의미의 상수를 여기선 쓰지 않음 — 참조용 주석만)
 
     _blank(v) { return (v == null || v === "") ? "" : v; },
@@ -59,7 +59,8 @@
         const zone = this._zoneOf(pin, deck);
         const pinNotes = this._notesOf(pin, notes);
         const unresolved = pinNotes.filter((n) => n && n.status !== "done").length;
-        const isChecker = !!pin.checkboard;
+        // [WO 20261019-unifymode] 구 "모드"(CHECKER/360 = 생성 메타) 열 → "사진"(있음/없음 — 핀은 하나, 상태 = 사진 유무)
+        const hasPhoto = (typeof PinSeries !== "undefined" && PinSeries.hasPhoto) ? PinSeries.hasPhoto(pin) : !!(pin && (pin.imageId || pin.imageUrl || pin.videoId));
         let author = "";
         if (role !== "viewer") {
           author = this._blank(pin.author) || this._blank(pinNotes[0] && (pinNotes[0].author || pinNotes[0].author_email));
@@ -67,7 +68,7 @@
         return [
           this._blank(deck && deck.name),
           this._blank(zone && zone.label),
-          isChecker ? "CHECKER" : "360",
+          hasPhoto ? "있음" : "없음",
           pin && pin._no != null ? pin._no : (i + 1),
           this._blank(pin && pin.label),
           this._fmtTs(pin && pin.shotAt),

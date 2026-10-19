@@ -89,9 +89,9 @@ export default async function (P) {
   await send("Page.navigate", { url: BASE + "/" });
   await waitFor("navigator.serviceWorker && navigator.serviceWorker.controller", 60000);
   await wait(3500);
-  await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=photo]')", 60000);
+  await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 60000);
   await ev(PROBE);
-  await evSafe("(function(){ var e=document.querySelector('[data-act=mode-open][data-mode-reg=photo]'); e && e.scrollIntoView({block:'center'}); e && e.click(); return 1; })()");
+  await evSafe("(function(){ var e=document.querySelector('.hub-tree-deck[data-act=deck-open]'); e && e.scrollIntoView({block:'center'}); e && e.click(); return 1; })()");
   const drawn = "window.__T && [document.getElementById('map-image'),document.getElementById('pdf-canvas')].some(function(e){ return e && !e.classList.contains('hidden') && e.getBoundingClientRect().width > 0 && e.complete !== false; })";
   ok((await waitFor(drawn, 90000)) >= 0, "디자이너 화면 + 시드 도면 표시");
   await settle(2500);

@@ -17,7 +17,7 @@
  *   N7 서버 360 필터 = 미디어 보유 핀(체커+사진 포함 · 사진 없는 360 제외) · aliasMeta 가 같은 함수 사용
  *   N8 서버 checker/null 모드 = 전부(원문 그대로)
  *   N9 matchKey(1)="001" · 1001 이 실제 핀이면 1↔1001.jpg 불일치(절단 오매칭 가드) · 1001↔1001.jpg 일치
- *   N10 색 불변 — 사진 붙은 체커 핀 = CHECKBOARD_COLOR(등록 진한 주황)
+ *   N10 [WO 20261019-unifymode 반전] 색 통일 — 사진 붙은 체커 핀 = 사진 있는 일반 핀(체커 메타는 색 축 아님)
  *   R1 리셋 미리보기(위치순 위→아래·왼→오) · R2 기존 번호순 · R3 범위 밖 겹침 표시 · R4 적용(라벨 1…n · id 불변 · 스냅샷)
  *   R5 되돌리기(옛 라벨·수동표시 복원 · 리셋 뒤 고친 핀은 건너뜀) · R6 NumReset 권한 사유(열람자·오프라인 0)
  *
@@ -237,11 +237,15 @@ console.log("\n[N9 matchKey — 표시 전용 3자리 · 절단 오매칭 가드
   ok(PF.isMatch(1001, "IMG_1001.jpg", new Set([1, 1001])) === true && PF.isMatch(1, "001.jpg", new Set([1])) === true, "N9c 1001↔1001.jpg · 1↔001.jpg 일치");
 }
 
-console.log("\n[N10 색 불변 — 사진 붙은 체커 핀]");
+// 🔴 [WO 20261019-unifymode] 계약 반전 — 전: 사진 붙은 체커 핀 = CHECKBOARD_COLOR(주황) 유지 / 후: 체커 메타는 색 축 아님 → 같은 사진 상태의 일반 핀과 같은 스타일
+console.log("\n[N10 색 통일 — 사진 붙은 체커 핀 = 사진 있는 일반 핀]");
 {
   const PS = loadSeries();
   const st = PS.markerStyle({ checkboard: true, imageId: "x" });
-  ok(st.kind === "checkboard" && st.filled === true && JSON.stringify(st.colors) === JSON.stringify(PS.CHECKBOARD_COLOR), "N10 체커+사진 = CHECKBOARD_COLOR(등록 진한 주황) · filled");
+  const plain = PS.markerStyle({ imageId: "x" });
+  ok(st.kind === "content" && st.filled === true && JSON.stringify(st.colors) === JSON.stringify(plain.colors) && st.dash === plain.dash, "N10 체커+사진 = 일반 사진 핀과 같은 kind·색·링(주황 체커 쌍 아님)");
+  const e1 = PS.markerStyle({ checkboard: true }), e2 = PS.markerStyle({});
+  ok(e1.kind === "empty" && JSON.stringify(e1.colors) === JSON.stringify(e2.colors) && e1.dash === e2.dash, "N10b 체커 메타·사진 없음 = 일반 빈 핀과 같은 스타일");
 }
 
 /* ══ 번호 리셋 정본 ══ */

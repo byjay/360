@@ -2,7 +2,6 @@
     open: false,
     sort: "page",     // 'page' | 'name'
     query: "",
-    tab: null,         // [WO 20261001-allpins] 'checkboard' | 'content' — 선택된 모드 탭(기본 = 활성 모드)
     selected: new Set(),  // [WO 20261001-allpins] 선택된 pin id
     _thumbCache: {},  // imageId → dataURL (썸네일 1회 fetch 캐시)
     _numMaps: {},     // [WO 20261001-allpins] page → PinSeries.numbers() 캐시(render() 1회마다 초기화)
@@ -21,11 +20,11 @@
           this.render();
         });
       });
-      // [WO 20261001-allpins] 모드 탭(CHECKER/360) — 탭 = 모드 전환(App._setRegMode SoT 재사용)
+      // [WO 20261019-unifymode] 탭 = [전체/사진 있음/사진 없음] 필터(PinSeries.photoFilter — 도면 칩·트리와 같은 상태 하나). 모드 전환 없음.
       const tabsHost = $("allpins-tabs");
       if (tabsHost) tabsHost.addEventListener("click", (e) => {
-        const b = e.target && e.target.closest ? e.target.closest("[data-series]") : null;
-        if (b) this._switchTab(b.dataset.series);
+        const b = e.target && e.target.closest ? e.target.closest("[data-pfilter]") : null;
+        if (b) this._switchTab(b.dataset.pfilter);
       });
       const bandBtn = $("allpins-band-btn");
       if (bandBtn) bandBtn.addEventListener("click", () => { if (typeof NumBand !== "undefined" && NumBand.open) NumBand.open(bandBtn); });
@@ -68,24 +67,23 @@
     /** 선택 삭제 권한 — 기존 일괄삭제 정본(App.canBulkDeletePins: 소유자·super) 그대로 재사용. */
     _canDelete() { return typeof App !== "undefined" && !!App.canBulkDeletePins && App.canBulkDeletePins(); },
 
-    /** 현재 패널이 보여줄 계열 — 탭이 있으면 탭 우선, 없으면 활성 모드(PinSeries.activeSeries), 기본 checkboard. */
-    _currentSeries() {
-      if (this.tab === "checkboard" || this.tab === "content") return this.tab;
-      const act = (typeof PinSeries !== "undefined" && PinSeries.activeSeries) ? PinSeries.activeSeries() : null;
-      return act || "checkboard";
+    /** [WO 20261019-unifymode] 대상 계열 = 항상 "all"(핀은 하나 — 구 CHECKER/360 탭 폐기). 재채번·번호 대역이 이 값을 쓴다. */
+    _currentSeries() { return "all"; },
+    /** 지금 필터(PinSeries.photoFilter SoT) */
+    _currentFilter() { return (typeof PinSeries !== "undefined" && PinSeries.photoFilter) ? PinSeries.photoFilter() : "all"; },
+    /** 확인창·시트 문구용 범위 이름(전체 / 사진 있음 / 사진 없음) */
+    _scopeLabel() {
+      const k = this._currentFilter();
+      const f = (typeof PinSeries !== "undefined" && PinSeries.PHOTO_FILTERS) ? PinSeries.PHOTO_FILTERS.find((x) => x.key === k) : null;
+      return (f && f.label) || "전체";
     },
-
-    /** [WO 20261001-allpins] 모드 탭 클릭 — 탭 = 모드 전환(SoT: App._setRegMode). 디자이너 화면이
-     *  아니면(뷰어 등 regMode 개념 없음) 전역 모드는 바꾸지 않고 패널 안 필터만 바꾼다. */
-    _switchTab(ser) {
-      if (ser !== "checkboard" && ser !== "content") return;
-      if (ser === this._currentSeries()) return;
-      this.tab = ser;
+    /** 필터 탭 클릭 — 도면 칩·트리와 같은 필터를 바꾼다(PinSeries.apply 가 지도·트리·이 패널을 함께 다시 그린다). */
+    _switchTab(key) {
+      if (typeof PinSeries === "undefined" || !PinSeries.setPhotoFilter) return;
+      if (key === this._currentFilter()) return;
+      PinSeries.setPhotoFilter(key);
       this.selected.clear();
-      if (typeof State !== "undefined" && State.mode === "designer" && typeof App !== "undefined" && App._setRegMode) {
-        App._setRegMode(ser === "checkboard" ? "checkboard" : "photo");
-      }
-      this.render();
+      if (PinSeries.apply) PinSeries.apply(); else this.render();
     },
 
     /** 핀이 있을 때만 topbar 버튼 노출 */
@@ -100,8 +98,6 @@
     show() {
       if (!State.pins.length) return;
       this.open = true;
-      // [WO 20261001-allpins] 열 때마다 "기본은 현재 활성 모드"로 맞춘다(지휘자 확정).
-      this.tab = (typeof PinSeries !== "undefined" && PinSeries.activeSeries && PinSeries.activeSeries()) || this.tab || "checkboard";
       this.selected.clear();
       document.getElementById("allpins-drawer").classList.remove("hidden");
       requestAnimationFrame(() => document.getElementById("allpins-drawer").classList.add("on"));
@@ -136,10 +132,10 @@
       return (typeof PinLink !== "undefined" && PinLink.dedupe) ? PinLink.dedupe(scoped) : scoped;
     },
 
-    /** [WO 20261001-allpins] 현재 탭(계열)의 핀만 — 페이지 구분 없이 전체(탭 = 작업공간). */
+    /** [WO 20261019-unifymode] 현재 필터(사진 유무)에 맞는 핀 — 페이지 구분 없이 전체. */
     _modePins() {
-      const ser = this._currentSeries();
-      return this._scopedPins().filter((p) => p && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === ser));
+      const pins = this._scopedPins().filter(Boolean);
+      return (typeof PinSeries !== "undefined" && PinSeries.filterByPhoto) ? PinSeries.filterByPhoto(pins) : pins;
     },
 
     /** 검색 필터 적용 전, 현재 정렬 기준(this.sort) 그대로 둔 전체 목록 — 재채번 "목록 순서" 기준이
@@ -155,7 +151,7 @@
     },
 
     _sorted() {
-      // [WO 20260930-fixmode] 모드 = 작업공간 — 활성 탭 핀만(SoT: _currentSeries)
+      // [WO 20261019-unifymode] 필터 탭에 맞는 핀만(SoT: PinSeries.photoFilter)
       const all = this._sortedAll();
       if (!this.query) return all;
       return all.filter((o) => (o.pin.label || "").toLowerCase().includes(this.query));
@@ -168,18 +164,17 @@
       return this._numMaps[pg].get(pin.id);
     },
 
-    /** [WO 20261001-allpins] 모드 탭 [CHECKER N][360 N] 렌더. */
+    /** [WO 20261019-unifymode] 필터 탭 [전체 N][사진 있음 N][사진 없음 N] 렌더(이 구역 범위 — _scopedPins). */
     _renderTabs() {
       const host = document.getElementById("allpins-tabs");
-      if (!host || typeof PinSeries === "undefined") return;
-      const cur = this._currentSeries();
-      const counts = { checkboard: 0, content: 0 };
-      this._scopedPins().forEach((p) => { if (p) counts[PinSeries.seriesOf(p)]++; });
-      host.innerHTML = PinSeries.SERIES.map((ser) => {
-        const active = ser === cur;
-        return '<button type="button" class="allpins-tab allpins-tab-' + ser + (active ? " active" : "") +
-          '" data-series="' + ser + '" role="tab" aria-selected="' + (active ? "true" : "false") + '">' +
-          PinSeries.LABELS[ser] + ' <span class="allpins-tab-cnt">' + counts[ser] + '</span></button>';
+      if (!host || typeof PinSeries === "undefined" || !PinSeries.PHOTO_FILTERS) return;
+      const cur = this._currentFilter();
+      const counts = PinSeries.photoCounts(this._scopedPins());
+      host.innerHTML = PinSeries.PHOTO_FILTERS.map((f) => {
+        const active = f.key === cur;
+        return '<button type="button" class="allpins-tab allpins-tab-' + f.key + (active ? " active" : "") +
+          '" data-pfilter="' + f.key + '" role="tab" aria-selected="' + (active ? "true" : "false") + '">' +
+          f.label + ' <span class="allpins-tab-cnt">' + (counts[f.key] || 0) + '</span></button>';
       }).join("");
     },
 
@@ -255,7 +250,6 @@
       const listEl = document.getElementById("allpins-list");
       const emptyEl = document.getElementById("allpins-empty");
       const countEl = document.getElementById("allpins-count");
-      const ser = this._currentSeries();
       // 탭 전환 등으로 현재 목록 밖에 남은 선택은 정리(교차 탭 유령 선택 방지)
       const inTab = new Set(this._modePins().map((p) => p.id));
       Array.from(this.selected).forEach((id) => { if (!inTab.has(id)) this.selected.delete(id); });
@@ -279,7 +273,7 @@
         const linkTag = (typeof PinLink !== "undefined" && PinLink.isLinked(pin) && PinLink.members(State.pins, pin).length > 1) ? " · 연결 " + PinLink.members(State.pins, pin).length + "도면" : "";
         const isSel = this.selected.has(pin.id);
         const row = document.createElement("div");
-        row.className = "allpins-item allpins-mode-" + ser + (State.activePin === pin.id ? " active" : "") + (isSel ? " selected" : "");
+        row.className = "allpins-item allpins-" + (PinSeries.hasPhoto && PinSeries.hasPhoto(pin) ? "photo" : "nophoto") + (State.activePin === pin.id ? " active" : "") + (isSel ? " selected" : "");
         row.dataset.id = pin.id;
         row.setAttribute("role", "button");
         row.tabIndex = 0;
@@ -330,8 +324,7 @@
       if (!this._canDelete()) return;
       const ids = Array.from(this.selected);
       if (!ids.length) return;
-      const ser = this._currentSeries();
-      const n = await App.deletePins(ids, { scopeLabel: PinSeries.LABELS[ser] });
+      const n = await App.deletePins(ids, { scopeLabel: this._scopeLabel() });
       if (n) { this.selected.clear(); this.render(); }
     },
 
@@ -385,7 +378,6 @@
 
     async _openRenumberSheet() {
       if (!this._canRenumber()) return;
-      const ser = this._currentSeries();
       const selectedPins = this._modePins().filter((p) => this.selected.has(p.id));
       this._renumberTargets = selectedPins.length ? selectedPins : this._modePins();
       if (!this._renumberTargets.length) { Prompt.toast && Prompt.toast("대상 핀이 없습니다"); return; }
@@ -393,7 +385,7 @@
       const myBand = (typeof App !== "undefined" && App._numBand) ? App._numBand() : (PinSeries.myBand(author) || 1);
       this._renumberMyBand = myBand;
       const m = this._ensureRenumberSheet();
-      m.querySelector("#arn-sub").textContent = PinSeries.LABELS[ser] + " " + this._renumberTargets.length + "개 — 새 시작 번호를 입력하세요";
+      m.querySelector("#arn-sub").textContent = this._scopeLabel() + " " + this._renumberTargets.length + "개 — 새 시작 번호를 입력하세요";
       m.querySelector("#arn-start").value = String(PinSeries.bandRange(myBand).lo);
       m.querySelectorAll('input[name="arn-order"]').forEach((r) => { r.checked = r.value === "list"; });
       m.classList.remove("hidden");

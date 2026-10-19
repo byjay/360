@@ -213,16 +213,18 @@ function suiteShapeOnly3State(label, sSrc) {
 }
 
 /* ────────────────────────────────────────────────────────────
- * ④ 계열(content·checkboard) 구분 유지
+ * ④ 🔴 [WO 20261019-unifymode] 계약 반전 — 계열(체커 메타) 구분 폐기: 같은 사진 상태면 메타와 무관하게 같은 kind·같은 링 패턴
+ *   전·후: 전 photo1=content / cbPhoto=checkboard · dash 가 한 조합 이상 달라야 함
+ *          후 photo1=cbPhoto=content · cbEmpty=empty1=empty · dash 동일(핀은 하나, 상태 = 사진 유무)
  * ──────────────────────────────────────────────────────────── */
 function suiteSeriesKind(label, sSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
   const ui = runUI(sSrc, uiSrc, fixture).pins;
-  ok(ui.photo1.kind === "content" && ui.cbPhoto.kind === "checkboard",
-    `④ kind 구분: content 계열=${ui.photo1.kind}, checkboard 계열=${ui.cbPhoto.kind}`);
-  ok(ui.cbPhoto.dash !== ui.photo1.dash || ui.cbEmpty.dash !== ui.empty1.dash,
-    "④ 계열별 외곽 링 dash 패턴이 최소 한 조합에서 구분됨(형태 단서)");
+  ok(ui.photo1.kind === "content" && ui.cbPhoto.kind === "content" && ui.cbEmpty.kind === "empty" && ui.empty1.kind === "empty",
+    `④ kind = 사진 유무만: photo1=${ui.photo1.kind}, cbPhoto=${ui.cbPhoto.kind}, cbEmpty=${ui.cbEmpty.kind}, empty1=${ui.empty1.kind}`);
+  ok(ui.cbPhoto.dash === ui.photo1.dash && ui.cbEmpty.dash === ui.empty1.dash,
+    "④ 체커 메타가 달라도 같은 상태면 외곽 링 dash 동일(모드별 형태 구분 없음)");
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -282,7 +284,7 @@ function suiteRadarParity(label, sSrc, rSrc) {
 suiteHeadHasNumberText("① 머리 안 번호 <text> 있음, 아이콘도 예외 없음 (정상 소스)", seriesSrc);
 suiteNumberInsideHeadOnly("② 번호는 머리 안에만, 머리 밖 숫자 배지 없음 (정상 소스)", seriesSrc);
 suiteShapeOnly3State("③ 색 제거해도 3상태 형태로 구분 (정상 소스)", seriesSrc);
-suiteSeriesKind("④ 계열 구분 유지 (정상 소스)", seriesSrc);
+suiteSeriesKind("④ 계열 구분 없음 — 상태 = 사진 유무 (정상 소스)", seriesSrc);
 suiteFilledHollow("⑤ 등록여부 구분 유지 (정상 소스)", seriesSrc);
 suiteNumberStillAvailable("⑥ 번호 다른 경로 확인 가능 (정상 소스)", seriesSrc);
 suitePinSize("⑦ 핀 크기 불변 (정상 소스)", cssSrc);

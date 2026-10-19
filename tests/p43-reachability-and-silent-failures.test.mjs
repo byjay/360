@@ -323,15 +323,17 @@ function makePinSeriesSandbox(initialStore) {
   const PSSaved = makePinSeriesSandbox({ wm_pin_default_mode: "checkboard" });
   ok(PSSaved.preferredMode() === "checkboard", "⑨ 저장된 선택(checkboard)이 있으면 기본값보다 우선함");
 
-  console.log("\n[뮤테이션ⓔ] DEFAULT_MODE 를 다시 designer(구 [보기])로 되돌리면 ⑩이 실패해야 함");
-  const needleE = 'DEFAULT_MODE: "checkboard",';
-  const mutatedE = seriesSrc.replace(needleE, 'DEFAULT_MODE: "designer",');
+  // [WO 20261019-unifymode] 기본값 SoT 이관 — DEFAULT_MODE(구 모드) → DEFAULT_REG_METHOD("batch" = 번호 먼저 = checkboard).
+  //   같은 의미의 뮤테이션 = 기본 등록 방식을 [바로 사진]("each" → photo)으로 바꾸면 ⑩(기본 = checkboard)이 깨져야 한다.
+  console.log("\n[뮤테이션ⓔ] 기본 등록 방식을 each(바로 사진)로 바꾸면 ⑩이 실패해야 함");
+  const needleE = 'DEFAULT_REG_METHOD: "batch",';
+  const mutatedE = seriesSrc.replace(needleE, 'DEFAULT_REG_METHOD: "each",');
   if (mutatedE === seriesSrc) { console.log("  FAIL 뮤테이션ⓔ 패치 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const sandboxM = { localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, console, JSON, Object, Array, Math, Number, String, Date };
     vm.createContext(sandboxM);
     vm.runInContext(mutatedE + "\n;globalThis.__PS = PinSeries;", sandboxM);
-    ok(sandboxM.__PS.preferredMode() !== "checkboard", "뮤테이션ⓔ 적용 시 기본값이 designer 로 되돌아감(⑩이 깨짐) → " + sandboxM.__PS.preferredMode());
+    ok(sandboxM.__PS.preferredMode() !== "checkboard", "뮤테이션ⓔ 적용 시 기본값이 photo 로 바뀜(⑩이 깨짐) → " + sandboxM.__PS.preferredMode());
   }
 
   // [WO 20260930-moderole 재정정] ⑪ CHECKER 로 전환해도(State.regMode='checkboard') 방어적으로

@@ -38,9 +38,12 @@ async function suite(src, quiet) {
     ok(C.classify(shot(8), now, C.staleDays({ info_json: { staleDays: 7 } })) === "stale", "C2 기준 7일이면 8일 = 오래됨");
     const mixed = [shot(1), shot(30), { id: "n2" }, { id: "ck", checkboard: true }, { id: "ck2", checkboard: true, imageId: "z" }];
     const sum = C.summarize(mixed, now, 14);
-    ok(sum.total === 3 && sum.fresh === 1 && sum.stale === 1 && sum.none === 1, "C3 🔴 CHECKER 핀 제외 — 360 핀만 집계 " + JSON.stringify(sum));
+    // 🔴 [WO 20261019-unifymode] 계약 반전 — 전: 체커 메타 핀 제외(360 만 total 3) · CHECKER 모드 = 토글 비활성+사유
+    //   후: 모든 핀 집계(total 5 — 번호만 찍은 ck = 미촬영, 사진 있으나 시각 없는 ck2 = 시각 미상) · 등록 방식과 무관하게 토글 가능
+    ok(sum.total === 5 && sum.fresh === 1 && sum.stale === 1 && sum.none === 2 && sum.unknown === 1, "C3 🔴 모든 핀 집계(체커 메타 무관) " + JSON.stringify(sum));
     S.regMode = "checkboard";
-    ok(/CHECKER/.test(C.reason()) && C.toggle() === false && C.on === false, "C3 CHECKER 모드 → 토글 비활성 + 사유");
+    ok(C.reason() === "" && C.toggle() === true && C.on === true, "C3 [번호 먼저] 방식에서도 토글 가능(사유 없음) — " + JSON.stringify(C.reason()));
+    C.toggle(false);
     S.regMode = "photo";
     const deck = { id: "dck_A", deployment_id: "dep1", page: 1, crop: { x: 0, y: 0, w: 50, h: 50 } };
     S.pins = [{ id: "in1", x: 10, y: 10, page: 1 }, { id: "in2", x: 20, y: 20, page: 1, imageId: "a", shotAt: Date.now() - 30 * DAY },
@@ -81,7 +84,9 @@ async function suite(src, quiet) {
 const MUT = [
   ["M6 오래됨 경계 > → >=", "cov", "(now - t) > n * this.DAY_MS", "(now - t) >= n * this.DAY_MS"],
   ["M7 구역 집계 SoT 우회(State.pins 전체)", "cov", "const pins = Projects.pinsForDeck(State.pins || [], deck);", "const pins = State.pins || [];"],
-  ["M8 CHECKER 핀 포함", "cov", '(typeof PinSeries === "undefined" || PinSeries.seriesOf(pin) === "content")', "true"]
+  // [WO 20261019-unifymode] M8 반전 — 체커 메타 핀을 다시 빼면(구 360 전용) C3 가 실패해야 한다
+  ["M8 CHECKER 핀 다시 제외", "cov", "isTarget(pin) { return !!pin && !pin._deleted; },", 'isTarget(pin) { return !!pin && !pin._deleted && (typeof PinSeries === "undefined" || PinSeries.seriesOf(pin) === "content"); },'],
+  ["M9 CHECKER 모드 사유 복구", "cov", 'if (typeof State === "undefined" || !State.fileType) return "도면을 먼저 여세요";', 'if (typeof State === "undefined" || !State.fileType) return "도면을 먼저 여세요";\n      if (State.mode === "designer" && State.regMode === "checkboard") return "CHECKER 는 사진을 등록하지 않습니다";']
 ];
 const fails = await suite(BASE, false);
 const mutBad = await runMutations(BASE, MUT, suite);

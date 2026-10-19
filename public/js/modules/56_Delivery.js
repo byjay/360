@@ -5,7 +5,9 @@
        ① 인쇄 보고서 — 새 창 HTML + @page(A4·머리말·쪽번호) → 브라우저 "PDF로 저장"
        ② 묶음 zip   — 같은 HTML(사진은 상대경로) + 축소 사진/위치도 JPEG (55_ZipStore, STORE)
      구성: 표지(프로젝트·선명/호선·방선 회차·작성자·범위) → 요약(구역별 핀·촬영 현황·결함 상태·지난 기한)
-           → 구역별 핀 위치도(도면 축소 + 번호 겹쳐 그림, 360=원형 P번호 / CHECKER=사각 번호) → 핀별 칸.
+           → 구역별 핀 위치도(도면 축소 + 번호 겹쳐 그림, 사진 있음=원형 / 사진 없음(번호만)=사각) → 핀별 칸.
+     🔴 [WO 20261019-unifymode] 모드 통일 — 핀 구분 축 = 사진 유무(PinSeries.hasPhoto). 내부 키 series("content"=사진 있음 ·
+        "checkboard"=사진 없음)·counts.content/checker 는 호출부·테스트 호환으로 이름만 유지한다(생성 모드 메타 pin.checkboard 비의존).
      🔴 SoT 재사용(새 판정 0):
         번호 = PinSeries.numbers/formatNo(도면 표시와 같은 번호) · 구역 범위 = Projects.pinsForDeck(crop 창)
         촬영 현황 = Coverage.classify/summarize/staleDays · 사진 이력 = TimeLapse._normalize(EXIF shotAt SoT)
@@ -25,8 +27,8 @@
     JPEG_Q: 0.82,
     CONC: 3,
     MARK: {
-      content:    { fill: "#1d4ed8", text: "#ffffff", shape: "circle", label: "360 사진 위치 — 원형·번호" },   // 6.7:1
-      checkboard: { fill: "#7c2d12", text: "#ffffff", shape: "square", label: "CHECKER 점검 번호 — 사각형" }    // 10.9:1
+      content:    { fill: "#1d4ed8", text: "#ffffff", shape: "circle", label: "사진 있음 — 원형·번호" },   // 6.7:1
+      checkboard: { fill: "#7c2d12", text: "#ffffff", shape: "square", label: "사진 없음(번호만) — 사각형" }    // 10.9:1
     },
     EMAIL_RE: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
 
@@ -148,14 +150,14 @@
         const numOf = (pin) => {
           const pg = pin.page || 1;
           if (!pageNos.has(pg)) pageNos.set(pg, PinSeries.numbers(sec.allPins, pg));
-          return pageNos.get(pg).get(pin.id) || { no: null, series: PinSeries.seriesOf(pin) };
+          return pageNos.get(pg).get(pin.id) || { no: null };
         };
         const pagesMap = new Map();
         const secPins = [];
         sec.items.forEach((it) => {
           const pin = it.pin;
           const n = numOf(pin);
-          const series = n.series || PinSeries.seriesOf(pin);
+          const series = PinSeries.hasPhoto(pin) ? "content" : "checkboard";   // [WO 20261019-unifymode] = 사진 유무(구 생성 계열 아님)
           const noText = n.no != null ? (PinSeries.textOf ? PinSeries.textOf(n) : PinSeries.formatNo(n.no, n.series)) : "?";   // [WO 20261016-multisheet P6] 접두 포함(A12)
           const key = "s" + si + "-" + pinsOut.length;
           const pg = pin.page || 1;
@@ -200,7 +202,7 @@
             : (pg + "쪽 · X " + _fmtXY(pin.x) + "% · Y " + _fmtXY(pin.y) + "%");
           const entry = {
             key, section: sec.title, sectionKey: sec.key, area: it.area || "", noText, series,
-            seriesLabel: series === "checkboard" ? "CHECKER" : "360", label: pin.label != null ? String(pin.label) : "",
+            seriesLabel: series === "checkboard" ? "사진 없음" : "사진 있음", label: pin.label != null ? String(pin.label) : "",
             page: pg, x: Number(pin.x), y: Number(pin.y), locText,
             shotAt: Number.isFinite(pin.shotAt) ? pin.shotAt : null, shotSrc: pin.shotSrc || "",
             cov: Coverage.isTarget(pin) ? Coverage.classify(pin, now, days) : null,
@@ -333,12 +335,12 @@
         row("선명", c.vessel || "미입력") + row("호선", c.hull || "미입력") +
         row("방선", visitTxt) + row("작성자", c.author || "—") + row("작성일시", c.createdAt) +
         row("범위", c.scopeLabel) +
-        row("구성", "구역 " + c.sectionCount + " · 포인트 " + c.pinCount + " (360 " + c.content + " · CHECKER " + c.checker + ")") +
+        row("구성", "구역 " + c.sectionCount + " · 포인트 " + c.pinCount + " (사진 있음 " + c.content + " · 사진 없음 " + c.checker + ")") +
         (c.skipped.length ? row("제외", c.skipped.map((s) => s.name + "(" + s.reason + ")").join(", ")) : "") +
         "</table>" + (c.masked ? '<p class="muted">열람자 보고서 — 다른 사람의 이메일은 가려져 있습니다.</p>' : "") + "</section>");
       // ── 요약 ──
       const covCell = (cv, k) => String(cv[k] || 0);
-      out.push('<section class="sec" data-rpt="summary"><h2>요약</h2><div class="blk"><h3>구역별 현황</h3><table><thead><tr><th style="width:30%">구역</th><th>포인트</th><th>360</th><th>CHECKER</th><th>' +
+      out.push('<section class="sec" data-rpt="summary"><h2>요약</h2><div class="blk"><h3>구역별 현황</h3><table><thead><tr><th style="width:30%">구역</th><th>포인트</th><th>사진 있음</th><th>사진 없음</th><th>' +
         e(covSt.none.label) + "</th><th>" + e(covSt.stale.label) + "</th><th>" + e(covSt.unknown.label) + "</th><th>미완 노트</th></tr></thead><tbody>");
       m.sections.forEach((s) => {
         out.push("<tr><td>" + e(s.title) + "</td><td>" + s.counts.total + "</td><td>" + s.counts.content + "</td><td>" + s.counts.checker + "</td><td>" +

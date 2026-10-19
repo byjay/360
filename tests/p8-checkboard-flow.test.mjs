@@ -99,8 +99,8 @@ function makeLightEnv(pins) {
   };
   const sandbox = { console, document, window: { addEventListener() {} }, navigator: { onLine: true }, SyncQueue: { count: () => Promise.resolve(0) }, State, UI, Prompt: { toast() {} }, JSON, Array, Map, Set, Date: makeSeqDate() };
   vm.createContext(sandbox);
-  vm.runInContext(seriesSrc + "\n" + appSrc + "\n;globalThis.__App = App;", sandbox);
-  return { App: sandbox.__App, State, registry };
+  vm.runInContext(seriesSrc + "\n" + appSrc + "\n;globalThis.__App = App; globalThis.__PS = PinSeries;", sandbox);
+  return { App: sandbox.__App, State, registry, PS: sandbox.__PS };
 }
 
 /** 전체 환경 — 실제 _bindSidebar()+PhotoBatch.init() 를 돌려 버튼 바인딩 자체를 검증.
@@ -132,21 +132,30 @@ function makeFullEnv(pins) {
   return { App, State, registry, photoBatchCalls };
 }
 
-/* ══ ① #btn-quickpoint 의 위임 로직: 꺼짐→체크보드 진입, 켜짐→배치 재개 ══ */
+/* ══ ① #btn-quickpoint 의 위임 로직: 꺼짐→편집 진입(지금 구역의 등록 방식), 켜짐→배치 재개 ══
+ * 🔴 [WO 20261019-unifymode] 계약 변경 — 전: 꺼짐 → #btn-checkboard-enter 클릭(무조건 CHECKER).
+ *   후: 꺼짐 → App._setRegMode(PinSeries.preferredMode(), {persist:false}) — 사용자가 이 구역에 고른 등록 방식을 덮어쓰지 않는다
+ *   (기본 = 번호 먼저 → "checkboard", 이 구역이 [바로 사진]이면 "photo"). 켜짐 → #btn-place(불변). */
 {
-  const { App, State, registry } = makeLightEnv();
+  const { App, State, registry, PS } = makeLightEnv();
   let cbClicked = false, placeClicked = false;
-  // getElementById 는 지연 생성이므로 먼저 강제 생성한 뒤 스파이 핸들러를 붙인다(makeDoc 과 동일한 makeEl 재사용).
   const cbEnterEl = registry["btn-checkboard-enter"] = registry["btn-checkboard-enter"] || makeEl();
   const btnPlaceEl = registry["btn-place"] = registry["btn-place"] || makeEl();
   cbEnterEl.addEventListener("click", () => { cbClicked = true; State.checkboard = true; });
   btnPlaceEl.addEventListener("click", () => { placeClicked = true; });
+  const calls = [];
+  App._setRegMode = (m, o) => { calls.push([m, o && o.persist]); State.checkboard = true; State.regMode = m; };   // openApp(화면 전환)은 이 유닛 범위 밖 — 호출 인자만 본다
 
-  App._quickCheckboardEntry(); // State.checkboard === false
-  ok(cbClicked === true && State.checkboard === true, "① 꺼진 상태에서 호출 → #btn-checkboard-enter 로 위임(체크보드 진입)");
+  App._quickCheckboardEntry(); // State.checkboard === false, 저장값 없음 = 기본(번호 먼저)
+  ok(calls.length === 1 && calls[0][0] === "checkboard" && calls[0][1] === false && !cbClicked, "① 꺼진 상태 + 기본 → _setRegMode('checkboard', persist:false)(구 CHECKER 버튼 위임 아님) → " + JSON.stringify(calls));
 
   App._quickCheckboardEntry(); // 이제 State.checkboard === true
-  ok(placeClicked === true, "① 이미 체크보드면 두번째 호출은 #btn-place 로 위임(배치 재개)");
+  ok(placeClicked === true, "① 이미 편집 중이면 두번째 호출은 #btn-place 로 위임(배치 재개)");
+
+  State.checkboard = false; calls.length = 0;
+  PS.setRegMethod("each");   // 이 구역 = [바로 사진]
+  App._quickCheckboardEntry();
+  ok(calls.length === 1 && calls[0][0] === "photo" && !cbClicked, "① 이 구역이 [바로 사진]이면 진입도 'photo'(구: 무조건 CHECKER 로 덮어씀) → " + JSON.stringify(calls));
 }
 
 /* ══ ②③ 연속 클릭 시 번호 1씩 증가 + 범위는 PinSeries 정본에서 파생 ══════ */

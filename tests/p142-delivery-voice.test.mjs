@@ -170,12 +170,15 @@ function testModel() {
   ok(m.pins.length === 6, "핀 6개(삭제 제외)", m.pins.length);
   const p11 = m.pins.find((p) => p.series === "content" && p.photos.length === 2);
   ok(!!p11 && p11.noText === M.PinSeries.formatNo(expectNos.get(11).no, "content"), "번호 = PinSeries.numbers/formatNo(도면 표시와 동일)", p11 && p11.noText);
-  ok(m.pins.filter((p) => p.series === "checkboard").map((p) => p.noText).sort().join(",") === "1,2,3", "CHECKER 번호 1,2,3(접두 없음)");
+  // 🔴 [WO 20261019-unifymode] series = 사진 유무("checkboard" = 사진 없음 · 이름만 호환). 전: 체커 메타 핀 1,2,3 / 후: 사진 없는 핀 1,2,3,13(메타 무관)
+  ok(m.pins.filter((p) => p.series === "checkboard").map((p) => p.noText).sort().join(",") === "1,2,3,3", "사진 없음(번호만) = 1,2,3 + 13(번호 3) — 접두 없음·메타 무관", m.pins.map((p) => p.series + ":" + p.noText));
+  ok(m.pins.filter((p) => p.series === "content").length === 2 && m.cover.content === 2 && m.cover.checker === 4, "표지 구성 = 사진 있음 2 · 사진 없음 4", m.cover);
   ok(p11 && p11.photos[0].role === "before" && p11.photos[0].imageId === "img_old" && p11.photos[1].role === "after" && p11.photos[1].imageId === "img_new", "사진 이력 → 전(img_old)·후(img_new) 2장(시각순)", p11 && p11.photos);
   ok(p11 && p11.gps && p11.gps.lat === 35.1 && p11.gps.acc === 8, "GPS 포함(값 그대로)");
   ok(p11 && p11.notes.length === 2 && p11.notes.every((n) => n.kind !== "reply"), "핀 노트 = 답변·다른 배포본 제외(2건)", p11 && p11.notes.map((n) => n.body));
   const c = m.summary.cov;
-  ok(c.total === 3 && c.fresh === 1 && c.stale === 1 && c.none === 1, "촬영 현황(360만) fresh1·stale1·none1 = Coverage.classify", c);
+  // 🔴 [WO 20261019-unifymode] 촬영 현황 대상 = 모든 핀(전: 360 계열 3개 → 후: 6개 — 번호만 찍은 1·2·3·13 = 미촬영 4)
+  ok(c.total === 6 && c.fresh === 1 && c.stale === 1 && c.none === 4, "촬영 현황(모든 핀) fresh1·stale1·none4 = Coverage.classify", c);
   const d = m.summary.defects;
   ok(d.open === 1 && d.progress === 1 && d.done === 1 && d.verified === 1, "결함 상태 4단계 개수(note 만)", d);
   ok(m.summary.requestsOpen === 1, "요청·질문 미처리 1");

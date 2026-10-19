@@ -154,7 +154,8 @@ console.log("\n[U9 칩 — 작성자·개수 · 내 대역 강조 · 다음 빈 
   ok(c.reg["numband-next"].textContent === "다음 핀 = 104", "U9 미리보기 '다음 핀 = 104' — " + c.reg["numband-next"].textContent);
   c.State.regMode = "photo";
   c.NumBand._renderSheet();
-  ok(c.reg["numband-next"].textContent === "다음 핀 = 104" && c.reg["numband-mode"].textContent === "360", "U9 360 모드 → '다음 핀 = 104'(같은 번호 공간, 종전 P101) · 모드 표시 360 — " + c.reg["numband-next"].textContent);
+  // [WO 20261019-unifymode] 전: 모드 표시 = "360"(regMode 따라 CHECKER/360) / 후: 등록 방식과 무관한 "모든 핀 공통"(nb-all) — 다음 번호 104 는 그대로
+  ok(c.reg["numband-next"].textContent === "다음 핀 = 104" && c.reg["numband-mode"].textContent === "모든 핀 공통" && /nb-all/.test(c.reg["numband-mode"].className), "U9 [바로 사진] 방식 → '다음 핀 = 104'(같은 번호 공간) · 표시 '모든 핀 공통' — " + c.reg["numband-next"].textContent + " / " + c.reg["numband-mode"].textContent);
 }
 
 /* ══ 서버: 실 번들 + 실 D1 ══ */

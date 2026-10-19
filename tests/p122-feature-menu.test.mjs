@@ -140,18 +140,20 @@ console.log("\n[B. 숨김 금지 — 비활성 + 사유]");
   ok(m3 && m3.attrs["aria-disabled"] === undefined, "B8 소유자: [메인 도면 교체] 활성");
 }
 
-/* ══ C. 모드 자동 전환 — 모드만 다르면 비활성이 아니라 전환 후 실행 ══ */
-console.log("\n[C. 모드 자동 전환]");
+/* ══ C. 🔴 [WO 20261019-unifymode] 계약 변경 — 모드 통일: "모드로 전환 후 실행" 폐기, 어느 등록 방식에서도 바로 실행
+ *   전: C1 360 모드 [정렬 ↕] = '…전환 후 실행' 표시 · C2 탭 → _setRegMode('checkboard') · C3 전환 후 실행
+ *   후: C1 [바로 사진](photo) 방식에서도 [정렬 ↕] = 활성 · 전환 안내 0 · C2 탭 → _setRegMode 호출 0 · C3 즉시 실행 ══ */
+console.log("\n[C. 모드 전환 없음 — 바로 실행]");
 {
   const M = load({ regMode: "photo" });
   const host = M.body.appendChild(makeEl("div", new Map()));
   M.FM.renderInto(host, "");
   const al = items(host).find((b) => b.dataset.feature === "align-v");
-  ok(al && al.attrs["aria-disabled"] === undefined && /CHECKER 모드로 전환 후 실행/.test(al.innerHTML), "C1 360 모드에서 [정렬 ↕] = 활성 + 'CHECKER 모드로 전환 후 실행'");
+  ok(al && al.attrs["aria-disabled"] === undefined && !/전환 후 실행/.test(al.innerHTML) && !/fm-mode/.test(al.innerHTML), "C1 [바로 사진] 방식에서 [정렬 ↕] = 활성 · '모드로 전환' 안내 없음");
   al.click();
-  ok(M.calls.setMode[0] === "checkboard", "C2 탭 → App._setRegMode('checkboard')(상단 세그먼트와 같은 SoT)");
-  await new Promise((r) => setTimeout(r, 200));
-  ok(M.calls.align[0] === "v", "C3 전환 후 정렬 실행(UI._startAlign('v'))");
+  ok(M.calls.setMode.length === 0, "C2 탭 → App._setRegMode 호출 0(등록 방식을 몰래 바꾸지 않는다) — " + JSON.stringify(M.calls.setMode));
+  ok(M.calls.align[0] === "v", "C3 즉시 정렬 실행(UI._startAlign('v'))");
+  ok(M.FM.FEATURES.every((f) => !f.mode), "C3b 기능 정의에 mode 필드 0개(전환 기계 폐기)");
   const S = load({ regMode: "checkboard" });
   S.FM.run("align-h");
   ok(S.calls.setMode.length === 0 && S.calls.align[0] === "h", "C4 이미 같은 모드면 전환 없이 즉시 실행");

@@ -433,20 +433,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   font-size: 12px;
 }
 .hub-tree-decks, .hub-tree-regions { list-style: none; }
-/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지(.hub-tree-modes/.hub-tree-mode)를
-   제거 — 구역·영역은 공유, 모드 분리는 구역/영역의 맨 안쪽 잎(CHECKER/360 두 항목)으로 이동했다.
-   라벨 색은 기존 검증된 var(--text) 그대로(카드 배경 실측 이력 위 §406~408 참조). */
-.hub-tree-leaf-modes { list-style: none; display: flex; gap: 6px; margin: 3px 0 2px 18px; }
-.hub-tree-leaf-mode { cursor: pointer; }
-.hub-tree-mode-label { display: inline-flex; align-items: center; padding: 3px 6px; font-weight: 800; font-size: 11px; letter-spacing: .06em; color: var(--text); }
-/* [WO 20260930-pinstyle] 사이드바 트리 잎과 같은 형태·색 단서(도면 마커와 일관) — 작은 아이콘 수준. */
-.hub-tree-leaf-mode-checker .hub-tree-mode-label::before,
-.hub-tree-leaf-mode-360 .hub-tree-mode-label::before{
-  content:""; display:inline-block; width:8px; height:8px; margin-right:5px; flex:0 0 auto;
-  box-shadow:0 0 0 1px rgba(0,0,0,.25);
-}
-.hub-tree-leaf-mode-checker .hub-tree-mode-label::before{ border-radius:2px; background:#c2410c; }
-.hub-tree-leaf-mode-360 .hub-tree-mode-label::before{ border-radius:50%; background:#10b981; }
+/* [WO 20261019-unifymode] 허브 카드 모드 잎(.hub-tree-leaf-mode*) 폐기 — CHECKER/360 통일(12_ProjectHub 렌더 0). */
 .hub-tree-regions { margin: 2px 0 6px 16px; }
 .hub-tree-deck, .hub-tree-region {
   display: block; cursor: pointer; border-radius: var(--radius-sm);
@@ -2621,10 +2608,11 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .allpins-item.selected { border-color: var(--accent); background: rgba(245,158,11,.08); }
 
 /* 모드별 형태 단서(색맹 대비 — 테두리 색 + 번호 배지 색 둘 다, 색만으로 구분 안 함) */
-.allpins-item.allpins-mode-checkboard { border-left: 3px solid #c2410c; }
-.allpins-item.allpins-mode-content { border-left: 3px solid #1d4ed8; }
-.allpins-item.allpins-mode-checkboard .allpins-thumb-no { background: #9a3412; } /* 흰글자 대비 7.31:1(PinSeries 실측값 재사용) */
-.allpins-item.allpins-mode-content .allpins-thumb-no { background: #1e3a8a; }    /* 흰글자 대비 10.36:1(PinSeries 실측값 재사용) */
+/* [WO 20261019-unifymode] 구 모드별(allpins-mode-checkboard/content) → 사진 유무(allpins-photo/nophoto). 고정색 그대로 재사용. */
+.allpins-item.allpins-nophoto { border-left: 3px solid #c2410c; }
+.allpins-item.allpins-photo { border-left: 3px solid #1d4ed8; }
+.allpins-item.allpins-nophoto .allpins-thumb-no { background: #9a3412; } /* 흰글자 대비 7.31:1(PinSeries 실측값 재사용) */
+.allpins-item.allpins-photo .allpins-thumb-no { background: #1e3a8a; }    /* 흰글자 대비 10.36:1(PinSeries 실측값 재사용) */
 
 .allpins-band-btn {
   font-family: var(--font-mono); font-size: 11px; color: var(--text2);
@@ -3873,7 +3861,6 @@ body.role-viewer .tree-more,
 body.role-viewer .tree-project-actions,
 body.role-viewer .side-tree-empty,
 body.role-viewer .tree-pop-item.is-disabled,
-body.role-viewer .tree-mode-leaf-checker,
 body.role-viewer #tb-pin-edit,
 body.role-viewer #tb-setdir,
 body.role-viewer #pin-grid-csv,
@@ -3927,6 +3914,7 @@ html.wm-view-link #screen-projects { display: none !important; }
 .numband-sheet .numband-title { margin: 0; font-size: 16px; font-weight: 800; color: #0f172a; }
 .numband-sheet .numband-mode { font-size: 11.5px; font-weight: 800; padding: 3px 8px; border-radius: 999px; color: #ffffff; background: #c2410c; }
 .numband-sheet .numband-mode.nb-content { background: #047857; }
+.numband-sheet .numband-mode.nb-all { background: #334155; }   /* [WO 20261019-unifymode] "모든 핀 공통" — 흰글자 10.35:1 */
 .numband-sheet .numband-x { margin-left: auto; min-width: 36px; min-height: 36px; border: none; border-radius: 8px; background: transparent; color: #334155; font-size: 22px; line-height: 1; cursor: pointer; }
 .numband-sheet .numband-x:hover { background: #f1f5f9; }
 .numband-sheet .numband-sub { margin: 6px 0 12px; font-size: 12.5px; line-height: 1.5; color: #475569; }
@@ -5345,6 +5333,13 @@ button { font-family: var(--font-ui); }
   background:var(--bg3,#efe9dc); border:1px solid var(--border,#e4dccb); border-radius:10px;
 }
 .settings-checkboard-block .checkboard-start-row{ margin-bottom:8px; }
+/* [WO 20261019-unifymode] 등록 방식(이 구역) 2버튼 — 선택 상태 = 고정색(테마 remap 무관). #fff/#1d4ed8 6.70:1 · 테두리 #93c5fd. */
+.settings-regmethod-row{ flex-wrap:wrap; gap:8px; }
+.settings-regmethod-btns{ display:inline-flex; gap:6px; }
+.settings-regmethod-btn{ min-height:36px; }
+/* 🔴 seastar-family-tokens.css .admin-gate-btn.ghost(배경·글자 !important, 0-2-0)가 뒤에 로드돼 같은 특이도면 이긴다 — #settings-modal 로 1-2-0. */
+#settings-modal .settings-regmethod-btn[aria-pressed="true"]{ background:#1d4ed8 !important; color:#ffffff !important; box-shadow:0 0 0 2px #93c5fd !important; font-weight:800; }
+#settings-modal .settings-regmethod-btn[aria-pressed="true"]::before{ content:"\2713\00a0"; }
 .settings-checkboard-actions{ display:flex; gap:8px; }
 .settings-checkboard-actions .admin-gate-btn{ flex:1; padding:8px 10px; font-size:12px; }
 /* [대비] var(--text-muted)는 :root 에 정의되지 않은 변수라 폴백(#6b7280)이 항상 쓰이는데,
@@ -5430,15 +5425,15 @@ button { font-family: var(--font-ui); }
   box-shadow:0 0 0 1.5px rgba(255,255,255,.35);
 }
 .pinfilter-chip.pf-all    .pinfilter-dot{ background:#9aa7b8; }
-.pinfilter-chip.pf-content .pinfilter-dot{ background:#10b981; }
-.pinfilter-chip.pf-empty  .pinfilter-dot{ background:#ef4444; border:1px dotted #fff; }
-/* [WO 20260930-pinstyle] CHECKER 색 = 주황/앰버 계열(PinSeries.CHECKBOARD_COLOR 와 동일 계열,
-   구 인디고 블루 폐기 — 360 은 그린/커스텀 팔레트 계열로 남아 색으로도 즉시 구분된다).
-   대비 실측(흰 글자 기준): dot #f97316(비텍스트 3:1 이상) · active bg #9a3412 = 7.31:1(4.5 초과). */
-.pinfilter-chip.pf-checkboard .pinfilter-dot{ background:#c2410c; border:1px dashed #fff; }
-.pinfilter-chip.pf-content.active{    background:#047857; border-color:#34d399; color:#fff; }
-.pinfilter-chip.pf-empty.active{      background:#b91c1c; border-color:#fca5a5; color:#fff; }
-.pinfilter-chip.pf-checkboard.active{ background:#431407; border-color:#fed7aa; color:#fff; }
+/* [WO 20261019-unifymode] 🔴 칩 = [전체][사진 있음][사진 없음](PinSeries.PHOTO_FILTERS, 배타 선택) — 구 CHECKER/360 칩(pf-checkboard·
+   pf-content) 폐기. 고정색(테마 변수 아님 — seastar-3d-skin 이 --bg/--text 를 다크로 remap 해도 대비 불변). 대비(WCAG 2.1, 흰 글자):
+   전체 활성 #fff/#1e3a8a 10.36:1 · 사진 있음 #fff/#047857 5.49:1 · 사진 없음 #fff/#431407 15.65:1 (전부 4.5 초과).
+   점(비텍스트, 바탕 rgba(20,28,38,.86)≈#1a222c): #10b981 6.6:1 · #fdba74 10.1:1 (3:1 초과) · 형태 단서 = 실선 원 / 점선 빈 원. */
+.pinfilter-chip.pf-photo   .pinfilter-dot{ background:#10b981; }
+.pinfilter-chip.pf-nophoto .pinfilter-dot{ background:transparent; border:1.5px dotted #fdba74; box-sizing:border-box; }
+.pinfilter-chip.pf-all.active{     background:#1e3a8a; border-color:#93c5fd; color:#fff; }
+.pinfilter-chip.pf-photo.active{   background:#047857; border-color:#34d399; color:#fff; }
+.pinfilter-chip.pf-nophoto.active{ background:#431407; border-color:#fed7aa; color:#fff; }
 @media (max-width:640px), (pointer:coarse){
   .pinfilter-bar{ top:auto; bottom:var(--pinfilter-bottom-mobile); left:8px; max-width:calc(100% - 16px); padding:5px 6px; gap:5px; }
   /* [결함3 2026-09-17] 토스트가 이 칩 바와 겹쳐 글자가 읽히지 않던 문제 — 칩 바 상단(bottom+height) 위로
@@ -5453,9 +5448,7 @@ button { font-family: var(--font-ui); }
    숫자 흰색 대비(needle 톤): 8.96~14.69:1 — 팔레트 6종 + 미배치/체크보드 전부 PASS */
 .pano-radar-pin-empty{ border-style:dotted; border-width:1.4px; }
 .pano-radar-pin-checkboard{ border-style:dashed; border-width:1.4px; }
-/* [WO 20260930-pinstyle] 모드별 형태 구분 — CHECKER 는 둥근사각(badge), 360 은 기본 원형(circle)
-   그대로. 도면 마커(pin-mode-checker 배지 프레임)와 같은 언어. */
-.pano-radar-pin-mode-checker{ border-radius:4px; }
+/* [WO 20261019-unifymode] 구 모드별 형태(.pano-radar-pin-mode-checker 둥근사각) 폐기 — 핀은 하나(07_Radar 렌더 0). */
 
 /* 구역 페이지 진입 시: 구역 밖 핀/구역 흐리게 (상세작업 집중) */
 body.zone-view-active .pin-marker.zone-dim{ opacity:.22; filter:grayscale(.5); pointer-events:none; }
@@ -5846,21 +5839,7 @@ body.tree-dnd-active .tree-node-deck,body.tree-dnd-active .tree-node-region{curs
    #1d2025 = 5.44:1") 재사용. 라이트에서도 #6b6457 on #f5f1e8 ≈ 4.9:1 — 양쪽 다 3:1(UI 비텍스트)
    을 크게 웃돈다. */
 .tree-children{padding-left:12px;border-left:1px solid var(--text2);margin-left:10px;}
-/* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff 모드 가지(.tree-mode/.tree-node-mode)를
-   제거 — 구역·영역은 공유, 모드 분리는 로드된 노드의 맨 안쪽 잎(.tree-mode-leaf/.tree-node-mode-leaf)
-   으로 이동했다. 같은 검증된 색(var(--text), 다크 런타임 실측 이력 tests/p91)을 그대로 재사용. */
-.tree-node-mode-leaf{font-weight:800;font-size:12.5px;letter-spacing:.05em;color:var(--text);}
-.tree-mode-leaf:not(.open) .tree-node-mode-leaf .tree-caret{transform:rotate(-90deg);}
-.tree-mode-leaf:not(.open) > .tree-children{display:none;}
-/* [WO 20260930-pinstyle] 잎 라벨 앞 작은 형태 단서 — 핀 마커(둥근사각/원형)·색(주황/그린)과
-   같은 언어. 색맹 대비: 모양(사각 vs 원)이 1차 단서, 색은 보조. */
-.tree-mode-leaf-checker .tree-node-mode-leaf::before,
-.tree-mode-leaf-360 .tree-node-mode-leaf::before{
-  content:""; display:inline-block; width:8px; height:8px; margin-right:5px; flex:0 0 auto;
-  box-shadow:0 0 0 1px rgba(0,0,0,.25);
-}
-.tree-mode-leaf-checker .tree-node-mode-leaf::before{ border-radius:2px; background:#c2410c; }
-.tree-mode-leaf-360 .tree-node-mode-leaf::before{ border-radius:50%; background:#10b981; }
+/* [WO 20261019-unifymode] 트리 모드 잎(.tree-mode-leaf*) 폐기 — CHECKER/360 통일(11_UI 렌더 0). 핀은 구역·영역 바로 아래. */
 .tree-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,.15);}
 /* [p100 정정, 2026-09-30] bg=var(--gold)=브랜드 블루(index.html:57) — 어두운 글자(#1a1206)와
    3.8:1(AA 미달, 헤드리스 Chrome 실측). 흰 글자로 교체(실측 4.87:1 — .pano-radar-pin-no 와 같은
@@ -6311,7 +6290,6 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .fm-keys { font: inherit; font-size: 11px; font-weight: 700; color: #374151; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4px; padding: 0 4px; margin-left: 4px; }
 .fm-desc { font-size: 11.5px; color: #4b5563; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fm-why { align-self: flex-start; font-size: 11px; font-weight: 700; color: #92400e; background: #fffbeb; border-radius: 4px; padding: 1px 6px; }
-.fm-mode { align-self: flex-start; font-size: 11px; font-weight: 700; color: #1e40af; background: #eff6ff; border-radius: 4px; padding: 1px 6px; }
 .fm-empty { padding: 12px; font-size: 13px; color: #4b5563; }
 .fm-inline { grid-column: 1 / -1; margin-top: 6px; padding-top: 8px; border-top: 1px solid #d1d5db; background: #ffffff; border-radius: 10px; }
 .fm-inline .fm-inline-title { display: block; padding: 0 12px 2px; }

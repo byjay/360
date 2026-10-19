@@ -47,7 +47,7 @@ function testRowsBasic() {
   const Report = makeReport();
   const decks = [{ id: "d1", name: "Main Deck", page: 1, zones: [{ label: "1번 화물창", pinIds: ["p1"] }] }];
   const pins = [
-    { id: "p1", page: 1, x: 10.5, y: 20.25, label: "P1", checkboard: true, author: "pak@seastar.test", shotAt: 1700000000000, shotSrc: "EXIF DateTimeOriginal", imageName: "img1", attachments: [{ id: "a1" }], gps: { lat: 35.1023, lng: 129.0401, acc: 12, src: "device" } },
+    { id: "p1", page: 1, x: 10.5, y: 20.25, label: "P1", checkboard: true, imageId: "imgA", author: "pak@seastar.test", shotAt: 1700000000000, shotSrc: "EXIF DateTimeOriginal", imageName: "img1", attachments: [{ id: "a1" }], gps: { lat: 35.1023, lng: 129.0401, acc: 12, src: "device" } },
     { id: "p2", page: 1, x: 30, y: 40, label: "P2" } // 사진·시각·작성자·GPS 전부 없음 — 빈칸 확인
   ];
   const notes = [
@@ -61,7 +61,9 @@ function testRowsBasic() {
   const r1 = rows[0];
   ok(r1[0] === "Main Deck", "구역(deck.name) = Main Deck — " + r1[0]);
   ok(r1[1] === "1번 화물창", "영역(zone.label, pinIds 매칭) = 1번 화물창 — " + r1[1]);
-  ok(r1[2] === "CHECKER", "모드 = checkboard:true → CHECKER — " + r1[2]);
+  // 🔴 [WO 20261019-unifymode] 열 2 "모드"(CHECKER/360 = 생성 메타) → "사진"(있음/없음). 전: checkboard:true → "CHECKER" / 후: imageId → "있음"(메타 무관)
+  ok(Report.COLUMNS[2] === "사진", "열 2 헤더 = 사진(구 모드) — " + Report.COLUMNS[2]);
+  ok(r1[2] === "있음", "사진 = imageId 있음 → 있음(체커 메타 무관) — " + r1[2]);
   ok(r1[4] === "P1", "라벨 = P1");
   ok(r1[5] === "2023-11-14 22:13:20", "촬영시각 UTC 고정 포맷 — " + r1[5]);
   ok(r1[6] === "EXIF DateTimeOriginal", "시각출처(shotSrc)");
@@ -74,7 +76,7 @@ function testRowsBasic() {
   ok(r1[14] === 35.1023 && r1[15] === 129.0401 && r1[16] === 12, "GPS 3열(lat/lng/gps_acc) — " + JSON.stringify([r1[14], r1[15], r1[16]]));
   const r2 = rows[1];
   ok(r2[0] === "Main Deck" && r2[1] === "", "핀2: 구역은 페이지 매칭, 영역은 pinIds 미포함 → 빈칸");
-  ok(r2[2] === "360", "핀2: checkboard 없음 → 360 계열");
+  ok(r2[2] === "없음", "핀2: 사진 없음 → 없음(구: checkboard 없음 → 360)");
   ok(r2[5] === "" && r2[6] === "" && r2[7] === "" && r2[11] === "", "핀2: 촬영시각/출처/사진명/작성자 전부 빈칸(지어내지 않음) — " + JSON.stringify(r2));
   ok(r2[8] === 0 && r2[9] === 0 && r2[10] === 0, "핀2: 첨부/노트/미해결 = 0(실제 0, 빈칸 아님)");
   ok(r2[14] === "" && r2[15] === "" && r2[16] === "", "핀2: GPS 없음 → 3열 전부 빈칸(지어내지 않음) — " + JSON.stringify([r2[14], r2[15], r2[16]]));

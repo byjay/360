@@ -1,7 +1,8 @@
 /**
  * 회귀 테스트 (프레임워크 0 · 실행: node tests/p101-pin-mode-style.test.mjs)
  *
- * 마스터 지시(2026-09-30): "핀 색이나 형태를 모드별로 구분" — CHECKER(체크보드)와 360(콘텐츠)이
+ * 🔴 [WO 20261019-unifymode] 계약 반전(아래 대조표) — 이제 모드별 구분이 "없어야" 한다.
+ * (구) 마스터 지시(2026-09-30): "핀 색이나 형태를 모드별로 구분" — CHECKER(체크보드)와 360(콘텐츠)이
  * 도면 마커·미니맵에서 형태(모양)·색 둘 다로 구분되는지 검사한다.
  *
  * 판정 SoT = PinSeries.seriesOf(meta.series) / pin.checkboard.
@@ -98,7 +99,7 @@ function runUI(sSrc, uSrc, pins, page = 1) {
   vm.runInContext(sSrc + "\n" + uSrc + "\n;globalThis.__UI = UI;", sandbox);
   sandbox.__UI.renderPinsOnMap();
   const out = {};
-  registry["pins-layer"]._children.forEach((m) => { out[m.dataset.id] = { cls: m.className, html: m._html }; });
+  registry["pins-layer"]._children.forEach((m) => { out[m.dataset.id] = { cls: m.className, html: m._html, photo: m.dataset.photo }; });
   return out;
 }
 function runRadar(sSrc, rSrc, pins, currentPin, page = 1) {
@@ -110,7 +111,7 @@ function runRadar(sSrc, rSrc, pins, currentPin, page = 1) {
   vm.runInContext(sSrc + "\n" + rSrc + "\n;globalThis.__R = Radar;", sandbox);
   sandbox.__R.update(currentPin);
   const out = {};
-  registry["pano-radar-pins"]._children.forEach((d) => { out[d.dataset.id] = { cls: d.className }; });
+  registry["pano-radar-pins"]._children.forEach((d) => { out[d.dataset.id] = { cls: d.className, kind: d.dataset.kind }; });
   return out;
 }
 
@@ -122,92 +123,87 @@ const FIXTURE = () => [
 ];
 const CURRENT = (f) => f.find((p) => p.id === "cur");
 
-/* ── ① 도면 마커: 모드 클래스 ── */
+/* 🔴 [WO 20261019-unifymode] 계약 반전 — 마스터 "360 과 체커 통일". 모드별 형태·색 구분을 폐기하고 상태 = 사진 유무 하나로.
+ *   전·후 대조(assertion):
+ *   | 항목 | 전(WO 20260930-pinstyle) | 후(unifymode) |
+ *   | ① 마커 클래스 | chk=pin-mode-checker · 360=pin-mode-360(상호배타) | pin-mode-* 0 · data-photo = 사진 유무(chk1 0 · chk2 1 · c360 1) |
+ *   | ② 마커 형태 | chk 만 둥근사각 배지 프레임(rx 7.5) | 프레임 0(전부 같은 메달리온) · tip(18,60) 앵커 불변 |
+ *   | ③ 미니맵 | pano-radar-pin-mode-checker/360 | mode 클래스 0 · kind = 사진 유무(chk2 = c360 = content) |
+ *   | ④ 색 | CHECKER 주황 ≠ 360 | 같은 상태면 같은 색(chk2 = c360 · chk1 = EMPTY_COLOR) — 체커 메타는 색 축 아님 |
+ *   뮤테이션 A/B 도 반전: 모드 클래스·배지 프레임을 **되살리면** ①②가 실패해야 한다. */
+/* ── ① 도면 마커: 모드 클래스 없음 · 사진 유무 표식 ── */
 function suiteMarkerModeClass(label, sSrc, uSrc) {
   console.log("\n[" + label + "]");
   const ui = runUI(sSrc, uSrc, FIXTURE());
-  ok(/(^|\s)pin-mode-checker(\s|$)/.test(ui.chk1.cls), `CHECKER 핀(chk1) 클래스에 pin-mode-checker → ${ui.chk1.cls}`);
-  ok(/(^|\s)pin-mode-checker(\s|$)/.test(ui.chk2.cls), `CHECKER 핀(chk2) 클래스에 pin-mode-checker`);
-  ok(/(^|\s)pin-mode-360(\s|$)/.test(ui.c360.cls), `360 핀(c360) 클래스에 pin-mode-360 → ${ui.c360.cls}`);
-  ok(!/pin-mode-360/.test(ui.chk1.cls), "CHECKER 핀에는 pin-mode-360 없음(상호배타)");
-  ok(!/pin-mode-checker/.test(ui.c360.cls), "360 핀에는 pin-mode-checker 없음(상호배타)");
+  ok(!/pin-mode-/.test(ui.chk1.cls + " " + ui.chk2.cls + " " + ui.c360.cls), `모드 클래스(pin-mode-*) 0 → chk1=${ui.chk1.cls}`);
+  ok(ui.chk1.photo === "0" && ui.chk2.photo === "1" && ui.c360.photo === "1", `data-photo = 사진 유무(체커 메타 무관) → chk1=${ui.chk1.photo}, chk2=${ui.chk2.photo}, c360=${ui.c360.photo}`);
+  ok(/(^|\s)pin-hollow(\s|$)/.test(ui.chk1.cls) && /(^|\s)pin-filled(\s|$)/.test(ui.chk2.cls) && /(^|\s)pin-filled(\s|$)/.test(ui.c360.cls), "등록 표식 = pin-filled/hollow(사진 유무 축)만");
 }
 
-/* ── ② 도면 마커: 형태(SVG) 자체가 다르다 — CHECKER 만 둥근사각 배지 프레임 ── */
+/* ── ② 도면 마커: 형태(SVG) 동일 — 배지 프레임 없음 ── */
 function suiteMarkerShape(label, sSrc, uSrc) {
   console.log("\n[" + label + "]");
   const ui = runUI(sSrc, uSrc, FIXTURE());
   const badgeFrame = /<rect[^>]*rx="7\.5"[^>]*opacity="0\.95"/;
-  ok(badgeFrame.test(ui.chk1.html), "CHECKER 마커(chk1)에 둥근사각 배지 프레임 rect 존재");
-  ok(badgeFrame.test(ui.chk2.html), "CHECKER 마커(chk2)에 둥근사각 배지 프레임 rect 존재");
-  ok(!badgeFrame.test(ui.c360.html), "360 마커(c360)에는 배지 프레임 없음(원형 티어드롭 그대로)");
-  // 위치 앵커 불변 — 둘 다 같은 tip(18,60) 유지(회귀: 배지 프레임이 위치 계산을 깨지 않음)
-  ok(/M14\.2 22 L18 60 L21\.8 22 Z/.test(ui.chk1.html), "CHECKER 도 tip(18,60) 앵커 불변(위치 회귀 없음)");
+  ok(!badgeFrame.test(ui.chk1.html) && !badgeFrame.test(ui.chk2.html) && !badgeFrame.test(ui.c360.html), "어느 마커에도 CHECKER 배지 프레임 없음(같은 메달리온)");
+  const norm = (h) => h.replace(/pg(body|stem|shadow)\d+/g, "pg$1").replace(/>[^<]*</g, "><");
+  ok(norm(ui.chk2.html) === norm(ui.c360.html), "같은 상태(사진 있음)면 체커 메타가 있어도 마커 SVG 구조 동일(chk2 = c360)");
+  ok(/M14\.2 22 L18 60 L21\.8 22 Z/.test(ui.chk1.html), "chk1 tip(18,60) 앵커 불변(위치 회귀 없음)");
   ok(/M14\.2 22 L18 60 L21\.8 22 Z/.test(ui.c360.html), "360 tip(18,60) 앵커 불변");
 }
 
-/* ── ③ 미니맵: 모드 클래스(형태는 CSS border-radius 분기) ── */
+/* ── ③ 미니맵: 모드 클래스 없음 · kind = 사진 유무 ── */
 function suiteRadarModeClass(label, sSrc, rSrc) {
   console.log("\n[" + label + "]");
   const fixture = FIXTURE();
   const rdr = runRadar(sSrc, rSrc, fixture, CURRENT(fixture));
-  ok(/pano-radar-pin-mode-checker/.test(rdr.chk1.cls), `미니맵 CHECKER 점(chk1) 클래스 → ${rdr.chk1.cls}`);
-  ok(/pano-radar-pin-mode-360/.test(rdr.c360.cls), `미니맵 360 점(c360) 클래스 → ${rdr.c360.cls}`);
+  ok(!/pano-radar-pin-mode-/.test(rdr.chk1.cls + " " + rdr.c360.cls), `미니맵 모드 클래스 0 → chk1=${rdr.chk1.cls}`);
+  ok(rdr.chk2.kind === "content" && rdr.c360.kind === "content" && rdr.chk1.kind === "empty", `미니맵 kind = 사진 유무 → chk1=${rdr.chk1.kind}, chk2=${rdr.chk2.kind}, c360=${rdr.c360.kind}`);
 }
 
-/* ── ④ 색: CHECKER(주황/앰버)가 360/EMPTY(레드)·기본 콘텐츠(그린) 계열과 다른 색상군 ── */
+/* ── ④ 색: 같은 상태면 같은 색 ── */
 function suiteColorFamily(label, sSrc) {
   console.log("\n[" + label + "]");
-  const sandbox = { console, JSON, Map, Set };
+  const sandbox = { console, JSON, Map, Set, App: AppMock };
   vm.createContext(sandbox);
   vm.runInContext(sSrc + "\n;globalThis.__PS = PinSeries;", sandbox);
   const PS = sandbox.__PS;
-  // 주황 판정: R 채널이 G·B 채널보다 뚜렷이 높다(간단한 색상군 신호 — 정밀 색공간 분석 아님)
-  const isOrange = (hex) => {
-    const v = hex.replace("#", "");
-    const r = parseInt(v.substr(0, 2), 16), g = parseInt(v.substr(2, 2), 16), b = parseInt(v.substr(4, 2), 16);
-    return r > g + 20 && r > b + 40;
-  };
-  ok(isOrange(PS.CHECKBOARD_COLOR.head), `CHECKER 등록 head(${PS.CHECKBOARD_COLOR.head})는 주황 계열`);
-  ok(isOrange(PS.CHECKBOARD_EMPTY_COLOR.head), `CHECKER 미등록 head(${PS.CHECKBOARD_EMPTY_COLOR.head})는 주황 계열`);
-  ok(PS.CHECKBOARD_COLOR.head !== PS.EMPTY_COLOR.head, "CHECKER 색은 360 미배치(레드) 색과 다름");
-  const green = { head: "#10b981" }; // PinPrefs 기본(그린)
-  ok(PS.CHECKBOARD_COLOR.head !== green.head, "CHECKER 색은 360 기본 콘텐츠(그린) 색과 다름");
+  const f = FIXTURE(); const by = (id) => f.find((p) => p.id === id);
+  ok(JSON.stringify(PS.markerStyle(by("chk2")).colors) === JSON.stringify(PS.markerStyle(by("c360")).colors), "사진 있는 체커 메타 핀(chk2) 색 = 360 핀(c360) 색");
+  ok(JSON.stringify(PS.markerStyle(by("chk1")).colors) === JSON.stringify(PS.EMPTY_COLOR), "사진 없는 체커 메타 핀(chk1) 색 = 사진 없음(EMPTY_COLOR) — CHECKBOARD_EMPTY_COLOR 아님");
 }
 
-suiteMarkerModeClass("① 도면 마커 모드 클래스 (정상 소스)", seriesSrc, uiSrc);
-suiteMarkerShape("② 도면 마커 형태(배지 프레임) (정상 소스)", seriesSrc, uiSrc);
-suiteRadarModeClass("③ 미니맵 모드 클래스 (정상 소스)", seriesSrc, radarSrc);
-suiteColorFamily("④ 색상군 구분 (정상 소스)", seriesSrc);
+suiteMarkerModeClass("① 도면 마커 — 모드 클래스 0 · 사진 유무 표식 (정상 소스)", seriesSrc, uiSrc);
+suiteMarkerShape("② 도면 마커 — 형태 동일 (정상 소스)", seriesSrc, uiSrc);
+suiteRadarModeClass("③ 미니맵 — 모드 클래스 0 (정상 소스)", seriesSrc, radarSrc);
+suiteColorFamily("④ 색 — 같은 상태 같은 색 (정상 소스)", seriesSrc);
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션A: 도면 마커 모드 클래스 추가 라인 제거 → ①이 실패해야 한다
+ * 뮤테이션A(반전): 모드 클래스 부여를 되살리면 ①이 실패해야 한다
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션A] 도면 마커 pin-mode-* 클래스 부여 제거 → ①이 실패해야 함");
-  const needle = 'marker.classList.add(isChecker ? "pin-mode-checker" : "pin-mode-360");';
-  const mutated = uiSrc.replace(needle, "");
+  console.log("\n[뮤테이션A] 도면 마커 pin-mode-* 클래스 부여 복구 → ①이 실패해야 함");
+  const needle = 'marker.dataset.photo = (PinSeries.hasPhoto && PinSeries.hasPhoto(pin)) ? "1" : "0";';
+  const mutated = uiSrc.replace(needle, needle + ' marker.classList.add(pin.checkboard ? "pin-mode-checker" : "pin-mode-360");');
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ui = runUI(seriesSrc, mutated, FIXTURE());
-    ok(!/pin-mode-checker/.test(ui.chk1.cls) && !/pin-mode-360/.test(ui.c360.cls),
-      `뮤테이션 적용 시 모드 클래스가 사라짐(테스트 실효성 증명) → chk1=${ui.chk1.cls}, c360=${ui.c360.cls}`);
+    ok(/pin-mode-checker/.test(ui.chk1.cls), `뮤테이션 적용 시 모드 클래스 재출현(①이 잡는다 — 실효성 증명) → chk1=${ui.chk1.cls}`);
   }
 }
 
 /* ────────────────────────────────────────────────────────────
- * 뮤테이션B: CHECKER 배지 프레임 제거(형태 구분 무력화) → ②가 실패해야 한다
+ * 뮤테이션B(반전): CHECKER 배지 프레임을 되살리면 ②가 실패해야 한다
  * ──────────────────────────────────────────────────────────── */
 {
-  console.log("\n[뮤테이션B] CHECKER 배지 프레임 렌더 제거(형태 구분 무력화) → ②가 실패해야 함");
-  const needle = '${isChecker ? `<rect x="3.6" y="2" width="28.8" height="27" rx="7.5" fill="${_st.filled ? "#fff7ed" : "#ffffff"}" opacity="0.95" stroke="#1a1a1a" stroke-width="1.6" stroke-opacity="0.45"/>` : ""}';
-  const mutated = uiSrc.replace(needle, "");
+  console.log("\n[뮤테이션B] CHECKER 배지 프레임 렌더 복구 → ②가 실패해야 함");
+  const needle = '<circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a"';
+  const mutated = uiSrc.replace(needle, '${pin.checkboard ? `<rect x="3.6" y="2" width="28.8" height="27" rx="7.5" fill="#ffffff" opacity="0.95"/>` : ""}\n              ' + needle);
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const ui = runUI(seriesSrc, mutated, FIXTURE());
     const badgeFrame = /<rect[^>]*rx="7\.5"[^>]*opacity="0\.95"/;
-    ok(!badgeFrame.test(ui.chk1.html),
-      `뮤테이션 적용 시 CHECKER 마커도 배지 프레임이 사라져 360과 형태 구분 불가(테스트 실효성 증명) → html에 프레임 없음=${!badgeFrame.test(ui.chk1.html)}`);
+    ok(badgeFrame.test(ui.chk1.html), `뮤테이션 적용 시 배지 프레임 재출현(②가 잡는다 — 실효성 증명)`);
   }
 }
 

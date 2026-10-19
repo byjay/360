@@ -14,6 +14,7 @@
          범위 밖 핀은 가져오지 않고 개수만 사실대로 표시한다.
        · 모드: 구역은 CHECKER/360 공유(모드로 구역을 거르지 않는다 — decks.mode 비의존).
          **핀만** 활성 모드 계열(PinSeries.seriesOf == PinSeries.activeSeries())로 거른다.
+         🔴 [WO 20261019-unifymode] 모드 통일 — 핀도 계열로 거르지 않는다(series = null = 전부). plan()의 series 인자는 하위호환.
        · 번호: 원본 번호 유지(자동 재채번 없음). 중복은 PinSeries.duplicateCheckboardIds 로 **표시만**.
        · 첨부: 360 사진은 imageId 참조 공유(R2 복제 0) · URL 문자열 복사 · 노트(pin_notes)는 기본 미복사.
        · 멱등: 복사 핀에 srcDeckId·srcPinId·mergeBatchId. 같은 원본을 두 번 합치면 두 번째는 0건(증분).
@@ -176,7 +177,7 @@
         if (!a) return;
         let best = null, bd = Infinity;
         (dstPins || []).forEach((e) => {
-          if (!e || e._deleted || (e.page || 1) !== (np.page || 1) || PinSeries.seriesOf(e) !== PinSeries.seriesOf(np)) return;
+          if (!e || e._deleted || (e.page || 1) !== (np.page || 1)) return;   // [WO 20261019-unifymode] 계열 무관(핀은 하나)
           const b = this.toDisplay(box, e);
           if (!b) return;
           const d = Math.hypot(a.x - b.x, a.y - b.y);
@@ -255,7 +256,7 @@
     /** 미리보기 1회 계산(모달·테스트 공용). opts = { raw, photos }. */
     async prepare(dstDeck, srcDeck, opts) {
       opts = opts || {};
-      const series = PinSeries.activeSeries ? PinSeries.activeSeries() : null;
+      const series = null;   // [WO 20261019-unifymode] 계열 거름 없음
       const srcPins = await this.fetchPins(srcDeck.deployment_id);
       const dstPins = (State.pins || []).slice();
       const plan = this.plan({ srcDeck, dstDeck, srcPins, dstPins, raw: !!opts.raw, series });
@@ -390,15 +391,14 @@
       this._ctx = null;
     },
 
-    /** 모달 열기 — 후보 구역마다 핀 수(활성 모드 계열만)를 병렬로 센다. */
+    /** 모달 열기 — 후보 구역마다 핀 수를 병렬로 센다. */
     async open(dstDeck) {
       if (!this.canMergeInto(dstDeck)) { Prompt.toast && Prompt.toast("지금 열린 구역에서만 가져올 수 있습니다(설계자 편집 화면)"); return; }
       if (!navigator.onLine) { Prompt.toast && Prompt.toast("오프라인이라 다른 구역의 포인트를 불러올 수 없습니다 — 연결 후 다시 시도하세요"); return; }
       const m = this._ensureModal();
-      const mode = PinSeries.activeMode ? PinSeries.activeMode() : null;
       const cands = this.candidates(dstDeck);
       this._ctx = { dstDeck, cands, counts: new Map(), prep: null, seq: 0 };
-      m.querySelector("#rm-sub").textContent = "대상: " + (dstDeck.name || "(이름 없음)") + (mode ? " · " + mode.label + " 포인트만" : "");
+      m.querySelector("#rm-sub").textContent = "대상: " + (dstDeck.name || "(이름 없음)");
       const sel = m.querySelector("#rm-src");
       sel.innerHTML = "";
       if (!cands.length) { sel.appendChild(this._el("option", null, "가져올 다른 구역이 없습니다")); sel.value = ""; }
@@ -412,8 +412,8 @@
       await Promise.all(cands.map(async (d, i) => {
         try {
           const pins = await this.fetchPins(d.deployment_id);
-          const box = this.boxOf(d), series = PinSeries.activeSeries ? PinSeries.activeSeries() : null;
-          ctx.counts.set(i, pins.filter((p) => this.inDeck(box, p) && (!series || PinSeries.seriesOf(p) === series)).length);
+          const box = this.boxOf(d);
+          ctx.counts.set(i, pins.filter((p) => this.inDeck(box, p)).length);
         } catch (e) { ctx.counts.set(i, null); }
         const o = sel.options[i];
         if (o && this._ctx === ctx) o.textContent = this._candLabel(d, dstDeck, ctx.counts.get(i));

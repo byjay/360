@@ -137,7 +137,9 @@ console.log("\n[U1·N6 연결 OFF(묶음 sheet_link=null) · Projects 없음 = 0
   const summarize = (PS, pins) => {
     const out = {};
     [1, 2, 3].forEach((pg) => {
-      const nm = {}; PS.numbers(pins, pg).forEach((v, k) => { nm[k] = [v.no, v.kind, v.series]; });
+      // [WO 20261019-unifymode] v.kind(색 축)는 비교에서 뺀다 — 체커 메타를 색 축에서 의도적으로 뗐다(kindOf = 사진 유무만).
+      //   이 U1 의 불변식(연결 OFF = 번호·채번·중복·리셋 결과 동일)은 no·series 로 그대로 검사한다. 전: [no, kind, series] → 후: [no, series]
+      const nm = {}; PS.numbers(pins, pg).forEach((v, k) => { nm[k] = [v.no, v.series]; });
       const nx = PS.nextInBand(pins, pg, "content", 1, 1);
       const nx2 = PS.nextInBand(pins, pg, "checkboard", 2, 101);
       const dup = Array.from(PS.duplicateNoIds(pins, pg)).sort();

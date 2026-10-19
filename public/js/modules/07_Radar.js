@@ -115,12 +115,10 @@
           //    체크보드 핀의 사진 등록 여부를 미니맵에도 똑같이 반영한다.
           //    (한쪽만 반영하면 사용자에게 거짓말이 된다)
           const _st = PinSeries.markerStyle(p);
-          // [WO 20260930-pinstyle] 🔴 모드별 형태 구분 SoT = PinSeries.seriesOf(meta.series) — 도면
-          //   마커(11_UI)와 같은 판정. CSS(.pano-radar-pin-mode-checker)가 둥근사각(badge)으로,
-          //   360 은 기본 원형(circle) 그대로 유지한다.
+          // 🔴 [WO 20261019-unifymode] 구 모드별 형태(pano-radar-pin-mode-checker 둥근사각) 폐기 — 도면 마커와 같이 핀은 하나.
+          //   상태 = kind(content/empty = 사진 유무) + 테두리 패턴(_st.border).
           const dot = document.createElement("div");
           dot.className = "pano-radar-pin pano-radar-pin-" + meta.kind
-            + " pano-radar-pin-mode-" + (meta.series === "checkboard" ? "checker" : "360")
             + (p.id === pin.id ? " current" : "");
           dot.style.left = p.x + "%";
           dot.style.top  = p.y + "%";

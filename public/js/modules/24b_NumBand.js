@@ -28,7 +28,7 @@
       this.render();
     },
 
-    _series() { return (typeof State !== "undefined" && State.regMode === "photo") ? "content" : "checkboard"; },
+    _series() { return "all"; },   // [WO 20261019-unifymode] 핀은 하나 — 대역·다음 번호·시작값 모두 계열 무관(구 CHECKER/360 구분 폐기)
     _author() { return (typeof App !== "undefined" && App._pinAuthor) ? App._pinAuthor() : null; },
     _page() { return (typeof State !== "undefined" && State.pdfPage) || 1; },
     _hasDrawing() { return (typeof State !== "undefined") && !!(State.pdfDoc || (State.viewerPages && State.viewerPages.length)); },
@@ -155,7 +155,7 @@
           '<div class="numband-head"><h3 id="numband-title" class="numband-title">번호 대역</h3>' +
           '<span id="numband-mode" class="numband-mode"></span>' +
           '<button type="button" class="numband-x" data-numband-close aria-label="닫기">&times;</button></div>' +
-          '<p class="numband-sub">100번 단위로 사람마다 번호대를 나눠 씁니다. 대역은 CHECKER·360 공통, 번호는 모드별로 따로 늘어납니다.</p>' +
+          '<p class="numband-sub">100번 단위로 사람마다 번호대를 나눠 씁니다. 대역과 번호는 모든 핀 공통입니다(등록 방식과 무관).</p>' +
           '<div id="numband-chips" class="numband-chips" role="group" aria-label="번호 대역 선택"></div>' +
           '<div id="numband-next" class="numband-next" aria-live="polite"></div>' +
           '<details class="numband-adv"><summary>직접 입력(고급)</summary>' +
@@ -179,7 +179,7 @@
         if (!inp || inp.value === "") return;
         const series = this._series();
         const n = App._setCheckboardStart(this._page(), inp.value, series);
-        this._status = PinSeries.LABELS[series] + " 다음 번호를 " + PinSeries.formatNo(n, series) + " 부터 — 대역 " + PinSeries.bandLabel(PinSeries.bandOf(n));
+        this._status = "다음 번호를 " + PinSeries.formatNo(n, series) + " 부터 — 대역 " + PinSeries.bandLabel(PinSeries.bandOf(n));
         this.render();
       };
       m.querySelector("#btn-numband-start").addEventListener("click", apply);
@@ -190,7 +190,7 @@
     _renderSheet() {
       const s = this.summary();
       const mode = document.getElementById("numband-mode");
-      if (mode) { mode.textContent = PinSeries.LABELS[s.series]; mode.className = "numband-mode nb-" + s.series; }
+      if (mode) { mode.textContent = "모든 핀 공통"; mode.className = "numband-mode nb-all"; }
       const chips = document.getElementById("numband-chips");
       if (chips) {
         chips.innerHTML = this.rows().map((r) => {

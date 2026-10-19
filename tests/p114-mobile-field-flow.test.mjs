@@ -389,9 +389,9 @@ async function runScenario(P) {
     return c;
   };
   const openLeaf = async (label) => {
-    const has = await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", navigator_offline ? 5000 : 30000);
+    const has = await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", navigator_offline ? 5000 : 30000);
     if (has < 0) {
-      // 오프라인 허브는 카드 아래 구역 트리(CHECKER/360 잎)가 없다 → 카드 자체를 탭(기존 진입 openProject)
+      // 오프라인 허브는 카드 아래 구역 트리가 없다 → 카드 자체를 탭(기존 진입 openProject)
       report.offlineHubNoTree = true;
       if (!report.cardNameProbe) {
         // 카드 이름을 탭하면 프로젝트가 열리는가? (오프라인 허브는 트리가 없어 카드가 유일한 진입점)
@@ -416,9 +416,9 @@ async function runScenario(P) {
       await P.wait(400);
       return tapSel(".hub-card-thumb", label + " — 카드 썸네일(트리 없음)");
     }
-    await evSafe("(function(){ var e = document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]'); e && e.scrollIntoView({ block: 'center' }); return 1; })()");
+    await evSafe("(function(){ var e = document.querySelector('.hub-tree-deck[data-act=deck-open]'); e && e.scrollIntoView({ block: 'center' }); return 1; })()");
     await P.wait(400);
-    return tapSel("[data-act=mode-open][data-mode-reg=checkboard]", label);
+    return tapSel(".hub-tree-deck[data-act=deck-open]", label);
   };
   const localState = () => S("{ pins: S.pins.length, ids: S.pins.map(function(p){ return String(p.id); }), pend: S.pins.filter(function(p){ return p.pendingOpId || (p.attachments||[]).some(function(a){ return a.pendingOpId; }); }).length, photo: S.pins.filter(function(p){ return !p.checkboard; }).map(function(p){ return { id: String(p.id), imageId: p.imageId || null, imageUrl: p.imageUrl || null, pendingOpId: p.pendingOpId || null }; }), dep: S.autoSaveDepId, ver: S.depVersion, dirty: !!(__T.App && __T.App._dirty), regMode: S.regMode, placing: S.placing, drawn: !!__M.drawingRect() }");
   const queueCount = () => evSafe("(window.__T && __T.SyncQueue && __T.SyncQueue.count) ? __T.SyncQueue.count() : -1");
@@ -437,7 +437,7 @@ async function runScenario(P) {
   T.coldLoadEventMs = Date.now() - t0;
   const paint = await evSafe("(function(){ var o = {}; performance.getEntriesByType('paint').forEach(function(e){ o[e.name] = Math.round(e.startTime); }); return o; })()");
   T.coldFirstContentfulPaintMs = paint && paint["first-contentful-paint"];
-  const hubR = await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
+  const hubR = await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 90000);
   T.coldHubReadyMs = hubR < 0 ? -1 : Date.now() - t0;
   // SW 설치 완료(제어권 + 앱셸 캐시 채움) 확인 — 안 되면 오프라인 재진입 측정이 무의미하다
   const swCtl = await waitFor("navigator.serviceWorker && navigator.serviceWorker.controller", 90000);
@@ -452,7 +452,7 @@ async function runScenario(P) {
   await P.wait(2500); // controllerchange 강제 새로고침이 있으면 이 사이에 일어난다
   T.coldLoadsDuringFirstVisit = loads.filter((x) => x >= t0).map((x) => x - t0);
   if (T.coldLoadsDuringFirstVisit.length > 1) defect("P2", "첫 방문 중 SW 설치 직후 페이지가 강제 새로고침됨(controllerchange → location.reload) — Fast 3G 에서 화면이 한 번 더 통째로 다시 뜬다", { loadsAtMs: T.coldLoadsDuringFirstVisit }, "public/index.html:1322-1326 (첫 설치 clients.claim 에도 controllerchange 발생)");
-  await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 60000);
+  await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 60000);
   await P.wait(800);
   await snap("cold-hub");
   report.touchTargetsHub = (await evSafe("__M.small()")) || [];
@@ -464,8 +464,8 @@ async function runScenario(P) {
     await send("Page.reload", { ignoreCache: false });
     while (loads.length === nr && Date.now() - tr < 60000) await P.wait(100);
     await waitFor("window.__T && document.getElementById('screen-projects')", 20000);
-    const leafOk = await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 8000);
-    T.offlineNoDownloadHub = { ms: Date.now() - tr, leafVisible: leafOk >= 0, cards: await evSafe("document.querySelectorAll('[data-act=mode-open]').length"), text: await evSafe("(document.querySelector('#screen-projects')||document.body).innerText.replace(/\s+/g,' ').slice(0,160)") };
+    const leafOk = await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 8000);
+    T.offlineNoDownloadHub = { ms: Date.now() - tr, leafVisible: leafOk >= 0, cards: await evSafe("document.querySelectorAll('[data-act=deck-open]').length"), text: await evSafe("(document.querySelector('#screen-projects')||document.body).innerText.replace(/\s+/g,' ').slice(0,160)") };
     await snap("offline-no-download-hub");
     if (leafOk < 0) defect("P1", "프로젝트 [다운로드]를 누르지 않고 오프라인이 되면, 새로고침 시 허브가 '등록된 프로젝트가 없습니다'로 비어 방금 보던 도면도 못 연다(자동 오프라인 보관 없음)", T.offlineNoDownloadHub, "12_ProjectHub.js load() 오프라인 폴백 = OfflineBundle 다운로드분만 · 열었던 구역 자동 보관 없음");
   }
@@ -473,7 +473,7 @@ async function runScenario(P) {
   { const tr = Date.now(); const nr = loads.length;
     await send("Page.reload", { ignoreCache: false });
     while (loads.length === nr && Date.now() - tr < 120000) await P.wait(100);
-    const hb = await waitFor("document.querySelector('[data-act=mode-open][data-mode-reg=checkboard]')", 90000);
+    const hb = await waitFor("document.querySelector('.hub-tree-deck[data-act=deck-open]')", 90000);
     T.warmReloadHubMs = hb < 0 ? -1 : Date.now() - tr; // SW 캐시가 있는 재방문(Fast 3G)
   }
   // 1-c. 프로젝트 카드 [다운로드](오프라인 번들) — 의도된 현장 준비 절차
@@ -498,7 +498,8 @@ async function runScenario(P) {
   await snap("online-downloaded-hub");
   // 프로젝트 → 도면 표시(화면 맞춤)까지: 허브 카드 트리의 CHECKER 잎을 실제 터치로 탭
   const t1 = Date.now();
-  const leaf = await openLeaf("허브 CHECKER 잎");
+  // [WO 20261019-unifymode] 허브 모드 잎(CHECKER/360) 폐기 — 진입 = 허브 카드 트리의 구역 행(같은 openProjectAtDeck 경로). 배치는 아래 도크 [포인트] 탭으로 켠다(종전에도 꺼져 있으면 탭).
+  const leaf = await openLeaf("허브 구역 행");
   const td = await waitFor(drawnExpr + " && __T.State.zoom > 0", 90000);
   T.openDrawingMs = td < 0 ? -1 : Date.now() - t1;
   ok(!!leaf && td >= 0, "온라인: 허브 → 도면 표시", { leaf, td });

@@ -297,7 +297,11 @@ console.log("\n[Part A · 트리 렌더 — 실제 11_UI.js]");
  *  안쪽 잎(.tree-mode-leaf-checker/.tree-mode-leaf-360)에서만 일어난다.
  *  실 소스(01b_PinSeries.js + 11_UI.js)를 함께 vm 평가(목 아님).
  * ══════════════════════════════════════════════════════════════════════ */
-console.log("\n[Part A2 · 모드 잎(CHECKER/360) — 구역·영역 중복 0, 계열별 핀 분리]");
+/* 🔴 [WO 20261019-unifymode] 계약 반전 — 모드 잎 폐기(마스터 "360 과 체커 통일"). 전·후:
+ *   A2① 잎 CHECKER·360 각 1개 → 잎 0개 · A2② CHECKER 잎에 360 핀 0 → 핀이 구역 노드 바로 아래 1개
+ *   A2③ 360 잎에 핀 1 → 사진 필터(PinSeries.photoFilter): [사진 있음] = 0 · [사진 없음] = 1 (도면 칩과 같은 상태)
+ *   뮤테이션ⓔ: 잎 렌더 제거 → 트리가 사진 필터를 무시(구역 핀 전부) 로 이관 — A2③ 이 깨져야 한다. */
+console.log("\n[Part A2 · 모드 잎 0 — 핀은 구역 바로 아래, 사진 필터로만 거른다]");
 const seriesSrc = rd("public/js/modules/01b_PinSeries.js");
 function runTreeWithSeries(uiSource, ctx) {
   const { document, registry } = makeDoc();
@@ -308,33 +312,33 @@ function runTreeWithSeries(uiSource, ctx) {
   sandbox.__UI.renderTree();
   return { host: registry["side-tree"], UI: sandbox.__UI };
 }
-function a2Checks(uiSource) {
-  const c = fx(); // 메인데크(d1, loaded) 핀 1개(checkboard 없음 = content/360 계열)
-  const { host } = runTreeWithSeries(uiSource, c);
-  const leaves = findAll(host, "tree-mode-leaf");
-  const tags = leaves.map((l) => l.dataset.mode);
-  const chk = leaves.find((l) => has(l, "tree-mode-leaf-checker"));
-  const p360 = leaves.find((l) => has(l, "tree-mode-leaf-360"));
-  return { leaves, tags, chk, p360 };
+function a2Checks(uiSource, filterKey) {
+  const c = fx(); // 메인데크(d1, loaded) 핀 1개(체커 메타 없음 · 사진 없음)
+  const { document, registry } = makeDoc();
+  const sandbox = { console, document, JSON, Map, Set, ...c };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(seriesSrc + "\n" + uiSource + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
+  if (filterKey) sandbox.__PS.setPhotoFilter(filterKey);
+  sandbox.__UI.renderTree();
+  const host = registry["side-tree"];
+  return { leaves: findAll(host, "tree-mode-leaf").concat(findAll(host, "tree-node-mode-leaf")), pins: findAll(host, "tree-node-pin").length };
 }
 {
-  const { leaves, tags, chk, p360 } = a2Checks(uiSrc);
-  ok(leaves.length === 2 && tags.filter((t) => t === "checker").length === 1 && tags.filter((t) => t === "360").length === 1,
-    "A2① 로드된 구역(메인데크) 안에 CHECKER/360 잎이 정확히 1개씩(중복 0) — 실제 " + JSON.stringify(tags));
-  ok(!!chk && findAll(chk, "tree-node-pin").length === 0,
-    "A2② CHECKER 잎: content 계열 핀(pn1)은 나열되지 않는다(계열 분리)");
-  ok(!!p360 && findAll(p360, "tree-node-pin").length === 1,
-    "A2③ 360 잎: content 계열 핀(pn1) 1개가 나열된다(픽스처 zone z1 이 모든 좌표를 포함해 zone 그룹 안에 중첩됨)");
+  const all = a2Checks(uiSrc), ph = a2Checks(uiSrc, "photo"), no = a2Checks(uiSrc, "nophoto");
+  ok(all.leaves.length === 0, "A2① 로드된 구역(메인데크) 안에 모드 잎(CHECKER/360) 0개 — 실제 " + all.leaves.length);
+  ok(all.pins === 1, "A2② 핀(pn1)이 구역 노드 아래 한 번만 나열된다(모드 묶음 없이, 중복 0) — " + all.pins);
+  ok(ph.pins === 0 && no.pins === 1, "A2③ 사진 필터: [사진 있음] = 0 · [사진 없음] = 1(pn1 은 사진 없음) — " + ph.pins + "/" + no.pins);
 }
-/* ── 뮤테이션 ⓔ: MODES.forEach 잎 렌더 제거 → A2①이 실패해야 한다 ─────────────── */
+/* ── 뮤테이션 ⓔ: 트리가 사진 필터를 무시 → A2③ 이 실패해야 한다 ─────────────── */
 {
-  console.log("\n[뮤테이션ⓔ] 모드 잎 렌더 제거 → A2①이 실패해야 함");
-  const needle = "MODES.forEach((m) => {";
-  const mut = uiSrc.replace(needle, "[].forEach((m) => {");
+  console.log("\n[뮤테이션ⓔ] 트리가 사진 필터를 무시(구역 핀 전부) → A2③이 실패해야 함");
+  const needle = "const shown = (typeof PinSeries !== \"undefined\" && PinSeries.filterByPhoto) ? PinSeries.filterByPhoto(deckPins) : deckPins;";
+  const mut = uiSrc.replace(needle, "const shown = deckPins;");
   if (mut === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const { leaves } = a2Checks(mut);
-    ok(leaves.length === 0, "뮤테이션 적용 시 A2①이 깨짐(모드 잎이 전혀 렌더되지 않음, 실제 " + leaves.length + "개)");
+    const ph = a2Checks(mut, "photo");
+    ok(ph.pins === 1, "뮤테이션 적용 시 A2③이 깨짐([사진 있음]인데 사진 없는 pn1 이 보임, 실제 " + ph.pins + "개)");
   }
 }
 /* ── 뮤테이션 ⓕ: 88e52ff 모드 가지(구역 중복) 재도입 → ①(3단 구조)이 실패해야 한다 ────── */
@@ -571,8 +575,8 @@ if (!puppeteer) {
   // [WO 20260930-moderole] 🔴 구역·영역은 모드 무관 한 벌만(중복 0) — 구역 3·영역 4(모드 가지 중복 없음).
   ok(m.decksTop === 3 && m.regions === 4,
     "④ 실 브라우저에서 구역·영역이 모드 가지로 중복 렌더되지 않는다(구역=3·영역=4) — 실제 decksTop=" + m.decksTop + " regions=" + m.regions);
-  ok(m.modeLeafTags.length === 2 && m.modeLeafTags.includes("checker") && m.modeLeafTags.includes("360"),
-    "④ 로드된 구역(메인데크)의 맨 안쪽에 CHECKER/360 잎 그룹이 존재한다 — 실제 " + JSON.stringify(m.modeLeafTags));
+  // [WO 20261019-unifymode] 전: 잎 CHECKER/360 2개 존재 / 후: 0개(모드 잎 폐기)
+  ok(m.modeLeafTags.length === 0, "④ 실 브라우저에서 모드 잎(.tree-mode-leaf) 0개 — 실제 " + JSON.stringify(m.modeLeafTags));
   ok(m.clientHeight >= 160, "④ #side-tree 가 0 으로 짓눌리지 않는다(clientHeight=" + m.clientHeight + " ≥ 160 = clamp 하한)");
   ok(m.scrollHeight > m.clientHeight,
     "④ scrollHeight(" + m.scrollHeight + ") > clientHeight(" + m.clientHeight + ") — 세로 스크롤이 실제로 생긴다");

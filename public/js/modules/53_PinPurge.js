@@ -1,11 +1,11 @@
   /* ══════════════════════════════════════════════════════════════
      PIN PURGE — 프로젝트 모든 핀 삭제 (WO 20261008-pinpurge, 마스터 "관리자는 모든 핀 삭제 기능도 구현해")
      ────────────────────────────────────────────────────────────────
-     범위 = 그 프로젝트의 모든 배포본(메인 + 벡터 복사 구역의 별도 배포본)의 모든 핀(CHECKER·360).
+     범위 = 그 프로젝트의 모든 배포본(메인 + 벡터 복사 구역의 별도 배포본)의 모든 핀.
        기존 구역 단위 삭제(11_UI._pinBulkButtons → App.deletePins)는 그대로 둔다 — 이건 서버 일괄 경로다.
      권한 = 소유자·super(서버 can_manage_members SoT). 서버(GET/POST /api/projects/:id/pins/purge)도 403 으로 막는다.
        🔴 숨김 금지 — 그 외에는 비활성 + "소유자·관리자 전용"(reason()).
-     확인 3단계 = ① 미리보기(구역·핀·CHECKER/360·사진 연결) → ② 프로젝트 이름 직접 입력 → ③ 본인 재인증(Auth.ensureReauth, X-Reauth).
+     확인 3단계 = ① 미리보기(구역·핀·사진 연결) → ② 프로젝트 이름 직접 입력 → ③ 본인 재인증(Auth.ensureReauth, X-Reauth).
        하나라도 실패·취소면 요청 자체를 보내지 않는다(서버도 이름·재인증을 다시 검사한다).
      삭제 = 서버 tombstone(하드 삭제·R2 삭제 0). 배포본별 base_version — 어긋난 곳은 409 로 따로 보고.
      되돌리기 = 서버가 준 undo_until 까지 하단 바의 [되돌리기](서버 스냅샷 복원). 오프라인 = 비활성("온라인에서만"), 큐에 넣지 않는다.
@@ -47,7 +47,7 @@
     },
     previewText(pv) {
       const t = pv.totals || {};
-      const lines = ["구역 " + (pv.decks || 0) + "개 · 핀 " + (t.pins || 0) + "개(CHECKER " + (t.checker || 0) + " / 360 " + (t.pano || 0) + ") · 사진 연결 " + (t.photos || 0) + "개"];
+      const lines = ["구역 " + (pv.decks || 0) + "개 · 핀 " + (t.pins || 0) + "개 · 사진 연결 " + (t.photos || 0) + "개"];   // [WO 20261019-unifymode] 구 CHECKER/360(생성 메타) 분할 표기 폐기 — 핀은 하나
       const deps = (pv.deployments || []).filter((d) => d.pins > 0);
       if (deps.length) {
         lines.push("", "도면(배포본) " + deps.length + "곳:");

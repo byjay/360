@@ -104,7 +104,7 @@ function runUI(sSrc, uSrc, { pins, page = 1, filter = null }) {
   vm.createContext(sandbox);
   vm.runInContext(sSrc + "\n" + uSrc + "\n;globalThis.__UI = UI; globalThis.__PS = PinSeries;", sandbox);
   const PS = sandbox.__PS;
-  if (filter) PS._filter = Object.assign({ content: true, empty: true, checkboard: true }, filter);
+  if (filter) PS.setPhotoFilter(filter);   // [WO 20261019-unifymode] 필터 = 사진 유무 key("all"|"photo"|"nophoto")
   sandbox.__UI.renderPinsOnMap();
   const markers = registry["pins-layer"]._children;
   const nums = {}, kinds = {};
@@ -121,7 +121,7 @@ function runRadar(sSrc, rSrc, { pins, page = 1, filter = null, currentPin }) {
   vm.createContext(sandbox);
   vm.runInContext(sSrc + "\n" + rSrc + "\n;globalThis.__R = Radar; globalThis.__PS = PinSeries;", sandbox);
   const PS = sandbox.__PS;
-  if (filter) PS._filter = Object.assign({ content: true, empty: true, checkboard: true }, filter);
+  if (filter) PS.setPhotoFilter(filter);
   sandbox.__R.update(currentPin || pins[0]);
   const dots = registry["pano-radar-pins"]._children;
   const nums = {};
@@ -154,8 +154,9 @@ function suiteSeries(label, sSrc) {
   ok(nums.b1 === "2", `통합 번호 b1 = ${nums.b1} (기대 2 — 계열 무관 단일 카운터)`);
   ok(nums.b3 === "6", `통합 번호 b3 = ${nums.b3} (기대 6)`);
   ok(nums.x1 === undefined, "다른 페이지 핀 x1 은 렌더되지 않음");
-  ok(kinds.c1 === "content" && kinds.e1 === "empty" && kinds.b1 === "checkboard",
-    `부류 판정 = ${kinds.c1}/${kinds.e1}/${kinds.b1} (기대 content/empty/checkboard)`);
+  // [WO 20261019-unifymode] 전·후: 종전 b1(체커 메타) = "checkboard" → 이제 사진·내용 유무만(체커 메타 무시) = "empty"
+  ok(kinds.c1 === "content" && kinds.e1 === "empty" && kinds.b1 === "empty",
+    `부류 판정 = ${kinds.c1}/${kinds.e1}/${kinds.b1} (기대 content/empty/empty — 체커 메타는 색 축 아님)`);
   // ② label 우선
   ok(nums.b2 === "77", `체크보드 b2 = ${nums.b2} (기대 77 — 저장된 label 숫자 우선)`);
 }
@@ -180,39 +181,43 @@ function suiteSameNumbers(label, sSrc, rSrc) {
  * ④ 필터를 켜도 번호가 재계산되지 않는다 (숨김은 표시만)
  * ⑤ 필터가 도면·미니맵 양쪽에 동일 적용
  * ──────────────────────────────────────────────────────────── */
-/* [WO 20260929 addendum, 지휘자 정정] "그냥 체크보드랑 360모드랑 2개 해" — 필터 축이 kindOf
+/* 🔴 [WO 20261019-unifymode] 계약 변경 — 필터 = [전체/사진 있음/사진 없음](PinSeries.PHOTO_FILTERS, 배타 선택).
+ *   전·후 대조: 종전 {checkboard:false} → c1,c2,e1 / {content:false} → b1,b2,b3 / 칩 2개(data-series)
+ *              이제 "photo" → c1(사진 있는 핀) / "nophoto" → b1,b2,b3,c2,e1 / 칩 3개(data-pfilter, 전체 6·사진 1·없음 5)
+ *   ④(필터 후 번호 불변)·⑤(도면=미니맵) 불변식은 그대로 검사한다.
+ * (구) [WO 20260929 addendum, 지휘자 정정] "그냥 체크보드랑 360모드랑 2개 해" — 필터 축이 kindOf
  * (3종: content/empty/checkboard)에서 seriesOf(2종: checkboard/content)로 바뀌었다. e1(empty
  * 부류)은 체크보드가 아니므로 이제 "content(360)" 계열 필터에 포함되어 함께 보인다(kind=empty
  * 만 따로 숨기는 3번째 칩은 없다 — 마스터: "내가 시킨 것만 하고"). */
 function suiteFilter(label, sSrc, rSrc) {
   console.log("\n[" + label + "]");
   const pins = FIXTURE();
-  const filter = { checkboard: false, content: true }; // 360(content) 계열만 보기
+  const filter = "nophoto"; // 사진 없는 핀만 보기
   const ui = runUI(sSrc, uiSrc, { pins, filter });
   const shown = Object.keys(ui.nums).sort();
-  ok(shown.join(",") === "c1,c2,e1", `도면 표시 핀 = [${shown.join(",")}] (기대 c1,c2,e1 — checkboard 아닌 전부)`);
-  // ④ 필터 전과 같은 번호(1, 3) — 1,2 로 다시 매겨지면 안 된다
-  ok(ui.nums.c1 === "1" && ui.nums.c2 === "5",
-    `필터 후 번호 c1=${ui.nums.c1}, c2=${ui.nums.c2} (기대 1, 5 — 재채번 금지)`);
+  ok(shown.join(",") === "b1,b2,b3,c2,e1", `도면 표시 핀 = [${shown.join(",")}] (기대 b1,b2,b3,c2,e1 — 사진 없는 전부, 체커 메타 무관)`);
+  // ④ 필터 전과 같은 번호 — 다시 매겨지면 안 된다
+  ok(ui.nums.b1 === "2" && ui.nums.c2 === "5" && ui.nums.b3 === "6",
+    `필터 후 번호 b1=${ui.nums.b1}, c2=${ui.nums.c2}, b3=${ui.nums.b3} (기대 2, 5, 6 — 재채번 금지)`);
 
   // ⑤ 미니맵에도 같은 필터 적용 + 같은 번호
   const rd2 = runRadar(sSrc, rSrc, { pins, filter, currentPin: pins[0] });
   const shownR = Object.keys(rd2.nums).sort();
-  ok(shownR.join(",") === "c1,c2,e1", `미니맵 표시 점 = [${shownR.join(",")}] (기대 c1,c2,e1 — 도면과 동일)`);
-  ok(rd2.nums.c1 === "1" && rd2.nums.c2 === "5",
-    `미니맵 필터 후 번호 c1=${rd2.nums.c1}, c2=${rd2.nums.c2} (기대 1, 5)`);
+  ok(shownR.join(",") === "b1,b2,b3,c1,c2,e1", `미니맵 표시 점 = [${shownR.join(",")}] (기대 = 도면과 같은 5개 + 지금 열람 중인 c1 — 기준점은 필터와 무관하게 항상 표시)`);
+  ok(rd2.nums.b1 === "2" && rd2.nums.c2 === "5",
+    `미니맵 필터 후 번호 b1=${rd2.nums.b1}, c2=${rd2.nums.c2} (기대 2, 5)`);
 
-  // 체크보드만 보기 → 통합 번호(2, 77, 6) 유지
-  const ui2 = runUI(sSrc, uiSrc, { pins, filter: { checkboard: true, content: false } });
-  ok(Object.keys(ui2.nums).sort().join(",") === "b1,b2,b3", `체크보드만 보기 = [${Object.keys(ui2.nums).sort().join(",")}]`);
-  ok(ui2.nums.b1 === "2" && ui2.nums.b2 === "77" && ui2.nums.b3 === "6",
-    `체크보드만 보기 번호 = ${ui2.nums.b1}/${ui2.nums.b2}/${ui2.nums.b3} (기대 2/77/6)`);
+  // 사진 있는 핀만 → c1(번호 1 유지)
+  const ui2 = runUI(sSrc, uiSrc, { pins, filter: "photo" });
+  ok(Object.keys(ui2.nums).sort().join(",") === "c1", `사진 있음만 보기 = [${Object.keys(ui2.nums).sort().join(",")}] (기대 c1)`);
+  ok(ui2.nums.c1 === "1", `사진 있음만 보기 번호 c1 = ${ui2.nums.c1} (기대 1)`);
 
-  // 칩 렌더: CHECKER/360 2칩뿐 — '전체' 칩 없음(마스터: "그냥 체크보드랑 360모드랑 2개 해")
+  // 칩 렌더: [전체][사진 있음][사진 없음] 3칩 — 구 CHECKER/360 칩(data-series) 없음
   const bar = ui.registry["pin-filter-bar"];
-  ok(!/data-series="all"/.test(bar.innerHTML) && !/data-kind="all"/.test(bar.innerHTML), "필터 칩 바에 '전체' 칩이 없음(2칩만)");
-  ok(/data-series="content"[\s\S]*?zpager-cnt">3</.test(bar.innerHTML), "360 칩 개수 = 3(c1,c2,e1)");
-  ok(/data-series="checkboard"[\s\S]*?zpager-cnt">3</.test(bar.innerHTML), "CHECKER 칩 개수 = 3(b1,b2,b3)");
+  ok(!/data-series=/.test(bar.innerHTML), "필터 칩 바에 구 계열 칩(data-series) 없음");
+  ok(/data-pfilter="all"[\s\S]*?zpager-cnt">6</.test(bar.innerHTML), "전체 칩 개수 = 6");
+  ok(/data-pfilter="photo"[\s\S]*?zpager-cnt">1</.test(bar.innerHTML), "사진 있음 칩 개수 = 1(c1)");
+  ok(/data-pfilter="nophoto"[\s\S]*?zpager-cnt">5</.test(bar.innerHTML) && /data-pfilter="nophoto"[^>]*aria-pressed="true"/.test(bar.innerHTML), "사진 없음 칩 개수 = 5 · 선택됨(aria-pressed)");
 }
 
 /* ────────────────────────────────────────────────────────────

@@ -67,6 +67,16 @@
         App._renumberCheckboard(this._currentSeries()); // 기존 Prompt.ask(시작번호 입력)+Prompt.confirm 흐름 그대로
       });
       // [WO 20261001-startno] 모드 전환 시 표시 갱신은 App._syncRegModeButtons() → NumBand.render() 한 곳.
+      // [WO 20261019-unifymode] 등록 방식(이 구역) 토글 — 편집 화면이면 App._setRegMode(상단 토글과 같은 경로·저장),
+      //   아니면(허브·뷰어에서 연 설정) 지금 구역 저장값만 바꾼다. 배치는 저절로 켜지 않는다(설정 패널 안의 조작).
+      document.querySelectorAll("#settings-modal [data-regmethod]").forEach((b) => b.addEventListener("click", () => {
+        if (!(typeof Auth !== "undefined" && Auth.isDesigner) || (typeof Auth !== "undefined" && Auth.readonly)) return;
+        const m = b.getAttribute("data-regmethod");
+        if (typeof State !== "undefined" && State.mode === "designer" && State.checkboard && typeof App !== "undefined" && App._setRegMode) {
+          App._setRegMode(PinSeries.regModeOfMethod(m), { autoStart: false });
+        } else if (typeof PinSeries !== "undefined" && PinSeries.setRegMethod) PinSeries.setRegMethod(m);
+        this._renderRegMethod();
+      }));
       // 설정 패널 내 로그아웃
       $("btn-settings-signout") && $("btn-settings-signout").addEventListener("click", () => {
         Auth.signOut();
@@ -92,9 +102,8 @@
     /** [WO 20260929 addendum] 현재 편집화면 모드(State.regMode)에 대응하는 채번 계열.
      *  photo(360)면 "content", 그 외(checkboard 및 방어적 view 폴백)는 "checkboard".
      *  판정 지점 하나(§10 SoT) — apply/renumber/inline/렌더가 전부 이 함수만 부른다. */
-    _currentSeries() {
-      return (typeof State !== "undefined" && State.regMode === "photo") ? "content" : "checkboard";
-    },
+    //  🔴 [WO 20261019-unifymode] 핀은 하나 — 일괄 변경 대상 = 페이지 전 핀("all"). 구 모드별 계열 판정 폐기.
+    _currentSeries() { return "all"; },
 
     /** [WO 20260928] 설정 패널의 "OO 시작 번호" 항목 렌더 — 현재 구역(도면)·현재 모드 값을 채우고,
      *  도면이 로드 안 됐으면 비활성 + 이유를 표시한다(조용히 무시 금지).
@@ -115,6 +124,19 @@
       if (hint) hint.textContent = hasDrawing
         ? "개별 핀 번호는 핀을 눌러 '번호' 칸에서 바로 바꿀 수 있습니다."
         : "도면(구역)을 먼저 불러와야 번호를 일괄 변경할 수 있습니다.";
+    },
+
+    /** [WO 20261019-unifymode] 등록 방식 버튼 표시 — 편집 중이면 지금 State.regMode, 아니면 지금 구역 저장값(PinSeries.regMethod).
+     *  App._syncRegModeButtons()(상단 토글 렌더 지점)도 이 함수를 불러 두 표시가 갈라지지 않는다. */
+    _renderRegMethod() {
+      if (typeof document === "undefined" || typeof PinSeries === "undefined" || !PinSeries.regMethod) return;
+      const editing = typeof State !== "undefined" && State.mode === "designer" && State.checkboard;
+      const cur = editing ? PinSeries.methodOfRegMode(State.regMode) : PinSeries.regMethod();
+      document.querySelectorAll("#settings-modal [data-regmethod]").forEach((b) => {
+        const on = b.getAttribute("data-regmethod") === cur;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
     },
 
     /** 일괄 리더선 체크 = 대상(UI._alignScopePins) 전부가 리더선이면 ON. 대상이 없으면 OFF. */
@@ -170,7 +192,7 @@
         $("settings-designer-actions") && $("settings-designer-actions").classList.toggle("hidden", !Auth.isDesigner);
         $("settings-viewer-note")      && $("settings-viewer-note").classList.toggle("hidden", Auth.isDesigner);
         $("settings-super-actions")    && $("settings-super-actions").classList.toggle("hidden", !Auth.isSuper);
-        if (Auth.isDesigner) this._renderCheckboardStart();
+        if (Auth.isDesigner) { this._renderCheckboardStart(); this._renderRegMethod(); }
       } else {
         // 미로그인 — 구글 로그인 안내
         out && out.classList.remove("hidden");

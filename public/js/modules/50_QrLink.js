@@ -131,7 +131,7 @@
           if (H.openAccessReq) H.openAccessReq(v.project);   // 기존 비멤버 처리(접근 신청)
           return "locked";
         }
-        await H.openProjectAtDeck(v.project, link.deck, null);
+        await H.openProjectAtDeck(v.project, link.deck);
         if (!(typeof Auth !== "undefined" && Auth.isDesigner)) return "gated";   // requireDesigner 가 기존 게이트를 띄웠다
         if (link.deck && !(Projects.currentDeck && String(Projects.currentDeck.id) === String(link.deck))) {
           this._toast("QR 의 구역을 찾을 수 없습니다 — 삭제되었을 수 있어 프로젝트 원본을 엽니다", 4200);
@@ -156,6 +156,8 @@
       if (!pin) { this._toast("QR 의 포인트를 이 도면에서 찾을 수 없습니다 — 삭제되었을 수 있습니다", 4600); return false; }
       // [WO 20261015-numunify] 종전 "핀 계열과 다른 모드면 그 모드로 전환" 폐기 — 모드는 더 이상 가시성을 잠그지 않는다
       //   (PinSeries.filter/inMode). 모드를 바꾸지 않으니 배치 상태도 그대로다.
+      // [WO 20261019-unifymode] 사진 필터가 그 핀을 가리고 있으면 "전체"로 되돌린다(QR 로 온 핀이 안 보이면 거짓 실패).
+      if (typeof PinSeries !== "undefined" && PinSeries.matchesPhotoFilter && !PinSeries.matchesPhotoFilter(pin)) { PinSeries.showAll(); PinSeries.apply(); }
       await App.focusPin(pin, false);
       this._pulse(pin.id);
       if (State.mode === "designer" && typeof PinActionPop !== "undefined" && PinActionPop.open) PinActionPop.open(pin.id);

@@ -159,7 +159,8 @@ function testLegacyRenderChecker() {
   UI.renderPinsOnMap();
   const bubble = pinsLayer.children.find((c) => c.classList.contains("pin-leader-bubble"));
   ok(!!bubble, "②a CHECKER 핀 leader:true(callout 없음) → 풍선 div 생성됨(기본 위치)");
-  ok(bubble && bubble.classList.contains("pin-leader-checker"), "②b 풍선에 pin-leader-checker 클래스");
+  // [WO 20261019-unifymode] 전: 체커 핀 풍선 = pin-leader-checker / 후: 모드별 풍선 클래스 폐기 — pin-leader-bubble 하나(핀은 하나)
+  ok(bubble && !bubble.classList.contains("pin-leader-checker") && !bubble.classList.contains("pin-leader-360"), "②b 풍선 = pin-leader-bubble 하나(모드별 클래스 0) — " + (bubble && bubble.className));
   ok(leaderLayer.children.length === 1, "②c leader-layer 에 리더 그룹(g) 1개 생성");
   const g = leaderLayer.children[0];
   const path = g.children.find((c) => c.tagName === "path");
@@ -175,7 +176,8 @@ function testToggle360() {
   ok(!pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble")), "③a 360 핀(기본) → 풍선 미생성");
   State.pins[0].leader = true;
   UI.renderPinsOnMap();
-  ok(pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble") && c.classList.contains("pin-leader-360")), "③b 핀별 leader:true → 360 풍선 생성됨");
+  // [WO 20261019-unifymode] 전: pin-leader-360 클래스 동반 / 후: 같은 pin-leader-bubble(체커 메타 핀 ②와 같은 풍선)
+  ok(pinsLayer.children.some((c) => c.classList.contains("pin-leader-bubble") && !c.classList.contains("pin-leader-360") && !c.classList.contains("pin-leader-checker")), "③b 핀별 leader:true → 같은 풍선 생성됨(모드별 클래스 0)");
   // [뮤테이션 증명] P133_MUT=dual(구 'CHECKER 무조건' 복원) → p133 A1·A2 와 이 파일 ②0 이 FAIL.
 }
 

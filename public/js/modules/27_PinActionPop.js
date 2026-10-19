@@ -344,7 +344,9 @@
       if (!this._canEdit()) return;
       const $ = (id) => document.getElementById(id);
       const v = ($("pap-label-input") && $("pap-label-input").value || "").trim();
-      if (pin.checkboard && typeof PinSeries !== "undefined" && PinSeries.validateCheckboardLabel) {
+      // [WO 20261019-unifymode] 검증 대상 = 번호 핀(PinSeries.isNumberPin — 구 체커 메타 또는 번호 label). 통일 후 새 핀은 체커 메타가 없다.
+      const _numPin = typeof PinSeries !== "undefined" && PinSeries.isNumberPin ? PinSeries.isNumberPin(pin) : !!pin.checkboard;
+      if (_numPin && typeof PinSeries !== "undefined" && PinSeries.validateCheckboardLabel) {
         const check = PinSeries.validateCheckboardLabel(State.pins, pin.page || 1, pin.id, v);
         if (!check.ok) {
           const hintEl = $("pap-label-hint");
@@ -353,7 +355,7 @@
           return; // 저장하지 않는다 — 조용한 실패 금지(이유를 보여주고 중단)
         }
       }
-      const _manual = pin.checkboard && String(pin.label) !== v; // [WO 20260930-numdup] 직접 고친 번호 — 동시 생성 재채번 제외
+      const _manual = _numPin && String(pin.label) !== v; // [WO 20260930-numdup] 직접 고친 번호 — 동시 생성 재채번 제외
       // [WO 20261016-multisheet P3] label 쓰기 = PinLink.setLabel(연결 묶음 전원 같은 번호)
       if (typeof PinLink !== "undefined" && PinLink.setLabel) PinLink.setLabel(State.pins, pin, v, { manual: _manual });
       else if (_manual) pin.labelManual = true;

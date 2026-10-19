@@ -96,7 +96,9 @@ const pick = (el, cls) => (el._children || []).filter((c) => has(c, cls));
    아래 한 벌(공유). 픽스처 핀은 전부 CHECKER 계열이므로 구역의 맨 안쪽 CHECKER 잎(.tree-mode-leaf-checker)
    아래를 본다(모드 잎 자체의 검사는 p91). */
 const deckUnderChecker = (proj) => pick(kidsOf(proj), "tree-deck")[0];
-const checkerKidsOf = (deck) => kidsOf(pick(kidsOf(deck), "tree-mode-leaf-checker")[0]);
+// 🔴 [WO 20261019-unifymode] 모드 잎 폐기 — 핀·영역은 구역 노드의 tree-children 바로 아래(전: CHECKER 잎 아래). 이 파일의
+//   불변식(영역 안/밖 배정 · 번호 오름차순 · 겹침 시 작은 영역 · 자연 정렬)은 그대로 — 탐색 경로만 한 단 줄었다.
+const checkerKidsOf = (deck) => kidsOf(deck);
 
 /** 실 좌표 포함판정(16_Zones.js _contains 의 rect 분기와 동일 로직) */
 const ZonesReal = {

@@ -295,7 +295,7 @@
     /* ── [WO 20261002-allmenu §2] 🔴 리더선 정렬 상시 노출 — CHECKER 툴바(데스크톱 #pdf-toolbar ·
        모바일 도크 .mdock-bar)에 [정렬 ↕][정렬 ↔] 를 항상 둔다. R1 근본원인: 정렬 버튼이 트리 핀 목록의
        [선택] 모드(소유자·super 전용) 안에서만 생성됐다. 새 정렬 로직 0 — 같은 _startAlign 을 부른다
-       (선택 0 → _alignCandidatePins 가 현재 구역·영역의 CHECKER 핀 전체). 표시 SoT = syncCheckerAlignTools
+       (선택 0 → _alignCandidatePins 가 현재 구역·영역의 핀 전체 — [WO 20261019-unifymode] 계열 구분 없음). 표시 SoT = syncCheckerAlignTools
        (App._syncRegModeButtons 가 모드 전환마다 부른다). */
     ALIGN_TOOLS: [
       { axis: "v", label: "정렬 ↕", title: "리더선 풍선 세로 정렬 — 선택한 리더선 포인트(없으면 이 구역·영역의 리더선 포인트 전체)를 클릭 위치 기준 등간격으로" },
@@ -356,7 +356,6 @@
     _alignScopePins() {
       const s = this._pinSel;
       const curPage = State.pdfPage || 1;
-      const curSeries = (State.regMode === "checkboard") ? "checkboard" : "content";
       let pins;
       if (s.ids.size) {
         pins = Array.from(s.ids).map(k => (State.pins || []).find(p => p && String(p.id) === k)).filter(Boolean);
@@ -365,8 +364,8 @@
         const c = (deck && deck.crop && deck.crop.w > 0 && deck.crop.h > 0
           && String(deck.deployment_id || "") === String(State.currentDeploymentId || "")) ? deck.crop : null;
         const inCrop = (p) => !c || (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h);
-        pins = (State.pins || []).filter(p => p && (p.page || 1) === curPage
-          && (typeof PinSeries === "undefined" || PinSeries.seriesOf(p) === curSeries) && inCrop(p));
+        // [WO 20261019-unifymode] 계열(구 CHECKER/360) 거름 폐기 — 이 구역·영역·페이지의 핀 전부(핀은 하나)
+        pins = (State.pins || []).filter(p => p && (p.page || 1) === curPage && inCrop(p));
       }
       const numMap = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, curPage) : new Map();
       pins.sort((a, b) => ((numMap.get(a.id) || {}).no || 0) - ((numMap.get(b.id) || {}).no || 0));
@@ -916,7 +915,7 @@
         if (typeof FeatureMenu === "undefined" || !FeatureMenu._f) return null;
         const f = FeatureMenu._f(id);
         if (!f) return null;
-        return { label: label || f.label, reason: FeatureMenu.reasonOf(f), desc: FeatureMenu.modeHint(f) || "", run: () => FeatureMenu.run(f) };
+        return { label: label || f.label, reason: FeatureMenu.reasonOf(f), desc: "", run: () => FeatureMenu.run(f) };   // [WO 20261019-unifymode] 구 modeHint("…모드로 전환 후 실행") 폐기
       } catch (e) { return null; }
     },
     _isEditable(t) {
@@ -957,10 +956,11 @@
     /** 열람자 허용 = 보기·요청·질문만. 그 외 편집 항목은 같은 사유 문구(permCheck SoT)로 비활성. */
     pinCtxItems(pin) {
       const edit = this.permCheck("designer");
-      const isChecker = (typeof PinSeries !== "undefined" && PinSeries.seriesOf) ? PinSeries.seriesOf(pin) === "checkboard" : !!pin.checkboard;
+      // [WO 20261019-unifymode] 설명 = 사진 유무(구 계열 메타 아님)
+      const hasPhoto = (typeof PinSeries !== "undefined" && PinSeries.hasPhoto) ? PinSeries.hasPhoto(pin) : !!(pin.imageId || pin.imageUrl);
       const leader = this.Leader.wants(pin);
       const items = [];
-      items.push({ label: "열기", desc: isChecker ? "번호·위치" : "360·사진·노트", run: () => {
+      items.push({ label: "열기", desc: hasPhoto ? "360·사진·노트" : "번호·위치 · 사진 등록", run: () => {
         if (State.mode === "designer" && typeof PinActionPop !== "undefined") { App.setActivePin(pin.id); PinActionPop.open(pin.id); }
         else if (typeof App !== "undefined" && App.onPinTap) App.onPinTap(pin);
       } });
@@ -984,8 +984,8 @@
       items.push({ label: "QR 위치 태그", reason: (typeof QrPrint === "undefined") ? "준비 중" : "", run: () => QrPrint.printPin(pin) });
       let aiWhy = "준비 중";
       try {
-        if (isChecker) aiWhy = "CHECKER 는 사진을 등록하지 않습니다 — 360 포인트에서";
-        else if (typeof AiVision !== "undefined") aiWhy = AiVision.buttonState({ canEdit: AiVision.canEdit(), online: AiVision._online(), pin, status: AiVision._status }).reason;
+        // [WO 20261019-unifymode] 구 "CHECKER 는 사진 미등록" 사유 폐기 — 사진 없음 사유는 AiVision.buttonState 정본이 낸다
+        if (typeof AiVision !== "undefined") aiWhy = AiVision.buttonState({ canEdit: AiVision.canEdit(), online: AiVision._online(), pin, status: AiVision._status }).reason;
       } catch (e) {}
       items.push({ label: "AI 분석", reason: aiWhy, run: () => {
         App.setActivePin(pin.id); PinActionPop.open(pin.id);
@@ -996,15 +996,14 @@
     },
     mapCtxItems(pct, at) {
       const edit = this.permCheck("designer");
-      const mode = State.regMode === "photo" ? "360" : "CHECKER";
+      // [WO 20261019-unifymode] 모드 이름 → 등록 방식 이름. 붙여넣기의 계열 일치 게이트 폐기(핀은 하나).
+      const each = State.regMode === "photo";
       const items = [];
-      items.push({ label: "여기에 핀 추가(" + mode + ")", desc: mode === "360" ? "번호 핀 + 사진 선택" : "번호 핀(사진 없음)",
+      items.push({ label: "여기에 핀 추가(" + (each ? "바로 사진" : "번호 먼저") + ")", desc: each ? "번호 핀 + 사진 선택" : "번호 핀(사진은 나중에)",
         reason: edit || (pct ? "" : "도면 밖입니다"), run: () => this._ctxAddPinAt(at) });
       const clip = this._pinClip;
-      const clipSeries = clip ? (clip.checkboard ? "checkboard" : "content") : null;
-      const curSeries = State.regMode === "checkboard" ? "checkboard" : "content";
       items.push({ label: "붙여넣기" + (clip ? " (" + (clip.no || "") + ")" : ""), desc: clip ? "복사한 포인트 모양으로 새 번호 핀" : "",
-        reason: edit || (!clip ? "복사한 포인트가 없습니다 — 핀 우클릭 > 복사" : (clipSeries !== curSeries ? "복사한 포인트는 " + (clipSeries === "checkboard" ? "CHECKER" : "360") + " — 그 모드에서 붙여넣기" : (pct ? "" : "도면 밖입니다"))),
+        reason: edit || (!clip ? "복사한 포인트가 없습니다 — 핀 우클릭 > 복사" : (pct ? "" : "도면 밖입니다")),
         run: () => this._ctxAddPinAt(at, clip) });
       ["align-v", "align-h", "zoom-fit", "coverage"].forEach((id) => {
         const it = this._fmItem(id, id === "align-v" ? "정렬 시작 ↕" : id === "align-h" ? "정렬 시작 ↔" : null);
@@ -1079,7 +1078,7 @@
     copyPin(pin) {
       const meta = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, pin.page || 1).get(pin.id) : null;
       const no = meta ? (PinSeries.textOf ? PinSeries.textOf(meta) : PinSeries.formatNo(meta.no, meta.series)) : (pin.label || "");
-      this._pinClip = { checkboard: !!pin.checkboard, icon: pin.icon || null, leader: this.Leader.wants(pin), no };
+      this._pinClip = { icon: pin.icon || null, leader: this.Leader.wants(pin), no };
       const txt = "#" + no + " x=" + (+pin.x).toFixed(3) + "% y=" + (+pin.y).toFixed(3) + "% page=" + (pin.page || 1);
       let done = false;
       try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).catch(() => {}); done = true; } } catch (e) {}
@@ -1433,16 +1432,16 @@
       };
       const pinNode = (p, numMap) => {
         const n = document.createElement("button");
-        const isCheckerPin = !!p.checkboard;
-        n.className = "tree-node tree-node-pin tree-node-pin-mode-" + (isCheckerPin ? "checker" : "360") + (State.activePin === p.id ? " active" : "");
+        // [WO 20261019-unifymode] 행 표식 = 사진 유무(구 계열 메타 아님 — 핀은 하나). 사진 없음 = 번호 아이콘 · 있음 = 핀 아이콘.
+        const hasPhoto = (typeof PinSeries !== "undefined" && PinSeries.hasPhoto) ? PinSeries.hasPhoto(p) : !!(p.imageId || p.imageUrl);
+        n.className = "tree-node tree-node-pin tree-node-pin-" + (hasPhoto ? "photo" : "nophoto") + (State.activePin === p.id ? " active" : "");
         n.dataset.pinId = String(p.id); // [WO 20261008-pinstyle §3] 우클릭 앱 메뉴 대상 판정(UI.ctxTargetOf)
         const noteIco = p.note ? '<svg class="tree-note" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' : "";
         const meta = numMap ? numMap.get(p.id) : null;
         // [WO 20260930-fixmode] 표시 번호 포맷 SoT = PinSeries.formatNo(CHECKER "1" / 360 "P1") — 핀 패널 헤더(27_PinActionPop)와 같은 표기.
         const noTxt = meta ? ((PinSeries.textOf ? PinSeries.textOf(meta) : String(meta.no))) : "";   // [WO 20261016-multisheet P6] 접두 포함(A12)
         const noLabel = meta ? '<span class="tree-pin-no">#' + esc(noTxt) + '</span>' : "";
-        // [WO 20260930-pinstyle] 모드별 아이콘(형태 단서) — 판정 SoT = pin.checkboard(PinSeries.seriesOf 와 동일 기준).
-        n.innerHTML = (isCheckerPin ? ICO.pinChecker : ICO.pin) + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
+        n.innerHTML = (hasPhoto ? ICO.pin : ICO.pinChecker) + noLabel + '<span class="tree-label">' + esc(p.label || "포인트") + '</span>' + pageTag(p.page) + noteIco;
         if (p.note) n.title = "" + p.note;
         // [WO 20260929-bulkdel] 선택 모드(관리자): 버튼 안에 input 을 둘 수 없어 aria-pressed + 표시 기호로 선택 상태를 나타낸다
         if (selecting) {
@@ -1476,8 +1475,8 @@
       /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
          "영역이나 구역 역시도 공유해야 돼. 프로젝트-구역-영역은 동시에 공유하고, 하단에 체크와 360을
          별개로 구분하자는 거다". 구역·영역은 모드와 무관하게 한 벌만 렌더한다(중복 0). 모드 분리는
-         이 노드가 로드된(hasState) 지점의 맨 안쪽에 CHECKER N / 360 N 두 잎 그룹으로만 존재한다 —
-         핀 목록·번호대·일괄삭제 범위는 그 잎 그룹 안에서 계열별로 가른다(SoT: PinSeries.DECK_MODES). */
+         이 노드가 로드된(hasState) 지점의 맨 안쪽에 CHECKER N / 360 N 두 잎 그룹으로만 존재했다.
+         🔴 [WO 20261019-unifymode] 그 잎도 폐기 — 핀은 구역·영역 바로 아래 한 벌, 사진 필터(PinSeries.photoFilter)로만 거른다. */
       /** [WO 20261015-treemap] 🔴 마스터: "그 하부로도 서브구역을 지정 가능하게 트리맵 구조
        *  명확히 해" — 트리는 이미 임의 깊이로 재귀하지만(위 subDecks.forEach(deckNode(cd, true))가
        *  깊이와 무관하게 자기 자신을 다시 부른다) 깊이 표시가 없어 3단 이상에서 "몇 단계인지"가
@@ -1611,7 +1610,7 @@
             if (best) zoneOfPin.set(p.id, best);
           });
           // 공유 렌더러 — 주어진 핀 부분집합(scopePins)을 영역별로 묶어 target 아래에 그린다.
-          // 모드 잎 안(계열별)과, PinSeries 미로드 하네스의 전체-핀 폴백(아래) 둘 다 이 함수 하나로 그린다.
+          // [WO 20261019-unifymode] 사진 필터로 거른 이 구역·영역의 핀을 그린다(모드 잎 폐기).
           const renderScopedPins = (target, scopePins) => {
             const pinsOfZone = new Map();
             zones.forEach((z) => pinsOfZone.set(z.id, []));
@@ -1645,58 +1644,22 @@
             });
             rootPins.sort(sortByNo).forEach((p) => target.appendChild(pinNode(p, numMap)));
           };
-          // [WO 20260930-moderole] 🔴 잎 — 프로젝트→구역→영역(공유) 다음, 이 노드가 로드된 곳에서만
-          //   CHECKER N / 360 N 두 그룹을 그린다. 핀 목록·번호대·일괄삭제 범위는 그룹 안에서만
-          //   계열별로 가른다(SoT: PinSeries.DECK_MODES). 클릭 = App._setRegMode(상단 세그먼트와 동일).
-          const MODES = (typeof PinSeries !== "undefined" && PinSeries.DECK_MODES) || [];
-          if (!MODES.length) {
-            // 모드 정본 미로드(단독 모듈 하네스) — 모드 잎 없이 전체 핀을 그대로(종전 구조, 회귀 없음).
-            renderScopedPins(kids, pins);
-          } else {
-            const actMode = (typeof PinSeries !== "undefined" && PinSeries.activeMode) ? PinSeries.activeMode() : null;
-            const leafOpen = this._treeModeLeafOpen || (this._treeModeLeafOpen = new Set());
-            MODES.forEach((m) => {
-              const modeAll = pins.filter((p) => p && PinSeries.inMode(p, m.series));
-              // [WO 46_DeckOutline 수정] 이 노드가 창(crop) 구역이면 그 크롭 안의 핀만 — SoT:
-              // Projects.pinsForDeck(§31_Projects.js). 번호(numMap)·영역 소속(zoneOfPin)은 전체
-              // 핀 기준 그대로 둔다(전역 채번이 깨지지 않게, 이 잎의 표시·집계 범위만 좁힌다).
-              const modePinsHere = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(modeAll, deck) : modeAll;
-              const isAct = !!(actMode && actMode.tag === m.tag);
-              const leafKey = collapseKey + ":" + m.tag;
-              const mw = document.createElement("div");
-              mw.className = "tree-mode-leaf tree-mode-leaf-" + m.tag + ((isAct || leafOpen.has(leafKey)) ? " open" : "");
-              mw.dataset.mode = m.tag;
-              const mh = document.createElement("button");
-              mh.type = "button";
-              mh.className = "tree-node tree-node-mode-leaf" + (isAct ? " active" : "");
-              mh.setAttribute("aria-pressed", String(isAct));
-              mh.title = m.label + " 작업공간" + (isAct ? " (현재 모드)" : " — 누르면 이 모드로 전환하고 이 구역/영역을 엽니다");
-              mh.innerHTML = C + '<span class="tree-label">' + esc(m.label) + '</span><span class="tree-cnt" title="핀 수">' + modePinsHere.length + '</span>';
-              mh.addEventListener("click", (e) => {
-                const onCaret = !!(e && e.target && e.target.closest && e.target.closest(".tree-caret"));
-                if (onCaret || isAct) {
-                  if (mw.classList.toggle("open")) leafOpen.add(leafKey); else leafOpen.delete(leafKey);
-                  return;
-                }
-                if (typeof App !== "undefined" && App._setRegMode) App._setRegMode(m.regMode);
-                mw.classList.add("open"); leafOpen.add(leafKey);
-              });
-              mw.appendChild(mh);
-              // [WO 20260929-bulkdel] 관리자 전용 — 범위 = 이 모드 그룹의 핀만(다른 모드 핀은 지우지 않는다).
-              if (this._pinSelOk() && modePinsHere.length) {
-                const acts = document.createElement("div");
-                acts.className = "tree-project-actions tree-pin-bulk";
-                this._pinBulkButtons({ scopePins: modePinsHere.slice(), scopeLabel: (isRegion ? "이 영역" : "이 구역") + " " + m.label })
-                  .forEach(b => acts.appendChild(b));
-                mw.appendChild(acts);
-              }
-              const mk = document.createElement("div");
-              mk.className = "tree-children";
-              renderScopedPins(mk, modePinsHere);
-              mw.appendChild(mk);
-              kids.appendChild(mw);
-            });
+          // 🔴 [WO 20261019-unifymode] 모드 잎(CHECKER N / 360 N) 폐기 — 마스터 "360 과 체커 통일". 핀은 구역·영역 바로 아래에
+          //   한 벌만 그린다. 묶음 대신 [전체/사진 있음/사진 없음] 필터(PinSeries.photoFilter — 도면 칩과 같은 상태 하나)로 거른다.
+          //   창(crop) 구역이면 그 크롭 안 핀만(Projects.pinsForDeck SoT) — 번호(numMap)·영역 소속(zoneOfPin)은 전체 기준 그대로.
+          const deckPins = (typeof Projects !== "undefined" && Projects.pinsForDeck) ? Projects.pinsForDeck(pins, deck) : pins;
+          const shown = (typeof PinSeries !== "undefined" && PinSeries.filterByPhoto) ? PinSeries.filterByPhoto(deckPins) : deckPins;
+          // [WO 20260929-bulkdel] 관리자 전용 — 범위 = 이 구역·영역의 (필터로 보이는) 핀.
+          if (this._pinSelOk() && shown.length) {
+            const acts = document.createElement("div");
+            acts.className = "tree-project-actions tree-pin-bulk";
+            const fl = (typeof PinSeries !== "undefined" && PinSeries.photoFilter && PinSeries.photoFilter() !== "all")
+              ? " " + ((PinSeries.PHOTO_FILTERS.find((f) => f.key === PinSeries.photoFilter()) || {}).label || "") : "";
+            this._pinBulkButtons({ scopePins: shown.slice(), scopeLabel: (isRegion ? "이 영역" : "이 구역") + fl })
+              .forEach(b => acts.appendChild(b));
+            kids.appendChild(acts);
           }
+          renderScopedPins(kids, shown);
         }
         if (expandable) g.appendChild(kids);
         return g;
@@ -1741,7 +1704,7 @@
       if (e.key === "ArrowRight") {
         e.preventDefault();
         const caret = target.querySelector(".tree-caret");
-        const container = target.closest(".tree-deck,.tree-region,.tree-project,.tree-zone,.tree-mode-leaf");
+        const container = target.closest(".tree-deck,.tree-region,.tree-project,.tree-zone");
         if (caret && container && !container.classList.contains("open")) { caret.dispatchEvent(new MouseEvent("click", { bubbles: true })); return; }
         if (container) { const kid = container.querySelector(".tree-children .tree-node"); if (kid) kid.focus(); }
         return;
@@ -1749,7 +1712,7 @@
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         const caret = target.querySelector(".tree-caret");
-        const container = target.closest(".tree-deck,.tree-region,.tree-project,.tree-zone,.tree-mode-leaf");
+        const container = target.closest(".tree-deck,.tree-region,.tree-project,.tree-zone");
         if (caret && container && container.classList.contains("open")) { caret.dispatchEvent(new MouseEvent("click", { bubbles: true })); return; }
         const parentContainer = container && container.parentElement ? container.parentElement.closest(".tree-deck,.tree-region,.tree-project") : null;
         const parentHead = parentContainer ? parentContainer.querySelector(".tree-node") : null;
@@ -1830,15 +1793,11 @@
         //   #pin-list(renderPinList, 위 pin-issue-badge/pin-dup-badge)에서 계속 보인다.
         //   작성자 대역 정보도 PinActionPop meta 줄로 이관(PinSeries.userMark 그대로 재사용).
         if (hasContent) marker.classList.add("has-content");
-        if (pin.checkboard) marker.classList.add("checkboard"); // [체크보드 핀 색상구분] 일반 핀과 다른 색으로 표시
         marker.classList.add("pin-marker-teardrop"); // 진짜 핀(물방울) 모양 + 중앙 번호
         marker.classList.add("pin-kind-" + meta.kind); // 색맹 대비: 색 외 식별 훅
-        // [WO 20260930-pinstyle] 🔴 모드별 형태·색 구분 SoT = PinSeries.seriesOf/meta.series.
-        //   CHECKER 는 아래 SVG 에서 둥근사각 배지 프레임을 추가로 그리고(형태), 색은 PinSeries
-        //   CHECKBOARD_COLOR/EMPTY_COLOR(주황 계열)로 이미 360(블루/그린 계열)과 갈린다.
-        //   미니맵(07_Radar)·트리(pinNode)·필터칩(pinfilter-chip)·허브카드 잎이 전부 이 판정을 따른다.
-        const isChecker = meta.series === "checkboard";
-        marker.classList.add(isChecker ? "pin-mode-checker" : "pin-mode-360");
+        // 🔴 [WO 20261019-unifymode] 구 모드별 형태·색 구분(pin-mode-checker/360 · 사각 배지 프레임) 폐기 — 핀은 하나.
+        //   상태 훅 = pin-filled/pin-hollow(아래, PinSeries.markerStyle.filled) · data-photo(사진 유무 — 필터와 같은 판정).
+        marker.dataset.photo = (PinSeries.hasPhoto && PinSeries.hasPhoto(pin)) ? "1" : "0";
         // ── 번호: 콘텐츠 계열 / 체크보드 계열이 각각 1부터 독립 채번(PinSeries 정본) ──
         const dispNo = meta.no;
         // [WO 20260930-marker-no] 표시 라벨 포맷 SoT = PinSeries.formatNo(트리/핀패널과 동일:
@@ -1887,21 +1846,9 @@
           : (tier === "photo")
             ? `<${_discTag} class="pin-tier-disc" ${_discGeomAttr(18, 15)} fill="#ffffff" opacity="0.99"/><circle cx="22.6" cy="10.4" r="4.2" fill="#ffffff" opacity="0.99" stroke="#1a1a1a" stroke-width="0.8"/>`
             : `<${_discTag} class="pin-tier-disc" ${_discGeomAttr(18, 15)} fill="#ffffff" opacity="0.99"/>`;
-        // [WO 20260929] 체크보드 모드에서는 체크보드 핀의 번호만 보이게 — 장식(펄스·그라디언트·
-        // 그림자·티어 원판 모양 구분·아이콘 오버라이드) 최소화. 앵커(tip 18,60)는 원본과 동일
-        // 유지해 좌표 위치가 어긋나지 않는다. 대비 쌍(흰 원판+txtFill)도 기존 검증값 그대로 재사용.
-        const simplifiedCheckboard = (State.regMode === "checkboard" && pin.checkboard === true);
-        marker.innerHTML = simplifiedCheckboard ? `
-          <div class="pin-pin">
-            <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
-              <!-- [WO 20260930-pinstyle] CHECKER 간소화 배지 = 둥근 사각(rounded-square) — 360(원형
-                   메달리온)과 형태부터 다르게. 앵커(tip 18,60)는 원본과 동일(회귀 없음). -->
-              <path d="M15.3 27 L18 60 L20.7 27 Z" fill="${headFill2}"/>
-              <rect x="5.6" y="2.6" width="24.8" height="24.8" rx="6" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
-              <rect x="${(18 - labelGeom.rx).toFixed(1)}" y="${(15 - labelGeom.ry).toFixed(1)}" width="${(labelGeom.rx * 2).toFixed(1)}" height="${(labelGeom.ry * 2).toFixed(1)}" rx="3.4" fill="#ffffff"/>
-              <text class="pin-num-text" x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
-            </svg>
-          </div>` : `
+        // 🔴 [WO 20261019-unifymode] 구 "CHECKER 모드 + 체커 메타 핀 = 간소화 사각 배지" 분기 폐기 — 같은 번호 핀이 생성 모드·등록
+        //   방식에 따라 다른 모양이면 "통일"이 아니다. 모든 핀 = 같은 메달리온, 상태(사진 유무)는 filled 축(색·링 패턴·속 원판)으로만.
+        marker.innerHTML = `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
             <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">
@@ -1922,10 +1869,6 @@
               <ellipse cx="18" cy="60.5" rx="6.2" ry="2.3" fill="#000" opacity="0.22"/>
               <!-- 받침대 줄기: 머리에서 접지점(18,60)으로 수렴 -->
               <path d="M14.2 22 L18 60 L21.8 22 Z" fill="url(#pgstem${pageIdx})" filter="url(#pgshadow${pageIdx})"/>
-              <!-- [WO 20260930-pinstyle] CHECKER 전용 배지 프레임(둥근 사각) — 원 머리 뒤에 깔아
-                   모서리가 보이게 해 360(원형 메달리온)과 실루엣이 다르게 보인다. 원의 등록/미등록
-                   fill 토글(테스트 p9 대상)은 그대로 유지 — 프레임은 장식용 배경일 뿐 원을 대체하지 않는다. -->
-              ${isChecker ? `<rect x="3.6" y="2" width="28.8" height="27" rx="7.5" fill="${_st.filled ? "#fff7ed" : "#ffffff"}" opacity="0.95" stroke="#1a1a1a" stroke-width="1.6" stroke-opacity="0.45"/>` : ""}
               <!-- [대비강화] 도면(촘촘한 선) 위에서도 또렷하게: 진한 외곽 링 -->
               <circle cx="18" cy="15" r="12.4" fill="none" stroke="#1a1a1a" stroke-width="3.2" opacity="0.5"${ringDash ? ` stroke-dasharray="${ringDash}" stroke-linecap="round"` : ""}/>
               <!-- 메달리온 머리 -->
@@ -2084,7 +2027,7 @@
         //   때만 그리고, 그때는 마커를 감춘다(두 표현 동시 금지). 마커는 DOM 에 남겨 클릭 배선(풍선 → marker.click)
         //   과 번호 메타를 그대로 쓴다. 리더를 실제로 그렸을 때만 감춘다(그릴 수 없는 환경에서 핀이 사라지지 않게).
         if (this.Leader.wants(pin) && leaderLayer
-            && this._renderLeader(leaderLayer, layer, pin, marker, dispLabel, headFill2, txtFill, isChecker)) {
+            && this._renderLeader(leaderLayer, layer, pin, marker, dispLabel, headFill2, txtFill)) {
           marker.classList.add("pin-as-leader");
           marker.style.display = "none";
         }
@@ -2103,7 +2046,7 @@
      *  선 두께는 vector-effect="non-scaling-stroke"로 줌과 무관하게 화면상 고정.
      *  풍선 크기·글자는 MapCtrl.pinScreenScale()과 동일한 역스케일(._applyPinBillboard, pin-leader-bubble
      *  분기)로 화면 기준 고정 — 풍선을 pins-layer 의 자식으로 두어 그 반복문을 그대로 공유한다. */
-    _renderLeader(leaderLayer, pinsLayer, pin, marker, dispLabel, lineColor, txtFill, isChecker) {
+    _renderLeader(leaderLayer, pinsLayer, pin, marker, dispLabel, lineColor, txtFill) {
       // 🔴 [형제 호출부 보호] 기존 회귀테스트(p4/p9/p12/p50/p54/p55/p79/p91/p101 등 10여 개)는
       // 경량 가짜 document(SVG 네임스페이스 API 無)로 renderPinsOnMap()을 구동한다. 실 브라우저는
       // 항상 createElementNS 를 지원하므로 운영 동작엔 영향 없이, 이 환경에서만 리더(장식)를
@@ -2130,7 +2073,7 @@
 
       // 풍선(HTML, 고정 px — pin-marker 와 같은 줌 역스케일 반복문(_applyPinBillboard)을 공유)
       const bubble = document.createElement("div");
-      bubble.className = "pin-leader-bubble" + (isChecker ? " pin-leader-checker" : " pin-leader-360");
+      bubble.className = "pin-leader-bubble";   // [WO 20261019-unifymode] 구 pin-leader-checker/360(모드별) 폐기
       bubble.style.left = co.x + "%";
       bubble.style.top  = co.y + "%";
       bubble.dataset.id = pin.id;
