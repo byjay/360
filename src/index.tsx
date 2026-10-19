@@ -6623,6 +6623,68 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   })
 })
 
+/* ══ [WO 20261019-gap3 후속] GPS 기준점 맞추기 — 구역·시트(배포본+페이지)별 저장/조회/삭제.
+ *  쓰기 = 디자이너(그 프로젝트 쓰기권한) · 읽기 = 배포본 읽기 SoT(canReadDepRow, revGate 'read' 와 동일 판정). ══ */
+async function gpsCalibGate(c: any, mode: 'read' | 'write'): Promise<{ user?: any, dep?: any, res?: Response }> {
+  const user = await getUser(c)
+  if (!user) return { res: c.json({ error: 'unauthorized — login required' }, 401) }
+  const dep: any = await c.env.DB.prepare('SELECT * FROM deployments WHERE id = ? AND deleted = 0').bind(c.req.param('id')).first()
+  if (!dep) return { res: c.json({ error: 'not found' }, 404) }
+  const scope = await readScopeOf(c, user)
+  const idx = await depRefIndexOf(c)
+  if (!canReadDepRow(scope, idx, dep)) return { res: c.json({ error: 'forbidden' }, 403) }
+  if (mode === 'write') {
+    if (!(await requireDesigner(c))) return { res: c.json({ error: 'forbidden — designer login required' }, 403) }
+    const denied = await deploymentWriteDenied(c, user, dep.project_id)
+    if (denied) return { res: c.json({ error: denied.error }, denied.status) }
+  }
+  return { user, dep }
+}
+app.get('/api/deployments/:id/gps-calibration', async (c) => {
+  const g = await gpsCalibGate(c, 'read')
+  if (g.res) return g.res
+  const page = Number(c.req.query('page') || 1)
+  const row: any = await c.env.DB.prepare('SELECT * FROM gps_calibrations WHERE deployment_id = ? AND page = ?').bind(g.dep.id, page).first()
+  if (!row) return c.json({ data: null })
+  let points = [], matrix = null
+  try { points = JSON.parse(row.points || '[]') } catch {}
+  try { matrix = row.matrix ? JSON.parse(row.matrix) : null } catch {}
+  return c.json({ data: { id: row.id, page: row.page, points, matrix, residual_m: row.residual_m, created_by: row.created_by, updated_at: row.updated_at } })
+})
+app.post('/api/deployments/:id/gps-calibration', async (c) => {
+  const g = await gpsCalibGate(c, 'write')
+  if (g.res) return g.res
+  let body: any = {}
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const page = Number(body.page || 1)
+  const points = Array.isArray(body.points) ? body.points : []
+  if (points.length < 2) return c.json({ error: 'points(배열, 최소 2개) required' }, 400)
+  // 🔴 변환 계산은 클라이언트(GPS.Calib.fit, 48_GPS.js — 순수 함수, SoT) 가 하고 결과(matrix·residual_m)를 함께 보낸다.
+  //   서버는 저장만(재계산 0) — 같은 수식을 두 곳에 두면 갈라진다.
+  const matrix = body.matrix && typeof body.matrix === 'object' ? JSON.stringify(body.matrix) : null
+  const residual = Number.isFinite(Number(body.residual_m)) ? Number(body.residual_m) : null
+  const now = Date.now()
+  const existing: any = await c.env.DB.prepare('SELECT id FROM gps_calibrations WHERE deployment_id = ? AND page = ?').bind(g.dep.id, page).first()
+  if (existing) {
+    await c.env.DB.prepare('UPDATE gps_calibrations SET points = ?, matrix = ?, residual_m = ?, updated_at = ? WHERE id = ?')
+      .bind(JSON.stringify(points), matrix, residual, now, existing.id).run()
+    return c.json({ id: existing.id, page, updated_at: now })
+  }
+  const id = genId('gpscal')
+  await c.env.DB.prepare('INSERT INTO gps_calibrations (id, deployment_id, page, points, matrix, residual_m, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, g.dep.id, page, JSON.stringify(points), matrix, residual, g.user.email, now, now).run()
+  await logActivity(c, 'gps_calibration.save', { actor: g.user, targetType: 'deployment', targetId: g.dep.id, detail: { page } })
+  return c.json({ id, page, created_at: now })
+})
+app.delete('/api/deployments/:id/gps-calibration', async (c) => {
+  const g = await gpsCalibGate(c, 'write')
+  if (g.res) return g.res
+  const page = Number(c.req.query('page') || 1)
+  await c.env.DB.prepare('DELETE FROM gps_calibrations WHERE deployment_id = ? AND page = ?').bind(g.dep.id, page).run()
+  await logActivity(c, 'gps_calibration.delete', { actor: g.user, targetType: 'deployment', targetId: g.dep.id, detail: { page } })
+  return c.json({ success: true })
+})
+
 /* ══ [WO 20261012-pinsync] 기존 구역 핀 이관(설계 §2) — 자동 변환 금지, 사람이 미리보기 보고 [원본과 합치기] ══════════
  *  GET  /tables/deployments/:id/pin-alias        상태·미리보기(N건 · 화면 안 M · 밖 K · id 재발급 · 번호 겹침 · 노트)
  *  POST /tables/deployments/:id/pin-alias        이관 실행 — 보관(region_pin_migration) + D0 추가 + D1 비움 + 노트 이동 = 한 batch(멱등)

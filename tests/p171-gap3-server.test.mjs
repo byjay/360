@@ -203,6 +203,26 @@ try {
   const afterRevoke = await api(plainKey, "GET", "/api/v1/projects");
   ok(afterRevoke.status === 401, "F11 폐기된 키로 호출 → 401 → " + afterRevoke.status);
 
+  console.log("\n[H. gps_calibrations 저장·조회·삭제 — 디자이너만 쓰기, 열람은 프로젝트 권한]");
+  const calibPoints = [{ x: 10, y: 10, lat: 35.1001, lng: 129.0001 }, { x: 90, y: 90, lat: 35.1009, lng: 129.0009 }];
+  const calibSaveR = await api(TOK, "POST", "/api/deployments/" + dep + "/gps-calibration", { page: 1, points: calibPoints, matrix: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, residual_m: 0.4 });
+  ok(calibSaveR.status === 200, "H1 디자이너 저장 200 → " + JSON.stringify(calibSaveR.j));
+  const calibGetR = await api(TOK, "GET", "/api/deployments/" + dep + "/gps-calibration?page=1");
+  ok(calibGetR.status === 200 && calibGetR.j.data && calibGetR.j.data.points.length === 2, "H2 조회 — points 2개 → " + (calibGetR.j.data && calibGetR.j.data.points.length));
+  const calibUpsertR = await api(TOK, "POST", "/api/deployments/" + dep + "/gps-calibration", { page: 1, points: calibPoints.concat([{ x: 50, y: 50, lat: 35.1005, lng: 129.0005 }]), matrix: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, residual_m: 0.1 });
+  ok(calibUpsertR.status === 200 && calibUpsertR.j.id === calibSaveR.j.id, "H3 같은 deployment+page 재저장 → upsert(같은 id) → " + (calibUpsertR.j.id === calibSaveR.j.id));
+
+  const viewerTok = "local-p171-viewer";
+  await run("INSERT INTO local_users (email, name, domain, pw_hash, pw_salt, email_verified, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0)", ["viewer171@seastar.test", "viewer", "seastar.test", "x", "y", now0, now0]);
+  await run("INSERT INTO local_sessions (token, email, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, 0)", [viewerTok, "viewer171@seastar.test", now0, now0 + 8.64e7]);
+  const calibWriteByViewer = await api(viewerTok, "POST", "/api/deployments/" + dep + "/gps-calibration", { page: 1, points: calibPoints, matrix: {}, residual_m: 0 });
+  ok(calibWriteByViewer.status === 403, "H4 디자이너 아닌 계정 쓰기 → 403 → " + calibWriteByViewer.status);
+
+  const calibDelR = await api(TOK, "DELETE", "/api/deployments/" + dep + "/gps-calibration?page=1");
+  ok(calibDelR.status === 200, "H5 삭제 200");
+  const calibAfterDel = await api(TOK, "GET", "/api/deployments/" + dep + "/gps-calibration?page=1");
+  ok(calibAfterDel.status === 200 && calibAfterDel.j.data === null, "H6 삭제 후 조회 → null");
+
   console.log("\n[G. /docs/api 공개 문서]");
   const docsR = await mf.dispatchFetch(BASE + "/docs/api");
   const docsHtml = await docsR.text();

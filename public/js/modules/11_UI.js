@@ -726,6 +726,8 @@
         run: () => { if (typeof App !== "undefined" && App.registerDrawingFor) App.registerDrawingFor({ kind: "deck", deck }); } });
       // [WO 20261016-multisheet P3·P5] ☐ 도면 간 핀 번호 연결 · 번호 접두사 — 판정·실행은 66_PinLink(SoT)
       if (typeof PinLink !== "undefined" && PinLink.deckMenuItems) PinLink.deckMenuItems(deck, why).forEach((it) => items.push(it));
+      // [WO 20261019-gap3 재발주] GPS 기준점 맞추기 — 구역 ⋯ 메뉴 진입점(GPS.deckMenuItems SoT, 48_GPS.js)
+      if (typeof GPS !== "undefined" && GPS.Calib && GPS.Calib.deckMenuItems) GPS.Calib.deckMenuItems(deck, why).forEach((it) => items.push(it));
       // [WO 20261012-treeexplorer] 탐색기처럼 — 이 구역 아래 다단 하위 구역(이름만, 폴더처럼 상위 도면을 그대로 봄).
       items.push({ label: "+ 하위 구역", desc: "이 구역 아래 새 하위 구역을 만듭니다(이름만)",
         reason: why, run: () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false, parent_id: deck.id }); } });

@@ -309,6 +309,292 @@
         const x = (m.d * Ex - m.b * Nx) / det;
         const y = (-m.c * Ex + m.a * Nx) / det;
         return { x, y };
+      },
+
+      /** 일괄등록(지시 §3) — EXIF GPS 사진 → 도면 좌표 변환 → 임계거리(%) 이내 기존 핀이 있으면 "연결",
+       *  없으면 "새 핀" 계획(순수, DOM·서버 0). 한 기존 핀은 한 사진에만 연결(먼저 온 사진이 선점).
+       *  @param {{file:any, gps:{lat:number,lng:number}}[]} photos
+       *  @param {{id:any,x:number,y:number}[]} existingPins
+       *  @param {object} fitResult GPS.Calib.fit() 결과
+       *  @param {number} [thresholdPct] 기본 ATTACH_THRESHOLD_PCT */
+      ATTACH_THRESHOLD_PCT: 2, // 도면 가로/세로 % 기준 — 이름 있는 상수(매직넘버 금지)
+      planBatchPlacement(photos, existingPins, fitResult, thresholdPct) {
+        const th = Number.isFinite(thresholdPct) ? thresholdPct : this.ATTACH_THRESHOLD_PCT;
+        const used = new Set();
+        return (photos || []).map((p, i) => {
+          if (!p || !p.gps || p.gps.lat == null || p.gps.lng == null) return { file: p && p.file, mode: "skip", reason: "사진에 GPS 정보 없음" };
+          const pos = this.gpsToPixel(fitResult, p.gps.lat, p.gps.lng);
+          if (!pos) return { file: p.file, mode: "skip", reason: "변환 불가(기준점 없음)" };
+          let best = null, bestD = Infinity;
+          (existingPins || []).forEach((pin) => {
+            if (!pin || pin.x == null || pin.y == null || used.has(pin.id)) return;
+            const d = Math.hypot(pin.x - pos.x, pin.y - pos.y);
+            if (d <= th && d < bestD) { bestD = d; best = pin; }
+          });
+          if (best) { used.add(best.id); return { file: p.file, mode: "attach", pinId: best.id, x: pos.x, y: pos.y, distPct: bestD }; }
+          return { file: p.file, mode: "new", no: i + 1, x: pos.x, y: pos.y };
+        });
+      },
+
+      /* ══════════════════════════════════════════════════════════════
+         화면 — [GPS 기준점 맞추기](지시 §2, 2026-10-19 재발주). 전체화면 오버레이 자체 조립
+         (58_Revision._overlay 와 같은 "모듈 자기완결" 패턴 — 공용 모달 위젯 재사용 0, 결합 0).
+         진입점: 11_UI.deckMenuItems(구역 ⋯ 메뉴) · 45_FeatureMenu(전체 기능 메뉴) 둘 다 openSheet(deck) 호출.
+      ══════════════════════════════════════════════════════════════ */
+      _C: { bg: "#0f172a", panel: "#1e293b", ink: "#0f172a", text: "#f1f5f9", sub: "#94a3b8", pri: "#2563eb", sec: "#334155", danger: "#b91c1c", warn: "#f59e0b", ok: "#16a34a" },
+      _ov: null, _state: null,
+
+      _pageImageUrl(dep, page) {
+        let pages = [];
+        try { pages = JSON.parse(dep.pages_data || "[]"); } catch (e) {}
+        const u = (Array.isArray(pages) && pages[page - 1]) || dep.drawing_data || "";
+        if (!u) return "";
+        return /^data:/i.test(u) ? u : ((typeof Auth !== "undefined" && Auth.r2) ? Auth.r2(u) : u);
+      },
+      _btn(label, kind, onClick) {
+        const C = this._C, b = document.createElement("button");
+        b.type = "button"; b.textContent = label;
+        b.style.cssText = "min-height:40px;padding:8px 14px;border-radius:8px;border:none;font-size:13px;font-weight:700;cursor:pointer;"
+          + "background:" + (kind === "danger" ? C.danger : kind === "pri" ? C.pri : C.sec) + ";color:#ffffff;";
+        b.addEventListener("click", onClick);
+        return b;
+      },
+      /** @param {{id:any, deployment_id:any, page?:number, name?:string}} deck */
+      async openSheet(deck) {
+        if (typeof document === "undefined" || !deck || !deck.deployment_id) { this._toast("이 구역에는 도면이 없습니다 — 먼저 도면을 등록하세요"); return; }
+        const depId = String(deck.deployment_id), page = Number(deck.page) || 1;
+        this._closeSheet();
+        const C = this._C;
+        let dep = null, existing = null;
+        try {
+          const r1 = await fetch("/tables/deployments/" + encodeURIComponent(depId), { headers: (typeof Auth !== "undefined" ? Auth.headers() : {}) });
+          dep = r1.ok ? await r1.json() : null;
+          const r2 = await fetch("/api/deployments/" + encodeURIComponent(depId) + "/gps-calibration?page=" + page, { headers: (typeof Auth !== "undefined" ? Auth.headers() : {}) });
+          existing = r2.ok ? (await r2.json()).data : null;
+        } catch (e) {}
+        if (!dep) { this._toast("도면을 불러오지 못했습니다"); return; }
+        const imgUrl = this._pageImageUrl(dep, page);
+        const st = { depId, page, points: (existing && existing.points) || [], fit: null, imgEl: null, markersEl: null };
+        this._state = st;
+
+        const ov = document.createElement("div");
+        ov.id = "gps-calib-sheet";
+        ov.setAttribute("role", "dialog"); ov.setAttribute("aria-modal", "true"); ov.setAttribute("aria-label", "GPS 기준점 맞추기");
+        ov.style.cssText = "position:fixed;inset:0;z-index:10045;background:" + C.bg + ";color:" + C.text + ";overflow:auto;"
+          + "-webkit-overflow-scrolling:touch;font-size:14px;line-height:1.45;padding:12px;box-sizing:border-box;";
+        const head = document.createElement("div");
+        head.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;";
+        const h = document.createElement("h2");
+        h.textContent = "GPS 기준점 맞추기 — " + (deck.name || "구역");
+        h.style.cssText = "margin:0;font-size:17px;font-weight:800;flex:1 1 200px;color:" + C.text + ";";
+        head.appendChild(h);
+        head.appendChild(this._btn("닫기", "sec", () => this._closeSheet()));
+        ov.appendChild(head);
+
+        const notice = document.createElement("div");
+        notice.style.cssText = "background:" + C.panel + ";border-left:4px solid " + C.warn + ";border-radius:8px;padding:10px 12px;margin-bottom:10px;color:" + C.text + ";font-size:13px;";
+        notice.textContent = "⚠ 열린 갑판 · 계류 중에만 정확합니다. 선체 내부 · 갑판 아래 · 항해 중에는 GPS 위치가 성립하지 않습니다.";
+        ov.appendChild(notice);
+
+        const help = document.createElement("div");
+        help.style.cssText = "color:" + C.sub + ";font-size:13px;margin-bottom:8px;";
+        help.textContent = "도면을 탭해 기준점을 찍고(2곳 이상), 각 점에 GPS를 짝지으세요 — [지금 위치 기록] 또는 [GPS 담긴 사진 선택].";
+        ov.appendChild(help);
+
+        // 도면 이미지 + 탭 영역
+        const paneWrap = document.createElement("div");
+        paneWrap.style.cssText = "position:relative;max-width:900px;margin:0 auto 10px;background:#000;border-radius:8px;overflow:hidden;";
+        const img = document.createElement("img");
+        img.alt = "도면"; img.style.cssText = "display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;";
+        img.src = imgUrl;
+        const markers = document.createElement("div");
+        markers.style.cssText = "position:absolute;inset:0;";
+        paneWrap.appendChild(img); paneWrap.appendChild(markers);
+        st.imgEl = img; st.markersEl = markers;
+        paneWrap.style.cursor = "crosshair";
+        paneWrap.addEventListener("click", (ev) => {
+          const r = paneWrap.getBoundingClientRect();
+          const x = Math.max(0, Math.min(100, ((ev.clientX - r.left) / r.width) * 100));
+          const y = Math.max(0, Math.min(100, ((ev.clientY - r.top) / r.height) * 100));
+          this._addPoint(x, y);
+        });
+        ov.appendChild(paneWrap);
+
+        // 잔차/경고
+        const status = document.createElement("div");
+        status.id = "gps-calib-status";
+        status.style.cssText = "color:" + C.text + ";font-size:13px;margin-bottom:8px;white-space:pre-line;";
+        ov.appendChild(status);
+        st.statusEl = status;
+
+        // 점 목록 테이블
+        const table = document.createElement("div");
+        table.id = "gps-calib-rows";
+        table.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:10px;";
+        ov.appendChild(table);
+        st.tableEl = table;
+
+        // 저장/삭제
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+        actions.appendChild(this._btn("저장", "pri", () => this._save(deck)));
+        actions.appendChild(this._btn("기준점 전체 삭제", "danger", () => this._deleteAll(deck)));
+        ov.appendChild(actions);
+
+        document.body.appendChild(ov);
+        this._ov = ov;
+        this._renderPoints();
+      },
+      _closeSheet() { if (this._ov && this._ov.parentNode) this._ov.parentNode.removeChild(this._ov); this._ov = null; this._state = null; },
+      _toast(m) { try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(m); } catch (e) {} },
+
+      /** 새 기준점 탭 → GPS 짝짓기 방법 선택(지금 위치 기록 / 사진에서 가져오기). */
+      _addPoint(x, y) {
+        const st = this._state; if (!st) return;
+        const pt = { x: +x.toFixed(2), y: +y.toFixed(2), lat: null, lng: null };
+        st.points.push(pt);
+        this._renderPoints();
+        const idx = st.points.length - 1;
+        if (typeof ThetaIntake !== "undefined" && ThetaIntake._sheet) {
+          ThetaIntake._sheet({
+            id: "gps-calib-pair-sheet", title: "기준점 " + (idx + 1) + " — GPS 짝짓기",
+            body: "이 점의 현장 GPS 를 가져오는 방법을 고르세요.",
+            actions: [
+              { label: "📍 지금 위치 기록", primary: true, run: () => this._pairWithDevice(idx) },
+              { label: "🖼 GPS 담긴 사진 선택", run: () => this._pairWithPhoto(idx) },
+              { label: "이 기준점 취소", run: () => { st.points.splice(idx, 1); this._renderPoints(); } }
+            ]
+          });
+        }
+      },
+      async _pairWithDevice(idx) {
+        const st = this._state; if (!st || !st.points[idx]) return;
+        if (typeof navigator === "undefined" || !navigator.geolocation) { this._toast("이 기기는 위치 조회를 지원하지 않습니다"); return; }
+        this._toast("위치 조회 중…");
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const c = pos && pos.coords; if (!c || !st.points[idx]) return;
+            Object.assign(st.points[idx], { lat: c.latitude, lng: c.longitude, acc: c.accuracy });
+            this._toast("위치 기록됨(±" + Math.round(c.accuracy || 0) + "m)");
+            this._renderPoints();
+          },
+          () => this._toast("위치 조회 실패 — 권한을 확인하세요"),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+        );
+      },
+      _pairWithPhoto(idx) {
+        const st = this._state; if (!st) return;
+        const inp = document.createElement("input");
+        inp.type = "file"; inp.accept = "image/*"; inp.style.display = "none";
+        inp.addEventListener("change", async () => {
+          const f = inp.files && inp.files[0]; inp.remove();
+          if (!f || !st.points[idx]) return;
+          try {
+            const buf = await f.slice(0, 262144).arrayBuffer();
+            const g = this.parseExifGPS(buf);
+            if (!g) { this._toast("이 사진에는 GPS 정보가 없습니다"); return; }
+            Object.assign(st.points[idx], { lat: g.lat, lng: g.lng, acc: g.acc });
+            this._toast("사진 GPS 적용됨");
+            this._renderPoints();
+          } catch (e) { this._toast("사진을 읽지 못했습니다"); }
+        });
+        document.body.appendChild(inp);
+        inp.click();
+      },
+
+      /** 점 추가/제거/짝짓기마다 재계산 — 테이블·마커·잔차경고를 한 번에 갱신(단일 지점, SoT). */
+      _renderPoints() {
+        const st = this._state; if (!st || !this._ov) return;
+        const C = this._C;
+        // 마커
+        st.markersEl.innerHTML = "";
+        st.points.forEach((p, i) => {
+          const m = document.createElement("div");
+          const paired = p.lat != null;
+          m.style.cssText = "position:absolute;left:" + p.x + "%;top:" + p.y + "%;width:22px;height:22px;margin:-11px 0 0 -11px;"
+            + "border-radius:50%;background:" + (paired ? C.ok : C.warn) + ";border:2px solid #ffffff;color:#ffffff;display:flex;"
+            + "align-items:center;justify-content:center;font-size:11px;font-weight:800;";
+          m.textContent = String(i + 1);
+          st.markersEl.appendChild(m);
+        });
+        // 잔차 계산(2점 이상 + 모두 짝지어짐)
+        const paired = st.points.filter((p) => p.lat != null);
+        st.fit = paired.length >= 2 ? this.fit(paired) : null;
+        // 테이블
+        st.tableEl.innerHTML = "";
+        st.points.forEach((p, i) => {
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex;align-items:center;gap:8px;background:" + C.panel + ";border-radius:6px;padding:6px 10px;font-size:12px;";
+          const residOf = (() => {
+            if (!st.fit || p.lat == null) return null;
+            const j = paired.indexOf(p);
+            return (j >= 0 && st.fit.residuals && st.fit.residuals[j] != null) ? st.fit.residuals[j] : null;
+          })();
+          row.innerHTML = "<strong>" + (i + 1) + "</strong>"
+            + "<span style='flex:1'>도면(" + p.x.toFixed(1) + "%, " + p.y.toFixed(1) + "%) — "
+            + (p.lat != null ? ("GPS " + p.lat.toFixed(5) + ", " + p.lng.toFixed(5) + (p.acc != null ? (" ±" + Math.round(p.acc) + "m") : "")) : "GPS 미짝지음")
+            + (residOf != null ? (" · 잔차 " + residOf.toFixed(1) + "m") : "") + "</span>";
+          row.appendChild(this._btn("삭제", "sec", () => { st.points.splice(i, 1); this._renderPoints(); }));
+          st.tableEl.appendChild(row);
+        });
+        // 상태줄
+        const lines = [];
+        lines.push(st.points.length + "개 기준점(짝지어짐 " + paired.length + "개)");
+        if (st.points.length >= 1 && paired.length < st.points.length) lines.push("모든 기준점에 GPS 를 짝지어야 계산됩니다.");
+        if (st.fit) {
+          lines.push("변환: " + (st.fit.pointCount === 2 ? "상사(2점)" : "아핀(" + st.fit.pointCount + "점, 최소제곱)"));
+          lines.push("최대 잔차 " + st.fit.maxResidualM.toFixed(1) + "m" + (st.fit.warn ? " — " + st.fit.warn : ""));
+        } else if (paired.length === 1) {
+          lines.push("기준점을 1개 더 찍어 짝지으세요(최소 2개 필요).");
+        }
+        st.statusEl.textContent = lines.join("\n");
+        st.statusEl.style.color = (st.fit && st.fit.warn) ? this._C.warn : this._C.text;
+      },
+      async _save(deck) {
+        const st = this._state; if (!st) return;
+        const paired = st.points.filter((p) => p.lat != null);
+        if (paired.length < 2) { this._toast("GPS 짝지어진 기준점이 2개 이상 필요합니다"); return; }
+        if (!st.fit) { this._toast("변환을 계산할 수 없습니다 — 기준점을 다시 확인하세요"); return; }
+        try {
+          const r = await fetch("/api/deployments/" + encodeURIComponent(st.depId) + "/gps-calibration", {
+            method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, (typeof Auth !== "undefined" ? Auth.headers() : {})),
+            body: JSON.stringify({ page: st.page, points: paired, matrix: st.fit.matrix, residual_m: st.fit.maxResidualM })
+          });
+          if (!r.ok) { const j = await r.json().catch(() => ({})); this._toast("저장 실패 — " + (j.error || r.status)); return; }
+          this._toast("GPS 기준점 저장됨");
+        } catch (e) { this._toast("저장 실패 — 네트워크 오류"); }
+      },
+      async _deleteAll(deck) {
+        const st = this._state; if (!st) return;
+        try {
+          const r = await fetch("/api/deployments/" + encodeURIComponent(st.depId) + "/gps-calibration?page=" + st.page, {
+            method: "DELETE", headers: (typeof Auth !== "undefined" ? Auth.headers() : {})
+          });
+          if (!r.ok) { this._toast("삭제 실패"); return; }
+          st.points = []; this._renderPoints();
+          this._toast("GPS 기준점 삭제됨");
+        } catch (e) { this._toast("삭제 실패 — 네트워크 오류"); }
+      },
+
+      /* ══ 구역 ⋯ 메뉴 진입점(11_UI.deckMenuItems 가 PinLink 와 같은 자리에서 호출) ══ */
+      deckMenuItems(deck, why) {
+        if (!deck) return [];
+        return [{ label: "GPS 기준점 맞추기", desc: "도면에 GPS 기준점을 찍어 사진 위치를 자동 배치(열린 갑판·계류 중에만 정확)",
+          reason: why || (deck.deployment_id ? "" : "이 구역에 등록된 도면이 없습니다"), run: () => this.openSheet(deck) }];
+      },
+
+      /** 현재 열려 있는 구역에서 저장된 기준점(GPS 변환) 조회 — 일괄등록 연동(60/67/69)이 공유 호출.
+       *  없으면 null(지어내지 않음 — 호출부가 "GPS로 배치 불가"로 정직하게 표시). */
+      async loadFitFor(deploymentId, page) {
+        try {
+          const r = await fetch("/api/deployments/" + encodeURIComponent(deploymentId) + "/gps-calibration?page=" + (page || 1), { headers: (typeof Auth !== "undefined" ? Auth.headers() : {}) });
+          if (!r.ok) return null;
+          const j = await r.json();
+          const d = j && j.data;
+          if (!d || !d.matrix || !d.points || d.points.length < 2) return null;
+          const ref = { lat: d.points[0].lat, lng: d.points[0].lng };
+          return { matrix: d.matrix, ref, pointCount: d.points.length, residuals: [], maxResidualM: Number(d.residual_m) || 0, warn: null };
+        } catch (e) { return null; }
       }
     },
 

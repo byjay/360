@@ -21,6 +21,9 @@
        finishTapPreview(files) → confirmTapRegister() → PhotoBatch._uploadOneRow 일괄.
      흐름 B(동선): startRoute() → finishRoutePreview(files) → createRoutePins() →
        confirmRouteRegister().
+     흐름 C(GPS 배치, WO 20261019-gap3 재발주): mode:"gps" → finishGpsPreview(files) — 사진 EXIF GPS
+       → GPS.Calib(48_GPS.js) 변환 → 임계거리 내 기존 핀이면 "연결", 없으면 "새 핀" 계획 →
+       드래그 미리보기(흐름 B의 ghost-stop 재사용, 일반화) → _confirmGpsPreview().
      공통: undo() = 세션이 만든 핀 전부 제거(사진 연결 포함, 되돌리기 단위 = 세션).
   ══════════════════════════════════════════════════════════════ */
   const CaptureSession = {
@@ -54,7 +57,7 @@
       const o = opts || {};
       this._s = {
         id: this._newId(),
-        mode: o.mode === "route" ? "route" : "tap",
+        mode: (o.mode === "route" || o.mode === "gps") ? o.mode : "tap",
         startedAt: Date.now(),
         page: o.page || 1,
         deckId: o.deckId || null,
@@ -406,10 +409,11 @@
       ThetaIntake._sheet({
         id: "capsess-mode-sheet",
         title: "촬영 세션 — 방식 선택",
-        body: "정지점 탭: 걸으면서 멈출 때마다 도면을 탭 → THETA 로 촬영.\n동선: 선을 그린 뒤 연속 촬영(탭 없음).",
+        body: "정지점 탭: 걸으면서 멈출 때마다 도면을 탭 → THETA 로 촬영.\n동선: 선을 그린 뒤 연속 촬영(탭 없음).\nGPS 배치: 사진에 담긴 GPS 로 핀을 자동 생성(열린 갑판·계류 중에만 정확 — 먼저 [GPS 기준점 맞추기] 필요).",
         actions: [
           { label: "📍 정지점 탭(기본)", primary: true, run: () => this.start({ mode: "tap", zoneName: r.value, startNo: Number.isFinite(startNo) ? startNo : 1, page: (typeof State !== "undefined" ? State.pdfPage : 1) || 1 }).then(() => this._toast("세션 시작 — 도면을 탭해 정지점을 기록하세요")) },
           { label: "🧵 동선 그리기", run: () => { if (typeof Routes !== "undefined" && Routes.toggleDraw) Routes.toggleDraw(); this.start({ mode: "route", zoneName: r.value, startNo: Number.isFinite(startNo) ? startNo : 1, page: (typeof State !== "undefined" ? State.pdfPage : 1) || 1 }).then(() => this._toast("동선을 그리고 완료하면 연속 촬영을 시작하세요")); } },
+          { label: "📡 GPS 배치", run: () => this.start({ mode: "gps", zoneName: r.value, startNo: Number.isFinite(startNo) ? startNo : 1, page: (typeof State !== "undefined" ? State.pdfPage : 1) || 1 }).then(() => this._toast("사진 선택 → [📷 사진 선택] 버튼으로 GPS 배치를 시작하세요")) },
           { label: "취소", run: () => {} }
         ]
       });
@@ -419,7 +423,7 @@
       ThetaIntake._sheet({
         id: "capsess-active-sheet",
         title: "촬영 세션 진행 중",
-        body: (s.mode === "tap" ? ("정지점 " + s.taps.length + "개 기록됨") : "동선 모드") + " — 사진을 선택해 일괄 등록하거나 세션을 종료하세요.",
+        body: (s.mode === "tap" ? ("정지점 " + s.taps.length + "개 기록됨") : s.mode === "gps" ? "GPS 배치 모드" : "동선 모드") + " — 사진을 선택해 일괄 등록하거나 세션을 종료하세요.",
         actions: [
           { label: "📷 사진 선택 → 일괄 등록", primary: true, run: () => { const inp = document.getElementById("input-capture-session"); if (inp) inp.click(); } },
           // [WO THETA-OSC 20261019] 세션 중 [카메라로 촬영] — 73_ThetaOSC.js 에 세션을 넘겨 FAB가
@@ -450,7 +454,92 @@
             { label: "취소", run: () => this._removeGhostStops() }
           ]
         });
+      } else if (this._s.mode === "gps") {
+        const r = await this.finishGpsPreview(files);
+        if (!r) return;
+        if (r.error) { this._toast(r.error); return; }
+        this._lastGpsPlaced = r.placed;
+        const real = r.placed.filter((p) => p.kind !== "skip");
+        this._renderGhostStops(real);
+        const newCount = r.placed.filter((p) => p.kind === "new").length;
+        const attachCount = r.placed.filter((p) => p.kind === "attach").length;
+        const skipCount = r.placed.filter((p) => p.kind === "skip").length;
+        ThetaIntake._sheet({
+          id: "capsess-preview-sheet", title: "미리보기 — GPS 배치",
+          body: "새 핀 " + newCount + "개(파란 점, 드래그 가능) · 기존 핀에 연결 " + attachCount + "개(초록 점, 위치 고정)"
+            + (skipCount ? (" · GPS 없음 — 건너뜀 " + skipCount + "개") : "") + " — 확인하면 핀이 생성·연결되고 사진이 올라갑니다.",
+          actions: [
+            { label: "확인 → 핀 생성·사진 연결", primary: true, run: () => this._confirmGpsPreview() },
+            { label: "취소", run: () => this._removeGhostStops() }
+          ]
+        });
       }
+    },
+
+    /* ══ 흐름 C — GPS 배치(EXIF GPS → GPS.Calib 변환 → 새 핀/기존 핀 연결, WO 20261019-gap3 재발주) ══
+     *  🔴 EXIF 는 PhotoBatch.buildAutoRows(기존 세그먼트 스캔·360판정·sortKey 정본, §10 SoT)로 읽은 뒤,
+     *  같은 파일 버퍼에서 GPS IFD만 48_GPS.js GPS.parseExifGPS(기존 GPS 전용 파서, 이미 테스트됨)로 추가 추출한다
+     *  — 날짜용 파서(_parseExifDate)를 다시 베껴 쓰지 않는다. */
+    async finishGpsPreview(files) {
+      if (!this._s || this._s.mode !== "gps") return null;
+      const depId = (typeof State !== "undefined") ? State.currentDeploymentId : null;
+      if (!depId || typeof GPS === "undefined" || !GPS.Calib) return { error: "GPS 모듈을 불러오지 못했습니다" };
+      const fit = await GPS.Calib.loadFitFor(depId, this._s.page);
+      if (!fit) return { error: "이 구역·시트에 GPS 기준점이 없습니다 — 먼저 [GPS 기준점 맞추기]로 저장하세요" };
+      const rows = (typeof PhotoBatch !== "undefined" && PhotoBatch.buildAutoRows) ? await PhotoBatch.buildAutoRows(files) : [];
+      const photos = [];
+      for (const row of rows) {
+        let gps = null;
+        try { const buf = await row.file.slice(0, 262144).arrayBuffer(); gps = (typeof GPS !== "undefined" && GPS.parseExifGPS) ? GPS.parseExifGPS(buf) : null; } catch (e) {}
+        photos.push({ file: row, gps }); // file 자리에 row(버퍼 재사용 산출물)를 그대로 담아 업로드 단계가 그대로 쓴다.
+      }
+      const existingPins = ((typeof State !== "undefined" && State.pins) || []).filter((p) => p && Number(p.page || 1) === Number(this._s.page));
+      const plan = GPS.Calib.planBatchPlacement(photos, existingPins, fit);
+      let seq = 0;
+      const placed = plan.map((it) => {
+        if (it.mode === "skip") return { kind: "skip", row: it.file, reason: it.reason };
+        seq++;
+        return { no: seq, kind: it.mode, x: it.x, y: it.y, pinId: it.mode === "attach" ? it.pinId : undefined, row: it.file };
+      });
+      this._lastGpsPlaced = placed;
+      await this._persist();
+      return { placed };
+    },
+    /** 확정 — "new" 는 드래그로 보정된 x/y 에 번호핀 생성(PinSeries 채번, §10 SoT), "attach" 는 기존 핀을
+     *  찾아 사진만 연결. 업로드는 두 경우 모두 PhotoBatch._uploadOneRow(흐름A/B와 동일 SoT). */
+    async _confirmGpsPreview() {
+      const placed = this._lastGpsPlaced;
+      if (!placed) return;
+      this._removeGhostStops();
+      const usedNames = new Set();
+      let done = 0, fail = 0, created = 0, skipped = 0;
+      for (const it of placed) {
+        if (it.kind === "skip") { skipped++; continue; }
+        let pin = null;
+        if (it.kind === "new") {
+          const nx = this._nextNo(State.pins, this._s.page, this._s.band, this._s.startNo, this._s.prefix);
+          if (!nx || nx.full) { fail++; continue; }
+          const now = Date.now() + created;
+          const label = nx.label != null ? nx.label : String(nx.no);
+          pin = { id: now, createdAt: now, x: it.x, y: it.y, page: this._s.page, label: label, checkboard: false };
+          pin.name = this._nameOf(this._s.nameTemplate, this._s.zoneName, nx.no, label);
+          State.pins.push(pin);
+          this._s.createdPinIds.push(pin.id);
+          created++;
+        } else {
+          pin = (State.pins || []).find((p) => p && p.id === it.pinId);
+        }
+        if (!pin) { fail++; continue; }
+        const r = (typeof PhotoBatch !== "undefined" && PhotoBatch._uploadOneRow)
+          ? await PhotoBatch._uploadOneRow(pin, it.row, false, usedNames, "GPS배치")
+          : { status: "fail" };
+        if (r && r.status === "done") done++; else if (r && r.status === "fail") fail++;
+      }
+      this._s.done = true;
+      await this._persist();
+      if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); UI.renderPinsOnMap && UI.renderPinsOnMap(); }
+      this._toast("GPS 배치 완료 — 새 핀 " + created + "개 · 등록 " + done + "건" + (fail ? (" · 실패 " + fail) : "") + (skipped ? (" · GPS 없음 " + skipped) : ""));
+      return { done, fail, created, skipped };
     },
 
     /** 탭 모드 미리보기 시트 — ThetaIntake._sheet 는 텍스트 body + 버튼만 지원(§33 공용 규약) 이라
@@ -518,12 +607,15 @@
         const el = document.createElement("div");
         el.className = "capsess-ghost-stop";
         el.dataset.no = String(st.no);
+        // [WO 20261019-gap3 재발주] GPS 배치(흐름C)는 kind:"attach"(기존 핀에 사진만 연결, 위치 고정·드래그 불가)와
+        //   kind:"new"(새 핀, 드래그 가능)를 구분한다. 흐름B(동선)는 kind 가 없어 항상 "new"와 동일(기존 동작 불변).
+        const isAttach = st.kind === "attach";
         el.style.cssText = "position:absolute;left:" + st.x + "%;top:" + st.y + "%;width:26px;height:26px;margin:-13px 0 0 -13px;"
-          + "border-radius:50%;background:#2563eb;border:2px solid #ffffff;color:#ffffff;display:flex;align-items:center;justify-content:center;"
-          + "font-size:11px;font-weight:800;z-index:60;cursor:grab;touch-action:none;box-shadow:0 1px 5px rgba(0,0,0,.45);user-select:none;";
+          + "border-radius:50%;background:" + (isAttach ? "#16a34a" : "#2563eb") + ";border:2px solid #ffffff;color:#ffffff;display:flex;align-items:center;justify-content:center;"
+          + "font-size:11px;font-weight:800;z-index:60;cursor:" + (isAttach ? "default" : "grab") + ";touch-action:none;box-shadow:0 1px 5px rgba(0,0,0,.45);user-select:none;";
         el.textContent = String(st.no);
-        el.title = "정지점 " + st.no + " — 드래그로 위치 보정";
-        this._bindGhostDrag(el, st);
+        el.title = isAttach ? ("정지점 " + st.no + " — 기존 핀에 연결(위치 고정)") : ("정지점 " + st.no + " — 드래그로 위치 보정");
+        if (!isAttach) this._bindGhostDrag(el, st);
         layer.appendChild(el);
         this._ghostEls.push(el);
       });

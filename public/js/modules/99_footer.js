@@ -62,6 +62,7 @@
       DesignCompare: (typeof DesignCompare !== "undefined" ? DesignCompare : null),
       CaptureSession: (typeof CaptureSession !== "undefined" ? CaptureSession : null),   // [WO 20261019-capsession] 테스트 훅(p167)
       PhotoBatch: (typeof PhotoBatch !== "undefined" ? PhotoBatch : null),
+      GPS: (typeof GPS !== "undefined" ? GPS : null),   // [WO 20261019-gap3] 테스트 훅(p171) — GPS.Calib 기준점 맞추기
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

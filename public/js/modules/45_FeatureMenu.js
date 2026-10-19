@@ -61,6 +61,9 @@
         click: "btn-upload-drawing", covers: ["btn-upload-drawing", "tq-upload"] },
       { id: "deck-drawing", group: "drawing", icon: "⇪", label: "구역 도면 등록/교체", desc: "지금 구역·영역에 자기 PDF·이미지를 따로(메인 PDF 는 그대로)", perm: "designer", needs: "deck",
         run: () => App.registerDrawingFor({ kind: "deck", deck: Projects.currentDeck }) },
+      // [WO 20261019-gap3 재발주] GPS 기준점 맞추기 — FeatureMenu 진입점(GPS.Calib.openSheet SoT, 48_GPS.js)
+      { id: "gps-calib", group: "drawing", icon: "📍", label: "GPS 기준점 맞추기", desc: "도면에 GPS 기준점을 찍어 사진 위치를 자동 배치(열린 갑판·계류 중에만 정확)", perm: "designer", needs: "deck", mod: "GPS",
+        run: () => GPS.Calib.openSheet(Projects.currentDeck) },
       { id: "main-replace", group: "drawing", icon: "⟳", label: "메인 도면 교체", desc: "프로젝트 메인 PDF 를 새 파일로(확인창)", perm: "owner", needs: "project", danger: true,
         run: () => App.registerDrawingFor({ kind: "main" }) },
       // [WO 20261010-revision] 도면 개정 — 대상 = 지금 보는 자기 도면 구역, 아니면 메인(Revision.currentTarget SoT). 사유 = Revision.reason
@@ -290,6 +293,7 @@
           case "BackGuard": return typeof BackGuard !== "undefined";
           case "Delivery": return typeof Delivery !== "undefined" && typeof ZipStore !== "undefined";
           case "NumReset": return typeof NumReset !== "undefined";
+          case "GPS": return typeof GPS !== "undefined" && !!GPS.Calib;
           default: return false;
         }
       } catch (e) { return false; }   // 선언 전(TDZ) 접근도 "미로드"로
