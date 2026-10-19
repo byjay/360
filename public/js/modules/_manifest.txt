@@ -46,6 +46,7 @@
 38_Install.js
 38b_InstallGate.js
 38c_ApkInstall.js
+39_FlsPano.js
 41_RegionMerge.js
 42_Requests.js
 43_ProjectInfo.js

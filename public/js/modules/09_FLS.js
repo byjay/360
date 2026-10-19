@@ -35,6 +35,8 @@
       if (show) {
         this._ensureRenderer();
         setTimeout(() => this._resize(), 30);
+        // [WO flspano] 패널이 열릴 때마다 360 사진 추출 버튼이 있는지 보장(E57 로드 전에도 SCENE 이미지 버튼은 상시 노출)
+        if (typeof FlsPano !== "undefined" && FlsPano._ensureButton) { try { FlsPano._ensureButton(); } catch (e) {} }
       }
     },
 
@@ -140,6 +142,11 @@
         return this._showError("표시할 점이 없습니다", "파일이 비었거나 좌표 데이터를 찾지 못했습니다.");
       }
       this._render(parsed);
+      // [WO flspano] E57 로드 후 360 사진 추출 버튼 노출 여부 결정 — 실제 격자 디코딩은 버튼 클릭 시점에만
+      // 수행한다(자동 전해상도 재디코딩으로 인한 성능 저하 방지). buf/name 을 그대로 넘겨 재사용(이중 다운로드 없음).
+      if (ext === "e57" && typeof FlsPano !== "undefined" && FlsPano.onE57Loaded) {
+        try { FlsPano.onE57Loaded(buf, name); } catch (e) {}
+      }
     },
 
     /* ── 파서들 (positions: Float32Array[xyz*n], colors: Float32Array|null) ── */
@@ -352,9 +359,14 @@
         cartesianX: 1, cartesianY: 2, cartesianZ: 3,
         colorRed: 4, colorGreen: 5, colorBlue: 6,
         cartesianInvalidState: 7, sphericalInvalidState: 7,
-        sphericalRange: 8, sphericalAzimuth: 9, sphericalElevation: 10
+        sphericalRange: 8, sphericalAzimuth: 9, sphericalElevation: 10,
+        // [WO flspano] 격자(스캔 raster) 복원용 — 39_FlsPano.js 가 360 사진 추출에 사용.
+        rowIndex: 11, columnIndex: 12, intensity: 13
       }
     },
+    // [WO flspano] 격자 추출 시 전체 레코드를 손실 없이 보관(point-cloud 뷰용 MAX_POINTS 와는
+    // 별개 상한 — 파노라마 1장 분량은 보통 rows*cols ≈ 수백만이라 그보다 커야 함).
+    GRID_MAX_POINTS: 30_000_000,
 
     /** 한 페이지에서 실제 데이터가 담기는 바이트 수(끝 4B 는 CRC) — CRC 처리의 정본 */
     _e57Usable(pageSize) { return pageSize - this.E57.CRC_BYTES; },
@@ -444,6 +456,38 @@
       return fields;
     },
 
+    /** vectorChild 블록(start~end) 안의 <pose> — 회전(쿼터니언 w,x,y,z) + 이동(x,y,z). 없으면 null.
+     *  [WO flspano] 39_FlsPano.js 가 스캔 raster(row/col)를 방위각/고도각으로 바꿀 때 로컬 방향을 구하는 데 쓴다. */
+    _e57PoseOf(xml, start, end) {
+      const s = xml.indexOf("<pose", start >= 0 ? start : 0);
+      if (s < 0 || (end >= 0 && s > end)) return null;
+      const e = xml.indexOf("</pose>", s);
+      if (e < 0) return null;
+      const block = xml.slice(s, e);
+      const num = (b, tag) => { const m = b.match(new RegExp("<" + tag + "[^>]*>([^<]*)<")); return m && m[1] !== "" ? parseFloat(m[1]) : null; };
+      const rs = block.indexOf("<rotation"), re2 = block.indexOf("</rotation>");
+      const ts = block.indexOf("<translation");
+      const rBlock = rs >= 0 ? block.slice(rs, re2 >= 0 ? re2 : block.length) : "";
+      const tBlock = ts >= 0 ? block.slice(ts) : "";
+      const rot = { w: num(rBlock, "w"), x: num(rBlock, "x"), y: num(rBlock, "y"), z: num(rBlock, "z") };
+      const tr = { x: num(tBlock, "x"), y: num(tBlock, "y"), z: num(tBlock, "z") };
+      if (rot.w == null || !isFinite(rot.w)) return null;
+      return { rotation: rot, translation: tr };
+    },
+
+    /** vectorChild 블록(start~end) 안의 <indexBounds> — rowMaximum/columnMaximum(스캔 raster 크기). 없으면 null. */
+    _e57IndexBoundsOf(xml, start, end) {
+      const s = xml.indexOf("<indexBounds", start >= 0 ? start : 0);
+      if (s < 0 || (end >= 0 && s > end)) return null;
+      const e = xml.indexOf("</indexBounds>", s);
+      if (e < 0) return null;
+      const block = xml.slice(s, e);
+      const num = (tag) => { const m = block.match(new RegExp("<" + tag + "[^>]*>([^<]*)<")); return m && m[1] !== "" ? parseInt(m[1], 10) : null; };
+      const rowMax = num("rowMaximum"), colMax = num("columnMaximum");
+      if (rowMax == null || colMax == null) return null;
+      return { rowMin: num("rowMinimum") || 0, rowMax, colMin: num("columnMinimum") || 0, colMax };
+    },
+
     /** 한 스트림에 새 바이트를 이어붙인다(이미 소비한 바이트는 버리고 잔여 비트는 유지) */
     _e57Feed(st, add) {
       const keep = st.bit >> 3;
@@ -488,8 +532,11 @@
       return f.type === "ScaledInteger" ? v * f.scale + f.offset : v;
     },
 
-    /** ArrayBuffer(.e57) → { positions, colors, count } — _parsePLY/_parseLAS 와 동일 계약 */
-    _parseE57(buf) {
+    /** ArrayBuffer(.e57) → { positions, colors, count[, grid] } — _parsePLY/_parseLAS 와 동일 계약.
+     *  opts.grid=true 면 rowIndex/columnIndex 격자가 있는 섹션을 전해상도(무손실)로 추가 디코딩해
+     *  grid:{rows,cols,n,row,col,localXYZ,rgb,intensity,pose} 를 덧붙인다(39_FlsPano.js 360 사진 추출용).
+     *  grid 생성 비용은 요청 시에만 발생 — 기존 3D 뷰 경로(opts 없음)는 동작·성능 변화 없음. */
+    _parseE57(buf, opts) {
       const u8 = new Uint8Array(buf);
       const h = this._e57Header(buf);
       const xmlBytes = this._e57ReadLogical(u8, h.xmlPhysOffset, h.xmlLength, h.pageSize);
@@ -504,7 +551,12 @@
         const fo = m[0].match(/fileOffset="(\d+)"/);
         if (!fo) continue;
         const rc = m[0].match(/recordCount="(\d+)"/);
-        secs.push({ at: m.index, fileOffset: Number(fo[1]), recordCount: rc ? Number(rc[1]) : 0 });
+        const vcStart = xml.lastIndexOf("<vectorChild", m.index);
+        secs.push({
+          at: m.index, fileOffset: Number(fo[1]), recordCount: rc ? Number(rc[1]) : 0,
+          pose: this._e57PoseOf(xml, vcStart >= 0 ? vcStart : 0, m.index),
+          indexBounds: this._e57IndexBoundsOf(xml, vcStart >= 0 ? vcStart : 0, m.index)
+        });
       }
       if (!secs.length) throw new Error("E57 안에 점 데이터(<points type=\"CompressedVector\">)가 없습니다.");
       secs.forEach(s => { s.fields = this._e57Prototype(xml, s.at); });
@@ -526,7 +578,25 @@
         throw new Error("유효한 점을 찾지 못했습니다 (recordCount=" + total + ", 무효점 " + sink.invalid + "). "
           + "좌표 필드(cartesianX/Y/Z 또는 sphericalRange)가 없거나 모두 무효 측정값일 수 있습니다.");
       }
-      return this._decim(sink.pos.subarray(0, sink.kept * 3), sink.col ? sink.col.subarray(0, sink.kept * 3) : null);
+      const result = this._decim(sink.pos.subarray(0, sink.kept * 3), sink.col ? sink.col.subarray(0, sink.kept * 3) : null);
+      if (opts && opts.grid) {
+        const gsec = secs.find(s => s.fields.some(f => f.role === 11) && s.fields.some(f => f.role === 12));
+        if (gsec) {
+          const g = this._e57ReadGridSection(u8, gsec, h.pageSize, this.GRID_MAX_POINTS);
+          if (g.n) {
+            let rowMax = gsec.indexBounds ? gsec.indexBounds.rowMax : null;
+            let colMax = gsec.indexBounds ? gsec.indexBounds.colMax : null;
+            if (rowMax == null) { rowMax = 0; for (let i = 0; i < g.n; i++) if (g.row[i] > rowMax) rowMax = g.row[i]; }
+            if (colMax == null) { colMax = 0; for (let i = 0; i < g.n; i++) if (g.col[i] > colMax) colMax = g.col[i]; }
+            result.grid = {
+              rows: rowMax + 1, cols: colMax + 1, n: g.n,
+              row: g.row, col: g.col, localXYZ: g.xyz, rgb: g.rgb, intensity: g.intensity,
+              pose: gsec.pose
+            };
+          }
+        }
+      }
+      return result;
     },
 
     /** CompressedVector 섹션 1개를 앞에서부터 스트리밍 디코딩해 sink 에 채운다 */
@@ -615,6 +685,108 @@
         }
         phys = next;
       }
+    },
+
+    /** [WO flspano] CompressedVector 섹션 1개를 rowIndex/columnIndex 와 함께 **전해상도**(디시메이션 없음)로
+     *  디코딩한다 — point-cloud 뷰용 _e57ReadSection(stride 다운샘플)과 다른 용도이므로 별도 함수로 둔다.
+     *  바이트/비트 읽기 원시함수(_e57ReadLogical/_e57Feed/_e57Bits/_e57Value 등)는 그대로 재사용(SoT 유지). */
+    _e57ReadGridSection(u8, sec, pageSize, capN) {
+      const E = this.E57, fields = sec.fields, nf = fields.length;
+      const sh = this._e57ReadLogical(u8, sec.fileOffset, E.SECTION_HEADER_BYTES, pageSize);
+      if (sh.length < E.SECTION_HEADER_BYTES) throw new Error("E57 CompressedVector 섹션 헤더를 읽지 못했습니다.");
+      if (sh[0] !== E.SECTION_ID_CV) throw new Error("E57 섹션 id 가 CompressedVector(1)가 아닙니다: " + sh[0]);
+      const sdv = new DataView(sh.buffer, sh.byteOffset, sh.byteLength);
+      const dataPhys = sdv.getUint32(16, true) + sdv.getUint32(20, true) * 4294967296;
+
+      const cartesian = fields.some(f => f.role >= 1 && f.role <= 3);
+      const hasColor = fields.some(f => f.role >= 4 && f.role <= 6);
+      const hasIntensity = fields.some(f => f.role === 13);
+      const scratch = new DataView(new ArrayBuffer(8));
+      const streams = [];
+      for (let i = 0; i < nf; i++) streams.push({ bytes: new Uint8Array(0), bit: 0 });
+      const cap = Math.min(sec.recordCount || capN, capN);
+      const row = new Int32Array(cap), col = new Int32Array(cap);
+      const xyz = cartesian ? new Float32Array(cap * 3) : null;
+      const rgb = hasColor ? new Uint8Array(cap * 3) : null;
+      const inten = hasIntensity ? new Float32Array(cap) : null;
+      let kept = 0, phys = dataPhys, done = 0;
+
+      while (kept < cap) {
+        if (sec.recordCount && done >= sec.recordCount) break;
+        if (phys >= u8.length) break;
+        const ph = this._e57ReadLogical(u8, phys, E.PACKET_HEADER_BYTES, pageSize);
+        if (ph.length < E.PACKET_HEADER_BYTES) break;
+        const packetLen = (ph[2] | (ph[3] << 8)) + 1;
+        if (packetLen < E.PACKET_HEADER_BYTES) throw new Error("E57 패킷 길이가 비정상입니다: " + packetLen);
+        const next = this._e57PhysOf(this._e57LogicalOf(phys, pageSize) + packetLen, pageSize);
+        if (ph[0] !== E.PACKET_DATA) { phys = next; continue; }
+        const nStreams = ph[4] | (ph[5] << 8);
+        if (nStreams !== nf)
+          throw new Error("E57 바이트스트림 수(" + nStreams + ")가 prototype 필드 수(" + nf + ")와 다릅니다.");
+        const full = this._e57ReadLogical(u8, phys, packetLen, pageSize);
+        if (full.length < packetLen) break;
+        let cur = E.PACKET_HEADER_BYTES + nStreams * 2;
+        for (let i = 0; i < nStreams; i++) {
+          const o = E.PACKET_HEADER_BYTES + i * 2;
+          const len = full[o] | (full[o + 1] << 8);
+          this._e57Feed(streams[i], full.subarray(cur, cur + len));
+          cur += len;
+        }
+        let avail = Infinity;
+        for (let i = 0; i < nf; i++) {
+          const bits = fields[i].bits;
+          if (!bits) continue;
+          const a = Math.floor((streams[i].bytes.length * 8 - streams[i].bit) / bits);
+          if (a < avail) avail = a;
+        }
+        if (avail === Infinity) avail = sec.recordCount ? sec.recordCount - done : 0;
+        if (sec.recordCount) avail = Math.min(avail, sec.recordCount - done);
+        if (avail <= 0) { phys = next; continue; }
+
+        for (let n = 0; n < avail && kept < cap; n++) {           // ← 디시메이션 없음: 매 레코드 디코딩(전해상도)
+          let x = 0, y = 0, z = 0, r = 1, g = 1, b = 1, it = 0, rIdx = 0, cIdx = 0, bad = 0, rng = 0, az = 0, el = 0;
+          for (let i = 0; i < nf; i++) {
+            const f = fields[i], v = this._e57Value(f, streams[i], scratch);
+            switch (f.role) {
+              case 1: x = v; break;
+              case 2: y = v; break;
+              case 3: z = v; break;
+              case 4: r = v / f.cnorm; break;
+              case 5: g = v / f.cnorm; break;
+              case 6: b = v / f.cnorm; break;
+              case 7: if (v !== 0) bad = 1; break;
+              case 8: rng = v; break;
+              case 9: az = v; break;
+              case 10: el = v; break;
+              case 11: rIdx = v; break;
+              case 12: cIdx = v; break;
+              case 13: it = v; break;
+              default: break;
+            }
+          }
+          done++;
+          if (bad) continue;
+          if (!cartesian) {
+            const c = Math.cos(el);
+            x = rng * c * Math.cos(az); y = rng * c * Math.sin(az); z = rng * Math.sin(el);
+          }
+          if (xyz && (!isFinite(x) || !isFinite(y) || !isFinite(z))) continue;
+          const k = kept;
+          row[k] = rIdx; col[k] = cIdx;
+          if (xyz) { xyz[k * 3] = x; xyz[k * 3 + 1] = y; xyz[k * 3 + 2] = z; }
+          if (rgb) { rgb[k * 3] = Math.round(r * 255); rgb[k * 3 + 1] = Math.round(g * 255); rgb[k * 3 + 2] = Math.round(b * 255); }
+          if (inten) inten[k] = it;
+          kept++;
+        }
+        phys = next;
+      }
+      return {
+        n: kept,
+        row: row.subarray(0, kept), col: col.subarray(0, kept),
+        xyz: xyz ? xyz.subarray(0, kept * 3) : null,
+        rgb: rgb ? rgb.subarray(0, kept * 3) : null,
+        intensity: inten ? inten.subarray(0, kept) : null
+      };
     },
 
     _parseFLS(buf, ext) {
