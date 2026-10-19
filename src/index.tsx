@@ -11,6 +11,7 @@ import { normalizeRevLabel, revLabelKey, nextRevLabel, IDENTITY as REV_IDENTITY,
   carryPins, carryZones, carryAnnos, carryRoutes, carryCrop, diffPins, revertPinsMerge, revertShapesMerge, invertAff } from './lib/revCore'
 import { aliasBoxOf, projectPins, mergeIntoHome, basePinsMin, unprojectOp, parsePins, aliasVersion, homeVersionOf, planMigration,
   type Box as AliasBox } from './lib/regionAlias'
+import { isPrivateOrLocalHost, validateWebhookUrl, hmacSignHex, deliverWithRetry, rateLimitStep, newApiKeyPlain } from './lib/webhooks'
 
 type Bindings = {
   DB: D1Database
@@ -1071,6 +1072,45 @@ function runLater(c: any, job: Promise<any>): Promise<any> | void {
   try { if (c.executionCtx && c.executionCtx.waitUntil) { c.executionCtx.waitUntil(job); return } } catch {}
   return job
 }
+
+/* ══ [WO 20261019-gap3] 웹훅 발송(SoT 단일 지점) — pin.created / photo.attached / issue.created 등 /
+ *  issue.updated / issue.status_changed / deployment.published 가 모두 이 함수 하나를 거친다
+ *  (src/lib/webhooks.ts 가 서명·SSRF·재시도 순수 로직). 실패해도 본문 저장을 막지 않는다
+ *  (호출부는 반드시 runLater로 감싸 응답을 지연하지 않는다). ══ */
+async function fireWebhooks(c: any, projectId: string, event: string, payload: any): Promise<void> {
+  if (!projectId) return
+  try {
+    const { results } = await c.env.DB.prepare('SELECT * FROM webhooks WHERE project_id = ? AND active = 1').bind(projectId).all()
+    const hooks = (results || []).filter((w: any) => { try { return JSON.parse(w.events || '[]').includes(event) } catch { return false } })
+    for (const w of hooks) {
+      const body = JSON.stringify({ event, project_id: projectId, payload, ts: Date.now() })
+      const sig = await hmacSignHex(String(w.secret), body)
+      const headers = { 'Content-Type': 'application/json', 'X-Webhook-Signature': 'sha256=' + sig, 'X-Webhook-Event': event }
+      const r = await deliverWithRetry(String(w.url), body, headers)
+      const last = r.attempts[r.attempts.length - 1]
+      await c.env.DB.prepare(
+        'INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status, attempt, response_code, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(genId('whd'), w.id, event, body, r.finalOk ? 'success' : 'failed', r.attempts.length, last.status ?? null, last.error ?? null, Date.now()).run()
+    }
+  } catch (e) { console.error('[webhook] fire failed', event, e) }
+}
+
+/** API 키 인증(Authorization: Bearer wk_... 또는 X-API-Key) — 읽기 기본, scope='write' 여야 쓰기 허용.
+ *  🔴 레이트리밋(고정 60s 윈도, 기본 60req) 도 이 지점에서 함께 판정 — 호출부가 중복 구현하지 않는다(SoT). */
+async function requireApiKey(c: any, needWrite: boolean): Promise<{ row: any } | null> {
+  const hdr = c.req.header('Authorization') || ''
+  const plain = (hdr.toLowerCase().startsWith('bearer ') ? hdr.slice(7) : '') || c.req.header('X-API-Key') || ''
+  if (!plain) return null
+  const hash = await sha256Hex(plain)
+  const row: any = await c.env.DB.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL').bind(hash).first()
+  if (!row) return null
+  if (needWrite && row.scope !== 'write') return null
+  const step = rateLimitStep(row, API_KEY_RATE_LIMIT_PER_MIN, 60000, Date.now())
+  if (!step) return null
+  await c.env.DB.prepare('UPDATE api_keys SET rl_window_start = ?, rl_count = ? WHERE id = ?').bind(step.windowStart, step.count, row.id).run()
+  return { row }
+}
+const API_KEY_RATE_LIMIT_PER_MIN = 60
 
 /** 열람자 — 초대받은 이메일 입력 → 메일 요청. 🔴 응답·레이트리밋은 수신자 여부와 무관하게 같다(이메일 존재 비노출). */
 app.post('/api/view-auth/start', async (c) => {
@@ -5270,6 +5310,7 @@ app.post('/api/projects/:id/publish', async (c) => {
     return c.json({ error: '배포 스냅샷 저장 실패 — 배포하지 않았습니다: ' + String(e && e.message || e).slice(0, 200) }, 500)
   }
   await logActivity(c, 'project.publish', { actor: user, targetType: 'project', targetId: pid, detail: { snapshot_deps: snapDeps } })
+  runLater(c, fireWebhooks(c, pid, 'deployment.published', { project_id: pid, snapshot_deps: snapDeps, published_at: now }))
   const row: any = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(pid).first()
   return c.json({ success: true, project: row ? mapProject(row) : null, snapshot_at: now, snapshot_deps: snapDeps })
 })
@@ -6408,6 +6449,8 @@ app.post('/tables/deployments/:id/ops', async (c) => {
   let newlyApplied = 0   // 멱등: 실제로 새로 적용된 op만 카운트 → version 증가 판정에 사용
   const noteIdMap: Record<string, string> = {}   // 클라 임시 note id → 서버 실제 id
   const revCache = new Map<string, RevEvent[]>()   // [WO 20261010-offmatrix S-REV] op.base → 이후 개정
+  // [WO 20261019-gap3] 핀 생성/사진 연결 웹훅 — 루프 중엔 수집만(응답 지연 0), 끝나고 runLater로 발송.
+  const webhookEvents: Array<{ event: string, pin: any }> = []
   for (const op of ops) {
     if (!op || !op.opId || !op.entity || op.id == null) continue
     // 멱등: 이미 적용된 opId면 건너뜀(중복 업로드 무해, version 증가에 기여하지 않음)
@@ -6523,11 +6566,25 @@ app.post('/tables/deployments/:id/ops', async (c) => {
       } else {
         m.set(String(op.id), Object.assign({}, op.data, { id: op.id, ts: opTs }))
       }
+      // [WO 20261019-gap3] 웹훅 — 새 핀(cur 없었음)=pin.created, 기존 핀에 imageId 가 새로 붙음=photo.attached.
+      //   🔴 기존 LWW/별칭 로직은 위에서 이미 끝났다 — 여기는 "그 결과를 관찰"만 하는 추가 분기(동작 변경 0).
+      if (op.entity === 'pin') {
+        const after = m.get(String(op.id))
+        if (!cur) webhookEvents.push({ event: 'pin.created', pin: after })
+        else if (op.data && op.data.imageId && (!cur.imageId || cur.imageId !== op.data.imageId)) webhookEvents.push({ event: 'photo.attached', pin: after })
+      }
     }
     await c.env.DB.prepare('INSERT OR IGNORE INTO applied_ops (op_id, deployment_id, applied_at) VALUES (?, ?, ?)')
       .bind(op.opId, opDepId, Date.now()).run()
     applied.push(op.opId)
     newlyApplied++
+  }
+  if (webhookEvents.length && dep.project_id) {
+    runLater(c, (async () => {
+      for (const we of webhookEvents) {
+        await fireWebhooks(c, String(dep.project_id), we.event, { pin_id: we.pin && we.pin.id, label: we.pin && we.pin.label, x: we.pin && we.pin.x, y: we.pin && we.pin.y, imageId: we.pin && we.pin.imageId, deployment_id: pinDepId })
+      }
+    })())
   }
 
   const dump = (m: Map<string, any>) => JSON.stringify(Array.from(m.values()))
@@ -7221,6 +7278,13 @@ app.post('/api/notes', async (c) => {
       })
     }
   } catch (e) { console.error('[notes.create] notify failed', e) }
+  // [WO 20261019-gap3] issue.created 웹훅 — 구조화된 결함 노트(kind='note')만. 답변/요청/질문은 이슈 자체가 아니다.
+  if (kind === 'note') {
+    try {
+      const depRow: any = await c.env.DB.prepare('SELECT project_id FROM deployments WHERE id = ? AND deleted = 0').bind(deployment_id).first()
+      if (depRow && depRow.project_id) runLater(c, fireWebhooks(c, String(depRow.project_id), 'issue.created', { note_id: id, pin_id, pin_label, status, assignee_email, severity, due_at }))
+    } catch (e) { console.error('[notes.create] webhook failed', e) }
+  }
   return c.json({ ...mapNote(row, mod || a.role === 'guest', mod ? undefined : a.email), ...(editKey ? { edit_key: editKey } : {}) })
 })
 
@@ -7337,6 +7401,16 @@ app.patch('/api/notes/:id', async (c) => {
       }
     }
   } catch (e) { console.error('[notes.patch] notify failed', e) }
+  // [WO 20261019-gap3] issue.updated/issue.status_changed 웹훅 — 구조화된 결함 노트(kind='note')만.
+  if (String(updated.kind || 'note') === 'note') {
+    try {
+      const depRow: any = await c.env.DB.prepare('SELECT project_id FROM deployments WHERE id = ? AND deleted = 0').bind(updated.deployment_id).first()
+      if (depRow && depRow.project_id) {
+        const ev = statusChanged ? 'issue.status_changed' : 'issue.updated'
+        runLater(c, fireWebhooks(c, String(depRow.project_id), ev, { note_id: id, pin_id: updated.pin_id, status: updated.status, assignee_email: updated.assignee_email, severity: updated.severity }))
+      }
+    } catch (e) { console.error('[notes.patch] webhook failed', e) }
+  }
   return c.json(mapNote(updated, right === 'designer', right === 'designer' ? undefined : actor.email))
 })
 
@@ -7432,6 +7506,310 @@ app.put('/api/notify-prefs', async (c) => {
    (css/js/images/static/index.html 은 _routes.json exclude로 자동 서빙되며,
     여기 도달하는 경로는 루트('/') 또는 알 수 없는 경로 → index.html 반환)
 ════════════════════════════════════════════ */
+/** [WO 20261019-gap3] /docs/api 정적 문서 — 열람자 0(공개), 운영 데이터 하드코딩 0(엔드포인트·헤더 설명만). */
+const API_DOCS_HTML = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>SEASTAR 360 API 문서</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font-family:-apple-system,"Segoe UI",sans-serif;max-width:860px;margin:32px auto;padding:0 20px;color:#0f172a;line-height:1.6}
+h1{font-size:22px}h2{font-size:17px;margin-top:32px;border-bottom:1px solid #e2e8f0;padding-bottom:6px}
+code,pre{background:#f1f5f9;border-radius:6px;padding:2px 6px;font-size:13px}pre{padding:12px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0}td,th{border:1px solid #e2e8f0;padding:6px 10px;text-align:left;font-size:13px}</style>
+</head><body>
+<h1>SEASTAR 360 외부 연동 API v1</h1>
+<p>프로젝트 설정 화면에서 API 키를 발급받아 <code>Authorization: Bearer &lt;key&gt;</code> 헤더로 호출합니다. 키는 발급 시 1회만 표시되며, 기본 권한은 읽기(scope=read)입니다.</p>
+<h2>레이트 리밋</h2><p>키당 분당 60회. 초과 시 <code>401</code>.</p>
+<h2>읽기 엔드포인트</h2>
+<table><tr><th>메서드</th><th>경로</th><th>설명</th></tr>
+<tr><td>GET</td><td>/api/v1/projects</td><td>이 키가 속한 프로젝트 1건</td></tr>
+<tr><td>GET</td><td>/api/v1/decks</td><td>구역(데크) 목록</td></tr>
+<tr><td>GET</td><td>/api/v1/pins?deck_id=</td><td>핀(번호·위치·사진 URL)</td></tr>
+<tr><td>GET</td><td>/api/v1/notes</td><td>이슈/노트 목록</td></tr>
+<tr><td>GET</td><td>/api/v1/routes?deck_id=</td><td>동선</td></tr>
+<tr><td>GET</td><td>/api/v1/media/&lt;key&gt;</td><td>핀 사진 바이너리(그 프로젝트가 참조한 키만)</td></tr>
+</table>
+<h2>쓰기 엔드포인트(scope=write 필요)</h2>
+<table><tr><th>메서드</th><th>경로</th><th>설명</th></tr>
+<tr><td>POST</td><td>/api/v1/issues</td><td>이슈 생성 — body: {deployment_id, pin_id?, pin_label?, body}</td></tr>
+<tr><td>PATCH</td><td>/api/v1/issues/:id</td><td>상태 변경 — body: {status}</td></tr>
+</table>
+<h2>웹훅</h2>
+<p>프로젝트 설정에서 URL(https만)·이벤트를 등록합니다. 발송 시 <code>X-Webhook-Signature: sha256=&lt;hex&gt;</code> 헤더로
+HMAC-SHA256(본문, 등록 시 발급된 secret) 서명을 보냅니다. 실패 시 지수 백오프로 최대 3회 재시도합니다.</p>
+<table><tr><th>이벤트</th><th>발생 시점</th></tr>
+<tr><td>pin.created</td><td>새 핀 생성</td></tr>
+<tr><td>photo.attached</td><td>핀에 사진 연결</td></tr>
+<tr><td>issue.created</td><td>이슈(결함 노트) 생성</td></tr>
+<tr><td>issue.updated</td><td>이슈 내용 수정</td></tr>
+<tr><td>issue.status_changed</td><td>이슈 상태 변경</td></tr>
+<tr><td>deployment.published</td><td>프로젝트 배포</td></tr>
+</table>
+<pre>{
+  "event": "pin.created",
+  "project_id": "...",
+  "payload": { "pin_id": 123, "label": "D1", "x": 10.2, "y": 40.5 },
+  "ts": 1760000000000
+}</pre>
+</body></html>`
+
+/* ════════════════════════════════════════════════════════════════════════
+   [WO 20261019-gap3] 외부 API/웹훅 — 프로젝트별 API 키 발급 + 읽기(쓰기 옵션) /api/v1/* + 웹훅 CRUD/발송.
+   관리(키·웹훅 발급/조회/폐기)는 그 프로젝트 쓰기권한(canManageProject) 소유 디자이너만.
+   /api/v1/* 호출은 API 키(Authorization: Bearer 또는 X-API-Key)만 — 로그인 세션과 무관(제3자 시스템 연동).
+════════════════════════════════════════════════════════════════════════ */
+async function requireProjectManage(c: any, pid: string): Promise<any | null> {
+  const user = await requireDesigner(c)
+  if (!user) return null
+  if (!(await canManageProject(c, user, pid))) return null
+  return user
+}
+
+// ── API 키 — 발급·목록·폐기(원문은 발급 응답에만, 이후 재노출 0) ──
+app.get('/api/projects/:id/api-keys', async (c) => {
+  const pid = c.req.param('id')
+  if (!(await requireProjectManage(c, pid))) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, name, key_prefix, scope, created_by, created_at, revoked_at FROM api_keys WHERE project_id = ? ORDER BY created_at DESC'
+  ).bind(pid).all()
+  return c.json({ data: results || [] })
+})
+app.post('/api/projects/:id/api-keys', async (c) => {
+  const pid = c.req.param('id')
+  const user = await requireProjectManage(c, pid)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const scope = body.scope === 'write' ? 'write' : 'read'
+  const plain = newApiKeyPlain()
+  const id = genId('wk')
+  const now = Date.now()
+  await c.env.DB.prepare(
+    'INSERT INTO api_keys (id, project_id, name, key_hash, key_prefix, scope, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, pid, String(body.name || '').slice(0, 100) || null, await sha256Hex(plain), plain.slice(0, 11), scope, user.email, now).run()
+  await logActivity(c, 'api_key.create', { actor: user, targetType: 'project', targetId: pid, detail: { scope } })
+  // 🔴 원문은 이 응답에만(지시 "원문은 1회만 표시") — DB엔 해시만 남는다.
+  return c.json({ id, key: plain, key_prefix: plain.slice(0, 11), scope, created_at: now })
+})
+app.delete('/api/projects/:id/api-keys/:keyId', async (c) => {
+  const pid = c.req.param('id')
+  const user = await requireProjectManage(c, pid)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  await c.env.DB.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND project_id = ? AND revoked_at IS NULL')
+    .bind(Date.now(), c.req.param('keyId'), pid).run()
+  await logActivity(c, 'api_key.revoke', { actor: user, targetType: 'project', targetId: pid, detail: { key_id: c.req.param('keyId') } })
+  return c.json({ success: true })
+})
+
+// ── 웹훅 — 등록(URL은 https만, SSRF 가드) / 목록(secret 비노출) / 수정 / 삭제 / [테스트 전송] / 최근 전송 기록 ──
+app.get('/api/projects/:id/webhooks', async (c) => {
+  const pid = c.req.param('id')
+  if (!(await requireProjectManage(c, pid))) return c.json({ error: 'forbidden' }, 403)
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, project_id, url, events, active, test_mode, created_by, created_at, updated_at FROM webhooks WHERE project_id = ? ORDER BY created_at DESC'
+  ).bind(pid).all()
+  return c.json({ data: (results || []).map((w: any) => ({ ...w, events: JSON.parse(w.events || '[]') })) })
+})
+const WEBHOOK_EVENTS = ['pin.created', 'photo.attached', 'issue.created', 'issue.updated', 'issue.status_changed', 'deployment.published']
+app.post('/api/projects/:id/webhooks', async (c) => {
+  const pid = c.req.param('id')
+  const user = await requireProjectManage(c, pid)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const testMode = !!body.test_mode
+  const v = validateWebhookUrl(String(body.url || ''), testMode)
+  if (!v.ok) return c.json({ error: v.error }, 400)
+  const events = Array.isArray(body.events) ? body.events.filter((e: string) => WEBHOOK_EVENTS.includes(e)) : []
+  if (!events.length) return c.json({ error: 'events(배열, 최소 1개) required' }, 400)
+  const id = genId('wh')
+  const secret = randToken('whsec_')
+  const now = Date.now()
+  await c.env.DB.prepare(
+    'INSERT INTO webhooks (id, project_id, url, secret, events, active, test_mode, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)'
+  ).bind(id, pid, String(body.url), secret, JSON.stringify(events), testMode ? 1 : 0, user.email, now, now).run()
+  await logActivity(c, 'webhook.create', { actor: user, targetType: 'project', targetId: pid, detail: { events } })
+  // 🔴 secret 은 이 응답에만(발급 후 재노출 0 — 지시). 분실 시 재발급(삭제 후 재등록)만 가능.
+  return c.json({ id, url: body.url, events, secret, test_mode: testMode, created_at: now })
+})
+app.patch('/api/projects/:id/webhooks/:hid', async (c) => {
+  const pid = c.req.param('id')
+  const user = await requireProjectManage(c, pid)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const w: any = await c.env.DB.prepare('SELECT * FROM webhooks WHERE id = ? AND project_id = ?').bind(c.req.param('hid'), pid).first()
+  if (!w) return c.json({ error: 'not found' }, 404)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  const fields: string[] = []; const args: any[] = []
+  if (typeof body.url === 'string') {
+    const testMode = body.test_mode != null ? !!body.test_mode : !!w.test_mode
+    const v = validateWebhookUrl(body.url, testMode)
+    if (!v.ok) return c.json({ error: v.error }, 400)
+    fields.push('url = ?'); args.push(body.url)
+  }
+  if (Array.isArray(body.events)) {
+    const events = body.events.filter((e: string) => WEBHOOK_EVENTS.includes(e))
+    if (!events.length) return c.json({ error: 'events(배열, 최소 1개) required' }, 400)
+    fields.push('events = ?'); args.push(JSON.stringify(events))
+  }
+  if (typeof body.active === 'boolean') { fields.push('active = ?'); args.push(body.active ? 1 : 0) }
+  if (typeof body.test_mode === 'boolean') { fields.push('test_mode = ?'); args.push(body.test_mode ? 1 : 0) }
+  if (!fields.length) return c.json({ error: 'nothing to update' }, 400)
+  fields.push('updated_at = ?'); args.push(Date.now())
+  args.push(c.req.param('hid'))
+  await c.env.DB.prepare(`UPDATE webhooks SET ${fields.join(', ')} WHERE id = ?`).bind(...args).run()
+  return c.json({ success: true })
+})
+app.delete('/api/projects/:id/webhooks/:hid', async (c) => {
+  const pid = c.req.param('id')
+  const user = await requireProjectManage(c, pid)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  await c.env.DB.prepare('DELETE FROM webhooks WHERE id = ? AND project_id = ?').bind(c.req.param('hid'), pid).run()
+  await logActivity(c, 'webhook.delete', { actor: user, targetType: 'project', targetId: pid, detail: { webhook_id: c.req.param('hid') } })
+  return c.json({ success: true })
+})
+app.post('/api/projects/:id/webhooks/:hid/test', async (c) => {
+  const pid = c.req.param('id')
+  const user = await requireProjectManage(c, pid)
+  if (!user) return c.json({ error: 'forbidden' }, 403)
+  const w: any = await c.env.DB.prepare('SELECT * FROM webhooks WHERE id = ? AND project_id = ?').bind(c.req.param('hid'), pid).first()
+  if (!w) return c.json({ error: 'not found' }, 404)
+  const body = JSON.stringify({ event: 'test', project_id: pid, payload: { message: '[테스트 전송] ' + (user.email || '') }, ts: Date.now() })
+  const sig = await hmacSignHex(String(w.secret), body)
+  const r = await deliverWithRetry(String(w.url), body, { 'Content-Type': 'application/json', 'X-Webhook-Signature': 'sha256=' + sig, 'X-Webhook-Event': 'test' }, { attempts: 1 })
+  const last = r.attempts[r.attempts.length - 1]
+  await c.env.DB.prepare(
+    'INSERT INTO webhook_deliveries (id, webhook_id, event, payload, status, attempt, response_code, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(genId('whd'), w.id, 'test', body, r.finalOk ? 'success' : 'failed', 1, last.status ?? null, last.error ?? null, Date.now()).run()
+  return c.json({ ok: r.finalOk, status: last.status ?? null, error: last.error ?? null })
+})
+app.get('/api/projects/:id/webhooks/:hid/deliveries', async (c) => {
+  const pid = c.req.param('id')
+  if (!(await requireProjectManage(c, pid))) return c.json({ error: 'forbidden' }, 403)
+  const w: any = await c.env.DB.prepare('SELECT id FROM webhooks WHERE id = ? AND project_id = ?').bind(c.req.param('hid'), pid).first()
+  if (!w) return c.json({ error: 'not found' }, 404)
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, event, status, attempt, response_code, error, created_at FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT 20'
+  ).bind(w.id).all()
+  return c.json({ data: results || [] })
+})
+
+// ── /api/v1/* — 외부 연동 읽기(기본) · 쓰기(옵션, scope='write') · API 키 전용(로그인 세션 무관) ──
+app.get('/api/v1/projects', async (c) => {
+  const a = await requireApiKey(c, false)
+  if (!a) return c.json({ error: 'unauthorized or rate limited' }, 401)
+  const p: any = await c.env.DB.prepare('SELECT id, name, description, created_at FROM projects WHERE id = ? AND deleted = 0').bind(a.row.project_id).first()
+  return c.json({ data: p ? [p] : [] })
+})
+app.get('/api/v1/decks', async (c) => {
+  const a = await requireApiKey(c, false)
+  if (!a) return c.json({ error: 'unauthorized or rate limited' }, 401)
+  const { results } = await c.env.DB.prepare('SELECT id, name, level_no, deployment_id, created_at FROM decks WHERE project_id = ? AND deleted = 0 ORDER BY level_no, created_at').bind(a.row.project_id).all()
+  return c.json({ data: results || [] })
+})
+app.get('/api/v1/pins', async (c) => {
+  const a = await requireApiKey(c, false)
+  if (!a) return c.json({ error: 'unauthorized or rate limited' }, 401)
+  const deckId = c.req.query('deck_id')
+  const { results: decks } = await c.env.DB.prepare('SELECT id, deployment_id FROM decks WHERE project_id = ? AND deleted = 0' + (deckId ? ' AND id = ?' : '')).bind(...(deckId ? [a.row.project_id, deckId] : [a.row.project_id])).all()
+  const out: any[] = []
+  for (const d of (decks || [])) {
+    if (!d.deployment_id) continue
+    const dep: any = await c.env.DB.prepare('SELECT id, pins FROM deployments WHERE id = ? AND deleted = 0').bind(d.deployment_id).first()
+    if (!dep) continue
+    let pins: any[] = []
+    try { pins = JSON.parse(dep.pins || '[]') } catch { pins = [] }
+    for (const p of pins) {
+      if (!p || p._deleted) continue
+      out.push({
+        id: p.id, label: p.label, x: p.x, y: p.y, deck_id: d.id, deployment_id: dep.id,
+        // 🔴 R2 토큰 규칙 — 직접 /api/r2/object/ 가 아니라 API 키 전용 미디어 경로(/api/v1/media/*, requireApiKey 게이트)
+        photo_url: p.imageId ? ('/api/v1/media/' + encodeURIComponent(String(p.imageUrl || '').replace(/^\/api\/r2\/object\//, ''))) : null,
+      })
+    }
+  }
+  return c.json({ data: out })
+})
+app.get('/api/v1/notes', async (c) => {
+  const a = await requireApiKey(c, false)
+  if (!a) return c.json({ error: 'unauthorized or rate limited' }, 401)
+  const { results: deps } = await c.env.DB.prepare('SELECT id FROM deployments WHERE project_id = ? AND deleted = 0').bind(a.row.project_id).all()
+  const ids = (deps || []).map((d: any) => d.id)
+  if (!ids.length) return c.json({ data: [] })
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, deployment_id, pin_id, pin_label, body, status, assignee_email, severity, due_at, kind, created_at, updated_at FROM pin_notes
+     WHERE deleted = 0 AND deployment_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 500`
+  ).bind(...ids).all()
+  return c.json({ data: results || [] })
+})
+app.get('/api/v1/routes', async (c) => {
+  const a = await requireApiKey(c, false)
+  if (!a) return c.json({ error: 'unauthorized or rate limited' }, 401)
+  const deckId = c.req.query('deck_id')
+  const { results: decks } = await c.env.DB.prepare('SELECT id, deployment_id FROM decks WHERE project_id = ? AND deleted = 0' + (deckId ? ' AND id = ?' : '')).bind(...(deckId ? [a.row.project_id, deckId] : [a.row.project_id])).all()
+  const out: any[] = []
+  for (const d of (decks || [])) {
+    if (!d.deployment_id) continue
+    const dep: any = await c.env.DB.prepare('SELECT id, routes FROM deployments WHERE id = ? AND deleted = 0').bind(d.deployment_id).first()
+    if (!dep) continue
+    let routes: any[] = []
+    try { routes = JSON.parse(dep.routes || '[]') } catch { routes = [] }
+    for (const r of routes) { if (r && !r._deleted) out.push({ ...r, deck_id: d.id, deployment_id: dep.id }) }
+  }
+  return c.json({ data: out })
+})
+// 쓰기(옵션) — 이슈 생성·상태 변경(scope='write' 필수)
+app.post('/api/v1/issues', async (c) => {
+  const a = await requireApiKey(c, true)
+  if (!a) return c.json({ error: 'unauthorized, write scope required, or rate limited' }, 401)
+  let body: any = {}
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const depRow: any = await c.env.DB.prepare('SELECT id FROM deployments WHERE id = ? AND project_id = ? AND deleted = 0').bind(String(body.deployment_id || ''), a.row.project_id).first()
+  if (!depRow) return c.json({ error: 'deployment_id invalid or not in this project' }, 400)
+  const text = String(body.body || '').trim()
+  if (!text) return c.json({ error: 'body required' }, 400)
+  const id = genId('note'); const now = Date.now()
+  await c.env.DB.prepare(
+    `INSERT INTO pin_notes (id, deployment_id, pin_id, pin_label, body, status, author, author_email, author_role, created_at, updated_at, deleted, kind)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, 'api', ?, ?, 0, 'note')`
+  ).bind(id, depRow.id, String(body.pin_id || ''), String(body.pin_label || '').slice(0, 200), text.slice(0, 4000), 'API', null, now, now).run()
+  runLater(c, fireWebhooks(c, a.row.project_id, 'issue.created', { note_id: id, pin_id: body.pin_id, status: 'open' }))
+  return c.json({ id, status: 'open', created_at: now })
+})
+app.patch('/api/v1/issues/:id', async (c) => {
+  const a = await requireApiKey(c, true)
+  if (!a) return c.json({ error: 'unauthorized, write scope required, or rate limited' }, 401)
+  const note: any = await c.env.DB.prepare(
+    'SELECT n.* FROM pin_notes n JOIN deployments d ON d.id = n.deployment_id WHERE n.id = ? AND d.project_id = ? AND n.deleted = 0'
+  ).bind(c.req.param('id'), a.row.project_id).first()
+  if (!note) return c.json({ error: 'not found' }, 404)
+  let body: any = {}
+  try { body = await c.req.json() } catch {}
+  if (typeof body.status !== 'string' || !VALID_STATUS_PATCH.includes(body.status)) return c.json({ error: 'status required' }, 400)
+  const now = Date.now()
+  await c.env.DB.prepare('UPDATE pin_notes SET status = ?, updated_at = ? WHERE id = ?').bind(body.status, now, note.id).run()
+  runLater(c, fireWebhooks(c, a.row.project_id, 'issue.status_changed', { note_id: note.id, status: body.status }))
+  return c.json({ id: note.id, status: body.status, updated_at: now })
+})
+// R2 미디어 — API 키 전용(브라우저 세션과 무관). 그 프로젝트 소속 배포본의 핀에서 참조된 키만 서빙(IDOR 차단).
+app.get('/api/v1/media/*', async (c) => {
+  const a = await requireApiKey(c, false)
+  if (!a) return c.json({ error: 'unauthorized or rate limited' }, 401)
+  if (!c.env.R2) return c.json({ error: 'R2 미구성' }, 501)
+  const key = decodeURIComponent(c.req.path.replace('/api/v1/media/', ''))
+  const { results: deps } = await c.env.DB.prepare('SELECT pins FROM deployments WHERE project_id = ? AND deleted = 0').bind(a.row.project_id).all()
+  let allowed = false
+  for (const d of (deps || [])) {
+    try { const pins = JSON.parse((d as any).pins || '[]'); if (pins.some((p: any) => p && String(p.imageUrl || '').includes(key))) { allowed = true; break } } catch {}
+  }
+  if (!allowed) return c.json({ error: 'forbidden — key not referenced by this project' }, 403)
+  const obj = await c.env.R2.get(key)
+  if (!obj) return c.notFound()
+  const headers = new Headers()
+  headers.set('Content-Type', obj.httpMetadata?.contentType || 'application/octet-stream')
+  headers.set('Cache-Control', 'private, max-age=3600')
+  return new Response(obj.body, { headers })
+})
+
+app.get('/docs/api', (c) => c.html(API_DOCS_HTML))
+
 app.all('*', async (c) => {
   const assets = c.env.ASSETS
   if (assets && assets.fetch) {

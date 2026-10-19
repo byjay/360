@@ -181,6 +181,137 @@
       return { lat, lng, acc: null, alt: (alt != null ? (altRef === 1 ? -alt : alt) : null), ts: Date.now(), src: "exif" };
     },
 
+    /* ══════════════════════════════════════════════════════════════
+       Calib — 도면 GPS 기준점 맞추기(WO 20261019-gap3 판정기준 §1)
+       "열린 갑판, 계류 중"에서만 정확 — 선체 내부·갑판 아래·항해 중은 GPS 가 성립하지 않는다(정직한 안내, UI 쪽).
+       2점 → 상사변환(회전·축척·평행이동, 4DOF) / 3점 이상 → 최소제곱 아핀(6DOF).
+       위경도는 기준점 중 첫 점을 원점으로 한 로컬 ENU(m, 등장방형 근사 — 소규모 거리라 오차 무시 가능)로 바꿔 계산한다.
+       🔴 순수 함수만(DOM·네트워크 없음) — 서버 저장은 호출부(UI)가 fit() 결과를 JSON 으로 올린다.
+    ══════════════════════════════════════════════════════════════ */
+    Calib: {
+      M_PER_DEG_LAT: 110574,         // 위도 1도 ≈ 110.574km(WGS84 근사, 이름 있는 상수 — 매직넘버 금지)
+      M_PER_DEG_LNG_AT_EQUATOR: 111320,
+
+      /** 위경도 → 기준점(ref) 원점의 로컬 ENU(m). 등장방형 근사(소규모 거리 전용, 선박 갑판 스케일엔 충분). */
+      toENU(ref, lat, lng) {
+        const E = (lng - ref.lng) * this.M_PER_DEG_LNG_AT_EQUATOR * Math.cos(ref.lat * Math.PI / 180);
+        const N = (lat - ref.lat) * this.M_PER_DEG_LAT;
+        return { E, N };
+      },
+      /** ENU(m) → 위경도(toENU 의 역변환, 같은 근사). */
+      fromENU(ref, E, N) {
+        const lat = ref.lat + N / this.M_PER_DEG_LAT;
+        const lng = ref.lng + E / (this.M_PER_DEG_LNG_AT_EQUATOR * Math.cos(ref.lat * Math.PI / 180));
+        return { lat, lng };
+      },
+
+      /** 2점 상사변환(Helmert) — E = a*x - b*y + e, N = b*x + a*y + f. 4 미지수(a,b,e,f), 4 방정식(점 2개 × 2축)
+       *  → 직접 대입으로 해석적으로 푼다(최소제곱 불필요, 과소/과대결정 없음). */
+      _fitSimilarity(pts, ref) {
+        const [p0, p1] = pts;
+        const e0 = this.toENU(ref, p0.lat, p0.lng), e1 = this.toENU(ref, p1.lat, p1.lng);
+        const dxPx = p1.x - p0.x, dyPx = p1.y - p0.y;
+        const dE = e1.E - e0.E, dN = e1.N - e0.N;
+        const denom = dxPx * dxPx + dyPx * dyPx;
+        if (!denom) return null; // 두 점이 도면상 같은 위치 — 변환 불가(지어내지 않음)
+        // [dE,dN] = a*[dxPx,dyPx] + b*[-dyPx,dxPx] 를 a,b 에 대해 풀면:
+        const a = (dE * dxPx + dN * dyPx) / denom;
+        const b = (dN * dxPx - dE * dyPx) / denom;
+        const e = e0.E - (a * p0.x - b * p0.y);
+        const f = e0.N - (b * p0.x + a * p0.y);
+        return { a, b: -b, c: b, d: a, e, f }; // E=a*x+b*y+e, N=c*x+d*y+f (일반 아핀 표기로 통일)
+      },
+
+      /** 3x3 선형계 직접 소거(가우스) — 최소제곱 정규방정식(AᵗA x = Aᵗy, 3미지수) 풀이 전용(의존성 0). */
+      _solve3(A, y) {
+        const M = [A[0].slice(), A[1].slice(), A[2].slice()];
+        const Y = y.slice();
+        for (let col = 0; col < 3; col++) {
+          let piv = col;
+          for (let r = col + 1; r < 3; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+          if (Math.abs(M[piv][col]) < 1e-12) return null;
+          if (piv !== col) { [M[col], M[piv]] = [M[piv], M[col]]; [Y[col], Y[piv]] = [Y[piv], Y[col]]; }
+          for (let r = 0; r < 3; r++) {
+            if (r === col) continue;
+            const f = M[r][col] / M[col][col];
+            for (let k = col; k < 3; k++) M[r][k] -= f * M[col][k];
+            Y[r] -= f * Y[col];
+          }
+        }
+        return [Y[0] / M[0][0], Y[1] / M[1][1], Y[2] / M[2][2]];
+      },
+
+      /** 최소제곱 아핀(3점 이상) — E,N 각각 독립 선형회귀(x,y,1 → 값). */
+      _fitAffineLS(pts, ref) {
+        // 정규방정식 Aᵗ A [p,q,r]ᵗ = Aᵗ [E] (N 도 같은 구조)
+        let Sxx = 0, Sxy = 0, Sx = 0, Syy = 0, Sy = 0, Sn = pts.length;
+        let SxE = 0, SyE = 0, SE = 0, SxN = 0, SyN = 0, SN = 0;
+        pts.forEach((p) => {
+          const { E, N } = this.toENU(ref, p.lat, p.lng);
+          Sxx += p.x * p.x; Sxy += p.x * p.y; Sx += p.x;
+          Syy += p.y * p.y; Sy += p.y;
+          SxE += p.x * E; SyE += p.y * E; SE += E;
+          SxN += p.x * N; SyN += p.y * N; SN += N;
+        });
+        const A = [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, Sn]];
+        const solE = this._solve3(A, [SxE, SyE, SE]);
+        const solN = this._solve3(A, [SxN, SyN, SN]);
+        if (!solE || !solN) return null; // 특이행렬(모든 점이 한 직선 위 등) — 지어내지 않고 null
+        return { a: solE[0], b: solE[1], e: solE[2], c: solN[0], d: solN[1], f: solN[2] };
+      },
+
+      /** 적합 잔차(m) — 각 기준점에서 실측 ENU와 변환 예측 ENU의 거리. 정확도 경고(§임계 5m)의 근거값. */
+      _residuals(pts, ref, matrix) {
+        return pts.map((p) => {
+          const { E, N } = this.toENU(ref, p.lat, p.lng);
+          const pE = matrix.a * p.x + matrix.b * p.y + matrix.e;
+          const pN = matrix.c * p.x + matrix.d * p.y + matrix.f;
+          return Math.sqrt((E - pE) * (E - pE) + (N - pN) * (N - pN));
+        });
+      },
+
+      RESIDUAL_WARN_M: 5, // 정확도 경고 임계(m) — 지시 §1 "예: 5m"
+
+      /** 기준점 배열({x,y,lat,lng}, x/y=도면 픽셀%) → 변환 결과. 2점=상사, 3점+=최소제곱 아핀.
+       *  실패(점<2, 특이행렬)면 null(지어내지 않음 — 호출부가 "계산 불가"로 정직하게 표시). */
+      fit(points) {
+        const pts = (points || []).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        if (pts.length < 2) return null;
+        const ref = { lat: pts[0].lat, lng: pts[0].lng };
+        const matrix = pts.length === 2 ? this._fitSimilarity(pts, ref) : this._fitAffineLS(pts, ref);
+        if (!matrix) return null;
+        const residuals = this._residuals(pts, ref, matrix);
+        const maxResidualM = residuals.length ? Math.max(...residuals) : 0;
+        return {
+          matrix, ref, pointCount: pts.length, residuals, maxResidualM,
+          warn: maxResidualM >= this.RESIDUAL_WARN_M ? ("정확도 경고 — 잔차 ±" + maxResidualM.toFixed(1) + "m") : null
+        };
+      },
+
+      /** 도면 픽셀%(x,y) → GPS(위경도). 2x2 선형계를 직접 역산(행렬식 0 이면 null). */
+      pixelToGps(fitResult, x, y) {
+        if (!fitResult) return null;
+        const m = fitResult.matrix;
+        const E = m.a * x + m.b * y + m.e, N = m.c * x + m.d * y + m.f;
+        const g = this.fromENU(fitResult.ref, E, N);
+        return { lat: g.lat, lng: g.lng };
+      },
+
+      /** GPS(위경도) → 도면 픽셀%(x,y). 순방향 아핀 2x2 를 역행렬로 풀어 x,y 를 구한다.
+       *  det≈0(특이행렬, 예: 2점이 같은 선상이고 변환이 축퇴) → null(지어내지 않음). */
+      gpsToPixel(fitResult, lat, lng) {
+        if (!fitResult) return null;
+        const m = fitResult.matrix;
+        const det = m.a * m.d - m.b * m.c;
+        if (Math.abs(det) < 1e-9) return null;
+        const { E, N } = this.toENU(fitResult.ref, lat, lng);
+        const Ex = E - m.e, Nx = N - m.f;
+        const x = (m.d * Ex - m.b * Nx) / det;
+        const y = (-m.c * Ex + m.a * Nx) / det;
+        return { x, y };
+      }
+    },
+
     /** 설정 패널 토글 런타임 주입 — index.html(타 팀 점유)을 건드리지 않고, 있는
      *  #chk-leader360 행(State.leader360 토글, 같은 스타일) 바로 뒤에 추가한다(판정기준 §5). */
     initToggle() {

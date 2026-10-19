@@ -162,11 +162,21 @@
     /** PhotoBatch.buildAutoRows(files) 결과(row.sortKey=ms) → 매칭용 photo 엔트리. */
     _rowsToPhotos(rows) { return (rows || []).filter((r) => Number.isFinite(r.sortKey)).map((r) => ({ t: r.sortKey, row: r })); },
 
-    /** 미리보기(커밋 전) — 파일 선택 → 오프셋 자동추정 → 매칭. UI 가 표로 보여주고 confirmTapRegister 호출. */
+    /** 미리보기(커밋 전) — 파일 선택 → 오프셋 자동추정 → 매칭. UI 가 표로 보여주고 confirmTapRegister 호출.
+     *  🔴 photos 를 this._lastPhotos 에 캐시 — 수동 시계보정 슬라이더(_recomputeTapPreview)가 파일을
+     *  다시 읽지 않고(EXIF 재파싱 0) 같은 photos 로 즉시 재매칭한다(§지시 "실시간 매칭 갱신"). */
     async finishTapPreview(files) {
       if (!this._s || this._s.mode !== "tap") return null;
       const rows = (typeof PhotoBatch !== "undefined" && PhotoBatch.buildAutoRows) ? await PhotoBatch.buildAutoRows(files) : [];
       const photos = this._rowsToPhotos(rows);
+      this._lastPhotos = photos;
+      return this._recomputeTapPreview();
+    },
+
+    /** 수동 오프셋 슬라이더(±120초) 변경 시 재계산 — this._lastPhotos(캐시)로 파일 재읽기 없이 즉시 재매칭. */
+    async _recomputeTapPreview() {
+      if (!this._s || this._s.mode !== "tap") return null;
+      const photos = this._lastPhotos || [];
       const taps = this._s.taps;
       const autoOffset = (taps.length && photos.length) ? this._estimateOffsetMs(taps[0].t, photos[0].t) : 0;
       const totalOffset = autoOffset + (this._s.manualOffsetMs || 0);
@@ -174,6 +184,14 @@
       this._s.lastPreview = { autoOffsetMs: autoOffset, totalOffsetMs: totalOffset, matchCount: result.matches.length };
       await this._persist();
       return Object.assign({ autoOffsetMs: autoOffset, totalOffsetMs: totalOffset }, result);
+    },
+
+    /** 수동 오프셋(초) 설정 — ±120초로 clamp(슬라이더 min/max 와 같은 값, 단일 SoT). */
+    MANUAL_OFFSET_MAX_S: 120,
+    setManualOffsetSec(sec) {
+      if (!this._s) return;
+      const s = Math.max(-this.MANUAL_OFFSET_MAX_S, Math.min(this.MANUAL_OFFSET_MAX_S, Number(sec) || 0));
+      this._s.manualOffsetMs = s * 1000;
     },
 
     /** 적용 — PhotoBatch._uploadOneRow 재사용(온라인 직접 업로드/오프라인 SyncQueue 큐잉, §10 SoT). */
@@ -417,28 +435,127 @@
       if (this._s.mode === "tap") {
         const prev = await this.finishTapPreview(files);
         if (!prev) return;
-        const sum = prev.matches.length + "건 매칭 · 미연결 탭 " + prev.unmatchedTaps.length + " · 미연결 사진 " + prev.unmatchedPhotos.length
-          + (prev.autoOffsetMs ? (" · 시계보정 " + Math.round(prev.autoOffsetMs / 1000) + "초") : "");
-        ThetaIntake._sheet({
-          id: "capsess-preview-sheet", title: "미리보기 — 정지점 탭", body: sum,
-          actions: [
-            { label: "확인 → 일괄 등록", primary: true, run: () => this.confirmTapRegister(State.pins, prev.matches).then((r) => this._toast("등록 완료 " + r.done + "건")) },
-            { label: "취소", run: () => {} }
-          ]
-        });
+        this._lastTapPreview = prev;
+        this._showTapPreviewSheet(prev);
       } else if (this._s.mode === "route") {
         const placed = await this.finishRoutePreview(files);
         if (!placed) return;
-        const created = this.createRoutePins(State.pins, placed);
-        if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); UI.renderPinsOnMap && UI.renderPinsOnMap(); }
+        this._lastRoutePlaced = placed;
+        this._renderGhostStops(placed);
         ThetaIntake._sheet({
-          id: "capsess-preview-sheet", title: "미리보기 — 동선 배치", body: created.length + "개 정지점에 핀 생성됨(드래그로 보정 가능). 확인하면 사진이 연결됩니다.",
+          id: "capsess-preview-sheet", title: "미리보기 — 동선 배치",
+          body: placed.length + "개 정지점(파란 점, 드래그로 위치 보정) — 확인하면 핀이 생성되고 사진이 연결됩니다.",
           actions: [
-            { label: "확인 → 사진 연결", primary: true, run: () => this.confirmRouteRegister(State.pins, placed).then((r) => this._toast("등록 완료 " + r.done + "건")) },
-            { label: "취소(핀 유지)", run: () => {} }
+            { label: "확인 → 핀 생성·사진 연결", primary: true, run: () => this._confirmRoutePreview() },
+            { label: "취소", run: () => this._removeGhostStops() }
           ]
         });
       }
+    },
+
+    /** 탭 모드 미리보기 시트 — ThetaIntake._sheet 는 텍스트 body + 버튼만 지원(§33 공용 규약) 이라
+     *  수동 오프셋 슬라이더(±120초)는 반환된 시트 DOM에 직접 삽입한다(판정기준 §3 "실시간 매칭 갱신"). */
+    _showTapPreviewSheet(prev) {
+      const summarize = (r) => r.matches.length + "건 매칭 · 미연결 탭 " + r.unmatchedTaps.length + " · 미연결 사진 " + r.unmatchedPhotos.length
+        + (r.autoOffsetMs ? (" · 자동보정 " + Math.round(r.autoOffsetMs / 1000) + "초") : "");
+      const sheetEl = ThetaIntake._sheet({
+        id: "capsess-preview-sheet", title: "미리보기 — 정지점 탭", body: summarize(prev),
+        actions: [
+          { label: "확인 → 일괄 등록", primary: true, run: () => this.confirmTapRegister(State.pins, (this._lastTapPreview || prev).matches).then((r) => this._toast("등록 완료 " + r.done + "건")) },
+          { label: "취소", run: () => {} }
+        ]
+      });
+      if (!sheetEl || typeof document === "undefined") return;
+      const curSec = Math.round((this._s.manualOffsetMs || 0) / 1000);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:10px;margin:6px 4px 10px;";
+      const lbl = document.createElement("span");
+      lbl.style.cssText = "font-size:12px;min-width:92px;flex:none;";
+      lbl.textContent = "수동 시계보정 " + curSec + "초";
+      const slider = document.createElement("input");
+      slider.type = "range"; slider.min = String(-this.MANUAL_OFFSET_MAX_S); slider.max = String(this.MANUAL_OFFSET_MAX_S); slider.step = "1";
+      slider.value = String(curSec);
+      slider.style.cssText = "flex:1;min-width:0;";
+      slider.setAttribute("aria-label", "수동 시계보정(초)");
+      slider.addEventListener("input", async () => {
+        const sec = parseInt(slider.value, 10) || 0;
+        this.setManualOffsetSec(sec);
+        await this._persist();
+        const r = await this._recomputeTapPreview();
+        this._lastTapPreview = r;
+        lbl.textContent = "수동 시계보정 " + sec + "초";
+        const bodyEl = sheetEl.querySelector(".theta-sheet-body");
+        if (bodyEl && r) bodyEl.textContent = summarize(r);
+      });
+      row.appendChild(lbl); row.appendChild(slider);
+      const titleEl = sheetEl.querySelector(".theta-sheet-title");
+      if (titleEl && titleEl.nextSibling) sheetEl.insertBefore(row, titleEl.nextSibling);
+      else sheetEl.appendChild(row);
+    },
+
+    /** 동선 미리보기 확정 — 드래그로 보정된 placed[].x/y 그대로 핀 생성 + 사진 연결(§지시: 생성될 핀 위치
+     *  표시 → 드래그 보정 → 확정). 되돌리기 쉽게 핀 생성 → ghost 제거 순서(사용자가 보던 자리에서 바로 실핀으로). */
+    async _confirmRoutePreview() {
+      const placed = this._lastRoutePlaced;
+      if (!placed) return;
+      const created = this.createRoutePins(State.pins, placed);
+      this._removeGhostStops();
+      if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); UI.renderPinsOnMap && UI.renderPinsOnMap(); }
+      const r = await this.confirmRouteRegister(State.pins, placed);
+      this._toast("등록 완료 " + r.done + "건 · 핀 " + created.length + "개");
+      return r;
+    },
+
+    /* ══ 동선 미리보기 드래그 보정(ghost 점 — 실 핀 아님, 확정 전까지 State.pins 에 없음) ══ */
+    _ghostEls: null,
+    _renderGhostStops(placed) {
+      this._removeGhostStops();
+      if (typeof document === "undefined") return;
+      const layer = document.getElementById("pins-layer");
+      if (!layer) return;
+      this._ghostEls = [];
+      (placed || []).forEach((st) => {
+        const el = document.createElement("div");
+        el.className = "capsess-ghost-stop";
+        el.dataset.no = String(st.no);
+        el.style.cssText = "position:absolute;left:" + st.x + "%;top:" + st.y + "%;width:26px;height:26px;margin:-13px 0 0 -13px;"
+          + "border-radius:50%;background:#2563eb;border:2px solid #ffffff;color:#ffffff;display:flex;align-items:center;justify-content:center;"
+          + "font-size:11px;font-weight:800;z-index:60;cursor:grab;touch-action:none;box-shadow:0 1px 5px rgba(0,0,0,.45);user-select:none;";
+        el.textContent = String(st.no);
+        el.title = "정지점 " + st.no + " — 드래그로 위치 보정";
+        this._bindGhostDrag(el, st);
+        layer.appendChild(el);
+        this._ghostEls.push(el);
+      });
+    },
+    _bindGhostDrag(el, st) {
+      let dragging = false;
+      const onMove = (ev) => {
+        if (!dragging) return;
+        const cx = ev.touches ? ev.touches[0].clientX : ev.clientX;
+        const cy = ev.touches ? ev.touches[0].clientY : ev.clientY;
+        const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent) ? MapCtrl.viewportToPercent(cx, cy) : null;
+        if (!pct) return;
+        st.x = Math.max(0, Math.min(100, pct.x));
+        st.y = Math.max(0, Math.min(100, pct.y));
+        el.style.left = st.x + "%"; el.style.top = st.y + "%";
+        if (ev.cancelable) ev.preventDefault();
+      };
+      const onUp = () => {
+        dragging = false;
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+      };
+      el.addEventListener("pointerdown", (ev) => {
+        dragging = true;
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+        if (ev.cancelable) ev.preventDefault();
+      });
+    },
+    _removeGhostStops() {
+      ((this._ghostEls) || []).forEach((el) => { try { el.remove(); } catch (e) {} });
+      this._ghostEls = [];
     },
     _toast(m, ms) { try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(m, ms); } catch (e) {} }
   };
