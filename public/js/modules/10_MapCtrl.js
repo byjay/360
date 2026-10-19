@@ -400,9 +400,19 @@
     PIN_SCALE_TOUCH: 0.8,      // [WO 20261019-pinscale3] 터치 기기 맞춤 기준 — 32px(40×0.8, 마우스보다 살짝 큼)
     PIN_NATIVE_PX: 40,         // .pin-marker-teardrop .pin-pin svg 세로(style.css ~4791) — px 환산 기준
     FIT_PAD: 0.92,             // [WO 20261019-pinscale3] fit() 여백과 동일(SoT) — computeFitZoom 공유
-    PIN_MIN_PX_TOUCH: 24,      // [WO 20261019-pinscale3] 터치 최소 가독/탭 보장(18→24)
-    PIN_MIN_PX_MOUSE: 20,      // 마우스 바닥(14→20) — 맞춤 기준(30px)이 작아도 핀이 사라지지 않게
+    /** [WO 20261019-pinscale4, 마스터 "너무 줌 아웃 했을 때는 핀 머리가 너무 크게 보이지 않게"]
+     *  [재현] 99dbf1b: 바닥 20/24px 가 맞춤(30px)보다 더 축소해도 버텨, 도면은 계속 작아지는데
+     *  핀 머리만 상대적으로 커져 겹쳐 보였다. 채택: 바닥을 "점"(8~10px) 수준까지 낮춰 맞춤 아래
+     *  구간도 계속 비례 축소되게 한다 — 탭 영역은 ::after 역스케일(style.css .pin-marker::after)로
+     *  별도 보장하므로 이 바닥은 더 이상 "최소 탭 크기"가 아니라 "최소 가시 크기"다.
+     *  터치를 마우스보다 살짝(20%, 종전과 같은 비율) 크게 유지(10 vs 8). */
+    PIN_MIN_PX_TOUCH: 10,      // [WO 20261019-pinscale4] 점 바닥(24→10)
+    PIN_MIN_PX_MOUSE: 8,       // [WO 20261019-pinscale4] 점 바닥(20→8) — 마스터 예시값 그대로
     PIN_MAX_PX: 56,            // [WO 20261019-pinscale3] 화면 최대 핀 높이(px, 48→56) — 과도줌 가림 방지 상한
+    /** [WO 20261019-pinscale4] 핀 번호 "자동" 옵션 — 화면 핀 높이가 이 밑이면 숫자를 숨기고
+     *  머리(색 점)만 남긴다(_applyPinBillboard 가 매 줌마다 #pins-layer.pin-num-off 로 토글,
+     *  CSS #pins-layer.pin-num-off .pin-num-text{display:none} 가 실제 숨김 — 11_UI.js 참조). */
+    LABEL_HIDE_PX: 16,
     _pinScaleRef: 1,           // 구역 보정(0~1) — setCropBoundary(crop, scaleRef) 단일 진입점이 설정
     _pinIsoPrev: null,         // [성능] flat↔ISO 전환 감지용(전환 시 1회만 인라인 정리)
     /** 터치 환경 판정(공유 패턴 — 19_PinGrid.js:10 / 20_App.js:11 / 48_GPS.js:18 과 동일). */
@@ -471,6 +481,16 @@
       // CSS 변수 하나(--pin-scale)만 갱신하면 평면 마커·리더 풍선은 정적 스타일시트 규칙
       // (style.css #pins-layer .pin-marker / .pin-leader-bubble)이 알아서 반영한다(O(1)).
       if (layer.style && typeof layer.style.setProperty === "function") layer.style.setProperty("--pin-scale", inv.toFixed(4));
+      // [WO 20261019-pinscale4] 핀 번호 표시 — PinLabelPrefs(23c_PinSizePrefs.js) 옵션 SoT.
+      // always=항상 켬 / hidden=항상 끔 / auto(기본)=화면 핀 높이 < LABEL_HIDE_PX(16px) 면 끔.
+      // 매 줌마다(이 함수가 호출될 때) 다시 판정 — SVG 재생성 없이 CSS 클래스 토글 1개로 즉시 반영.
+      if (layer.classList) {
+        const px = inv * this.PIN_NATIVE_PX;
+        const hideLabel = (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.shouldHide)
+          ? PinLabelPrefs.shouldHide(px)
+          : (px < this.LABEL_HIDE_PX); // PinLabelPrefs 미로드(테스트 하니스 등) → auto 폴백
+        layer.classList.toggle("pin-num-off", !!hideLabel);
+      }
       // [WO 20261008-pinstyle §2] 화살촉·선 굵기도 같은 inv 로(풍선과 비례 고정) — SVG 좌표라 UI 쪽에서 재계산.
       if (typeof UI !== "undefined" && UI.refreshLeaders) { try { UI.refreshLeaders(); } catch (e) {} }
       // [WO 20261001-leader] 리더 풍선(.pin-leader-bubble) — 바늘형 핀과 앵커가 다르다(중앙 vs 하단).

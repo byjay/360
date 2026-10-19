@@ -74,3 +74,76 @@
       });
     }
   };
+
+  /* ══════════════════════════════════════════
+     PinLabelPrefs — 핀 번호(지도 위 핀 머리 안 숫자) 표시 옵션
+     [WO 20261019-pinscale4, 마스터 "핀 숫자가 보여도 되고 안 보여도 돼. 그것도 옵션으로 선택할
+     수 있게끔 해. 보는 사람이 옵션으로 선택할 수 있게끔 해."] 3상태:
+       always — 항상 표시 / hidden — 항상 숨김 / auto(기본) — 작을 때만 자동 숨김(MapCtrl.LABEL_HIDE_PX).
+     PinSizePrefs 와 동일 패턴(프로젝트별 localStorage, _projectId 재사용 — SoT 중복 선언 금지:
+     PinSizePrefs._projectId() 그대로 호출). 디자이너·열람자 모두 같은 화면 설정에서 바꾼다
+     (24_Settings.js initToggle 호출, chk-leader360 행 바로 뒤 — 핀 크기 슬라이더와 같은 자리).
+     🔴 서버 저장(디자이너가 "배포 시 열람자 기본값"을 정하는 것)은 이 WO 범위 밖(src/index.tsx·
+     migrations 변경 필요, 담당 파일 목록 밖) — 지금은 기기별(localStorage) 선택만 지원한다. */
+  const PinLabelPrefs = {
+    ALWAYS: "always", HIDDEN: "hidden", AUTO: "auto",
+    DEFAULT: "auto",
+    _key() { return "wm_pinlabel_" + PinSizePrefs._projectId(); },
+    /** 저장된 옵션(없거나 비정상 값이면 DEFAULT). */
+    get() {
+      try {
+        const v = localStorage.getItem(this._key());
+        if (v === this.ALWAYS || v === this.HIDDEN || v === this.AUTO) return v;
+        return this.DEFAULT;
+      } catch (e) { return this.DEFAULT; }
+    },
+    set(v) {
+      const n = (v === this.ALWAYS || v === this.HIDDEN || v === this.AUTO) ? v : this.DEFAULT;
+      try { localStorage.setItem(this._key(), n); } catch (e) {}
+      try { if (typeof MapCtrl !== "undefined" && MapCtrl.applyTransform) MapCtrl.applyTransform(); } catch (e) {}
+      return n;
+    },
+    /** MapCtrl._applyPinBillboard() 가 매 줌마다 호출 — px = 현재 화면 핀 높이(px). */
+    shouldHide(px) {
+      const v = this.get();
+      if (v === this.ALWAYS) return false;
+      if (v === this.HIDDEN) return true;
+      return px < (typeof MapCtrl !== "undefined" ? MapCtrl.LABEL_HIDE_PX : 16); // auto
+    },
+    /** 설정 패널 3단 버튼(select 대신 — 터치 44px 보장이 쉽고 현재 선택이 한눈에 보인다).
+     *  PinSizePrefs.initSlider() 와 같은 런타임 주입 패턴(index.html 미수정) — 그 슬라이더 바로 뒤. */
+    initToggle() {
+      const slider = document.getElementById("pinsize-slider");
+      const anchor = slider && slider.closest ? slider.closest("div") : null; // pinsize wrap(label+slider)
+      if (!anchor || !anchor.parentNode || document.getElementById("pinlabel-toggle")) return;
+      const wrap = document.createElement("div");
+      wrap.id = "pinlabel-toggle";
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-top:10px;";
+      const label = document.createElement("span");
+      label.textContent = "핀 번호 표시";
+      label.style.cssText = "font-size:13px;";
+      const btnRow = document.createElement("div");
+      btnRow.style.cssText = "display:flex;gap:6px;";
+      const OPTS = [[this.ALWAYS, "항상"], [this.AUTO, "자동"], [this.HIDDEN, "숨김"]];
+      const buttons = OPTS.map(([val, text]) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = text; b.dataset.pinlabelOpt = val;
+        b.style.cssText = "flex:1;min-height:32px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;cursor:pointer;font-size:12px;";
+        b.addEventListener("click", () => { this.set(val); paint(); });
+        return b;
+      });
+      const paint = () => {
+        const cur = this.get();
+        buttons.forEach((b) => {
+          const on = b.dataset.pinlabelOpt === cur;
+          b.style.fontWeight = on ? "700" : "400";
+          b.style.opacity = on ? "1" : ".6";
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+      };
+      buttons.forEach((b) => btnRow.appendChild(b));
+      wrap.appendChild(label); wrap.appendChild(btnRow);
+      anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
+      paint();
+    }
+  };

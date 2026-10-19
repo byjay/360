@@ -3,12 +3,20 @@
  *   [포인트] 버튼 자동시작 확인(R5) · CHECKER 사진 안내 배너(R4).
  * 실행: node tests/p133-pinstyle.test.mjs
  * 뮤테이션(실제 소스를 바꿔 같은 단언을 다시 돌린다 — 반드시 EXIT=1):
- *   P133_MUT=dual|nohide|noinv|stroke|alignall|autotoggle|touchstart|nonote|noctx|ctxinput|nofab|r7|r8|r8css|r9|labelsmall node tests/p133-pinstyle.test.mjs
+ *   P133_MUT=dual|nohide|noinv|stroke|alignall|autotoggle|touchstart|nonote|noctx|ctxinput|nofab|r7|r8|r8css|r9|labelsmall|nolabeloff|numtextclass node tests/p133-pinstyle.test.mjs
  *
  * [L] WO 20261019-pinscale3-label(마스터 "라벨이 약 8px 이면 같은 결함이다") — 맞춤 상태에서
  *   번호 배지 글자 높이가 ≥11px(1~2자리)·≥10px(3자리+, §3 바닥)가 되는지 UI._numberBadgeGeom() 값을
  *   실측 변환식(height_px ≈ fs × 0.625 × pinScreenScale()/PIN_SCALE, .tmp/probe-label.mjs 라이브 CDP로
  *   잰 상수)으로 검증. P133_MUT=labelsmall 로 구 리터럴(13/9)로 되돌리면 반드시 EXIT=1.
+ *
+ * [M] WO 20261019-pinscale4(마스터 "핀 숫자가 보여도 되고 안 보여도 돼 — 옵션으로 선택할 수 있게")
+ *   [재현] 99dbf1b 실측(지휘자 발주서 인용): 바닥 20/24px 가 맞춤(30px)보다 더 축소해도 버텨, 핀
+ *   머리가 상대적으로 커져 보였고, 번호 표시 옵션은 0개(항상 켜짐)였다. 채택: 바닥을 8/10px(점)로
+ *   낮추고(PIN_MIN_PX_MOUSE/TOUCH), PinLabelPrefs(23c_PinSizePrefs.js) 3상태(always/auto/hidden)를
+ *   추가 — auto 는 화면 핀 높이 <MapCtrl.LABEL_HIDE_PX(16px) 면 #pins-layer.pin-num-off 로 번호만
+ *   숨긴다(머리는 남음). P133_MUT=nolabeloff(토글 제거)·numtextclass(번호 텍스트 클래스 1곳 제거)
+ *   로 되돌리면 반드시 EXIT=1.
  *
  * [재현] 0b4d262(라이브) CDP 실측(.tmp/fixpinstyle/r4-*-0b4d262-report.json):
  *   R1 CHECKER 핀 2개 = 마커 표시 + 리더 g 2 + 풍선 2(동시 두 표현) · 1280 zoom .41 화살촉 15.6px/풍선 30.8px,
@@ -59,6 +67,12 @@ const MUTS = {
   labelsmall: ["11_UI.js",
     "if (len <= 1) return { fs: 20, rx: 8.6, ry: 8.6 };   // 맞춤 상태 ≈12px(목표 12~13 충족)\n      if (len === 2) return { fs: 18, rx: 13.4, ry: 8.6 }; // ≈11.25px(≥11 충족), 폭 확보로 원판 확장\n      return { fs: 16, rx: 17.6, ry: 8.6 };                // 3자+ ≈10.5px(§3 바닥 10px 충족), 원판 최대폭",
     "if (len <= 1) return { fs: 13, rx: 8.6, ry: 8.6 };\n      if (len === 2) return { fs: 13, rx: 8.6, ry: 8.6 };\n      return { fs: 9, rx: 8.6, ry: 8.6 };"],
+  // [WO 20261019-pinscale4] 되돌림: #pins-layer.pin-num-off 토글 자체를 제거 — "자동" 옵션에서
+  // 작은 핀의 번호를 숨기는 기능이 완전히 무효화된다(CSS 규칙은 남아도 클래스가 절대 안 붙음).
+  nolabeloff: ["10_MapCtrl.js", 'layer.classList.toggle("pin-num-off", !!hideLabel);', 'void hideLabel; /* [MUT nolabeloff] 토글 제거 */'],
+  // [WO 20261019-pinscale4] 되돌림: 번호 <text> 에 pin-num-text 클래스가 안 붙음(첫 등장 1곳만) —
+  // CSS #pins-layer.pin-num-off .pin-num-text{display:none} 가 그 핀의 번호를 못 찾아 숨기지 못한다.
+  numtextclass: ["11_UI.js", 'class="pin-num-text" x="18" y="15.4"', 'x="18" y="15.4"'],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
 const rd = (p) => {
@@ -71,7 +85,7 @@ const rd = (p) => {
   return s;
 };
 const M = (f) => rd("public/js/modules/" + f);
-const stateSrc = M("01_State.js"), seriesSrc = M("01b_PinSeries.js"), mapSrc = M("10_MapCtrl.js"), uiSrc = M("11_UI.js"), appSrc = M("20_App.js");
+const stateSrc = M("01_State.js"), seriesSrc = M("01b_PinSeries.js"), mapSrc = M("10_MapCtrl.js"), uiSrc = M("11_UI.js"), appSrc = M("20_App.js"), pinSizeSrc = M("23c_PinSizePrefs.js");
 
 let failed = 0;
 const ok = (cond, label) => { console.log((cond ? "  PASS " : "  FAIL ") + label); if (!cond) failed++; };
@@ -121,18 +135,22 @@ function uiEnv(opts) {
   const pinsLayer = add("pins-layer"), leaderLayer = add("leader-layer", "svg"), tr = add("map-transform"), vp = add("map-viewport");
   const toasts = [], dirty = [];
   const App = { _markDirty() { dirty.push(1); }, _autoSave() {}, setActivePin() {}, onPinTap() {}, deletePins: async () => 0, canBulkDeletePins: () => true };
+  // [WO 20261019-pinscale4] 상태형 localStorage — PinSizePrefs/PinLabelPrefs 의 get/set 라운드트립을
+  // 실제로 검증하려면 getItem 이 setItem 한 값을 돌려줘야 한다(종전 getItem:()=>null 은 그걸 못 봄).
+  const lsStore = new Map();
   const sandbox = {
     console, document, window: {}, navigator: { onLine: true }, App,
     Prompt: { toast: (m) => toasts.push(m) }, Zones: { render() {} }, PdfAnno: { refresh() {} }, PinIcons: { headMarkup: () => "" },
     JSON, Array, Map, Set, Date, Math, String, Number, Object, Boolean, setTimeout, clearTimeout,
-    localStorage: { getItem: () => null, setItem() {} }, requestAnimationFrame: (f) => f()
+    localStorage: { getItem: (k) => (lsStore.has(k) ? lsStore.get(k) : null), setItem: (k, v) => lsStore.set(k, String(v)), removeItem: (k) => lsStore.delete(k) },
+    requestAnimationFrame: (f) => f()
   };
   vm.createContext(sandbox);
-  vm.runInContext(stateSrc + "\n" + seriesSrc + "\n" + mapSrc + "\n" + uiSrc + "\n;globalThis.__UI=UI;globalThis.__S=State;globalThis.__MC=MapCtrl;", sandbox);
-  const UI = sandbox.__UI, State = sandbox.__S, MapCtrl = sandbox.__MC;
+  vm.runInContext(stateSrc + "\n" + seriesSrc + "\n" + mapSrc + "\n" + uiSrc + "\n" + pinSizeSrc + "\n;globalThis.__UI=UI;globalThis.__S=State;globalThis.__MC=MapCtrl;globalThis.__PLP=PinLabelPrefs;globalThis.__PSP=PinSizePrefs;", sandbox);
+  const UI = sandbox.__UI, State = sandbox.__S, MapCtrl = sandbox.__MC, PinLabelPrefs = sandbox.__PLP;
   MapCtrl.init(vp, tr);
   State.mode = "designer"; State.pdfPage = 1; State.zoom = 1;
-  return { UI, State, MapCtrl, pinsLayer, leaderLayer, tr, vp, toasts, dirty };
+  return { UI, State, MapCtrl, PinLabelPrefs, pinsLayer, leaderLayer, tr, vp, toasts, dirty };
 }
 const markers = (L) => L.children.filter((c) => c._classes.has("pin-marker"));
 const bubbles = (L) => L.children.filter((c) => c._classes.has("pin-leader-bubble"));
@@ -505,6 +523,51 @@ console.log("\n[L] 번호 배지 가독성(WO 20261019-pinscale3-label) — 맞�
   State.zoom = 1.3;
   const h1x13 = heightPx("1");
   ok(Math.abs(h1x13 - h1 * 1.3) < 1e-6, `L5 zoom=맞춤×1.3 → "1" 라벨 높이=${h1x13.toFixed(3)}px = 맞춤×1.3=${(h1 * 1.3).toFixed(3)}px(비례 확인)`);
+}
+
+console.log("\n[M] WO 20261019-pinscale4 — 핀 번호 표시 옵션(항상/자동/숨김) + 작을 때 자동 숨김");
+{
+  // M1~M4: PinLabelPrefs 3상태 SoT (localStorage 라운드트립 포함)
+  const { PinLabelPrefs } = uiEnv();
+  ok(PinLabelPrefs.get() === "auto", `M1 기본값 = auto (${PinLabelPrefs.get()})`);
+  PinLabelPrefs.set("hidden");
+  ok(PinLabelPrefs.get() === "hidden" && PinLabelPrefs.shouldHide(999) === true, "M2 hidden → 아무리 커도(999px) 항상 숨김");
+  PinLabelPrefs.set("always");
+  ok(PinLabelPrefs.get() === "always" && PinLabelPrefs.shouldHide(1) === false, "M3 always → 아무리 작아도(1px) 항상 표시");
+  PinLabelPrefs.set("auto");
+  ok(PinLabelPrefs.shouldHide(20) === false && PinLabelPrefs.shouldHide(10) === true, "M4 auto → LABEL_HIDE_PX(16) 기준 20px 표시/10px 숨김");
+}
+{
+  // M5~M7: renderPinsOnMap() 이 실제로 번호 <text> 에 pin-num-text 클래스를 붙이는가(CSS 가 잡을 대상).
+  const { UI, State, pinsLayer } = uiEnv();
+  State.regMode = "checkboard"; // simplifiedCheckboard 템플릿(1902행, 번호 텍스트가 2곳 중 하나) 경로를 실제로 태운다
+  State.pins = [{ id: "m1", x: 10, y: 10, page: 1, checkboard: true, label: "1" }, { id: "m2", x: 20, y: 20, page: 1, label: "P1" }];
+  UI.renderPinsOnMap();
+  const html = pinsLayer.children.map((m) => m.innerHTML).join("");
+  const n = (html.match(/class="pin-num-text"/g) || []).length;
+  ok(n === 2, `M5 CHECKER·360 핀 둘 다 번호 <text> 에 pin-num-text 클래스(실제 ${n}/2) — CSS #pins-layer.pin-num-off 가 잡을 대상`);
+}
+{
+  // M6~M8: _applyPinBillboard() 가 매 줌마다 #pins-layer 에 pin-num-off 를 실제로 토글하는가(auto).
+  const { MapCtrl, State, PinLabelPrefs, pinsLayer } = uiEnv();
+  PinLabelPrefs.set("auto");
+  State.zoom = 0.667; // px≈20(≥16) — fitZoom 폴백 1 전제(§L 과 동일)
+  MapCtrl._applyPinBillboard();
+  ok(!pinsLayer.classList.contains("pin-num-off"), `M6 px≈20(≥16) → pin-num-off 없음(번호 표시)`);
+  State.zoom = 0.333; // px≈10(<16)
+  MapCtrl._applyPinBillboard();
+  ok(pinsLayer.classList.contains("pin-num-off"), `M7 px≈10(<16) → pin-num-off 붙음(번호 숨김, 머리는 그대로)`);
+  PinLabelPrefs.set("always");
+  MapCtrl._applyPinBillboard(); // 같은 zoom(px≈10)이어도 always 면 절대 안 숨김
+  ok(!pinsLayer.classList.contains("pin-num-off"), `M8 같은 px≈10 이어도 always → pin-num-off 없음(옵션이 auto 판정보다 우선)`);
+}
+{
+  // M9: 핀 바닥(점) — 맞춤보다 더 축소해도 "점"(8px, 종전 20px)까지 계속 작아진다(마스터 "핀 머리가
+  //  너무 크게 보이지 않게"). fitZoom 폴백 1 이라 effZoom=zoom — zoom 을 아주 작게 주면 바닥에 닿는다.
+  const { MapCtrl, State } = uiEnv();
+  State.zoom = 0.0001;
+  const px = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
+  ok(Math.abs(px - MapCtrl.PIN_MIN_PX_MOUSE) < 1e-6 && MapCtrl.PIN_MIN_PX_MOUSE <= 10, `M9 극저 zoom → 바닥 ${px.toFixed(2)}px = PIN_MIN_PX_MOUSE(${MapCtrl.PIN_MIN_PX_MOUSE}, ≤10 — 종전 20px 에서 완화)`);
 }
 
 console.log(failed === 0 ? "\n✅ p133 전체 PASS" : `\n❌ p133 ${failed}건 FAIL`);

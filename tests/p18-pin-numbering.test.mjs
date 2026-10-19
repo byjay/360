@@ -162,7 +162,7 @@ function suitePinScale(label) {
   const cssVars = {};
   const layer = {
     children: [makeMarker(), makeMarker(), makeMarker()], // 라벨 길이·콘텐츠 유무와 무관 — 인자 자체가 없음
-    classList: { add() {}, remove() {} },
+    classList: { add() {}, remove() {}, toggle() {} }, // [WO 20261019-pinscale4] _applyPinBillboard 가 pin-num-off 토글 호출(실 DOM 과 동일한 최소 API)
     style: { setProperty(k, v) { cssVars[k] = v; } }
   };
   const sandbox = {

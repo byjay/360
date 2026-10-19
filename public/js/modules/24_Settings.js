@@ -33,6 +33,8 @@
       if (typeof GPS !== "undefined" && GPS.initToggle) GPS.initToggle();
       // [WO 20261016-pinscale §3] 핀 크기(도면 대비) 슬라이더 — 같은 런타임 주입 패턴.
       if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.initSlider) PinSizePrefs.initSlider();
+      // [WO 20261019-pinscale4] 핀 번호 표시 옵션(항상/자동/숨김) — 슬라이더 바로 뒤, 같은 런타임 주입 패턴.
+      if (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.initToggle) PinLabelPrefs.initToggle();
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
       const bd = document.querySelector('#settings-modal .admin-gate-backdrop');

@@ -28,14 +28,23 @@
  * 경계의 확대비를 이미 반영하므로 scaleRef 를 또 곱하면 이중보정(⑥, nofit 뮤테이션이 증명) —
  * 경계 없는 벡터복사 구역(scaleRef<1, crop=null)만 scaleRef 를 유지한다(⑥b, 변경 없음).
  *
+ * ── WO 20261019-pinscale4 (마스터 "너무 줌 아웃 했을 때는 핀 머리가 너무 크게 보이지 않게끔")──
+ * [재현] 99dbf1b(지휘자 발주서 인용): 맞춤 30px·2배 확대 56px·0.5배 축소에서 바닥(20/24px) 고정 —
+ * 맞춤보다 더 축소해도 핀이 20~24px 에 멈춰, 도면은 작아지는데 핀 머리만 상대적으로 커져 보였다.
+ * 채택(3차): 바닥을 PIN_MIN_PX_MOUSE/TOUCH 20/24→8/10px(점)로 낮춰 맞춤 아래 구간도 계속 비례
+ * 축소되게 한다(§9 전·후). 탭 영역은 더는 이 바닥에 얹혀가지 않고 style.css .pin-marker::after
+ * 역스케일(scale(calc(1/var(--pin-scale))))로 별도 보장 — 핀이 8px 로 작아져도 44px 그대로 눌린다.
+ * 번호는 LABEL_HIDE_PX(16px) 밑이면(옵션 auto) 숨기고 머리(색 점)만 남긴다(11_UI.js·p133 §M 검증).
+ *
  * 실제 모듈 소스(02_PDF.js / 10_MapCtrl.js)를 그대로 vm 에 평가해 검사(목 구현 아님).
  * 뮤테이션 6건 — 고친 부분을 되돌리면 반드시 EXIT=1:
  *   P159_MUT=noceil   → pin 상한(Math.min(...,ceil)) 제거 — zoom=16 56px 초과 단언 실패
  *   P159_MUT=nolinecap→ line 상한(Math.min(...,LINE_MAX_RATIO)) 제거 — 선 두께 상한 단언 실패
  *   P159_MUT=nofloor  → Math.max(raw, floor) 제거(바닥 삭제) — 저줌 최소크기 단언 실패
  *   P159_MUT=nocrop   → scaleRef 무시(항상 1) — 구역 보정 단언 실패
- *   P159_MUT=nofit    → [신규 20261019] fitZoom 나누기 제거(zoom 직접 기준으로 되돌림) — 경계
+ *   P159_MUT=nofit    → fitZoom 나누기 제거(zoom 직접 기준으로 되돌림) — 경계
  *                        맞춤(⑥) 단언 실패(비경계 구간은 fitZoom 폴백=1 이라 차이가 안 드러남)
+ * (핀 번호 표시 옵션·토글 뮤테이션은 DOM 이 필요해 p133 §M nolabeloff/numtextclass 쪽에 있다.)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -130,8 +139,8 @@ const { PDF, MapCtrl, State } = ctx;
  * 1. zoom 0.2/1/4/16 — 화면 px 가 [바닥px, 상한px] 범위 안(G-4⑦ 요구 수치 그대로)
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[① zoom 0.2/1/4/16 — 화면 px 범위]");
-const floorPx = MapCtrl.PIN_MIN_PX_MOUSE; // 테스트 환경=마우스(window 無) = 14px
-const ceilPx = MapCtrl.PIN_MAX_PX;        // 48px
+const floorPx = MapCtrl.PIN_MIN_PX_MOUSE; // 테스트 환경=마우스(window 無) = 8px(WO 20261019-pinscale4, 종전 20px)
+const ceilPx = MapCtrl.PIN_MAX_PX;        // 56px
 for (const z of [0.2, 1, 4, 16]) {
   State.zoom = z;
   const px = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
@@ -233,10 +242,17 @@ for (let z = 0.2; z <= 16; z *= 1.37) {
 ok(sweepOk, "zoom 0.2~16 전범위 — pinScreenScale() = min(상한, max(바닥, base×zoom)) 일치");
 
 /* ══════════════════════════════════════════════════════════════════
- * 9. [신규 WO 20261019-pinscale3] 비경계(전체 도면) computeFitZoom() 실측 — "맞춤 상태 약 30px",
- *    2배 확대 시 56px 상한, 0.5배 축소 시 20px 바닥. ①~⑧은 테스트 하니스에 content 크기가 없어
- *    fitZoom 이 항상 1(폴백)이었다 — 이 섹션만 _contentSize() 를 오버라이드해 실제 "큰 도면을
- *    화면 맞춤으로 열었을 때"(지휘자 라이브 재현: zoom≈0.16)와 같은 상황을 흉내낸다.
+ * 9. [WO 20261019-pinscale3] 비경계(전체 도면) computeFitZoom() 실측 — "맞춤 상태 약 30px",
+ *    2배 확대 시 56px 상한. ①~⑧은 테스트 하니스에 content 크기가 없어 fitZoom 이 항상 1(폴백)
+ *    이었다 — 이 섹션만 _contentSize() 를 오버라이드해 실제 "큰 도면을 화면 맞춤으로 열었을 때"
+ *    (지휘자 라이브 실측: zoom≈0.16)와 같은 상황을 흉내낸다.
+ *
+ * [전·후 — WO 20261019-pinscale4, 마스터 "너무 줌 아웃 했을 때는 핀 머리가 너무 크게 보이지 않게"]
+ * [재현] 99dbf1b(지휘자 발주서 인용): 맞춤×0.5(0.5배 축소)에서 바닥(종전 20/24px)에 깔려, 그보다
+ * 더 축소해도 핀은 20~24px 에 고정됐다 — 도면은 계속 작아지는데 핀 머리만 상대적으로 커져 겹쳐
+ * 보였다. 채택: 바닥을 20/24→8/10px(점)로 낮춰, 맞춤×0.5 는 이제 바닥이 아니라 "여전히 비례
+ * 구간"(15px)이 되고, 바닥은 훨씬 더 축소해야(맞춤×0.1) 닿는다 — §9 뒷부분(맞춤×0.5·맞춤×0.1)이
+ * 전·후를 그대로 보여준다.
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[⑨ 비경계 전체 맞춤 — computeFitZoom() 실측]");
 PDF.setDeckCrop(null, 1);
@@ -251,9 +267,13 @@ ok(near(px9fit, 30, 1), `맞춤 상태(zoom=fitZoom) 화면px=${px9fit.toFixed(2
 State.zoom = fitZ9 * 2; // 맞춤 대비 2배 확대
 const px9x2 = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
 ok(near(px9x2, MapCtrl.PIN_MAX_PX, 1e-6), `맞춤×2 확대 화면px=${px9x2.toFixed(2)} = 상한 ${MapCtrl.PIN_MAX_PX}px 에서 멈춤("비례해서 커지다가 최대 56px")`);
-State.zoom = fitZ9 * 0.5; // 맞춤 대비 0.5배 축소
+State.zoom = fitZ9 * 0.5; // 맞춤 대비 0.5배 축소 — [전] 종전 바닥(20/24px)에 깔렸던 지점
 const px9half = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-ok(near(px9half, MapCtrl.PIN_MIN_PX_MOUSE, 1e-6), `맞춤×0.5 축소 화면px=${px9half.toFixed(2)} = 바닥 ${MapCtrl.PIN_MIN_PX_MOUSE}px 에서 멈춤("작아지다가 최소 20px")`);
+ok(near(px9half, 15, 0.1), `맞춤×0.5 축소 화면px=${px9half.toFixed(2)} ≈ 15px(=30×0.5) — [후] 바닥(8px)이 아니라 여전히 비례 구간("핀 머리가 너무 크게 보이지 않게", 종전엔 여기서 바닥 20px 에 깔려 비례가 깨졌었다)`);
+State.zoom = fitZ9 * 0.1; // 맞춤 대비 더 축소(×0.1) — 이제야 점 바닥에 닿는다
+const px9tiny = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
+ok(near(px9tiny, MapCtrl.PIN_MIN_PX_MOUSE, 1e-6), `맞춤×0.1 축소 화면px=${px9tiny.toFixed(2)} = 점 바닥 ${MapCtrl.PIN_MIN_PX_MOUSE}px 에서 멈춤(종전 20px 보다 훨씬 작게 허용 — 도면과 비례가 더 오래 유지된다)`);
+ok(px9tiny < MapCtrl.LABEL_HIDE_PX, `맞춤×0.1 화면px=${px9tiny.toFixed(2)} < LABEL_HIDE_PX(${MapCtrl.LABEL_HIDE_PX}) — "자동" 옵션이면 번호 숨김 대상(11_UI.js/23c_PinSizePrefs.js, p133 §M 에서 실제 토글 검증)`);
 MapCtrl._contentSize = origContentSize; // 원복(이후 구역 테스트에 영향 없게)
 
 console.log(MUT ? `\n[MUT=${MUT}] 의도적 되돌림 — 위 단언 중 최소 1개는 FAIL 이어야 정상(뮤테이션이 진짜로 잡혔다는 증거)` : "");

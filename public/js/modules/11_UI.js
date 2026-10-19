@@ -1899,7 +1899,7 @@
               <path d="M15.3 27 L18 60 L20.7 27 Z" fill="${headFill2}"/>
               <rect x="5.6" y="2.6" width="24.8" height="24.8" rx="6" fill="${_st.filled ? headFill : "none"}" stroke="#ffffff" stroke-width="2"/>
               <rect x="${(18 - labelGeom.rx).toFixed(1)}" y="${(15 - labelGeom.ry).toFixed(1)}" width="${(labelGeom.rx * 2).toFixed(1)}" height="${(labelGeom.ry * 2).toFixed(1)}" rx="3.4" fill="#ffffff"/>
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
+              <text class="pin-num-text" x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
             </svg>
           </div>` : `
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
@@ -1943,7 +1943,7 @@
                    대비 ≥4.5:1 이미 보장된 값이라 별도 실측 불필요 — ≥3:1 요구보다 넉넉함). -->
               <!-- [WO 20260917 형태단서] 속 원판 실루엣으로 티어 구분(원=photo/empty, 둥근사각형=content) -->
               ${tierDisc}
-              <text x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
+              <text class="pin-num-text" x="18" y="15.4" text-anchor="middle" dominant-baseline="central" font-family="'Segoe UI',sans-serif" font-size="${labelGeom.fs}" font-weight="900" fill="${txtFill}">${dispLabel}</text>
               ${(typeof PinIcons !== "undefined" && pin.icon && pin.icon !== "number")
                 ? `<circle class="pin-icon-badge" cx="26.8" cy="6.3" r="5.4" fill="#ffffff" stroke="${headFill2}" stroke-width="1.3"/>${PinIcons.headMarkup(pin.icon, txtFill, 6.3, 26.8, 0.32)}`
                 : ""}

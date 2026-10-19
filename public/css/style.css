@@ -1490,12 +1490,23 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transform: translate(-50%, calc(-100% + 2px)) scale(var(--pin-scale, 1));
   transform-origin: 50% 100%;
 }
-/* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭 */
+/* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭.
+   [WO 20261019-pinscale4] scale(calc(1/var(--pin-scale))) 로 역스케일 — ::after 는 .pin-marker
+   의 자손 렌더이므로 부모 transform(scale(var(--pin-scale)))이 적용된 뒤 그려진다. 역스케일을
+   안 곱하면 핀이 작아질수록(바닥 8px까지) 탭 영역도 같이 줄어 44px 보장이 깨진다(마스터
+   "너무 작아져도 눌리게" — 10_MapCtrl.js PIN_MIN_PX_* 하한 완화와 짝). */
 .pin-marker::after {
   content: ""; position: absolute; left: 50%; top: 0;
-  width: 44px; height: 44px; transform: translate(-50%, -22px);
+  width: 44px; height: 44px;
+  transform: translate(-50%, -22px) scale(calc(1 / var(--pin-scale, 1)));
   pointer-events: auto; z-index: -1;
 }
+/* [WO 20261019-pinscale4] 핀 번호(지도 위 핀 머리 숫자) 표시 옵션 — PinLabelPrefs(23c_PinSizePrefs.js)
+   SoT. always/hidden 은 사용자가 직접, auto(기본)는 MapCtrl._applyPinBillboard 가 화면 핀 높이
+   <LABEL_HIDE_PX(16px) 일 때 자동으로 이 클래스를 붙인다. 머리(색 점)·링·원판은 그대로 남아
+   "숫자만" 사라진다(핀 소실 0). 리더 풍선 번호(.pin-leader-bubble 안 text)는 이 클래스 밖이라
+   영향 없음(발주 §3 — 지도 위 핀만 해당). */
+#pins-layer.pin-num-off .pin-num-text { display: none; }
 
 /* Pending pin */
 .pending-pin {
