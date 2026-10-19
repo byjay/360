@@ -10,6 +10,14 @@
      equirect 360 은 좌우가 이어진다(seam) — 감지는 가로 N조각(겹침 포함)으로 나눠 합치고,
      박스가 이은선을 넘으면 블러도 양끝에서 랩 처리한다(sliceRanges/mapBoxToFull/normalizeX/
      mergeBoxes/applyBoxBlur 전부 순수 함수로 분리 — tests/p157 단위검증 대상).
+     🔴 [지휘자 실측 2026-10-19 R2] 기본 base=mobilenet_v2(lite 아님)·수평 띠 y 28~78%만 1차 감지·
+     10조각·겹침25%·점수 하한 0.6(실 사진 7장: 정답1/1, 오탐0/7 — lite+전체높이+5조각일 때는
+     정답을 놓치고 오탐 3건). "전체 높이로 다시 찾기" 로 위아래까지 확장 재검색 가능.
+     점수 0.4~0.6 은 자동 미적용 — "확인 필요"(점선) 로 보여주고 탭하면 박스로 포함(review 버킷).
+     저사양 기기(Device Memory API ≤2GB 또는 hardwareConcurrency ≤2 또는 WebGL MAX_TEXTURE_SIZE
+     <4096 — 실제 WebGL 벤치마크는 비용이 커 생략, 휴리스틱임을 명시)는 lite_mobilenet_v2 로 폴백
+     (모델 다운로드량 실측: lite 20.0MB/8req vs full 66.0MB/20req — 약 3.3배, 저사양에서 로드 지연
+     가치가 큼). 모델 선택은 1회 계산 후 _modelBase 에 캐시.
      원본 보존 — 처리(블러)본을 pin.imageId(기본 표시)로 올리고, 블러 "이전" 원본은
         App._uploadToR2 로 R2 에 올려 pin.blurOrigUrl/blurOrigKind 에 보관한다(기존 pin.origKey
         관례와 같은 id/url 보관 스타일 — 단, origKey는 "고해상도 원본 보관"이라는 다른 의미로
@@ -22,14 +30,18 @@
   const PersonBlur = {
     TF_SCRIPT: "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js",
     COCO_SCRIPT: "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js",
-    SLICE_COUNT: 5,
-    SLICE_OVERLAP_FRAC: 0.12,     // 조각 하나 폭의 12%를 좌우로 더 겹쳐 자른다
-    CONF_DEFAULT: 0.5,
+    SLICE_COUNT: 10,
+    SLICE_OVERLAP_FRAC: 0.25,     // 조각 하나 폭의 25%를 좌우로 더 겹쳐 자른다(R2 실측)
+    CONF_DEFAULT: 0.6,            // 자동 적용 하한(R2 실측 — 이 이상만 바로 박스로 확정)
+    CONF_REVIEW: 0.4,             // "확인 필요"(점선) 하한 — 이 미만은 버린다
+    BAND_Y0_FRAC: 0.28,           // 1차 감지는 수평 띠만(상/하단 천장·바닥 오탐 배제) — R2 실측
+    BAND_Y1_FRAC: 0.78,
     MAX_DETECT_WIDTH: 3200,       // 감지용 다운스케일 상한(메모리 안전) — 블러는 원해상도에 적용
     _inited: false,
     _hosts: {},
     _busy: false,
     _modelPromise: null,
+    _modelBase: null,             // "mobilenet_v2" | "lite_mobilenet_v2" — _detectBase() 로 1회 계산
     _detectorOverride: null,      // 테스트 주입 — setDetector(fn) 로 교체
     _editors: {},                 // pinId → 에디터 상태(boxes, canvas 등)
 
@@ -86,10 +98,11 @@
       if (v < 0) v += W;
       return v;
     },
-    /** 조각-로컬 박스(bbox:[x,y,w,h], 조각 내부 픽셀) → 전체 이미지 좌표(x 는 [0,width) 로 랩됨). */
-    mapBoxToFull(bbox, slice, width) {
+    /** 조각-로컬 박스(bbox:[x,y,w,h], 조각 내부 픽셀) → 전체 이미지 좌표(x 는 [0,width) 로 랩됨).
+     *  yOffset — 수평 띠(band)만 잘라 감지했을 때 띠의 상단 y(bandY0)를 더해 전체 y로 되돌린다. */
+    mapBoxToFull(bbox, slice, width, yOffset) {
       const fx = slice.x0 + bbox[0];
-      return { x: this.normalizeX(fx, width), y: Math.round(bbox[1]), width: Math.round(bbox[2]), height: Math.round(bbox[3]) };
+      return { x: this.normalizeX(fx, width), y: Math.round(bbox[1] + (yOffset || 0)), width: Math.round(bbox[2]), height: Math.round(bbox[3]) };
     },
     /** 두 박스의 IoU — shiftB(보통 0/+width/-width) 만큼 b.x 를 옮겨 비교(이음선 건너 중복 판정용). */
     _iou(a, b, shiftB) {
@@ -129,7 +142,7 @@
               const bx = items[j].x + bestShift;
               const x1 = Math.min(cur.x, bx), x2 = Math.max(cur.x + cur.width, bx + items[j].width);
               const y1 = Math.min(cur.y, items[j].y), y2 = Math.max(cur.y + cur.height, items[j].y + items[j].height);
-              cur = { x: W > 0 ? this.normalizeX(x1, W) : x1, y: y1, width: x2 - x1, height: y2 - y1 };
+              cur = { x: W > 0 ? this.normalizeX(x1, W) : x1, y: y1, width: x2 - x1, height: y2 - y1, score: Math.max(cur.score || 0, items[j].score || 0) };
               used[j] = true;
               changed = true;
             }
@@ -142,6 +155,28 @@
 
     /* ════════ 감지(실 캔버스 필요) ════════ */
     setDetector(fn) { this._detectorOverride = fn; },   // 테스트 주입: async (sliceCanvasLike) -> [{class,score,bbox:[x,y,w,h]}]
+    /** 저사양 기기 판정(휴리스틱) — Device Memory API(Chrome/Edge/Android 한정, 다른 브라우저는
+     *  undefined)·hardwareConcurrency·WebGL MAX_TEXTURE_SIZE 3종. 실 WebGL 렌더 벤치마크는 비용이
+     *  커(수백ms~수초) 세션마다 돌리지 않고, 정적 파라미터 조회만 쓴다 — 정밀하진 않지만 0ms. */
+    _shouldUseLite() {
+      try {
+        if (typeof navigator !== "undefined") {
+          const mem = navigator.deviceMemory;
+          if (typeof mem === "number" && mem > 0 && mem <= 2) return true;
+          const cores = navigator.hardwareConcurrency;
+          if (typeof cores === "number" && cores > 0 && cores <= 2) return true;
+        }
+        if (typeof document !== "undefined") {
+          const c = document.createElement("canvas");
+          const gl = c.getContext && (c.getContext("webgl") || c.getContext("experimental-webgl"));
+          if (!gl) return true;   // WebGL 자체가 없으면 저사양으로 간주
+          const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+          if (typeof maxTex === "number" && maxTex > 0 && maxTex < 4096) return true;
+        }
+      } catch (e) { /* 판정 실패 시 기본(full) 유지 — 보수적 */ }
+      return false;
+    },
+    _detectBase() { return this._shouldUseLite() ? "lite_mobilenet_v2" : "mobilenet_v2"; },
     async _loadScript(src) {
       if (typeof document === "undefined") throw new Error("no-dom");
       return new Promise((resolve, reject) => {
@@ -160,7 +195,8 @@
         if (typeof window === "undefined") throw new Error("no-window");
         if (!window.tf) await this._loadScript(this.TF_SCRIPT);
         if (!window.cocoSsd) await this._loadScript(this.COCO_SCRIPT);
-        if (!this._model) this._model = await window.cocoSsd.load({ base: "lite_mobilenet_v2" });
+        if (!this._modelBase) this._modelBase = this._detectBase();
+        if (!this._model) this._model = await window.cocoSsd.load({ base: this._modelBase });
         return true;
       })();
       return this._modelPromise;
@@ -171,31 +207,44 @@
       const preds = await this._model.detect(sliceCanvas);
       return (preds || []).map((p) => ({ class: p.class, score: p.score, bbox: p.bbox }));
     },
-    /** canvas(또는 동치 getContext 지원 캔버스) 전체에서 사람 박스를 N조각으로 나눠 감지 후 합친다. */
+    /** canvas(또는 동치 getContext 지원 캔버스) 에서 사람 박스를 N조각으로 나눠 감지 후 합친다.
+     *  기본은 수평 띠(BAND_Y0_FRAC~BAND_Y1_FRAC)만 자르고, opts.fullHeight:true 면 전체 높이.
+     *  반환: { auto:[...], review:[...] } — score>=confidence 는 auto, [reviewConfidence,confidence)
+     *  구간은 review("확인 필요", 자동 미적용). confidence 미만(reviewConfidence 포함 안 함)은 버린다. */
     async detectPersons(canvas, opts) {
       const o = opts || {};
-      const conf = typeof o.confidence === "number" ? o.confidence : this.CONF_DEFAULT;
+      const confAuto = typeof o.confidence === "number" ? o.confidence : this.CONF_DEFAULT;
+      const confReview = typeof o.reviewConfidence === "number" ? o.reviewConfidence : this.CONF_REVIEW;
       const n = o.sliceCount || this.SLICE_COUNT;
+      const overlapFrac = typeof o.overlapFrac === "number" ? o.overlapFrac : this.SLICE_OVERLAP_FRAC;
       const width = canvas.width, height = canvas.height;
-      const slices = this.sliceRanges(width, n, o.overlapFrac);
+      const useBand = !o.fullHeight;
+      const bandY0 = useBand ? Math.round(height * (typeof o.bandY0Frac === "number" ? o.bandY0Frac : this.BAND_Y0_FRAC)) : 0;
+      const bandY1 = useBand ? Math.round(height * (typeof o.bandY1Frac === "number" ? o.bandY1Frac : this.BAND_Y1_FRAC)) : height;
+      const bandH = Math.max(1, bandY1 - bandY0);
+      const slices = this.sliceRanges(width, n, overlapFrac);
       let all = [];
       for (const slice of slices) {
         const sc = (typeof document !== "undefined") ? document.createElement("canvas") : null;
         if (!sc) continue;
-        sc.width = slice.w; sc.height = height;
+        sc.width = slice.w; sc.height = bandH;
         const sctx = sc.getContext("2d");
         // 이음선 랩 — 조각이 [0,width) 밖으로 나가면 모자란 구간을 반대쪽에서 채운다
         for (let col = 0; col < slice.w; ) {
           const srcX = this.normalizeX(slice.x0 + col, width);
           const run = Math.min(slice.w - col, width - srcX);
-          sctx.drawImage(canvas, srcX, 0, run, height, col, 0, run, height);
+          sctx.drawImage(canvas, srcX, bandY0, run, bandH, col, 0, run, bandH);
           col += run;
         }
         const preds = await this._runDetector(sc);
-        preds.filter((p) => p.class === "person" && p.score >= conf)
-          .forEach((p) => all.push(Object.assign(this.mapBoxToFull(p.bbox, slice, width), { score: p.score })));
+        preds.filter((p) => p.class === "person" && p.score >= confReview)
+          .forEach((p) => all.push(Object.assign(this.mapBoxToFull(p.bbox, slice, width, bandY0), { score: p.score })));
       }
-      return this.mergeBoxes(all, width, o.iouThresh);
+      const merged = this.mergeBoxes(all, width, o.iouThresh);
+      return {
+        auto: merged.filter((b) => b.score >= confAuto),
+        review: merged.filter((b) => b.score < confAuto && b.score >= confReview)
+      };
     },
 
     /* ════════ 블러 적용(랩 포함) ════════ */
@@ -306,21 +355,29 @@
       } catch (e) { this._toast("사진을 불러올 수 없습니다"); return; }
       let canvas;
       try { canvas = await this._toCanvas(src, this.MAX_DETECT_WIDTH * 2); } catch (e) { this._toast("이미지 디코딩 실패"); return; }
-      const ed = { pin, hostId, canvas, boxes: [], showBoxes: true, busy: false };
+      const ed = { pin, hostId, canvas, boxes: [], reviewBoxes: [], showBoxes: true, busy: false, fullHeight: false };
       this._editors[pin.id] = ed;
       this._renderEditor(ed);
       this._detectInto(ed);
     },
+    /** 감지 실행 — ed.fullHeight 에 따라 수평 띠(기본)/전체 높이. "전체 높이로 다시 찾기" 는
+     *  ed.fullHeight=true 로 바꾸고 이 함수를 재호출한다. 재호출 시 사용자가 직접 그린 박스
+     *  (score 없음)는 보존하고 감지 결과만 교체한다. */
     async _detectInto(ed) {
       ed.busy = true; this._renderEditor(ed);
+      const manualBoxes = (ed.boxes || []).filter((b) => b.score == null);
       try {
         const dCanvas = document.createElement("canvas");
         const scale = Math.min(1, this.MAX_DETECT_WIDTH / ed.canvas.width);
         dCanvas.width = Math.round(ed.canvas.width * scale); dCanvas.height = Math.round(ed.canvas.height * scale);
         dCanvas.getContext("2d").drawImage(ed.canvas, 0, 0, dCanvas.width, dCanvas.height);
-        const boxes = await this.detectPersons(dCanvas, {});
-        ed.boxes = boxes.map((b) => ({ x: Math.round(b.x / scale), y: Math.round(b.y / scale), width: Math.round(b.width / scale), height: Math.round(b.height / scale) }));
-        this._toast(ed.boxes.length ? ("감지된 사람 " + ed.boxes.length + "명") : "감지된 사람이 없습니다 — 직접 박스를 추가할 수 있습니다");
+        const result = await this.detectPersons(dCanvas, { fullHeight: !!ed.fullHeight });
+        const back = (b) => ({ x: Math.round(b.x / scale), y: Math.round(b.y / scale), width: Math.round(b.width / scale), height: Math.round(b.height / scale), score: b.score });
+        ed.boxes = manualBoxes.concat(result.auto.map(back));
+        ed.reviewBoxes = result.review.map(back);
+        const n = result.auto.length, r = ed.reviewBoxes.length;
+        if (n || r) this._toast("감지된 사람 " + n + "명" + (r ? (" · 확인 필요 " + r + "건(점선 — 탭하면 포함)") : ""));
+        else this._toast("감지된 사람이 없습니다 — 직접 박스를 추가하거나" + (ed.fullHeight ? "" : " [전체 높이로 다시 찾기] 를 눌러보세요"));
       } catch (e) {
         this._toast("자동 감지 실패 — 직접 박스를 추가하세요(" + (e && e.message ? e.message : "모델 로드 오류") + ")", 5000);
       }
@@ -344,8 +401,9 @@
         '<div style="position:relative;max-width:100%;overflow:auto;border:1px solid #cbd5e1;border-radius:8px;">' +
         '<canvas id="pbl-canvas" style="display:block;max-width:100%;height:auto;cursor:crosshair;"></canvas></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:#475569;">' +
-        '<span>박스 ' + ed.boxes.length + '개 · 드래그로 추가 · 박스 클릭으로 삭제</span>' +
+        '<span>박스 ' + ed.boxes.length + '개' + (ed.reviewBoxes && ed.reviewBoxes.length ? (' · 확인 필요(점선) ' + ed.reviewBoxes.length + '건 — 탭하면 포함') : '') + ' · 드래그로 추가 · 박스 클릭으로 삭제</span>' +
         '<label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" id="pbl-toggle" ' + (ed.showBoxes ? "checked" : "") + '> 박스 표시</label>' +
+        (ed.fullHeight ? '' : '<button type="button" id="pbl-fullheight" ' + (ed.busy ? "disabled" : "") + ' style="min-height:32px;padding:4px 10px;border-radius:8px;border:1px solid #cbd5e1;background:#f1f5f9;color:#0f172a;font-size:12px;font-weight:600;cursor:' + (ed.busy ? "default" : "pointer") + ';">전체 높이로 다시 찾기</button>') +
         '</div>' +
         '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
         '<button type="button" id="pbl-cancel" style="min-height:40px;padding:8px 14px;border-radius:10px;border:1px solid #cbd5e1;background:#e2e8f0;color:#0f172a;font-weight:700;cursor:pointer;">취소</button>' +
@@ -356,11 +414,19 @@
       const ctx = cv.getContext("2d");
       ctx.drawImage(ed.canvas, 0, 0);
       if (ed.showBoxes) {
-        ctx.strokeStyle = "#dc2626"; ctx.lineWidth = Math.max(2, Math.round(cv.width / 400));
-        ed.boxes.forEach((b) => {
+        const drawBox = (b) => {
           if (b.x + b.width <= cv.width) ctx.strokeRect(b.x, b.y, b.width, b.height);
           else { ctx.strokeRect(b.x, b.y, cv.width - b.x, b.height); ctx.strokeRect(0, b.y, b.width - (cv.width - b.x), b.height); }
-        });
+        };
+        ctx.lineWidth = Math.max(2, Math.round(cv.width / 400));
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "#dc2626";
+        ed.boxes.forEach(drawBox);
+        // "확인 필요" — 점선(주황), 자동 미적용 — 탭하면 포함(위 박스 ' + ed.boxes.length + '개' 안내문과 동일 UI 규칙)
+        ctx.strokeStyle = "#d97706";
+        ctx.setLineDash([Math.max(6, Math.round(cv.width / 160)), Math.max(4, Math.round(cv.width / 240))]);
+        (ed.reviewBoxes || []).forEach(drawBox);
+        ctx.setLineDash([]);
       }
       this._bindEditorEvents(ed, cv);
     },
@@ -370,16 +436,21 @@
       const cancelBtn = document.getElementById("pbl-cancel"); if (cancelBtn) cancelBtn.onclick = close;
       const toggle = document.getElementById("pbl-toggle"); if (toggle) toggle.onchange = () => { ed.showBoxes = toggle.checked; this._renderEditor(ed); };
       const applyBtn = document.getElementById("pbl-apply"); if (applyBtn) applyBtn.onclick = () => this._applyAndSave(ed);
+      const fullBtn = document.getElementById("pbl-fullheight"); if (fullBtn) fullBtn.onclick = () => { ed.fullHeight = true; this._detectInto(ed); };
       let drag = null;
       const toImgXY = (ev) => {
         const r = cv.getBoundingClientRect();
         const sx = cv.width / r.width, sy = cv.height / r.height;
         return { x: Math.round((ev.clientX - r.left) * sx), y: Math.round((ev.clientY - r.top) * sy) };
       };
+      const hit = (list, p) => list.findIndex((b) => p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height);
       cv.onpointerdown = (ev) => {
         const p = toImgXY(ev);
-        const hitIdx = ed.boxes.findIndex((b) => p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height);
+        const hitIdx = hit(ed.boxes, p);
         if (hitIdx >= 0) { ed.boxes.splice(hitIdx, 1); this._renderEditor(ed); return; }
+        // "확인 필요"(점선) 박스 탭 → 포함(review → boxes 로 이동, 자동 적용은 아니고 사용자가 확정)
+        const reviewIdx = hit(ed.reviewBoxes || [], p);
+        if (reviewIdx >= 0) { ed.boxes.push(ed.reviewBoxes.splice(reviewIdx, 1)[0]); this._renderEditor(ed); return; }
         drag = { x0: p.x, y0: p.y };
       };
       cv.onpointermove = (ev) => {
