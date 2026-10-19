@@ -381,38 +381,85 @@
      *   · ISO/평면 두 경로 + 리더선(11_UI.js refreshLeaders)·360 동선(63_RouteDraw)이 모두 이 함수
      *     하나(또는 같은 바닥·상한·보정 로직)를 공유 → 상수만 바꾸면 전체 반영(§G-2-5).
      *   · 상한을 적용해도 translate(앵커 좌표)는 그대로 — CSS 변수(--pin-scale)만 바뀌고 마커의
-     *     위치(픽셀 anchor)는 별도 로직(도면 좌표→화면 변환)이라 scale 상한과 무관(§4 유지 확인). */
-    PIN_SCALE: 0.75,           // 기준 줌(zoom=1, 구역 보정 無)에서의 배율 — PinSizePrefs.DEFAULT 와 동일
-    PIN_NATIVE_PX: 40,         // .pin-marker-teardrop .pin-pin svg 세로(style.css ~4762) — 최소 px 환산 기준
-    PIN_MIN_PX_TOUCH: 18,      // 터치 최소 가독/탭 보장(핀 자체에 ::after 44px 터치패드가 별도로 있음)
-    PIN_MIN_PX_MOUSE: 14,      // 마우스는 포인터가 정밀해 더 작은 바닥을 허용
-    PIN_MAX_PX: 48,            // [WO 20261016-pinscale2] 화면 최대 핀 높이(px) — 과도줌 시 도면 가림 방지 상한
+     *     위치(픽셀 anchor)는 별도 로직(도면 좌표→화면 변환)이라 scale 상한과 무관(§4 유지 확인).
+     *
+     *  [WO 20261019-pinscale3, 마스터 "핀이, 포인트가 너무 크기가 작아서 안 보여. 전체 비율을 봐"]
+     *  근본원인: 기준이 "zoom=1"(임의의 절대 배율)이었다 — 실제 도면은 화면 맞춤(fit) 상태에서
+     *  zoom≈0.16 인 경우가 흔해(큰 PDF), raw=0.75×0.16×40≈4.8px 가 바닥(14px)에 깔려 거의 안 보였다.
+     *  채택: 분모를 "zoom=1" 에서 "화면 맞춤 배율"(computeFitZoom, fit()·_fitBoundary() 와 동일 공식,
+     *  §G-2-5 단일 진입점)로 바꾼다 — effZoom = (zoom/fitZoom) × scaleRef. fitZoom 에서 PIN_SCALE(0.75,
+     *  =30px) 그대로 나오므로 "맞춤 상태에서 약 30px"이 보장된다. fitZoom 을 모르면(로드 전·구역
+     *  경계도 미확정·테스트 환경처럼 viewport/content 크기가 없음) 1 로 폴백 — 종전 zoom 직접 기준과
+     *  동일해 회귀 0(테스트 하니스는 DOM 셸만 있어 전부 이 폴백 경로를 탄다, tests/p159 참조).
+     *  판단(구역 scaleRef 중복보정 제거, pinScreenScale/lineScreenScale 안 주석 참조): 구역 "경계"
+     *  (크롭 보기, _cropBoundary)는 fitZoom 자체가 이미 computeCoverZoom 으로 그 경계의 확대비를
+     *  반영하므로, scaleRef 를 또 곱하면 이중보정이 된다(핀이 비정상적으로 작아짐 — tests/p159 ⑥,
+     *  nofit 뮤테이션이 증명). 경계 없는 "벡터 복사" 구역(crop=null, scaleRef<1)은 fitZoom 계산이
+     *  (아직) 그 구역 자신의 렌더 캔버스 크기를 보지 못하는 경로라 scaleRef 를 그대로 유지한다. */
+    PIN_SCALE: 0.75,           // 맞춤(fitZoom) 기준 배율 — 30px(40×0.75). PinSizePrefs.DEFAULT 와 동일
+    PIN_SCALE_TOUCH: 0.8,      // [WO 20261019-pinscale3] 터치 기기 맞춤 기준 — 32px(40×0.8, 마우스보다 살짝 큼)
+    PIN_NATIVE_PX: 40,         // .pin-marker-teardrop .pin-pin svg 세로(style.css ~4791) — px 환산 기준
+    FIT_PAD: 0.92,             // [WO 20261019-pinscale3] fit() 여백과 동일(SoT) — computeFitZoom 공유
+    PIN_MIN_PX_TOUCH: 24,      // [WO 20261019-pinscale3] 터치 최소 가독/탭 보장(18→24)
+    PIN_MIN_PX_MOUSE: 20,      // 마우스 바닥(14→20) — 맞춤 기준(30px)이 작아도 핀이 사라지지 않게
+    PIN_MAX_PX: 56,            // [WO 20261019-pinscale3] 화면 최대 핀 높이(px, 48→56) — 과도줌 가림 방지 상한
     _pinScaleRef: 1,           // 구역 보정(0~1) — setCropBoundary(crop, scaleRef) 단일 진입점이 설정
     _pinIsoPrev: null,         // [성능] flat↔ISO 전환 감지용(전환 시 1회만 인라인 정리)
     /** 터치 환경 판정(공유 패턴 — 19_PinGrid.js:10 / 20_App.js:11 / 48_GPS.js:18 과 동일). */
     _coarsePointer() {
       try { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (e) { return false; }
     },
+    /** [WO 20261019-pinscale3] 핀/선 기준 배율의 SoT — "화면 맞춤"(F 버튼·fit()) 과 똑같은 배율.
+     *  구역 경계(크롭 보기) 활성이면 그 경계를 덮는 최소 배율(computeCoverZoom) — _enforceBoundary 가
+     *  매 applyTransform 마다 캐시해 둔 _boundaryFitZoom 을 우선 쓰고(최신), 없으면(아직 한 번도
+     *  적용 안 됨) 그 자리에서 즉시 재계산한다. 경계가 없으면 도면 전체를 뷰포트에 맞추는 배율
+     *  (fit() 과 동일, FIT_PAD 포함). 캐시를 따로 두지 않고 viewport/offsetWidth 를 그때그때 읽으므로
+     *  로드·리사이즈·구역전환 후 별도 이벤트 리스너 없이 항상 최신값이다. 크기를 아직 모르면
+     *  (로드 전·테스트 환경) null. */
+    computeFitZoom() {
+      const vw = this.viewport && this.viewport.clientWidth;
+      const vh = this.viewport && this.viewport.clientHeight;
+      if (!vw || !vh) return null;
+      if (this._cropBoundary) {
+        if (this._boundaryFitZoom > 0) return this._boundaryFitZoom;
+        const cw = this.transform && this.transform.offsetWidth, ch = this.transform && this.transform.offsetHeight;
+        const z = this.computeCoverZoom(this._cropBoundary, vw, vh, cw, ch);
+        return (z > 0) ? z : null;
+      }
+      const size = this._contentSize();
+      if (!size || !(size.w > 0) || !(size.h > 0)) return null;
+      const z = Math.min(vw / size.w, vh / size.h) * this.FIT_PAD;
+      return (z > 0) ? z : null;
+    },
     pinScreenScale() {
       const zoom = State.zoom || 1;
-      const base = (typeof PinSizePrefs !== "undefined" && PinSizePrefs.scale) ? PinSizePrefs.scale() : this.PIN_SCALE;
-      const effZoom = zoom * (this._pinScaleRef || 1); // 구역이면 원본 대비 보정
-      const raw = base * effZoom; // 도면과 완전 비례(지수 1)
-      const minPx = this._coarsePointer() ? this.PIN_MIN_PX_TOUCH : this.PIN_MIN_PX_MOUSE;
+      const touch = this._coarsePointer();
+      const prefBase = (typeof PinSizePrefs !== "undefined" && PinSizePrefs.scale) ? PinSizePrefs.scale() : this.PIN_SCALE;
+      // 터치는 사용자 설정값 대비 PIN_SCALE_TOUCH/PIN_SCALE(기본 32/30)배 — 설정을 올리거나 내려도 비율 유지.
+      const base = touch ? prefBase * (this.PIN_SCALE_TOUCH / this.PIN_SCALE) : prefBase;
+      const fitZoom = this.computeFitZoom() || 1; // 모르면 종전처럼 zoom 을 그대로 기준으로(회귀 0)
+      // 경계(구역 창)는 fitZoom 이 이미 확대비를 반영 → scaleRef 중복보정 제거(위 헤더 주석 판단 근거).
+      const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);
+      const effZoom = (zoom / fitZoom) * scaleRef; // 기준: 화면맞춤(fitZoom) 대비 현재 줌
+      const raw = base * effZoom;
+      const minPx = touch ? this.PIN_MIN_PX_TOUCH : this.PIN_MIN_PX_MOUSE;
       const floor = minPx / this.PIN_NATIVE_PX;
       const ceil = this.PIN_MAX_PX / this.PIN_NATIVE_PX; // [WO 20261016-pinscale2] 상한
       return Math.min(Math.max(raw, floor), ceil);
     },
-    /** [WO 20261016-pinscale §2, pinscale2] 선(360 동선·주석) 공용 — 핀과 같은 보정(zoom × 구역
-     *  scaleRef)을 쓰되, 바닥은 핀처럼 절대 px 가 아니라 "줌 1 배율 대비 비율"로 둔다(선 종류마다
+    /** [WO 20261016-pinscale §2, pinscale2 / 20261019-pinscale3] 선(360 동선·주석) 공용 — 핀과 같은
+     *  기준(zoom/fitZoom × 구역 scaleRef, 경계면 scaleRef 중복보정 제거)에 LINE_FIT_RATIO 를 곱해
+     *  "맞춤 상태에서 기준선(route-line 3px)이 약 1.5px"가 되게 한다(마스터 "전체 비율을 봐" — 핀과
+     *  같은 분모를 쓰되 선은 핀보다 더 얇게 시작). 바닥은 절대 px 가 아니라 "비율"로 둔다(선 종류마다
      *  기준 두께가 달라 픽셀 바닥 하나로 못 묶는다 — 판단: 지금 모양의 40% 밑으로는 안 가늘어지게).
-     *  상한(LINE_MAX_RATIO=1)도 같은 이유로 비율 기준: 제일 두꺼운 기준선(route-line 3px, style.css
-     *  ~2784)이 ratio=1 일 때 3px 그대로라 "최대 3px 정도"를 만족(더 얇은 anno-rect-line 2.5px 는
-     *  ratio=1 에서 2.5px로 자동으로 더 작음). */
+     *  상한(LINE_MAX_RATIO=1)은 원본 css 두께(effZoom=2, 맞춤의 2배 확대에서 도달) — "최대 3px". */
+    LINE_FIT_RATIO: 0.5,
     LINE_MAX_RATIO: 1,
     lineScreenScale(minRatio) {
       const zoom = State.zoom || 1;
-      const effZoom = zoom * (this._pinScaleRef || 1);
+      const fitZoom = this.computeFitZoom() || 1;
+      const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);
+      const effZoom = (zoom / fitZoom) * scaleRef * this.LINE_FIT_RATIO;
       const floor = (typeof minRatio === "number" && minRatio > 0) ? minRatio : 0.4;
       return Math.min(Math.max(effZoom, floor), this.LINE_MAX_RATIO);
     },
@@ -528,7 +575,9 @@
 
     /** 화면 맞춤 — 도면 전체가 뷰포트에 들어오도록.
      *  [WO 20260928-crop] 구역 경계가 활성(구역이 "새 페이지"로 열려 있음)이면
-     *  원본 전체가 아니라 그 경계를 화면에 꽉 채운다(요구④). */
+     *  원본 전체가 아니라 그 경계를 화면에 꽉 채운다(요구④).
+     *  [WO 20261019-pinscale3] z 계산을 computeFitZoom() 으로 통일(§G-2-5 단일 진입점) — pinScreenScale()
+     *  이 "맞춤 상태에서 약 30px"를 보장하려면 이 함수가 실제로 쓰는 배율과 같은 값을 봐야 한다. */
     fit() {
       this.cancelFly();
       if (this._cropBoundary) { this._fitBoundary(); return; }
@@ -536,8 +585,8 @@
       if (!size) return;
       const vw = this.viewport.clientWidth;
       const vh = this.viewport.clientHeight;
-      const pad = 0.92; // 여백
-      const z = Math.min(vw / size.w, vh / size.h) * pad;
+      const z = this.computeFitZoom();
+      if (!(z > 0)) return;
       this._animateTo({
         z,
         x: (vw - size.w * z) / 2,
