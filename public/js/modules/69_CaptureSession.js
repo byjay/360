@@ -71,6 +71,17 @@
         anchors: [],                                        // 흐름 B: [{t,r}] 기준점(사용자 보정)
         done: false
       };
+      // 🔴 정지점 탭(흐름A) 활성화 — 기존 "+번호 핀 찍기"(State.placing) 토글이 켜져 있으면 같은
+      // #map-viewport 클릭에서 _handlePlaceClick(20_App.js:1869) 가 먼저 돌아 평범한 핀을 하나 더
+      // 만든다(중복 생성). 세션 시작 시 그 토글을 꺼서 탭이 이 세션 전용이 되게 한다(Routes.toggleDraw
+      // 의 같은 상호배타 패턴, 63_RouteDraw.js:63 재사용).
+      if (this._s.mode === "tap" && typeof State !== "undefined" && State.placing) {
+        State.placing = false;
+        if (typeof UI !== "undefined") {
+          UI.$ && UI.$("btn-place") && UI.$("btn-place").classList.remove("active");
+          UI.$ && UI.$("place-hint") && UI.$("place-hint").classList.add("hidden");
+        }
+      }
       await this._persist();
       return this._s;
     },
@@ -334,27 +345,34 @@
       const more = document.getElementById("mdock-more-toggle");
       if (more && more.parentNode === bar) bar.insertBefore(b, more); else bar.appendChild(b);
       this.syncDockButton();
-      const vp = document.getElementById("map-viewport");
-      if (vp) vp.addEventListener("click", (e) => this._onMapClick(e));
+      // 🔴 지도 탭 연결은 "click" 리스너가 아니라 20_App.js _bindMap() 의 mousedown 분기
+      //   (Zones.onDrawStart/Routes.onDrawStart 와 같은 자리)가 onDrawStart() 를 직접 호출한다.
+      //   이유(실측, p167-capture-session-cdp.mjs 로 발견) — MapCtrl.handlePanStart(mousedown)가
+      //   먼저 돌며 pan 제스처를 잡아 이후 네이티브 "click" 합성이 억제된다(실 마우스·터치 둘 다).
+      //   Zones/Routes 가 같은 문제를 mousedown 분기 자체에서 해결한 전례를 그대로 따른다.
     },
     syncDockButton() {
       const d = document.getElementById("mdock-capture-session");
-      const on = typeof State !== "undefined" && State.mode === "designer";
+      const on = typeof State !== "undefined" && State.mode === "designer" && State.regMode === "photo";
       if (d && d.classList) d.classList.toggle("hidden", !on);
     },
 
-    /** 탭 모드 활성(armed) 중에만 지도 클릭을 정지점 탭으로 처리 — 기존 핀 배치 리스너는 그대로
-     *  두고(addEventListener 추가분, 치환 아님) State.placing/drawingRoute/drawingZone 중이면 양보. */
-    _onMapClick(e) {
-      if (!this._s || this._s.mode !== "tap" || this._s.done) return;
-      if (typeof State === "undefined" || State.placing || State.drawingRoute || State.drawingZone) return;
-      if (typeof MapCtrl === "undefined" || !MapCtrl.viewportToPercent) return;
-      const pct = MapCtrl.viewportToPercent(e.clientX, e.clientY);
-      if (!pct) return;
+    /** 탭 모드 활성(armed) 여부 — 20_App.js _bindMap() 의 mousedown 분기가 Zones/Routes 와
+     *  같은 자리에서 이 값으로 양보 여부를 묻는다. */
+    isArmedTap() { return !!(this._s && this._s.mode === "tap" && !this._s.done); },
+    /** 지도 탭 1회 처리(Zones.onDrawStart/Routes.onDrawStart 와 동일 호출 규약 — clientX/clientY,
+     *  처리했으면 true). 20_App.js _bindMap() 이 State.placing/drawingZone/drawingRoute 분기와
+     *  같은 자리에서 직접 호출한다(별도 "click" 리스너가 아님 — 위 mountDockButton 주석 참조). */
+    onDrawStart(clientX, clientY) {
+      if (!this.isArmedTap()) return false;
+      if (typeof MapCtrl === "undefined" || !MapCtrl.viewportToPercent) return false;
+      const pct = MapCtrl.viewportToPercent(clientX, clientY);
+      if (!pct) return false;
       const r = this.addTap(State.pins, { x: +pct.x.toFixed(3), y: +pct.y.toFixed(3) });
-      if (!r) return;
+      if (!r) return false;
       if (typeof UI !== "undefined") { UI.renderPinList && UI.renderPinList(); UI.renderPinsOnMap && UI.renderPinsOnMap(r.pin.id); }
       this._toast((this._s.taps.length) + "번째 정지점 — " + r.tap.name + " · THETA 로 촬영하세요");
+      return true;
     },
 
     open() {

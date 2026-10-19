@@ -22,6 +22,8 @@
     if (typeof AiVision !== "undefined" && AiVision.init) { try { AiVision.init(); } catch (e) {} }
     // [WO 20261015-personblur] 온라인/오프라인 전환 시 [사람 흐리게] 버튼 사유 재계산
     if (typeof PersonBlur !== "undefined" && PersonBlur.init) { try { PersonBlur.init(); } catch (e) {} }
+    // [WO 20261019-capsession] 촬영 세션 — 모바일 도크 버튼 마운트 + 세션 복원(p167)
+    if (typeof CaptureSession !== "undefined" && CaptureSession.init) { try { CaptureSession.init(); } catch (e) {} }
     // [WO 20261007-qrcov] 핀 팝업 [QR] 주입 · 촬영 현황(커버리지) 초기화
     if (typeof QrPrint !== "undefined" && QrPrint.init) { try { QrPrint.init(); } catch (e) {} }
     if (typeof Coverage !== "undefined" && Coverage.init) { try { Coverage.init(); } catch (e) {} }
@@ -58,6 +60,8 @@
       Scale: (typeof Scale !== "undefined" ? Scale : null),   // [WO 20261019-gap1] 도면 축척 측정
       XlsxExport: (typeof XlsxExport !== "undefined" ? XlsxExport : null),
       DesignCompare: (typeof DesignCompare !== "undefined" ? DesignCompare : null),
+      CaptureSession: (typeof CaptureSession !== "undefined" ? CaptureSession : null),   // [WO 20261019-capsession] 테스트 훅(p167)
+      PhotoBatch: (typeof PhotoBatch !== "undefined" ? PhotoBatch : null),
       addPin(p) {
         const pin = Object.assign({ id: "t" + Date.now() + Math.random().toString(36).slice(2,6), x: 50, y: 50, page: 1, label: "Pin" }, p);
         State.pins.push(pin);

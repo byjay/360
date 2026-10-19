@@ -855,6 +855,8 @@
       if (typeof ThetaIntake !== "undefined" && ThetaIntake.syncAppButtons) { try { ThetaIntake.syncAppButtons(); } catch (e) {} }
       // [WO 20261008-fieldcap] 360 모드 모바일 도크 [📷 현장 촬영] — 같은 렌더 지점에서 동기화.
       if (typeof FieldCapture !== "undefined" && FieldCapture.syncDockButton) { try { FieldCapture.syncDockButton(); } catch (e) {} }
+      // [WO 20261019-capsession] 모바일 도크 [🧭 촬영 세션] — 같은 렌더 지점에서 동기화.
+      if (typeof CaptureSession !== "undefined" && CaptureSession.syncDockButton) { try { CaptureSession.syncDockButton(); } catch (e) {} }
     },
 
     _togglePlacing() {
@@ -1306,6 +1308,10 @@
         if (State.drawingZone) { if (Zones.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         // [360 동선] 동선 그리기 중 클릭 = 점 추가
         if (State.drawingRoute && typeof Routes !== "undefined") { if (Routes.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
+        // [WO 20261019-capsession] 촬영 세션 정지점 탭 — 같은 자리(mousedown, Zones/Routes 와 동일
+        // 양보 패턴). MapCtrl.handlePanStart 가 먼저 pan 을 잡으면 이후 네이티브 click 합성이
+        // 억제돼(실측, p167-capture-session-cdp.mjs) 별도 click 리스너로는 탭을 받을 수 없었다.
+        if (typeof CaptureSession !== "undefined" && CaptureSession.isArmedTap && CaptureSession.isArmedTap()) { if (CaptureSession.onDrawStart(e.clientX, e.clientY)) { e.preventDefault(); return; } }
         MapCtrl.handlePanStart(e);
       });
       window.addEventListener("mousemove", e => {
@@ -1362,6 +1368,12 @@
           // [360 동선] 모바일 동선 그리기 — 데스크톱 mousedown 과 동일하게 터치에서도 onDrawStart
           if (!inPinchCooldown && State.drawingRoute && typeof Routes !== "undefined") {
             if (Routes.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
+          }
+          // [WO 20261019-capsession] 촬영 세션 정지점 탭 — 모바일 터치도 데스크톱 mousedown 과
+          // 같은 자리에서 onDrawStart(실측, p167-capture-session-cdp.mjs: 실기기 탭은 이 touchstart
+          // 경로를 쓰고, mousedown 분기만으론 터치를 못 받는다).
+          if (!inPinchCooldown && typeof CaptureSession !== "undefined" && CaptureSession.isArmedTap && CaptureSession.isArmedTap()) {
+            if (CaptureSession.onDrawStart(e.touches[0].clientX, e.touches[0].clientY)) { e.preventDefault(); return; }
           }
           lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
