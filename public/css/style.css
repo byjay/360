@@ -1837,13 +1837,18 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pano-shape-label .psl-equip-ic { color: #f0b941; }
 .pano-shape-label .psl-label-actions { display: flex; gap: 6px; margin-top: 2px; }
 .pano-shape-label .psl-att-badge,
-.pano-shape-label .psl-attach-btn {
+.pano-shape-label .psl-attach-btn,
+.pano-shape-label .psl-issue-btn {
   min-height: 32px; min-width: 32px; padding: 4px 8px; border-radius: 7px;
   background: rgba(255,255,255,.1); color: #f3ecd9; border: 1px solid rgba(255,255,255,.18);
   font-size: 11px; cursor: pointer;
 }
 .pano-shape-label .psl-att-badge:hover,
-.pano-shape-label .psl-attach-btn:hover { background: rgba(255,255,255,.2); }
+.pano-shape-label .psl-attach-btn:hover,
+.pano-shape-label .psl-issue-btn:hover { background: rgba(255,255,255,.2); }
+/* [WO 20261019-issueflow] 이슈를 다시 열 때 그 도형을 강조하는 펄스(outline) — 대비와 무관(색은 그대로, 두께/투명도만 변화). */
+@keyframes panoShapeFlash { 0%, 100% { stroke-width: 2; fill-opacity: .14; } 50% { stroke-width: 4; fill-opacity: .4; } }
+.pano-shape-flash .pano-shape-outline { animation: panoShapeFlash .4s ease-in-out 4; }
 /* 라이트박스(첨부 사진 확대) */
 .pano-shape-lightbox {
   position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,.88);
@@ -2346,6 +2351,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pnp-author { font-size: 11.5px; color: #3a352b; font-weight: 600; }
 .pnp-assignee-tag { font-size: 10.5px; color: var(--accent); font-family: var(--font-mono); }
 .pnp-time { margin-left: auto; font-size: 10px; color: var(--text2); font-family: var(--font-mono); }
+/* [WO 20261019-issueflow] 마크업↔이슈 "📍 보기" — 대비: #2b2820 on #f1e6c6 ≈ 11.8:1(위 .pnp-shape-chip 과 같은 톤). */
+.pnp-view-btn { padding: 2px 8px; border-radius: 6px; background: #f1e6c6; border: 1px solid #c9962a; color: #2b2820; font-size: 10.5px; cursor: pointer; min-height: 22px; }
+.pnp-view-btn:hover { background: #e9d8ab; }
 .pnp-body { font-size: 13px; color: #2b2820; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .pnp-status-actions { display: flex; gap: 5px; margin-top: 9px; align-items: center; }
 .pnp-st-btn {
@@ -2366,6 +2374,11 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pnp-empty-hint { font-size: 11px !important; opacity: .7; }
 
 .pnp-form { padding: 12px 18px 16px; border-top: 1px solid var(--border); background: rgba(43,40,32,.04); }
+/* [WO 20261019-issueflow] 마크업↔이슈 — 도형과 연결된 상태로 이슈를 작성 중임을 알리는 칩. 대비: #2b2820 on #f1e6c6 ≈ 11.8:1(실측 공식, .pnp-input 과 같은 톤). */
+.pnp-shape-chip { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; padding: 6px 10px; border-radius: 7px; background: #f1e6c6; border: 1px solid #c9962a; color: #2b2820; font-size: 12px; font-family: var(--font-ui); }
+.pnp-shape-chip.hidden { display: none; }
+.pnp-shape-chip button { padding: 3px 9px; border-radius: 6px; background: transparent; border: 1px solid #2b2820; color: #2b2820; font-size: 11px; cursor: pointer; min-height: 24px; }
+.pnp-shape-chip button:hover { background: rgba(43,40,32,.08); }
 .pnp-input {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 44px;
   padding: 9px 11px; border-radius: 8px; background: #fffdf8;

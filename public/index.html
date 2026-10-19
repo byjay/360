@@ -1137,9 +1137,16 @@
       <p class="pnp-empty-hint">아래에 새 이슈/노트를 작성하세요.</p>
     </div>
     <form id="pnp-form" class="pnp-form">
+      <!-- [WO 20261019-issueflow] 마크업↔이슈 — 도형에서 "이슈로 만들기"를 누르면 이 칩이 보이고, 제출 시 그 도형 좌표+시점이 함께 저장된다. -->
+      <div id="pnp-shape-chip" class="pnp-shape-chip hidden">
+        <span>📍 선택한 도형과 연결됨</span>
+        <button type="button" id="pnp-shape-clear" aria-label="도형 연결 해제">해제</button>
+      </div>
       <textarea id="pnp-input" class="pnp-input" rows="2" maxlength="4000" placeholder="이슈/메모를 입력하세요 (예: 도장 벗겨짐, 용접 확인 필요…)"></textarea>
       <div class="pnp-form-row">
-        <input id="pnp-assignee" class="pnp-assignee" type="text" maxlength="80" placeholder="담당자(선택)" />
+        <!-- [WO 20261019-issueflow] 담당자 — 프로젝트 멤버 목록(datalist)에서 고르거나 자유 입력(이메일 우선 정규화는 서버가 처리). -->
+        <input id="pnp-assignee" class="pnp-assignee" type="text" maxlength="80" placeholder="담당자(선택)" list="pnp-assignee-list" />
+        <datalist id="pnp-assignee-list"></datalist>
         <select id="pnp-status-sel" class="pnp-status-sel" title="상태">
           <option value="open">미해결</option>
           <option value="progress">진행중</option>

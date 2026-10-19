@@ -1107,6 +1107,8 @@
         '<div class="psl-label-actions">' +
         (attCount ? '<button type="button" class="psl-att-badge" aria-label="첨부 보기">📎' + attCount + '</button>' : "") +
         (canEdit ? '<button type="button" class="psl-attach-btn" aria-label="첨부 올리기" title="사진/도면 첨부">＋📎</button>' : "") +
+        // [WO 20261019-issueflow] 마크업↔이슈 연결 — 디자이너만, 이 도형 좌표+시점을 들고 이슈 패널을 연다(13_Notes.openForShape).
+        (canEdit ? '<button type="button" class="psl-issue-btn" aria-label="이 위치로 이슈 만들기" title="이 위치로 이슈 만들기">🛠 이슈</button>' : "") +
         '</div>';
       label.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1120,6 +1122,11 @@
         e.stopPropagation();
         const first = (s.attachments || [])[0];
         if (first && typeof App !== "undefined" && App._openAttachment) App._openAttachment(first);
+      });
+      const issueBtn = label.querySelector(".psl-issue-btn");
+      if (issueBtn) issueBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof Notes !== "undefined" && Notes.openForShape) Notes.openForShape(pv._currentPin, s);
       });
       this._wireLabelDrag(pv, s, label);
       layer.appendChild(label);
@@ -1206,6 +1213,17 @@
       const svg = this._svg(); if (!svg) return;
       const g = svg.querySelector(".pano-shape-draft");
       if (g) g.remove();
+    },
+    /** [WO 20261019-issueflow] 이슈를 다시 열 때 그 도형을 잠깐 강조(펄스) — id 로 현재 렌더된 DOM 을 찾는다.
+     *  도형이 삭제되었거나 다른 핀(사진)으로 아직 전환 중이면 조용히 무시(지어내지 않음, 에러 던지지 않음). */
+    flash(id) {
+      const svg = this._svg();
+      if (!svg || !id) return;
+      let g = null;
+      try { g = svg.querySelector('[data-id="' + String(id).replace(/"/g, "") + '"]'); } catch (e) { g = null; }
+      if (!g) return;
+      g.classList.add("pano-shape-flash");
+      setTimeout(() => g.classList.remove("pano-shape-flash"), 1600);
     }
   };
 

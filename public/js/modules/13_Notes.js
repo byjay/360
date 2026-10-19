@@ -76,6 +76,37 @@
       // 작성 폼
       const form = $("pnp-form");
       form && form.addEventListener("submit", (e) => { e.preventDefault(); this.submit(); });
+      // [WO 20261019-issueflow] 도형 연결 칩 해제
+      $("pnp-shape-clear") && $("pnp-shape-clear").addEventListener("click", () => { this._pendingShape = null; this._syncShapeChip(); });
+    },
+
+    /** [WO 20261019-issueflow] 도형(PanoViewer.Shapes 라벨의 "🛠 이슈" 버튼)에서 "이 위치로 이슈 만들기" —
+     *  도형 좌표+시점을 들고 이슈 패널을 연다. 제출 시 submit()이 이 값을 pano_view.shape 로 함께 보낸다. */
+    openForShape(pin, shape) {
+      if (!pin) return;
+      this.setPin(pin);
+      this._pendingShape = shape ? {
+        id: shape.id, type: shape.type,
+        ...(shape.type === "circle" ? { lon: shape.lon, lat: shape.lat, radiusDeg: shape.radiusDeg } : { lon1: shape.lon1, lat1: shape.lat1, lon2: shape.lon2, lat2: shape.lat2 }),
+      } : null;
+      this.openPanel();
+      this._syncShapeChip();
+      const input = document.getElementById("pnp-input");
+      if (input) input.focus();
+    },
+    _syncShapeChip() {
+      const row = document.getElementById("pnp-shape-chip");
+      if (row) row.classList.toggle("hidden", !this._pendingShape);
+    },
+
+    /** [WO 20261019-issueflow] 이슈의 저장된 사진·시점(+도형)으로 다시 연다 — 42_Requests.goTo() 와 같은 경로(SoT) 재사용. */
+    async _openIssueView(id) {
+      const n = (this._list || []).find((x) => x.id === id);
+      if (!n || !n.pano_view || !this._pin || typeof Requests === "undefined" || !Requests._openPanoView) return;
+      const opened = await Requests._openPanoView(this._pin, n.pano_view);
+      if (opened && n.pano_view.shape && n.pano_view.shape.id && typeof PanoViewer !== "undefined" && PanoViewer.Shapes && PanoViewer.Shapes.flash) {
+        setTimeout(() => PanoViewer.Shapes.flash(n.pano_view.shape.id), 350);
+      }
     },
 
     /** 현재 배포의 핀별 노트 요약 로드 → 도면/리스트 뱃지 */
@@ -145,6 +176,21 @@
       const ar = document.getElementById("pnp-author-row");
       if (ar) ar.classList.toggle("hidden", !!(Auth && Auth.user));
       this.loadForPin();
+      this._loadAssigneeOptions();
+    },
+    /** [WO 20261019-issueflow] 담당자를 "프로젝트 멤버 목록에서 고르게" — datalist 로 자유입력은 그대로 허용(이메일 우선).
+     *  실패해도 조용히 빈 목록(자유텍스트 입력은 영향 없음 — 지어내지 않되 숨기지 않음, 콘솔만). */
+    async _loadAssigneeOptions() {
+      const dl = document.getElementById("pnp-assignee-list");
+      if (!dl) return;
+      const proj = (typeof Projects !== "undefined") ? Projects.currentProject : null;
+      if (!proj || !proj.id || !(Auth && Auth.isDesigner)) { dl.innerHTML = ""; return; }
+      try {
+        const r = await fetch("/api/projects/" + encodeURIComponent(proj.id) + "/members", { headers: Auth.headers() });
+        if (!r.ok) { dl.innerHTML = ""; return; }
+        const j = await r.json();
+        dl.innerHTML = (j.data || []).map((m) => '<option value="' + UI.escapeHtml(m.email) + '">').join("");
+      } catch (e) { dl.innerHTML = ""; }
     },
     closePanel() {
       const p = document.getElementById("pano-notes-panel");
@@ -216,6 +262,8 @@
         const st = n.status || "open";
         const stLabel = this.STATUS[st] || st;
         const assignee = n.assignee ? `<span class="pnp-assignee-tag">${UI.escapeHtml(n.assignee)}</span>` : "";
+        // [WO 20261019-issueflow] 마크업↔이슈 — 저장된 사진·시점(+도형)이 있으면 그 자리로 다시 여는 버튼.
+        const viewBtn = n.pano_view ? `<button type="button" class="pnp-view-btn" data-act="viewpos" data-id="${n.id}" title="이 사진·방향에서 보기">📍 보기</button>` : "";
         const editable = canEdit(n);
         const stBtns = editable ? `
           <div class="pnp-status-actions">
@@ -231,6 +279,7 @@
               ${this._kindTag(n)}
               <span class="pnp-author">${UI.escapeHtml(n.author || "익명")}</span>
               ${assignee}
+              ${viewBtn}
               <span class="pnp-time">${this._timeAgo(n.created_at)}</span>
             </div>
             <div class="pnp-body">${UI.escapeHtml(n.body)}</div>
@@ -244,6 +293,9 @@
       });
       listEl.querySelectorAll('[data-act="del"]').forEach((b) => {
         b.addEventListener("click", () => this.remove(b.dataset.id));
+      });
+      listEl.querySelectorAll('[data-act="viewpos"]').forEach((b) => {
+        b.addEventListener("click", (e) => { e.stopPropagation(); this._openIssueView(b.dataset.id); });
       });
       this._syncHeaderCount();
     },
@@ -264,6 +316,14 @@
       const due_at = (dueEl && dueEl.value) ? new Date(dueEl.value + "T00:00:00").getTime() : null;
       const sevEl = document.getElementById("pnp-severity");
       const severity = (sevEl && sevEl.value) ? sevEl.value : null;
+      // [WO 20261019-issueflow] 마크업↔이슈 — 지금 360 사진이 열려 있으면 그 사진·시점(+연결된 도형)을 같이 보낸다.
+      //   도형이 있으면 그 중심(PanoViewer.Shapes.center)을 yaw/pitch 로 못박는다(지금 카메라 방향이 아니라 도형 위치가 기준).
+      const pendingShape = this._pendingShape || null;
+      let view = null;
+      if (typeof Requests !== "undefined" && Requests.panoView) {
+        const centerOverride = (pendingShape && typeof PanoViewer !== "undefined" && PanoViewer.Shapes) ? PanoViewer.Shapes.center(pendingShape) : null;
+        view = Requests.panoView(centerOverride, pendingShape);
+      }
       this._busy = true;
       const submitBtn = document.getElementById("pnp-submit");
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "등록 중…"; }
@@ -301,11 +361,14 @@
           body: JSON.stringify({
             deployment_id: dep, pin_id: pin.id, pin_label: pin.label || "",
             body, status, assignee, due_at, severity, author,
+            ...(view ? { view } : {}),
           }),
         });
         if (r.ok) {
           input.value = "";
           clearExtra();
+          this._pendingShape = null;
+          this._syncShapeChip();
           await this.loadForPin();
           await this.loadSummary();
         }

@@ -19,6 +19,9 @@ type Bindings = {
   RESEND_API_KEY?: string
   SENDGRID_API_KEY?: string
   MAIL_FROM?: string
+  // [WO 20261019-issueflow] 🔴 테스트 전용 — 설정되면 Resend 엔드포인트 대신 이 URL로 보낸다(로컬 스텁 서버).
+  //   실제 운영에서는 미설정(실 api.resend.com). 외부 발송 없이 postMail 의 성공/실패 분기를 실측하기 위함.
+  MAIL_STUB_URL?: string
   // ── LLM(AI) 연동: 키는 Cloudflare 시크릿으로만 주입. 프론트에 노출 금지. ──
   // 나중에 설정에서 키를 바꾸려면 `wrangler pages secret put AI_API_KEY` 로 교체.
   AI_API_KEY?: string          // OpenAI 호환 API 키 (Groq 등)
@@ -591,7 +594,8 @@ async function postMail(c: any, opts: { to: string; subject: string; html: strin
   const summarize = (s: string) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 200)
   try {
     if (c.env?.RESEND_API_KEY) {
-      const res = await fetch('https://api.resend.com/emails', {
+      const resendUrl = (c.env?.MAIL_STUB_URL && String(c.env.MAIL_STUB_URL)) || 'https://api.resend.com/emails'
+      const res = await fetch(resendUrl, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + c.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: fromEmail, to: [opts.to], subject: opts.subject, html: opts.html, text: opts.text })
@@ -6800,7 +6804,12 @@ function mapNote(r: any, withContact = false, maskFor?: string | null) {
   const out = mapNoteRaw(r, withContact)
   if (maskFor === undefined) return out
   const own = !!maskFor && String(r.author_email || '').toLowerCase() === maskFor
-  return { ...out, author_email: own ? out.author_email : null, author: own ? out.author : maskEmailsIn(out.author), assignee: maskEmailsIn(out.assignee) }
+  // [WO 20261019-issueflow] assignee_email 도 남의 것은 가린다(assignee 자유텍스트와 같은 마스킹 규칙) — 본인이 담당자면 그대로(내 담당 판정용).
+  const isMineAssignee = !!maskFor && String(r.assignee_email || '').toLowerCase() === maskFor
+  return {
+    ...out, author_email: own ? out.author_email : null, author: own ? out.author : maskEmailsIn(out.author),
+    assignee: maskEmailsIn(out.assignee), assignee_email: isMineAssignee ? out.assignee_email : null,
+  }
 }
 function mapNoteRaw(r: any, withContact = false) {
   return {
@@ -6815,6 +6824,7 @@ function mapNoteRaw(r: any, withContact = false) {
     body: r.body,
     status: r.status,
     assignee: r.assignee,
+    assignee_email: r.assignee_email ?? null,   // [WO 20261019-issueflow] 담당자 계정 연결 키(이메일 정규화값, 없으면 null)
     due_at: r.due_at ?? null,          // [WO 20261002-gap] 기한(epoch ms)
     severity: r.severity ?? null,      // [WO 20261002-gap] '상'|'중'|'하'(사람이 확정한 값만)
     author: r.author,
@@ -6830,8 +6840,26 @@ function mapNoteRaw(r: any, withContact = false) {
 }
 
 /** [WO 20261012-viewlink] 🔴 360 시점 SoT — 저장(POST /api/notes)과 응답(mapNoteRaw)이 같은 검증을 쓴다.
- *  image_id(문자열 ≤120) + yaw/pitch/fov(유한 수, 범위 클램프). 하나라도 깨지면 null(지어내지 않는다). */
-function parsePanoView(raw: any): { image_id: string, yaw: number, pitch: number, fov: number | null } | null {
+ *  image_id(문자열 ≤120) + yaw/pitch/fov(유한 수, 범위 클램프). 하나라도 깨지면 null(지어내지 않는다).
+ *  [WO 20261019-issueflow] shape(선택) — 360 사진 위 도형(06_PanoViewer.js PanoViewer.Shapes 와 같은 좌표계: 구면 lon/lat)과
+ *  이슈를 연결(SIGNAX 격차2 "마크업↔이슈"). 도형 없이 시점만 있는 이슈도 그대로 지원(shape:null). 형식이 깨지면 null(지어내지 않음) —
+ *  시점(yaw/pitch)까지 버리지 않는다(shape 만 무효화). */
+function parsePanoShape(raw: any): any {
+  if (!raw || typeof raw !== 'object') return null
+  const type = (raw.type === 'rect' || raw.type === 'circle') ? raw.type : null
+  if (!type) return null
+  const id = typeof raw.id === 'string' ? raw.id.slice(0, 80) : null
+  const num = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : null }
+  if (type === 'circle') {
+    const lon = num(raw.lon), lat = num(raw.lat), radiusDeg = num(raw.radiusDeg)
+    if (lon == null || lat == null) return null
+    return { id, type, lon, lat, radiusDeg: radiusDeg == null ? 1 : Math.max(0.1, Math.min(90, radiusDeg)) }
+  }
+  const lon1 = num(raw.lon1), lat1 = num(raw.lat1), lon2 = num(raw.lon2), lat2 = num(raw.lat2)
+  if (lon1 == null || lat1 == null || lon2 == null || lat2 == null) return null
+  return { id, type, lon1, lat1, lon2, lat2 }
+}
+function parsePanoView(raw: any): { image_id: string, yaw: number, pitch: number, fov: number | null, shape: any } | null {
   let o: any = raw
   if (typeof raw === 'string') { try { o = JSON.parse(raw) } catch { return null } }
   if (!o || typeof o !== 'object') return null
@@ -6839,7 +6867,102 @@ function parsePanoView(raw: any): { image_id: string, yaw: number, pitch: number
   const yaw = Number(o.yaw), pitch = Number(o.pitch)
   if (!image_id || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return null
   const fovN = Number(o.fov)
-  return { image_id, yaw: ((yaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, pitch)), fov: Number.isFinite(fovN) ? Math.max(10, Math.min(120, fovN)) : null }
+  return {
+    image_id, yaw: ((yaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, pitch)),
+    fov: Number.isFinite(fovN) ? Math.max(10, Math.min(120, fovN)) : null,
+    shape: parsePanoShape(o.shape),
+  }
+}
+
+/** [WO 20261019-issueflow] 담당자 자유텍스트 → 계정 연결 키(이메일) 정규화.
+ *  유효한 이메일이 아니면 null(지어내지 않음) — 기존 자유텍스트 assignee 값은 그대로 보존, 이 값은 필터·알림 수신처로만 쓴다. */
+function normalizeAssigneeEmail(raw: any): string | null {
+  const s = String(raw || '').trim()
+  return (s && isValidEmail(s)) ? s.toLowerCase() : null
+}
+
+/** [WO 20261019-issueflow] 이슈 알림 — 생성(INSERT OR IGNORE, dedupe_key UNIQUE)과 메일 발송을 한곳에서 처리(SoT).
+ *  멱등: dedupe_key 가 이미 있으면(changes===0) 중복 사건으로 보고 메일도 다시 보내지 않는다.
+ *  dedupe_key 설계(호출부별) — assignee: `assignee:{noteId}:{email}:{updatedAt}` · status: `status:{noteId}:{status}:{updatedAt}`
+ *  (updatedAt 포함 = 같은 저장 1회의 중복 호출만 막고, 그 뒤 실제로 또 바뀌면 새 사건으로 알린다) ·
+ *  comment: `comment:{replyNoteId}`(답변 1개=사건 1개, 영구 고유) · due_soon/due_over: `{kind}:{noteId}`(평생 1회만 — 재알림 없음). */
+async function notifyEvent(c: any, opts: {
+  recipient: string, kind: string, title: string, body: string,
+  projectId?: string | null, noteId?: string | null, dedupeKey: string
+}): Promise<void> {
+  if (!opts.recipient || !isValidEmail(opts.recipient)) return
+  const now = Date.now()
+  const id = genId('ntf')
+  let inserted = false
+  try {
+    const res: any = await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO notifications (id, recipient_email, project_id, note_id, kind, title, body, dedupe_key, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, opts.recipient, opts.projectId ?? null, opts.noteId ?? null, opts.kind, opts.title, opts.body, opts.dedupeKey, now).run()
+    inserted = !!Number((res && res.meta && res.meta.changes) || 0)
+  } catch (e) { console.error('[notifyEvent] insert failed', e); return }
+  if (!inserted) return   // 🔴 중복 사건(멱등 키 충돌) — 앱 내 알림도 메일도 다시 만들지 않는다
+  const prefRow: any = await c.env.DB.prepare('SELECT mail_enabled, digest FROM notify_prefs WHERE email = ?').bind(opts.recipient).first().catch(() => null)
+  const mailEnabled = prefRow ? !!prefRow.mail_enabled : true   // 설정 행 없음 = 기본값(즉시 발송 켜짐)
+  const digest = prefRow ? String(prefRow.digest || 'instant') : 'instant'
+  if (!mailEnabled || digest !== 'instant') {
+    // [Uncertain] 일일 요약(digest='daily') 실제 배치 발송기는 미구현 — 앱 내 알림만 쌓이고 메일은 보내지 않는다(거짓 성공 금지, 숨기지 않고 로그만).
+    console.log('[notifyEvent] mail skipped(pref)', opts.kind, { mailEnabled, digest })
+    return
+  }
+  const r = await postMail(c, { to: opts.recipient, subject: '[SEASTAR 360° 뷰어] ' + opts.title, html: '<p>' + escapeHtmlServer(opts.body) + '</p>', text: opts.body })
+  if (r === null) { console.log('[notifyEvent] mail skipped(no key)', opts.kind); return }   // 키 미설정 — 앱 내 알림은 이미 쌓였다(은폐 0)
+  if (r.sent) await c.env.DB.prepare('UPDATE notifications SET mailed_at = ? WHERE id = ?').bind(Date.now(), id).run()
+  else console.error('[notifyEvent] mail failed', opts.recipient, opts.kind, r.error)
+}
+
+/** [WO 20261019-issueflow] 담당자 지정/상태변경/댓글 알림의 수신자 — 실제로 바뀐 디자이너 계정만(자기 자신 제외, 이메일 확정된 경우만).
+ *  actorEmail = 이 변경을 일으킨 사람(자기 알림 금지). candidates 중복/guest(이메일 없음)는 걸러낸다. */
+function recipientsFor(candidates: (string | null | undefined)[], actorEmail: string | null): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of candidates) {
+    const e = String(raw || '').toLowerCase().trim()
+    if (!e || !isValidEmail(e) || seen.has(e)) continue
+    if (actorEmail && e === actorEmail) continue
+    seen.add(e); out.push(e)
+  }
+  return out
+}
+
+/** [WO 20261019-issueflow] 마감 임박(24h 전)·초과 알림 — Cloudflare Pages 는 Cron Trigger 를 지원하지 않는다
+ *  (wrangler.jsonc 가 pages_build_output_dir 로 Pages 프로젝트임을 선언 — `triggers.crons` 는 Workers 전용 설정 키라
+ *  Pages 배포에는 적용되지 않는다. 네트워크 재검증은 못 했음 — [Uncertain] 표시, 기존 플랫폼 구조 지식 근거).
+ *  대안으로 바쁜 읽기 경로(요청함·노트 목록 조회)에 확률적으로 편승해 스캔한다(아래 호출부, maybeScanDueReminders). */
+async function scanDueReminders(c: any): Promise<void> {
+  const now = Date.now()
+  const soonUntil = now + 24 * 3600 * 1000
+  let rows: any = null
+  try {
+    rows = await c.env.DB.prepare(
+      `SELECT id, pin_label, assignee_email, due_at FROM pin_notes
+        WHERE deleted = 0 AND due_at IS NOT NULL AND status NOT IN ('done','verified')
+          AND assignee_email IS NOT NULL AND due_at <= ?
+        ORDER BY due_at ASC LIMIT 30`
+    ).bind(soonUntil).all()
+  } catch (e) { console.error('[scanDueReminders] query failed', e); return }
+  for (const n of ((rows && rows.results) || [])) {
+    const overdue = Number(n.due_at) < now
+    const kind = overdue ? 'due_over' : 'due_soon'
+    const label = String(n.pin_label || '이슈')
+    await notifyEvent(c, {
+      recipient: String(n.assignee_email), kind, noteId: String(n.id),
+      title: (overdue ? '[마감 초과] ' : '[마감 임박] ') + label,
+      body: overdue ? ('마감을 초과한 이슈입니다: ' + label) : ('마감 24시간 이내로 다가온 이슈입니다: ' + label),
+      dedupeKey: kind + ':' + n.id,
+    })
+  }
+}
+/** 확률적 편승(기본 15%) + 수동 강제(`?_scan_due=1`, 디자이너 화면에서만 호출되는 내부 쿼리라 데이터 노출 없음·테스트 결정성 확보용). */
+async function maybeScanDueReminders(c: any): Promise<void> {
+  const force = c.req.query('_scan_due') === '1'
+  if (!force && Math.random() >= 0.15) return
+  try { await scanDueReminders(c) } catch (e) { console.error('[maybeScanDueReminders]', e) }
 }
 
 /** [WO 20261001-viewreq] 🔴 노트 주체 판정 — 단일 지점(작성·수정·삭제·요청함이 공유).
@@ -6907,6 +7030,7 @@ app.get('/api/projects/:id/requests', async (c) => {
   const pid = c.req.param('id')
   const denied = await deploymentWriteDenied(c, a.user, pid)
   if (denied) return c.json({ error: denied.error }, denied.status)
+  await maybeScanDueReminders(c)   // [WO 20261019-issueflow] 바쁜 읽기 경로 편승(Pages Cron 미지원 — scanDueReminders 주석 참조)
   const { results } = await c.env.DB.prepare(
     `SELECT n.* FROM pin_notes n
       WHERE n.deleted = 0 AND n.kind IN ('request', 'question', 'reply', 'note')
@@ -6915,7 +7039,9 @@ app.get('/api/projects/:id/requests', async (c) => {
   ).bind(pid).all()
   const rows: any[] = results || []
   const tops = new Set(rows.filter((r) => r.kind !== 'reply').map((r) => String(r.id)))
-  const data = rows.filter((r) => r.kind !== 'reply' || tops.has(String(r.parent_id))).map((r) => mapNote(r, true))
+  let data = rows.filter((r) => r.kind !== 'reply' || tops.has(String(r.parent_id))).map((r) => mapNote(r, true))
+  // [WO 20261019-issueflow] [내 담당] 필터 — 로그인한 디자이너 본인이 assignee_email 인 것만(마스킹 전 원본 비교 — withContact=true 라 가려지지 않음).
+  if (c.req.query('mine') === '1' && a.email) data = data.filter((n: any) => String(n.assignee_email || '').toLowerCase() === a.email)
   // [WO 20261002-gap] 미완 = done·verified 둘 다 제외(결함 노트의 '확인' 단계까지 처리된 것으로 본다)
   const open = data.filter((n: any) => n.kind !== 'reply' && n.status !== 'done' && n.status !== 'verified').length
   return c.json({ data, open })
@@ -6938,8 +7064,11 @@ app.get('/api/notes', async (c) => {
   const args: any[] = ns.args.slice()
   if (pin) { sql += ' AND pin_id = ?'; args.push(pin) }
   if (status && VALID_STATUS.includes(status)) { sql += ' AND status = ?'; args.push(status) }
+  // [WO 20261019-issueflow] [내 담당] 필터 — 로그인 본인이 assignee_email 인 것만.
+  if (c.req.query('mine') === '1' && actor.email) { sql += ' AND assignee_email = ?'; args.push(actor.email) }
   sql += ' ORDER BY created_at ASC LIMIT ?'
   args.push(limit)
+  await maybeScanDueReminders(c)   // [WO 20261019-issueflow] 바쁜 읽기 경로 편승
   const { results } = await c.env.DB.prepare(sql).bind(...args).all()
   // [R2] 디자이너라도 링크로만 읽는 비멤버 배포본이면 열람자처럼 가린다(마스킹 SoT = maskFor)
   const full = actor.designer && !maskForDepRow(await readScopeOf(c, actor.user), await depRefIndexOf(c),
@@ -7032,6 +7161,8 @@ app.post('/api/notes', async (c) => {
   let status = mod ? String(body.status || 'open') : 'open'
   if (!VALID_STATUS.includes(status)) status = 'open'
   const assignee = mod ? (String(body.assignee || '') || null) : null
+  // [WO 20261019-issueflow] 담당자 계정 연결 — 자유텍스트는 그대로 두고(유실 0), 이메일이면 정규화해 별도 저장(필터·알림 수신처).
+  const assignee_email = normalizeAssigneeEmail(assignee)
   // [WO 20261002-gap 묶음C] 기한·심각도 — 생성 시점은 디자이너만, '확인' 단계는 생성 시 불가(VALID_STATUS 에 verified 없음).
   const due_at = (mod && body.due_at != null && Number.isFinite(Number(body.due_at))) ? Number(body.due_at) : null
   let severity: string | null = mod && typeof body.severity === 'string' ? body.severity : null
@@ -7056,19 +7187,40 @@ app.post('/api/notes', async (c) => {
   // [WO 20261012-viewlink] 360 사진 안 요청 — 작성 당시 사진·시점(검증 실패면 null). 답변은 원 요청 위치를 따르므로 싣지 않는다.
   const pv = parent ? null : parsePanoView(body.view)
   const row = {
-    id, deployment_id, pin_id, pin_label, body: text, status, assignee, due_at, severity, author, author_email: a.email, author_role: a.role,
+    id, deployment_id, pin_id, pin_label, body: text, status, assignee, assignee_email, due_at, severity, author, author_email: a.email, author_role: a.role,
     created_at: now, updated_at: now, resolved_at: status === 'done' ? now : null,
     kind, parent_id: parent ? String(parent.id) : null, deck_id, author_contact, link_ref, pano_view: pv ? JSON.stringify(pv) : null,
   }
   await c.env.DB.prepare(
     `INSERT INTO pin_notes
-      (id, deployment_id, pin_id, pin_label, body, status, assignee, due_at, severity, author, author_email, author_role, created_at, updated_at, resolved_at, deleted,
+      (id, deployment_id, pin_id, pin_label, body, status, assignee, assignee_email, due_at, severity, author, author_email, author_role, created_at, updated_at, resolved_at, deleted,
        kind, parent_id, deck_id, author_contact, author_key_hash, ip, link_ref, pano_view)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.due_at, row.severity, row.author, row.author_email, row.author_role,
+    row.id, row.deployment_id, row.pin_id, row.pin_label, row.body, row.status, row.assignee, row.assignee_email, row.due_at, row.severity, row.author, row.author_email, row.author_role,
     row.created_at, row.updated_at, row.resolved_at, row.kind, row.parent_id, row.deck_id, row.author_contact, author_key_hash, limiterKey, row.link_ref, row.pano_view
   ).run()
+  // [WO 20261019-issueflow] 알림 — 담당자 최초 지정 / 새 댓글(답변). 실패해도 본문 저장은 이미 끝났다(알림은 부가 기능).
+  try {
+    if (kind === 'reply' && parent) {
+      const recips = recipientsFor([parent.assignee_email, parent.author_email], a.email)
+      for (const rc of recips) {
+        await notifyEvent(c, {
+          recipient: rc, kind: 'comment', noteId: String(parent.id),
+          title: '[새 답변] ' + String(parent.pin_label || parent.body || '이슈').slice(0, 60),
+          body: author + '님이 답변을 남겼습니다: ' + text.slice(0, 200),
+          dedupeKey: 'comment:' + id,
+        })
+      }
+    } else if (assignee_email && assignee_email !== a.email) {
+      await notifyEvent(c, {
+        recipient: assignee_email, kind: 'assignee', noteId: id,
+        title: '[담당자 지정] ' + (pin_label || '이슈'),
+        body: (author || '담당자') + '님이 당신을 이 이슈의 담당자로 지정했습니다: ' + text.slice(0, 200),
+        dedupeKey: 'assignee:' + id + ':' + assignee_email + ':' + now,
+      })
+    }
+  } catch (e) { console.error('[notes.create] notify failed', e) }
   return c.json({ ...mapNote(row, mod || a.role === 'guest', mod ? undefined : a.email), ...(editKey ? { edit_key: editKey } : {}) })
 })
 
@@ -7119,6 +7271,9 @@ app.patch('/api/notes/:id', async (c) => {
   const fields: string[] = []
   const args: any[] = []
   const now = Date.now()
+  const actor = await noteActor(c)   // [WO 20261019-issueflow] 한 번만 조회 — 알림 발신자 제외(자기 알림 금지)에도 재사용
+  let statusChanged = false
+  let newAssigneeEmail: string | null | undefined = undefined   // undefined = 이번 요청에 담당자 변경 없음
   if (typeof body.body === 'string') {
     const t = body.body.trim()
     if (!t) return c.json({ error: 'body required' }, 400)
@@ -7128,16 +7283,20 @@ app.patch('/api/notes/:id', async (c) => {
   if (typeof body.status === 'string' && VALID_STATUS_PATCH.includes(body.status)) {
     // [WO 20261002-gap 묶음C] 🔴 마스터 확정 — '확인(verified)'은 소유자·super 만. 서버 강제(403).
     if (body.status === 'verified') {
-      const actor = await noteActor(c)
       if (!(await canVerifyNoteByDeployment(c, actor.user, note.deployment_id))) {
         return c.json({ error: 'forbidden — verified requires project owner or super' }, 403)
       }
     }
+    if (body.status !== note.status) statusChanged = true
     fields.push('status = ?'); args.push(body.status)
     fields.push('resolved_at = ?'); args.push((body.status === 'done' || body.status === 'verified') ? now : null)
   }
   if (typeof body.assignee === 'string') {
-    fields.push('assignee = ?'); args.push(body.assignee.trim() || null)
+    const trimmed = body.assignee.trim() || null
+    fields.push('assignee = ?'); args.push(trimmed)
+    // [WO 20261019-issueflow] 담당자 계정 연결 — 자유텍스트는 그대로, 이메일이면 정규화해 같이 저장.
+    newAssigneeEmail = normalizeAssigneeEmail(trimmed)
+    fields.push('assignee_email = ?'); args.push(newAssigneeEmail)
   }
   // [WO 20261002-gap] 기한 — null 허용(해제). 숫자가 아니면 400(지어내지 않음).
   if (body.due_at !== undefined) {
@@ -7155,8 +7314,30 @@ app.patch('/api/notes/:id', async (c) => {
   fields.push('updated_at = ?'); args.push(now)
   args.push(id)
   await c.env.DB.prepare(`UPDATE pin_notes SET ${fields.join(', ')} WHERE id = ?`).bind(...args).run()
-  const updated = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ?').bind(id).first()
-  return c.json(mapNote(updated, right === 'designer', right === 'designer' ? undefined : (await noteActor(c)).email))
+  const updated: any = await c.env.DB.prepare('SELECT * FROM pin_notes WHERE id = ?').bind(id).first()
+  // [WO 20261019-issueflow] 알림 — 담당자 변경(실제로 바뀐 경우만) / 상태 변경. 본문 저장은 이미 끝났다(알림 실패가 저장을 막지 않는다).
+  try {
+    if (newAssigneeEmail !== undefined && newAssigneeEmail && newAssigneeEmail !== String(note.assignee_email || '').toLowerCase() && newAssigneeEmail !== actor.email) {
+      await notifyEvent(c, {
+        recipient: newAssigneeEmail, kind: 'assignee', noteId: id,
+        title: '[담당자 지정] ' + (updated.pin_label || '이슈'),
+        body: (actor.user && (actor.user.name || actor.user.email) || '담당자') + '님이 당신을 이 이슈의 담당자로 지정했습니다.',
+        dedupeKey: 'assignee:' + id + ':' + newAssigneeEmail + ':' + now,
+      })
+    }
+    if (statusChanged) {
+      const recips = recipientsFor([updated.assignee_email, updated.author_email], actor.email)
+      for (const rc of recips) {
+        await notifyEvent(c, {
+          recipient: rc, kind: 'status', noteId: id,
+          title: '[상태 변경: ' + updated.status + '] ' + (updated.pin_label || '이슈'),
+          body: (updated.pin_label || '이슈') + ' 상태가 "' + updated.status + '" 로 변경되었습니다.',
+          dedupeKey: 'status:' + id + ':' + updated.status + ':' + now,
+        })
+      }
+    }
+  } catch (e) { console.error('[notes.patch] notify failed', e) }
+  return c.json(mapNote(updated, right === 'designer', right === 'designer' ? undefined : actor.email))
 })
 
 // 노트 삭제(soft) — 원 요청을 지우면 그 답변도 함께(고아 답변 0)
@@ -7185,6 +7366,65 @@ app.post('/api/notes/:id/severity-suggest', async (c) => {
   await logActivity(c, 'note.severity_suggest', { actor: await getUser(c), targetType: 'note', targetId: id,
     detail: { ok: probe.ok, p: gate.p, estimated: gate.estimated, ms: Date.now() - t0 } })
   return c.json({ level: gate.level, estimated: gate.estimated, p: gate.p, ok: probe.ok, error: probe.ok ? null : probe.error })
+})
+
+/* ════════════════════════════════════════════
+   [WO 20261019-issueflow] 알림함 — 벨 아이콘(앱 내) + 메일 설정. 생성은 notifyEvent(SoT, pin_notes 섹션)만 호출.
+════════════════════════════════════════════ */
+// 내 알림 목록(최신순) — 로그인 사용자만. unread=1 이면 안 읽은 것만.
+app.get('/api/notifications', async (c) => {
+  const user = await getUser(c)
+  if (!user || user._readonly) return c.json({ error: 'unauthorized' }, 401)
+  const email = String(user.email || '').toLowerCase()
+  const limit = Math.min(Number(c.req.query('limit') || 50), 200)
+  let sql = 'SELECT * FROM notifications WHERE recipient_email = ?'
+  const args: any[] = [email]
+  if (c.req.query('unread') === '1') sql += ' AND read_at IS NULL'
+  sql += ' ORDER BY created_at DESC LIMIT ?'
+  args.push(limit)
+  const { results } = await c.env.DB.prepare(sql).bind(...args).all()
+  const { count }: any = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM notifications WHERE recipient_email = ? AND read_at IS NULL').bind(email).first() || { count: 0 }
+  return c.json({ data: results || [], unread: Number(count) || 0 })
+})
+// 1건 읽음 처리 — 본인 수신함만.
+app.post('/api/notifications/:id/read', async (c) => {
+  const user = await getUser(c)
+  if (!user || user._readonly) return c.json({ error: 'unauthorized' }, 401)
+  const email = String(user.email || '').toLowerCase()
+  const id = c.req.param('id')
+  const r: any = await c.env.DB.prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND recipient_email = ? AND read_at IS NULL')
+    .bind(Date.now(), id, email).run()
+  return c.json({ success: true, changed: Number((r && r.meta && r.meta.changes) || 0) })
+})
+// 전체 읽음 처리.
+app.post('/api/notifications/read-all', async (c) => {
+  const user = await getUser(c)
+  if (!user || user._readonly) return c.json({ error: 'unauthorized' }, 401)
+  const email = String(user.email || '').toLowerCase()
+  await c.env.DB.prepare('UPDATE notifications SET read_at = ? WHERE recipient_email = ? AND read_at IS NULL').bind(Date.now(), email).run()
+  return c.json({ success: true })
+})
+// 메일 알림 설정 조회/변경 — [마스터 확정] 담당자 지정·알림 설정은 디자이너만.
+app.get('/api/notify-prefs', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const email = String(user.email || '').toLowerCase()
+  const row: any = await c.env.DB.prepare('SELECT mail_enabled, digest FROM notify_prefs WHERE email = ?').bind(email).first()
+  return c.json({ mail_enabled: row ? !!row.mail_enabled : true, digest: row ? row.digest : 'instant' })
+})
+app.put('/api/notify-prefs', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const email = String(user.email || '').toLowerCase()
+  const mailEnabled = body.mail_enabled === false ? 0 : 1
+  const digest = body.digest === 'daily' ? 'daily' : 'instant'
+  await c.env.DB.prepare(
+    `INSERT INTO notify_prefs (email, mail_enabled, digest, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(email) DO UPDATE SET mail_enabled = excluded.mail_enabled, digest = excluded.digest, updated_at = excluded.updated_at`
+  ).bind(email, mailEnabled, digest, Date.now()).run()
+  return c.json({ success: true, mail_enabled: !!mailEnabled, digest })
 })
 
 /* ════════════════════════════════════════════

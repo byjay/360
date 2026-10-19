@@ -56,6 +56,7 @@
     _tab: "reqq",                  // 'reqq'(요청·질문) | 'note'(결함 노트)
     _fAssignee: "",                // 담당자 자유텍스트 부분일치
     _fOverdue: false,              // 기한 지남만
+    _fMine: false,                 // [WO 20261019-issueflow] 내 담당만(assignee_email === 로그인 본인)
     _sort: "recent",               // 'recent' | 'due'
 
     /* ── 공통 ── */
@@ -106,7 +107,10 @@
       this._inited = true;
       this._createViewerBtn();
       this._createInboxBtn();
+      this._createNotifBtn();
       this.syncChrome();
+      // [WO 20261019-issueflow] 알림 벨 — 새 폴링 체계 추가 없이 이 모듈 자체 타이머로 독립 갱신(30s, 로그인 중일 때만).
+      if (!this._notifTimer) this._notifTimer = setInterval(() => this.refreshNotif(), 30000);
     },
 
     /** 진입 버튼 표시 — 뷰어 = [요청·질문] 플로팅, 디자이너 = 상단 [요청함 N](프로젝트 열림 + 요청함 권한 확인됨) */
@@ -116,6 +120,14 @@
         const proj = (typeof Projects !== "undefined") ? Projects.currentProject : null;
         const show = this._isDesignerView() && this._available && !!proj && this._pid === proj.id;
         this._inboxBtn.style.display = show ? "inline-flex" : "none";
+      }
+      // [WO 20261019-issueflow] 알림 벨 — 로그인 중이면 항상(담당자 지정은 디자이너만이지만, 과거 디자이너였다가
+      //   권한이 바뀐 계정의 잔여 알림도 볼 수 있어야 한다 — 안 보여주는 쪽이 오히려 "숨김"이 된다).
+      const notifWrap = document.getElementById("notif-wrap");
+      if (notifWrap) {
+        const loggedIn = !!(typeof Auth !== "undefined" && Auth.user);
+        notifWrap.style.display = loggedIn ? "flex" : "none";
+        if (loggedIn && this._notifSyncedOnce !== true) { this._notifSyncedOnce = true; this.refreshNotif(); }
       }
     },
 
@@ -143,18 +155,25 @@
     },
 
     /** [WO 20261012-viewlink] 지금 열린 360 사진·시점 — {image_id, yaw, pitch, fov}. 사진이 안 열려 있으면 null(지어내지 않는다).
-     *  사진 id = 타임랩스 현재 시점(TimeLapse.currentShot — 여러 촬영 중 지금 보는 것)의 imageId, 없으면 그 시점 id. */
-    panoView() {
+     *  사진 id = 타임랩스 현재 시점(TimeLapse.currentShot — 여러 촬영 중 지금 보는 것)의 imageId, 없으면 그 시점 id.
+     *  [WO 20261019-issueflow] centerOverride({lon,lat}, 선택) — 도형(Shapes) 중심으로 yaw/pitch 를 못박을 때(13_Notes.openForShape).
+     *  없으면 종전처럼 지금 카메라 방향(PanoViewer.S). shape(선택) — 도형 좌표를 pano_view.shape 로 함께 실어 이슈에 저장(마크업↔이슈 연결). */
+    panoView(centerOverride, shape) {
       if (typeof PanoViewer === "undefined" || !PanoViewer.open || !PanoViewer.S) return null;
       const pin = PanoViewer._currentPin || null;
       const shot = (typeof TimeLapse !== "undefined" && TimeLapse.currentShot) ? TimeLapse.currentShot() : null;
       const image_id = String((shot && (shot.imageId || shot.id)) || (pin && (pin.imageId || pin.id)) || "");
       if (!image_id) return null;
       const S = PanoViewer.S;
-      const yaw = ((Number(S.lon) % 360) + 360) % 360;
-      const pitch = Math.max(-90, Math.min(90, Number(S.lat) || 0));
+      const lon = centerOverride ? Number(centerOverride.lon) : Number(S.lon);
+      const lat = centerOverride ? Number(centerOverride.lat) : Number(S.lat);
+      const yaw = ((lon % 360) + 360) % 360;
+      const pitch = Math.max(-90, Math.min(90, lat || 0));
       const fov = Number.isFinite(Number(S.fov)) ? Number(S.fov) : null;
-      return Number.isFinite(yaw) ? { image_id, yaw: Math.round(yaw * 100) / 100, pitch: Math.round(pitch * 100) / 100, fov } : null;
+      if (!Number.isFinite(yaw)) return null;
+      const out = { image_id, yaw: Math.round(yaw * 100) / 100, pitch: Math.round(pitch * 100) / 100, fov };
+      if (shape) out.shape = shape;
+      return out;
     },
 
     /** [WO 20261012-viewlink] 요청함 → 그 사진·그 방향으로 연다(핀 360 열기 → 같은 촬영 시점 → 카메라 방향). 실패는 토스트로 정직하게. */
@@ -172,6 +191,103 @@
       Object.assign(PanoViewer.S, { lon: Number(v.yaw) || 0, lat: Number(v.pitch) || 0 }, Number.isFinite(Number(v.fov)) && v.fov != null ? { fov: Number(v.fov) } : {});
       if (PanoViewer._invalidate) PanoViewer._invalidate();
       return true;
+    },
+
+    /* ══ [WO 20261019-issueflow] 알림 벨 — 앱 내 알림함(읽음 표시) ══ */
+    _createNotifBtn() {
+      const bar = document.getElementById("topbar");
+      if (!bar) return;
+      const wrap = this._el("div", "display:none;position:relative;flex-shrink:0;margin:0 4px");
+      wrap.id = "notif-wrap";
+      const b = this._el("button", [
+        "display:flex", "align-items:center", "justify-content:center", "flex-shrink:0", "width:32px", "height:32px",
+        "border-radius:8px", "border:1px solid #554", "cursor:pointer", "font-size:15px", "background:#2a2518", "color:#ffffff",
+      ].join(";"));
+      b.type = "button"; b.id = "btn-notif-bell";
+      b.setAttribute("aria-haspopup", "true");
+      b.setAttribute("aria-label", "알림");
+      b.title = "알림";
+      b.textContent = "🔔";
+      b.addEventListener("click", (e) => { e.stopPropagation(); this._toggleNotifPanel(); });
+      const cnt = this._el("span", "display:none;position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#b91c1c;color:#ffffff;font-size:10px;line-height:16px;text-align:center;font-weight:700");
+      cnt.setAttribute("data-notif-count", "1");
+      wrap.appendChild(b); wrap.appendChild(cnt);
+      const anchor = document.getElementById("btn-req-inbox");
+      if (anchor && anchor.parentNode === bar) bar.insertBefore(wrap, anchor); else bar.appendChild(wrap);
+      this._notifBtn = b;
+    },
+    /** 서버에서 알림 다시 읽기 — 배지 갱신 + 패널 열려 있으면 다시 그린다. 실패해도 조용히(배지는 이전 값 유지, 지어내지 않음). */
+    async refreshNotif() {
+      if (typeof Auth === "undefined" || !Auth.user) return;
+      try {
+        const r = await fetch("/api/notifications?limit=30", { headers: Auth.headers() });
+        if (!r.ok) return;
+        const j = await r.json();
+        this._notifItems = Array.isArray(j.data) ? j.data : [];
+        this._notifUnread = Number(j.unread) || 0;
+        const cnt = document.querySelector('[data-notif-count]');
+        if (cnt) { cnt.textContent = String(this._notifUnread); cnt.style.display = this._notifUnread > 0 ? "inline-block" : "none"; }
+        if (this._notifPanelEl) this._renderNotifPanel();
+      } catch (e) {}
+    },
+    _toggleNotifPanel() {
+      if (this._notifPanelEl) { this._closeNotifPanel(); return; }
+      const wrap = document.getElementById("notif-wrap");
+      if (!wrap) return;
+      const panel = this._el("div", [
+        "position:absolute", "top:40px", "right:0", "width:320px", "max-height:420px", "overflow-y:auto",
+        "background:#1a1712", "color:#ffffff", "border:1px solid #554", "border-radius:10px",
+        "box-shadow:0 10px 30px rgba(0,0,0,.5)", "padding:10px", "z-index:99990", "font-family:sans-serif", "font-size:12.5px",
+      ].join(";"));
+      panel.id = "notif-panel";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-label", "알림");
+      wrap.appendChild(panel);
+      this._notifPanelEl = panel;
+      this.refreshNotif().then(() => this._renderNotifPanel());
+      this._renderNotifPanel();
+      const onDoc = (e) => { if (this._notifPanelEl && !wrap.contains(e.target)) { this._closeNotifPanel(); document.removeEventListener("click", onDoc); } };
+      setTimeout(() => document.addEventListener("click", onDoc), 0);
+    },
+    _closeNotifPanel() {
+      if (this._notifPanelEl && this._notifPanelEl.parentNode) this._notifPanelEl.parentNode.removeChild(this._notifPanelEl);
+      this._notifPanelEl = null;
+    },
+    _renderNotifPanel() {
+      if (!this._notifPanelEl) return;
+      const items = this._notifItems || [];
+      const head = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<strong style="font-size:13px">알림</strong>' +
+        (this._notifUnread > 0 ? '<button type="button" data-notif-readall="1" style="background:transparent;border:1px solid #665;color:#ffffff;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer">전체 읽음</button>' : '') +
+        '</div>';
+      const body = items.length === 0
+        ? '<div style="padding:20px 6px;text-align:center;color:#cbbfa0;font-size:12px">알림이 없습니다</div>'
+        : items.map((n) => {
+            const unread = !n.read_at;
+            return '<div class="notif-item" data-notif-id="' + UI.escapeHtml(n.id) + '" style="padding:8px 6px;border-bottom:1px solid #332e22;cursor:pointer;' +
+              (unread ? 'background:rgba(201,150,42,.1)' : '') + '">' +
+              '<div style="display:flex;gap:6px;align-items:flex-start">' +
+              (unread ? '<span style="width:7px;height:7px;border-radius:50%;background:#c9962a;margin-top:4px;flex-shrink:0"></span>' : '<span style="width:7px;flex-shrink:0"></span>') +
+              '<div style="flex:1;min-width:0">' +
+              '<div style="font-weight:700;color:#f7d98a;word-break:break-word">' + UI.escapeHtml(n.title || "") + '</div>' +
+              '<div style="color:#cbbfa0;font-size:11.5px;margin-top:2px;word-break:break-word">' + UI.escapeHtml((n.body || "").slice(0, 160)) + '</div>' +
+              '</div></div></div>';
+          }).join("");
+      this._notifPanelEl.innerHTML = head + body;
+      const readAllBtn = this._notifPanelEl.querySelector('[data-notif-readall]');
+      if (readAllBtn) readAllBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try { await fetch("/api/notifications/read-all", { method: "POST", headers: this._headers() }); } catch (err) {}
+        await this.refreshNotif();
+      });
+      this._notifPanelEl.querySelectorAll('[data-notif-id]').forEach((el) => {
+        el.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const id = el.getAttribute("data-notif-id");
+          try { await fetch("/api/notifications/" + encodeURIComponent(id) + "/read", { method: "POST", headers: this._headers() }); } catch (err) {}
+          await this.refreshNotif();
+        });
+      });
     },
 
     _createInboxBtn() {
@@ -254,6 +370,11 @@
         out = out.filter((n) => n.kind === "reply" || (String(n.assignee || "").toLowerCase().indexOf(q) >= 0));
       }
       if (this._fOverdue) out = out.filter((n) => n.kind === "reply" || this._isOverdue(n));
+      // [WO 20261019-issueflow] 내 담당만 — assignee_email 이 로그인 본인 이메일과 같은 것만.
+      if (this._fMine) {
+        const me = String((typeof Auth !== "undefined" && Auth.user && Auth.user.email) || "").toLowerCase();
+        out = out.filter((n) => n.kind === "reply" || (me && String(n.assignee_email || "").toLowerCase() === me));
+      }
       return out;
     },
 
@@ -356,6 +477,13 @@
       odCb.addEventListener("change", () => { this._fOverdue = odCb.checked; this._renderInbox(); });
       odLabel.appendChild(odCb); odLabel.appendChild(this._el("span", "", "기한지남"));
       bar.appendChild(odLabel);
+      // [WO 20261019-issueflow] 내 담당만
+      const mineLabel = this._el("label", "display:flex;align-items:center;gap:4px;font-size:12px;color:#cbbfa0;cursor:pointer");
+      const mineCb = this._el("input"); mineCb.type = "checkbox"; mineCb.setAttribute("data-req-f-mine", "1");
+      mineCb.checked = this._fMine;
+      mineCb.addEventListener("change", () => { this._fMine = mineCb.checked; this._renderInbox(); });
+      mineLabel.appendChild(mineCb); mineLabel.appendChild(this._el("span", "", "내 담당만"));
+      bar.appendChild(mineLabel);
       // 정렬
       const sortBtn = this._btn("정렬: 최근", null, () => {
         this._sort = this._sort === "due" ? "recent" : "due";
@@ -515,7 +643,14 @@
       if (!pin) { Prompt.toast && Prompt.toast("이 포인트를 찾을 수 없습니다(삭제되었거나 다른 도면)"); return false; }
       if (typeof App !== "undefined" && App.focusPin) await App.focusPin(pin, false);
       // [WO 20261012-viewlink] 사진 안에서 남긴 요청 = 그 사진·그 방향으로 연다
-      if (n.pano_view) return await this._openPanoView(pin, n.pano_view);
+      if (n.pano_view) {
+        const opened = await this._openPanoView(pin, n.pano_view);
+        // [WO 20261019-issueflow] 도형과 연결된 이슈면 열린 뒤 그 도형을 잠깐 강조(마크업↔이슈 "다시 열면 강조").
+        if (opened && n.pano_view.shape && n.pano_view.shape.id && typeof PanoViewer !== "undefined" && PanoViewer.Shapes && PanoViewer.Shapes.flash) {
+          setTimeout(() => PanoViewer.Shapes.flash(n.pano_view.shape.id), 350);
+        }
+        return opened;
+      }
       return true;
     },
 
