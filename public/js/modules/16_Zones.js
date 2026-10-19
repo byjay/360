@@ -329,7 +329,8 @@
     updateLabelScale() {
       const layer = document.getElementById("zones-layer");
       if (!layer) return;
-      const zoom = (typeof State !== "undefined" && State.zoom) || 1;
+      // [WO 20261019-pinpx] 상위 scale(zoom) 상쇄 SoT = MapCtrl.parentScale()
+      const zoom = (typeof MapCtrl !== "undefined" && MapCtrl.parentScale) ? MapCtrl.parentScale() : ((typeof State !== "undefined" && State.zoom) || 1);
       const inv = (1 / zoom).toFixed(3);
       layer.querySelectorAll(".zone-box-label").forEach(el => {
         el.style.transform = `scale(${inv})`;

@@ -441,37 +441,65 @@
       const z = Math.min(vw / size.w, vh / size.h) * this.FIT_PAD;
       return (z > 0) ? z : null;
     },
-    pinScreenScale() {
+    /** [WO 20261019-pinpx] 상위 transform 상쇄의 SoT — #map-transform 은 `scale(State.zoom)` 이고
+     *  #pins-layer·#routes-svg·#anno-svg·#leader-layer·#zones-layer 는 전부 그 자손이라, 자손에 준 로컬
+     *  크기에는 이 값이 한 번 더 곱해져 화면에 나온다. "화면 px" 로 정한 크기를 로컬 단위로 바꿀 때는
+     *  반드시 이 함수로 나눈다(핀·풍선·리더선·ISO 빌보드·탭 패드·동선·주석·구역 라벨 공용).
+     *  [재현] ae36a91: pinScreenScale() 이 화면 배율을 그대로 --pin-scale 로 넣어 화면 px =
+     *  zoom × scale × 40 — 큰 PDF(ga.pdf, fitZoom 0.125) 맞춤 3.76px(사양 30px), tests/p172 CDP 실측. */
+    parentScale() {
+      const z = State.zoom;
+      return (z > 0) ? z : 1;
+    },
+    /** 화면 맞춤(fitZoom) 대비 현재 줌 × 구역 보정 — 핀·선 공용 기준(위 헤더 주석 판단 근거). */
+    _fitRelZoom() {
       const zoom = State.zoom || 1;
+      const fitZoom = this.computeFitZoom() || 1; // 모르면 종전처럼 zoom 을 그대로 기준으로(회귀 0)
+      // 경계(구역 창)는 fitZoom 이 이미 확대비를 반영 → scaleRef 중복보정 제거(위 헤더 주석 판단 근거).
+      const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);
+      return (zoom / fitZoom) * scaleRef;
+    },
+    /** 핀 머리의 "실제 화면 px"(상위 transform 포함) — 맞춤 30px(터치 32) · 비례 · 하한 8/10 · 상한 56. */
+    pinScreenPx() {
       const touch = this._coarsePointer();
       const prefBase = (typeof PinSizePrefs !== "undefined" && PinSizePrefs.scale) ? PinSizePrefs.scale() : this.PIN_SCALE;
       // 터치는 사용자 설정값 대비 PIN_SCALE_TOUCH/PIN_SCALE(기본 32/30)배 — 설정을 올리거나 내려도 비율 유지.
       const base = touch ? prefBase * (this.PIN_SCALE_TOUCH / this.PIN_SCALE) : prefBase;
-      const fitZoom = this.computeFitZoom() || 1; // 모르면 종전처럼 zoom 을 그대로 기준으로(회귀 0)
-      // 경계(구역 창)는 fitZoom 이 이미 확대비를 반영 → scaleRef 중복보정 제거(위 헤더 주석 판단 근거).
-      const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);
-      const effZoom = (zoom / fitZoom) * scaleRef; // 기준: 화면맞춤(fitZoom) 대비 현재 줌
-      const raw = base * effZoom;
+      const raw = base * this.PIN_NATIVE_PX * this._fitRelZoom();
       const minPx = touch ? this.PIN_MIN_PX_TOUCH : this.PIN_MIN_PX_MOUSE;
-      const floor = minPx / this.PIN_NATIVE_PX;
-      const ceil = this.PIN_MAX_PX / this.PIN_NATIVE_PX; // [WO 20261016-pinscale2] 상한
-      return Math.min(Math.max(raw, floor), ceil);
+      const px = Math.max(raw, minPx);        // 하한(점)
+      return Math.min(px, this.PIN_MAX_PX);   // 상한
+    },
+    /** --pin-scale 로 쓰는 "로컬" 배율 — 화면 px 를 상위 scale(zoom) 로 상쇄한 값. */
+    pinScreenScale() {
+      return this.pinScreenPx() / this.PIN_NATIVE_PX / this.parentScale();
     },
     /** [WO 20261016-pinscale §2, pinscale2 / 20261019-pinscale3] 선(360 동선·주석) 공용 — 핀과 같은
      *  기준(zoom/fitZoom × 구역 scaleRef, 경계면 scaleRef 중복보정 제거)에 LINE_FIT_RATIO 를 곱해
      *  "맞춤 상태에서 기준선(route-line 3px)이 약 1.5px"가 되게 한다(마스터 "전체 비율을 봐" — 핀과
      *  같은 분모를 쓰되 선은 핀보다 더 얇게 시작). 바닥은 절대 px 가 아니라 "비율"로 둔다(선 종류마다
      *  기준 두께가 달라 픽셀 바닥 하나로 못 묶는다 — 판단: 지금 모양의 40% 밑으로는 안 가늘어지게).
-     *  상한(LINE_MAX_RATIO=1)은 원본 css 두께(effZoom=2, 맞춤의 2배 확대에서 도달) — "최대 3px". */
+     *  상한(LINE_MAX_RATIO=1)은 원본 css 두께(effZoom=2, 맞춤의 2배 확대에서 도달) — "최대 3px".
+     *  lineScreenRatio = 화면 기준 비율(css 두께 대비). */
     LINE_FIT_RATIO: 0.5,
     LINE_MAX_RATIO: 1,
-    lineScreenScale(minRatio) {
-      const zoom = State.zoom || 1;
-      const fitZoom = this.computeFitZoom() || 1;
-      const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);
-      const effZoom = (zoom / fitZoom) * scaleRef * this.LINE_FIT_RATIO;
+    lineScreenRatio(minRatio) {
+      const effZoom = this._fitRelZoom() * this.LINE_FIT_RATIO;
       const floor = (typeof minRatio === "number" && minRatio > 0) ? minRatio : 0.4;
       return Math.min(Math.max(effZoom, floor), this.LINE_MAX_RATIO);
+    },
+    /** [WO 20261019-pinpx] SVG 사용자 단위 1 이 transform 안에서 차지하는 로컬 CSS px(viewBox→박스, 기하평균 —
+     *  preserveAspectRatio=none 이라 축마다 다르다). 크기를 모르면(테스트 셸·미표시) 1. */
+    svgUnitPx(svg) {
+      const vb = svg && svg.viewBox && svg.viewBox.baseVal;
+      const w = svg && svg.clientWidth, h = svg && svg.clientHeight;
+      if (!vb || !(vb.width > 0) || !(vb.height > 0) || !(w > 0) || !(h > 0)) return 1;
+      return Math.sqrt((w / vb.width) * (h / vb.height));
+    },
+    /** --route-scale/--anno-scale 로 쓰는 배율 — css 두께(SVG 사용자 단위)에 곱하면 화면 두께가
+     *  css 두께 × lineScreenRatio 가 되도록 viewBox 배율과 상위 scale(zoom)을 상쇄한다. */
+    lineScreenScale(minRatio, svg) {
+      return this.lineScreenRatio(minRatio) / this.parentScale() / this.svgUnitPx(svg);
     },
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
@@ -480,12 +508,17 @@
       // [성능] 핀치/줌 중 매 프레임 재계산 — 마커 전체를 순회해 인라인 transform 을 다시 쓰지 않는다.
       // CSS 변수 하나(--pin-scale)만 갱신하면 평면 마커·리더 풍선은 정적 스타일시트 규칙
       // (style.css #pins-layer .pin-marker / .pin-leader-bubble)이 알아서 반영한다(O(1)).
-      if (layer.style && typeof layer.style.setProperty === "function") layer.style.setProperty("--pin-scale", inv.toFixed(4));
+      const px = this.pinScreenPx(); // 실제 화면 px(상위 scale 포함) — 번호 숨김·탭 패드 판정 기준
+      if (layer.style && typeof layer.style.setProperty === "function") {
+        layer.style.setProperty("--pin-scale", inv.toFixed(4));
+        // [WO 20261019-pinpx] 탭 패드(.pin-marker::after 44px)는 마커(--pin-scale)·상위 scale(zoom) 둘 다 상쇄해야
+        // 화면 44px — 그 곱 = px/PIN_NATIVE_PX 를 따로 넘긴다(style.css .pin-marker::after).
+        layer.style.setProperty("--pin-screen-k", (px / this.PIN_NATIVE_PX).toFixed(4));
+      }
       // [WO 20261019-pinscale4] 핀 번호 표시 — PinLabelPrefs(23c_PinSizePrefs.js) 옵션 SoT.
       // always=항상 켬 / hidden=항상 끔 / auto(기본)=화면 핀 높이 < LABEL_HIDE_PX(16px) 면 끔.
       // 매 줌마다(이 함수가 호출될 때) 다시 판정 — SVG 재생성 없이 CSS 클래스 토글 1개로 즉시 반영.
       if (layer.classList) {
-        const px = inv * this.PIN_NATIVE_PX;
         const hideLabel = (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.shouldHide)
           ? PinLabelPrefs.shouldHide(px)
           : (px < this.LABEL_HIDE_PX); // PinLabelPrefs 미로드(테스트 하니스 등) → auto 폴백

@@ -3,7 +3,7 @@
  *   [포인트] 버튼 자동시작 확인(R5) · CHECKER 사진 안내 배너(R4).
  * 실행: node tests/p133-pinstyle.test.mjs
  * 뮤테이션(실제 소스를 바꿔 같은 단언을 다시 돌린다 — 반드시 EXIT=1):
- *   P133_MUT=dual|nohide|noinv|stroke|alignall|autotoggle|touchstart|nonote|noctx|ctxinput|nofab|r7|r8|r8css|r9|labelsmall|nolabeloff|numtextclass node tests/p133-pinstyle.test.mjs
+ *   P133_MUT=dual|nohide|noinv|stroke|alignall|autotoggle|touchstart|nonote|noctx|ctxinput|nofab|r7|r8|r8css|r9|labelsmall|nolabeloff|numtextclass|nocancel node tests/p133-pinstyle.test.mjs
  *
  * [L] WO 20261019-pinscale3-label(마스터 "라벨이 약 8px 이면 같은 결함이다") — 맞춤 상태에서
  *   번호 배지 글자 높이가 ≥11px(1~2자리)·≥10px(3자리+, §3 바닥)가 되는지 UI._numberBadgeGeom() 값을
@@ -28,6 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { openRealMap } from "./_lib/real-map-page.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MUT = process.env.P133_MUT || "";
@@ -72,6 +73,8 @@ const MUTS = {
   nolabeloff: ["10_MapCtrl.js", 'layer.classList.toggle("pin-num-off", !!hideLabel);', 'void hideLabel; /* [MUT nolabeloff] 토글 제거 */'],
   // [WO 20261019-pinscale4] 되돌림: 번호 <text> 에 pin-num-text 클래스가 안 붙음(첫 등장 1곳만) —
   // CSS #pins-layer.pin-num-off .pin-num-text{display:none} 가 그 핀의 번호를 못 찾아 숨기지 못한다.
+  // [WO 20261019-pinpx] 상위 #map-transform scale(zoom) 상쇄 제거(ae36a91 동작) — §L 실측 라벨·§M9 머리 단언이 FAIL 해야 한다
+  nocancel: ["10_MapCtrl.js", "return this.pinScreenPx() / this.PIN_NATIVE_PX / this.parentScale();", "return this.pinScreenPx() / this.PIN_NATIVE_PX;"],
   numtextclass: ["11_UI.js", 'class="pin-num-text" x="18" y="15.4"', 'x="18" y="15.4"'],
 };
 if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
@@ -502,27 +505,40 @@ console.log("\n[H] R7 프로젝트 단위 편집 권한 · R8 윤곽 라벨 통�
   ok(State.placing === true && PG.collapsed === true, "H8 R9 모바일 포인트 모드 진입 → 리스트 패널 접힘(숨김 아님 — 다시 열기 그대로)");
 }
 
-console.log("\n[L] 번호 배지 가독성(WO 20261019-pinscale3-label) — 맞춤 상태 라벨 bbox 높이");
+console.log("\n[L] 번호 배지 가독성(WO 20261019-pinscale3-label) — 맞춤 상태 라벨 실측 높이(실 Chrome)");
+// [WO 20261019-pinpx 전·후] 전: 높이 = _numberBadgeGeom(label).fs × 0.625 × pinScreenScale()/PIN_SCALE(함수값 환산,
+//   vm DOM 셸, fitZoom 폴백 1) — 상위 #map-transform scale(zoom) 중첩을 원리적으로 못 봐 큰 PDF 맞춤에서 실제
+//   글자 1~2px 을 12px 로 통과시켰다(ae36a91, p172 실측 머리 3.76px). 후: 실 Chrome(tests/_lib/real-map-page.mjs —
+//   CSS 3종 + index.html #map-viewport 원문 + 실제 모듈) 의 .pin-num-text getBoundingClientRect 높이.
+//   큰 도면(CSS 8000×6000, 1280×800 맞춤 fitZoom≈0.123 <0.15)에서 잰다. 단언 문턱(11/10px, 비례 1.3배)은 그대로.
+const chromeMutate = (name, src) => (MUT && MUTS[MUT][0] === name && src.includes(MUTS[MUT][1])) ? src.replace(MUTS[MUT][1], MUTS[MUT][2]) : src;
+const RM = await openRealMap({ width: 1280, height: 800, canvas: { w: 8000, h: 6000 }, mutate: chromeMutate });
+const RMfit = await (async () => {
+  await RM.ev(`__M.pins(${JSON.stringify([
+    { id: "L1", x: 20, y: 40, page: 1, label: "1", checkboard: true },
+    { id: "L2", x: 40, y: 40, page: 1, label: "12", checkboard: true },
+    { id: "L3", x: 60, y: 40, page: 1, label: "123", checkboard: true },
+    { id: "L4", x: 80, y: 40, page: 1, label: "A12", checkboard: true },
+    { id: "L5", x: 50, y: 70, page: 1, label: "5", checkboard: true, leader: true, callout: { x: 58, y: 62 } },
+  ])})`);
+  return RM.ev("__M.fit()");
+})();
 {
-  const { UI, MapCtrl, State } = uiEnv();
-  State.zoom = 1; // 이 하니스는 viewport.clientWidth 가 없어 computeFitZoom()→null→폴백 1
-                  // (p159 와 동일 전제) → pinScreenScale()=PIN_SCALE = "맞춤 상태"와 동일 비율.
-  // [실측] 라이브 CDP(.tmp/probe-label.mjs, 실제 public/css/style.css + Segoe UI Bold 로드,
-  // --pin-scale 0.75 적용 후 getBoundingClientRect)로 잰 변환 상수: height_px ≈ fontSize(viewBox
-  // 단위) × 0.625 × (pinScreenScale()/MapCtrl.PIN_SCALE). 실측 원값: fs13→8.25px, fs18→11.25px,
-  // fs20→12px, fs22→13.5px(기울기 0.6136~0.6346, 평균 0.625 채택).
-  const K = 0.625;
-  const heightPx = (label) => UI._numberBadgeGeom(label).fs * K * (MapCtrl.pinScreenScale() / MapCtrl.PIN_SCALE);
-  const h1 = heightPx("1"), h2 = heightPx("12"), h3 = heightPx("123"), hA = heightPx("A12");
-  ok(h1 >= 11, `L1 1자리 "1" 맞춤 상태 라벨 높이=${h1.toFixed(2)}px ≥11px(목표 12~13) — 마스터 재현(종전 fs13→8.25px)`);
-  ok(h2 >= 11, `L2 2자리 "12" 맞춤 상태 라벨 높이=${h2.toFixed(2)}px ≥11px`);
-  ok(h3 >= 10, `L3 3자리 "123" 맞춤 상태 라벨 높이=${h3.toFixed(2)}px ≥10px(바닥, §3 긴 라벨은 줄이되 바닥 10px)`);
-  ok(hA >= 10, `L4 접두사 "A12" 맞춤 상태 라벨 높이=${hA.toFixed(2)}px ≥10px(바닥)`);
-  // [비례] 맞춤의 1.3배로 확대하면 라벨도 정확히 1.3배 커진다(마커 전체 --pin-scale 공유 — 추가
-  // 코드 없이 구조적 보장. 1.3배는 PIN_MAX_PX 상한(ceil, zoom≈1.87배부터 clamp)에 안 걸리는 구간).
-  State.zoom = 1.3;
-  const h1x13 = heightPx("1");
-  ok(Math.abs(h1x13 - h1 * 1.3) < 1e-6, `L5 zoom=맞춤×1.3 → "1" 라벨 높이=${h1x13.toFixed(3)}px = 맞춤×1.3=${(h1 * 1.3).toFixed(3)}px(비례 확인)`);
+  const lab = async (id) => ((await RM.ev(`__M.label(${JSON.stringify(id)})`)) || { h: 0 }).h;
+  await RM.ev(`__M.zoom(${RMfit})`);
+  const h1 = await lab("L1"), h2 = await lab("L2"), h3 = await lab("L3"), hA = await lab("L4");
+  ok(h1 >= 11, `L1 1자리 "1" 맞춤 상태 라벨 실측 높이=${h1.toFixed(2)}px ≥11px(목표 12~13) — 마스터 재현(종전 fs13→8.25px)`);
+  ok(h2 >= 11, `L2 2자리 "12" 맞춤 상태 라벨 실측 높이=${h2.toFixed(2)}px ≥11px`);
+  ok(h3 >= 10, `L3 3자리 "123" 맞춤 상태 라벨 실측 높이=${h3.toFixed(2)}px ≥10px(바닥, §3 긴 라벨은 줄이되 바닥 10px)`);
+  ok(hA >= 10, `L4 접두사 "A12" 맞춤 상태 라벨 실측 높이=${hA.toFixed(2)}px ≥10px(바닥)`);
+  // [비례] 맞춤의 1.3배로 확대하면 라벨도 1.3배(마커 전체 --pin-scale 공유, PIN_MAX_PX 상한 전 구간).
+  await RM.ev(`__M.zoom(${RMfit * 1.3})`);
+  const h1x13 = await lab("L1");
+  ok(Math.abs(h1x13 - h1 * 1.3) <= h1 * 1.3 * 0.03, `L5 맞춤×1.3 → "1" 라벨 실측 높이=${h1x13.toFixed(3)}px ≈ 맞춤×1.3=${(h1 * 1.3).toFixed(3)}px(비례 ±3%)`);
+  // [WO 20261019-pinpx 신규] 리더 풍선/머리 실측 비 = 22/40 (풍선·머리 모두 같은 상쇄 경로 — 화면 px 기준)
+  await RM.ev(`__M.zoom(${RMfit})`);
+  const hb = await RM.ev("__M.bubble()"), hh = await RM.ev("__M.head()");
+  ok(hh > 0 && Math.abs(hb / hh - 22 / 40) <= 0.03, `L6 맞춤 리더 풍선 ${hb}px / 머리 ${hh}px = ${(hb / hh).toFixed(3)} ≈ 22/40(0.55) — 실측`);
 }
 
 console.log("\n[M] WO 20261019-pinscale4 — 핀 번호 표시 옵션(항상/자동/숨김) + 작을 때 자동 숨김");
@@ -563,12 +579,13 @@ console.log("\n[M] WO 20261019-pinscale4 — 핀 번호 표시 옵션(항상/자
 }
 {
   // M9: 핀 바닥(점) — 맞춤보다 더 축소해도 "점"(8px, 종전 20px)까지 계속 작아진다(마스터 "핀 머리가
-  //  너무 크게 보이지 않게"). fitZoom 폴백 1 이라 effZoom=zoom — zoom 을 아주 작게 주면 바닥에 닿는다.
-  const { MapCtrl, State } = uiEnv();
-  State.zoom = 0.0001;
-  const px = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-  ok(Math.abs(px - MapCtrl.PIN_MIN_PX_MOUSE) < 1e-6 && MapCtrl.PIN_MIN_PX_MOUSE <= 10, `M9 극저 zoom → 바닥 ${px.toFixed(2)}px = PIN_MIN_PX_MOUSE(${MapCtrl.PIN_MIN_PX_MOUSE}, ≤10 — 종전 20px 에서 완화)`);
+  //  너무 크게 보이지 않게"). [WO 20261019-pinpx 전·후] 전: pinScreenScale()×40 함수값(vm). 후: 실 Chrome 머리 svg 실측.
+  await RM.ev(`__M.zoom(${RMfit * 0.01})`);
+  const px = await RM.ev("__M.head()");
+  const PIN_MIN = await RM.ev("__T.MapCtrl.PIN_MIN_PX_MOUSE");
+  ok(Math.abs(px - PIN_MIN) <= 0.1 && PIN_MIN <= 10, `M9 맞춤×0.01 → 머리 실측 ${px}px = PIN_MIN_PX_MOUSE(${PIN_MIN}, ≤10 — 종전 20px 에서 완화)`);
 }
+await RM.close();
 
 console.log(failed === 0 ? "\n✅ p133 전체 PASS" : `\n❌ p133 ${failed}건 FAIL`);
 process.exit(failed === 0 ? 0 : 1);

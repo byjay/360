@@ -36,245 +36,144 @@
  * 역스케일(scale(calc(1/var(--pin-scale))))로 별도 보장 — 핀이 8px 로 작아져도 44px 그대로 눌린다.
  * 번호는 LABEL_HIDE_PX(16px) 밑이면(옵션 auto) 숨기고 머리(색 점)만 남긴다(11_UI.js·p133 §M 검증).
  *
- * 실제 모듈 소스(02_PDF.js / 10_MapCtrl.js)를 그대로 vm 에 평가해 검사(목 구현 아님).
- * 뮤테이션 6건 — 고친 부분을 되돌리면 반드시 EXIT=1:
- *   P159_MUT=noceil   → pin 상한(Math.min(...,ceil)) 제거 — zoom=16 56px 초과 단언 실패
- *   P159_MUT=nolinecap→ line 상한(Math.min(...,LINE_MAX_RATIO)) 제거 — 선 두께 상한 단언 실패
- *   P159_MUT=nofloor  → Math.max(raw, floor) 제거(바닥 삭제) — 저줌 최소크기 단언 실패
- *   P159_MUT=nocrop   → scaleRef 무시(항상 1) — 구역 보정 단언 실패
- *   P159_MUT=nofit    → fitZoom 나누기 제거(zoom 직접 기준으로 되돌림) — 경계
- *                        맞춤(⑥) 단언 실패(비경계 구간은 fitZoom 폴백=1 이라 차이가 안 드러남)
- * (핀 번호 표시 옵션·토글 뮤테이션은 DOM 이 필요해 p133 §M nolabeloff/numtextclass 쪽에 있다.)
+ * ── WO 20261019-pinpx (지휘자: "두 보고가 충돌 — 실제 화면 px 로 판정") ──
+ * [재현] ae36a91, tests/p172-pin-screen-px-cdp.mjs(실 번들 + 실 ga.pdf + 실 Chrome): #pins-layer 는
+ *   #map-transform(scale(State.zoom)) 의 자손인데 pinScreenScale() 이 "화면 배율"을 그대로 --pin-scale 로
+ *   넣어, 실제 화면 px = zoom × pinScreenScale() × 40 — 큰 PDF(fitZoom 0.125) 맞춤 3.76px(사양 30px).
+ *   이 테스트의 옛 구조(vm 에서 pinScreenScale()×40 을 "화면px"라 부르며 검사)는 상위 scale 중첩을
+ *   원리적으로 볼 수 없어 결함을 통과시켰다(99dbf1b 보고의 측정 스크립트도 #pins-layer 를 transform
+ *   바깥에 둬 같은 맹점).
+ * 채택: 모든 px 단언을 실 Chrome getBoundingClientRect(상위 transform 포함)로 바꾼다 —
+ *   tests/_lib/real-map-page.mjs(CSS 3종 + public/index.html #map-viewport 원문 + 실제 모듈).
+ *   전·후 대조: ①~⑨ 의 "pinScreenScale()×PIN_NATIVE_PX"(함수값) → 머리 svg 실측 높이,
+ *   ⑦ lineScreenScale 비율 → 동선/주석 선 실측 화면 두께, ⑩(신규) 탭 패드 hit-test.
+ * 뮤테이션 — 고친 부분을 되돌리면 반드시 EXIT=1 (대상 문자열 없으면 EXIT=2):
+ *   P159_MUT=nocancel     → pinScreenScale 의 상위 scale(zoom) 상쇄 제거
+ *   P159_MUT=nolinecancel → lineScreenScale 의 상위 scale(zoom) 상쇄 제거
+ *   P159_MUT=noceil       → 핀 상한(Math.min(px, PIN_MAX_PX)) 제거
+ *   P159_MUT=nofloor      → 핀 하한(Math.max(raw, minPx)) 제거
+ *   P159_MUT=nolinecap    → 선 상한(LINE_MAX_RATIO) 제거
+ *   P159_MUT=nocrop       → 구역 보정(scaleRef) 무시
+ *   P159_MUT=nofit        → fitZoom 나누기 제거(zoom 직접 기준)
+ *   P159_MUT=notapk       → 탭 패드 역스케일 인자를 종전 --pin-scale 값으로 되돌림
  */
-import fs from "node:fs";
-import path from "node:path";
-import vm from "node:vm";
-import { fileURLToPath } from "node:url";
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
-const pdfSrcOrig = rd("public/js/modules/02_PDF.js");
-const mapSrcOrig = rd("public/js/modules/10_MapCtrl.js");
+import { openRealMap } from "./_lib/real-map-page.mjs";
 
 let failed = 0;
 const ok = (cond, label) => {
   console.log((cond ? "  PASS " : "  FAIL ") + label);
   if (!cond) failed++;
 };
-const near = (a, b, eps = 1e-3) => Math.abs(a - b) <= eps;
+const near = (a, b, eps) => a != null && Math.abs(a - b) <= eps;
 
 const MUT = process.env.P159_MUT || "";
-/** 대상 문자열이 실제 소스에 없으면 조용히 no-op 하지 않고 즉시 에러(가짜 PASS 방지). */
-function mustReplace(src, from, to, label) {
-  if (!src.includes(from)) { console.log("FAIL 뮤테이션 대상 없음(" + label + "): " + JSON.stringify(from)); process.exit(2); }
-  return src.replace(from, to);
-}
-function mutate(mapSrc) {
-  if (MUT === "noceil") {
-    // 핀 상한(ceil) 제거 — 과도줌에서 핀이 끝없이 커진다(2026-10-16 마스터 지적 재현).
-    return mustReplace(mapSrc,
-      "return Math.min(Math.max(raw, floor), ceil);",
-      "return Math.max(raw, floor); // [MUT noceil] 상한 제거",
-      "noceil"
-    );
+const MUTS = {
+  nocancel: ["10_MapCtrl.js", "return this.pinScreenPx() / this.PIN_NATIVE_PX / this.parentScale();", "return this.pinScreenPx() / this.PIN_NATIVE_PX;"],
+  nolinecancel: ["10_MapCtrl.js", "return this.lineScreenRatio(minRatio) / this.parentScale() / this.svgUnitPx(svg);", "return this.lineScreenRatio(minRatio) / this.svgUnitPx(svg);"],
+  noceil: ["10_MapCtrl.js", "return Math.min(px, this.PIN_MAX_PX);   // 상한", "return px;"],
+  nofloor: ["10_MapCtrl.js", "const px = Math.max(raw, minPx);        // 하한(점)", "const px = raw;"],
+  nolinecap: ["10_MapCtrl.js", "return Math.min(Math.max(effZoom, floor), this.LINE_MAX_RATIO);", "return Math.max(effZoom, floor);"],
+  nocrop: ["10_MapCtrl.js", "const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);", "const scaleRef = 1;"],
+  nofit: ["10_MapCtrl.js", "return (zoom / fitZoom) * scaleRef;", "return zoom * scaleRef;"],
+  notapk: ["10_MapCtrl.js", 'layer.style.setProperty("--pin-screen-k", (px / this.PIN_NATIVE_PX).toFixed(4));', 'layer.style.setProperty("--pin-screen-k", inv.toFixed(4));'],
+};
+if (MUT && !MUTS[MUT]) { console.log("알 수 없는 뮤테이션: " + MUT); process.exit(2); }
+let mutHit = !MUT;
+const mutate = (name, src) => {
+  if (!MUT || MUTS[MUT][0] !== name) return src;
+  if (!src.includes(MUTS[MUT][1])) { console.log("FAIL 뮤테이션 대상 없음(" + MUT + "): " + MUTS[MUT][1]); process.exit(2); }
+  mutHit = true;
+  return src.replace(MUTS[MUT][1], MUTS[MUT][2]);
+};
+
+// 큰 도면(CSS 8000×6000) — 1280×800 데스크톱(마우스) 맞춤 fitZoom = min(1280/8000, 800/6000)×0.92 ≈ 0.1227
+// (<0.15, 실 ga.pdf 맞춤 0.125 와 같은 자릿수 — p172 실측)
+const page = await openRealMap({ width: 1280, height: 800, canvas: { w: 8000, h: 6000 }, mutate });
+if (!mutHit) { console.log("FAIL 뮤테이션 미적용: " + MUT); process.exit(2); }
+const ev = page.ev;
+const PINS = [
+  { id: "a", x: 44, y: 46, page: 1, label: "1", checkboard: true },
+  { id: "b", x: 50, y: 50, page: 1, label: "2", checkboard: true },
+  { id: "c", x: 56, y: 54, page: 1, label: "3", checkboard: true },
+];
+const head = async (z) => { await ev(`__M.zoom(${z})`); return ev("__M.head()"); };
+try {
+  await ev(`__M.pins(${JSON.stringify(PINS)})`);
+  const fitZ = await ev("__M.fit()");
+  const want = (f) => Math.min(56, Math.max(8, 30 * f)); // 사양: 맞춤 30 · 비례 · 하한 8(마우스) · 상한 56
+
+  console.log("\n[⑨ 큰 도면 맞춤 — computeFitZoom() = fit() 공식]");
+  const expFit = Math.min(1280 / 8000, 800 / 6000) * 0.92;
+  ok(near(fitZ, expFit, 1e-6) && fitZ < 0.15, `fitZoom=${fitZ.toFixed(4)} = min(vw/w,vh/h)×0.92=${expFit.toFixed(4)} (<0.15)`);
+
+  console.log("\n[① 머리 실측 높이 ∈ [8, 56] — 맞춤 ×0.05/0.5/1/2/4/16]");
+  for (const f of [0.05, 0.5, 1, 2, 4, 16]) { const h = await head(fitZ * f); ok(h >= 8 - 0.05 && h <= 56 + 0.05, `맞춤×${f} 머리=${h}px ∈ [8, 56]`); }
+
+  console.log("\n[② 맞춤 ≈ 30px (실측)]");
+  const h1 = await head(fitZ);
+  ok(near(h1, 30, 0.5), `맞춤 머리=${h1}px ≈ 30px`);
+
+  console.log("\n[③ 맞춤~상한 구간 비례 (실측)]");
+  const h15 = await head(fitZ * 1.5);
+  ok(near(h15, 45, 0.5), `맞춤×1.5 머리=${h15}px ≈ 45px(=30×1.5)`);
+
+  console.log("\n[④ 하한 8px (실측)]");
+  const hT = await head(fitZ * 0.05);
+  ok(near(hT, 8, 0.1), `맞춤×0.05 머리=${hT}px = 하한 8px`);
+
+  console.log("\n[⑤ 상한 56px (실측)]");
+  const h4 = await head(fitZ * 4), h16 = await head(fitZ * 16);
+  ok(near(h4, 56, 0.1), `맞춤×4 머리=${h4}px = 상한 56px`);
+  ok(near(h16, 56, 0.1), `맞춤×16 머리=${h16}px = 상한 56px`);
+
+  console.log("\n[⑧ 맞춤×0.03~16 스윕 — 실측 = min(56, max(8, 30×f))]");
+  let sweepOk = true;
+  for (let f = 0.03; f <= 16; f *= 1.37) { const h = await head(fitZ * f); if (!near(h, want(f), 0.15)) { sweepOk = false; console.log(`    ×${f.toFixed(3)} 실측 ${h} 기대 ${want(f).toFixed(2)}`); } }
+  ok(sweepOk, "스윕 전 구간 실측 머리 높이 = 사양 곡선");
+
+  console.log("\n[⑨b 번호 숨김(auto) — 16px 미만 (실측 display)]");
+  await ev(`__M.zoom(${fitZ})`);
+  const lf = await ev("__M.label('a')");
+  ok(!(await ev("__M.numOff()")) && lf && lf.display !== "none", `맞춤(30px) 번호 표시 (display=${lf && lf.display})`);
+  await ev(`__M.zoom(${fitZ * 0.5})`);
+  const lh = await ev("__M.label('a')");
+  ok((await ev("__M.numOff()")) && lh && lh.display === "none", `맞춤×0.5(15px) 번호 숨김 (display=${lh && lh.display})`);
+
+  console.log("\n[⑦ 동선·주석 선 실측 화면 두께 — 맞춤 1.5 · 하한 1.2(40%) · 상한 3]");
+  for (const [f, w] of [[1, 1.5], [0.05, 1.2], [4, 3]]) {
+    await ev(`__M.zoom(${fitZ * f})`);
+    const r = await ev("__M.line('routes-svg','route-line-halo')"), a = await ev("__M.line('anno-svg','anno-pen-line')");
+    ok(near(r, w, 0.2), `맞춤×${f} 동선 halo(3px) 화면=${r}px ≈ ${w}px`);
+    ok(near(a, w, 0.2), `맞춤×${f} 주석 펜(3px) 화면=${a}px ≈ ${w}px`);
   }
-  if (MUT === "nolinecap") {
-    // 선 두께 상한(LINE_MAX_RATIO) 제거.
-    return mustReplace(mapSrc,
-      "return Math.min(Math.max(effZoom, floor), this.LINE_MAX_RATIO);",
-      "return Math.max(effZoom, floor); // [MUT nolinecap] 상한 제거",
-      "nolinecap"
-    );
-  }
-  if (MUT === "nofloor") {
-    // 바닥(Math.max) 제거 — 저줌에서 핀이 끝없이 작아진다.
-    return mustReplace(mapSrc,
-      "return Math.min(Math.max(raw, floor), ceil);",
-      "return Math.min(raw, ceil); // [MUT nofloor] 바닥 제거",
-      "nofloor"
-    );
-  }
-  if (MUT === "nocrop") {
-    // 구역 보정(scaleRef) 무시 — 항상 1(첫 등장 = pinScreenScale 안의 scaleRef 선언).
-    return mustReplace(mapSrc,
-      "const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);",
-      "const scaleRef = 1; // [MUT nocrop] 구역 보정 무시",
-      "nocrop"
-    );
-  }
-  if (MUT === "nofit") {
-    // [신규 WO 20261019-pinscale3] fitZoom 나누기 제거 — zoom 을 그대로 기준으로 되돌림.
-    return mustReplace(mapSrc,
-      "const effZoom = (zoom / fitZoom) * scaleRef; // 기준: 화면맞춤(fitZoom) 대비 현재 줌",
-      "const effZoom = zoom * scaleRef; // [MUT nofit] fitZoom 무시(종전 zoom 직접 기준)",
-      "nofit"
-    );
-  }
-  return mapSrc;
+
+  console.log("\n[⑩ 탭 패드 44px — 하한(8px) 핀 머리 옆 15px 도 그 핀]");
+  await ev(`__M.zoom(${fitZ * 0.05})`);
+  // 하한 배율에선 도면 폭이 ~49px 라 핀 3개의 패드가 겹친다 → 어느 핀이든(DOM 뒤 핀이 위). 맞춤에선 서로 떨어져 "그 핀".
+  const tp = await ev("__M.tapSide(15, true)");
+  ok(tp === true, `하한 핀(폭 6px) 머리 중심 옆 15px hit-test = 핀 (${tp})`);
+  await ev(`__M.zoom(${fitZ})`);
+  const tpf = await ev("__M.tapSide(15)");
+  ok(tpf === true, `맞춤 핀(폭 22.5px) 머리 중심 옆 15px hit-test = 그 핀 (${tpf})`);
+
+  console.log("\n[⑥ 구역(crop 창=경계) — 경계 맞춤 = 30px, ×2 = 56px (실측)]");
+  await ev("__T.PDF.setDeckCrop({ x: 10, y: 20, w: 25, h: 25 }, 0.25); 1");
+  const zFit = await ev("__M.fit()");
+  ok(zFit > fitZ, `사전조건: 경계 fitZoom=${zFit && zFit.toFixed(4)} > 원본 ${fitZ.toFixed(4)}`);
+  const hz1 = await head(zFit), hz2 = await head(zFit * 2);
+  ok(near(hz1, 30, 0.5), `구역 맞춤 머리=${hz1}px = 30px (원본 맞춤과 동일)`);
+  ok(near(hz2, 56, 0.1), `구역 맞춤×2 머리=${hz2}px = 상한 56px`);
+
+  console.log("\n[⑥b 벡터 복사 구역(crop 없음, scaleRef=0.1) — 원본 대비 10배 그린 페이지]");
+  await ev("__T.PDF.setDeckCrop(null, 0.1); 1");
+  const zv = await ev("__M.fit()");
+  const hv = await head(zv * 10);
+  ok(near(hv, 30, 0.5), `벡터 복사 zoom=맞춤×10 머리=${hv}px = 30px (원본 맞춤과 동일)`);
+  await ev("__T.PDF.setDeckCrop(null, 1); 1");
+} finally {
+  await page.close();
 }
 
-function load(pdfS, mapS) {
-  const State = { zoom: 1, pan: { x: 0, y: 0 }, isoView: false, isoDir: 0, mode: "designer", fileType: "pdf", pdfDoc: null, srcPdfDoc: null };
-  const viewport = { clientWidth: 375, clientHeight: 812, style: {} };
-  const transform = { offsetWidth: 2384, offsetHeight: 1684, style: {}, children: [] };
-  const sandbox = {
-    console, State, Math, JSON, Promise, setTimeout, clearTimeout,
-    document: { getElementById: () => null, createElement: () => ({ style: {}, getContext: () => null }) },
-    navigator: { userAgent: "node", platform: "", maxTouchPoints: 0 },
-    performance: { now: () => 0 }
-    // window 미제공 → MapCtrl._coarsePointer() 가 false(마우스 바닥 14px) 로 수렴(예측 가능한 결정론).
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(pdfS + "\n" + mapS + "\n;globalThis.__PDF = PDF; globalThis.__MAP = MapCtrl;", sandbox);
-  const PDF = sandbox.__PDF, MapCtrl = sandbox.__MAP;
-  MapCtrl.init(viewport, transform);
-  return { PDF, MapCtrl, State, viewport, transform };
-}
-
-const mapSrc = mutate(mapSrcOrig);
-const ctx = load(pdfSrcOrig, mapSrc);
-const { PDF, MapCtrl, State } = ctx;
-
-/* ══════════════════════════════════════════════════════════════════
- * 1. zoom 0.2/1/4/16 — 화면 px 가 [바닥px, 상한px] 범위 안(G-4⑦ 요구 수치 그대로)
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[① zoom 0.2/1/4/16 — 화면 px 범위]");
-const floorPx = MapCtrl.PIN_MIN_PX_MOUSE; // 테스트 환경=마우스(window 無) = 8px(WO 20261019-pinscale4, 종전 20px)
-const ceilPx = MapCtrl.PIN_MAX_PX;        // 56px
-for (const z of [0.2, 1, 4, 16]) {
-  State.zoom = z;
-  const px = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-  ok(px >= floorPx - 1e-6 && px <= ceilPx + 1e-6, `zoom=${z} → 화면px=${px.toFixed(2)} ∈ [${floorPx}, ${ceilPx}]`);
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * 2. zoom=1 → 기준값 약 30px (PIN_SCALE=0.75 × PIN_NATIVE_PX=40)
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[② zoom=1 기준값 ≈30px]");
-State.zoom = 1;
-const px1 = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-ok(px1 >= 28 && px1 <= 32, `zoom=1 → 화면px=${px1.toFixed(2)} ∈ [28, 32]`);
-ok(near(MapCtrl.pinScreenScale(), MapCtrl.PIN_SCALE, 1e-6), `zoom=1 → scale=${MapCtrl.pinScreenScale()} = PIN_SCALE(${MapCtrl.PIN_SCALE})`);
-
-/* ══════════════════════════════════════════════════════════════════
- * 3. 1~상한 구간은 여전히 비례(바닥·상한에 아직 안 닿는 중간 구간)
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[③ 1~상한 구간 비례]");
-State.zoom = 1; const s1 = MapCtrl.pinScreenScale();
-State.zoom = 1.5; const s15 = MapCtrl.pinScreenScale(); // raw=1.125 < ceil(1.2) → 아직 비례 구간
-ok(near(s15 / s1, 1.5, 1e-6), `zoom 1→1.5(×1.5, 둘 다 바닥/상한 밖) → scale ${s1}→${s15}(×${(s15 / s1).toFixed(3)}) 비례`);
-
-/* ══════════════════════════════════════════════════════════════════
- * 4. 최소 크기 보장(바닥) — 여전히 유지
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[④ 최소 크기 보장(바닥)]");
-State.zoom = 0.001; const sTiny = MapCtrl.pinScreenScale();
-const floorExpect = MapCtrl.PIN_MIN_PX_MOUSE / MapCtrl.PIN_NATIVE_PX;
-ok(near(sTiny, floorExpect, 1e-6), `zoom=0.001(극저) → scale=${sTiny.toFixed(4)} = 바닥 ${floorExpect.toFixed(4)}(마우스 ${MapCtrl.PIN_MIN_PX_MOUSE}px/native ${MapCtrl.PIN_NATIVE_PX}px) 에서 멈춤`);
-
-/* ══════════════════════════════════════════════════════════════════
- * 5. 최대 크기 상한 — [신규] WO 20261016-pinscale2
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[⑤ 최대 크기 상한(신규)]");
-State.zoom = 16; const sBig = MapCtrl.pinScreenScale();
-const ceilExpect = MapCtrl.PIN_MAX_PX / MapCtrl.PIN_NATIVE_PX;
-ok(near(sBig, ceilExpect, 1e-6), `zoom=16(최대) → scale=${sBig.toFixed(4)} = 상한 ${ceilExpect.toFixed(4)}(${MapCtrl.PIN_MAX_PX}px/native ${MapCtrl.PIN_NATIVE_PX}px) 에서 멈춤(2026-10-16 "너무 커지는 거 아니니" 재도입)`);
-State.zoom = 4; const sMid = MapCtrl.pinScreenScale();
-ok(near(sMid, ceilExpect, 1e-6), `zoom=4(구 정책 320px 유발 지점) → scale=${sMid.toFixed(4)} = 상한에서 멈춤(구 320px → 신규 48px)`);
-
-/* ══════════════════════════════════════════════════════════════════
- * 6. 구역(crop 창=경계) 보정 — [WO 20261019-pinscale3 전·후 대조]
- *    전(1차 정책): zoom=4 를 "fitZone 이 1/scaleRef=4배 확대한 결과"라고 가정해 scaleRef(0.25)를
- *    곱해 역산했다 — 임의의 zoom 값과 scaleRef 를 짝지은 가짜 전제였다.
- *    후(2차 정책): 이 구역을 "진짜로 화면에 맞춘"(F) 상태 = zoom === computeFitZoom() 이다. 그 배율은
- *    fit()·_fitBoundary() 가 실제로 쓰는 값(computeCoverZoom)과 같다 — scaleRef 없이도 원본과 같은
- *    기준px 가 나와야 한다(이중보정 제거 판단, 헤더 주석 참조).
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[⑥ 구역 보정 — crop 창(경계), 화면 맞춤 기준으로 계산]");
-State.zoom = 1;
-const sBefore = MapCtrl.pinScreenScale();
-PDF.setDeckCrop({ x: 10, y: 20, w: 25, h: 25 }, 0.25); // 원본의 25% 폭만 담은 구역(경계 활성)
-const fitZ6 = MapCtrl.computeFitZoom(); // 이 경계를 화면에 맞추는 배율(= fit() 이 실제로 쓸 값)
-ok(fitZ6 > 0, `사전조건: computeFitZoom() = ${fitZ6 && fitZ6.toFixed(4)}(경계 cover 배율, >0)`);
-State.zoom = fitZ6; // "방금 이 구역에 맞춤(F)했다"를 흉내
-const sZoneFit = MapCtrl.pinScreenScale();
-ok(near(sZoneFit, sBefore, 1e-6), `경계 맞춤(zoom=fitZoom=${fitZ6.toFixed(4)}) scale=${sZoneFit.toFixed(4)} = 원본 맞춤 scale=${sBefore.toFixed(4)} — scaleRef 없이도 일치`);
-ok(near(sZoneFit * MapCtrl.PIN_NATIVE_PX, 30, 1), `구역 맞춤 화면px=${(sZoneFit * MapCtrl.PIN_NATIVE_PX).toFixed(2)} ≈ 30px(원본 맞춤과 동일)`);
-
-console.log("\n[⑥b 구역 보정 — 벡터 복사(crop 없음, src_crop 만)]");
-PDF.setDeckCrop(null, 1); // crop 해제 + 보정 해제(일반 페이지로 돌아간 것처럼)
-State.zoom = 1;
-ok(near(MapCtrl.pinScreenScale(), sBefore, 1e-6), "크롭 해제(scaleRef=1) → 보정 없음(원래 공식)");
-PDF.setDeckCrop(null, 0.1); // 벡터 복사 구역: crop(클리핑 경계)은 없지만 src_crop 비율만 있음
-State.zoom = 10;
-ok(near(MapCtrl.pinScreenScale(), sBefore, 1e-6), `벡터 복사(crop=null, scaleRef=0.1, zoom=10) scale=${MapCtrl.pinScreenScale().toFixed(4)} = 원본 scale=${sBefore.toFixed(4)}`);
-
-/* ══════════════════════════════════════════════════════════════════
- * 7. 선(동선·주석) 공유 — lineScreenScale(바닥 비율) + 상한(신규)
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[⑦ 선 두께 바닥/상한(비율) — lineScreenScale]");
-// [WO 20261019-pinscale3 전·후] 전: effZoom=zoom 직접, zoom=0.6 → 비례 0.6. 후: effZoom=
-// (zoom/fitZoom)×LINE_FIT_RATIO(0.5) — zoom=0.6 은 이제 0.3(<바닥 0.4)이라 바닥에 깔린다.
-// "맞춤 상태"(fitZoom 폴백=1 과 같은 zoom=1)에서 비율이 정확히 0.5(=기준선 3px→1.5px, 마스터
-// 요구 "맞춤 상태 1.5px 쯤")가 되는 걸 비례 구간 대표값으로 쓴다.
-PDF.setDeckCrop(null, 1);
-State.zoom = 0.01;
-ok(near(MapCtrl.lineScreenScale(0.4), 0.4, 1e-6), `zoom 극저 → lineScreenScale(0.4)=${MapCtrl.lineScreenScale(0.4)} = 바닥 0.4`);
-State.zoom = 1;
-ok(near(MapCtrl.lineScreenScale(0.4), 0.5, 1e-6), `zoom=1(=맞춤, fitZoom 폴백 1) → lineScreenScale(0.4)=${MapCtrl.lineScreenScale(0.4)} = 0.5(기준선 3px→1.5px, "맞춤 상태 1.5px 쯤" 충족)`);
-State.zoom = 3;
-ok(near(MapCtrl.lineScreenScale(0.4), MapCtrl.LINE_MAX_RATIO, 1e-6), `zoom=3(effZoom×0.5=1.5>상한) → lineScreenScale(0.4)=${MapCtrl.lineScreenScale(0.4)} = 상한(${MapCtrl.LINE_MAX_RATIO}, 기준선 3px*1=최대 약 3px)`);
-
-/* ══════════════════════════════════════════════════════════════════
- * 8. zoom 0.2~16 전범위 스윕 — 공식이 항상 min(상한, max(바닥, base×effZoom)) 과 일치
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[⑧ zoom 0.2~16 스윕]");
-PDF.setDeckCrop(null, 1);
-let sweepOk = true;
-for (let z = 0.2; z <= 16; z *= 1.37) {
-  State.zoom = z;
-  const got = MapCtrl.pinScreenScale();
-  const floor = MapCtrl.PIN_MIN_PX_MOUSE / MapCtrl.PIN_NATIVE_PX;
-  const ceil = MapCtrl.PIN_MAX_PX / MapCtrl.PIN_NATIVE_PX;
-  const want = Math.min(Math.max(MapCtrl.PIN_SCALE * z, floor), ceil);
-  if (!near(got, want, 1e-6)) { sweepOk = false; console.log(`    zoom=${z.toFixed(3)} got=${got} want=${want}`); }
-}
-ok(sweepOk, "zoom 0.2~16 전범위 — pinScreenScale() = min(상한, max(바닥, base×zoom)) 일치");
-
-/* ══════════════════════════════════════════════════════════════════
- * 9. [WO 20261019-pinscale3] 비경계(전체 도면) computeFitZoom() 실측 — "맞춤 상태 약 30px",
- *    2배 확대 시 56px 상한. ①~⑧은 테스트 하니스에 content 크기가 없어 fitZoom 이 항상 1(폴백)
- *    이었다 — 이 섹션만 _contentSize() 를 오버라이드해 실제 "큰 도면을 화면 맞춤으로 열었을 때"
- *    (지휘자 라이브 실측: zoom≈0.16)와 같은 상황을 흉내낸다.
- *
- * [전·후 — WO 20261019-pinscale4, 마스터 "너무 줌 아웃 했을 때는 핀 머리가 너무 크게 보이지 않게"]
- * [재현] 99dbf1b(지휘자 발주서 인용): 맞춤×0.5(0.5배 축소)에서 바닥(종전 20/24px)에 깔려, 그보다
- * 더 축소해도 핀은 20~24px 에 고정됐다 — 도면은 계속 작아지는데 핀 머리만 상대적으로 커져 겹쳐
- * 보였다. 채택: 바닥을 20/24→8/10px(점)로 낮춰, 맞춤×0.5 는 이제 바닥이 아니라 "여전히 비례
- * 구간"(15px)이 되고, 바닥은 훨씬 더 축소해야(맞춤×0.1) 닿는다 — §9 뒷부분(맞춤×0.5·맞춤×0.1)이
- * 전·후를 그대로 보여준다.
- * ══════════════════════════════════════════════════════════════════ */
-console.log("\n[⑨ 비경계 전체 맞춤 — computeFitZoom() 실측]");
-PDF.setDeckCrop(null, 1);
-const origContentSize = MapCtrl._contentSize;
-MapCtrl._contentSize = () => ({ w: 4000, h: 3000 }); // 큰 PDF 흉내(viewport 375x812 대비 매우 큼)
-const fitZ9 = MapCtrl.computeFitZoom();
-const expFitZ9 = Math.min(375 / 4000, 812 / 3000) * MapCtrl.FIT_PAD;
-ok(near(fitZ9, expFitZ9, 1e-6), `computeFitZoom()=${fitZ9.toFixed(4)} = min(vw/w,vh/h)*FIT_PAD=${expFitZ9.toFixed(4)}(실제 재현의 zoom≈0.16 과 같은 크기 자릿수)`);
-State.zoom = fitZ9; // "방금 F(화면맞춤)을 눌렀다"
-const px9fit = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-ok(near(px9fit, 30, 1), `맞춤 상태(zoom=fitZoom) 화면px=${px9fit.toFixed(2)} ≈ 30px(마스터 "핀이 안 보여" 재현 해소 — 종전엔 zoom=0.16 이 바닥 14px 에 깔렸었다)`);
-State.zoom = fitZ9 * 2; // 맞춤 대비 2배 확대
-const px9x2 = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-ok(near(px9x2, MapCtrl.PIN_MAX_PX, 1e-6), `맞춤×2 확대 화면px=${px9x2.toFixed(2)} = 상한 ${MapCtrl.PIN_MAX_PX}px 에서 멈춤("비례해서 커지다가 최대 56px")`);
-State.zoom = fitZ9 * 0.5; // 맞춤 대비 0.5배 축소 — [전] 종전 바닥(20/24px)에 깔렸던 지점
-const px9half = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-ok(near(px9half, 15, 0.1), `맞춤×0.5 축소 화면px=${px9half.toFixed(2)} ≈ 15px(=30×0.5) — [후] 바닥(8px)이 아니라 여전히 비례 구간("핀 머리가 너무 크게 보이지 않게", 종전엔 여기서 바닥 20px 에 깔려 비례가 깨졌었다)`);
-State.zoom = fitZ9 * 0.1; // 맞춤 대비 더 축소(×0.1) — 이제야 점 바닥에 닿는다
-const px9tiny = MapCtrl.pinScreenScale() * MapCtrl.PIN_NATIVE_PX;
-ok(near(px9tiny, MapCtrl.PIN_MIN_PX_MOUSE, 1e-6), `맞춤×0.1 축소 화면px=${px9tiny.toFixed(2)} = 점 바닥 ${MapCtrl.PIN_MIN_PX_MOUSE}px 에서 멈춤(종전 20px 보다 훨씬 작게 허용 — 도면과 비례가 더 오래 유지된다)`);
-ok(px9tiny < MapCtrl.LABEL_HIDE_PX, `맞춤×0.1 화면px=${px9tiny.toFixed(2)} < LABEL_HIDE_PX(${MapCtrl.LABEL_HIDE_PX}) — "자동" 옵션이면 번호 숨김 대상(11_UI.js/23c_PinSizePrefs.js, p133 §M 에서 실제 토글 검증)`);
-MapCtrl._contentSize = origContentSize; // 원복(이후 구역 테스트에 영향 없게)
-
-console.log(MUT ? `\n[MUT=${MUT}] 의도적 되돌림 — 위 단언 중 최소 1개는 FAIL 이어야 정상(뮤테이션이 진짜로 잡혔다는 증거)` : "");
+console.log(MUT ? `\n[MUT=${MUT}] 의도적 되돌림 — 위 단언 중 최소 1개는 FAIL 이어야 정상` : "");
+console.log(failed ? `\n❌ p159 ${failed}건 FAIL` : "\n✅ p159 전체 PASS");
 process.exit(failed ? 1 : 0);

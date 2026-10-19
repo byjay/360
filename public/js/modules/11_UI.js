@@ -2196,7 +2196,7 @@
       const co = this.Leader.calloutOf(pin);
       const t = this.$("map-transform");
       const inv = (typeof MapCtrl !== "undefined" && MapCtrl.pinScreenScale) ? MapCtrl.pinScreenScale() : 1;
-      const geo = this.Leader.geometry(pin, co, t && t.offsetWidth, t && t.offsetHeight, inv, State.zoom || 1);
+      const geo = this.Leader.geometry(pin, co, t && t.offsetWidth, t && t.offsetHeight, inv, (typeof MapCtrl !== "undefined" && MapCtrl.parentScale) ? MapCtrl.parentScale() : (State.zoom || 1));
       path.setAttribute("d", geo.d);
       path.setAttribute("stroke-width", geo.strokePx.toFixed(2));
       arrow.setAttribute("points", geo.points);

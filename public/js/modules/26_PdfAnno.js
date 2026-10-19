@@ -153,7 +153,7 @@
     updateLineScale() {
       const svg = document.getElementById("anno-svg");
       if (!svg) return;
-      const s = (typeof MapCtrl !== "undefined" && MapCtrl.lineScreenScale) ? MapCtrl.lineScreenScale(0.4) : 1;
+      const s = (typeof MapCtrl !== "undefined" && MapCtrl.lineScreenScale) ? MapCtrl.lineScreenScale(0.4, svg) : 1; // [WO 20261019-pinpx] viewBox·상위 zoom 상쇄
       if (svg.style && typeof svg.style.setProperty === "function") svg.style.setProperty("--anno-scale", s.toFixed(3));
     },
     _render() {

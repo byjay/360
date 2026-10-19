@@ -1491,6 +1491,8 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transform-origin: 50% 100%;
 }
 /* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭.
+   [WO 20261019-pinpx] 역스케일 = 1/--pin-screen-k(= --pin-scale × 상위 scale(zoom), MapCtrl._applyPinBillboard) —
+   종전 1/--pin-scale 은 상위 #map-transform scale(zoom) 을 빠뜨려 화면 44×zoom px 였다(p172 CDP 실측).
    [WO 20261019-pinscale4] scale(calc(1/var(--pin-scale))) 로 역스케일 — ::after 는 .pin-marker
    의 자손 렌더이므로 부모 transform(scale(var(--pin-scale)))이 적용된 뒤 그려진다. 역스케일을
    안 곱하면 핀이 작아질수록(바닥 8px까지) 탭 영역도 같이 줄어 44px 보장이 깨진다(마스터
@@ -1498,7 +1500,7 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .pin-marker::after {
   content: ""; position: absolute; left: 50%; top: 0;
   width: 44px; height: 44px;
-  transform: translate(-50%, -22px) scale(calc(1 / var(--pin-scale, 1)));
+  transform: translate(-50%, -22px) scale(calc(1 / var(--pin-screen-k, 1)));
   pointer-events: auto; z-index: -1;
 }
 /* [WO 20261019-pinscale4] 핀 번호(지도 위 핀 머리 숫자) 표시 옵션 — PinLabelPrefs(23c_PinSizePrefs.js)
