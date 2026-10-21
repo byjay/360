@@ -57,9 +57,18 @@
      폴더 핸들 영속화: 새 IndexedDB 스토어/DB버전 업그레이드 없이 SyncQueue.saveDraft/loadDraft
      (05_SyncQueue.js DRAFT_STORE, 기존 스토어 재사용)를 재사용한다 — FileSystemDirectoryHandle 은
      구조적 복제(structured clone) 가능해 기존 draft 저장경로에 그대로 담긴다(§5 사다리).
+
+     🔴 [WO 20261022-flsfolder · 지휘자 발주] "FLS 폴더(정합된 스캔) 경로만 주면 거기서 360 파노라마를
+     추출해서 체크보드 번호와 FLS(스캔) 번호를 매칭해 그 번호 핀에 360 사진을 붙여라." — 열거 대상 확장자에
+     .e57 를 추가하고(매칭 자체는 기존 isMatch/findMatches 불변 — 번호 비교는 파일명만 본다), **매칭되어
+     실제 등록될 파일에만** 등록 직전 단계(_materializeFile)에서 09_FLS(FLS._parseE57 grid:true) +
+     39_FlsPano(fromGrid/padToEquirect/toJpegBlob, SoT — 재구현 금지) 로 변환해 일반 이미지 등록 경로에
+     그대로 태운다. manifest 상 09_FLS·39_FlsPano 가 60 보다 앞이라 전역 참조 가능. 구조화 격자(rowIndex/
+     columnIndex) 없는 E57·*.fls 원본 디렉터리는 조용히 건너뛰지 않고 사유를 결과에 남긴다(§10-no-hardcoding
+     "조용한 실패가 최악").
   ══════════════════════════════════════════════════════════════ */
   const PhotoFolder = {
-    _EXT_RE: /\.(jpe?g|png|heic)$/i,
+    _EXT_RE: /\.(jpe?g|png|heic|e57)$/i,
     _decks: null,          // Map<deckKey, {mode,dirHandle,fallbackFiles,folderLabel,fileCount,permGranted,restored,restoring}>
     _pickTargetKey: null,  // 폴백(webkitdirectory) change 이벤트가 어느 구역 키를 겨냥한 pickFolder() 호출인지
     _afterPick: null,      // 폴백 change 완료 후 1회 콜백(Deck Manager 행 갱신용)
@@ -120,7 +129,7 @@
       return fb === pn;
     },
 
-    /** 대상 확장자(jpg/jpeg/png/heic) + 번호 일치 항목만. entries: [{name,...}]. 순수 함수. */
+    /** 대상 확장자(jpg/jpeg/png/heic/e57) + 번호 일치 항목만. entries: [{name,...}]. 순수 함수. */
     findMatches(pinNo, entries, existingNumbers) {
       return (entries || []).filter((e) => e && e.name && this._EXT_RE.test(e.name) && this.isMatch(pinNo, e.name, existingNumbers));
     },
@@ -238,7 +247,7 @@
       const input = document.createElement("input");
       input.type = "file"; input.multiple = true; input.id = "photofolder-fallback-input";
       input.setAttribute("webkitdirectory", "");
-      input.setAttribute("accept", "image/*");
+      input.setAttribute("accept", "image/*,.e57");
       input.style.display = "none";
       input.addEventListener("change", (e) => {
         const files = Array.from(e.target.files || []);
@@ -459,6 +468,55 @@
       return null;
     },
 
+    /* ══ E57(정합 스캔) → 360 사진 변환(등록 직전, 매칭된 파일만) ══════════════════════ */
+
+    _isE57(name) { return /\.e57$/i.test(String(name || "")); },
+
+    /** entry 가 .e57 이면 09_FLS(_parseE57 grid:true) + 39_FlsPano(fromGrid/padToEquirect/toJpegBlob)
+     *  로 변환해 등록용 File(jpg) 로 바꾼다. 일반 이미지(jpg/png/heic)는 그대로 통과.
+     *  구조화 격자가 없으면 조용히 건너뛰지 않고 사유를 돌려준다(§10-no-hardcoding).
+     *  @returns {Promise<{ok:boolean, file?:File, reason?:string}>} */
+    async _materializeFile(entry) {
+      const file = await entry.getFile();
+      if (!this._isE57(entry.name)) return { ok: true, file: file };
+      try {
+        if (typeof FLS === "undefined" || !FLS._parseE57) return { ok: false, reason: "E57 파서(FLS)를 찾지 못했습니다" };
+        if (typeof FlsPano === "undefined" || !FlsPano.fromGrid) return { ok: false, reason: "FlsPano 모듈을 찾지 못했습니다" };
+        const buf = await file.arrayBuffer();
+        const parsed = FLS._parseE57(buf, { grid: true });
+        if (!parsed || !parsed.grid) return { ok: false, reason: "구조화 격자 없음 — SCENE 에서 'Ordered/구조화' 로 내보내기 필요" };
+        const canvas = FlsPano.fromGrid(parsed.grid);
+        const padded = FlsPano.padToEquirect(canvas, FlsPano.TOP_DEG, FlsPano.BOTTOM_DEG);
+        const blob = await FlsPano.toJpegBlob(padded, 0.92);
+        const jpgName = entry.name.replace(/\.e57$/i, "") + ".jpg";
+        return { ok: true, file: new File([blob], jpgName, { type: "image/jpeg" }) };
+      } catch (e) {
+        return { ok: false, reason: "E57 추출 실패: " + ((e && e.message) || e) };
+      }
+    },
+
+    /** 폴더 안의 *.fls 디렉터리(원본 미처리 스캔 스트림 — 직접 판독 불가) 감지, 안내문 1개(숨기지 않음).
+     *  handle 모드: FileSystemDirectoryHandle.values() 의 kind==="directory" 중 이름이 .fls 로 끝나는 것.
+     *  fallback(webkitdirectory) 모드: 각 파일의 webkitRelativePath 세그먼트 중 .fls 로 끝나는 디렉터리명. */
+    async _flsDirNotice(key) {
+      key = key || this._activeDeckKey();
+      const e = this._entry(key);
+      const names = new Set();
+      if (e.mode === "handle" && e.dirHandle && e.permGranted !== false) {
+        try {
+          for await (const ent of e.dirHandle.values()) {
+            if (ent.kind === "directory" && /\.fls$/i.test(ent.name)) names.add(ent.name);
+          }
+        } catch (err) {}
+      } else if (e.mode === "fallback" && e.fallbackFiles) {
+        e.fallbackFiles.forEach((f) => {
+          String((f && f.webkitRelativePath) || "").split("/").forEach((seg) => { if (/\.fls$/i.test(seg)) names.add(seg); });
+        });
+      }
+      if (!names.size) return null;
+      return "FLS 원본 " + names.size + "개 발견 — 원본 스캔 스트림은 직접 판독 불가, SCENE 에서 E57 로 내보낸 폴더를 지정하세요";
+    },
+
     /* ══ 등록 1건 — PhotoBatch._uploadOneRow 재사용 ══════════════════════════════════ */
 
     _pinNo(pin) {
@@ -489,8 +547,10 @@
     /** @param {boolean} [overwrite=false] [WO 20261016-multiselect] 기본 false(기존 845a081 동작 불변) —
      *  67_PinMultiPhoto.js(핀 멀티선택 ↔ 파일 멀티선택 등록)만 true 를 넘긴다(§SoT, 업로드 경로는 1곳). */
     async _registerEntry(pin, entry, source, overwrite) {
-      const file = await entry.getFile();
-      const row = { file: file, name: entry.name, sortKey: Number.isFinite(file.lastModified) ? file.lastModified : NaN, timeSource: "폴더 매칭", is360: null, w: 0, h: 0 };
+      const mat = await this._materializeFile(entry);
+      if (!mat.ok) return { status: "fail", reason: mat.reason };
+      const file = mat.file;
+      const row = { file: file, name: file.name, sortKey: Number.isFinite(file.lastModified) ? file.lastModified : NaN, timeSource: "폴더 매칭", is360: null, w: 0, h: 0 };
       await new Promise((resolve) => {
         if (typeof App === "undefined" || !App._detect360) { resolve(); return; }
         App._detect360(file, (is360, w, h) => { row.is360 = is360; row.w = w; row.h = h; resolve(); });
@@ -681,7 +741,7 @@
       };
       const existing = this._existingNumbers(page);
       const peers = this._peers(page);
-      return targets.map((pin) => {
+      const rows = targets.map((pin) => {
         const info = numOf(pin);
         const no = info ? info.no : null;
         if (no == null) return { pin: pin, no: null, key: null, candidates: [], status: "번호없음" };
@@ -695,19 +755,30 @@
         else status = "일치";
         return { pin: pin, no: no, key: mk, candidates: candidates, status: status };
       });
+      try { const notice = await this._flsDirNotice(folderKey); if (notice) rows.notice = notice; } catch (e) {}
+      return rows;
     },
 
-    /** 미리보기에서 "일치" 상태인 행만 순차 등록(동시성 없음 — 진행률 표시 목적).
-     *  이미 사진 있는 핀은 _uploadOneRow 내부 가드로 덮어쓰지 않는다. */
+    /** 미리보기에서 "일치" 상태인 행만 순차 등록(동시성 없음 — 한 번에 1개씩, E57 변환은 메모리 소모가
+     *  커 특히 중요). 이미 사진 있는 핀은 _uploadOneRow 내부 가드로 덮어쓰지 않는다. 실패(예: 구조화
+     *  격자 없는 E57)는 건너뛰고 사유를 failures 에 남긴다(조용한 실패 금지). */
     async runBatchConfirmed(rows, onProgress) {
       const applicable = (rows || []).filter((r) => r.status === "일치");
       let done = 0, skip = 0, fail = 0;
-      for (const r of applicable) {
-        const result = await this._registerEntry(r.pin, r.candidates[0], "폴더일괄");
-        if (result.status === "done") done++; else if (result.status === "skip") skip++; else fail++;
+      const failures = [];
+      for (let i = 0; i < applicable.length; i++) {
+        const r = applicable[i];
+        const entry = r.candidates[0];
+        if (onProgress && this._isE57(entry.name)) {
+          try { onProgress({ stage: "extract", label: "추출 중 " + (i + 1) + "/" + applicable.length, done: done, skip: skip, fail: fail, total: applicable.length }); } catch (e) {}
+        }
+        const result = await this._registerEntry(r.pin, entry, "폴더일괄");
+        if (result.status === "done") done++;
+        else if (result.status === "skip") skip++;
+        else { fail++; failures.push({ no: r.no, name: entry.name, reason: result.reason || "등록 실패" }); }
         if (onProgress) { try { onProgress({ done: done, skip: skip, fail: fail, total: applicable.length }); } catch (e) {} }
       }
-      return { done: done, skip: skip, fail: fail, total: applicable.length, excluded: (rows || []).length - applicable.length };
+      return { done: done, skip: skip, fail: fail, total: applicable.length, excluded: (rows || []).length - applicable.length, failures: failures };
     },
 
     /* ══ 구역별 폴더 관리 화면(JS 생성 모달) ══════════════════════════════════════════ */
@@ -812,10 +883,11 @@
       this._lastBatchRows = rows;
       document.getElementById("photofolder-batchprev-title").textContent = t.name + " — 일괄 등록 미리보기(" + rows.length + "건 대상)";
       const body = document.getElementById("photofolder-batchprev-rows");
+      const noticeHtml = rows.notice ? ('<div style="padding:8px;color:#9a4a00;font-weight:600;border-bottom:1px solid #eee;">' + this._esc(rows.notice) + '</div>') : "";
       if (!rows.length) {
-        body.innerHTML = '<div style="padding:10px;color:#444;">사진 없는 핀이 없습니다</div>';
+        body.innerHTML = noticeHtml + '<div style="padding:10px;color:#444;">사진 없는 핀이 없습니다</div>';
       } else {
-        body.innerHTML = rows.map((r) => {
+        body.innerHTML = noticeHtml + rows.map((r) => {
           const fname = r.candidates.length === 1 ? r.candidates[0].name : (r.candidates.length > 1 ? r.candidates.map((c) => c.name).join(", ") : "-");
           const color = r.status === "일치" ? "#1a7f37" : (r.status === "없음" ? "#767676" : "#9a4a00");
           return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-bottom:1px solid #eee;color:#111;">'
@@ -833,12 +905,13 @@
         confirmBtn.disabled = true;
         const summary = await this.runBatchConfirmed(rows, (p) => {
           const el = document.getElementById("photofolder-batchprev-progress");
-          if (el) el.textContent = "진행 " + p.done + "/" + p.total + " (건너뜀 " + p.skip + " · 실패 " + p.fail + ")";
+          if (el) el.textContent = p.label || ("진행 " + p.done + "/" + p.total + " (건너뜀 " + p.skip + " · 실패 " + p.fail + ")");
         });
         modal.classList.add("hidden");
         try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
         try { if (typeof PhotoBatch !== "undefined" && PhotoBatch._markUnsaved) PhotoBatch._markUnsaved(); } catch (e) {}
-        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("일괄 등록 완료 " + summary.done + "건 · 제외 " + summary.excluded + "건" + (summary.fail ? (" · 실패 " + summary.fail) : ""));
+        const failMsg = (summary.failures && summary.failures.length) ? (" · 실패 " + summary.failures.map((f) => f.name + "(" + f.reason + ")").join(", ")) : (summary.fail ? (" · 실패 " + summary.fail) : "");
+        if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("일괄 등록 완료 " + summary.done + "건 · 제외 " + summary.excluded + "건" + failMsg);
       };
       modal.classList.remove("hidden");
     }
