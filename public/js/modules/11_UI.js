@@ -921,6 +921,28 @@
     _isEditable(t) {
       return !!(t && t.closest && t.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
     },
+    /** [WO 20261022-singleattach R3] 탭 좌표에 겹친 핀 마커가 여럿이면(점 마커 탭패드 겹침) 브라우저
+     *  hit-test 가 돌려준 타깃(topmost, DOM 적층 순서)이 아니라 화면 거리가 가장 가까운 핀을 고른다.
+     *  순수 거리계산은 MapCtrl.nearestByRect(SoT) 재사용. elementsFromPoint 미지원(테스트 셸 등)·
+     *  후보 1개 이하면 원래 타깃 pin 그대로(회귀 0). */
+    _resolveTapPin(e, pin) {
+      try {
+        if (typeof document === "undefined" || typeof document.elementsFromPoint !== "function") return pin;
+        const x = e && e.clientX, y = e && e.clientY;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return pin;
+        const hits = document.elementsFromPoint(x, y)
+          .filter((el) => el && el.classList && el.classList.contains("pin-marker") && el.dataset && el.dataset.id);
+        if (hits.length < 2) return pin;
+        const candidates = hits.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { id: el.dataset.id, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+        });
+        const nearestId = (typeof MapCtrl !== "undefined" && MapCtrl.nearestByRect) ? MapCtrl.nearestByRect(candidates, x, y) : null;
+        if (!nearestId || String(nearestId) === String(pin.id)) return pin;
+        const nearPin = (State.pins || []).find((p) => String(p.id) === nearestId);
+        return nearPin || pin;
+      } catch (e2) { return pin; }
+    },
     ctxTargetOf(target, x, y) {
       if (!target || !target.closest) return null;
       const pinEl = target.closest(".pin-marker[data-id], .pin-leader-bubble[data-id], .tree-node-pin[data-pin-id]");
@@ -1978,6 +2000,8 @@
           marker.addEventListener("click", e => {
             e.stopPropagation();
             if (moved) { moved = false; return; } // 드래그 직후 클릭 무시
+            // [WO 20261022-singleattach R3] 겹친 핀 탭패드 — 실제 가장 가까운 핀으로 교체
+            pin = this._resolveTapPin(e, pin);
             if (State.pinEditUnlocked === pin.id) return; // 이동 잠금해제 상태에서는 클릭 무시(드래그 대기)
             // ── [WO 20260929 마스터 정정] 체크보드·사진등록 모드에서 기존 핀 클릭 = 항상 패널
             //   (번호수정·사진/노트 등록 가능). ISO 전환/줌(onPinTap)이 화면을 되돌리던 결함을
@@ -2016,6 +2040,8 @@
         } else {
           marker.addEventListener("click", e => {
             e.stopPropagation();
+            // [WO 20261022-singleattach R3] 겹친 핀 탭패드 — 실제 가장 가까운 핀으로 교체
+            pin = this._resolveTapPin(e, pin);
             // [마스터 요청] 뷰어도 동일: 첫 탭 → ISO+구역 확대, 둘째 탭 → 360°
             App.onPinTap(pin);
           });

@@ -521,6 +521,20 @@
       }
       return pts;
     },
+    /** [WO 20261022-singleattach R3, 재현: 점 마커 탭 히트영역(PIN_DOT_HIT_MIN_PX 패드)이 겹치면
+     *  브라우저는 DOM 적층(topmost — 보통 나중에 그려진 핀) 하나만 click 타깃으로 주고, 그게
+     *  탭 좌표에서 더 먼 핀일 수 있다. 후보들(각 {id,cx,cy} — 실제 화면 중심) 중 (x,y)에 화면
+     *  거리가 가장 가까운 id를 고르는 순수 함수(SoT) — 11_UI.js._resolveTapPin 이 elementsFromPoint
+     *  로 모은 후보를 넘겨 호출한다. 후보 0개면 null. */
+    nearestByRect(candidates, x, y) {
+      if (!Array.isArray(candidates) || !candidates.length) return null;
+      let bestId = null, bestD = Infinity;
+      for (const c of candidates) {
+        const d = Math.hypot(c.cx - x, c.cy - y);
+        if (d < bestD) { bestD = d; bestId = c.id; }
+      }
+      return bestId;
+    },
     /** [WO 20261022-pinprefs] 설정 슬라이더(PinSizePrefs) 대비 배율 — 기본값(DEFAULT)에서 1,
      *  슬라이더를 올리면 >1·내리면 <1. teardrop(선택/호버)은 이미 pinScreenPx()(§472)가
      *  PinSizePrefs.scale() 을 직접 쓴다 — 점(dot) 지름에도 같은 배율을 입히는 SoT. 미로드

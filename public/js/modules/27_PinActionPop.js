@@ -445,6 +445,23 @@
       const errEl = $("pap-photo-err"), statusEl = $("pap-photo-status");
       if (errEl) errEl.classList.add("hidden");
       if (!file) { if (errEl) { errEl.textContent = "파일을 선택하세요."; errEl.classList.remove("hidden"); } return; }
+      // [WO 20261022-singleattach R1] .fls/.e57 스캔 파일 첨부 — 39_FlsPano.toPanoFile(SoT, 60_PhotoFolder
+      // ._materializeFile 과 동일 변환) 로 360 사진으로 바꿔 아래 일반 등록 경로에 그대로 태운다.
+      if (/\.(fls|e57)$/i.test(file.name || "")) {
+        if (statusEl) statusEl.textContent = "스캔 파일(" + file.name + ") 변환 중…";
+        if (typeof FlsPano === "undefined" || !FlsPano.toPanoFile) {
+          if (errEl) { errEl.textContent = "스캔 변환 모듈을 찾지 못했습니다(FlsPano 미로드)."; errEl.classList.remove("hidden"); }
+          if (statusEl) statusEl.textContent = "";
+          return;
+        }
+        const conv = await FlsPano.toPanoFile(file);
+        if (!conv || !conv.ok) {
+          if (statusEl) statusEl.textContent = "";
+          if (errEl) { errEl.textContent = (conv && conv.reason) || "스캔 변환 실패"; errEl.classList.remove("hidden"); }
+          return; // 조용한 실패 금지 — 이유를 보여주고 중단
+        }
+        file = conv.file;
+      }
       const wantsTheta = this._regCat === "theta";
       if (wantsTheta) {
         if (statusEl) statusEl.textContent = "360 비율 확인 중…";
@@ -485,22 +502,40 @@
           ? PhotoNaming.name(pin, file.name, shotAt, new Set())
           : (pin.label || ("pin_" + pin.id)).replace(/[^a-zA-Z0-9_\-가-힣]/g, "_");
         const imgName = fullName.replace(/\.[^.]+$/, "");
-        const imageId = await Cloud.uploadImage(imgName, dataURL, width, height);
+        // [WO 20261022-singleattach R2] 재현: 종전엔 Cloud.uploadImage 가 오프라인/실패 시 그대로
+        // throw → catch 가 "업로드 실패"만 보여주고 끝(사진 소실). 사진 폴더/촬영 경로(35_PhotoBatch
+        // ._uploadOneRow)가 쓰는 같은 오프라인 큐(SyncQueue.enqueue)·같은 pendingOpId 방식을 재사용
+        // — 큐에 쌓인 op 은 05_SyncQueue._onReconnect→flush→App._onSyncDone 이 재연결 시 자동으로
+        // imageId 로 치환해 핀에 연결한다(이미 전역 동작 — 신규 구현 없음).
+        let imageId = null, pendingOp = null;
+        if (navigator.onLine) {
+          try { imageId = await Cloud.uploadImage(imgName, dataURL, width, height); } catch (e) { imageId = null; }
+        }
+        if (!imageId) {
+          pendingOp = await SyncQueue.enqueue({ kind: "image", name: imgName, image_data: dataURL, width, height });
+          if (!pendingOp) throw new Error("오프라인 저장 실패 — 기기 저장공간 부족");
+        }
         // [WO 20261002-gap 묶음A①] 덮어쓰기 직전, 지금 "현재" 사진을 이력에 적립(SoT — pushHistory).
         if (typeof PhotoNaming !== "undefined" && PhotoNaming.pushHistory) PhotoNaming.pushHistory(pin, "단건등록");
-        pin.imageId = imageId; pin.imageName = imgName; pin.origKey = null; pin.pendingOpId = null; pin.pendingSync = false;
+        pin.imageId = imageId; pin.imageName = imgName; pin.origKey = null;
+        pin.pendingOpId = imageId ? null : pendingOp; pin.pendingSync = !imageId;
         // [지휘자 발주 보강 §4] 표시용 메타(있는 것만 — 지어내지 않음).
         pin.origName = file.name; pin.shotAt = shotAt; pin.shotSrc = shotSrc;
         // [WO 20261001-gps] 사진 등록도 자동 위치 기록 트리거 — EXIF GPS 있으면 위에서 이미 채워졌고(우선),
         // 없으면 기기 GPS로 보강(비동기·실패해도 등록을 막지 않음).
         if (typeof GPS !== "undefined" && GPS.attachToPin) GPS.attachToPin(pin);
         if (wantsTheta) pin.is360 = true; // SoT: 20_App.js:2083 과 동일 필드(신규 필드 도입 금지)
-        if (typeof Cloud !== "undefined") { Cloud._cache = Cloud._cache || {}; Cloud._cache[imageId] = dataURL; }
+        if (typeof Cloud !== "undefined") {
+          Cloud._cache = Cloud._cache || {};
+          Cloud._cache[imageId ? imageId : ("op:" + pendingOp)] = dataURL;
+        }
         // [WO 20261002-gap 묶음A④] 360 원본(풀해상도) 보관 — 보기용(4096px)과 별도로 R2에 백그라운드 업로드.
         if (wantsTheta && typeof SyncQueue !== "undefined" && SyncQueue.keepOriginal) SyncQueue.keepOriginal(pin, file, imageId);
         PinActionPop._commitLocal();
         if (typeof UI !== "undefined") { UI.renderPinsOnMap && UI.renderPinsOnMap(); UI.renderPinList && UI.renderPinList(); }
-        if (statusEl) statusEl.textContent = (wantsTheta ? "360° 사진 등록됨" : "사진 등록됨") + " (미저장 — 저장 버튼으로 서버에 반영하세요)";
+        if (statusEl) statusEl.textContent = imageId
+          ? ((wantsTheta ? "360° 사진 등록됨" : "사진 등록됨") + " (미저장 — 저장 버튼으로 서버에 반영하세요)")
+          : "오프라인 저장됨 — 온라인 복귀 시 자동 업로드됩니다";
         this._renderPhoto(pin, true);
       } catch (e) {
         if (errEl) { errEl.textContent = "업로드 실패: " + (e.message || e); errEl.classList.remove("hidden"); }

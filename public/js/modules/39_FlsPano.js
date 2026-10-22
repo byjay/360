@@ -460,6 +460,45 @@
       return canvas;
     },
 
+    /** [WO 20261022-singleattach R1] 핀 팝업 단건 첨부(27_PinActionPop.js._registerPhotoFile)가 쓰는
+     *  공용 진입점 — .fls/.e57 이면 360 사진으로 변환해 File 을 돌려주고, 그 외 확장자는 그대로
+     *  통과시킨다(SoT — 60_PhotoFolder.js._materializeFile 의 변환 로직과 100% 동일, 신규 구현 금지·
+     *  60 은 다른 팀 점유라 수정하지 않고 이쪽에 추출해 둠. 다음 발주에서 60 도 이 함수를 호출하도록
+     *  바꿀 수 있다). 실패해도 예외를 던지지 않고 {ok:false, reason} 로 사유를 돌려준다(조용한 실패 금지).
+     *  @returns {Promise<{ok:boolean, file?:File, reason?:string}>} */
+    async toPanoFile(file) {
+      const name = (file && file.name) || "";
+      if (/\.fls$/i.test(name)) {
+        try {
+          if (!this.fromFlsOle) return { ok: false, reason: "FlsPano 모듈을 찾지 못했습니다" };
+          const buf = await file.arrayBuffer();
+          const res = await this.fromFlsOle(buf);
+          if (!res || !res.ok) return { ok: false, reason: (res && res.reason) || ".fls 추출 실패" };
+          const blob = await this.toJpegBlob(res.canvas, 0.92);
+          const jpgName = name.replace(/\.fls$/i, "") + ".jpg";
+          return { ok: true, file: new File([blob], jpgName, { type: "image/jpeg" }) };
+        } catch (e) {
+          return { ok: false, reason: ".fls 추출 실패: " + ((e && e.message) || e) };
+        }
+      }
+      if (/\.e57$/i.test(name)) {
+        try {
+          if (typeof FLS === "undefined" || !FLS._parseE57) return { ok: false, reason: "E57 파서(FLS)를 찾지 못했습니다" };
+          const buf = await file.arrayBuffer();
+          const parsed = FLS._parseE57(buf, { grid: true });
+          if (!parsed || !parsed.grid) return { ok: false, reason: "구조화 격자 없음 — SCENE 에서 'Ordered/구조화' 로 내보내기 필요" };
+          const canvas = this.fromGrid(parsed.grid);
+          const padded = this.padToEquirect(canvas, this.TOP_DEG, this.BOTTOM_DEG);
+          const blob = await this.toJpegBlob(padded, 0.92);
+          const jpgName = name.replace(/\.e57$/i, "") + ".jpg";
+          return { ok: true, file: new File([blob], jpgName, { type: "image/jpeg" }) };
+        } catch (e) {
+          return { ok: false, reason: "E57 추출 실패: " + ((e && e.message) || e) };
+        }
+      }
+      return { ok: true, file: file };
+    },
+
     /** canvas → JPEG Blob */
     toJpegBlob(canvas, q) {
       return new Promise((resolve, reject) => {
