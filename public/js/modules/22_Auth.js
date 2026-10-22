@@ -437,6 +437,10 @@
         // [WO 20261007-qrcov] 로그인 완료 → 보류된 QR 딥링크로 복귀(같은 단일 지점). setTimeout 0 = 로그인 경로의
         //   후속 처리(회사 이메일 로그인 done() 의 openApp 등)가 끝난 **뒤** 실행돼 딥링크 화면이 덮이지 않게 한다.
         if (!data.auto && !data.demo) { try { if (typeof DeepLink !== "undefined" && DeepLink.resumePending) setTimeout(() => { Promise.resolve(DeepLink.resumePending()).catch(() => {}); }, 0); } catch (e) {} }
+        // [WO 20261022-smallfixes R1] 로그인 완료 → 기능 플래그를 그제서야 1회 적용(비로그인 401 폭주 방지).
+        //   Firebase·GIS·회사이메일·데모·자동입장 로그인이 모두 refresh() 를 지나므로 이 한 지점에서만 건다(§G-2-5).
+        //   AdminPanels.applyFeaturesToUI() 자체가 같은 토큰 중복 fetch 를 막는다(App.init() 의 최초 호출과 중복되지 않음).
+        try { if (typeof AdminPanels !== "undefined" && AdminPanels.applyFeaturesToUI) AdminPanels.applyFeaturesToUI(); } catch (e) {}
         // [p113] 이 세션이 Firebase(Google) 로그인인지 판별 — 로컬(local-)·데모·자동입장 토큰은 제외.
         //   § refresh() 는 로그인·복원 경로가 모두 거치는 한 지점이라 여기서만 판정한다.
         const looksFirebase = !data.auto && !data.demo && this.firebaseEnabled &&

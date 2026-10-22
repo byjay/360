@@ -26,6 +26,19 @@
       $("pwc-submit") && $("pwc-submit").addEventListener("click", () => this._submitPwChange());
       const pwc2 = $("pwc-new2");
       if (pwc2) pwc2.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this._submitPwChange(); } });
+      // [WO 20261022-smallfixes R3] 비밀번호 입력은 각자 <form> 으로 감싸(DOM 경고 제거) — 제출해도
+      //   페이지 이동 없이 기존 버튼 핸들러와 동일한 동작만 실행한다(preventDefault, §G-2-5 한 지점).
+      this._bindPwForm("cg-pw-form", () => {});
+      this._bindPwForm("cg-pw2-form", () => this._verify());
+      this._bindPwForm("cg-login-pw-form", () => this._login());
+      this._bindPwForm("pwc-new-form", () => {});
+      this._bindPwForm("pwc-new2-form", () => this._submitPwChange());
+    },
+    /** 비밀번호 <form> 제출 → 페이지 이동 금지 + 지정된 기존 동작만 실행(§G-2-5 공유 바인딩 지점). */
+    _bindPwForm(formId, onSubmit) {
+      const f = document.getElementById(formId);
+      if (!f) return;
+      f.addEventListener("submit", (e) => { e.preventDefault(); try { onSubmit(); } catch (err) {} });
     },
     _projectId() {
       try { return (typeof Projects !== "undefined" && Projects.currentProject) ? Projects.currentProject.id : null; }

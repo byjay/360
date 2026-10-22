@@ -17,6 +17,14 @@
       $("invite-gate-cancel") && $("invite-gate-cancel").addEventListener("click", () => this.close());
       const pw2 = $("inv-pw2");
       if (pw2) pw2.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.accept(); } });
+      // [WO 20261022-smallfixes R3] 비밀번호 입력을 각자 <form> 으로 감싸(DOM 경고 제거) — 제출해도
+      //   페이지 이동 없이 기존 accept() 만 실행한다(preventDefault).
+      const bindPwForm = (formId, onSubmit) => {
+        const f = $(formId);
+        if (f) f.addEventListener("submit", (e) => { e.preventDefault(); try { onSubmit(); } catch (err) {} });
+      };
+      bindPwForm("inv-pw-form", () => {});
+      bindPwForm("inv-pw2-form", () => this.accept());
       return this.detect();
     },
 

@@ -1748,14 +1748,18 @@
             <span class="company-label">부서 / 소속</span>
             <input id="cg-dept" class="company-input" type="text" placeholder="예: 설계1팀 / 해양플랜트사업부" autocomplete="organization-title" />
           </label>
-          <label class="company-field">
-            <span class="company-label">비밀번호 (8자 이상)</span>
-            <input id="cg-pw" class="company-input" type="password" placeholder="새 비밀번호" autocomplete="new-password" />
-          </label>
-          <label class="company-field">
-            <span class="company-label">비밀번호 확인</span>
-            <input id="cg-pw2" class="company-input" type="password" placeholder="비밀번호 확인" autocomplete="new-password" />
-          </label>
+          <form id="cg-pw-form" style="display:contents">
+            <label class="company-field">
+              <span class="company-label">비밀번호 (8자 이상)</span>
+              <input id="cg-pw" class="company-input" type="password" placeholder="새 비밀번호" autocomplete="new-password" />
+            </label>
+          </form>
+          <form id="cg-pw2-form" style="display:contents">
+            <label class="company-field">
+              <span class="company-label">비밀번호 확인</span>
+              <input id="cg-pw2" class="company-input" type="password" placeholder="비밀번호 확인" autocomplete="new-password" />
+            </label>
+          </form>
           <button id="cg-resend" class="company-link-btn" type="button">코드 재발송</button>
           <button id="cg-create" class="company-primary-btn" type="button">가입 완료</button>
         </div>
@@ -1767,10 +1771,12 @@
           <span class="company-label">회사 이메일 주소</span>
           <input id="cg-login-email" class="company-input" type="email" placeholder="you@yourcompany.com" autocomplete="email" />
         </label>
-        <label class="company-field">
-          <span class="company-label">비밀번호</span>
-          <input id="cg-login-pw" class="company-input" type="password" placeholder="비밀번호" autocomplete="current-password" />
-        </label>
+        <form id="cg-login-pw-form" style="display:contents">
+          <label class="company-field">
+            <span class="company-label">비밀번호</span>
+            <input id="cg-login-pw" class="company-input" type="password" placeholder="비밀번호" autocomplete="current-password" />
+          </label>
+        </form>
         <button id="cg-login-btn" class="company-primary-btn" type="button">로그인</button>
       </div>
 
@@ -2272,8 +2278,12 @@
     <div class="admin-gate-card">
       <h2 id="pwc-title" class="admin-gate-title">비밀번호 변경</h2>
       <p class="admin-gate-sub">비밀번호 변경이 필요한 계정입니다. 새 비밀번호를 설정하세요.</p>
-      <input id="pwc-new" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 (4자 이상)" aria-label="새 비밀번호" />
-      <input id="pwc-new2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인" style="margin-top:10px" />
+      <form id="pwc-new-form" style="display:contents">
+        <input id="pwc-new" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 (4자 이상)" aria-label="새 비밀번호" />
+      </form>
+      <form id="pwc-new2-form" style="display:contents">
+        <input id="pwc-new2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인" style="margin-top:10px" />
+      </form>
       <div id="pwc-error" class="admin-gate-error hidden"></div>
       <div class="admin-gate-actions">
         <button id="pwc-submit" class="admin-gate-btn primary full" type="button">변경하고 시작</button>
@@ -2290,8 +2300,12 @@
       <div id="inv-existing-msg" class="par-pending-msg hidden">이미 가입된 계정입니다. 이름·비밀번호를 다시 입력하지 않아도 됩니다.</div>
       <div id="inv-newacct-fields">
         <input id="inv-name" class="admin-gate-input" type="text" autocomplete="name" placeholder="이름 (필수)" aria-label="이름" />
-        <input id="inv-pw" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="비밀번호 (8자 이상, 필수)" aria-label="비밀번호" style="margin-top:10px" />
-        <input id="inv-pw2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="비밀번호 확인" aria-label="비밀번호 확인" style="margin-top:10px" />
+        <form id="inv-pw-form" style="display:contents">
+          <input id="inv-pw" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="비밀번호 (8자 이상, 필수)" aria-label="비밀번호" style="margin-top:10px" />
+        </form>
+        <form id="inv-pw2-form" style="display:contents">
+          <input id="inv-pw2" class="admin-gate-input" type="password" autocomplete="new-password" placeholder="비밀번호 확인" aria-label="비밀번호 확인" style="margin-top:10px" />
+        </form>
       </div>
       <div id="inv-error" class="admin-gate-error hidden"></div>
       <div class="admin-gate-actions">

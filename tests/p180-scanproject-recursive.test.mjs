@@ -123,18 +123,22 @@ let entries;
 }
 
 /* ══════════════════════════════════════════════════════════════
-   ② _scanSummaryLine — "스캔 2개 발견" + "360 사진 1개"
+   ② _scanSummaryLine — "스캔 2개 발견" + "이미지 1개(번호 없음 — 매칭 제외 1개)"
+   [WO 20261022-smallfixes R2] @preview.jpg 는 확장자만으로 360 여부를 알 수 없고(2:1 판정 전)
+   파일명 끝에 숫자가 없어 매칭 대상도 아니다 — "360 사진"이라 부르지 않고 그 사실을 그대로 드러낸다.
    ══════════════════════════════════════════════════════════════ */
 console.log("\n[② _scanSummaryLine — 요약 1줄]");
 {
   const { PF } = loadPF(PF_SRC);
   const line = PF._scanSummaryLine(entries);
-  ok(/스캔 2개 발견/.test(line), "②a 스캔 2개 발견 — " + line);
+  ok(/스캔 2개\(\.fls\/\.e57\) 발견/.test(line), "②a 스캔 2개(.fls/.e57) 발견 — " + line);
   ok(/위치/.test(line), "②b 위치 표기 포함 — " + line);
-  ok(/360 사진 1개/.test(line), "②c 360 사진 1개 — " + line);
+  ok(/이미지 1개/.test(line), "②c 이미지 1개(360 이라 단정하지 않음) — " + line);
+  ok(!/360 사진/.test(line), "②c-2 '360 사진' 문구를 쓰지 않는다(2:1 미판정) — " + line);
+  ok(/번호 없음 — 매칭 제외 1개/.test(line), "②e @preview.jpg(번호 없음) → 매칭 제외 1개 안내 — " + line);
 
   const zero = PF._scanSummaryLine([]);
-  ok(zero === "이 폴더 하위에 스캔(.fls/.e57)·360 사진이 없습니다", "②d 0건이면 정직한 안내문 — " + zero);
+  ok(zero === "이 폴더 하위에 스캔(.fls/.e57)·이미지가 없습니다", "②d 0건이면 정직한 안내문 — " + zero);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -162,7 +166,7 @@ console.log("\n[④ previewBatch — rows.scanSummary + 10번 핀 일치]");
   const rows = await PF.previewBatch("__root__", null);
   ok(rows.length === 1 && rows[0].status === "일치" && rows[0].candidates[0].name === "scan_10.fls",
     "④a previewBatch: 10번 핀 ↔ scan_10.fls 일치 — " + JSON.stringify(rows.map((r) => r.status)));
-  ok(typeof rows.scanSummary === "string" && /스캔 2개 발견/.test(rows.scanSummary), "④b rows.scanSummary 부착 — " + rows.scanSummary);
+  ok(typeof rows.scanSummary === "string" && /스캔 2개\(\.fls\/\.e57\) 발견/.test(rows.scanSummary), "④b rows.scanSummary 부착 — " + rows.scanSummary);
 }
 
 /* ══════════════════════════════════════════════════════════════

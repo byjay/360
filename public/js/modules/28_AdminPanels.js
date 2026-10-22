@@ -2,8 +2,14 @@
     _features: {},           // 현재 적용된 기능 토글 상태
     _featScope: "*",
 
-    /** 앱 시작 시 한 번 호출: 현재 적용 기능을 불러와 본문에 반영 */
+    _featuresFetchedFor: null,   // [WO 20261022-smallfixes R1] 이 토큰으로 이미 조회 완료 — 중복 fetch 방지
+    /** 앱 시작/로그인 완료 시 호출: 현재 적용 기능을 불러와 본문에 반영.
+     *  [WO 20261022-smallfixes R1] 비로그인(Auth.idToken 없음)이면 401 1건 + 콘솔 error 만 낼 뿐이라
+     *  요청 자체를 생략한다 — 로그인 완료 시점(Auth.refresh() 단일 지점, §G-2-5)에 다시 불려 1회 적용된다. */
     async applyFeaturesToUI() {
+      if (!Auth.idToken) { this._reflect(); return; }
+      if (this._featuresFetchedFor === Auth.idToken) { this._reflect(); return; }
+      this._featuresFetchedFor = Auth.idToken;
       try {
         const r = await fetch("/api/app-settings?scope=*&key=features", { headers: Auth.headers() });
         if (!r.ok) return;

@@ -382,19 +382,26 @@
     },
 
     /** 미리보기 상단 요약 1줄 — "스캔 N개 발견 (위치: …)" 또는 0건이면 정직하게 "없습니다"
-     *  (§10-no-hardcoding, 조용한 0건 금지). 순수(entries: _listEntries() 결과). */
+     *  (§10-no-hardcoding, 조용한 0건 금지). 순수(entries: _listEntries() 결과).
+     *  [WO 20261022-smallfixes R2] 확장자(jpg/png/heic)만으로는 360인지 알 수 없다(2:1 비율 판정 전) —
+     *  "360 사진"이라 부르지 않고 사실만 "이미지"로 표기한다(프로젝트 썸네일 @preview.jpg 등 비360 혼재).
+     *  파일명 끝에 숫자가 없는 파일(예: @preview.jpg)은 핀 번호 매칭(_fileDigits) 대상이 아니므로
+     *  "번호 없음 — 매칭 제외"를 함께 알린다(조용한 제외 금지). */
     _scanSummaryLine(entries) {
       const list = entries || [];
       const scans = list.filter((e) => e && /\.(e57|fls)$/i.test(e.name || ""));
       const photos = list.filter((e) => e && /\.(jpe?g|png|heic)$/i.test(e.name || ""));
-      if (!scans.length && !photos.length) return "이 폴더 하위에 스캔(.fls/.e57)·360 사진이 없습니다";
+      if (!scans.length && !photos.length) return "이 폴더 하위에 스캔(.fls/.e57)·이미지가 없습니다";
       const parts = [];
       if (scans.length) {
         const first = scans[0];
         const dir = String(first.relPath || first.name || "").replace(/[^/\\]*$/, "").replace(/[\\/]+$/, "") || "(최상위)";
-        parts.push("스캔 " + scans.length + "개 발견 (위치: " + dir + (scans.length > 1 ? " 등" : "") + ")");
+        parts.push("스캔 " + scans.length + "개(.fls/.e57) 발견 (위치: " + dir + (scans.length > 1 ? " 등" : "") + ")");
       }
-      if (photos.length) parts.push("360 사진 " + photos.length + "개");
+      if (photos.length) {
+        const noNum = photos.filter((e) => this._fileDigits(e.name) == null).length;
+        parts.push("이미지 " + photos.length + "개" + (noNum ? " (번호 없음 — 매칭 제외 " + noNum + "개)" : ""));
+      }
       return parts.join(" · ");
     },
 
