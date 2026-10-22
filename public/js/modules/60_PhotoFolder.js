@@ -582,35 +582,12 @@
      *  @returns {Promise<{ok:boolean, file?:File, reason?:string}>} */
     async _materializeFile(entry) {
       const file = await entry.getFile();
-      if (this._isFls(entry.name)) {
-        try {
-          if (typeof FlsPano === "undefined" || !FlsPano.fromFlsOle) return { ok: false, reason: "FlsPano 모듈을 찾지 못했습니다" };
-          const buf = await file.arrayBuffer();
-          const res = await FlsPano.fromFlsOle(buf);
-          if (!res || !res.ok) return { ok: false, reason: (res && res.reason) || ".fls 추출 실패" };
-          const blob = await FlsPano.toJpegBlob(res.canvas, 0.92);
-          const jpgName = entry.name.replace(/\.fls$/i, "") + ".jpg";
-          return { ok: true, file: new File([blob], jpgName, { type: "image/jpeg" }) };
-        } catch (e) {
-          return { ok: false, reason: ".fls 추출 실패: " + ((e && e.message) || e) };
-        }
-      }
-      if (!this._isE57(entry.name)) return { ok: true, file: file };
-      try {
-        if (typeof FLS === "undefined" || !FLS._parseE57) return { ok: false, reason: "E57 파서(FLS)를 찾지 못했습니다" };
-        if (typeof FlsPano === "undefined" || !FlsPano.fromGrid) return { ok: false, reason: "FlsPano 모듈을 찾지 못했습니다" };
-        const buf = await file.arrayBuffer();
-        const parsed = FLS._parseE57(buf, { grid: true });
-        if (!parsed || !parsed.grid) return { ok: false, reason: "구조화 격자 없음 — SCENE 에서 'Ordered/구조화' 로 내보내기 필요" };
-        const canvas = FlsPano.fromGrid(parsed.grid);
-        const padded = FlsPano.padToEquirect(canvas, FlsPano.TOP_DEG, FlsPano.BOTTOM_DEG);
-        const blob = await FlsPano.toJpegBlob(padded, 0.92);
-        const jpgName = entry.name.replace(/\.e57$/i, "") + ".jpg";
-        return { ok: true, file: new File([blob], jpgName, { type: "image/jpeg" }) };
-      } catch (e) {
-        return { ok: false, reason: "E57 추출 실패: " + ((e && e.message) || e) };
-      }
+      if (!this._isFls(entry.name) && !this._isE57(entry.name)) return { ok: true, file: file };
+      // SoT: 변환은 39_FlsPano.toPanoFile 한 곳(핀 팝업 단건 첨부와 공유) — 중복 구현 금지
+      if (typeof FlsPano === "undefined" || !FlsPano.toPanoFile) return { ok: false, reason: "FlsPano 모듈을 찾지 못했습니다" };
+      return FlsPano.toPanoFile(file);
     },
+
 
     /** 폴더 안의 *.fls 디렉터리(원본 미처리 스캔 스트림 — 직접 판독 불가) 감지, 안내문 1개(숨기지 않음).
      *  handle 모드: FileSystemDirectoryHandle.values() 의 kind==="directory" 중 이름이 .fls 로 끝나는 것.
