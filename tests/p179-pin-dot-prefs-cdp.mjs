@@ -65,12 +65,18 @@ const PROBE179 = String.raw`(function(){
     }
     return n;
   };
+  // [WO 20261022-pinprefs 추가 §3] 실 index.html 의 #settings-modal 골격(#settings-loggedin >
+  // #settings-designer-actions > #chk-leader360) 축소 재현 — settingsDisplayPrefsHost() 가 찾는
+  // #settings-loggedin 이 이 harness 의 viewportBlock() 슬라이스엔 없어 직접 만든다.
   P.injectSettingsAnchor = function(){
-    if (document.getElementById('chk-leader360')) return;
-    var row = document.createElement('label');
-    row.className = 'settings-leader-toggle-row';
-    row.innerHTML = '<input id="chk-leader360" type="checkbox" />';
-    document.body.appendChild(row);
+    if (document.getElementById('settings-loggedin')) return;
+    var inner = document.createElement('div');
+    inner.id = 'settings-loggedin';
+    var actions = document.createElement('div');
+    actions.id = 'settings-designer-actions';
+    actions.innerHTML = '<label class="settings-leader-toggle-row" for="chk-leader360"><input id="chk-leader360" type="checkbox" /></label>';
+    inner.appendChild(actions);
+    document.body.appendChild(inner);
   };
 })();`;
 

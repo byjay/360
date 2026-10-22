@@ -43,16 +43,15 @@
     /** 배율(MIN~MAX) ↔ 기준px(PX_NATIVE 곱) 환산 — 슬라이더는 px 로 보여주고 저장은 배율 그대로. */
     _toPx(ratio) { return Math.round(ratio * this.PX_NATIVE); },
     _fromPx(px) { return Number(px) / this.PX_NATIVE; },
-    /** 설정 패널 슬라이더 런타임 주입 — index.html(타 팀 점유 가능성)을 건드리지 않고, 있는
-     *  #chk-leader360 행(48_GPS.initToggle 과 같은 자리) 바로 뒤에 추가한다.
+    /** 설정 패널 슬라이더 런타임 주입 — index.html(타 팀 점유 가능성)을 건드리지 않고
+     *  settingsDisplayPrefsHost()(이 파일 하단, PinLabelPrefs 와 공유)가 만든 "보기 설정" 구역에 넣는다.
      *  [WO 20261019-pinscale3] 슬라이더 단위를 "배율×"에서 "기준px"(맞춤 상태 화면 핀 높이)로 — 저장은
      *  그대로 배율(마이그레이션 불필요, _toPx/_fromPx 로 표시만 환산). */
     initSlider() {
-      const base = document.getElementById("chk-leader360");
-      const row = base && base.closest ? base.closest(".settings-leader-toggle-row") : null;
-      if (!row || !row.parentNode || document.getElementById("pinsize-slider")) return;
+      const host = settingsDisplayPrefsHost();
+      if (!host || document.getElementById("pinsize-slider")) return;
       const wrap = document.createElement("div");
-      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-top:10px;";
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
       const labelRow = document.createElement("div");
       labelRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
       const label = document.createElement("span");
@@ -67,13 +66,39 @@
       slider.value = String(this._toPx(this.get()));
       val.textContent = slider.value + "px";
       wrap.appendChild(labelRow); wrap.appendChild(slider);
-      row.parentNode.insertBefore(wrap, row.nextSibling);
+      host.appendChild(wrap);
       slider.addEventListener("input", () => {
         val.textContent = slider.value + "px";
         this.set(this._fromPx(slider.value));
       });
     }
   };
+
+  /** [WO 20261022-pinprefs 추가 §3] 핀 크기·번호 표시 — "보는 사람이 옵션으로 선택"(마스터 원문)해야
+   *  하므로 권한 블록 밖에 둔다. 종전엔 #chk-leader360(디자이너 전용 #settings-designer-actions 안,
+   *  index.html Auth.isDesigner 로 .hidden 토글, 24_Settings.js render()) 바로 뒤에 끼워 넣어, 비로그인
+   *  공유 열람 링크(/v/<토큰>, readonly 세션)에서는 #btn-settings 는 보여도 이 컨트롤이 든 블록 전체가
+   *  display:none 이라 DOM엔 있어도 폭 0(지휘자 실측 — tests/p179b "sliderVis:false"). #settings-loggedin
+   *  (로그인 여부만 보는 블록, 디자이너 전용 아님 — auto-entry 열람 세션도 Auth.user 가 채워져 여기 든다)
+   *  바로 아래, #settings-designer-actions 와 형제로 "보기 설정" 구역을 만들어 역할과 무관하게 보이게 한다.
+   *  PinSizePrefs.initSlider()·PinLabelPrefs.initToggle() 공용 SoT(같은 호스트 element, 1회만 생성). */
+  function settingsDisplayPrefsHost() {
+    let host = document.getElementById("settings-display-prefs");
+    if (host) return host;
+    const inner = document.getElementById("settings-loggedin");
+    if (!inner) return null; // 로그인 블록 자체가 없음(테스트 셸 등) — 회귀 0(기존처럼 주입 생략)
+    host = document.createElement("div");
+    host.id = "settings-display-prefs";
+    host.style.cssText = "display:flex;flex-direction:column;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(0,0,0,.12);";
+    const title = document.createElement("div");
+    title.textContent = "보기 설정";
+    title.style.cssText = "font-size:12px;font-weight:700;opacity:.65;";
+    host.appendChild(title);
+    const designerActions = document.getElementById("settings-designer-actions");
+    if (designerActions && designerActions.parentNode === inner) inner.insertBefore(host, designerActions.nextSibling);
+    else inner.appendChild(host);
+    return host;
+  }
 
   /* ══════════════════════════════════════════
      PinLabelPrefs — 핀 번호(지도 위 핀 머리 안 숫자) 표시 옵션
@@ -111,14 +136,14 @@
       return px < (typeof MapCtrl !== "undefined" ? MapCtrl.LABEL_HIDE_PX : 16); // auto
     },
     /** 설정 패널 3단 버튼(select 대신 — 터치 44px 보장이 쉽고 현재 선택이 한눈에 보인다).
-     *  PinSizePrefs.initSlider() 와 같은 런타임 주입 패턴(index.html 미수정) — 그 슬라이더 바로 뒤. */
+     *  PinSizePrefs.initSlider() 와 같은 공유 호스트(settingsDisplayPrefsHost, 이 파일 상단) — 권한
+     *  블록 밖이라 비로그인 공유 열람 링크(readonly)에서도 보인다. */
     initToggle() {
-      const slider = document.getElementById("pinsize-slider");
-      const anchor = slider && slider.closest ? slider.closest("div") : null; // pinsize wrap(label+slider)
-      if (!anchor || !anchor.parentNode || document.getElementById("pinlabel-toggle")) return;
+      const host = settingsDisplayPrefsHost();
+      if (!host || document.getElementById("pinlabel-toggle")) return;
       const wrap = document.createElement("div");
       wrap.id = "pinlabel-toggle";
-      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-top:10px;";
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
       const label = document.createElement("span");
       label.textContent = "핀 번호 표시";
       label.style.cssText = "font-size:13px;";
@@ -143,7 +168,7 @@
       };
       buttons.forEach((b) => btnRow.appendChild(b));
       wrap.appendChild(label); wrap.appendChild(btnRow);
-      anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
+      host.appendChild(wrap);
       paint();
     }
   };
