@@ -187,6 +187,7 @@
       let projects = [];
       try {
         const r = await fetch("/api/projects", { headers: Auth.headers() });
+        if (!r.ok) throw new Error("HTTP " + r.status);   // [WO unauth401 R2] 401 을 "0개"로 삼키지 않음
         const j = await r.json();
         projects = j.data || j.results || j || [];
       } catch (e) {}
@@ -215,6 +216,7 @@
         let pmap = {};
         try {
           const rp = await fetch("/api/projects", { headers: Auth.headers() });
+          if (!rp.ok) throw new Error("HTTP " + rp.status);   // [WO unauth401 R2]
           const jp = await rp.json();
           (jp.data || jp.results || jp || []).forEach((p) => { pmap[p.id] = p.name || p.id; });
         } catch (e) {}

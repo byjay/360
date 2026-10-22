@@ -42,7 +42,11 @@
       if (!sel) return;
       const cur = sel.value || "*";
       let projects = [];
-      try { const r = await fetch("/api/projects", { headers: Auth.headers() }); const j = await r.json(); projects = j.data || j.results || j || []; } catch (e) {}
+      try {
+        const r = await fetch("/api/projects", { headers: Auth.headers() });
+        if (!r.ok) throw new Error("HTTP " + r.status);   // [WO unauth401 R2] 401 을 "0개"로 삼키지 않음
+        const j = await r.json(); projects = j.data || j.results || j || [];
+      } catch (e) {}
       sel.innerHTML = '<option value="*">전체 공통(모든 프로젝트)</option>';
       (projects || []).forEach((p) => { const o = document.createElement("option"); o.value = p.id; o.textContent = p.name || p.id; sel.appendChild(o); });
       sel.value = cur;

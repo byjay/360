@@ -768,14 +768,16 @@
     /** 오프라인 큐/드래프트 자동 업로드가 401/403(토큰 만료)로 실패했을 때 호출하는 공유 지점.
      *  App._flushDirtyDrafts(20_App.js) 와 SyncQueue.flush(05_SyncQueue.js) 양쪽에서 호출한다(§G-2-5,
      *  로직 복붙 대신 이 한 곳만 고친다). 데이터(큐/드래프트)는 그대로 보존되고, 세션당 1회만
-     *  안내 + 기존 로그인 게이트를 재사용해 재로그인 동선을 제공한다(신규 UI 없음). */
-    authExpired() {
+     *  안내 + 기존 로그인 게이트를 재사용해 재로그인 동선을 제공한다(신규 UI 없음).
+     *  [WO unauth401] msg 생략 시 업로드 문구(기존 호출부 그대로). 목록 읽기(GET) 401 재사용 호출부는
+     *  자기 문맥에 맞는 문구를 넘긴다 — 토스트 문구만 다르고 게이트 재진입 로직은 한 곳. */
+    authExpired(msg) {
       this._expired = true;
       // [WO 20261010-offmatrix] 배지(32_Offline.updateNetBadge — SyncQueue 구독)를 즉시 "인증 필요"로 — 3초 주기를 기다리는 동안 "업로드 중"으로 보이지 않게
       try { if (typeof SyncQueue !== "undefined" && SyncQueue._emit) SyncQueue._emit(); } catch (e) {}
       if (this._authExpiredNotified) return;
       this._authExpiredNotified = true;
-      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("로그인이 만료돼 업로드하지 못했습니다 — 다시 로그인하면 자동으로 이어서 올립니다", 4000); } catch (e) {}
+      try { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(msg || "로그인이 만료돼 업로드하지 못했습니다 — 다시 로그인하면 자동으로 이어서 올립니다", 4000); } catch (e) {}
       try { this._openGate(); } catch (e) {}
     },
 

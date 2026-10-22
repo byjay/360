@@ -3,6 +3,8 @@
   const ProjectHub = {
     list: [],
     _loaded: false,
+    _needsLogin: false,   // [WO unauth401] 비로그인/세션만료로 목록을 아예 조회 못 한 상태(0개와 구분)
+    _loadPromise: null,   // [WO unauth401] 동시 중복 load() 호출을 진행 중인 요청 하나로 합친다
     // [WO 20260921 publish-fix] subdomain 없는 배포 프로젝트의 뷰어 딥링크(?d=) 캐시.
     //   project_id → deployment_id(string) | null(도면 없음, 조회 완료) — SoT: /api/projects/:id/decks.
     _deployLinkCache: {},
@@ -369,9 +371,19 @@
     },
 
     async load() {
+      // [WO unauth401] 동시에 여러 호출부(뒤로가기·urlMode=designer 이중호출·QrLink 등)가 거의 같은
+      //   틱에 load()를 부르면 진행 중인 요청을 그대로 공유한다 — 중복 네트워크 왕복 + 401 중복 로그
+      //   방지(§G-2-5, 호출부 전수 확인: 99_footer.js 루트 분기·urlMode=designer 이중호출·
+      //   58_BackGuard._closeProject·50_QrLink).
+      if (this._loadPromise) return this._loadPromise;
+      this._loadPromise = this._loadImpl();
+      try { await this._loadPromise; } finally { this._loadPromise = null; }
+    },
+
+    async _loadImpl() {
       // [P63] 공유·배포 링크 세션은 프로젝트 목록을 아예 불러오지도·그리지도 않는다.
       if (this._isShareEntry()) {
-        this.list = []; this._loaded = true;
+        this.list = []; this._loaded = true; this._needsLogin = false;
         const grid = document.getElementById("hub-grid"); if (grid) grid.innerHTML = "";
         const empty = document.getElementById("hub-empty"); if (empty) empty.classList.add("hidden");
         return;
@@ -381,11 +393,20 @@
       if (!navigator.onLine && typeof OfflineLoad !== "undefined") {
         try {
           this.list = (await OfflineLoad.projects()).filter(Boolean);
-          this._offline = true;
+          this._offline = true; this._needsLogin = false;
           if (typeof Prompt !== "undefined" && Prompt.toast && this.list.length)
             Prompt.toast("오프라인 — 다운로드한 프로젝트 " + this.list.length + "개 표시");
         } catch (e) { this.list = []; }
         this._loaded = true; this.render(); return;
+      }
+      // [WO unauth401 R1·R2] 🔴 로그인 토큰이 없으면 인증 필수 목록 API 를 아예 호출하지 않는다.
+      //   종전엔 비로그인 상태에서도 매번 /api/projects 를 쏴 401 을 받고, 그 401 응답 본문의
+      //   data 가 undefined → "프로젝트 0개"로 조용히 렌더됐다(조용한 실패). 로그인 게이트는
+      //   Auth.init() 이 이미 자동으로 띄운다 — 여기서는 요청 자체를 보내지 않고 안내 문구만 바꾼다.
+      if (!Auth.idToken) {
+        this.list = []; this._loaded = true; this._needsLogin = true;
+        this.render();
+        return;
       }
       try {
         // [버그수정] 인증헤더 필수 — 서버가 멤버십/배포 스코프로 필터하므로(미전송 시 익명취급→설계자 프로젝트 누락)
@@ -394,13 +415,23 @@
         const ctrl = new AbortController();
         const t = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
         let data;
+        let status;
         try {
           const r = await fetch("/api/projects", { headers: Auth.headers(), signal: ctrl.signal });
+          status = r.status;
           ({ data } = await r.json());
         } finally { clearTimeout(t); }
-        this.list = data || [];
-        this._offline = false;
-        await Promise.all([this._resolveDeployLinks(), this._loadDeckTrees()]);
+        // [WO unauth401 R2] 세션이 있었는데 서버가 401 을 준 경우(토큰 만료) — 빈 목록이 아니라
+        //   재로그인 안내로 처리한다(기존 공유 관문 Auth.authExpired 재사용, §G-2-5 한 곳만 고침).
+        if (status === 401) {
+          this.list = []; this._offline = false; this._needsLogin = true;
+          if (typeof Auth.authExpired === "function")
+            Auth.authExpired("세션이 만료돼 프로젝트 목록을 불러오지 못했습니다 — 다시 로그인하면 이어서 보여드립니다");
+        } else {
+          this.list = data || [];
+          this._offline = false; this._needsLogin = false;
+          await Promise.all([this._resolveDeployLinks(), this._loadDeckTrees()]);
+        }
       } catch (e) {
         // 네트워크 실패/타임아웃 → 오프라인 번들로 폴백(있으면)
         try { this.list = (typeof OfflineLoad !== "undefined") ? (await OfflineLoad.projects()).filter(Boolean) : []; this._offline = true; }
@@ -526,6 +557,7 @@
       const grid  = document.getElementById("hub-grid");
       const empty = document.getElementById("hub-empty");
       const btnNew = document.getElementById("hub-btn-new");
+      const emptyText = document.getElementById("hub-empty-text");
       const emptyHint = document.getElementById("hub-empty-hint");
       if (!grid) return;
 
@@ -537,9 +569,17 @@
 
       if (!this.list.length) {
         empty && empty.classList.remove("hidden");
-        if (emptyHint) emptyHint.textContent = isDesigner
-          ? "우측 상단 '+ 새 프로젝트'로 첫 프로젝트를 만들어 보세요."
-          : "설계자로 로그인하면 새 프로젝트를 만들 수 있습니다.";
+        // [WO unauth401] "0개"와 "로그인 필요"는 다른 사실이다 — 비로그인/세션만료(_needsLogin)면
+        //   목록 조회조차 못 한 것이므로 "등록된 프로젝트가 없습니다" 대신 로그인 안내를 보여준다.
+        if (this._needsLogin) {
+          if (emptyText) emptyText.textContent = "로그인이 필요합니다.";
+          if (emptyHint) emptyHint.textContent = "상단에서 로그인하면 내 프로젝트 목록을 볼 수 있습니다.";
+        } else {
+          if (emptyText) emptyText.textContent = "아직 등록된 프로젝트가 없습니다.";
+          if (emptyHint) emptyHint.textContent = isDesigner
+            ? "우측 상단 '+ 새 프로젝트'로 첫 프로젝트를 만들어 보세요."
+            : "설계자로 로그인하면 새 프로젝트를 만들 수 있습니다.";
+        }
         return;
       }
       empty && empty.classList.add("hidden");

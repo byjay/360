@@ -24,6 +24,10 @@
       try {
         // [버그수정] 인증헤더 필수 — /api/projects 는 멤버십/배포 스코프 필터(미전송=익명→누락)
         const r = await fetch("/api/projects", { headers: Auth.headers() });
+        // [WO unauth401 R2] 401(세션 만료)을 "data undefined → 0개"로 조용히 삼키지 않는다 —
+        //   catch 로 떨어뜨려 기존 "진짜 네트워크 실패"와 같은 경로로(설계자 진입 후 호출이라
+        //   공유 재로그인 안내는 20_App.enterEdit/Auth.requireDesigner 쪽이 이미 담당).
+        if (!r.ok) throw new Error("HTTP " + r.status);
         const { data } = await r.json();
         this.list = data || [];
       } catch (e) { this.list = []; }

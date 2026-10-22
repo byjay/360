@@ -170,7 +170,9 @@ console.log("\n[①④ SyncQueue.flush — 401 시 큐 보존 + Auth.authExpired
  * ══════════════════════════════════════════════════════════════════ */
 console.log("\n[② Auth.authExpired — 세션당 1회만 토스트+게이트]");
 function makeAuthExpiredSandbox(src) {
-  const block = extractBalanced(src, "authExpired() {");
+  // [WO unauth401] authExpired(msg) — ProjectHub 의 GET 401(비업로드 문맥)도 같은 공유 관문을
+  //   재사용하도록 msg 매개변수가 추가됐다(기본값은 기존 업로드 문구 그대로, §G-2-5 한 곳만 고침).
+  const block = extractBalanced(src, "authExpired(msg) {");
   const objSrc = "const __authTest = { _expired: false, _authExpiredNotified: false, " +
     "_openGate() { __gateCalls++; }, " + block + " };\n" +
     "globalThis.__authTest = __authTest;";
