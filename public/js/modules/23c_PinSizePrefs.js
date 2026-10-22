@@ -12,7 +12,10 @@
   ══════════════════════════════════════════ */
   const PinSizePrefs = {
     DEFAULT: 0.75,   // MapCtrl.PIN_SCALE 과 동일(맞춤 상태 화면 약 30px)
-    MIN: 0.5,        // [WO 20261019-pinscale3] 기준px 20(=20/40) — 너무 작아 무의미해지지 않는 하한
+    // [WO 20261023-pinviewopt §3, 마스터 "크기를 좀 더 디테일하게 줄일 수 있는 옵션"] 하한을
+    // 20px → 8px(=8/40)로 더 낮춤 — 아주 촘촘한 도면에서 더 작게 뺄 수 있게. 상한(MAX)은 그대로
+    // (MapCtrl.PIN_MAX_PX 56px 상한보다 낮게 유지).
+    MIN: 0.2,        // 기준px 8(=8/40)
     MAX: 1.2,        // 기준px 48(=48/40) — MapCtrl.PIN_MAX_PX(56px) 상한보다 낮게(강제 상한은 MapCtrl 쪽)
     PX_NATIVE: 40,   // MapCtrl.PIN_NATIVE_PX 와 동일(배율 ↔ px 환산, 슬라이더 표시용)
     _projectId() { return (typeof Projects !== "undefined" && Projects.currentProject && Projects.currentProject.id) || "default"; },
@@ -46,7 +49,9 @@
     /** 설정 패널 슬라이더 런타임 주입 — index.html(타 팀 점유 가능성)을 건드리지 않고
      *  settingsDisplayPrefsHost()(이 파일 하단, PinLabelPrefs 와 공유)가 만든 "보기 설정" 구역에 넣는다.
      *  [WO 20261019-pinscale3] 슬라이더 단위를 "배율×"에서 "기준px"(맞춤 상태 화면 핀 높이)로 — 저장은
-     *  그대로 배율(마이그레이션 불필요, _toPx/_fromPx 로 표시만 환산). */
+     *  그대로 배율(마이그레이션 불필요, _toPx/_fromPx 로 표시만 환산).
+     *  [WO 20261023-pinviewopt §3] 프리셋([작게/보통/크게]=MIN/DEFAULT/MAX, 새 매직넘버 無) + 초기화
+     *  버튼 추가 — 슬라이더와 같은 set()/get() SoT, 숫자만 더 빨리 맞추는 보조 UI. */
     initSlider() {
       const host = settingsDisplayPrefsHost();
       if (!host || document.getElementById("pinsize-slider")) return;
@@ -66,6 +71,24 @@
       slider.value = String(this._toPx(this.get()));
       val.textContent = slider.value + "px";
       wrap.appendChild(labelRow); wrap.appendChild(slider);
+      const presetRow = document.createElement("div");
+      presetRow.id = "pinsize-presets";
+      presetRow.style.cssText = "display:flex;gap:6px;";
+      const apply = (px) => { slider.value = String(px); val.textContent = px + "px"; this.set(this._fromPx(px)); };
+      const PRESETS = [["작게", this._toPx(this.MIN)], ["보통", this._toPx(this.DEFAULT)], ["크게", this._toPx(this.MAX)]];
+      PRESETS.forEach(([text, px]) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = text; b.dataset.pinsizePreset = String(px);
+        b.style.cssText = "flex:1;min-height:32px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;color:inherit;cursor:pointer;font-size:12px;";
+        b.addEventListener("click", () => apply(px));
+        presetRow.appendChild(b);
+      });
+      const resetBtn = document.createElement("button");
+      resetBtn.type = "button"; resetBtn.id = "pinsize-reset"; resetBtn.textContent = "초기화";
+      resetBtn.style.cssText = "min-height:32px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;color:inherit;cursor:pointer;font-size:12px;";
+      resetBtn.addEventListener("click", () => { this.reset(); const px = this._toPx(this.get()); slider.value = String(px); val.textContent = px + "px"; });
+      presetRow.appendChild(resetBtn);
+      wrap.appendChild(presetRow);
       host.appendChild(wrap);
       slider.addEventListener("input", () => {
         val.textContent = slider.value + "px";
@@ -145,11 +168,13 @@
       wrap.id = "pinlabel-toggle";
       wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
       const label = document.createElement("span");
-      label.textContent = "핀 번호 표시";
+      // [WO 20261023-pinviewopt §2, 마스터 "숫자가 보여도 되고 안 보여도 돼... 그것도 옵션으로"]
+      // 문구를 "숫자 보이기/자동/숨기기"로 명확히(구 "항상/자동/숨김" — 무엇의 항상/숨김인지 불명확했음).
+      label.textContent = "번호(숫자) 표시";
       label.style.cssText = "font-size:13px;";
       const btnRow = document.createElement("div");
       btnRow.style.cssText = "display:flex;gap:6px;";
-      const OPTS = [[this.ALWAYS, "항상"], [this.AUTO, "자동"], [this.HIDDEN, "숨김"]];
+      const OPTS = [[this.ALWAYS, "보이기"], [this.AUTO, "자동"], [this.HIDDEN, "숨기기"]];
       const buttons = OPTS.map(([val, text]) => {
         const b = document.createElement("button");
         b.type = "button"; b.textContent = text; b.dataset.pinlabelOpt = val;
@@ -161,6 +186,129 @@
         const cur = this.get();
         buttons.forEach((b) => {
           const on = b.dataset.pinlabelOpt === cur;
+          b.style.fontWeight = on ? "700" : "400";
+          b.style.opacity = on ? "1" : ".6";
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+      };
+      buttons.forEach((b) => btnRow.appendChild(b));
+      wrap.appendChild(label); wrap.appendChild(btnRow);
+      host.appendChild(wrap);
+      paint();
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     PinShapePrefs — 핀 모양(자동/핀/점) 강제 옵션
+     [WO 20261023-pinviewopt §1, 마스터 "핀으로도 할 수 있지만, 그냥 동그라미 점이나 작은 동그라미에
+     숫자만 안 나오게... 아예 핀으로 보이게, 리더선으로 끌어낼 수 있는 방법... 그런 옵션들 정확하게"]
+     3상태: auto(기본, 종전 그대로 — 선택/호버/방금배치만 teardrop) / pin(항상 물방울) / dot(항상 점,
+     선택·호버 중에도). 렌더 결정 지점은 MapCtrl._applyPinBillboard 한 곳(#pins-layer 에
+     shape-pin/shape-dot 클래스 토글, style.css 가 그 클래스로 teardrop↔dot CSS 규칙을 덮어쓴다 —
+     §G-2-5 단일 진입점). PinSizePrefs 와 동일 패턴(프로젝트별 localStorage, _projectId 재사용). */
+  const PinShapePrefs = {
+    AUTO: "auto", PIN: "pin", DOT: "dot",
+    DEFAULT: "auto",
+    _key() { return "wm_pinshape_" + PinSizePrefs._projectId(); },
+    get() {
+      try {
+        const v = localStorage.getItem(this._key());
+        if (v === this.AUTO || v === this.PIN || v === this.DOT) return v;
+        return this.DEFAULT;
+      } catch (e) { return this.DEFAULT; }
+    },
+    set(v) {
+      const n = (v === this.AUTO || v === this.PIN || v === this.DOT) ? v : this.DEFAULT;
+      try { localStorage.setItem(this._key(), n); } catch (e) {}
+      // 구조 변경 없음(표시/전환 토글만) — applyTransform() 한 번으로 즉시 반영(마커 재생성 불필요).
+      try { if (typeof MapCtrl !== "undefined" && MapCtrl.applyTransform) MapCtrl.applyTransform(); } catch (e) {}
+      return n;
+    },
+    /** 설정 패널 3단 버튼 + 작은 미리보기 글리프(텍스트만으로 모양을 바로 구분). */
+    initToggle() {
+      const host = settingsDisplayPrefsHost();
+      if (!host || document.getElementById("pinshape-toggle")) return;
+      const wrap = document.createElement("div");
+      wrap.id = "pinshape-toggle";
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+      const label = document.createElement("span");
+      label.textContent = "핀 모양";
+      label.style.cssText = "font-size:13px;";
+      const btnRow = document.createElement("div");
+      btnRow.style.cssText = "display:flex;gap:6px;";
+      const OPTS = [[this.AUTO, "🔘", "자동"], [this.PIN, "📍", "핀"], [this.DOT, "●", "점"]];
+      const buttons = OPTS.map(([val, icon, text]) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.dataset.pinshapeOpt = val;
+        b.innerHTML = `<span aria-hidden="true">${icon}</span> ${text}`;
+        b.style.cssText = "flex:1;min-height:32px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;color:inherit;cursor:pointer;font-size:12px;";
+        b.addEventListener("click", () => { this.set(val); paint(); });
+        return b;
+      });
+      const paint = () => {
+        const cur = this.get();
+        buttons.forEach((b) => {
+          const on = b.dataset.pinshapeOpt === cur;
+          b.style.fontWeight = on ? "700" : "400";
+          b.style.opacity = on ? "1" : ".6";
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+      };
+      buttons.forEach((b) => btnRow.appendChild(b));
+      wrap.appendChild(label); wrap.appendChild(btnRow);
+      host.appendChild(wrap);
+      paint();
+    }
+  };
+
+  /* ══════════════════════════════════════════
+     PinLeaderViewPrefs — 리더선 "보기" 전용 토글(모든 사용자)
+     [WO 20261023-pinviewopt §4b] 데이터 SoT 는 그대로 pin.leader(UI.Leader.wants) — 이 설정은
+     화면에 그릴지만 결정한다("켬"=데이터대로 리더선 그림, "끔"=리더선인 핀도 그 자리 점/핀으로만
+     그림). 끄더라도 pin.leader 는 바뀌지 않는다(리더선 데이터는 디자이너의 #chk-leader360 일괄
+     토글/정렬에서만 바뀜 — 24_Settings.js). 렌더 결정 지점 = 11_UI.js renderPinsOnMap() 의
+     Leader.wants(pin) 판정 바로 옆 한 곳(§G-2-5). 구조 변경(마커↔풍선 전환)이라 set() 은
+     renderPinsOnMap() 전체 재호출이 필요(applyTransform 만으론 DOM 구조가 안 바뀜). */
+  const PinLeaderViewPrefs = {
+    ON: "on", OFF: "off",
+    DEFAULT: "on",
+    _key() { return "wm_leaderview_" + PinSizePrefs._projectId(); },
+    get() {
+      try {
+        const v = localStorage.getItem(this._key());
+        if (v === this.ON || v === this.OFF) return v;
+        return this.DEFAULT;
+      } catch (e) { return this.DEFAULT; }
+    },
+    set(v) {
+      const n = (v === this.ON || v === this.OFF) ? v : this.DEFAULT;
+      try { localStorage.setItem(this._key(), n); } catch (e) {}
+      try { if (typeof UI !== "undefined" && UI.renderPinsOnMap) UI.renderPinsOnMap(); } catch (e) {}
+      return n;
+    },
+    initToggle() {
+      const host = settingsDisplayPrefsHost();
+      if (!host || document.getElementById("leaderview-toggle")) return;
+      const wrap = document.createElement("div");
+      wrap.id = "leaderview-toggle";
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+      const label = document.createElement("span");
+      label.textContent = "리더선 표시(핀 대신 풍선+선으로 끌어낸 핀)";
+      label.style.cssText = "font-size:13px;";
+      const btnRow = document.createElement("div");
+      btnRow.style.cssText = "display:flex;gap:6px;";
+      const OPTS = [[this.ON, "켬"], [this.OFF, "끔"]];
+      const buttons = OPTS.map(([val, text]) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = text; b.dataset.leaderviewOpt = val;
+        b.style.cssText = "flex:1;min-height:32px;border-radius:6px;border:1px solid rgba(0,0,0,.2);background:transparent;color:inherit;cursor:pointer;font-size:12px;";
+        b.addEventListener("click", () => { this.set(val); paint(); });
+        return b;
+      });
+      const paint = () => {
+        const cur = this.get();
+        buttons.forEach((b) => {
+          const on = b.dataset.leaderviewOpt === cur;
           b.style.fontWeight = on ? "700" : "400";
           b.style.opacity = on ? "1" : ".6";
           b.setAttribute("aria-pressed", on ? "true" : "false");

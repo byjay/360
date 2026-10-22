@@ -710,6 +710,14 @@
     _applyPinBillboard() {
       const layer = document.getElementById("pins-layer");
       if (!layer) return;
+      // [WO 20261023-pinviewopt §1] 핀 모양 강제(자동/핀/점) — PinShapePrefs(23c_PinSizePrefs.js) SoT.
+      // style.css #pins-layer.shape-pin/.shape-dot 규칙(§G-2-5 단일 진입점, 이 토글 한 곳만)이
+      // teardrop↔dot CSS 표시를 덮어쓴다. auto(기본, 클래스 둘 다 없음)는 종전 규칙 그대로.
+      if (layer.classList) {
+        const shapeMode = (typeof PinShapePrefs !== "undefined" && PinShapePrefs.get) ? PinShapePrefs.get() : "auto";
+        layer.classList.toggle("shape-pin", shapeMode === "pin");
+        layer.classList.toggle("shape-dot", shapeMode === "dot");
+      }
       const inv = this.pinScreenScale();
       // [성능] 핀치/줌 중 매 프레임 재계산 — 마커 전체를 순회해 인라인 transform 을 다시 쓰지 않는다.
       // CSS 변수 하나(--pin-scale)만 갱신하면 평면 마커·리더 풍선은 정적 스타일시트 규칙

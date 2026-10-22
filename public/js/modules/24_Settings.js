@@ -31,10 +31,20 @@
       }
       // [WO 20261001-gps] 위치 자동 기록 토글 — chk-leader360 행 옆에 런타임 주입(index.html 미수정).
       if (typeof GPS !== "undefined" && GPS.initToggle) GPS.initToggle();
-      // [WO 20261016-pinscale §3] 핀 크기(도면 대비) 슬라이더 — 같은 런타임 주입 패턴.
-      if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.initSlider) PinSizePrefs.initSlider();
-      // [WO 20261019-pinscale4] 핀 번호 표시 옵션(항상/자동/숨김) — 슬라이더 바로 뒤, 같은 런타임 주입 패턴.
+      // [WO 20261023-pinviewopt] "보기 설정" 그룹 — 모양 → 번호 → 크기 → 리더선 표시(보기 전용) 순.
+      // 전부 settingsDisplayPrefsHost() 공유 호스트(23c_PinSizePrefs.js)에 들어간다(같은 패턴 재사용).
+      if (typeof PinShapePrefs !== "undefined" && PinShapePrefs.initToggle) PinShapePrefs.initToggle();
+      // [WO 20261019-pinscale4] 핀 번호 표시 옵션(항상/자동/숨김) — 같은 런타임 주입 패턴.
       if (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.initToggle) PinLabelPrefs.initToggle();
+      // [WO 20261016-pinscale §3] 핀 크기(도면 대비) 슬라이더.
+      if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.initSlider) PinSizePrefs.initSlider();
+      // [WO 20261023-pinviewopt §4b] 리더선 "보기" 전용 토글(모든 사용자, 데이터 불변) — 아래
+      // #chk-leader360(디자이너 전용 데이터 일괄변경)과는 다른 옵션(§23c_PinSizePrefs.js 헤더 주석).
+      if (typeof PinLeaderViewPrefs !== "undefined" && PinLeaderViewPrefs.initToggle) PinLeaderViewPrefs.initToggle();
+      // [WO 20261023-pinviewopt §4a] 디자이너 전용 리더선 일괄 켜기/끄기(#chk-leader360, 기존 DOM 그대로
+      // 이동)를 같은 "보기 설정" 그룹 안으로 옮겨(설명문 함께) — 마스터 "리더선으로 끌어낼 수 있는 방법도
+      // 이미 구현되어 있잖아. 그런 옵션들 정확하게". 데이터/이벤트 바인딩(위) 불변 — DOM 위치만 이동.
+      this._moveLeaderDesignerRowIntoDisplayPrefs();
       // 닫기
       $("settings-close") && $("settings-close").addEventListener("click", () => this.close());
       const bd = document.querySelector('#settings-modal .admin-gate-backdrop');
@@ -139,6 +149,29 @@
       });
     },
 
+    /** [WO 20261023-pinviewopt §4a] 기존 #chk-leader360 행(이벤트 바인딩은 init() 에서 이미 끝남,
+     *  여기서는 DOM 위치만 옮김 — 같은 엘리먼트를 그대로 appendChild 하므로 리스너 유실 0)을
+     *  "보기 설정" 공유 호스트(settingsDisplayPrefsHost, 23c_PinSizePrefs.js) 안, 설명문과 함께
+     *  감싼 새 래퍼(#settings-leader-designer-row)로 옮긴다. 호스트 자체가 없으면(테스트 셸 등)
+     *  조용히 건너뛴다(회귀 0 — 원래 자리에 그대로 남아 디자이너 전용으로 계속 동작). */
+    _moveLeaderDesignerRowIntoDisplayPrefs() {
+      if (typeof document === "undefined" || typeof settingsDisplayPrefsHost !== "function") return;
+      if (document.getElementById("settings-leader-designer-row")) return; // 1회만
+      const host = settingsDisplayPrefsHost();
+      const row = document.querySelector('label.settings-leader-toggle-row[for="chk-leader360"]');
+      if (!host || !row) return;
+      const wrap = document.createElement("div");
+      wrap.id = "settings-leader-designer-row";
+      wrap.className = "hidden"; // render() 가 Auth.isDesigner 로 토글
+      const desc = document.createElement("p");
+      desc.className = "settings-note-sm";
+      desc.textContent = "리더선(풍선+선으로 끌어내기) — 핀이 좁은 곳에 겹칠 때, 선택한 포인트(없으면 이 구역 현재 모드 전체)를 번호 풍선으로 끌어내 표시합니다. 기본은 핀.";
+      row.style.marginTop = "0"; // 이동 전 자리(아래 간격)와의 이중 margin 제거
+      wrap.appendChild(desc);
+      wrap.appendChild(row);
+      host.appendChild(wrap);
+    },
+
     /** 일괄 리더선 체크 = 대상(UI._alignScopePins) 전부가 리더선이면 ON. 대상이 없으면 OFF. */
     _syncLeaderBulk() {
       const c = document.getElementById("chk-leader360");
@@ -190,6 +223,9 @@
         if (av) { if (Auth.user.picture) { av.src = Auth.user.picture; av.style.display = ""; } else av.style.display = "none"; }
         // 권한별 액션
         $("settings-designer-actions") && $("settings-designer-actions").classList.toggle("hidden", !Auth.isDesigner);
+        // [WO 20261023-pinviewopt §4a] "보기 설정" 그룹 안으로 옮긴 리더선 일괄 토글 행 — 원래
+        // #settings-designer-actions 안에 있었을 때와 같은 권한(디자이너 전용)으로 가시성만 재현.
+        $("settings-leader-designer-row") && $("settings-leader-designer-row").classList.toggle("hidden", !Auth.isDesigner);
         $("settings-viewer-note")      && $("settings-viewer-note").classList.toggle("hidden", Auth.isDesigner);
         $("settings-super-actions")    && $("settings-super-actions").classList.toggle("hidden", !Auth.isSuper);
         if (Auth.isDesigner) { this._renderCheckboardStart(); this._renderRegMethod(); }

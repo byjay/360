@@ -2057,7 +2057,9 @@
         // [WO 20261008-pinstyle §1] 🔴 핀 표현 1종 — 기본은 마커(핀)만. 리더선은 핀별 선택(Leader.wants SoT)일
         //   때만 그리고, 그때는 마커를 감춘다(두 표현 동시 금지). 마커는 DOM 에 남겨 클릭 배선(풍선 → marker.click)
         //   과 번호 메타를 그대로 쓴다. 리더를 실제로 그렸을 때만 감춘다(그릴 수 없는 환경에서 핀이 사라지지 않게).
-        if (this.Leader.wants(pin) && leaderLayer
+        // [WO 20261023-pinviewopt §4b] PinLeaderViewPrefs(23c_PinSizePrefs.js) "끔"이면 데이터(pin.leader)는
+        //   그대로 두고 화면만 보통 마커로 그린다(보기 전용 — 이 한 곳만 판정, §G-2-5).
+        if (this.Leader.wants(pin) && (typeof PinLeaderViewPrefs === "undefined" || PinLeaderViewPrefs.get() !== "off") && leaderLayer
             && this._renderLeader(leaderLayer, layer, pin, marker, dispLabel, headFill2, txtFill)) {
           marker.classList.add("pin-as-leader");
           marker.style.display = "none";

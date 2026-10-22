@@ -1547,6 +1547,57 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
    영향 없음(발주 §3 — 지도 위 핀만 해당). */
 #pins-layer.pin-num-off .pin-num-text { display: none; }
 
+/* [WO 20261023-pinviewopt, 마스터 "핀으로도 할 수 있지만 점만 보이게, 아예 핀으로 보이게... 그런 옵션을
+   정확하게"] 핀 모양 강제(자동/핀/점) — #pins-layer.shape-pin/.shape-dot, PinShapePrefs(23c_PinSizePrefs.js)
+   SoT(MapCtrl._applyPinBillboard 가 매 줌마다 토글, §G-2-5 단일 진입점). 자동(클래스 없음)은 위 규칙
+   그대로(선택/호버/드롭만 teardrop). .shape-pin 규칙은 .pin-marker 1개 클래스만 더 가져(특이성 우위)
+   위 기본 규칙을 덮어쓴다 — 소스 순서 의존 없음. ISO 는 범위 밖(:not(.iso-mode) 밖과 매치 안 됨). */
+#pins-layer.shape-pin:not(.iso-mode) > .pin-marker {
+  transform: translate(-50%, calc(-100% + 2px)) scale(var(--pin-scale, 1));
+  transform-origin: 50% 100%;
+}
+#pins-layer.shape-pin:not(.iso-mode) > .pin-marker .pin-dot { display: none; }
+#pins-layer.shape-pin:not(.iso-mode) > .pin-marker .pin-pin { display: block; }
+#pins-layer.shape-pin:not(.iso-mode) > .pin-marker .pin-pulse { display: block; }
+#pins-layer.shape-pin:not(.iso-mode) > .pin-marker::after {
+  left: 50%; top: 0; width: 44px; height: 44px;
+  transform: translate(-50%, -22px) scale(calc(1 / var(--pin-screen-k, 1)));
+}
+/* 점 강제 — 선택/호버/드롭/force-pin 중에도 점 유지. 이 선택자들은 기본 hover 규칙보다 클래스
+   하나(.shape-dot)가 더 많아 특이성이 더 높다 → 항상 이긴다(소스 순서 무관). */
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker:hover,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.focused,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.drop,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.force-pin {
+  transform: translate(-50%, -50%) scale(var(--pin-scale, 1));
+  transform-origin: 50% 50%;
+}
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker .pin-dot,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker:hover .pin-dot,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.focused .pin-dot,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.drop .pin-dot,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.force-pin .pin-dot { display: flex; }
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker .pin-pin,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker:hover .pin-pin,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.focused .pin-pin,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.drop .pin-pin,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.force-pin .pin-pin,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker .pin-pulse,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker:hover .pin-pulse,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.focused .pin-pulse,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.drop .pin-pulse,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.force-pin .pin-pulse { display: none; }
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker::after,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker:hover::after,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.focused::after,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.drop::after,
+#pins-layer.shape-dot:not(.iso-mode) > .pin-marker.force-pin::after {
+  left: 50%; top: 50%;
+  width: var(--dot-pad-local-px, 24px); height: var(--dot-pad-local-px, 24px);
+  transform: translate(-50%, -50%);
+}
+
 /* Pending pin */
 .pending-pin {
   position: absolute;
