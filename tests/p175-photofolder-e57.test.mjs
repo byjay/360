@@ -327,8 +327,8 @@ console.log("\n[③ 일반 jpg 는 _materializeFile 통과(변환 없음)]");
    ══════════════════════════════════════════════════════════════ */
 console.log("\n[뮤테이션] _EXT_RE 에서 e57 를 제거하면 ①이 뒤집혀야 함");
 {
-  const needle = "_EXT_RE: /\\.(jpe?g|png|heic|e57)$/i,";
-  const mutated = pfSrc.replace(needle, "_EXT_RE: /\\.(jpe?g|png|heic)$/i,");
+  const needle = "_EXT_RE: /\\.(jpe?g|png|heic|e57|fls)$/i,";
+  const mutated = pfSrc.replace(needle, "_EXT_RE: /\\.(jpe?g|png|heic|fls)$/i,");
   if (mutated === pfSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const document = makeFakeDoc();

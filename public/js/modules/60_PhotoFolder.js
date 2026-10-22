@@ -66,9 +66,15 @@
      그대로 태운다. manifest 상 09_FLS·39_FlsPano 가 60 보다 앞이라 전역 참조 가능. 구조화 격자(rowIndex/
      columnIndex) 없는 E57·*.fls 원본 디렉터리는 조용히 건너뛰지 않고 사유를 결과에 남긴다(§10-no-hardcoding
      "조용한 실패가 최악").
+
+     🔴 [WO 20261022-flsole · 지휘자 재발주 · 실측 R1~R4] *.fls 는 디렉터리가 아니라 **단일 파일(OLE2
+     복합 문서)** 인 경우도 있다(FARO iQscene 미처리 스캔 — scan_0.fls 등). 열거 대상 확장자에 단일
+     파일 .fls 를 추가(_EXT_RE, _listEntries 는 이미 kind==="file" 만 올려 디렉터리 .fls 안내(_flsDirNotice)
+     와 충돌 없음). _materializeFile 에서 39_FlsPano.fromFlsOle(OLE2 최소 리더로 "Main"·
+     "Previews/previewColor.jpg" 스트림만 읽음, SoT — 재구현 금지)로 변환해 같은 jpg 등록 경로에 태운다.
   ══════════════════════════════════════════════════════════════ */
   const PhotoFolder = {
-    _EXT_RE: /\.(jpe?g|png|heic|e57)$/i,
+    _EXT_RE: /\.(jpe?g|png|heic|e57|fls)$/i,
     _decks: null,          // Map<deckKey, {mode,dirHandle,fallbackFiles,folderLabel,fileCount,permGranted,restored,restoring}>
     _pickTargetKey: null,  // 폴백(webkitdirectory) change 이벤트가 어느 구역 키를 겨냥한 pickFolder() 호출인지
     _afterPick: null,      // 폴백 change 완료 후 1회 콜백(Deck Manager 행 갱신용)
@@ -471,13 +477,28 @@
     /* ══ E57(정합 스캔) → 360 사진 변환(등록 직전, 매칭된 파일만) ══════════════════════ */
 
     _isE57(name) { return /\.e57$/i.test(String(name || "")); },
+    _isFls(name) { return /\.fls$/i.test(String(name || "")); },
 
     /** entry 가 .e57 이면 09_FLS(_parseE57 grid:true) + 39_FlsPano(fromGrid/padToEquirect/toJpegBlob)
-     *  로 변환해 등록용 File(jpg) 로 바꾼다. 일반 이미지(jpg/png/heic)는 그대로 통과.
-     *  구조화 격자가 없으면 조용히 건너뛰지 않고 사유를 돌려준다(§10-no-hardcoding).
+     *  로, 단일 파일 .fls(OLE2 복합 문서)면 39_FlsPano.fromFlsOle 로 변환해 등록용 File(jpg) 로 바꾼다.
+     *  일반 이미지(jpg/png/heic)는 그대로 통과. 구조화 격자/컬러 미리보기가 없으면 조용히 건너뛰지
+     *  않고 사유를 돌려준다(§10-no-hardcoding).
      *  @returns {Promise<{ok:boolean, file?:File, reason?:string}>} */
     async _materializeFile(entry) {
       const file = await entry.getFile();
+      if (this._isFls(entry.name)) {
+        try {
+          if (typeof FlsPano === "undefined" || !FlsPano.fromFlsOle) return { ok: false, reason: "FlsPano 모듈을 찾지 못했습니다" };
+          const buf = await file.arrayBuffer();
+          const res = await FlsPano.fromFlsOle(buf);
+          if (!res || !res.ok) return { ok: false, reason: (res && res.reason) || ".fls 추출 실패" };
+          const blob = await FlsPano.toJpegBlob(res.canvas, 0.92);
+          const jpgName = entry.name.replace(/\.fls$/i, "") + ".jpg";
+          return { ok: true, file: new File([blob], jpgName, { type: "image/jpeg" }) };
+        } catch (e) {
+          return { ok: false, reason: ".fls 추출 실패: " + ((e && e.message) || e) };
+        }
+      }
       if (!this._isE57(entry.name)) return { ok: true, file: file };
       try {
         if (typeof FLS === "undefined" || !FLS._parseE57) return { ok: false, reason: "E57 파서(FLS)를 찾지 못했습니다" };
@@ -769,7 +790,7 @@
       for (let i = 0; i < applicable.length; i++) {
         const r = applicable[i];
         const entry = r.candidates[0];
-        if (onProgress && this._isE57(entry.name)) {
+        if (onProgress && (this._isE57(entry.name) || this._isFls(entry.name))) {
           try { onProgress({ stage: "extract", label: "추출 중 " + (i + 1) + "/" + applicable.length, done: done, skip: skip, fail: fail, total: applicable.length }); } catch (e) {}
         }
         const result = await this._registerEntry(r.pin, entry, "폴더일괄");

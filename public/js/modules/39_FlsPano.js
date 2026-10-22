@@ -199,6 +199,188 @@
       }
     },
 
+    /* ══════════════ .fls(OLE2 복합 문서) 최소 리더 — 필요한 스트림만(Main, Previews/previewColor.jpg) ═══
+       [WO 20261022-flsole · 지휘자 재발주 R1~R4] FARO iQscene 미처리 스캔(scan_0.fls 등)은 디렉터리가
+       아니라 단일 OLE2(MS-CFB) 파일이다. 새 npm 의존성 금지 — 섹터/FAT/디렉터리 엔트리/미니스트림만
+       직접 구현(압축·암호화 등 CFB 의 다른 기능은 대상 외, 이 포맷은 쓰지 않는다). ══════════════════ */
+    _OLE2_FREESECT: -1, _OLE2_ENDOFCHAIN: -2,
+
+    /** OLE2 헤더+FAT+디렉터리를 읽어 path("Main","Previews/previewColor.jpg" 등) → Uint8Array 맵을 만든다.
+     *  wanted 를 넘기면 그 경로만 데이터를 채워 돌려준다(나머지는 디코딩하지 않음). 없는 경로는 null. */
+    _ole2Streams(buf, wanted) {
+      const dv = new DataView(buf);
+      const SIG = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+      for (let i = 0; i < 8; i++) if (dv.getUint8(i) !== SIG[i]) throw new Error("OLE2 시그니처 불일치");
+      const FREE = this._OLE2_FREESECT, EOC = this._OLE2_ENDOFCHAIN;
+      const sectorSize = 1 << dv.getUint16(30, true);
+      const miniSectorSize = 1 << dv.getUint16(32, true);
+      const firstDirSector = dv.getInt32(48, true);
+      const miniCutoff = dv.getUint32(56, true);
+      const firstMiniFATSector = dv.getInt32(60, true);
+      const firstDIFATSector = dv.getInt32(68, true);
+      const numDIFATSectors = dv.getUint32(72, true);
+      const u8 = new Uint8Array(buf);
+
+      const difat = [];
+      for (let i = 0; i < 109; i++) { const v = dv.getInt32(76 + i * 4, true); if (v !== FREE) difat.push(v); }
+      let dsec = firstDIFATSector, remain = numDIFATSectors, guard = 0;
+      const perDifat = sectorSize / 4 - 1;
+      while (dsec !== EOC && dsec >= 0 && remain > 0 && guard++ < 100000) {
+        const off = (dsec + 1) * sectorSize;
+        for (let i = 0; i < perDifat; i++) { const v = dv.getInt32(off + i * 4, true); if (v !== FREE) difat.push(v); }
+        dsec = dv.getInt32(off + perDifat * 4, true);
+        remain--;
+      }
+
+      const perFat = sectorSize / 4;
+      const fat = new Int32Array(Math.max(1, difat.length) * perFat);
+      difat.forEach((sid, k) => {
+        const off = (sid + 1) * sectorSize;
+        for (let i = 0; i < perFat; i++) fat[k * perFat + i] = dv.getInt32(off + i * 4, true);
+      });
+
+      const readChain = (startSector, byteLength) => {
+        const chunks = [];
+        let sector = startSector, guard2 = 0;
+        while (sector !== EOC && sector >= 0 && sector < fat.length && guard2++ < 2000000) {
+          const off = (sector + 1) * sectorSize;
+          chunks.push(u8.subarray(off, off + sectorSize));
+          sector = fat[sector];
+        }
+        const full = new Uint8Array(chunks.length * sectorSize);
+        let o = 0; chunks.forEach((c) => { full.set(c, o); o += c.length; });
+        return byteLength != null ? full.subarray(0, byteLength) : full;
+      };
+
+      const dirBuf = readChain(firstDirSector);
+      const n = Math.floor(dirBuf.length / 128);
+      const ddv = new DataView(dirBuf.buffer, dirBuf.byteOffset, dirBuf.byteLength);
+      const entries = [];
+      for (let i = 0; i < n; i++) {
+        const off = i * 128;
+        const nameLen = ddv.getUint16(off + 64, true);
+        let name = "";
+        for (let c = 0; c < Math.max(0, Math.floor(nameLen / 2) - 1); c++) name += String.fromCharCode(ddv.getUint16(off + c * 2, true));
+        const type = ddv.getUint8(off + 66);
+        const left = ddv.getInt32(off + 68, true);
+        const right = ddv.getInt32(off + 72, true);
+        const child = ddv.getInt32(off + 76, true);
+        const startSector = ddv.getInt32(off + 116, true);
+        const sizeLow = ddv.getUint32(off + 120, true);
+        const sizeHigh = ddv.getUint32(off + 124, true);
+        entries.push({ name: name, type: type, left: left, right: right, child: child, startSector: startSector, size: sizeHigh * 4294967296 + sizeLow });
+      }
+
+      const rootIdx = entries.findIndex((e) => e.type === 5);
+      if (rootIdx < 0) throw new Error("루트 디렉터리 엔트리를 찾지 못함");
+      const root = entries[rootIdx];
+
+      const paths = {};
+      const visited = new Set();
+      const walk = (idx, parent) => {
+        if (idx == null || idx < 0 || idx >= entries.length || visited.has(idx)) return;
+        visited.add(idx);
+        const e = entries[idx];
+        walk(e.left, parent);
+        const p = parent ? parent + "/" + e.name : e.name;
+        if (e.type === 2) paths[p] = e;
+        else if (e.type === 1) walk(e.child, p);
+        walk(e.right, parent);
+      };
+      walk(root.child, "");
+
+      let miniStream = null;
+      const getMiniStream = () => { if (!miniStream) miniStream = root.startSector >= 0 ? readChain(root.startSector, root.size) : new Uint8Array(0); return miniStream; };
+      let miniFat = null;
+      const getMiniFat = () => {
+        if (!miniFat) {
+          const mfBuf = firstMiniFATSector >= 0 ? readChain(firstMiniFATSector) : new Uint8Array(0);
+          const cnt = Math.floor(mfBuf.length / 4);
+          const arr = new Int32Array(cnt);
+          const mdv = new DataView(mfBuf.buffer, mfBuf.byteOffset, mfBuf.byteLength);
+          for (let i = 0; i < cnt; i++) arr[i] = mdv.getInt32(i * 4, true);
+          miniFat = arr;
+        }
+        return miniFat;
+      };
+      const readMiniChain = (startSector, byteLength) => {
+        const mfat = getMiniFat(), ms = getMiniStream();
+        const chunks = [];
+        let sector = startSector, guard3 = 0;
+        while (sector !== EOC && sector >= 0 && sector < mfat.length && guard3++ < 2000000) {
+          const off = sector * miniSectorSize;
+          chunks.push(ms.subarray(off, off + miniSectorSize));
+          sector = mfat[sector];
+        }
+        const full = new Uint8Array(chunks.length * miniSectorSize);
+        let o = 0; chunks.forEach((c) => { full.set(c, o); o += c.length; });
+        return full.subarray(0, byteLength);
+      };
+
+      const out = {};
+      (wanted || Object.keys(paths)).forEach((p) => {
+        const e = paths[p];
+        if (!e) { out[p] = null; return; }
+        if (e.size === 0) { out[p] = new Uint8Array(0); return; }
+        out[p] = (e.size < miniCutoff) ? readMiniChain(e.startSector, e.size) : readChain(e.startSector, e.size);
+      });
+      return out;
+    },
+
+    /** JPEG bytes → 이미지. opts.decodeJpeg 가 있으면 그것을 쓴다(테스트/디코더 교체 — 합성 바이트는
+     *  실제 JPEG 가 아닐 수 있어 주입 지점이 필요하다). 기본은 브라우저 createImageBitmap, 없으면
+     *  Image+document 폴백. */
+    async _decodeJpeg(bytes, opts) {
+      if (opts && typeof opts.decodeJpeg === "function") return opts.decodeJpeg(bytes);
+      const blob = (typeof Blob !== "undefined") ? new Blob([bytes], { type: "image/jpeg" }) : null;
+      if (typeof createImageBitmap === "function" && blob) return createImageBitmap(blob);
+      const ImageCtor = (typeof Image !== "undefined") ? Image : null;
+      if (!ImageCtor || !blob || typeof URL === "undefined") throw new Error("이 환경에서 JPEG 디코드를 지원하지 않습니다(decodeJpeg 주입 필요)");
+      const url = URL.createObjectURL(blob);
+      try {
+        return await new Promise((resolve, reject) => {
+          const im = new ImageCtor();
+          im.onload = () => resolve(im);
+          im.onerror = reject;
+          im.src = url;
+        });
+      } finally { URL.revokeObjectURL(url); }
+    },
+
+    /** .fls(OLE2) → 360 사진 canvas. 필요한 스트림 2개만 읽는다(Main, Previews/previewColor.jpg).
+     *  Main 의 StartTheta/EndTheta(라디안)를 "그대로"(도 변환만) padToEquirect 의 topDeg/bottomDeg 로
+     *  넘긴다 — padToEquirect 내부 공식 topFrac=(90-topDeg)/180 이 "상단=90°-StartTheta" 규칙과
+     *  이미 동일해 재구현이 필요 없다(실측 R2~R3: StartTheta=90°,EndTheta=-60.135° 가 기존 TOP_DEG=90/
+     *  BOTTOM_DEG=-60 기본값과 일치 — FARO 류 기본 수직 FOV 추정치가 실제로도 맞았다).
+     *  @returns {Promise<{ok:boolean, canvas?, reason?:string}>} */
+    async fromFlsOle(buf, opts) {
+      let streams;
+      try { streams = this._ole2Streams(buf, ["Main", "Previews/previewColor.jpg"]); }
+      catch (e) { return { ok: false, reason: ".fls 파일 형식을 읽지 못했습니다(OLE2 아님): " + ((e && e.message) || e) }; }
+      const jpgBuf = streams["Previews/previewColor.jpg"];
+      if (!jpgBuf || !jpgBuf.length) return { ok: false, reason: "스캔에 컬러 미리보기 없음 — 스캐너 컬러 촬영 꺼짐 또는 미처리 스캔" };
+      let topDeg = this.TOP_DEG, bottomDeg = this.BOTTOM_DEG;
+      const mainBuf = streams["Main"];
+      if (mainBuf && mainBuf.length) {
+        const txt = new TextDecoder("utf-8").decode(mainBuf);
+        const sm = /StartTheta\s*[:=]?\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)/.exec(txt);
+        const em = /EndTheta\s*[:=]?\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)/.exec(txt);
+        if (sm) topDeg = parseFloat(sm[1]) * 180 / Math.PI;
+        if (em) bottomDeg = parseFloat(em[1]) * 180 / Math.PI;
+      }
+      let img;
+      try { img = await this._decodeJpeg(jpgBuf, opts); }
+      catch (e) { return { ok: false, reason: "미리보기 JPEG 디코드 실패: " + ((e && e.message) || e) }; }
+      // [실측 R1~R4 후속] 일부 미처리 스캔은 바이트가 있는(zero-length 아닌) 1x1 플레이스홀더 JPEG를
+      // previewColor.jpg 에 그대로 남긴다(실파일 scan_121.fls) — 등록하면 무의미한 단색 사진이 되므로
+      // "비어있음"과 동일하게 취급해 사유를 돌려준다(§10-no-hardcoding 조용한 실패 금지).
+      if (!img || !img.width || !img.height || img.width < 8 || img.height < 8) {
+        return { ok: false, reason: "스캔에 컬러 미리보기 없음 — 스캐너 컬러 촬영 꺼짐 또는 미처리 스캔" };
+      }
+      const canvas = this.padToEquirect(img, topDeg, bottomDeg, opts);
+      return { ok: true, canvas: canvas, topDeg: topDeg, bottomDeg: bottomDeg };
+    },
+
     /** E57 격자(grid: {rows,cols,n,row,col,localXYZ,rgb,intensity,pose}) → 등장방형(2:1) canvas.
      *  각 점의 로컬 방향(= pose 역회전 적용 후 x,y,z)에서 방위각(열)·고도각(행 대표값)을 구해
      *  캔버스에 직접 배치한다 — 스캔이 도달하지 못한 영역(예: FARO 하단 -60° 아래)은 중립 회색으로 둔다. */
