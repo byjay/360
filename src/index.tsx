@@ -3270,6 +3270,16 @@ function linkReadPids(s: ReadScope): string[] {
   return Array.from(s.linkOnly ? s.pids : s.linkPids)
 }
 
+/** [viewer-audit] 🔴 이 배포본을 **멤버로** 읽는가(= 작업본 열람 가능). false = 열람 링크로만 읽는다 → 동결본(스냅샷) 외 작업본 데이터 0.
+ *  단일 판정 지점 — GET /tables/deployments/:id · 개정 이력(revGate) · GPS 기준점(gpsCalibGate)이 공유한다.
+ *  (종전: 개정·GPS 게이트가 canReadDepRow 만 보고 작업본 행을 그대로 내려 배포 후 디자이너 수정·설계자 이메일이 열람자에게 샜다) */
+function isMemberReadOfDep(s: ReadScope, refsIdx: Map<string, Set<string>>, dep: any): boolean {
+  if (!dep || s.linkOnly) return false
+  if (s.all) return true
+  const bound = boundPidsOf(refsIdx, dep)
+  return bound.some((p) => s.pids.has(p)) || (!bound.length && canReadDepRow(s, refsIdx, dep))
+}
+
 /** 링크 읽기 — depId 가 링크 프로젝트의 배포 스냅샷에 있으면 { pid, row(동결본) }, 아니면 null. */
 async function linkSnapRow(c: any, s: ReadScope, depId: string): Promise<{ pid: string, row: any } | null> {
   if (!depId) return null
@@ -3855,6 +3865,8 @@ async function revGate(c: any, mode: 'read' | 'propose' | 'apply'): Promise<{ us
   const scope = await readScopeOf(c, user)
   const idx = await depRefIndexOf(c)
   if (!canReadDepRow(scope, idx, dep)) return { res: c.json({ error: 'forbidden' }, 403) }
+  // [viewer-audit] 열람 링크 = 동결본만 — 개정 이력은 작업본(제목·버전·핀) 기준이라 링크 열람자에게 내리지 않는다.
+  if (!isMemberReadOfDep(scope, idx, dep)) return { res: c.json({ error: 'forbidden — view link reads the published snapshot only' }, 403) }
   let canPropose = false, canApply = false
   if (!user._readonly && (await requireDesigner(c))) {
     canPropose = !(await deploymentWriteDenied(c, user, dep.project_id))
@@ -6000,8 +6012,7 @@ app.get('/tables/deployments/:id', async (c) => {
   {
     const ridx = await depRefIndexOf(c)
     const liveRow: any = await c.env.DB.prepare('SELECT id, project_id, tenant_id FROM deployments WHERE id = ?').bind(id).first()
-    const memberRead = !!liveRow && !scope.linkOnly && (scope.all || boundPidsOf(ridx, liveRow).some((p) => scope.pids.has(p)) ||
-      (!boundPidsOf(ridx, liveRow).length && canReadDepRow(scope, ridx, liveRow)))
+    const memberRead = isMemberReadOfDep(scope, ridx, liveRow)
     if (!memberRead && linkReadPids(scope).length) {
       const snap = await linkSnapRow(c, scope, String(id))
       if (!snap) return c.json({ error: 'forbidden' }, 403)
@@ -6633,6 +6644,8 @@ async function gpsCalibGate(c: any, mode: 'read' | 'write'): Promise<{ user?: an
   const scope = await readScopeOf(c, user)
   const idx = await depRefIndexOf(c)
   if (!canReadDepRow(scope, idx, dep)) return { res: c.json({ error: 'forbidden' }, 403) }
+  // [viewer-audit] 열람 링크 = 동결본만 — GPS 기준점은 작업본 데이터(+ created_by 설계자 이메일)라 링크 열람자에게 내리지 않는다.
+  if (!isMemberReadOfDep(scope, idx, dep)) return { res: c.json({ error: 'forbidden — view link reads the published snapshot only' }, 403) }
   if (mode === 'write') {
     if (!(await requireDesigner(c))) return { res: c.json({ error: 'forbidden — designer login required' }, 403) }
     const denied = await deploymentWriteDenied(c, user, dep.project_id)
