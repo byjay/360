@@ -337,6 +337,11 @@ function mLib() { return String.raw`(function(){
   /* 지도 뷰포트 안에 붙은 UI(배너·버튼 등) — 터치는 뷰포트 핸들러로 가지만 도면을 시각적으로 덮는다 */
   M.chrome = function(el){ if (!el || !el.closest) return false; if (el.closest('.pin-marker')) return false; return !!el.closest('button,a,input,select,textarea,[role=status],[role=dialog],[role=toolbar],#src-link-bar'); };
   M.visible = function(el){ var r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return false; var cs = getComputedStyle(el); return cs.display !== 'none' && cs.visibility !== 'hidden' && +cs.opacity > 0.05; };
+  /* [WO 20261022-offlinephoto] 7cafcbb(pindots) 이후 평면 마커 기본 = 점(.pin-dot, absolute) · .pin-pin display:none →
+   *  .pin-marker 박스가 0x0 이라 M.visible(marker) 가 거의 전부 false(실측 markerSelfHit.visible 21→1, "핀 패널" mk.none).
+   *  핀 마커의 탭 기준 = 보이는 점(.pin-dot) 중심 = 핀 좌표(p177 P.dots 와 같은 기준). 점이 안 보이면(선택/호버/드롭 teardrop·ISO) 종전대로 마커 박스. */
+  M.tgtRect = function(e){ if (e.classList && e.classList.contains('pin-marker')) { var d = e.querySelector('.pin-dot'); if (d && M.visible(d)) return d.getBoundingClientRect(); } return e.getBoundingClientRect(); };
+  M.tgtVisible = function(e){ if (e.classList && e.classList.contains('pin-marker')) { var d = e.querySelector('.pin-dot'); if (d && M.visible(d)) { var cs = getComputedStyle(e); return cs.visibility !== 'hidden' && +cs.opacity > 0.05; } } return M.visible(e); };
   M.rect = function(el){ var r = el.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; };
   M.scan = function(){ var now = performance.now(); document.querySelectorAll('.pin-marker[data-id]').forEach(function(m){ var id = m.getAttribute('data-id'); if (!(id in M.seen)) { M.seen[id] = now; requestAnimationFrame(function(){ M.paint[id] = performance.now(); }); } }); };
   function startObs(){ if (M._obs || !document.body) return; M.scan(); M._obs = new MutationObserver(M.scan); M._obs.observe(document.body, { childList: true, subtree: true }); }
@@ -420,7 +425,11 @@ async function runScenario(P) {
     await P.wait(400);
     return tapSel(".hub-tree-deck[data-act=deck-open]", label);
   };
-  const localState = () => S("{ pins: S.pins.length, ids: S.pins.map(function(p){ return String(p.id); }), pend: S.pins.filter(function(p){ return p.pendingOpId || (p.attachments||[]).some(function(a){ return a.pendingOpId; }); }).length, photo: S.pins.filter(function(p){ return !p.checkboard; }).map(function(p){ return { id: String(p.id), imageId: p.imageId || null, imageUrl: p.imageUrl || null, pendingOpId: p.pendingOpId || null }; }), dep: S.autoSaveDepId, ver: S.depVersion, dirty: !!(__T.App && __T.App._dirty), regMode: S.regMode, placing: S.placing, drawn: !!__M.drawingRect() }");
+  /** [WO 20261022-offlinephoto] 사진 핀 = 4단계에서 "바로 사진" 방식으로 탭해 사진을 고른 **그 핀(ID)**.
+   *  0b716e2(unifymode) 이후 새 핀에 pin.checkboard 를 쓰지 않으므로 종전 판정 `!p.checkboard` 는 번호 핀 24개까지
+   *  "사진 핀" 으로 세어 동기화 완료(syncDone)·사진 연결 단언이 영영 성립하지 않았다(제품은 연결 완료 — 실측 report.json). */
+  let photoPinId = null;
+  const localState = () => S("{ pins: S.pins.length, ids: S.pins.map(function(p){ return String(p.id); }), pend: S.pins.filter(function(p){ return p.pendingOpId || (p.attachments||[]).some(function(a){ return a.pendingOpId; }); }).length, photo: S.pins.filter(function(p){ return String(p.id) === " + JSON.stringify(String(photoPinId)) + "; }).map(function(p){ return { id: String(p.id), imageId: p.imageId || null, imageUrl: p.imageUrl || null, pendingOpId: p.pendingOpId || null }; }), dep: S.autoSaveDepId, ver: S.depVersion, dirty: !!(__T.App && __T.App._dirty), regMode: S.regMode, placing: S.placing, drawn: !!__M.drawingRect() }");
   const queueCount = () => evSafe("(window.__T && __T.SyncQueue && __T.SyncQueue.count) ? __T.SyncQueue.count() : -1");
   const TREE_INFO = "(function(){ var t = document.getElementById('side-tree'); return { decks: t ? t.querySelectorAll('.tree-node-deck,[data-deck-id]').length : -1, text: t ? (t.innerText||'').replace(/\\s+/g,' ').slice(0, 200) : null }; })()";
   const drawnExpr = "window.__M && __M.drawingRect() && ((document.getElementById('map-image')||{}).complete !== false)";
@@ -681,14 +690,14 @@ async function runScenario(P) {
   }
   await snap("offline-after-20pins");
   // 핀 번호(배지)가 다른 핀의 리더선 풍선·마커에 가려 안 보이거나 탭이 엉뚱한 핀으로 가는가(66px 간격 격자)
-  T.markerSelfHit = await evSafe("(function(){ var ms = Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ return __M.visible(e); }); var bad = []; ms.forEach(function(m){ var r = m.getBoundingClientRect(); var h = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2); var mine = h && (m.contains(h) || h.closest('.pin-marker') === m); if (!mine) bad.push({ id: m.getAttribute('data-id'), no: m.getAttribute('data-no'), hit: h ? __M.label(h.closest('.pin-leader-bubble,.pin-marker') || h) : null }); }); return { visible: ms.length, coveredOrStolen: bad.length, sample: bad.slice(0, 6) }; })()");
+  T.markerSelfHit = await evSafe("(function(){ var ms = Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ return __M.tgtVisible(e); }); var bad = []; ms.forEach(function(m){ var r = __M.tgtRect(m); var h = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2); var mine = h && (m.contains(h) || h.closest('.pin-marker') === m); if (!mine) bad.push({ id: m.getAttribute('data-id'), no: m.getAttribute('data-no'), hit: h ? __M.label(h.closest('.pin-leader-bubble,.pin-marker') || h) : null }); }); return { visible: ms.length, coveredOrStolen: bad.length, sample: bad.slice(0, 6) }; })()");
   if (T.markerSelfHit && T.markerSelfHit.coveredOrStolen > 0) defect("P2", "CHECKER 핀 " + T.markerSelfHit.coveredOrStolen + "/" + T.markerSelfHit.visible + "개의 마커 중심을 다른 요소(이웃 핀의 리더선 번호풍선 등)가 덮음 — 번호가 겹쳐 안 보이고 탭하면 다른 핀이 열림", T.markerSelfHit, "11_UI.js _renderLeader(1072~) CHECKER 리더선 기본 ON — 풍선 오프셋이 이웃 핀 위치와 충돌(66px 간격 실측)");
   // [a7a7bb0 검증] 영역 경계 탭 통과 — 경계선(왼쪽·위쪽)·안쪽 점을 "기존 핀·풍선에서 가장 먼" 위치로 골라 탭
   {
     const zr = await evSafe("(function(){ var z = document.querySelector('.zone-shape[data-zone=z_p114]'); if (!z) return null; var r = z.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()");
     const res = [];
     if (zr) {
-      const pick = async (name, cands) => evSafe("(function(){ var R = __M.mapRect(); var obs = Array.from(document.querySelectorAll('.pin-marker[data-id], .pin-leader-bubble')).filter(function(e){ return __M.visible(e); }).map(function(e){ var r = e.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; }); var best = null; " + JSON.stringify(cands) + ".forEach(function(c){ if (c.x < 4 || c.x > innerWidth - 4 || c.y < R.y + 40 || c.y > R.b - 110) return; var h = document.elementFromPoint(c.x, c.y); if (h && h.closest && h.closest('.pin-marker,.pin-leader-bubble,button')) return; var d = obs.reduce(function(m, o){ return Math.min(m, Math.hypot(o.x - c.x, o.y - c.y)); }, 1e9); if (!best || d > best.d) best = { x: Math.round(c.x), y: Math.round(c.y), d: Math.round(d), hit: h ? __M.label(h) : null }; }); return best ? Object.assign({ name: " + JSON.stringify(name) + " }, best) : { name: " + JSON.stringify(name) + ", skipped: '후보 없음(화면 밖/핀 위)' }; })()");
+      const pick = async (name, cands) => evSafe("(function(){ var R = __M.mapRect(); var obs = Array.from(document.querySelectorAll('.pin-marker[data-id], .pin-leader-bubble')).filter(function(e){ return __M.tgtVisible(e); }).map(function(e){ var r = __M.tgtRect(e); return { x: r.left + r.width/2, y: r.top + r.height/2 }; }); var best = null; " + JSON.stringify(cands) + ".forEach(function(c){ if (c.x < 4 || c.x > innerWidth - 4 || c.y < R.y + 40 || c.y > R.b - 110) return; var h = document.elementFromPoint(c.x, c.y); if (h && h.closest && h.closest('.pin-marker,.pin-leader-bubble,button')) return; var d = obs.reduce(function(m, o){ return Math.min(m, Math.hypot(o.x - c.x, o.y - c.y)); }, 1e9); if (!best || d > best.d) best = { x: Math.round(c.x), y: Math.round(c.y), d: Math.round(d), hit: h ? __M.label(h) : null }; }); return best ? Object.assign({ name: " + JSON.stringify(name) + " }, best) : { name: " + JSON.stringify(name) + ", skipped: '후보 없음(화면 밖/핀 위)' }; })()");
       const steps = Array.from({ length: 19 }, (_, i) => 0.05 + i * 0.05);
       const pts = [
         await pick("왼쪽 경계선", steps.map((t) => ({ x: zr.x + 1, y: zr.y + zr.h * t }))),
@@ -720,6 +729,7 @@ async function runScenario(P) {
   const d2 = await evSafe("__M.drawingRect()");
   const pp = { x: Math.round(d2.x + d2.w * 0.5), y: Math.round(d2.y + d2.h * 0.03 + 4) };
   const hp = await evSafe(`__M.hit(${pp.x}, ${pp.y})`);
+  const idsBeforePhoto = await S("S.pins.map(function(p){ return String(p.id); })");
   const chooser = P.onceEvent("Page.fileChooserOpened", 15000).catch(() => null);
   const tP = Date.now();
   await tap(pp.x, pp.y);
@@ -730,9 +740,13 @@ async function runScenario(P) {
     await snap("offline-360-chooser-open");
     await send("DOM.setFileInputFiles", { files: [P.PANO_JPG], backendNodeId: fc.backendNodeId });
     const tSel = Date.now();
-    const linked = await waitFor("__T.State.pins.some(function(p){ return !p.checkboard && (p.pendingOpId || p.imageId || p.imageUrl); })", 60000);
+    // 사진 핀 = 이 탭으로 새로 생긴 핀(ID) — 정확히 1개여야 한다(0/2개면 사진 핀 미식별 → 아래 연결 단언 FAIL)
+    const newIds = ((await S("S.pins.map(function(p){ return String(p.id); })")) || []).filter((id) => (idsBeforePhoto || []).indexOf(id) < 0);
+    photoPinId = newIds.length === 1 ? newIds[0] : null;
+    const pidJ = JSON.stringify(String(photoPinId));
+    const linked = photoPinId ? await waitFor("__T.State.pins.some(function(p){ return String(p.id) === " + pidJ + " && (p.pendingOpId || p.imageId || p.imageUrl); })", 60000) : -1;
     T.photoLinkMs = linked < 0 ? -1 : Date.now() - tSel;
-    const photoPin = await S("(S.pins.filter(function(p){ return !p.checkboard; }).map(function(p){ return { id: String(p.id), pendingOpId: p.pendingOpId || null, imageId: p.imageId || null, imageUrl: p.imageUrl || null }; }))");
+    const photoPin = await S("({ newIds: " + JSON.stringify(newIds) + ", pin: S.pins.filter(function(p){ return String(p.id) === " + pidJ + "; }).map(function(p){ return { id: String(p.id), pendingOpId: p.pendingOpId || null, imageId: p.imageId || null, imageUrl: p.imageUrl || null }; }) })");
     ok(linked >= 0, "오프라인 360 사진 → 핀 자동 연결(큐 보관)", photoPin);
   }
   T.queueAfterPhoto = await queueCount();
@@ -751,7 +765,7 @@ async function runScenario(P) {
   // 360 모드는 CHECKER 핀을 숨긴다(모드 = 작업공간) — 다시 CHECKER 로
   await tapSel("#btn-regmode-checkboard", "상단 CHECKER 모드");
   await P.wait(800);
-  ui.checkerVisibleMarkers = await evSafe("Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ return __M.visible(e); }).length");
+  ui.checkerVisibleMarkers = await evSafe("Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ return __M.tgtVisible(e); }).length");
   const nbOpenExpr = "document.getElementById('btn-numband').getAttribute('aria-expanded') === 'true'";
   let t5 = Date.now();
   const nbBtn = await tapSel("#btn-numband", "번호 대역 버튼");
@@ -778,7 +792,7 @@ async function runScenario(P) {
   ok(!!nbBtn && nbOpen >= 0 && nbClosed >= 0, "오프라인 번호 대역 메뉴 열고 닫기", { open: ui.numbandOpenMs, close: ui.numbandCloseMs, by: ui.numbandCloseBy });
   ok(ui.numbandClosePinsCreated === 0, "번호 대역 메뉴 닫기 탭이 핀을 만들지 않음", ui.numbandClosePinsCreated);
   // 핀 패널(CHECKER 마커 탭 → PinActionPop → 닫기)
-  const mk = await evSafe("(function(){ var R = __M.mapRect(); var m = Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ if (!__M.visible(e)) return false; var r = e.getBoundingClientRect(); var x = r.left + r.width/2, y = r.top + r.height/2; var h = document.elementFromPoint(x, y); return y > R.y && y < R.b && h && (e.contains(h) || h.closest('.pin-marker') === e); }); var e = m[0]; if (!e) return { none: true, total: document.querySelectorAll('.pin-marker[data-id]').length }; var r = e.getBoundingClientRect(); return { id: e.getAttribute('data-id'), x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height }; })()");
+  const mk = await evSafe("(function(){ var R = __M.mapRect(); var m = Array.from(document.querySelectorAll('.pin-marker[data-id]')).filter(function(e){ if (!__M.tgtVisible(e)) return false; var r = __M.tgtRect(e); var x = r.left + r.width/2, y = r.top + r.height/2; var h = document.elementFromPoint(x, y); return y > R.y && y < R.b && h && (e.contains(h) || h.closest('.pin-marker') === e); }); var e = m[0]; if (!e) return { none: true, total: document.querySelectorAll('.pin-marker[data-id]').length }; var r = __M.tgtRect(e); return { id: e.getAttribute('data-id'), x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height }; })()");
   const pinsBeforePanel = await S("S.pins.length");
   const papOpenExpr = "(function(){ var p = document.getElementById('pin-action-pop'); return !!p && !p.classList.contains('hidden') && __M.visible(p); })()";
   t5 = Date.now();
@@ -864,9 +878,11 @@ async function runScenario(P) {
    *  photoDone=true 가 됐다 → 업로드가 끝나기 전(실측: Fast 3G 에서 1.73MB base64 = 21.2s,
    *  POST /api/sync/batch 200) 1.6s 에 루프를 빠져나와 종료 12.6s 뒤 측정 → "360 사진이 서버에
    *  올라가 핀에 연결됨" 이 측정 조기 종료 때문에 FAIL 했다(제품은 24.6s 에 연결 완료 — 실측). */
+  /*  [WO 20261022-offlinephoto] 대상 = 사진을 고른 그 핀(ID) — 서버에 있고 imageId/imageUrl 보유 + pendingOpId 해소.
+   *  추가로 서버 핀 전체에 pendingOpId 잔존 0(번호 핀 쪽 미해소 큐 참조도 놓치지 않게). 사진 핀 미식별(null) = false(vacuous 금지). */
   const srvPhotoLinked = (pins) => {
-    const ph = pins.filter((p) => !p.checkboard);
-    return ph.length >= 1 && ph.every((p) => (p.imageId || p.imageUrl) && !p.pendingOpId);
+    const ph = photoPinId ? pins.filter((p) => String(p.id) === String(photoPinId)) : [];
+    return ph.length === 1 && ph.every((p) => (p.imageId || p.imageUrl) && !p.pendingOpId) && pins.every((p) => !p.pendingOpId);
   };
   const apiIdx = P.net.api.length;
   const tOn = Date.now();
@@ -918,10 +934,10 @@ async function runScenario(P) {
   if (syncDone >= 0 && T.afterSyncSaveState && T.afterSyncSaveState.dirty) defect("P2", "서버 동기화가 끝났는데(서버 핀 = 로컬 핀, 사진 연결) 화면은 계속 '저장 *'(미저장) — 현장 사용자가 다시 저장을 누르거나 불안해함", T.afterSyncSaveState, "05_SyncQueue._onReconnect → App._flushDirtyDrafts 가 서버 반영 후 App._dirty/저장 버튼을 정리하지 않음(추정)");
   if (syncStart < 0 || syncStart > 5000) defect("P2", "온라인 복귀 후 동기화가 5초 안에 시작하지 않음(" + syncStart + "ms)", { syncStart, probe: authProbe }, "20_App.js:61-64 online → +600ms SyncQueue._onReconnect");
   ok(!!lsEnd && sp.length === lsEnd.pins && lsEnd.ids.every((id) => srvIds.indexOf(id) >= 0), "서버 핀 수 = 로컬 핀 수(ID 일치)", { local: lsEnd && lsEnd.pins, server: sp.length, missing: lsEnd && lsEnd.ids ? lsEnd.ids.filter((id) => srvIds.indexOf(id) < 0) : null });
-  const srvPhoto = sp.filter((p) => !p.checkboard);
+  const srvPhoto = sp.filter((p) => String(p.id) === String(photoPinId));
   const pano = await P.db.prepare("SELECT COUNT(*) AS n FROM pano_images").first().catch(() => ({ n: -1 }));
   const r2list = await P.r2.list().catch(() => ({ objects: [] }));
-  report.serverAfterSync = { pins: sp.length, photoPins: srvPhoto.map((p) => ({ id: String(p.id), imageId: p.imageId || null, imageUrl: p.imageUrl || null, pendingOpId: p.pendingOpId || null })), panoImagesRows: pano && pano.n, r2Keys: (r2list.objects || []).map((o) => o.key + " " + o.size + "B") };
+  report.serverAfterSync = { pins: sp.length, photoPinId, srvPendingOpIds: sp.filter((p) => p.pendingOpId).length, photoPins: srvPhoto.map((p) => ({ id: String(p.id), imageId: p.imageId || null, imageUrl: p.imageUrl || null, pendingOpId: p.pendingOpId || null })), panoImagesRows: pano && pano.n, r2Keys: (r2list.objects || []).map((o) => o.key + " " + o.size + "B") };
   const photoOk = srvPhotoLinked(sp);   // 루프 탈출 조건과 같은 단일 규칙(§G-2-5)
   ok(photoOk, "360 사진이 서버에 올라가 핀에 연결됨(pendingOpId 해소)", report.serverAfterSync);
   ok(blockSamples.length === 0, "동기화 중 도면 중앙이 다른 UI 로 막히지 않음", blockSamples.slice(0, 5));
