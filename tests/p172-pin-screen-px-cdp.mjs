@@ -124,7 +124,14 @@ export default async function (P) {
         { id: "p172c", x: 56, y: 54, page: pg, label: "3", checkboard: true },
         { id: "p172d", x: 30, y: 60, page: pg, label: "4", checkboard: true, leader: true, callout: { x: 36, y: 56 } }
       ];
-      __T.UI.renderPinsOnMap(); __T.MapCtrl.applyTransform(); return S.pins.length; })()`);
+      __T.UI.renderPinsOnMap();
+      // [WO 20261022-pindots] teardrop 공식(pinScreenPx) 측정 범위 — 점(dot) 기본표시는 별도(p177).
+      // 평면 기본이 점으로 바뀌어도 이 테스트는 teardrop 을 그대로 측정하도록 고정한다(회귀 0).
+      // 🔴 .focused 클래스가 아니라 테스트 전용 .force-pin — .pin-marker-teardrop.focused
+      // .pin-pin{transform:scale(1.25)}(선택 강조, 기존 규칙)까지 같이 걸려 측정값이 25% 부푼다
+      // (tests/_lib/real-map-page.mjs 주석 참조 — 같은 함정, p159 실측으로 확인).
+      Array.prototype.forEach.call(document.querySelectorAll('#pins-layer > .pin-marker'), function(m){ m.classList.add("force-pin"); });
+      __T.MapCtrl.applyTransform(); return S.pins.length; })()`);
   };
   const at = async (z) => { await ev(`(function(){ __T.State.zoom = ${z}; __T.MapCtrl.applyTransform(); return 1; })()`); await settle(150); };
   const snap = async () => ({ st: await ev("__P172.state()"), heads: await ev("__P172.heads()"), bubble: await ev("__P172.bubble()"), route: await ev("__P172.line('routes-svg','route-line-halo')"), anno: await ev("__P172.line('anno-svg','anno-pen-line')") });

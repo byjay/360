@@ -211,9 +211,14 @@ function suiteTierShape(label, sSrc, uSrc) {
  * ──────────────────────────────────────────────────────────── */
 function suitePinSize() {
   console.log("\n[핀 크기 불변]");
+  // [WO 20261022-pindots] 점(.pin-dot) 가시성 토글 규칙이 "...pin-pin { display: block; }" 꼴로
+  // 추가되어 첫 매치만 보던 종전 방식(.match)이 그 토글 규칙을 집어 오탐했다(실제 크기 정의 블록은
+  // 그 아래). 크기 정의를 "포함하는" 블록이 하나라도 있는지(any-match)로 바꾼다 — 전/후 모두 동일
+  // 의도(21×37 유지)를 검사하되, 다른 .pin-pin 선택자 규칙이 몇 개 섞여도 깨지지 않는다.
   [["public/css/style.css", cssPublic], ["css/style.css", cssRoot]].forEach(([name, css]) => {
-    const m = css.match(/\.pin-pin\s*\{[^}]*\}/);
-    ok(!!m && /width:\s*21px/.test(m[0]) && /height:\s*37px/.test(m[0]), `⑥ ${name}: .pin-pin 21×37 유지`);
+    const ms = css.match(/\.pin-pin\s*\{[^}]*\}/g) || [];
+    const hit = ms.some((m) => /width:\s*21px/.test(m) && /height:\s*37px/.test(m));
+    ok(hit, `⑥ ${name}: .pin-pin 21×37 유지`);
   });
 }
 
@@ -288,9 +293,9 @@ suiteExistingAxesIntact("⑦ 기존 축 회귀 없음", seriesSrc, uiSrc);
   const mutated = cssPublic.replace(needle, "width: 42px; height: 74px;");
   if (mutated === cssPublic) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
-    const m = mutated.match(/\.pin-pin\s*\{[^}]*\}/);
-    ok(!(m && /width:\s*21px/.test(m[0]) && /height:\s*37px/.test(m[0])),
-      "뮤테이션 적용 시 핀 크기 21×37 판정이 깨짐(⑥ 실패 증명)");
+    const ms = mutated.match(/\.pin-pin\s*\{[^}]*\}/g) || [];
+    const hit = ms.some((m) => /width:\s*21px/.test(m) && /height:\s*37px/.test(m));
+    ok(!hit, "뮤테이션 적용 시 핀 크기 21×37 판정이 깨짐(⑥ 실패 증명)");
   }
 }
 

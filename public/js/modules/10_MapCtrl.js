@@ -484,6 +484,137 @@
     pinScreenScale() {
       return this.pinScreenPx() / this.PIN_NATIVE_PX / this.parentScale();
     },
+    /** [WO 20261022-pindots, 마스터 "핀 크기가 너무 커서 도면을 다 가린다. 방식을 다른 방식으로"]
+     *  [재현] 라이브(scan.seastar.work main.js?v=ac4c31536c) PIN_MIN_PX_TOUCH/MOUSE 20~24px 바닥 +
+     *  화면고정 px 방식이 "핀 밀도"(핀 간 거리)를 전혀 보지 않아, 촘촘한 도면에서 핀 머리끼리 겹쳐
+     *  도면을 덮는다 — 5번째 반복된 "크기 숫자만 바꾸는" 미세조정은 근본 해결이 아니었다.
+     *  채택: 기본 마커를 "점"(dot)으로 바꾸고, 지름을 화면상 최근접 이웃 핀 거리(d)에 비례(0.8×d)
+     *  시켜 핀끼리 항상 겹치지 않게 한다(아래 증명). 선택/호버/방금 배치한 핀만(.focused/.drop/:hover)
+     *  기존 물방울(teardrop) 머리로 전환 — DOM·색상·번호·tier 로직은 그대로(SoT 불변), CSS 가시성
+     *  토글만 담당(style.css #pins-layer:not(.iso-mode) .pin-dot/.pin-pin, §G-2-5 단일 진입점).
+     *  ISO(3D) 뷰는 이 WO 범위 밖 — 기존처럼 항상 teardrop(회귀 0, iso-mode 스코프 밖).
+     *
+     *  [겹침 방지 증명] 점 i 의 지름 = clamp(0.8×nearest_i, MIN, MAX). 임의의 두 점 i,j 사이 거리
+     *  d_ij 에 대해 nearest_i ≤ d_ij, nearest_j ≤ d_ij(정의상 최근접 거리가 d_ij 보다 클 수 없음) →
+     *  반지름 합 = 0.4×nearest_i + 0.4×nearest_j ≤ 0.4×d_ij + 0.4×d_ij = 0.8×d_ij ≤ d_ij. 바닥(MIN)
+     *  클램프로 올려질 때만(극단적 밀집) 겹칠 수 있다 — 그 경우도 가시 최소 크기(점)는 유지하고
+     *  탭 영역은 아래 PIN_DOT_HIT_MIN_PX 로 별도 보장한다(발주 §4, 시각 크기와 탭 판정 분리). */
+    PIN_DOT_RATIO: 0.8,
+    PIN_DOT_MIN_PX: 6,
+    PIN_DOT_MAX_PX: 28,
+    PIN_DOT_NUM_MIN_PX: 16,   // 점 지름이 이 이상이어야 원 안에 번호(마커에 dot-show-num 클래스)
+    PIN_DOT_HIT_MIN_PX: 24,   // 탭 히트영역(::after 패드) 최소 — 시각 크기와 분리
+    /** 현재 #pins-layer 의 핀 마커들을 화면(screen) 좌표 px 로 — 밀도 계산 입력.
+     *  좌표계: 콘텐츠(도면) CSS 크기 × zoom(= 화면 px, parentScale() 과 동일 스케일). 아직 레이아웃을
+     *  모르면(로드 전) null(호출부가 건너뜀 → 기존 기본값 유지, 회귀 0). */
+    _pinScreenPoints(layer) {
+      const cw = this.transform && this.transform.offsetWidth;
+      const ch = this.transform && this.transform.offsetHeight;
+      const zoom = State.zoom || 1;
+      if (!(cw > 0) || !(ch > 0)) return null;
+      const pts = [];
+      for (const m of layer.children) {
+        if (!m.classList || !m.classList.contains("pin-marker")) continue;
+        const xPct = parseFloat(m.style.left), yPct = parseFloat(m.style.top);
+        if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) continue;
+        pts.push({ id: m.dataset.id, x: (xPct / 100) * cw * zoom, y: (yPct / 100) * ch * zoom, el: m });
+      }
+      return pts;
+    },
+    /** 격자 버킷 최근접 이웃(O(n) 평균, 수천 개에서도 n² 회피) — 점 i 의 "화면 지름"(px) 맵 반환.
+     *  cell 크기는 전체 분포의 평균 밀도로 추정(국소 밀집·희소가 섞여도, 링 확장 탐색이 안전망이라
+     *  추정이 어긋나도 정확도는 유지되고 속도만 영향). 외딴 점(이웃 없음)은 PIN_DOT_MAX_PX. */
+    _computePinDotPx(points) {
+      const diamMap = new Map();
+      const n = points.length;
+      if (n === 0) return diamMap;
+      if (n === 1) { diamMap.set(points[0].id, this.PIN_DOT_MAX_PX); return diamMap; }
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of points) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      }
+      const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+      let cell = Math.sqrt((w * h) / n);
+      if (!(cell > 0)) cell = 32;
+      const colOf = (p) => Math.floor((p.x - minX) / cell);
+      const rowOf = (p) => Math.floor((p.y - minY) / cell);
+      const grid = new Map();
+      points.forEach((p, i) => {
+        const k = colOf(p) + "_" + rowOf(p);
+        let bucket = grid.get(k);
+        if (!bucket) { bucket = []; grid.set(k, bucket); }
+        bucket.push(i);
+      });
+      const MAX_RING = 8;
+      points.forEach((p, i) => {
+        const cx = colOf(p), cy = rowOf(p);
+        let best = Infinity, ring = 1;
+        while (ring <= MAX_RING) {
+          best = Infinity;
+          for (let gx = cx - ring; gx <= cx + ring; gx++) {
+            for (let gy = cy - ring; gy <= cy + ring; gy++) {
+              const bucket = grid.get(gx + "_" + gy);
+              if (!bucket) continue;
+              for (const j of bucket) {
+                if (j === i) continue;
+                const dx = points[j].x - p.x, dy = points[j].y - p.y;
+                const d = Math.hypot(dx, dy);
+                if (d < best) best = d;
+              }
+            }
+          }
+          // 안전 종료: 쿼리점이 자기 셀 "가장자리"에 있는 최악의 경우에도, 이미 스캔한 범위
+          // 밖(ring+1)에 best 보다 더 가까운 점이 없음을 보장하려면 (ring-1)*cell 이하여야 한다
+          // (ring*cell 로는 한 셀 덜 보고 멈춰 실제보다 먼 "최근접"을 확정해 지름이 과대해질 수
+          // 있었다 — tests/p177 겹침 1쌍 실측으로 발견, (ring-1) 로 교정 후 0쌍).
+          if ((ring > 1 && best <= (ring - 1) * cell) || ring === MAX_RING) break;
+          ring++;
+        }
+        const diam = (best === Infinity)
+          ? this.PIN_DOT_MAX_PX
+          : Math.min(this.PIN_DOT_MAX_PX, Math.max(this.PIN_DOT_MIN_PX, best * this.PIN_DOT_RATIO));
+        diamMap.set(p.id, diam);
+      });
+      return diamMap;
+    },
+    /** 매 줌/팬/핀 변경마다 — 점 지름(--dot-local-px)·탭패드(--dot-pad-local-px)·번호표시
+     *  (dot-show-num 클래스)를 마커별로 갱신한다. 요청 프레임 1회로 묶음(_dotRaf) — 핀치/줌 중
+     *  연타해도 실제 계산은 프레임당 1번. "로컬" 단위 환산 = 화면 px ÷ (상위 scale 전체).
+     *  상위 scale 전체(zoom × --pin-scale) = pinScreenPx()/PIN_NATIVE_PX(§460 parentScale 주석 참조,
+     *  zoom 이 상쇄되어 상수) — 그 역수를 곱해 "화면 px 그대로"가 되는 로컬 크기를 구한다. */
+    _applyPinDotSizes(layer) {
+      if (this._dotRaf) return;
+      this._dotRaf = (typeof requestAnimationFrame === "function") ? requestAnimationFrame(() => {
+        this._dotRaf = null;
+        this._applyPinDotSizesNow(document.getElementById("pins-layer"));
+      }) : (this._applyPinDotSizesNow(layer), null);
+    },
+    _applyPinDotSizesNow(layer) {
+      if (!layer) return;
+      const points = this._pinScreenPoints(layer);
+      if (!points) return; // 레이아웃 미확정(로드 전·테스트 셸) — CSS 기본값(폴백) 유지
+      const diamMap = this._computePinDotPx(points);
+      const screenPx = this.pinScreenPx();
+      const factor = screenPx > 0 ? (this.PIN_NATIVE_PX / screenPx) : 1; // 화면px → 로컬px 환산
+      const canSetProp = (st) => st && typeof st.setProperty === "function";
+      for (const p of points) {
+        const diam = diamMap.get(p.id) || this.PIN_DOT_MIN_PX;
+        const padDiam = Math.max(diam, this.PIN_DOT_HIT_MIN_PX);
+        const localPx = (diam * factor).toFixed(2) + "px";
+        const localPadPx = (padDiam * factor).toFixed(2) + "px";
+        // [테스트 셸] style 이 plain object(setProperty 無)인 경량 DOM 모의(p133 등) 대비 — 값은
+        // 그대로 보존(후속 읽기 가능), 실제 CSS 반영은 없음(해당 하니스는 시각 렌더 자체를 안 봄).
+        if (canSetProp(p.el.style)) {
+          p.el.style.setProperty("--dot-local-px", localPx);
+          p.el.style.setProperty("--dot-pad-local-px", localPadPx);
+        } else if (p.el.style) {
+          p.el.style["--dot-local-px"] = localPx;
+          p.el.style["--dot-pad-local-px"] = localPadPx;
+        }
+        if (p.el.classList) p.el.classList.toggle("dot-show-num", diam >= this.PIN_DOT_NUM_MIN_PX);
+      }
+    },
     /** [WO 20261016-pinscale §2, pinscale2 / 20261019-pinscale3] 선(360 동선·주석) 공용 — 핀과 같은
      *  기준(zoom/fitZoom × 구역 scaleRef, 경계면 scaleRef 중복보정 제거)에 LINE_FIT_RATIO 를 곱해
      *  "맞춤 상태에서 기준선(route-line 3px)이 약 1.5px"가 되게 한다(마스터 "전체 비율을 봐" — 핀과
@@ -571,6 +702,8 @@
           }
         }
         this._pinIsoPrev = false;
+        // [WO 20261022-pindots] 평면 모드만 — 밀도 기반 점 지름 재계산(ISO 는 범위 밖, 항상 teardrop).
+        this._applyPinDotSizes(layer);
       }
     },
 

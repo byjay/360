@@ -98,14 +98,23 @@ window.__T = { State, MapCtrl, UI, PDF, PinLabelPrefs, Routes, PdfAnno };
   if ((await ev("typeof window.__T")) !== "object") throw new Error("모듈 로드 실패(__T 없음)");
   await ev(PROBE);
   const close = async () => { try { ws.close(); } catch (e) {} try { proc.kill(); } catch (e) {} await wait(300); try { fs.rmSync(htmlPath, { force: true }); fs.rmSync(profileDir, { recursive: true, force: true }); } catch (e) {} };
-  return { ev, close };
+  return { ev, close, send }; // send: 저수준 CDP(스크린샷 등) — 기존 호출부는 ev/close만 써서 하위호환
 }
 
 /** 페이지 안 측정 도구 — 전부 getBoundingClientRect/getScreenCTM(상위 transform 포함 실제 화면값). */
 const PROBE = String.raw`(function(){
   var M = window.__M = {};
   var S = __T.State, MC = __T.MapCtrl;
-  M.pins = function(list){ S.pins = list; __T.UI.renderPinsOnMap(); MC.applyTransform(); return S.pins.length; };
+  // [WO 20261022-pindots] 이 하니스는 pinScreenPx()/pinScreenScale() "공식"(teardrop 머리 px)만
+  // 측정한다 — 점(dot)↔물방울(teardrop) UX 전환은 범위 밖. teardrop 은 이제 기본(평면)에서
+  // .focused/:hover/.drop/.force-pin 일 때만 보이므로(CSS 토글, style.css), 측정 대상엔 테스트
+  // 전용 .force-pin 클래스를 준다. 🔴 .focused 로 보이게 하면 안 된다 —
+  // .pin-marker-teardrop.focused .pin-pin{transform:scale(1.25)}(선택 강조용, 기존 규칙)까지 같이
+  // 걸려 측정값이 25% 부풀었다(실측: 맞춤 30→37.5px, 바닥 8→10px — git archive HEAD 대조로 확인).
+  // .force-pin 은 그 강조 규칙의 선택자(.focused/:hover)와 무관해 순수 teardrop 공식만 읽는다 —
+  // 탭 패드(::after 44px top-anchor)도 .force-pin 에 같이 걸려 있어 ⑩ 탭 테스트도 그대로 재사용.
+  // opts.noFocus=true: [p177] 점(dot) 기본표시 자체를 측정할 때는 이 강제 표시를 건너뛴다.
+  M.pins = function(list, opts){ S.pins = list; __T.UI.renderPinsOnMap(); if (!(opts && opts.noFocus)) { Array.from(document.querySelectorAll('#pins-layer > .pin-marker')).forEach(function(m){ m.classList.add('force-pin'); }); } MC.applyTransform(); return S.pins.length; };
   M.zoom = function(z){ S.zoom = z; MC.applyTransform(); return S.zoom; };
   M.fit = function(){ var z = MC.computeFitZoom(); S.zoom = z; MC.applyTransform(); return z; };
   M.heads = function(){ return Array.from(document.querySelectorAll('#pins-layer > .pin-marker')).filter(function(m){ return m.style.display !== 'none'; }).map(function(m){ var r = (m.querySelector('.pin-pin svg') || m.querySelector('svg')).getBoundingClientRect(); return Math.round(r.height * 1000) / 1000; }); };

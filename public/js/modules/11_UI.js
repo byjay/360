@@ -1848,7 +1848,12 @@
             : `<${_discTag} class="pin-tier-disc" ${_discGeomAttr(18, 15)} fill="#ffffff" opacity="0.99"/>`;
         // 🔴 [WO 20261019-unifymode] 구 "CHECKER 모드 + 체커 메타 핀 = 간소화 사각 배지" 분기 폐기 — 같은 번호 핀이 생성 모드·등록
         //   방식에 따라 다른 모양이면 "통일"이 아니다. 모든 핀 = 같은 메달리온, 상태(사진 유무)는 filled 축(색·링 패턴·속 원판)으로만.
+        // [WO 20261022-pindots] 점(dot) 마커 — 평면 모드 기본 표시(teardrop 은 선택/호버/드롭 때만, CSS
+        // 토글). 색·테두리 패턴은 teardrop 과 같은 정본(_st.colors/_st.border, PinSeries)에서 파생.
+        const dotBg = headFill2;
+        const dotBorder = _st.filled ? "#ffffff" : headFill2;
         marker.innerHTML = `
+          <div class="pin-dot" style="background:${dotBg};border-color:${dotBorder};border-style:${_st.border};"><span class="pin-dot-num">${dispLabel}</span></div>
           ${hasContent ? '<div class="pin-pulse"></div>' : ''}
           <div class="pin-pin">
             <svg viewBox="0 0 36 64" xmlns="http://www.w3.org/2000/svg">

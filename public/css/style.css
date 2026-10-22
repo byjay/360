@@ -1477,18 +1477,68 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transform: translate(-50%, calc(-100% + 2px)) scale(var(--pin-scale, 1));
   transform-origin: 50% 100%;
 }
+/* [WO 20261022-pindots, 마스터 "핀 크기가 너무 커서 도면을 다 가린다"] 평면 모드 기본 = 점(dot,
+   중앙 앵커) · 선택/호버/방금 배치만(.focused/.drop/:hover) 물방울(teardrop, 하단 tip 앵커)로
+   전환 — 아래가 기본 규칙을 덮어쓴다(선택자 동일 특이성, 소스 순서로 우선). ISO 는 범위 밖(위 규칙
+   그대로, iso-mode 는 이 선택자들과 매치 안 됨). */
+#pins-layer:not(.iso-mode) > .pin-marker {
+  transform: translate(-50%, -50%) scale(var(--pin-scale, 1));
+  transform-origin: 50% 50%;
+}
+#pins-layer:not(.iso-mode) > .pin-marker:hover,
+#pins-layer:not(.iso-mode) > .pin-marker.focused,
+#pins-layer:not(.iso-mode) > .pin-marker.drop,
+#pins-layer:not(.iso-mode) > .pin-marker.force-pin {
+  transform: translate(-50%, calc(-100% + 2px)) scale(var(--pin-scale, 1));
+  transform-origin: 50% 100%;
+}
+/* 점(기본)/물방울(선택·호버·드롭) 가시성 토글 — DOM·색상·번호 로직(11_UI.js)은 그대로, 보이는 것만 바뀐다.
+   .force-pin = 테스트 전용 훅(tests/_lib/real-map-page.mjs) — .focused/:hover 가 이미 가진 "선택 강조"
+   스케일(.pin-marker-teardrop.focused .pin-pin{scale(1.25)} 등, 아래쪽 §ENHANCED PIN MARKER)과는
+   별개 선택자라 그 배율 없이 teardrop 순수 공식(pinScreenPx)만 보이게 한다. */
+#pins-layer:not(.iso-mode) > .pin-marker .pin-dot { display: flex; }
+#pins-layer:not(.iso-mode) > .pin-marker .pin-pin,
+#pins-layer:not(.iso-mode) > .pin-marker .pin-pulse { display: none; }
+#pins-layer:not(.iso-mode) > .pin-marker:hover .pin-dot,
+#pins-layer:not(.iso-mode) > .pin-marker.focused .pin-dot,
+#pins-layer:not(.iso-mode) > .pin-marker.drop .pin-dot,
+#pins-layer:not(.iso-mode) > .pin-marker.force-pin .pin-dot { display: none; }
+#pins-layer:not(.iso-mode) > .pin-marker:hover .pin-pin,
+#pins-layer:not(.iso-mode) > .pin-marker.focused .pin-pin,
+#pins-layer:not(.iso-mode) > .pin-marker.drop .pin-pin,
+#pins-layer:not(.iso-mode) > .pin-marker.force-pin .pin-pin { display: block; }
+#pins-layer:not(.iso-mode) > .pin-marker:hover .pin-pulse,
+#pins-layer:not(.iso-mode) > .pin-marker.focused .pin-pulse,
+#pins-layer:not(.iso-mode) > .pin-marker.drop .pin-pulse,
+#pins-layer:not(.iso-mode) > .pin-marker.force-pin .pin-pulse { display: block; }
 /* ★ 핀 머리 주변 보이지 않는 터치 패드(권장 44px 터치 타깃) — 작은 핀도 손가락으로 쉽게 탭.
    [WO 20261019-pinpx] 역스케일 = 1/--pin-screen-k(= --pin-scale × 상위 scale(zoom), MapCtrl._applyPinBillboard) —
    종전 1/--pin-scale 은 상위 #map-transform scale(zoom) 을 빠뜨려 화면 44×zoom px 였다(p172 CDP 실측).
    [WO 20261019-pinscale4] scale(calc(1/var(--pin-scale))) 로 역스케일 — ::after 는 .pin-marker
    의 자손 렌더이므로 부모 transform(scale(var(--pin-scale)))이 적용된 뒤 그려진다. 역스케일을
    안 곱하면 핀이 작아질수록(바닥 8px까지) 탭 영역도 같이 줄어 44px 보장이 깨진다(마스터
-   "너무 작아져도 눌리게" — 10_MapCtrl.js PIN_MIN_PX_* 하한 완화와 짝). */
+   "너무 작아져도 눌리게" — 10_MapCtrl.js PIN_MIN_PX_* 하한 완화와 짝). [ISO 전용 기본값 — 평면/점
+   모드는 아래 :not(.iso-mode) 오버라이드가 담당(§WO 20261022-pindots).] */
 .pin-marker::after {
   content: ""; position: absolute; left: 50%; top: 0;
   width: 44px; height: 44px;
   transform: translate(-50%, -22px) scale(calc(1 / var(--pin-screen-k, 1)));
   pointer-events: auto; z-index: -1;
+}
+/* [WO 20261022-pindots] 평면/점 기본 — 패드는 마커 중앙(점과 같은 앵커)에, 지름은 MapCtrl이
+   밀도로 계산한 --dot-pad-local-px(최소 24px 보장, §PIN_DOT_HIT_MIN_PX) — 시각 크기와 분리. */
+#pins-layer:not(.iso-mode) > .pin-marker::after {
+  left: 50%; top: 50%;
+  width: var(--dot-pad-local-px, 24px); height: var(--dot-pad-local-px, 24px);
+  transform: translate(-50%, -50%);
+}
+#pins-layer:not(.iso-mode) > .pin-marker:hover::after,
+#pins-layer:not(.iso-mode) > .pin-marker.focused::after,
+#pins-layer:not(.iso-mode) > .pin-marker.drop::after,
+#pins-layer:not(.iso-mode) > .pin-marker.force-pin::after {
+  left: 50%; top: 0;
+  width: 44px; height: 44px;
+  transform: translate(-50%, -22px) scale(calc(1 / var(--pin-screen-k, 1)));
 }
 /* [WO 20261019-pinscale4] 핀 번호(지도 위 핀 머리 숫자) 표시 옵션 — PinLabelPrefs(23c_PinSizePrefs.js)
    SoT. always/hidden 은 사용자가 직접, auto(기본)는 MapCtrl._applyPinBillboard 가 화면 핀 높이
@@ -4797,6 +4847,38 @@ html.wm-view-link #screen-projects { display: none !important; }
   width:26px; height:26px; left:50%; top:18px;
   transform:translate(-50%,-50%);
   background:radial-gradient(circle, rgba(126,217,87,.55) 0%, rgba(126,217,87,0) 70%);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [WO 20261022-pindots] 점 마커(.pin-dot) — 평면 모드 기본 표시.
+   지름(--dot-local-px)·탭패드(--dot-pad-local-px)는 MapCtrl._applyPinDotSizesNow 가 매 줌/핀 변경마다
+   밀도(최근접 이웃 거리) 기준으로 계산해 마커 인라인 스타일로 넣는다(10_MapCtrl.js 주석 참조).
+   색/테두리 패턴(_st.colors·_st.border)은 11_UI.renderPinsOnMap 이 인라인 style 로 넣어 기존 PinSeries
+   정본(색·등록여부 구분)을 그대로 재사용한다 — 여기선 크기·배치만.
+   ─────────────────────────────────────────────────────────── */
+.pin-dot {
+  position: absolute; left: 50%; top: 50%;
+  width: var(--dot-local-px, 20px); height: var(--dot-local-px, 20px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border-width: 2px; /* border-color/border-style 는 인라인(상태별 정본) */
+  box-sizing: border-box;
+  box-shadow: 0 1px 3px rgba(0,0,0,.45);
+  align-items: center; justify-content: center;
+  z-index: 1;
+}
+.pin-dot-num {
+  display: none; /* 지름 ≥ PIN_DOT_NUM_MIN_PX(16px) 일 때만(.pin-marker.dot-show-num) */
+  font-family: var(--font-ui); font-weight: 800; color: #ffffff;
+  font-size: calc(var(--dot-local-px, 20px) * 0.52);
+  line-height: 1; text-shadow: 0 1px 1px rgba(0,0,0,.5);
+  pointer-events: none; white-space: nowrap;
+}
+.pin-marker.dot-show-num .pin-dot-num { display: block; }
+/* 개정 이월 배지(.pin-rev-badge)는 점 모드에서도 그대로 보여야 한다(기존 teardrop 전용 위치 -16px
+   는 점 중앙 앵커와 어긋나므로 점 모드일 때만 살짝 올림 — 선택/호버 시(teardrop) 원래 위치로 복귀). */
+#pins-layer:not(.iso-mode) > .pin-marker:not(:hover):not(.focused):not(.drop) .pin-rev-badge {
+  top: calc(-1 * var(--dot-local-px, 20px) / 2 - 16px);
 }
 /* ═══════════════════════════════════════════
    핀 작업 전용 팝업 (디자이너)
