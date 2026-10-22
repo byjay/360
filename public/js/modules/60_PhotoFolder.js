@@ -72,9 +72,23 @@
      파일 .fls 를 추가(_EXT_RE, _listEntries 는 이미 kind==="file" 만 올려 디렉터리 .fls 안내(_flsDirNotice)
      와 충돌 없음). _materializeFile 에서 39_FlsPano.fromFlsOle(OLE2 최소 리더로 "Main"·
      "Previews/previewColor.jpg" 스트림만 읽음, SoT — 재구현 금지)로 변환해 같은 jpg 등록 경로에 태운다.
+
+     🔴 [WO 20261022-scanproject · 지휘자 재발주 · 실측 R1~R2] 최상위 SCENE 프로젝트 폴더를 지정하면
+     스캔(.fls/.e57)·360 사진이 Revisions/<N>/Scans/ 처럼 여러 단계 아래에 있어 기존 _listEntries(최상위
+     1단만 열거)는 0개를 돌려줬다(R2: public/js/modules/60_PhotoFolder.js:329-345). handle 모드를
+     재귀(깊이·디렉터리 수 상한 — 내용은 읽지 않고 이름만 열거해 32GB 폴더에서도 빠름)로 바꾸고, 열거
+     시점에 _EXT_RE 로 걸러 *.fls.cache·*.dat 등 비대상 파일을 자연 제외한다. 같은 파일명이 여러
+     Revisions 에 있으면(원본 미처리 재스캔 — 리비전마다 같은 scan_N.fls 가 남는다) Revisions/<N> 의
+     N 이 가장 큰 쪽(없거나 동률이면 lastModified 최신) 1개만 남기고(_dedupeByName), 숨기지 않고
+     선택된 쪽에 _dupTotal/_dupNote 를 남긴다. 이름이 .fls 로 끝나는 디렉터리는 재귀하지 않는다
+     (레거시 원본 스캔 디렉터리 — 내용은 _flsDirNotice 안내만, 불변). fallback(webkitdirectory) 모드도
+     webkitRelativePath 기준으로 같은 규칙을 적용한다. previewBatch 는 결과에 rows.scanSummary
+     ("스캔 N개 발견 (위치: …)" 또는 0건이면 정직하게 "없습니다")를 1줄 붙인다(§10-no-hardcoding).
   ══════════════════════════════════════════════════════════════ */
   const PhotoFolder = {
     _EXT_RE: /\.(jpe?g|png|heic|e57|fls)$/i,
+    _MAX_SCAN_DEPTH: 8,     // [WO 20261022-scanproject] 재귀 깊이 상한(이름만 열거 — 내용은 안 읽음)
+    _MAX_SCAN_DIRS: 20000,  // 방문 디렉터리 수 상한(대형 SCENE 프로젝트 폴더에서도 응답 보장)
     _decks: null,          // Map<deckKey, {mode,dirHandle,fallbackFiles,folderLabel,fileCount,permGranted,restored,restoring}>
     _pickTargetKey: null,  // 폴백(webkitdirectory) change 이벤트가 어느 구역 키를 겨냥한 pickFolder() 호출인지
     _afterPick: null,      // 폴백 change 완료 후 1회 콜백(Deck Manager 행 갱신용)
@@ -326,21 +340,96 @@
       } catch (err) { return false; }
     },
 
+    /** relPath(예: "Revisions/3/Scans/scan_10.fls") 안의 Revisions/<N> 숫자 — 없으면 -1. 순수. */
+    _revisionNum(relPath) {
+      const m = /Revisions[\\/](\d+)[\\/]/i.exec(String(relPath || ""));
+      return m ? parseInt(m[1], 10) : -1;
+    },
+
+    /** 같은 파일명이 여러 경로(리비전 재스캔 등)에 있을 때 1개만 남긴다 — Revisions/<N> 의 N 이 가장
+     *  큰 쪽, 없거나 동률이면 lastModified 최신 쪽. 숨기지 않고 선택된 entry 에 _dupTotal/_dupNote 를
+     *  남긴다(§10-no-hardcoding "조용한 실패가 최악"). lastModified 미보유(handle 모드) 항목은 동률일
+     *  때만 entry.getFile() 로 지연 조회(중복 아닌 다수 파일에 추가 I/O 없음). */
+    async _dedupeByName(entries) {
+      const groups = new Map();
+      (entries || []).forEach((en) => {
+        if (!en || !en.name) return;
+        if (!groups.has(en.name)) groups.set(en.name, []);
+        groups.get(en.name).push(en);
+      });
+      const out = [];
+      for (const list of groups.values()) {
+        if (list.length === 1) { out.push(list[0]); continue; }
+        const withRev = list.map((en) => ({ en: en, rev: this._revisionNum(en.relPath) }));
+        const maxRev = Math.max(...withRev.map((x) => x.rev));
+        let cands = (maxRev > -1) ? withRev.filter((x) => x.rev === maxRev).map((x) => x.en) : list;
+        let chosen;
+        if (cands.length === 1) chosen = cands[0];
+        else {
+          const withTime = await Promise.all(cands.map(async (en) => {
+            let t = en.lastModified;
+            if (!Number.isFinite(t)) { try { const f = await en.getFile(); t = f.lastModified; } catch (err) { t = 0; } }
+            return { en: en, t: Number.isFinite(t) ? t : 0 };
+          }));
+          withTime.sort((a, b) => b.t - a.t);
+          chosen = withTime[0].en;
+        }
+        chosen._dupTotal = list.length;
+        chosen._dupNote = (maxRev > -1) ? ("Revisions/" + maxRev) : "최신 수정시각";
+        out.push(chosen);
+      }
+      return out;
+    },
+
+    /** 미리보기 상단 요약 1줄 — "스캔 N개 발견 (위치: …)" 또는 0건이면 정직하게 "없습니다"
+     *  (§10-no-hardcoding, 조용한 0건 금지). 순수(entries: _listEntries() 결과). */
+    _scanSummaryLine(entries) {
+      const list = entries || [];
+      const scans = list.filter((e) => e && /\.(e57|fls)$/i.test(e.name || ""));
+      const photos = list.filter((e) => e && /\.(jpe?g|png|heic)$/i.test(e.name || ""));
+      if (!scans.length && !photos.length) return "이 폴더 하위에 스캔(.fls/.e57)·360 사진이 없습니다";
+      const parts = [];
+      if (scans.length) {
+        const first = scans[0];
+        const dir = String(first.relPath || first.name || "").replace(/[^/\\]*$/, "").replace(/[\\/]+$/, "") || "(최상위)";
+        parts.push("스캔 " + scans.length + "개 발견 (위치: " + dir + (scans.length > 1 ? " 등" : "") + ")");
+      }
+      if (photos.length) parts.push("360 사진 " + photos.length + "개");
+      return parts.join(" · ");
+    },
+
+    /** [WO 20261022-scanproject] handle 모드는 재귀(깊이·디렉터리 수 상한), 열거 시점에 _EXT_RE 로
+     *  걸러 비대상 파일(.cache/.dat 등)을 제외한다. 이름이 .fls 로 끝나는 디렉터리는 재귀하지 않는다
+     *  (레거시 원본 스캔 디렉터리 — _flsDirNotice 안내 대상, 불변). 중복 파일명은 _dedupeByName 로 1개만. */
     async _listEntries(key) {
       key = key || this._activeDeckKey();
       const e = this._entry(key);
       if (e.mode === "handle" && e.dirHandle) {
         if (e.permGranted === false) return [];
         const out = [];
-        try {
-          for await (const entry of e.dirHandle.values()) {
-            if (entry.kind === "file") out.push({ name: entry.name, getFile: () => entry.getFile() });
-          }
-        } catch (err) {}
-        return out;
+        let dirCount = 0;
+        const walk = async (dirHandle, relPrefix, depth) => {
+          if (depth > this._MAX_SCAN_DEPTH || dirCount >= this._MAX_SCAN_DIRS) return;
+          dirCount++;
+          try {
+            for await (const entry of dirHandle.values()) {
+              if (entry.kind === "file") {
+                if (this._EXT_RE.test(entry.name)) out.push({ name: entry.name, relPath: relPrefix + entry.name, getFile: () => entry.getFile() });
+              } else if (entry.kind === "directory") {
+                if (/\.fls$/i.test(entry.name)) continue;
+                await walk(entry, relPrefix + entry.name + "/", depth + 1);
+              }
+            }
+          } catch (err) {}
+        };
+        await walk(e.dirHandle, "", 0);
+        return await this._dedupeByName(out);
       }
       if (e.mode === "fallback" && e.fallbackFiles) {
-        return e.fallbackFiles.map((f) => ({ name: f.name, getFile: async () => f }));
+        const arr = e.fallbackFiles
+          .filter((f) => f && this._EXT_RE.test(f.name || ""))
+          .map((f) => ({ name: f.name, relPath: f.webkitRelativePath || f.name, getFile: async () => f, lastModified: Number.isFinite(f.lastModified) ? f.lastModified : null }));
+        return await this._dedupeByName(arr);
       }
       return [];
     },
@@ -777,6 +866,7 @@
         return { pin: pin, no: no, key: mk, candidates: candidates, status: status };
       });
       try { const notice = await this._flsDirNotice(folderKey); if (notice) rows.notice = notice; } catch (e) {}
+      try { rows.scanSummary = this._scanSummaryLine(entries); } catch (e) {}
       return rows;
     },
 
@@ -904,11 +994,12 @@
       this._lastBatchRows = rows;
       document.getElementById("photofolder-batchprev-title").textContent = t.name + " — 일괄 등록 미리보기(" + rows.length + "건 대상)";
       const body = document.getElementById("photofolder-batchprev-rows");
+      const summaryHtml = rows.scanSummary ? ('<div style="padding:8px;color:#1a5fa8;font-weight:600;border-bottom:1px solid #eee;">' + this._esc(rows.scanSummary) + '</div>') : "";
       const noticeHtml = rows.notice ? ('<div style="padding:8px;color:#9a4a00;font-weight:600;border-bottom:1px solid #eee;">' + this._esc(rows.notice) + '</div>') : "";
       if (!rows.length) {
-        body.innerHTML = noticeHtml + '<div style="padding:10px;color:#444;">사진 없는 핀이 없습니다</div>';
+        body.innerHTML = summaryHtml + noticeHtml + '<div style="padding:10px;color:#444;">사진 없는 핀이 없습니다</div>';
       } else {
-        body.innerHTML = noticeHtml + rows.map((r) => {
+        body.innerHTML = summaryHtml + noticeHtml + rows.map((r) => {
           const fname = r.candidates.length === 1 ? r.candidates[0].name : (r.candidates.length > 1 ? r.candidates.map((c) => c.name).join(", ") : "-");
           const color = r.status === "일치" ? "#1a7f37" : (r.status === "없음" ? "#767676" : "#9a4a00");
           return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-bottom:1px solid #eee;color:#111;">'
