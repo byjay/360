@@ -4868,9 +4868,11 @@ html.wm-view-link #screen-projects { display: none !important; }
   z-index: 1;
 }
 .pin-dot-num {
-  display: none; /* 지름 ≥ PIN_DOT_NUM_MIN_PX(16px) 일 때만(.pin-marker.dot-show-num) */
+  display: none; /* 지름 ≥ PIN_DOT_NUM_MIN_PX(16px) 또는 PinLabelPrefs="always"(.pin-marker.dot-show-num) */
   font-family: var(--font-ui); font-weight: 800; color: #ffffff;
-  font-size: calc(var(--dot-local-px, 20px) * 0.52);
+  /* [WO 20261022-pinprefs] "항상 보이기"로 지름이 작게 클램프될 극단적 밀집 상황에서도 글자가
+     9px 밑으로 쪼그라들지 않게(가독성 발주 §2) — 평소(16px+)엔 calc 쪽이 더 커서 영향 없음(회귀 0). */
+  font-size: max(9px, calc(var(--dot-local-px, 20px) * 0.52));
   line-height: 1; text-shadow: 0 1px 1px rgba(0,0,0,.5);
   pointer-events: none; white-space: nowrap;
 }

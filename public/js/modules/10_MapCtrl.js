@@ -521,14 +521,60 @@
       }
       return pts;
     },
+    /** [WO 20261022-pinprefs] 설정 슬라이더(PinSizePrefs) 대비 배율 — 기본값(DEFAULT)에서 1,
+     *  슬라이더를 올리면 >1·내리면 <1. teardrop(선택/호버)은 이미 pinScreenPx()(§472)가
+     *  PinSizePrefs.scale() 을 직접 쓴다 — 점(dot) 지름에도 같은 배율을 입히는 SoT. 미로드
+     *  (테스트 셸 등)·DEFAULT=0 이면 1(회귀 0). */
+    _pinSizeFactor() {
+      try {
+        if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.get && PinSizePrefs.DEFAULT) {
+          return PinSizePrefs.get() / PinSizePrefs.DEFAULT;
+        }
+      } catch (e) {}
+      return 1;
+    },
+    /** "항상 보이기" 라벨 모드면 번호가 들어갈 최소 지름(numMinPx, 설정 배율 반영)까지 diam을
+     *  끌어올린다. 이 상향은 극단적 밀집에서만 겹침 방지(§497)를 깨뜨릴 수 있음(사용자가 명시로
+     *  "항상 보이기"를 선택한 결과로 허용 — 발주 §2 근거, tests/p179 실측). 크기 슬라이더
+     *  (PinSizePrefs)는 여기서 곱하지 않는다 — _computePinDotPx 가 클램프의 상/하한 자체
+     *  (PIN_DOT_MIN/MAX_PX)를 배율만큼 넓혀서 적용한다(겹침 방지 비율 0.8×d는 그대로 유지,
+     *  아래 주석 — "슬라이더로 커진 핀이 보통 밀집에서도 서로 겹친다" 회귀 실측 후 교정). */
+    _applyLabelAlwaysBump(diam, labelMode, numMinPx) {
+      return (labelMode === "always") ? Math.max(diam, numMinPx) : diam;
+    },
     /** 격자 버킷 최근접 이웃(O(n) 평균, 수천 개에서도 n² 회피) — 점 i 의 "화면 지름"(px) 맵 반환.
      *  cell 크기는 전체 분포의 평균 밀도로 추정(국소 밀집·희소가 섞여도, 링 확장 탐색이 안전망이라
-     *  추정이 어긋나도 정확도는 유지되고 속도만 영향). 외딴 점(이웃 없음)은 PIN_DOT_MAX_PX. */
+     *  추정이 어긋나도 정확도는 유지되고 속도만 영향). 외딴 점(이웃 없음)은 PIN_DOT_MAX_PX.
+     *  [WO 20261022-pinprefs] PinSizePrefs 슬라이더(factor)는 클램프의 상/하한(PIN_DOT_MIN/MAX_PX)
+     *  "자체"를 넓히지, 비율 계산(RATIO×nearest)의 결과를 사후에 곱하지 않는다 — 사후 곱(옛 구현)은
+     *  이미 안전한(0.8×d ≤ d) 중간 구간 점까지 통째로 키워 factor>1.25 에서 보통 밀집(20px 간격)
+     *  구역조차 겹치는 회귀를 냈다(tests/p179 실측 90쌍). this.PIN_DOT_MIN/MAX_PX 를 호출 동안만
+     *  배율값으로 바꿔두면(동기 실행, 재진입 없음) 기존 클램프 리터럴(아래 diam 식)을 그대로 두고도
+     *  "경계(MAX)에 닿은 희소 점만 커지고, 중간 구간(RATIO 지배)은 factor 와 무관하게 안전"을
+     *  보장한다(MAX 경계 쪽은 §497 증명과 같은 비율로 안전 — nearest ≥ MAX×factor/RATIO 일 때만
+     *  닿으므로 radius/d ≤ RATIO/2 로 동일). MIN 경계(초밀집) 쪽만 사용자가 더 키우면 겹칠 수
+     *  있음(발주 §1 "슬라이더 최대 구간에서만 허용" 그대로) — tests/p179 "[보고]" 라인 참조.
+     *  tests/p177 뮤테이션 needle(클램프 리터럴)은 그대로 보존(G-4⑧). */
     _computePinDotPx(points) {
       const diamMap = new Map();
       const n = points.length;
       if (n === 0) return diamMap;
-      if (n === 1) { diamMap.set(points[0].id, this.PIN_DOT_MAX_PX); return diamMap; }
+      const factor = this._pinSizeFactor();
+      const labelMode = (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.get) ? PinLabelPrefs.get() : "auto";
+      const numMinPx = this.PIN_DOT_NUM_MIN_PX * factor;
+      const origMinPx = this.PIN_DOT_MIN_PX, origMaxPx = this.PIN_DOT_MAX_PX;
+      this.PIN_DOT_MIN_PX = origMinPx * factor;
+      this.PIN_DOT_MAX_PX = origMaxPx * factor;
+      try {
+        return this._computePinDotPxScaled(points, n, labelMode, numMinPx);
+      } finally {
+        this.PIN_DOT_MIN_PX = origMinPx;
+        this.PIN_DOT_MAX_PX = origMaxPx;
+      }
+    },
+    _computePinDotPxScaled(points, n, labelMode, numMinPx) {
+      const diamMap = new Map();
+      if (n === 1) { diamMap.set(points[0].id, this._applyLabelAlwaysBump(this.PIN_DOT_MAX_PX, labelMode, numMinPx)); return diamMap; }
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const p of points) {
         if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
@@ -574,7 +620,7 @@
         const diam = (best === Infinity)
           ? this.PIN_DOT_MAX_PX
           : Math.min(this.PIN_DOT_MAX_PX, Math.max(this.PIN_DOT_MIN_PX, best * this.PIN_DOT_RATIO));
-        diamMap.set(p.id, diam);
+        diamMap.set(p.id, this._applyLabelAlwaysBump(diam, labelMode, numMinPx));
       });
       return diamMap;
     },
@@ -597,6 +643,10 @@
       const diamMap = this._computePinDotPx(points);
       const screenPx = this.pinScreenPx();
       const factor = screenPx > 0 ? (this.PIN_NATIVE_PX / screenPx) : 1; // 화면px → 로컬px 환산
+      // [WO 20261022-pinprefs] 번호 표시 옵션(PinLabelPrefs) — "always"/"hidden" 은 지름과 무관하게
+      // 강제, "auto"(기본)는 현재 규칙(지름 ≥ numMinPx, 설정 배율 반영)을 유지(§460 PinSizePrefs 주석).
+      const labelMode = (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.get) ? PinLabelPrefs.get() : "auto";
+      const numMinPx = this.PIN_DOT_NUM_MIN_PX * this._pinSizeFactor();
       const canSetProp = (st) => st && typeof st.setProperty === "function";
       for (const p of points) {
         const diam = diamMap.get(p.id) || this.PIN_DOT_MIN_PX;
@@ -612,7 +662,8 @@
           p.el.style["--dot-local-px"] = localPx;
           p.el.style["--dot-pad-local-px"] = localPadPx;
         }
-        if (p.el.classList) p.el.classList.toggle("dot-show-num", diam >= this.PIN_DOT_NUM_MIN_PX);
+        const showNum = labelMode === "hidden" ? false : labelMode === "always" ? true : (diam >= numMinPx);
+        if (p.el.classList) p.el.classList.toggle("dot-show-num", showNum);
       }
     },
     /** [WO 20261016-pinscale §2, pinscale2 / 20261019-pinscale3] 선(360 동선·주석) 공용 — 핀과 같은
