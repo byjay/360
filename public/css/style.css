@@ -2739,6 +2739,61 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .allpins-action-danger { border-color: #ef4444; color: #fca5a5; }
 .allpins-action-danger:hover:not(:disabled) { border-color: #f87171; }
 
+/* ── [WO 20261023-pointlist] 구역별 포인트 리스트 — 범위 전환 · 내보내기 · 그룹 헤더 · 코멘트/360 버튼 ──
+   🔴 대비 함정 재발 방지(.allpins-sort-btn 사고 참조, 위 2679줄 주석과 동일 원칙):
+   이 패널 전체(.allpins-panel)는 seastar-family-tokens.css 가 배경을 밝게(#f4f1ea) !important 로
+   고정한다. 버튼류(범위·내보내기·그룹헤더)는 자기 배경을 var(--bg)(불투명, 3d-skin 이 항상 다크로
+   리맵)로 다시 칠해 밝은 패널과 무관하게 만든다(.allpins-tab 과 같은 안전한 패턴).
+   플레인 텍스트(코멘트 요약)는 불투명 배경이 없는 채 밝은 .allpins-item 표면 위에 바로 얹히므로
+   var(--text2)(다크용 밝은 회색) 대신 리터럴 진한 색을 쓴다(실측 대비: .tmp/contrast-p186.mjs
+   #45423a vs #f4f1ea = 8.89:1, #1e3a8a vs 360버튼 합성배경 ≈ 8.0:1 — 둘 다 ≥4.5:1). */
+.allpins-tools2 { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 16px 10px; flex-wrap: wrap; }
+.allpins-scope { display: flex; gap: 6px; }
+.allpins-scope-btn {
+  height: 28px; padding: 0 10px; border-radius: 7px;
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text2);
+  font-family: var(--font-ui); font-size: 11.5px; font-weight: 700; cursor: pointer;
+}
+.allpins-scope-btn:hover { color: var(--text); border-color: var(--text3); }
+/* 🔴 실측(p186 Part B, getComputedStyle) — 이 테넌트의 var(--accent) 는 브랜드 블루 #1b75bb
+   (window.WM_BRAND.accent, index.html 주입)라 var(--bg) 다크(#15171b) 위에서 3.68:1 뿐이다
+   (.allpins-tab.active 와 같은 기존 패턴이 이미 이 값을 쓰고 있었다 — 새로 만들지 않고 여기서는
+   피해간다: 글자는 항상 밝은 var(--text)(14.9:1), 강조는 테두리(비문자 대비 3:1 기준 3.68:1 통과)로만). */
+.allpins-scope-btn.active { border-color: var(--accent); color: var(--text); }
+.allpins-export { display: flex; gap: 6px; }
+.allpins-export-btn {
+  height: 28px; padding: 0 10px; border-radius: 7px;
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text2);
+  font-family: var(--font-ui); font-size: 11.5px; font-weight: 700; cursor: pointer;
+}
+.allpins-export-btn:hover { color: var(--text); border-color: var(--text3); }
+
+.allpins-group { display: flex; flex-direction: column; gap: 6px; }
+.allpins-group-head {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  height: 32px; padding: 0 10px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+  font-family: var(--font-ui); font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: left;
+}
+.allpins-group-head:hover { border-color: var(--text3); }
+.allpins-group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.allpins-group-cnt { font-size: 10.5px; font-weight: 600; color: var(--text2); white-space: nowrap; }
+.allpins-group:not(.open) .allpins-group-caret { transform: rotate(-90deg); }
+.allpins-group-body { display: flex; flex-direction: column; gap: 7px; padding-left: 4px; }
+.allpins-group-body.hidden { display: none; }
+
+.allpins-row-comment {
+  font-family: var(--font-ui); font-size: 11px; line-height: 1.4; color: #45423a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.allpins-row-comment-cnt { font-weight: 700; color: #334155; }
+.allpins-row-360 {
+  flex: none; height: 26px; padding: 0 9px; margin-left: 4px; border-radius: 7px;
+  background: rgba(29,78,216,.12); border: 1px solid rgba(29,78,216,.35); color: #1e3a8a;
+  font-family: var(--font-ui); font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.allpins-row-360:hover { background: rgba(29,78,216,.2); }
+
 /* ─── Responsive ─── */
 @media (max-width: 600px) {
   .sidebar { width: 200px; }
@@ -2749,6 +2804,9 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   .allpins-panel { width: 100vw; max-width: 100vw; }
   .btn-allpins span { display: none; }
   .btn-allpins { padding: 0 8px; }
+  .allpins-tools2 { flex-direction: column; align-items: stretch; }
+  .allpins-scope, .allpins-export { justify-content: stretch; }
+  .allpins-scope-btn, .allpins-export-btn { flex: 1; }
 }
 
 /* ══════════ 타임랩스 비교 (시점 전/후 토글) ══════════ */

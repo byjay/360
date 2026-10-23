@@ -614,6 +614,19 @@
          · 영역JSON(State.zones)/핀: 전체 페이지를 항상 표시하고, 현재 페이지 항목만 .active 로 "구분"한다.
          · 로드되지 않은 구역(다른 배포본)은 클라이언트에 zone/pin 데이터 자체가 없으므로
            개수 배지를 붙이지 않는다(하드코딩 금지 — 없는 값을 0으로 지어내지 않는다). */
+    /** [WO 20261023-pointlist] 🔴 공유 지점(SoT) — "이 구역/영역에 State(zones·pins)가 실려 있는가"
+     *  판정 한 곳. 같은 배포본을 여러 구역이 가리킬 때 State 는 딱 하나의 deck 에만 귀속된다
+     *  (선택된 구역이 그 배포본 안이면 그 구역만 loaded). renderTree() 의 로컬 hasState 가
+     *  원래 정의였고, 전체 포인트 패널(21_AllPins._zoneGroups)이 똑같은 판정을 쓰려면 호출부
+     *  2곳이 각자 계산하지 않게 여기로 끌어올린다(§G-2-5 — 순수 이동, 로직 변경 0). */
+    isDeckLoaded(deck) {
+      if (!deck || !deck.deployment_id) return false;
+      if (String(deck.deployment_id) !== String((typeof State !== "undefined" && State.currentDeploymentId) || "")) return false;
+      const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
+      if (curDeck && String(curDeck.deployment_id || "") === String(deck.deployment_id)) return String(curDeck.id) === String(deck.id);
+      return true;
+    },
+
     /** [WO 20260928-hub-tree] 🔴 공유 지점(SoT) — 구역/영역 분류 규칙은 여기 한 곳에만 둔다.
      *  사이드바 트리(renderTree, 아래)와 허브 카드(12_ProjectHub.js)가 이 함수를 함께 쓴다.
      *  parent_id 가 가리키는 부모가 없거나(삭제됨) 자기참조면 최상위로 승격(숨김 금지).
@@ -1486,12 +1499,9 @@
       // [WO 20261001-projectinfo] docLabel 은 이 함수 위쪽(decks 선언 직후)으로 이동했다 — 중복 정의 제거.
 
       /* 같은 도면을 여러 deck(구역/영역)이 가리키므로 State(영역JSON·핀)를 붙일 deck 을 하나로 정한다.
-         선택된 deck 이 그 도면 안에 있으면 그 deck 에만, 없으면 종전대로 로드된 deck 에 붙인다. */
-      const hasState = (deck) => {
-        if (!deck.deployment_id || String(deck.deployment_id) !== String(State.currentDeploymentId || "")) return false;
-        if (curDeck && String(curDeck.deployment_id || "") === String(deck.deployment_id)) return String(curDeck.id) === String(deck.id);
-        return true;
-      };
+         선택된 deck 이 그 도면 안에 있으면 그 deck 에만, 없으면 종전대로 로드된 deck 에 붙인다.
+         [WO 20261023-pointlist] 판정 자체는 this.isDeckLoaded(위)로 승격 — 로직 변경 0, 호출만 위임. */
+      const hasState = (deck) => this.isDeckLoaded(deck);
 
       /* ── 구역/영역 노드(같은 생성기 — 깊이만 다르다) ───────────────── */
       /* [WO 20260930-moderole] 🔴 마스터 2차 지시로 88e52ff(프로젝트→모드→구역) 구조를 뒤집는다 —
