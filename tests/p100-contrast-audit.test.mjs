@@ -248,10 +248,28 @@ async function runFlow(vw, vh, tag) {
   await page.evaluate(() => { const b = document.getElementById("btn-pano-close"); if (b) b.click(); });
   await sleep(200);
 
-  // S6 설정
+  // S6 설정 (디자이너/super 세션 — #settings-display-prefs "보기 설정" 패널도 이 안에 포함돼 같이 스캔된다,
+  //   PinShapePrefs/PinLabelPrefs/PinSizePrefs/PinLeaderViewPrefs.initToggle 이 Settings.init() 에서
+  //   무조건 주입되므로 열릴 때 이미 DOM 에 있음 — 23c_PinSizePrefs.js)
   await page.evaluate(() => document.getElementById("btn-settings").click());
   await sleep(300);
   await measure("settings");
+
+  // S6b [대비수정 재현, WO settings-panel-contrast] "보기 설정" 패널은 역할과 무관하게 보이게 설계됐다
+  //   (디자이너 전용 블록 밖 — 23c_PinSizePrefs.js 주석). 열람(非디자이너) 세션에서도 같은 색을 보는지
+  //   별도로 재확인 — Auth.role 을 임시로 낮추고 재렌더(페이지 재로드 없이, DOM/CSS 경로는 동일).
+  await page.evaluate(() => {
+    if (typeof Auth !== "undefined") { Auth.role = "viewer"; Auth.projectRole = null; }
+    if (typeof Settings !== "undefined" && Settings.render) Settings.render();
+  });
+  await sleep(200);
+  await measure("settings-viewer-view-prefs");
+  await page.evaluate(() => {
+    if (typeof Auth !== "undefined") { Auth.role = "super"; Auth.projectRole = null; }
+    if (typeof Settings !== "undefined" && Settings.render) Settings.render();
+  });
+  await sleep(150);
+
   await page.evaluate(() => { const b = document.getElementById("settings-close"); if (b) b.click(); });
   await sleep(150);
 
