@@ -281,13 +281,16 @@
       this._copyInviteLink();
     },
     _copyInviteLink() {
+      // [p187 detached-task 수정] 과거엔 clipboard API 실패를 .catch(()=>{}) 로 그냥 삼켜 복사도
+      // 안 되고 알림도 없었다(형제 _copyDeployUrl 은 execCommand 폴백 + 알림이 있는데 여기만 없던 불일치).
+      // _copyDeployUrlFallback(SoT)을 그대로 재사용해 동일한 폴백·알림 경로로 통일한다.
       const inp = document.getElementById("pm-invite-link");
       if (!inp || !inp.value) return;
       const done = () => { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("초대 링크를 복사했습니다."); };
       try {
-        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(inp.value).then(done).catch(() => {}); return; }
-        inp.select(); document.execCommand("copy"); done();
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(inp.value).then(done).catch(() => this._copyDeployUrlFallback(inp.value, done)); return; }
       } catch (e) {}
+      this._copyDeployUrlFallback(inp.value, done);
     },
     /** [P53] 초대 링크 공유 — 폰에서 누르면 공유시트(카톡 등)가 뜬다.
      *  navigator.share 미지원 환경(데스크톱 크롬 등)은 기존 복사 동작(_copyInviteLink, SoT)으로 대체한다.
