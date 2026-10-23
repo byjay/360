@@ -125,7 +125,7 @@
       //   권한이 바뀐 계정의 잔여 알림도 볼 수 있어야 한다 — 안 보여주는 쪽이 오히려 "숨김"이 된다).
       const notifWrap = document.getElementById("notif-wrap");
       if (notifWrap) {
-        const loggedIn = !!(typeof Auth !== "undefined" && Auth.user);
+        const loggedIn = this._notifEligible();
         notifWrap.style.display = loggedIn ? "flex" : "none";
         if (loggedIn && this._notifSyncedOnce !== true) { this._notifSyncedOnce = true; this.refreshNotif(); }
       }
@@ -217,8 +217,13 @@
       this._notifBtn = b;
     },
     /** 서버에서 알림 다시 읽기 — 배지 갱신 + 패널 열려 있으면 다시 그린다. 실패해도 조용히(배지는 이전 값 유지, 지어내지 않음). */
+    /** [viewer-audit] 알림함 대상 = 실계정 로그인만. 열람 링크 통행증(Auth.readonly)은 신원이 없어 서버가 401 —
+     *  종전엔 Auth.user 만 보고 벨을 띄우고 30초마다 401 을 쏟았다(콘솔 에러·불필요 요청). 벨 표시·조회가 이 판정 하나를 공유한다. */
+    _notifEligible() {
+      return typeof Auth !== "undefined" && !!Auth.user && !Auth.readonly;
+    },
     async refreshNotif() {
-      if (typeof Auth === "undefined" || !Auth.user) return;
+      if (!this._notifEligible()) return;
       try {
         const r = await fetch("/api/notifications?limit=30", { headers: Auth.headers() });
         if (!r.ok) return;
