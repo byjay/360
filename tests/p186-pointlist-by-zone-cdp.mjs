@@ -176,6 +176,49 @@ console.log("\n[Part A · 순수 로직 — 실제 11_UI.js + 01b_PinSeries.js +
   }
 }
 
+/* ── F2 [WO 20261023-followups3] 크롭 없는 루트 구역 2개가 같은 page 를 가리킬 때
+ *   leftover 핀(어느 영역에도 속하지 않는 핀)이 두 그룹 모두에 중복 집계되던 결함.
+ *   채택 규칙: 트리 SoT 순서상 "첫 루트 구역" 1곳에만 귀속(claimedLeftover). ── */
+console.log("\n[F2 · 크롭 없는 루트 2개 + 같은 page → leftover 핀 중복 금지]");
+function fxF2() {
+  const State = {
+    mode: "designer", currentDeploymentId: "depF2", activePin: null,
+    pins: [{ id: "lp1", label: "복도", page: 1, x: 10, y: 10 }], zones: []
+  };
+  const decks = [
+    { id: "r1", name: "구역A", deployment_id: "depF2", parent_id: null, page: 1, crop: null },
+    { id: "r2", name: "구역B", deployment_id: "depF2", parent_id: null, page: 1, crop: null }
+  ];
+  const Projects = { decks, currentProject: { id: "prjF2" }, currentDeck: decks[0], pinsForDeck(pins) { return pins; } };
+  const PinLink = { dedupe: (p) => p };
+  const Auth = { readonly: false };
+  return { State, Projects, PinLink, Auth, App: { pinHasContent: () => false }, UI: undefined };
+}
+{
+  const c = fxF2();
+  const sb = evalModules(FULL_SRC, c);
+  const groups = sb.__AllPins._zoneGroups();
+  const totalCount = groups.reduce((n, g) => n + g.pins.length, 0);
+  ok(totalCount === 1, "F2 leftover 핀(lp1)이 전체 그룹 합계로 정확히 1번만 집계(중복 금지)", { totalCount, groups: groups.map((g) => ({ name: g.deck.name, pins: g.pins.map((p) => p.id) })) });
+  const owners = groups.filter((g) => g.pins.some((p) => p.id === "lp1")).map((g) => g.deck.name);
+  ok(owners.length === 1 && owners[0] === "구역A", "F2 leftover 핀은 트리 SoT 순서상 '첫 루트 구역'(구역A)에만 귀속", owners);
+}
+/* ── 뮤테이션 ⓓ: claimedLeftover 를 제거(구 동작으로 되돌림) → F2 가 깨져야 함 ── */
+{
+  console.log("\n[뮤테이션ⓓ] claimedLeftover 제거(구 동작) → F2 가 깨져야 함(두 그룹 모두에 leftover 중복)");
+  const needle = '          pins = basePins.filter((p) => (deck.page == null || (p.page || 1) === deck.page) && !claimedBy.has(p.id) && !claimedLeftover.has(p.id));\n          pins.forEach((p) => claimedLeftover.add(p.id));';
+  const old = '          pins = basePins.filter((p) => (deck.page == null || (p.page || 1) === deck.page) && !claimedBy.has(p.id));';
+  const mutSrc = apSrc.replace(needle, old);
+  if (mutSrc === apSrc) { console.log("  FAIL 뮤테이션 대상 문자열 없음(소스 변경?)"); failed++; }
+  else {
+    const c = fxF2();
+    const sb = evalModules(uiSrc + "\n" + psSrc + "\n" + mutSrc, c);
+    const groups = sb.__AllPins._zoneGroups();
+    const owners = groups.filter((g) => g.pins.some((p) => p.id === "lp1")).map((g) => g.deck.name);
+    ok(owners.length !== 1, "뮤테이션 적용 시 F2 가 깨짐(leftover 핀이 " + owners.length + "개 그룹에 중복 집계됨: " + JSON.stringify(owners) + ")");
+  }
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  * Part B — 실 Chrome(Puppeteer) · 실 public/ 정적 자산(조립된 public/js/main.js 포함)
  * ══════════════════════════════════════════════════════════════════════ */

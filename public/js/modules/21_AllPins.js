@@ -361,6 +361,11 @@
         });
       });
 
+      // [WO 20261023-followups3 F2] 크롭 없는(구역) 루트가 2개 이상 같은 page 를 가리키면, 아래
+      // forEach 가 순서(order = 트리 SoT, walk() 가 roots 를 선언 순서대로 push)대로 돌며 leftover
+      // 핀을 "처음 만난 구역" 1곳에만 귀속시킨다(claimedLeftover) — 이후 같은 page 의 다른 구역은
+      // 이미 귀속된 핀을 제외해 중복 집계를 막는다.
+      const claimedLeftover = new Set();
       return order.map(({ deck, depth }) => {
         const loaded = deck.deployment_id && typeof State !== "undefined" && String(deck.deployment_id) === String(State.currentDeploymentId || "");
         if (!loaded) return { deck, depth, loaded: false, pins: [] };
@@ -370,7 +375,8 @@
         } else {
           // 크롭 없는(구역) — 자기 페이지의 핀 중, 하위 영역(크롭)이 이미 가져간 핀은 뺀다(중복 0).
           // deck.page == null = 모든 페이지(기존 pinsForDeck "크롭 없으면 전체" 규칙과 같은 와일드카드).
-          pins = basePins.filter((p) => (deck.page == null || (p.page || 1) === deck.page) && !claimedBy.has(p.id));
+          pins = basePins.filter((p) => (deck.page == null || (p.page || 1) === deck.page) && !claimedBy.has(p.id) && !claimedLeftover.has(p.id));
+          pins.forEach((p) => claimedLeftover.add(p.id));
         }
         return { deck, depth, loaded: true, pins };
       });

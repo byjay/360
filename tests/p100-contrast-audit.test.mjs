@@ -299,6 +299,13 @@ async function runFlow(vw, vh, tag) {
   const apOpen = await page.waitForFunction(() => { const d = document.getElementById("allpins-drawer"); return d && d.classList.contains("on"); }, { timeout: 8000 }).then(() => true).catch(() => false);
   if (apOpen) {
     await sleep(300);
+    // 🔴 [WO 20261023-followups3 F1] --accent 는 모드(체크보드=var(--blue) 패스/일반 designer=
+    // var(--gold)/viewer=var(--green))에 따라 달라 이 플로우(기본 체크보드 진입)에서는 우연히 패스하는
+    // 값(#3a97dd)일 수 있다(실측). 테넌트가 실제로 겪는 실패값(#1b75bb, index.html WM_BRAND.accent)을
+    // 강제 주입해 모드와 무관하게 그 값으로도 이 화면이 통과하는지 결정적으로 재현한다.
+    // AllPins 서브트리에만 국한(documentElement 에 걸면 #route-count 등 이 화면과 무관한 다른
+    // --accent 소비 요소까지 영향받아 F1 과 무관한 거짓 FAIL 이 섞인다 — 실측으로 확인·수정).
+    await page.evaluate(() => { const d = document.getElementById("allpins-drawer"); if (d) d.style.setProperty("--accent", "#1b75bb"); });
     await measure("allpins-tab1-sort-page");
     await page.evaluate(() => { const b = document.querySelector('.allpins-sort-btn[data-sort="name"]'); if (b) b.click(); });
     await sleep(200);

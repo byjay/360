@@ -440,14 +440,11 @@ select option,
    var(--text2) 는 이 앱의 다른 다크 버튼(.fl-btn 등)에서 이미 쓰는 값이며 3d-skin.css 가
    #9095a0 으로 확정 리맵해 항상 밝다 — 배경과 짝지어 5.98:1. */
 .allpins-sort-btn { color: var(--text2, #9095a0) !important; }
-/* [WO 20261001-allpins 재발견·수정] 🔴 이 규칙은 base(비활성) .allpins-sort-btn 의 배경이
-   var(--bg)(불투명, 3d-skin 이 다크로 리맵)라는 전제로 흰 글자를 썼으나, .active 상태는
-   style.css 가 background 를 rgba(245,158,11,.12)(반투명)로 "통째로" 덮어써 var(--bg) 자체가
-   사라진다 — 그 반투명이 실제로 합성되는 배경은 이 파일 위쪽의 .allpins-panel #f4f1ea(밝은
-   베이지) 다. 실측(.tmp/contrast_allpins.mjs): 합성 배경 #f4e7cf 위 흰 글자 = 1.22:1(WCAG
-   4.5:1 대실패 — 마스터 스크린샷 "글자 안 보임" 재현). 밝은 배경 규칙(아래 패널 전체와 동일
-   "흰바탕=검정" 원칙)에 맞춰 진한 글자로 교체 — #7c2d12 vs #f4e7cf = 7.66:1. */
-.allpins-sort-btn.active { color: #7c2d12 !important; }
+/* [WO 20261001-allpins 재발견·수정 → 20261023-followups3 F1 재정정]
+   위 #7c2d12 !important 는 .active 배경이 rgba(245,158,11,.12)(반투명, 패널 #f4f1ea 와 합성)라는
+   전제였다. style.css:2608 이 그 반투명 배경을 불투명 var(--bg)(3d-skin 다크 리맵)로 교체해
+   전제가 깨졌다 — #7c2d12 는 새 배경(#15171b) 위에서 1.92:1 로 더 나쁘다. 색은 더 이상 여기서
+   고정하지 않고 style.css:2609 의 color:var(--text) !important(14.9:1) 에 맡긴다(단일 SoT). */
 .allpins-thumb-no { color: #ffffff !important; }
 
 /* [마스터: PDF 팝업] 사진 대신 PDF 등록 시 내장 PDF 뷰어 */

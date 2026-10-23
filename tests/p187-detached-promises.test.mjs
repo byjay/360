@@ -39,7 +39,7 @@ function buildBundle(overrides = {}) {
 function exposeForTest(bundle) {
   const idx = bundle.lastIndexOf("})();");
   if (idx === -1) return bundle;
-  const inject = "\n  try { window.__T_ProjectHub=ProjectHub; window.__T_Auth=Auth; } catch (e) {}\n";
+  const inject = "\n  try { window.__T_ProjectHub=ProjectHub; window.__T_Auth=Auth; window.__T_UI=UI; window.__T_State=State; } catch (e) {}\n";
   return bundle.slice(0, idx) + inject + bundle.slice(idx);
 }
 function makeServeDir(bundleJs) {
@@ -161,6 +161,47 @@ async function r1Check(ws, expectFallback) {
 }
 
 /* ══════════════════════════════════════════════════════════════
+   R2 [WO 20261023-followups3 F3] — 11_UI.copyPin: done=true 를 클립보드 결과 확인 "전"에
+   세팅해 실패해도 "복사됨"이라 오안내하던 결함. 성공 시에만 "복사됨", 실패 시
+   12_ProjectHub._copyDeployUrlFallback(SoT) 로 execCommand 폴백 + 정직한 안내.
+   ══════════════════════════════════════════════════════════════ */
+const R2_SETUP = `(function(){
+  window.__unhandled = [];
+  window.addEventListener('unhandledrejection', function(e){ window.__unhandled.push(String(e.reason)); });
+  document.querySelectorAll('.screen').forEach(function(s){ s.classList.remove('active'); });
+  document.getElementById('screen-app').classList.add('active');
+  window.__T_Auth.user = { email:'t@t.com', name:'t' };
+  window.__T_State.pins = [{ id:'r2p1', x:10, y:10, page:1, label:'1' }];
+  window.__execCalls = 0;
+  // 🔴 headless Chrome 의 실제 execCommand('copy') 반환값은 포커스·보안 컨텍스트에 따라 들쑥날쑥하다
+  // (실측: 이 환경은 항상 false) — 우리 코드의 copied===true/false 분기 자체를 검증하는 게 목적이라
+  // navigator.clipboard 와 같은 방식(외부 I/O 경계만 대체)으로 반환값을 직접 통제한다.
+  document.execCommand = function(cmd){ if (cmd === 'copy') { window.__execCalls++; return !window.__execFail; } return false; };
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: function(){ return Promise.reject(new Error('STUB_CLIPBOARD_DENIED')); } }, configurable: true });
+  return 'ok';
+})();`;
+
+async function r2Check(ws, mode) {
+  if (mode === "execfail") await ev(ws, "window.__execFail = true; 1");
+  await ev(ws, `(function(){ document.getElementById('wm-toast-host') && document.getElementById('wm-toast-host').remove(); window.__T_UI.copyPin(window.__T_State.pins[0]); })(); 1`);
+  await wait(300);
+  const r = await ev(ws, `(function(){
+    var host = document.getElementById('wm-toast-host');
+    return { unhandled: window.__unhandled, execCalls: window.__execCalls, toastText: host ? host.textContent : '' };
+  })()`);
+  if (mode === "fallback-ok") {
+    ok(r.unhandled.length === 0, "R2 — clipboard.writeText reject 시 unhandledrejection 0", r);
+    ok(r.execCalls > 0, "R2 — execCommand('copy') 폴백이 실제로 호출됨", r);
+    ok(r.toastText.indexOf("복사됨") >= 0, "R2 — 폴백(execCommand) 성공 시에만 '복사됨' 안내", r);
+  } else if (mode === "execfail") {
+    ok(r.toastText.indexOf("복사됨") < 0, "R2 — execCommand 폴백도 실패하면 '복사됨'이라 오안내하지 않는다", r);
+    ok(r.toastText.indexOf("복사 실패") >= 0, "R2 — 폴백도 실패 시 정직한 실패 안내('복사 실패')", r);
+  } else { // mutation — 구 동작(done=true 를 확인 전에 세팅)
+    ok(r.toastText.indexOf("복사됨") >= 0, "R2 뮤테이션 — done=true 를 결과 확인 전에 세팅하면 실패해도 '복사됨'(결함 재현)", r);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
    메인
    ══════════════════════════════════════════════════════════════ */
 async function main() {
@@ -178,6 +219,30 @@ async function main() {
     else {
       const mutated = src.replace(needle, `navigator.clipboard.writeText(inp.value).then(done).catch(() => {}); return; }\n      } catch (e) {}`);
       await runSession(exposeForTest(buildBundle({ "12_ProjectHub.js": mutated })), R1_SETUP, (ws) => r1Check(ws, false));
+    }
+  }
+
+  console.log("\n[R2] 11_UI.copyPin — 수정본(원본 소스), clipboard reject → execCommand 폴백 성공");
+  await runSession(exposeForTest(buildBundle()), R2_SETUP, (ws) => r2Check(ws, "fallback-ok"));
+
+  console.log("\n[R2] 11_UI.copyPin — 수정본, clipboard reject + execCommand 도 실패 → 정직한 실패 안내");
+  await runSession(exposeForTest(buildBundle()), R2_SETUP, (ws) => r2Check(ws, "execfail"));
+
+  console.log("\n[R2] 뮤테이션 — done=true 를 클립보드 결과 확인 전에 세팅(구 동작으로 되돌림)");
+  {
+    const src = fs.readFileSync(path.join(MODULES_DIR, "11_UI.js"), "utf8");
+    const needle = `      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).then(done).catch(fallback); return txt; }
+      } catch (e) {}
+      fallback();
+      return txt;`;
+    if (src.indexOf(needle) < 0) { ok(false, "R2 뮤테이션 대상 문자열 없음(소스 변경됨 — 재확인 필요)"); }
+    else {
+      const mutated = src.replace(needle, `      let __d = false;
+      try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).catch(() => {}); __d = true; } } catch (e) {}
+      Prompt.toast((__d ? "복사됨 — " : "복사(앱 안) — ") + txt);
+      return txt;`);
+      await runSession(exposeForTest(buildBundle({ "11_UI.js": mutated })), R2_SETUP, (ws) => r2Check(ws, "mutation"));
     }
   }
 

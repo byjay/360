@@ -1110,14 +1110,24 @@
       p.textContent = this.CTX_FOOTER;
       t.pop.appendChild(p);
     },
+    /** [WO 20261023-followups3 F3] 🔴 클립보드 결과 확인 "전"에 done=true 를 세팅해 실패해도
+     *  "복사됨"으로 안내하던 오안내를 제거 — writeText 성공을 실제로 기다린 뒤에만 "복사됨",
+     *  실패하면 12_ProjectHub._copyDeployUrlFallback(공용, SoT)로 execCommand 폴백 + 정직한 안내. */
     copyPin(pin) {
       const meta = (typeof PinSeries !== "undefined") ? PinSeries.numbers(State.pins, pin.page || 1).get(pin.id) : null;
       const no = meta ? (PinSeries.textOf ? PinSeries.textOf(meta) : PinSeries.formatNo(meta.no, meta.series)) : (pin.label || "");
       this._pinClip = { icon: pin.icon || null, leader: this.Leader.wants(pin), no };
       const txt = "#" + no + " x=" + (+pin.x).toFixed(3) + "% y=" + (+pin.y).toFixed(3) + "% page=" + (pin.page || 1);
-      let done = false;
-      try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).catch(() => {}); done = true; } } catch (e) {}
-      Prompt.toast((done ? "복사됨 — " : "복사(앱 안) — ") + txt);
+      const done = () => Prompt.toast("복사됨 — " + txt);
+      const honestFail = () => Prompt.toast("복사 실패 — 직접 선택해 복사해 주세요: " + txt);
+      const fallback = () => {
+        if (typeof ProjectHub !== "undefined" && ProjectHub._copyDeployUrlFallback) ProjectHub._copyDeployUrlFallback(txt, done, honestFail);
+        else honestFail();
+      };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).then(done).catch(fallback); return txt; }
+      } catch (e) {}
+      fallback();
       return txt;
     },
     /** 우클릭 위치(화면 좌표 at)에 핀 — 기존 배치 경로(App._handlePlaceClick) 그대로(채번·360 사진 선택창·자동저장).

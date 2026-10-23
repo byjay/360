@@ -1071,16 +1071,21 @@
       } catch (e) {}
       this._copyDeployUrlFallback(url, done);
     },
-    _copyDeployUrlFallback(url, done) {
+    /** [WO 20261023-followups3 F3] onFail(옵션) — execCommand 가 false 를 반환해도 호출부가
+     *  "정직한 안내"를 보여줄 수 있게 한다. 🔴 형제 호출부 2곳(_copyInviteLink·_copyDeployUrl)은
+     *  onFail 을 안 넘긴다 — 그 둘은 원래부터 execCommand 반환값과 무관하게 done() 을 불렀으므로
+     *  (하위호환, R1 p187 실측 재확인) onFail 이 없으면 copied 여부와 무관하게 done() 그대로 호출.
+     *  onFail 을 넘긴 새 호출부(copyPin, F3)만 copied===false 에서 실제로 onFail() 로 갈라진다. */
+    _copyDeployUrlFallback(url, done, onFail) {
       try {
         const ta = document.createElement("textarea");
         ta.value = url; ta.setAttribute("readonly", "");
         ta.style.position = "fixed"; ta.style.top = "-9999px"; ta.style.opacity = "0";
         document.body.appendChild(ta); ta.focus(); ta.select();
-        document.execCommand("copy");
+        const copied = document.execCommand("copy");
         document.body.removeChild(ta);
-        done();
-      } catch (e) {}
+        if (copied || !onFail) done(); else onFail();
+      } catch (e) { if (onFail) onFail(); }
     },
     /** 배포 주소 공유 — _shareInviteLink 와 동일한 패턴(navigator.share + 복사 폴백).
      *  AbortError(사용자가 공유시트를 취소) 는 정상 동작 — 오류 알림 금지. */
