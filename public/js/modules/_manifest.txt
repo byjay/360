@@ -80,4 +80,5 @@
 71_XlsxExport.js
 72_DesignCompare.js
 73_ThetaOSC.js
+74_MarkupAlign.js
 99_footer.js

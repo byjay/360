@@ -81,6 +81,9 @@
       { id: "route-draw", group: "drawing", icon: "⤳", label: "360 동영상 동선 긋기", desc: "도면 위에 선을 긋고 그 동선에 360 동영상(30MB 이하)을 연결합니다", perm: "designer", needs: "drawing", click: "btn-route-draw", covers: ["btn-route-draw", "btn-route-finish"] },
       { id: "region-merge", group: "drawing", icon: "⇄", label: "구역 합치기(다른 구역 포인트 가져오기)", desc: "지금 구역·영역으로 다른 구역의 포인트를 옮겨 옵니다", perm: "designer", needs: "deck", mod: "RegionMerge",
         run: () => RegionMerge.open(Projects.currentDeck) },
+      // [WO 20261023-markupalign] 현장 출력 도면에 수동 마킹한 사진 → 4점 정합 → 차분 검출 → 검토 → 확정(핀 생성)
+      { id: "markup-align", group: "drawing", icon: "📐", label: "마킹 도면 사진으로 핀 만들기", desc: "손으로 표시한 출력 도면 사진을 원본 도면과 대조해 위치를 맞춰 핀을 만듭니다", perm: "designer", needs: "drawing", mod: "MarkupAlign",
+        run: () => MarkupAlign.open() },
       { id: "deck-outline", group: "drawing", icon: "⬚", label: "구역 윤곽 표시 켜기/끄기", desc: "메인 도면 위에 캡처해 만든 구역 윤곽", click: "chk-deck-outline" },
       { id: "page-thumbs", group: "drawing", icon: "▦", label: "페이지 썸네일", keys: "T", needs: "drawing", click: "tb-thumbs", covers: ["tb-thumbs"] },
       { id: "page-first", group: "drawing", icon: "⏮", label: "첫 페이지", keys: "Home", needs: "drawing", click: "tb-first", covers: ["tb-first", "btn-first-page"] },
@@ -297,6 +300,7 @@
           case "Delivery": return typeof Delivery !== "undefined" && typeof ZipStore !== "undefined";
           case "NumReset": return typeof NumReset !== "undefined";
           case "GPS": return typeof GPS !== "undefined" && !!GPS.Calib;
+          case "MarkupAlign": return typeof MarkupAlign !== "undefined";
           default: return false;
         }
       } catch (e) { return false; }   // 선언 전(TDZ) 접근도 "미로드"로

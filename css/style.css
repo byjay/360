@@ -5919,6 +5919,34 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .rm-undo-btn { flex: none; padding: 5px 12px; border: 0; border-radius: 6px; background: #f4f6fb; color: #0d1425; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .rm-undo-btn:disabled { opacity: .6; cursor: default; }
 
+/* [WO 20261023-markupalign] 마킹 도면 사진으로 핀 만들기(74_MarkupAlign.js) — .admin-gate 카드 재사용.
+   글자색 color:inherit — rm-card 와 동일 근거(카드 실제 색은 seastar-family-tokens.css 의 var(--panel)/var(--text)
+   !important 오버라이드가 SoT, 여기서 새 색을 박지 않는다 — G-4⑤ 3파일 숙지). */
+.admin-gate-card.ma-card { width: min(760px, 96vw); text-align: left; max-height: 92vh; overflow-y: auto; }
+.ma-step.hidden { display: none; }
+.ma-lbl { margin: 0 0 4px; font-size: 12px; font-weight: 700; color: inherit; }
+.ma-canvases { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; }
+.ma-cv-wrap { flex: 1 1 260px; min-width: 220px; }
+/* 캔버스 2장(베이스+오버레이)을 같은 위치에 겹쳐 터치 지점을 그대로 쓴다 — 375px 모바일도 폭 100% 로 맞춰 탭 가능 */
+.ma-cv-stage { position: relative; width: 100%; line-height: 0; touch-action: none; border: 1px solid rgba(127,127,127,.3); border-radius: 6px; overflow: hidden; }
+.ma-cv-stage canvas { display: block; width: 100%; height: auto; }
+.ma-cv-stage canvas:last-child { position: absolute; inset: 0; }
+.ma-cv-stage-wide { max-width: 100%; }
+.ma-slider { width: 100%; margin: 8px 0; }
+.ma-cand-list { max-height: 220px; overflow-y: auto; margin-top: 6px; }
+.ma-cand-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; color: inherit; }
+.ma-cand-row.off { opacity: .45; }
+.ma-cand-ico { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; flex: none; }
+.ma-cand-input { flex: 1; padding: 6px 10px; font-size: 13px; text-align: left; letter-spacing: 0; }
+.ma-cand-warn { color: var(--red, #e0705e); font-size: 11px; flex: none; min-width: 48px; }
+/* 삭제 버튼 — 터치타깃 ≥36px */
+.ma-cand-del { flex: none; width: 36px; height: 36px; border: 1px solid rgba(107,100,87,.3); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; font-size: 13px; }
+.ma-cand-del:hover { border-color: var(--red, #e0705e); color: var(--red, #e0705e); }
+@media (max-width: 480px) {
+  .admin-gate-card.ma-card { padding: 20px 16px 18px; }
+  .ma-cv-wrap { flex: 1 1 100%; }
+}
+
 /* ══════════ 구역 원본 윤곽(DeckOutline) — WO 20261002-allmenu §6 ══════════ */
 /* 영역(Zones, 색 ZONE_COLORS/.zone-shape 실선)과 구분: 인디고 점선 + 전용 라벨색. 항상 zones-layer보다 뒤. */
 .deck-outline-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: visible; }
