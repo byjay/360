@@ -2064,6 +2064,14 @@ app.delete('/api/invites/:email', async (c) => {
   return c.json({ success: true })
 })
 
+/** [R6 뷰어감사 followup, §G-2-5 단일 진입점] GET /api/app-settings 는 로그인만 되면 scope=* 전체를
+ *  읽는다(프론트 메뉴 토글용) — auto_entry_secret(123행, 서버 서명 비밀키) 같은 행이 지금은 "값이
+ *  JSON이 아니라 파싱 실패로 {} 가 나가 우연히 비노출"일 뿐이라, 저장 형식이 바뀌면(예: 앞으로 다른
+ *  *_secret/*_key/*token* 행을 JSON 값으로 추가) 그대로 샌다. 이름 패턴으로 항상 걸러
+ *  — 단건(key=) 조회와 scope 전체 목록 조회 두 분기 모두 이 함수 하나로 판정한다. */
+function isSensitiveAppSettingsKey(key: string): boolean {
+  return /secret|token|apikey|_key$/i.test(key)
+}
 /* ── 앱 설정(기능/메뉴/레이아웃/AI) — 최상위 관리자가 프로젝트별로 관장 ──
    · GET  /api/app-settings?scope=<*|projectId>&key=<features|layout|ai>  (읽기는 로그인 사용자 허용 — 프론트가 메뉴 토글에 사용)
    · PUT  /api/app-settings  { scope?, key, value }  (슈퍼관리자만 쓰기) */
@@ -2074,6 +2082,7 @@ app.get('/api/app-settings', async (c) => {
   const key = String(c.req.query('key') || '')
   try {
     if (key) {
+      if (isSensitiveAppSettingsKey(key)) return c.json({ scope, key, value: {}, updated_at: 0 })
       const row: any = await c.env.DB.prepare('SELECT value, updated_at, updated_by FROM app_settings WHERE scope = ? AND skey = ?').bind(scope, key).first()
       let value = {}
       try { value = row ? JSON.parse(row.value) : {} } catch { value = {} }
@@ -2081,7 +2090,10 @@ app.get('/api/app-settings', async (c) => {
     }
     const { results } = await c.env.DB.prepare('SELECT scope, skey, value, updated_at FROM app_settings WHERE scope = ?').bind(scope).all()
     const out: any = {}
-    ;(results || []).forEach((r: any) => { try { out[r.skey] = JSON.parse(r.value) } catch { out[r.skey] = {} } })
+    ;(results || []).forEach((r: any) => {
+      if (isSensitiveAppSettingsKey(r.skey)) return
+      try { out[r.skey] = JSON.parse(r.value) } catch { out[r.skey] = {} }
+    })
     return c.json({ scope, settings: out })
   } catch (e: any) { return c.json({ scope, settings: {}, value: {} }) }
 })

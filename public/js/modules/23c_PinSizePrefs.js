@@ -52,6 +52,20 @@
      *  그대로 배율(마이그레이션 불필요, _toPx/_fromPx 로 표시만 환산).
      *  [WO 20261023-pinviewopt §3] 프리셋([작게/보통/크게]=MIN/DEFAULT/MAX, 새 매직넘버 無) + 초기화
      *  버튼 추가 — 슬라이더와 같은 set()/get() SoT, 숫자만 더 빨리 맞추는 보조 UI. */
+    /** [R4 뷰어감사 followup] initSlider() 가 만든 슬라이더는 생성 시점의 get()(= 그 시점
+     *  _projectId())값으로만 채워진다. 설정 패널을 "프로젝트가 아직 확정되기 전"(예: 새로고침 직후,
+     *  Projects.currentProject 가 비동기로 채워지기 전)에 처음 열면 슬라이더가 "default" 스코프 값으로
+     *  굳어, 그 뒤 프로젝트가 확정돼도 저장값(예: 44px)과 다른 값(기본 30px)을 계속 보여준다
+     *  (.tmp/viewer-audit/scn5.log afterReloadOpen). 재생성 없이 현재 get() 으로 다시 읽어 그린다 —
+     *  Settings.render()(패널을 열 때마다) 가 호출해 "열 때 값"을 항상 최신 저장값으로 맞춘다. */
+    syncSlider() {
+      const slider = document.getElementById("pinsize-slider");
+      const val = document.getElementById("pinsize-val");
+      if (!slider || !val) return;
+      const px = this._toPx(this.get());
+      slider.value = String(px);
+      val.textContent = px + "px";
+    },
     initSlider() {
       const host = settingsDisplayPrefsHost();
       if (!host || document.getElementById("pinsize-slider")) return;
@@ -158,6 +172,17 @@
       if (v === this.HIDDEN) return true;
       return px < (typeof MapCtrl !== "undefined" ? MapCtrl.LABEL_HIDE_PX : 16); // auto
     },
+    /** [R4 뷰어감사 followup] PinSizePrefs.syncSlider() 와 같은 이유 — 버튼 생성 시점의 get() 으로
+     *  굳은 강조(aria-pressed/굵기) 표시를 패널을 열 때마다 현재 저장값으로 다시 맞춘다. */
+    sync() {
+      const cur = this.get();
+      document.querySelectorAll("[data-pinlabel-opt]").forEach((b) => {
+        const on = b.getAttribute("data-pinlabel-opt") === cur;
+        b.style.fontWeight = on ? "700" : "400";
+        b.style.opacity = on ? "1" : ".6";
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+    },
     /** 설정 패널 3단 버튼(select 대신 — 터치 44px 보장이 쉽고 현재 선택이 한눈에 보인다).
      *  PinSizePrefs.initSlider() 와 같은 공유 호스트(settingsDisplayPrefsHost, 이 파일 상단) — 권한
      *  블록 밖이라 비로그인 공유 열람 링크(readonly)에서도 보인다. */
@@ -216,6 +241,16 @@
         if (v === this.AUTO || v === this.PIN || v === this.DOT) return v;
         return this.DEFAULT;
       } catch (e) { return this.DEFAULT; }
+    },
+    /** [R4 뷰어감사 followup] PinLabelPrefs.sync() 와 동일 패턴. */
+    sync() {
+      const cur = this.get();
+      document.querySelectorAll("[data-pinshape-opt]").forEach((b) => {
+        const on = b.getAttribute("data-pinshape-opt") === cur;
+        b.style.fontWeight = on ? "700" : "400";
+        b.style.opacity = on ? "1" : ".6";
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
     },
     set(v) {
       const n = (v === this.AUTO || v === this.PIN || v === this.DOT) ? v : this.DEFAULT;
@@ -280,6 +315,16 @@
         return this.DEFAULT;
       } catch (e) { return this.DEFAULT; }
     },
+    /** [R4 뷰어감사 followup] PinLabelPrefs.sync() 와 동일 패턴. */
+    sync() {
+      const cur = this.get();
+      document.querySelectorAll("[data-leaderview-opt]").forEach((b) => {
+        const on = b.getAttribute("data-leaderview-opt") === cur;
+        b.style.fontWeight = on ? "700" : "400";
+        b.style.opacity = on ? "1" : ".6";
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+    },
     set(v) {
       const n = (v === this.ON || v === this.OFF) ? v : this.DEFAULT;
       try { localStorage.setItem(this._key(), n); } catch (e) {}
@@ -320,3 +365,14 @@
       paint();
     }
   };
+
+  /** [R4 뷰어감사 followup, §G-2-5 단일 진입점] "보기 설정" 구역 전체(크기/번호/모양/리더선 보기)를
+   *  현재 저장값으로 다시 읽어 그리는 단일 호출점. 24_Settings.js render() 가 패널을 열 때마다(그리고
+   *  로그인/프로젝트 상태가 바뀔 때마다) 이 함수 하나만 부른다 — initSlider/initToggle(1회 생성)과
+   *  분리해, "생성 시점 값으로 굳는" 문제(R4)를 패널을 열 때마다 재동기화로 해소한다. */
+  function syncDisplayPrefsControls() {
+    try { if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.syncSlider) PinSizePrefs.syncSlider(); } catch (e) {}
+    try { if (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.sync) PinLabelPrefs.sync(); } catch (e) {}
+    try { if (typeof PinShapePrefs !== "undefined" && PinShapePrefs.sync) PinShapePrefs.sync(); } catch (e) {}
+    try { if (typeof PinLeaderViewPrefs !== "undefined" && PinLeaderViewPrefs.sync) PinLeaderViewPrefs.sync(); } catch (e) {}
+  }

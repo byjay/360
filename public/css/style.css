@@ -2847,7 +2847,10 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
 .cmp-close:hover { background: rgba(220,38,38,1); transform: translateX(-50%) translateY(-1px); }
 
 @media (max-width: 640px) {
-  .pano-timeline { max-width: 94vw; bottom: 70px; }
+  /* [R5 뷰어감사 followup] bottom:70px 는 #pano-nav(top 736px)·#btn-pano-tools-toggle(위
+     .pano-tools-toggle, bottom:84px → top 724px)와 겹쳤다(.tmp/viewer-audit/scn10-2.log
+     bottomStack y640~742). 토글 위로 8px 띄워(top 116px 위) 128px 로. */
+  .pano-timeline { max-width: 94vw; bottom: 128px; }
   .tl-compare-btn { font-size: 10px; padding: 2px 7px; }
 }
 
@@ -4347,10 +4350,14 @@ html.wm-view-link #screen-projects { display: none !important; }
   .pano-header-more .pano-iso-views { justify-content: center; }
   .pano-header-more .btn-pano-notes { justify-content: center; }
 
-  /* R4 — 컨트롤 패드 기본 접힘, [⋯ 도구]로 펼침. 펼친 버튼은 36px 이하(판정 기준). */
+  /* R4 — 컨트롤 패드 기본 접힘, [⋯ 도구]로 펼침. 펼친 버튼은 36px 이하(판정 기준).
+     [R5 뷰어감사 followup] 이 버튼이 var(--pano-controls-bottom)(=56px, .pano-controls 와 공유)을
+     그대로 쓰면 #pano-nav(bottom:18px, 실측높이 58px → top 736px, .tmp/viewer-audit/scn10-2.log
+     bottomStack)와 y736~756 구간이 겹친다. .pano-controls(펼침 패드)는 그대로 두고(회귀 방지 —
+     펼쳤을 때 레이아웃 불변), 이 작은 토글 버튼만 리터럴 bottom 으로 분리해 nav 위로 띄운다. */
   .pano-tools-toggle {
     display: inline-flex; align-items: center; gap: 5px;
-    position: absolute; bottom: var(--pano-controls-bottom); left: 50%; transform: translateX(-50%);
+    position: absolute; bottom: 84px; left: 50%; transform: translateX(-50%);
     z-index: 14; padding: 7px 14px; border-radius: 999px;
     background: rgba(10,16,32,.78); border: 1px solid rgba(255,255,255,.22);
     color: #f1f3f8; font-size: 12px; font-weight: 700; font-family: var(--font-ui); cursor: pointer;

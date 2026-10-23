@@ -208,6 +208,11 @@
       const $ = (id) => document.getElementById(id);
       const out = $("settings-loggedout");
       const inn = $("settings-loggedin");
+      // [R4 뷰어감사 followup] initSlider/initToggle(23c_PinSizePrefs.js)는 1회만 DOM을 만들어
+      // "생성 시점" 저장값으로 굳는다(새로고침 직후처럼 프로젝트가 아직 확정 전이면 어긋남 —
+      // .tmp/viewer-audit/scn5.log). 패널을 열 때마다(render 는 open() 에서 항상 호출) 현재
+      // 저장값으로 다시 그려 맞춘다.
+      if (typeof syncDisplayPrefsControls === "function") syncDisplayPrefsControls();
       if (Auth.user) {
         // 로그인됨
         out && out.classList.add("hidden");

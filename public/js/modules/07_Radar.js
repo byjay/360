@@ -54,6 +54,20 @@
           eb0.title = storedLarge ? "미니맵 작게 보기" : "미니맵 크게 보기";
         }
       }
+      // [R5 뷰어감사 followup] 위 기본값(storedLarge=true)은 "크게보기"일 때 width:60vw까지
+      // 넓어지고, 아래 조작판(controls)을 피해 위로 올라간 bottom 위치(seastar-family-tokens.css
+      // §mobile .pano-radar-large)가 좁은 세로 화면(375×812 등)에서는 화면 수직 중앙(= 360 캔버스를
+      // 손가락으로 끌어 회전하는 지점)까지 덮는다(.tmp/viewer-audit/scn10-2.log mobile.radar.rect
+      // y325~542, 중앙 y406 포함). 데스크톱 기본값(확대)은 그대로 두고, 좁은 화면에서만 "접힘"을
+      // 기본으로 — 이 세션 한정(저장 안 함, wm-radar-large 와 섞이지 않게), 토글로 언제든 펼 수 있다.
+      if (!this._mobileCollapseInited) {
+        this._mobileCollapseInited = true;
+        try {
+          if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 720px)").matches) {
+            box.classList.add("collapsed");
+          }
+        } catch (e) {}
+      }
       if (!this._expandBound) {
         const eb = document.getElementById("pano-radar-expand");
         if (eb) {
