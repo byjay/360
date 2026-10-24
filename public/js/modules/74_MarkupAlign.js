@@ -3,14 +3,17 @@
      마스터: "구역(영역)을 지정하면, 현장에서 출력 도면에 수동으로 마킹한 것을 사진으로 올렸을 때
              그 구역 PDF 원본과 대조해 위치를 정확하게 맞춰라."
 
-     동선: 전체 기능 메뉴 → "마킹 도면 사진으로 핀 만들기"
+     동선: 전체 기능 메뉴 → "마킹 도면 사진으로 핀 만들기" — 2026-10-24 "보조 배치로 전환"(마스터 결정,
+       현장 실측 자동검출 recall 22%·정합오차 2.45% 한계): 자동검출은 참고 후보로만, 사람이 탭해 배치가 기본.
        ① 사진 선택(갤러리·카메라) → ② 사진·원본 도면 각각에서 같은 기준점 4곳을 순서대로 탭
           → 4점 DLT 호모그래피로 사진을 원본 도면 좌표계로 역매핑 워프(양선형 보간)
           → 겹쳐보기 슬라이더로 정합 확인(점 다시 잡기 가능)
-       ③ [마킹 찾기] — 그레이스케일 차분(+색 채도 보조) → 임계 → 형태학(닫힘→열림) → 연결 성분 →
-          크기 필터 → 후보(중심) 목록
-       ④ 검토 — 후보를 도면 위 번호 없는 원으로, 목록에 번호 입력칸(다음 번호 자동 제안·중복 경고)
-          + 후보 추가(도면 탭)/삭제 → [확정] 시에만 기존 핀 생성 공용 경로로 일괄 생성(자동 생성 금지)
+       ③ 검토(보조 배치 기본) — 정합된 사진을 반투명 겹쳐보기 한 화면 위를 사용자가 직접 탭 →
+          그 지점을 그대로 원본 좌표 후보로 추가(번호 입력칸, 다음 번호 자동 제안·직전 입력 기억·중복 경고).
+          핀치/휠로 확대·이동 가능 — 이동 거리 임계를 넘으면 탭으로 오인하지 않음(§_wireGesture).
+          [후보 보기] 토글(기본 꺼짐) — 켜면 그레이스케일 차분(+색 채도 보조)→임계→형태학→연결성분
+          자동 검출 결과를 점선 원으로만 참고 표시(탭하면 그 위치에 후보 추가, 자동 생성 아님).
+       ④ 후보 목록 — 추가/삭제/드래그 수정 → [확정] 시에만 기존 핀 생성 공용 경로로 일괄 생성(자동 생성 금지)
 
      🔴 좌표 SoT — pin.x/pin.y 는 기존 관례(20_App._placeCheckboardPin)와 동일하게 "그 페이지 폭/높이의
         0~100%". 이 모듈이 그리는 원본 캔버스는 어떤 해상도로 렌더해도 무방하다(퍼센트는 해상도 불변) —
@@ -485,13 +488,12 @@
         '<button id="ma-align" type="button" class="admin-gate-btn primary" disabled>정합 확인</button></div>' +
         '</div>' +
         '<div id="ma-step3" class="ma-step hidden">' +
-        '<p class="admin-gate-sub">슬라이더로 겹쳐보기(정합 확인) → [마킹 찾기] → 번호 입력 후 [확정]</p>' +
+        '<p class="admin-gate-sub">사진 겹쳐보기 위를 탭해 마킹 지점에 후보를 추가하세요(핀치·휠 확대/이동, 점 끌어서 수정)</p>' +
         '<input id="ma-opacity" type="range" min="0" max="100" value="50" class="ma-slider">' +
-        '<div class="ma-cv-stage ma-cv-stage-wide"><canvas id="ma-cmp-base"></canvas><canvas id="ma-cmp-over"></canvas><canvas id="ma-cmp-cand"></canvas></div>' +
+        '<div class="ma-cv-stage ma-cv-stage-wide" id="ma-cmp-viewport"><div class="ma-cmp-stage" id="ma-cmp-stage"><canvas id="ma-cmp-base"></canvas><canvas id="ma-cmp-over"></canvas><canvas id="ma-cmp-cand"></canvas></div></div>' +
         '<div class="admin-gate-actions">' +
-        '<button id="ma-redo-pts" type="button" class="admin-gate-btn ghost">점 다시 잡기</button>' +
-        '<button id="ma-detect" type="button" class="admin-gate-btn primary">마킹 찾기</button></div>' +
-        '<label class="rm-chk"><input type="checkbox" id="ma-addmode"> 후보 추가(도면 탭으로 직접 찍기)</label>' +
+        '<button id="ma-redo-pts" type="button" class="admin-gate-btn ghost">점 다시 잡기</button></div>' +
+        '<label class="rm-chk"><input type="checkbox" id="ma-showcand"> 자동 검출 후보 보기(점선 — 탭하면 그 위치에 후보 추가)</label>' +
         '<p id="ma-cand-summary" class="rm-preview"></p>' +
         '<div id="ma-cand-list" class="ma-cand-list"></div>' +
         '<div id="ma-err" class="admin-gate-error hidden"></div>' +
@@ -507,11 +509,10 @@
       m.querySelector("#ma-redo-pts").addEventListener("click", () => this._backToPoints());
       m.querySelector("#ma-align").addEventListener("click", () => this._align());
       m.querySelector("#ma-opacity").addEventListener("input", (e) => this._renderOverlay(Number(e.target.value) / 100));
-      m.querySelector("#ma-detect").addEventListener("click", () => this._detect());
+      m.querySelector("#ma-showcand").addEventListener("change", (e) => this._toggleGuides(e.target.checked));
       m.querySelector("#ma-cancel").addEventListener("click", () => this.close());
       m.querySelector("#ma-confirm").addEventListener("click", () => this._confirm());
-      const cmpCand = m.querySelector("#ma-cmp-cand");
-      cmpCand.addEventListener("pointerdown", (e) => this._onCandTap(e));
+      this._wireGesture(m.querySelector("#ma-cmp-cand"), m.querySelector("#ma-cmp-viewport"));
       this._wirePointPicker(m.querySelector("#ma-photo-ov"), "photoPts", "ma-photo");
       this._wirePointPicker(m.querySelector("#ma-orig-ov"), "origPts", "ma-orig");
       this._panel = m;
@@ -605,16 +606,21 @@
       const warped = this.warp(photoImgData, H, w, h);
       if (!warped) { err.textContent = "정합 계산에 실패했습니다 — 점을 다시 지정하세요"; err.classList.remove("hidden"); return; }
       ctx.H = H; ctx.warped = warped; ctx.candidates = [];
+      ctx.detected = null; ctx.showGuides = false; ctx.view = { scale: 1, tx: 0, ty: 0 }; ctx.gesture = null;
       const warpedCanvas = document.createElement("canvas");
       warpedCanvas.width = w; warpedCanvas.height = h;
       warpedCanvas.getContext("2d").putImageData(new ImageData(warped.data, w, h), 0, 0);
       ctx.warpedCanvas = warpedCanvas;
       ["ma-cmp-base", "ma-cmp-over", "ma-cmp-cand"].forEach((id) => { const c = document.getElementById(id); c.width = w; c.height = h; });
       document.getElementById("ma-cmp-base").getContext("2d").drawImage(ctx.origCanvas, 0, 0);
+      const showcandChk = this._panel.querySelector("#ma-showcand");
+      if (showcandChk) showcandChk.checked = false;
       ctx.step = 3;
       this._panel.querySelector("#ma-step2").classList.add("hidden");
       this._panel.querySelector("#ma-step3").classList.remove("hidden");
+      this._applyView();
       this._renderOverlay(Number(this._panel.querySelector("#ma-opacity").value) / 100);
+      this._redrawCandCanvas();
       this._renderCandList();
     },
 
@@ -628,22 +634,30 @@
       g.globalAlpha = 1;
     },
 
-    _detect() {
-      const ctx = this._ctx; if (!ctx || !ctx.warped) return;
-      const orig = ctx.origCanvas.getContext("2d").getImageData(0, 0, ctx.origCanvas.width, ctx.origCanvas.height);
-      const found = this.detectMarks(orig, ctx.warped);
-      const existingLabels = this.suggestLabels((State.pins || []), ctx.page, found.length);
-      ctx.candidates = found.map((f, i) => ({ x: f.x, y: f.y, w: f.w, h: f.h, label: existingLabels[i], include: true }));
-      this._renderCandidateDots();
-      this._renderCandList();
+    /** [후보 보기] 토글 — 켜지면(최초 1회) 자동 검출을 돌려 ctx.detected 에 캐시, 점선 가이드로만 표시.
+     *  자동 생성 아님 — 탭하면 _addCandidateAt 의 일반 경로로 그 지점이 후보로 추가될 뿐이다. */
+    _toggleGuides(on) {
+      const ctx = this._ctx; if (!ctx) return;
+      if (on && !ctx.detected && ctx.warped) {
+        const orig = ctx.origCanvas.getContext("2d").getImageData(0, 0, ctx.origCanvas.width, ctx.origCanvas.height);
+        ctx.detected = this.detectMarks(orig, ctx.warped);
+      }
+      ctx.showGuides = on;
+      this._redrawCandCanvas();
     },
 
-    _renderCandidateDots() {
+    /** cmp-cand 캔버스를 다시 그린다 — [후보 보기] 점선 가이드(선택) + 확정 후보(실선, 초록). */
+    _redrawCandCanvas() {
       const ctx = this._ctx; if (!ctx) return;
-      const c = document.getElementById("ma-cmp-cand");
+      const c = document.getElementById("ma-cmp-cand"); if (!c) return;
       const g = c.getContext("2d");
       g.clearRect(0, 0, c.width, c.height);
-      (ctx.candidates || []).forEach((cd, i) => {
+      if (ctx.showGuides && ctx.detected) {
+        g.save(); g.setLineDash([6, 5]); g.strokeStyle = "rgba(234,179,8,.9)"; g.lineWidth = 2;
+        ctx.detected.forEach((d) => { g.beginPath(); g.arc(d.x, d.y, Math.max(10, c.width * 0.016), 0, Math.PI * 2); g.stroke(); });
+        g.restore();
+      }
+      (ctx.candidates || []).forEach((cd) => {
         if (cd.include === false) return;
         g.beginPath(); g.arc(cd.x, cd.y, Math.max(10, c.width * 0.016), 0, Math.PI * 2);
         g.strokeStyle = "#22c55e"; g.lineWidth = 3; g.stroke();
@@ -651,17 +665,133 @@
       });
     },
 
-    _onCandTap(e) {
-      const ctx = this._ctx;
-      const addMode = this._panel.querySelector("#ma-addmode");
-      if (!ctx || ctx.step !== 3 || !addMode || !addMode.checked) return;
+    /** 탭 확정(이동 아님) 시 호출 — 그 화면 지점을 원본 좌표 후보로 추가(자동 생성 금지, 사용자 탭만). */
+    _addCandidateAt(clientX, clientY) {
+      const ctx = this._ctx; if (!ctx || ctx.step !== 3) return;
       const c = document.getElementById("ma-cmp-cand");
-      const p = this._ptOnCanvas(c, e.clientX, e.clientY);
+      const p = this._ptOnCanvas(c, clientX, clientY);
       if (!p) return;
       const label = this.suggestLabels((State.pins || []).concat(ctx.candidates.filter((x) => x.include !== false).map((x) => ({ page: ctx.page, label: x.label }))), ctx.page, 1)[0];
       ctx.candidates.push({ x: p.x, y: p.y, w: 0, h: 0, label, include: true });
-      this._renderCandidateDots();
+      this._redrawCandCanvas();
       this._renderCandList();
+    },
+
+    /** 기존 후보 중 (px,py) 에서 넉넉한 반경 안의 것(가장 위에 그려진, 즉 배열 뒤쪽부터) — 없으면 -1. */
+    _hitCandidate(px, py) {
+      const ctx = this._ctx; if (!ctx) return -1;
+      const c = document.getElementById("ma-cmp-cand");
+      const r = Math.max(14, c.width * 0.022);
+      const list = ctx.candidates || [];
+      for (let i = list.length - 1; i >= 0; i--) {
+        const cd = list[i]; if (!cd || cd.include === false) continue;
+        if (Math.hypot(cd.x - px, cd.y - py) <= r) return i;
+      }
+      return -1;
+    },
+
+    /** cmp-cand 캔버스 스테이지의 transform(확대/이동) 적용 — CSS transform 이므로
+     *  getBoundingClientRect() 기반 _ptOnCanvas 좌표 변환은 그대로 정확하다(추가 보정 불필요). */
+    _applyView() {
+      const ctx = this._ctx; if (!ctx) return;
+      const s = document.getElementById("ma-cmp-stage"); if (!s) return;
+      const v = ctx.view || { scale: 1, tx: 0, ty: 0 };
+      s.style.transform = "translate(" + v.tx + "px," + v.ty + "px) scale(" + v.scale + ")";
+    },
+
+    /** 핀치(2손가락)·휠 확대, 1손가락 이동 거리 임계로 탭/이동(pan)/후보 끌기(move) 구분.
+     *  🔴 이동 거리 임계(MOVE_THRESH) 없으면 확대·이동 중 손끝이 조금만 흔들려도 탭으로 오인되어
+     *  의도치 않은 후보가 추가된다 — p188 뮤테이션으로 검증. */
+    _wireGesture(canvas, viewport) {
+      if (!canvas || !viewport) return;
+      const MOVE_THRESH = 8;
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      const ensureGesture = () => {
+        const ctx = this._ctx; if (!ctx) return null;
+        if (!ctx.view) ctx.view = { scale: 1, tx: 0, ty: 0 };
+        if (!ctx.gesture) ctx.gesture = { pointers: new Map(), mode: null, moved: false, moveIdx: -1, downX: 0, downY: 0, startDist: 0, startScale: 1, startTx: 0, startTy: 0, anchorX: 0, anchorY: 0 };
+        return ctx.gesture;
+      };
+      canvas.addEventListener("pointerdown", (e) => {
+        const ctx = this._ctx; if (!ctx || ctx.step !== 3) return;
+        const gst = ensureGesture();
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+        gst.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (gst.pointers.size === 1) {
+          gst.downX = e.clientX; gst.downY = e.clientY;
+          gst.startTx = ctx.view.tx; gst.startTy = ctx.view.ty;
+          const p = this._ptOnCanvas(canvas, e.clientX, e.clientY);
+          const hitIdx = p ? this._hitCandidate(p.x, p.y) : -1;
+          if (hitIdx >= 0) { gst.mode = "move"; gst.moveIdx = hitIdx; gst.moved = false; }
+          else { gst.mode = "tap"; gst.moved = false; }
+        } else if (gst.pointers.size === 2) {
+          const pts = Array.from(gst.pointers.values());
+          gst.mode = "pinch"; gst.moved = true;
+          gst.startDist = Math.max(1, dist(pts[0], pts[1]));
+          gst.startScale = ctx.view.scale;
+          const vr = viewport.getBoundingClientRect();
+          const m = mid(pts[0], pts[1]);
+          gst.anchorX = (m.x - vr.left - ctx.view.tx) / ctx.view.scale;
+          gst.anchorY = (m.y - vr.top - ctx.view.ty) / ctx.view.scale;
+        }
+        e.preventDefault();
+      });
+      canvas.addEventListener("pointermove", (e) => {
+        const ctx = this._ctx; const gst = ctx && ctx.gesture; if (!ctx || !gst || !gst.pointers.has(e.pointerId)) return;
+        gst.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (gst.pointers.size >= 2 && gst.mode === "pinch") {
+          const pts = Array.from(gst.pointers.values()).slice(0, 2);
+          const d = Math.max(1, dist(pts[0], pts[1]));
+          const scale = Math.max(1, Math.min(6, gst.startScale * (d / gst.startDist)));
+          const vr = viewport.getBoundingClientRect();
+          const m = mid(pts[0], pts[1]);
+          ctx.view = { scale, tx: (m.x - vr.left) - gst.anchorX * scale, ty: (m.y - vr.top) - gst.anchorY * scale };
+          this._applyView();
+        } else if (gst.pointers.size === 1 && gst.mode === "move") {
+          const p = this._ptOnCanvas(canvas, e.clientX, e.clientY);
+          if (p && ctx.candidates[gst.moveIdx]) {
+            ctx.candidates[gst.moveIdx].x = p.x; ctx.candidates[gst.moveIdx].y = p.y;
+            gst.moved = true;
+            this._redrawCandCanvas();
+          }
+        } else if (gst.pointers.size === 1 && (gst.mode === "tap" || gst.mode === "pan")) {
+          const dx = e.clientX - gst.downX, dy = e.clientY - gst.downY;
+          if (!gst.moved && Math.hypot(dx, dy) > MOVE_THRESH) { gst.mode = "pan"; gst.moved = true; }
+          if (gst.mode === "pan") {
+            ctx.view = Object.assign({}, ctx.view, { tx: gst.startTx + dx, ty: gst.startTy + dy });
+            this._applyView();
+          }
+        }
+        e.preventDefault();
+      });
+      const endPointer = (e) => {
+        const ctx = this._ctx; const gst = ctx && ctx.gesture; if (!ctx || !gst) return;
+        const wasSingleTap = gst.pointers.size === 1 && gst.pointers.has(e.pointerId) && gst.mode === "tap" && !gst.moved;
+        gst.pointers.delete(e.pointerId);
+        if (wasSingleTap) this._addCandidateAt(e.clientX, e.clientY);
+        if (gst.pointers.size === 1) {
+          const remain = Array.from(gst.pointers.values())[0];
+          gst.mode = "pan"; gst.moved = true; gst.downX = remain.x; gst.downY = remain.y;
+          gst.startTx = ctx.view.tx; gst.startTy = ctx.view.ty;
+        } else if (gst.pointers.size === 0) {
+          gst.mode = null; gst.moved = false; gst.moveIdx = -1;
+        }
+      };
+      canvas.addEventListener("pointerup", endPointer);
+      canvas.addEventListener("pointercancel", endPointer);
+      viewport.addEventListener("wheel", (e) => {
+        const ctx = this._ctx; if (!ctx || ctx.step !== 3) return;
+        e.preventDefault();
+        if (!ctx.view) ctx.view = { scale: 1, tx: 0, ty: 0 };
+        const vr = viewport.getBoundingClientRect();
+        const localX = e.clientX - vr.left, localY = e.clientY - vr.top;
+        const anchorX = (localX - ctx.view.tx) / ctx.view.scale, anchorY = (localY - ctx.view.ty) / ctx.view.scale;
+        const factor = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+        const scale = Math.max(1, Math.min(6, ctx.view.scale * factor));
+        ctx.view = { scale, tx: localX - anchorX * scale, ty: localY - anchorY * scale };
+        this._applyView();
+      }, { passive: false });
     },
 
     _renderCandList() {
@@ -677,7 +807,7 @@
         const warn = this._el("span", "ma-cand-warn");
         if (this.isDuplicateLabel(cd.label, State.pins, ctx.page, list, i)) warn.textContent = "번호 중복";
         const del = this._el("button", "ma-cand-del"); del.type = "button"; del.textContent = "✕";
-        del.addEventListener("click", () => { list.splice(i, 1); this._renderCandidateDots(); this._renderCandList(); });
+        del.addEventListener("click", () => { list.splice(i, 1); this._redrawCandCanvas(); this._renderCandList(); });
         row.appendChild(this._el("span", "ma-cand-ico"));
         row.appendChild(inp); row.appendChild(warn); row.appendChild(del);
         host.appendChild(row);
@@ -704,7 +834,7 @@
     open() {
       if (!this.canOpen()) { this._toast("도면이 열린 설계자 편집 화면에서만 사용할 수 있습니다"); return; }
       const m = this._ensureModal();
-      this._ctx = { step: 1, photoPts: [], origPts: [], candidates: [], page: State.pdfPage || 1 };
+      this._ctx = { step: 1, photoPts: [], origPts: [], candidates: [], page: State.pdfPage || 1, view: { scale: 1, tx: 0, ty: 0 }, gesture: null, showGuides: false, detected: null };
       m.querySelector("#ma-step1").classList.remove("hidden");
       m.querySelector("#ma-step2").classList.add("hidden");
       m.querySelector("#ma-step3").classList.add("hidden");

@@ -269,6 +269,108 @@ if (!puppeteer) {
       return { hasFile: !!document.getElementById("ma-file"), hasPick: !!el, hasOpacity: !!document.getElementById("ma-opacity"), hasCandList: !!document.getElementById("ma-cand-list") };
     });
     ok(feature.hasFile && feature.hasPick && feature.hasOpacity && feature.hasCandList, "모달 핵심 요소(파일선택·슬라이더·후보목록) 실 DOM 존재");
+
+    /* ══════════════════════════════════════════════════════════════
+       (C2) 보조 배치(마스터 2026-10-24) — 정합된 사진 위를 탭하면 그 지점이 원본 좌표 후보로
+       추가되는지, 확대·이동 중 탭이 오인되지 않는지, [후보 보기] 기본값·확정 생성까지 실 Chrome 검증.
+       ══════════════════════════════════════════════════════════════ */
+    console.log("\n[C2] 보조 배치 — 사진 위 탭으로 후보 추가(실 Chrome 인터랙션)");
+    const UIW = 400, UIH = 300;
+    await page.evaluate((w, h) => {
+      const mk = (ww, hh) => { const c = document.createElement("canvas"); c.width = ww; c.height = hh; c.getContext("2d").fillRect(0, 0, ww, hh); return c; };
+      const orig = mk(w, h);
+      window.State = window.State || {}; window.State.pins = [];
+      MarkupAlign._ctx = {
+        step: 3, photoPts: [], origPts: [], candidates: [], page: 1,
+        view: { scale: 1, tx: 0, ty: 0 }, gesture: null, showGuides: false, detected: null,
+        origCanvas: orig, H: null
+      };
+      const origImg = orig.getContext("2d").getImageData(0, 0, w, h);
+      MarkupAlign._ctx.warped = { data: origImg.data, width: w, height: h, outside: new Uint8Array(w * h) };
+      ["ma-cmp-base", "ma-cmp-over", "ma-cmp-cand"].forEach((id) => { const c = document.getElementById(id); c.width = w; c.height = h; });
+      document.getElementById("ma-cmp-base").getContext("2d").drawImage(orig, 0, 0);
+      document.getElementById("ma-step2").classList.add("hidden");
+      document.getElementById("ma-step3").classList.remove("hidden");
+      MarkupAlign._applyView();
+    }, UIW, UIH);
+
+    async function tapAt(fracX, fracY, pointerId) {
+      await page.evaluate(({ fracX, fracY, pointerId }) => {
+        const el = document.getElementById("ma-cmp-cand");
+        const r = el.getBoundingClientRect();
+        const x = r.left + fracX * r.width, y = r.top + fracY * r.height;
+        const mk = (type) => new PointerEvent(type, { clientX: x, clientY: y, pointerId, bubbles: true, cancelable: true, isPrimary: true, pointerType: "touch" });
+        el.dispatchEvent(mk("pointerdown"));
+        el.dispatchEvent(mk("pointerup"));
+      }, { fracX, fracY, pointerId });
+    }
+    async function dragAt(fracX, fracY, dxPx, dyPx, pointerId) {
+      await page.evaluate(({ fracX, fracY, dxPx, dyPx, pointerId }) => {
+        const el = document.getElementById("ma-cmp-cand");
+        const r = el.getBoundingClientRect();
+        const x = r.left + fracX * r.width, y = r.top + fracY * r.height;
+        const mk = (type, X, Y) => new PointerEvent(type, { clientX: X, clientY: Y, pointerId, bubbles: true, cancelable: true, isPrimary: true, pointerType: "touch" });
+        el.dispatchEvent(mk("pointerdown", x, y));
+        el.dispatchEvent(mk("pointermove", x + dxPx, y + dyPx));
+        el.dispatchEvent(mk("pointerup", x + dxPx, y + dyPx));
+      }, { fracX, fracY, dxPx, dyPx, pointerId });
+    }
+
+    const TAPS = [[0.2, 0.2], [0.4, 0.3], [0.6, 0.5], [0.3, 0.7], [0.8, 0.8]];
+    for (let i = 0; i < TAPS.length; i++) await tapAt(TAPS[i][0], TAPS[i][1], 100 + i);
+    const afterTaps = await page.evaluate(() => ({
+      n: MarkupAlign._ctx.candidates.length,
+      pts: MarkupAlign._ctx.candidates.map((c) => ({ x: c.x, y: c.y })),
+      labels: MarkupAlign._ctx.candidates.map((c) => c.label)
+    }));
+    measure("탭 5회 후 후보 수", afterTaps.n);
+    ok(afterTaps.n === 5, "사진 위 5곳 탭 → 후보 5개 추가(자동 생성 없음)");
+    const coordErrPct = afterTaps.pts.map((p, i) => Math.max(Math.abs(p.x - TAPS[i][0] * UIW), Math.abs(p.y - TAPS[i][1] * UIH)) / UIW * 100);
+    const maxCoordErr = Math.max(...coordErrPct);
+    measure("탭 좌표→원본 좌표 변환 오차(최대, 폭대비%)", maxCoordErr.toFixed(3) + "%");
+    ok(maxCoordErr <= 0.5, "탭 지점이 원본 좌표로 ≤0.5% 오차 내 변환(실측 " + maxCoordErr.toFixed(3) + "%)");
+    ok(afterTaps.labels.join(",") === "1,2,3,4,5", "번호 자동 제안 — 순차 증가(실측 " + afterTaps.labels.join(",") + ")");
+
+    await dragAt(0.5, 0.5, 40, 30, 200);
+    const afterDrag = await page.evaluate(() => MarkupAlign._ctx.candidates.length);
+    ok(afterDrag === 5, "확대·이동(드래그, 임계 초과) 중 탭 미발생 — 후보 수 불변(실측 " + afterDrag + ")");
+
+    const beforeMove = await page.evaluate(() => Object.assign({}, MarkupAlign._ctx.candidates[0]));
+    await dragAt(TAPS[0][0], TAPS[0][1], 15, 10, 300);
+    const afterMove = await page.evaluate(() => ({ n: MarkupAlign._ctx.candidates.length, c0: Object.assign({}, MarkupAlign._ctx.candidates[0]) }));
+    ok(afterMove.n === 5, "기존 후보를 끌어도 개수 불변(새 후보 추가 아님, 실측 " + afterMove.n + ")");
+    ok(Math.abs(afterMove.c0.x - beforeMove.x) > 5 || Math.abs(afterMove.c0.y - beforeMove.y) > 5,
+      "기존 후보를 끌면 위치가 바뀜(끌어서 수정, dx=" + (afterMove.c0.x - beforeMove.x).toFixed(1) + " dy=" + (afterMove.c0.y - beforeMove.y).toFixed(1) + ")");
+
+    await page.evaluate(() => {
+      const vp = document.getElementById("ma-cmp-viewport");
+      const r = vp.getBoundingClientRect();
+      vp.dispatchEvent(new WheelEvent("wheel", { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, deltaY: -100, bubbles: true, cancelable: true }));
+    });
+    const afterWheel = await page.evaluate(() => MarkupAlign._ctx.view.scale);
+    ok(afterWheel > 1, "휠로 확대 — view.scale 증가(실측 " + afterWheel.toFixed(3) + ")");
+
+    const guardDefault = await page.evaluate(() => ({ checked: document.getElementById("ma-showcand").checked, detected: MarkupAlign._ctx.detected }));
+    ok(guardDefault.checked === false, "자동 검출 [후보 보기] 토글 기본값 = 꺼짐");
+    ok(guardDefault.detected === null, "토글 켜기 전엔 자동 검출을 계산하지 않음(참고용일 뿐 자동 생성 아님)");
+    await page.evaluate(() => { const el = document.getElementById("ma-showcand"); el.checked = true; el.dispatchEvent(new Event("change", { bubbles: true })); });
+    const guardOn = await page.evaluate(() => ({ showGuides: MarkupAlign._ctx.showGuides, detectedIsArray: Array.isArray(MarkupAlign._ctx.detected) }));
+    ok(guardOn.showGuides === true && guardOn.detectedIsArray, "[후보 보기] 켜면 자동 검출 실행(점선 표시용 데이터 생성, 후보엔 추가 안 됨)");
+    const stillFive = await page.evaluate(() => MarkupAlign._ctx.candidates.length);
+    ok(stillFive === 5, "[후보 보기] 토글만으로는 후보가 늘지 않음(자동 생성 금지, 실측 " + stillFive + ")");
+
+    const dup = await page.evaluate(() => {
+      MarkupAlign._ctx.candidates[2].label = "3";
+      window.State.pins = [{ id: 9, page: 1, label: "3" }];
+      MarkupAlign._renderCandList();
+      return Array.from(document.querySelectorAll(".ma-cand-warn")).map((w) => w.textContent);
+    });
+    ok(dup[2] === "번호 중복", "직접 입력한 번호가 기존 핀과 충돌하면 경고 표시(실측 [" + dup.join("|") + "])");
+
+    await page.evaluate(() => { window.State.pins = []; });
+    await page.evaluate(() => document.getElementById("ma-confirm").click());
+    const confirmed = await page.evaluate(() => window.State.pins.length);
+    ok(confirmed === 5, "[확정] → 탭으로 추가한 후보 5개 전부 핀 생성(실측 " + confirmed + ")");
   } finally { await browser.close(); }
 }
 

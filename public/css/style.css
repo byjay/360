@@ -6337,6 +6337,13 @@ body:has(#crosshair-overlay:not(.hidden)) [data-help-inquiry-toggle]:active {
 .ma-cv-stage canvas { display: block; width: 100%; height: auto; }
 .ma-cv-stage canvas:last-child { position: absolute; inset: 0; }
 .ma-cv-stage-wide { max-width: 100%; }
+/* [WO 20261024-markupassist] step3 비교 스테이지 — 3캔버스(base/over/cand) 중 last-child 만
+   absolute 되던 기존 규칙으로는 가운데 over 가 겹쳐지지 않는다(실제 겹쳐보기가 깨짐) — base 를
+   기준 크기로 두고 그 뒤 형제 전부(over·cand)를 absolute 로 맞춘다. .ma-cmp-stage 는 핀치/휠
+   확대·이동(transform) 전용 레이어 — getBoundingClientRect() 기반 탭 좌표 변환은 transform 을
+   그대로 반영하므로 별도 보정이 필요 없다(74_MarkupAlign.js _wireGesture 참고). */
+.ma-cmp-stage { position: relative; transform-origin: 0 0; will-change: transform; }
+.ma-cmp-stage canvas:not(:first-child) { position: absolute; inset: 0; }
 .ma-slider { width: 100%; margin: 8px 0; }
 .ma-cand-list { max-height: 220px; overflow-y: auto; margin-top: 6px; }
 .ma-cand-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; color: inherit; }
