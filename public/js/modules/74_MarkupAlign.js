@@ -314,6 +314,52 @@
         .map((c) => ({ x: c.cx, y: c.cy, w: c.w, h: c.h, area: c.area }));
     },
 
+    /* ══ 구역 자동 선택 — 사진 제목 ↔ 구역/데크 이름 매칭(DOM 없이도 호출 가능한 순수 함수) ══════════
+       [WO 20261029-markupzone] 마스터: "구역만 자동, 번호는 사람이". 서버가 사진에서 읽은 제목(문자열)과
+       프로젝트의 데크/구역 이름 후보를 정규화 후 "후보 전체가 제목 안에 단어경계로 포함되는지"로 매칭하고,
+       매칭된 후보들 중 가장 긴(구체적인) 것을 1순위로 고른다("ST GEAR FLAT (3RD DECK LEVEL)" → "3RD DECK"
+       보다 더 구체적인 "ST GEAR FLAT" 우선). 번호는 다루지 않는다. */
+
+    /** 구역/데크 이름 표기 정규화 — 대소문자·구두점·공백·"DK"→"DECK" 약어 통일. */
+    _normZoneTitle(s) {
+      let t = String(s == null ? "" : s).toUpperCase();
+      t = t.replace(/\./g, " ");
+      t = t.replace(/\bDK\b/g, "DECK");
+      t = t.replace(/[^A-Z0-9가-힣]+/g, " ").trim().replace(/\s+/g, " ");
+      return t;
+    },
+
+    /** candidates = [{id,name,...}] → 제목 문자열 안에 (단어경계로) 포함되는 후보만, 긴(구체적) 것부터. */
+    matchZoneCandidates(title, candidates) {
+      const tn = this._normZoneTitle(title);
+      if (!tn) return [];
+      const padded = " " + tn + " ";
+      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const scored = [];
+      (candidates || []).forEach((c) => {
+        if (!c) return;
+        const raw = c.name != null ? c.name : c.label;
+        const cn = this._normZoneTitle(raw);
+        if (!cn) return;
+        const re = new RegExp("(^|\\s)" + esc(cn) + "(\\s|$)");
+        if (re.test(padded)) scored.push({ candidate: c, name: cn, score: cn.replace(/\s/g, "").length });
+      });
+      scored.sort((a, b) => b.score - a.score);
+      return scored;
+    },
+
+    /** 최상위 매칭 1건 + 전체 매칭 후보(바꿀 수 있게) — 매칭 없으면 null. */
+    matchZone(title, candidates) {
+      const scored = this.matchZoneCandidates(title, candidates);
+      if (!scored.length) return null;
+      const titleLen = this._normZoneTitle(title).replace(/\s/g, "").length || 1;
+      return {
+        candidate: scored[0].candidate,
+        confidence: Math.max(0, Math.min(1, scored[0].score / titleLen)),
+        candidates: scored.map((s) => s.candidate),
+      };
+    },
+
     /* ══ 번호 제안·중복 경고·핀 생성(DOM 없이도 호출 가능한 순수 함수) ══════════════════════ */
 
     /** 다음 번호 제안 — 정본 PinSeries.nextInBand(App 대역·시작값) 우선, 미로드 시 숫자 라벨 최댓값+1. */
@@ -479,6 +525,7 @@
         '<button id="ma-pick" type="button" class="admin-gate-btn primary full">사진 선택</button>' +
         '</div>' +
         '<div id="ma-step2" class="ma-step hidden">' +
+        '<p id="ma-zone-banner" class="admin-gate-sub ma-zone-banner hidden"></p>' +
         '<p id="ma-step2-hint" class="admin-gate-sub"></p>' +
         '<div class="ma-canvases">' +
         '<div class="ma-cv-wrap"><p class="ma-lbl">사진</p><div class="ma-cv-stage"><canvas id="ma-photo"></canvas><canvas id="ma-photo-ov"></canvas></div></div>' +
@@ -576,22 +623,97 @@
         const img = await this._loadImageFromFile(file);
         const ctx = this._ctx;
         ctx.photoCanvas = this._drawToCanvas(img, 1600);
-        ctx.origCanvas = await this._renderOriginCanvas(1400);
-        if (!ctx.origCanvas) { this._toast("원본 도면을 불러오지 못했습니다"); return; }
-        ctx.page = State.pdfPage || 1;
         ctx.photoPts = []; ctx.origPts = [];
         const pc = document.getElementById("ma-photo"), poc = document.getElementById("ma-photo-ov");
-        const oc = document.getElementById("ma-orig"), ooc = document.getElementById("ma-orig-ov");
         [pc, poc].forEach((c) => { c.width = ctx.photoCanvas.width; c.height = ctx.photoCanvas.height; });
-        [oc, ooc].forEach((c) => { c.width = ctx.origCanvas.width; c.height = ctx.origCanvas.height; });
         pc.getContext("2d").drawImage(ctx.photoCanvas, 0, 0);
-        oc.getContext("2d").drawImage(ctx.origCanvas, 0, 0);
         ctx.step = 2;
         this._panel.querySelector("#ma-step1").classList.add("hidden");
         this._panel.querySelector("#ma-step2").classList.remove("hidden");
         this._panel.querySelector("#ma-step3").classList.add("hidden");
+        // [WO 20261029-markupzone] 원본 렌더 전에 사진 제목으로 구역을 먼저 찾는다(다른 데크/페이지면 전환).
+        await this._autoPickZone(ctx);
+        await this._renderOriginInto(ctx);
+        if (!ctx.origCanvas) { this._toast("원본 도면을 불러오지 못했습니다"); return; }
         this._updateAlignBtn();
       } catch (e) { this._toast("사진을 열지 못했습니다: " + ((e && e.message) || e)); }
+    },
+
+    /** 원본 캔버스를 렌더해 ma-orig/ma-orig-ov 에 그린다 — _onFile 최초 1회 + 구역 선택 변경 시 재사용. */
+    async _renderOriginInto(ctx) {
+      ctx.origCanvas = await this._renderOriginCanvas(1400);
+      if (!ctx.origCanvas) return;
+      ctx.page = State.pdfPage || 1;
+      const oc = document.getElementById("ma-orig"), ooc = document.getElementById("ma-orig-ov");
+      [oc, ooc].forEach((c) => { c.width = ctx.origCanvas.width; c.height = ctx.origCanvas.height; });
+      oc.getContext("2d").drawImage(ctx.origCanvas, 0, 0);
+    },
+
+    /** 현재 프로젝트의 구역 후보 — 데크(실 이름, 다른 배포본일 수 있음) + 현 배포본의 구역(label). */
+    _zoneCandidates() {
+      const out = [];
+      try {
+        const decks = (typeof Projects !== "undefined" && Array.isArray(Projects.decks)) ? Projects.decks : [];
+        decks.forEach((d) => { if (d && d.name && (d.deployment_id || d.page)) out.push({ kind: "deck", id: "deck:" + d.id, name: d.name, page: d.page || 1, deck: d }); });
+      } catch (e) {}
+      try {
+        (State.zones || []).forEach((z) => { if (z && z.label) out.push({ kind: "zone", id: "zone:" + z.id, name: z.label, page: z.page || 1, zone: z }); });
+      } catch (e) {}
+      return out;
+    },
+
+    /** 선택된 후보를 실제로 적용 — 데크면 Projects.selectDeck(배포본 전환까지 포함), 구역이면 그 페이지로 이동. */
+    async _applyZonePick(cand) {
+      if (!cand) return;
+      try {
+        if (cand.kind === "deck" && cand.deck && typeof Projects !== "undefined" && Projects.selectDeck) {
+          await Projects.selectDeck(cand.deck);
+        } else if (cand.kind === "zone" && typeof App !== "undefined" && App._gotoPage && (cand.page || 1) !== (State.pdfPage || 1)) {
+          await App._gotoPage(cand.page);
+        }
+      } catch (e) {}
+    },
+
+    /** 사진 제목을 서버(무료 Workers AI)로 읽어 구역 후보와 매칭 → 자동 선택(+ 바꿀 수 있는 목록 표시).
+     *  🔴 AI 불가/한도 초과/오프라인/매칭 실패는 조용히 넘어가지 않고 안내 후 기존(현재 열린) 구역으로 진행. */
+    async _autoPickZone(ctx) {
+      const banner = this._panel && this._panel.querySelector("#ma-zone-banner");
+      if (banner) { banner.classList.remove("hidden"); banner.textContent = "사진 제목으로 구역을 찾는 중…"; }
+      let data = null;
+      try {
+        const dataUrl = ctx.photoCanvas.toDataURL("image/jpeg", 0.82);
+        const headers = Object.assign({ "Content-Type": "application/json" }, (typeof Auth !== "undefined" && Auth.headers) ? Auth.headers() : {});
+        const r = await fetch("/api/ai/read-drawing-title", { method: "POST", headers, body: JSON.stringify({ image: dataUrl }) });
+        data = await r.json().catch(() => null);
+        if (!r.ok || !data || !data.ok) data = null;
+      } catch (e) { data = null; }
+      if (!data || !data.title) { this._renderZoneBanner(null, [], null); return; }
+      const candidates = this._zoneCandidates();
+      const m = this.matchZone(data.title, candidates);
+      if (!m) { this._renderZoneBanner(data.title, [], null); return; }
+      await this._applyZonePick(m.candidate);
+      this._renderZoneBanner(data.title, m.candidates, m.candidate);
+    },
+
+    _renderZoneBanner(title, candidates, picked) {
+      const banner = this._panel && this._panel.querySelector("#ma-zone-banner");
+      if (!banner) return;
+      banner.classList.remove("hidden");
+      if (!title) { banner.textContent = "구역을 자동으로 찾지 못했습니다 — 직접 고르세요"; return; }
+      if (!candidates || !candidates.length) { banner.textContent = "사진 제목 '" + title + "' 인식 — 일치하는 구역을 찾지 못했습니다. 직접 고르세요"; return; }
+      const esc = this._esc.bind(this);
+      const opts = candidates.map((c) => '<option value="' + esc(c.id) + '"' + ((picked && picked.id === c.id) ? " selected" : "") + ">" + esc(c.name) + "</option>").join("");
+      banner.innerHTML = esc("사진 제목 '" + title + "' → 구역 자동 선택: ") +
+        '<select id="ma-zone-select" class="admin-gate-input ma-zone-select">' + opts + "</select>";
+      const selEl = banner.querySelector("#ma-zone-select");
+      selEl.addEventListener("change", async () => {
+        const cand = candidates.find((c) => String(c.id) === selEl.value);
+        if (!cand) return;
+        await this._applyZonePick(cand);
+        const ctx = this._ctx; if (!ctx) return;
+        await this._renderOriginInto(ctx);
+        this._resetPoints();
+      });
     },
 
     _align() {

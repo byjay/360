@@ -6,7 +6,8 @@ import { decideCompanyGate, askJevSameCompany, COMPANY_GATE_PASS_P } from './lib
 import { sanitizeDupPairs, askJevDupPairs } from './lib/jevDup'
 import { askJevSeverity, gateSeverity, SEVERITY_LEVELS } from './lib/jevSeverity'
 import { askVision, visionModelOf, visionRunnerOf, visionCacheKey, pinImageRefs, visionQuotaExhausted, visionDayStartUtc,
-  AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P, AI_VISION_GLOBAL_NEURON_CAP, AI_VISION_FREE_NEURONS_PER_DAY, AI_VISION_PROVIDER } from './lib/aiVision'
+  AI_VISION_DAILY_LIMIT, AI_VISION_WINDOW_MS, AI_VISION_MAX_IMAGE_BYTES, AI_VISION_ESTIMATE_P, AI_VISION_GLOBAL_NEURON_CAP, AI_VISION_FREE_NEURONS_PER_DAY, AI_VISION_PROVIDER,
+  askDrawingTitle } from './lib/aiVision'
 import { normalizeRevLabel, revLabelKey, nextRevLabel, IDENTITY as REV_IDENTITY, isIdentity as revIsIdentity, affSane, solveCarry, autoCarry,
   carryPins, carryZones, carryAnnos, carryRoutes, carryCrop, diffPins, revertPinsMerge, revertShapesMerge, invertAff } from './lib/revCore'
 import { aliasBoxOf, projectPins, mergeIntoHome, basePinsMin, unprojectOp, parsePins, aliasVersion, homeVersionOf, planMigration,
@@ -1698,6 +1699,53 @@ app.post('/api/ai/analyze-photo', async (c) => {
     items: probe.value.items.length, defect: !!probe.value.defect_suggestion,
   } })
   return c.json({ ok: true, cached: false, model: probe.model, provider: AI_VISION_PROVIDER, result: probe.value, analyzed_at: now, compare: !!cmp, usage: probe.usage, estimate_p: AI_VISION_ESTIMATE_P })
+})
+
+/* ════════════════════════════════════════════
+   [WO 20261029-markupzone] POST /api/ai/read-drawing-title — 마킹 사진에서 도면 제목만 읽는다("구역만 자동, 번호는 사람이")
+   🔴 숫자(마킹 번호)는 읽지 않는다 — 2026-10 실측(markup-ocr) recall 0%, 마스터 결정.
+   🔴 이 사진은 아직 R2/D1 에 저장되지 않은 업로드 전 미리보기라 analyze-photo 와 달리 요청 본문의 data URL 을
+     그대로 쓴다(SSRF 아님 — 외부 URL 을 서버가 fetch 하지 않는다. 클라가 축소한 인라인 바이트만 받는다).
+   같은 가드(디자이너 로그인·무료 모델만·일일 상한·전체 Neuron 상한)를 analyze-photo 와 공유한다.
+════════════════════════════════════════════ */
+app.post('/api/ai/read-drawing-title', async (c) => {
+  const user = await requireDesigner(c)
+  if (!user) return c.json({ error: 'forbidden — designer login required' }, 403)
+  const reason = visionDisabledReason(c)
+  if (reason) return c.json({ error: reason, enabled: false }, 503)
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+  const dataUrl = typeof body?.image === 'string' ? body.image : ''
+  if (!/^data:image\/(jpeg|png|webp);base64,/i.test(dataUrl)) return c.json({ error: 'image(data URL) required' }, 400)
+  if (dataUrl.length * 0.75 > AI_VISION_MAX_IMAGE_BYTES) return c.json({ error: 'image-too-large' }, 413)
+
+  const now = Date.now()
+  const email = String(user.email).toLowerCase()
+  const neuronsToday = await visionNeuronsToday(c, now)
+  if (visionQuotaExhausted(neuronsToday)) {
+    return c.json({ error: VISION_EXHAUSTED_REASON, exhausted: true, neurons_used_today: neuronsToday, neuron_cap: AI_VISION_GLOBAL_NEURON_CAP }, 429)
+  }
+  const used = await visionUsedCount(c, email, now)
+  if (used >= AI_VISION_DAILY_LIMIT) {
+    return c.json({ error: `일일 AI 분석 상한(${AI_VISION_DAILY_LIMIT}회/24h)을 초과했습니다 — 내일 다시 시도하세요`, limit: AI_VISION_DAILY_LIMIT, used }, 429)
+  }
+  const probe = await askDrawingTitle(c.env, { imageDataUrl: dataUrl })
+  const rowId = genId('aiv')
+  const imageRef = 'title:' + rowId
+  if (!probe.ok) {
+    await c.env.DB.prepare(
+      `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, error, prompt_tokens, completion_tokens, neurons, cost_usd, ms, created_by, created_at)
+       VALUES (?, ?, NULL, NULL, ?, NULL, ?, 'error', ?, ?, ?, ?, 0, ?, ?, ?)`
+    ).bind(rowId, imageRef, imageRef, probe.model, probe.error, probe.usage.prompt_tokens, probe.usage.completion_tokens, probe.usage.neurons, probe.ms, email, now).run().catch(() => {})
+    await logActivity(c, 'ai.vision', { actor: user, targetType: 'drawing-title', detail: { ok: false, error: probe.error, model: probe.model, provider: AI_VISION_PROVIDER, neurons: probe.usage.neurons, ms: probe.ms } })
+    return c.json({ error: '제목 판독 실패(' + probe.error + ')', code: probe.error, enabled: true }, 502)
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO ai_vision_results (id, cache_key, deployment_id, pin_id, image_ref, compare_ref, model, status, result, prompt_tokens, completion_tokens, neurons, cost_usd, ms, created_by, created_at)
+     VALUES (?, ?, NULL, NULL, ?, NULL, ?, 'ok', ?, ?, ?, ?, 0, ?, ?, ?)`
+  ).bind(rowId, imageRef, imageRef, probe.model, JSON.stringify(probe.value), probe.usage.prompt_tokens, probe.usage.completion_tokens, probe.usage.neurons, probe.ms, email, now).run()
+  await logActivity(c, 'ai.vision', { actor: user, targetType: 'drawing-title', detail: { ok: true, model: probe.model, provider: AI_VISION_PROVIDER, ms: probe.ms, neurons: probe.usage.neurons } })
+  return c.json({ ok: true, model: probe.model, title: probe.value.title, confidence: probe.value.confidence, estimate_p: AI_VISION_ESTIMATE_P })
 })
 
 /* ════════════════════════════════════════════
