@@ -728,6 +728,11 @@
         // [WO 20261019-pinpx] 탭 패드(.pin-marker::after 44px)는 마커(--pin-scale)·상위 scale(zoom) 둘 다 상쇄해야
         // 화면 44px — 그 곱 = px/PIN_NATIVE_PX 를 따로 넘긴다(style.css .pin-marker::after).
         layer.style.setProperty("--pin-screen-k", (px / this.PIN_NATIVE_PX).toFixed(4));
+        // [WO 20261030-pinopacity] 핀 투명도 — PinOpacityPrefs(23c_PinSizePrefs.js) SoT.
+        // style.css .pin-marker/.pin-leader-bubble 가 이 변수로 opacity 적용(선택/호버/드래그 중은
+        // CSS 예외 규칙이 1 로 강제 — §G-2-5 단일 진입점).
+        const op = (typeof PinOpacityPrefs !== "undefined" && PinOpacityPrefs.get) ? PinOpacityPrefs.get() : 1;
+        layer.style.setProperty("--pin-opacity", op.toFixed(2));
       }
       // [WO 20261019-pinscale4] 핀 번호 표시 — PinLabelPrefs(23c_PinSizePrefs.js) 옵션 SoT.
       // always=항상 켬 / hidden=항상 끔 / auto(기본)=화면 핀 높이 < LABEL_HIDE_PX(16px) 면 끔.

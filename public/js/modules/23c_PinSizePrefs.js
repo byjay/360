@@ -297,6 +297,78 @@
   };
 
   /* ══════════════════════════════════════════
+     PinOpacityPrefs — 핀 투명도(20~100%, 기본 100%) 환경설정
+     [WO 20261030-pinopacity, 마스터 "핀 투명도 설정은 했지?"] PinSizePrefs 와 동일 패턴
+     (프로젝트별 localStorage, _projectId 재사용 — SoT 중복 선언 금지). 렌더 지점은
+     MapCtrl._applyPinBillboard 한 곳(#pins-layer 에 --pin-opacity CSS 변수 세팅,
+     style.css .pin-marker/.pin-leader-bubble 가 그 변수로 opacity 적용, §G-2-5 단일 진입점).
+     하한 20% — 마스터 "20% 미만 금지(핀이 안 보이면 안 됨)". 선택/호버/드래그 중인 핀은
+     style.css 쪽 :hover/.focused/.drop/.moving/.force-pin 예외 규칙이 opacity:1 로 강제한다
+     (조작 대상이 흐려지면 안 되므로 — 이 모듈은 값 저장만, 예외는 CSS 전담). */
+  const PinOpacityPrefs = {
+    DEFAULT: 1,   // 100%
+    MIN: 0.2,     // 20% — 핀이 안 보이면 안 됨(마스터 지시)
+    MAX: 1,       // 100%
+    _key() { return "wm_pinopacity_" + PinSizePrefs._projectId(); },
+    /** 저장된 투명도(0.2~1, 없으면 DEFAULT). 범위 밖/비정상 값은 DEFAULT 로. */
+    get() {
+      try {
+        const raw = localStorage.getItem(this._key());
+        if (raw == null) return this.DEFAULT;
+        const n = Number(raw);
+        if (!Number.isFinite(n)) return this.DEFAULT;
+        return Math.max(this.MIN, Math.min(this.MAX, n));
+      } catch (e) { return this.DEFAULT; }
+    },
+    set(v) {
+      const n = Math.max(this.MIN, Math.min(this.MAX, Number(v) || this.DEFAULT));
+      try { localStorage.setItem(this._key(), String(n)); } catch (e) {}
+      // 즉시 반영 — 마커 재생성 없이 CSS 변수만 바뀜(MapCtrl._applyPinBillboard).
+      try { if (typeof MapCtrl !== "undefined" && MapCtrl.applyTransform) MapCtrl.applyTransform(); } catch (e) {}
+      return n;
+    },
+    reset() {
+      try { localStorage.removeItem(this._key()); } catch (e) {}
+      try { if (typeof MapCtrl !== "undefined" && MapCtrl.applyTransform) MapCtrl.applyTransform(); } catch (e) {}
+    },
+    /** [R4 뷰어감사 followup] syncSlider() 와 동일 이유 — 패널을 열 때마다 현재 저장값으로 다시 그린다. */
+    syncSlider() {
+      const slider = document.getElementById("pinopacity-slider");
+      const val = document.getElementById("pinopacity-val");
+      if (!slider || !val) return;
+      const pct = Math.round(this.get() * 100);
+      slider.value = String(pct);
+      val.textContent = pct + "%";
+    },
+    initSlider() {
+      const host = settingsDisplayPrefsHost();
+      if (!host || document.getElementById("pinopacity-slider")) return;
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+      const labelRow = document.createElement("div");
+      labelRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
+      const label = document.createElement("span");
+      label.textContent = "핀 투명도";
+      const val = document.createElement("span");
+      val.id = "pinopacity-val";
+      val.style.cssText = "font-size:12px;opacity:.7;min-width:2.4em;text-align:right;";
+      labelRow.appendChild(label); labelRow.appendChild(val);
+      const slider = document.createElement("input");
+      slider.type = "range"; slider.id = "pinopacity-slider";
+      slider.min = String(Math.round(this.MIN * 100)); slider.max = String(Math.round(this.MAX * 100)); slider.step = "1";
+      slider.setAttribute("aria-label", "핀 투명도");
+      slider.value = String(Math.round(this.get() * 100));
+      val.textContent = slider.value + "%";
+      wrap.appendChild(labelRow); wrap.appendChild(slider);
+      host.appendChild(wrap);
+      slider.addEventListener("input", () => {
+        val.textContent = slider.value + "%";
+        this.set(Number(slider.value) / 100);
+      });
+    }
+  };
+
+  /* ══════════════════════════════════════════
      PinLeaderViewPrefs — 리더선 "보기" 전용 토글(모든 사용자)
      [WO 20261023-pinviewopt §4b] 데이터 SoT 는 그대로 pin.leader(UI.Leader.wants) — 이 설정은
      화면에 그릴지만 결정한다("켬"=데이터대로 리더선 그림, "끔"=리더선인 핀도 그 자리 점/핀으로만
@@ -372,6 +444,7 @@
    *  분리해, "생성 시점 값으로 굳는" 문제(R4)를 패널을 열 때마다 재동기화로 해소한다. */
   function syncDisplayPrefsControls() {
     try { if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.syncSlider) PinSizePrefs.syncSlider(); } catch (e) {}
+    try { if (typeof PinOpacityPrefs !== "undefined" && PinOpacityPrefs.syncSlider) PinOpacityPrefs.syncSlider(); } catch (e) {}
     try { if (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.sync) PinLabelPrefs.sync(); } catch (e) {}
     try { if (typeof PinShapePrefs !== "undefined" && PinShapePrefs.sync) PinShapePrefs.sync(); } catch (e) {}
     try { if (typeof PinLeaderViewPrefs !== "undefined" && PinLeaderViewPrefs.sync) PinLeaderViewPrefs.sync(); } catch (e) {}

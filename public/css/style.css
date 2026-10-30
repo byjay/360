@@ -1547,6 +1547,24 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
    영향 없음(발주 §3 — 지도 위 핀만 해당). */
 #pins-layer.pin-num-off .pin-num-text { display: none; }
 
+/* [WO 20261030-pinopacity, 마스터 "핀 투명도 설정은 했지?"] 핀 투명도(20~100%) — PinOpacityPrefs
+   (23c_PinSizePrefs.js) SoT, MapCtrl._applyPinBillboard 가 #pins-layer 에 --pin-opacity 세팅
+   (§G-2-5 단일 진입점). 도면 위 핀(.pin-marker)·리더 풍선(.pin-leader-bubble) 둘 다 적용(리더선·번호
+   텍스트는 그 자손이라 함께 흐려짐 — 발주 §2 "리더선·번호 텍스트 포함 여부는 기존 크기 설정과 같게").
+   선택/호버/드래그/방금배치/테스트훅 중인 핀은 조작 대상이 흐려지면 안 되므로 항상 opacity:1 로 강제
+   (아래 예외 규칙 — 소스 순서 뒤 + 클래스 1개 더 가진 특이성 둘 다로 기본 규칙을 이긴다). */
+.pin-marker, .pin-leader-bubble { opacity: var(--pin-opacity, 1); }
+#pins-layer > .pin-marker:hover,
+#pins-layer > .pin-marker.focused,
+#pins-layer > .pin-marker.drop,
+#pins-layer > .pin-marker.moving,
+#pins-layer > .pin-marker.force-pin,
+.pin-leader-bubble:hover,
+.pin-leader-bubble.focused,
+.pin-leader-bubble.moving {
+  opacity: 1;
+}
+
 /* [WO 20261023-pinviewopt, 마스터 "핀으로도 할 수 있지만 점만 보이게, 아예 핀으로 보이게... 그런 옵션을
    정확하게"] 핀 모양 강제(자동/핀/점) — #pins-layer.shape-pin/.shape-dot, PinShapePrefs(23c_PinSizePrefs.js)
    SoT(MapCtrl._applyPinBillboard 가 매 줌마다 토글, §G-2-5 단일 진입점). 자동(클래스 없음)은 위 규칙

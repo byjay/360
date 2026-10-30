@@ -38,6 +38,8 @@
       if (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.initToggle) PinLabelPrefs.initToggle();
       // [WO 20261016-pinscale §3] 핀 크기(도면 대비) 슬라이더.
       if (typeof PinSizePrefs !== "undefined" && PinSizePrefs.initSlider) PinSizePrefs.initSlider();
+      // [WO 20261030-pinopacity] 핀 투명도(20~100%) 슬라이더 — 같은 "보기 설정" 그룹.
+      if (typeof PinOpacityPrefs !== "undefined" && PinOpacityPrefs.initSlider) PinOpacityPrefs.initSlider();
       // [WO 20261023-pinviewopt §4b] 리더선 "보기" 전용 토글(모든 사용자, 데이터 불변) — 아래
       // #chk-leader360(디자이너 전용 데이터 일괄변경)과는 다른 옵션(§23c_PinSizePrefs.js 헤더 주석).
       if (typeof PinLeaderViewPrefs !== "undefined" && PinLeaderViewPrefs.initToggle) PinLeaderViewPrefs.initToggle();

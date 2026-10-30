@@ -37,6 +37,7 @@ function viewportBlock() {
  * @param {number} [o.width=1280] @param {number} [o.height=800] 뷰포트(데스크톱 마우스)
  * @param {{w:number,h:number}} [o.canvas] #pdf-canvas CSS 크기(도면 크기)
  * @param {(name:string, src:string)=>string} [o.mutate] 모듈 소스 변형(뮤테이션 증명용)
+ * @param {(name:string, src:string)=>string} [o.cssMutate] CSS 파일(public/css/*.css) 소스 변형(뮤테이션 증명용, p191)
  * @returns {Promise<{ev:(expr:string)=>Promise<any>, close:()=>Promise<void>}>}
  */
 export async function openRealMap(o = {}) {
@@ -44,7 +45,8 @@ export async function openRealMap(o = {}) {
   const cv = o.canvas || { w: 8000, h: 6000 };
   if (!fs.existsSync(CHROME)) throw new Error("Chrome 없음: " + CHROME + " (CHROME_PATH 지정) — 실제 화면 px 단언은 브라우저 없이 판정 불가");
   const mods = (o.modules || DEFAULT_MODULES).map((f) => { const s = rd("public/js/modules/" + f); return o.mutate ? o.mutate(f, s) : s; });
-  const css = ["public/css/style.css", "public/css/seastar-family-tokens.css", "public/css/seastar-3d-skin.css"].map(rd).join("\n");
+  const css = ["public/css/style.css", "public/css/seastar-family-tokens.css", "public/css/seastar-3d-skin.css"]
+    .map((f) => { const s = rd(f); return o.cssMutate ? o.cssMutate(f, s) : s; }).join("\n");
   const page = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style>
 <style>html,body{margin:0;padding:0;} #map-viewport{position:relative;width:${width}px;height:${height}px;overflow:hidden;}</style>
 </head><body>
