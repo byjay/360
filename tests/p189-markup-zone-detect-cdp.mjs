@@ -1,11 +1,15 @@
 /**
  * p189 — [WO 20261029-markupzone] 실 Chrome 증거 캡처(지휘자 반려 재작업)
  * 지휘자 반려 사유: 이전 s5-zone.png 는 사진 선택 전 1단계(제목·[사진 선택] 버튼)뿐이라
- *   자동 선택 증거가 아니었다. 이번엔 s5.jpg 를 실제로 선택 → _onFile 실행(실 _autoPickZone
- *   경로 통과, 실 Workers AI 응답 title="FLOOR" 는 .tmp/markup-ocr/title-probe-raw.json 의
- *   실측값을 fetch 모킹으로 재사용 — 같은 세션에서 이미 1회 실 호출로 확인했다, Neurons 재소모 방지)
+ *   자동 선택 증거가 아니었다. 이번엔 (합성) 마킹 사진을 실제로 선택 → _onFile 실행(실 _autoPickZone
+ *   경로 통과, Workers AI 응답 title="FLOOR" 는 fetch 모킹 — 실 호출은 p190 (E)에서 별도 확인했다)
  *   → ① 자동 선택 배너 + 바꿀 수 있는 후보 select ② 프로젝트가 FLOOR 구역(page=1)으로 전환된
  *   상태(시작은 3RD DECK, page=2)까지 끝난 화면을 데스크톱(1280x800)·모바일(375x812) 두 장 저장.
+ *
+ * [재현 수정] 2026-10-30 — 실사진 .tmp/markup-samples/s5.jpg(gitignore, 로컬 전용)에 의존해
+ *   클린 복사본(해당 파일 없음)에서 ENOENT 로 거짓 실패했다. 사진 내용은 _onFile 이 디코드만 하면
+ *   되고(fetch 모킹이라 실제 글자는 안 읽음) p184(createCanvas)와 동일 패턴의 node-canvas 합성
+ *   이미지로 대체 — 실사진 없이도 항상 재현 가능.
  *
  * 실행: node tests/p189-markup-zone-detect-cdp.mjs
  */
@@ -13,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { createCanvas } from "canvas";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let failed = 0;
@@ -29,7 +34,21 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const css = ["public/css/style.css", "public/css/seastar-family-tokens.css", "public/css/seastar-3d-skin.css"]
   .map((p) => fs.readFileSync(path.join(ROOT, p), "utf8")).join("\n");
 const modSrc = fs.readFileSync(path.join(ROOT, "public/js/modules/74_MarkupAlign.js"), "utf8");
-const photoB64 = fs.readFileSync(path.join(ROOT, ".tmp/markup-samples/s5.jpg")).toString("base64");
+
+/** 합성 현장 마킹 사진(node-canvas, p184 와 동일 패턴) — 도면 제목 "FLOOR" + 빨강 마킹원 1개.
+ *  실제 글자 판독은 fetch 모킹이 대신하므로 내용은 _onFile 디코드만 통과하면 된다. */
+function buildSyntheticMarkupPhoto() {
+  const c = createCanvas(1000, 800);
+  const g = c.getContext("2d");
+  g.fillStyle = "#e8e4da"; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = "#1a1a1a"; g.lineWidth = 4; g.strokeRect(40, 40, c.width - 80, c.height - 80);
+  g.fillStyle = "#1a1a1a"; g.font = "bold 48px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText("FLOOR", c.width / 2, 100);
+  g.beginPath(); g.arc(500, 450, 40, 0, Math.PI * 2); g.fillStyle = "#cf1d1d"; g.fill();
+  g.fillStyle = "#ffffff"; g.font = "bold 36px sans-serif"; g.fillText("1", 500, 450);
+  return c.toBuffer("image/jpeg", { quality: 0.85 });
+}
+const photoB64 = buildSyntheticMarkupPhoto().toString("base64");
 
 const browser = await puppeteer.launch({ headless: "new", ...(fs.existsSync(CHROME) ? { executablePath: CHROME } : {}), args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 try {
@@ -69,7 +88,7 @@ try {
       window.State.pdfPage = d.page; window.__selectedDeckName = d.name;
       window.State.imageUrl = mkPlaceholder(d.name + " (전환됨)");
     };
-    // 실 Workers AI 응답(이번 세션 .tmp/markup-ocr/title-probe-raw.json 실측: title="FLOOR") 재사용
+    // Workers AI 응답 모킹(실 호출로 title="FLOOR" 판독 가능함은 p190 (E)에서 별도 확인했다)
     window.fetch = async (url) => {
       if (String(url).includes("read-drawing-title")) return { ok: true, json: async () => ({ ok: true, title: "FLOOR", confidence: 1 }) };
       throw new Error("unexpected fetch " + url);
@@ -80,11 +99,11 @@ try {
     m.classList.remove("hidden"); m.classList.add("on");
     MarkupAlign._ctx = { step: 1, photoPts: [], origPts: [], candidates: [], page: window.State.pdfPage, view: { scale: 1, tx: 0, ty: 0 }, gesture: null, showGuides: false, detected: null };
 
-    // s5.jpg(현장 마킹 사진, 실제 바이트) → File 객체 → 실 _onFile 경로(= 사진 선택 UI 그대로)
+    // 합성 마킹 사진(node-canvas, 실제 바이트) → File 객체 → 실 _onFile 경로(= 사진 선택 UI 그대로)
     const bin = atob(photoB64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const file = new File([bytes], "s5.jpg", { type: "image/jpeg" });
+    const file = new File([bytes], "synthetic-markup.jpg", { type: "image/jpeg" });
 
     const pageBefore = window.State.pdfPage;
     await MarkupAlign._onFile(file);
