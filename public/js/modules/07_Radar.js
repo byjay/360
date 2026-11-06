@@ -81,6 +81,49 @@
           this._expandBound = true;
         }
       }
+      // [마스터 요청 2026-11-06] 미니맵 "창"(패널 전체) 크기 단계 조절 — #pano-radar-size-in/out.
+      // 콘텐츠 확대(_bindZoomControls, 도면만 확대)와는 완전히 분리된 축: 여기서는 박스(#pano-radar)
+      // 자체를 transform:scale() 로 키우거나 줄인다. width 를 직접 바꾸지 않으므로 기존
+      // pano-radar-large(⤢ 확대/축소 2단, 위 코드) 폭 전환과 겹쳐도 서로 충돌하지 않는다
+      // (scale 은 그 결과 폭 위에 곱으로 얹힌다 — 두 축이 독립이라 SoT 충돌 없음).
+      if (!this._sizeBound) {
+        this._sizeBound = true;
+        // index 1 = 기본값(배율 1, 기존 사용자 화면 변화 0 — 회귀 방지).
+        const SIZE_STEPS = [0.8, 1, 1.25, 1.55];
+        const SMIN = 0, SMAX = SIZE_STEPS.length - 1;
+        let step = 1;
+        try {
+          const v = localStorage.getItem("wm-radar-size-step");
+          if (v !== null) { const n = parseInt(v, 10); if (n >= SMIN && n <= SMAX) step = n; }
+        } catch (e) { /* 사생활 모드 등 localStorage 접근 불가 → 기본값(1) 유지 */ }
+        const sin = document.getElementById("pano-radar-size-in");
+        const sout = document.getElementById("pano-radar-size-out");
+        const applySize = () => {
+          const nominal = SIZE_STEPS[step];
+          const safe = this._clampSizeScale(nominal, box);
+          box.style.transformOrigin = "left bottom";
+          box.style.transform = (Math.abs(safe - 1) < 0.001) ? "" : ("scale(" + safe.toFixed(3) + ")");
+          if (sin) sin.disabled = step >= SMAX;
+          if (sout) sout.disabled = step <= SMIN;
+        };
+        const setStep = (n) => {
+          step = Math.max(SMIN, Math.min(SMAX, n));
+          try { localStorage.setItem("wm-radar-size-step", String(step)); } catch (e) {}
+          applySize();
+        };
+        if (sin) sin.addEventListener("click", (e) => { e.stopPropagation(); setStep(step + 1); });
+        if (sout) sout.addEventListener("click", (e) => { e.stopPropagation(); setStep(step - 1); });
+        applySize();
+        // 창 크기(뷰포트 회전·리사이즈) 변화 시 같은 step 이라도 안전 범위를 다시 계산.
+        if (typeof window !== "undefined" && window.addEventListener) {
+          window.addEventListener("resize", () => applySize());
+        }
+        // [재현 R1] 도면 이미지가 아직 디코드되기 전에 위 applySize()가 먼저 돌면(특히 새로고침
+        // 직후) 스테이지 높이가 아직 확정 안 돼 maxByH 가 실제보다 크게 계산되고, 이미지가
+        // 뒤늦게 로드돼도 버튼을 누르기 전까진 그 틀린 값이 그대로 남는다(뷰포트 밖으로 삐져나감
+        // — p193-minimap-size-cdp.mjs B2 가 실제로 잡았다). 이미지 로드 완료 시 다시 계산해 고정.
+        this._sizeApply = applySize;
+      }
       // [마스터 요청] 미니맵에서 드래그로 직접 시야 방향(부채꼴) 조절 (1회 바인딩)
       if (!this._dirBound) {
         const db = document.getElementById("pano-radar-dir");
@@ -110,6 +153,21 @@
       const page = pin.page || 1;
       const imgEl = document.getElementById("pano-radar-map");
       if (imgEl && imgEl.src !== mapSrc) imgEl.src = mapSrc;
+      // [재현 R1] 도면 이미지 디코드가 끝나야 스테이지 실제 높이(이미지 비율로 결정)가 확정된다 —
+      // 창 크기 클램프(_clampSizeScale)가 그 전에 계산되면 틀린(너무 느슨한) 값이 굳어버린다
+      // (새로고침 직후처럼 버튼 재클릭 없이 끝나는 경로에서 실측됨). 로드 완료 시 1회 재계산.
+      if (imgEl && this._sizeApply) {
+        // complete===true 여도 "디코드 완료" ≠ "레이아웃 반영 완료"(1x1처럼 극소 이미지에서
+        // 실측 확인됨 — 같은 틱에 재계산하면 여전히 레이아웃 반영 전 수치를 읽는다).
+        // 다음 페인트 이후(rAF 2회)로 미뤄 커밋된 레이아웃을 읽는다.
+        const resync = () => {
+          if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(() => requestAnimationFrame(() => this._sizeApply()));
+          } else this._sizeApply();
+        };
+        if (imgEl.complete) resync();
+        else imgEl.addEventListener("load", resync, { once: true });
+      }
       const pageEl = document.getElementById("pano-radar-page");
       if (pageEl) pageEl.textContent = "p." + page;
 
@@ -230,6 +288,30 @@
       }
       stage.style.transformOrigin = "0 0";
       stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-vx).toFixed(2) + "%, " + (-vy).toFixed(2) + "%)";
+    },
+
+    /** [마스터 요청 2026-11-06] 창 크기 단계(scale)가 실제 뷰포트를 넘지 않도록 동적으로 재클램프.
+     *  getBoundingClientRect는 "현재 적용된 transform 기준" 값이라, 비교를 위해 일단 scale을 1로
+     *  풀어 측정한 기준 크기(scale=1) 위에 nominal을 곱했을 때 뷰포트에 맞는지 검증한다.
+     *  패널은 left/bottom 고정(앵커 불변) → 좌하단 고정, 우측·위쪽으로만 커진다. 모바일 좁은
+     *  화면(375px)에서도 이 함수가 매 적용마다 재계산하므로 화면 밖으로 나가지 않는다. */
+    _clampSizeScale(nominal, box) {
+      try {
+        if (typeof window === "undefined" || !box || !box.getBoundingClientRect) return nominal;
+        const prevTransform = box.style.transform;
+        box.style.transform = "";                 // scale=1 기준 크기로 측정
+        const rect = box.getBoundingClientRect();
+        box.style.transform = prevTransform;
+        if (!rect || !rect.width || !rect.height) return nominal;
+        const margin = 8;
+        const maxByW = (window.innerWidth - rect.left - margin) / rect.width;
+        const maxByH = (rect.bottom - margin) / rect.height;  // 위로 자라므로 bottom 좌표만큼 여유
+        const safeMax = Math.max(1, Math.min(maxByW, maxByH));
+        // 🔴 여기서 floor(1)를 다시 걸면 축소 단계(nominal<1)까지 1로 끌어올려지는 버그였다
+        // (p193-minimap-size-cdp.mjs A10이 실측으로 잡았다) — safeMax는 이미 >=1 이므로
+        // nominal이 0.8(축소)이면 min(0.8, safeMax)=0.8 그대로 통과해야 한다.
+        return Math.min(nominal, safeMax);
+      } catch (e) { return nominal; }
     },
 
     /** [마스터 요청] 미니맵 콘텐츠(도면) 확대 1~6x — +/− 버튼, 핀치 줌, 더블탭/더블클릭 리셋.

@@ -172,7 +172,7 @@
       { id: "pano-video-play", group: "pano", icon: "▶", label: "360 동영상 재생/일시정지", desc: "동선에 연결된 360 동영상 재생 — 열람자도 재생만 가능(그리기/삭제 금지)", needs: "pano", click: "btn-pano-video-playpause", covers: ["btn-pano-video-playpause"] },
       { id: "pano-nav", group: "pano", icon: "⇆", label: "360 이전/다음 포인트", keys: "← →", needs: "pano", click: "btn-pano-next", covers: ["btn-pano-prev", "btn-pano-next"] },
       { id: "pano-minimap", group: "pano", icon: "◫", label: "360 미니맵(확대·접기)", help: "radar-zoom", needs: "pano", click: "pano-radar-expand",
-        covers: ["pano-radar-expand", "pano-radar-zoom-in", "pano-radar-zoom-out", "pano-radar-toggle", "pano-radar-more"] },
+        covers: ["pano-radar-expand", "pano-radar-zoom-in", "pano-radar-zoom-out", "pano-radar-size-in", "pano-radar-size-out", "pano-radar-toggle", "pano-radar-more"] },
       { id: "photo-history", group: "pano", icon: "◷", label: "사진 이력(재방선)", desc: "같은 포인트의 이전 사진 · 되돌리기", needs: "pano", click: "btn-tl-prev", covers: ["btn-tl-prev", "btn-tl-next", "btn-tl-revert"] },
       { id: "photo-history-delete", group: "pano", icon: "✕", label: "사진 이력 삭제", perm: "admin", needs: "pano", danger: true, click: "btn-tl-delete", covers: ["btn-tl-delete"] },
       { id: "photo-compare", group: "pano", icon: "◧", label: "전/후 분할 비교(360 동기)", desc: "두 시점 360을 나란히, 한쪽을 돌리면 같이 돈다. 평면 슬라이더 보조 모드 포함", needs: "pano", click: "btn-tl-compare", covers: ["btn-tl-compare", "btn-cmp-close", "btn-cmp360-close", "btn-cmp360-sync", "btn-cmp360-flat"] },
