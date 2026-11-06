@@ -54,12 +54,16 @@ function loadUI(ctx) {
   vm.runInContext(uiSrc + "\nthis.UI = UI;", sandbox);
   return { UI: sandbox.UI, host, body, sandbox };
 }
-// pickOriginalDeck — 31_Projects.js 실제 함수 본문을 그대로 꺼내 쓴다(SoT 재사용, 사본 금지)
+// pickOriginalDeck/pickMainOrOpen — 31_Projects.js 실제 함수 본문을 그대로 꺼내 쓴다(SoT 재사용, 사본 금지)
 const projSrc = rd("public/js/modules/31_Projects.js");
 const pickSrc = (() => { const i = projSrc.indexOf("    pickOriginalDeck(decks, project) {"); const j = projSrc.indexOf("\n    },", i); return projSrc.slice(i + 4, j + 6); })();
-function makeProjects(o) {
+const pickMainOrOpenSrc = (() => { const i = projSrc.indexOf("    pickMainOrOpen(decks, project) {"); const j = projSrc.indexOf("\n    },", i); return projSrc.slice(i + 4, j + 6); })();
+function makeProjects(o, State) {
   const P = Object.assign({ currentProject: null, currentDeck: null, decks: [], list: [], openOriginal() { P._opened = true; }, setOriginalToCurrent() {}, selectDeck: async (d) => { P.currentDeck = d; } }, o);
   P.pickOriginalDeck = new Function("UI", "return ({" + pickSrc + "}).pickOriginalDeck;")(undefined).bind(P);
+  // [WO 20261106-originfallback] pickMainOrOpen 은 소스에서 바깥 스코프 State 를 참조한다 — "State" 를
+  // 팩토리 매개변수로 선언해 호출부가 넘긴 실제 State(없으면 빈 객체)로 닫는다(UI 트릭과 같은 방식).
+  P.pickMainOrOpen = new Function("State", "return ({" + pickMainOrOpenSrc + "}).pickMainOrOpen;")(State || {}).bind(P);
   return P;
 }
 
@@ -176,7 +180,7 @@ function makeApp({ decks, proj, currentDeck, owner = true, confirmAns = true, cu
   const calls = { toast: [], confirm: [], fetch: [], picked: 0 };
   const State = { pins: [], zones: [], annotations: [], pdfPage: 1, mode: "designer", fileType: "image", pinTombstones: {}, pinBaseIds: null, currentDeploymentId: curDep, depVersion: 7,
     reset() { this.pins = []; this.zones = []; this.fileType = null; this.pinTombstones = {}; this.pinBaseIds = null; this.autoSaveDepId = null; this.depVersion = 0; } };
-  const Projects = makeProjects({ currentProject: proj, decks, currentDeck });
+  const Projects = makeProjects({ currentProject: proj, decks, currentDeck }, State);
   const uiStub = new Proxy({ $: (id) => (els[id] = els[id] || anyEl()), deckSourceOf: realUI.deckSourceOf.bind(realUI) }, { get(t, k) { return k in t ? t[k] : () => {}; } });
   const sandbox = {
     console, window: { addEventListener() {} }, navigator: { onLine: true }, location: { search: "" },

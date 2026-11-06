@@ -4784,10 +4784,12 @@
     /* ── [WO 20261002-allmenu §5] 도면 등록 대상 — "프로젝트 메인 PDF 는 하나, 구역별로 따로 등록 가능" ──
        🔴 SoT: 어떤 배포본을 PATCH(교체)할지 / 새로 만들지 / 막을지는 _drawingPlan 한 곳에서만 정한다.
        버튼·트리 ⋯·전체 기능 메뉴·드래그앤드롭 등 모든 진입이 _loadDrawing 으로 모이고 거기서 이 함수를 부른다. */
-    /** 프로젝트 메인(원본) 배포본 id — Projects.pickOriginalDeck(기존 SoT) 그대로. 없으면 null(지어내지 않음). */
+    /** 프로젝트 메인(원본) 배포본 id — Projects.pickMainOrOpen(SoT, 31_Projects.js) 그대로.
+     *  [WO 20261106-originfallback] 구역 0개 + 원본 미기록이라도 지금 열린 도면이 있으면 그것을
+     *  메인으로 본다(메뉴/교체 게이트가 "메인(원본) 도면이 아직 없습니다" 오판을 내지 않게). 없으면 null(지어내지 않음). */
     _mainDepId() {
-      if (typeof Projects === "undefined" || !Projects.pickOriginalDeck) return null;
-      const pick = Projects.pickOriginalDeck(Projects.decks || [], Projects.currentProject);
+      if (typeof Projects === "undefined" || !Projects.pickMainOrOpen) return null;
+      const pick = Projects.pickMainOrOpen(Projects.decks || [], Projects.currentProject);
       return (pick && pick.deployment_id) || null;
     },
     /** 구역이 "자기 도면"을 가졌나 — 창(crop) 아님 · 메인 아님 · 다른 구역과 배포본 공유 안 함. */

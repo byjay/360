@@ -714,8 +714,13 @@
         items.push({ label: "개정 이력·비교", desc: "번호·일자·작성자·메모 · 이전 개정 보기 · 겹쳐 비교",
           reason: Revision.reason({ kind: "main" }, "history"), run: () => Revision.openHistory({ kind: "main" }) });
       }
-      if (!pick) {
-        items.push({ label: "지금 열린 도면을 원본으로 지정", reason: ownerWhy || ((typeof State !== "undefined" && State.currentDeploymentId) ? "" : "먼저 도면을 열어야 합니다"),
+      if (!pick || pick.inferred) {
+        // [WO 20261106-originfallback] 🔴 재현(resume): 구역 0개 프로젝트에서 로컬 draft만 복원된
+        //   열린 도면(서버에 한 번도 저장 안 됨 — State.currentDeploymentId 없음·State.fileType 있음)도
+        //   "도면이 열려 있다"로 본다 — setOriginalToCurrent 가 먼저 저장(App._createInitialSave)한다.
+        const hasOpenDrawing = !!(typeof State !== "undefined"
+          && (State.currentDeploymentId || (State.fileType && State.mode === "designer")));
+        items.push({ label: "지금 열린 도면을 원본으로 지정", reason: ownerWhy || (hasOpenDrawing ? "" : "먼저 도면을 열어야 합니다"),
           run: () => { if (typeof Projects !== "undefined" && Projects.setOriginalToCurrent) Projects.setOriginalToCurrent(); } });
       }
       // [WO 20261008-pinpurge] 프로젝트 모든 핀 삭제 — 숨김 금지: 비활성 사유 SoT = PinPurge.reason()
@@ -1173,7 +1178,7 @@
         this.openTreeMenu(at, "포인트 " + (meta ? (PinSeries.textOf ? PinSeries.textOf(meta) : PinSeries.formatNo(meta.no, meta.series)) : (tg.pin.label || "")), this.pinCtxItems(tg.pin), { focus: true });
       } else if (tg.kind === "outline") {
         const proj = this._treeProject ? this._treeProject() : null;
-        const pick = (Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(Projects.decks || [], proj) : null;
+        const pick = (Projects.pickMainOrOpen) ? Projects.pickMainOrOpen(Projects.decks || [], proj) : null;
         this.openTreeMenu(at, "구역 " + (tg.deck.name || ""), this.deckMenuItems(tg.deck, (pick && pick.deployment_id) || null), { focus: true });
       } else {
         const pct = (typeof MapCtrl !== "undefined" && MapCtrl.viewportToPercent) ? MapCtrl.viewportToPercent(x, y) : null;
@@ -1327,7 +1332,7 @@
        *  표시 근거가 없으면 지어내지 않고 지금 열린 도면 이름 또는 "미지정"으로 정직하게 표시한다.
        *  ⋯ 메뉴: [원본 열기] · [메인 도면 교체](소유자·super, 확인창) · [원본으로 지정]. */
       const originNode = () => {
-        const pick = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks, proj) : null;
+        const pick = (typeof Projects !== "undefined" && Projects.pickMainOrOpen) ? Projects.pickMainOrOpen(decks, proj) : null;
         const n = document.createElement("button");
         n.className = "tree-node tree-node-origin";
         const moreHtml = isReadonlyTree ? "" : ' <span class="tree-more" role="button" tabindex="0" aria-label="원본 도면 메뉴" title="원본 도면 메뉴 — 열기·메인 도면 교체">⋯</span>';
@@ -1365,7 +1370,7 @@
       //   (State.currentProjectId — openProject/openApp 이 동기로 세팅)로 목록에서 찾고, 그래도 없으면 id·이름만 담은
       //   서술자로 그린다(권한 필드 없음 = 권한 버튼 없음, 지어내지 않음).
       const proj = this._treeProject();
-      const _mainPick = (typeof Projects !== "undefined" && Projects.pickOriginalDeck) ? Projects.pickOriginalDeck(decks, proj) : null;
+      const _mainPick = (typeof Projects !== "undefined" && Projects.pickMainOrOpen) ? Projects.pickMainOrOpen(decks, proj) : null;
       const mainDepId = (_mainPick && _mainPick.deployment_id) || null;
       const mountProjectNode = (rootCount) => {
         const pw = document.createElement("div");

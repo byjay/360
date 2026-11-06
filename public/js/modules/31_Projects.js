@@ -1002,6 +1002,27 @@
       return roots.slice().sort((a, b) => ts(b) - ts(a))[0];
     },
 
+    /** [WO 20261106-originfallback] 🔴 공유 지점(SoT) — "원본 도면" 메뉴·트리 표시/게이트 전용 pick.
+     *  pickOriginalDeck(기록된 원본 또는 루트 구역)이 null이면(구역이 하나도 없고 원본 지정도 안 된 상태
+     *  — 재현: 프로젝트 단위로 도면만 등록하고 구역을 아직 안 만든 구간, 또는 그 구역이 나중에 지워진
+     *  레거시 데이터) 이 화면에 지금 열려 있는 도면(State.currentDeploymentId)을 추론 후보로 본다.
+     *  🔴 지어내지 않음 — 실존하는 값만 그대로 쓰고, pick.inferred=true 로 "서버에 아직 기록 안 됨"을
+     *  표시한다(originMenuItems 의 [지금 열린 도면을 원본으로 지정] 이 이 플래그로 계속 보인다).
+     *  resume/재진입(20_App.js loadLatestDeployment, decks fetch 전)처럼 아직 이 프로젝트 화면이 아닐 때
+     *  섞이면 안 되는 호출부는 pickOriginalDeck 을 그대로 쓴다 — 이 함수는 쓰지 않는다. */
+    pickMainOrOpen(decks, project) {
+      const pick = this.pickOriginalDeck(decks, project);
+      if (pick) return pick;
+      const proj = project !== undefined ? project : this.currentProject;
+      if (!proj) return null;
+      const depId = (typeof State !== "undefined") ? State.currentDeploymentId : null;
+      if (!depId) return null;
+      // 지금 화면이 이 프로젝트를 보고 있을 때만(다른 프로젝트 재진입 잔류 상태 오염 방지)
+      if (typeof State !== "undefined" && State.currentProjectId != null && String(State.currentProjectId) !== String(proj.id)) return null;
+      return { id: null, deployment_id: depId, parent_id: null, crop: null, page: null,
+        name: (typeof State !== "undefined" && State.fileName) || proj.name || "원본", inferred: true };
+    },
+
     /** [WO 20260929-tree1] 🔴 마스터: "상위 프로젝트를 클릭하면 [원본 전체 도면이] 나오게 해".
      *  🔴 정직한 한계(데이터 구조 확인 결과, RECON 2026-09-29): deployments 테이블엔 project_id 가
      *  없다(테넌트 단위) — 구역(decks)에 연결된 배포본만 프로젝트 소속으로 알 수 있다. 벡터복사로
@@ -1014,7 +1035,7 @@
      *  이 선택이 "원본 전체 도면"에 가장 가깝다. 루트가 여럿이면(도면 여러 장 등록) 최신 1장을
      *  열고, 나머지는 트리에 이미 목록으로 나열돼 있다(추가 UI 0). */
     async openOriginal() {
-      const latest = this.pickOriginalDeck(this.decks);
+      const latest = this.pickMainOrOpen(this.decks);
       if (!latest) { Prompt.toast && Prompt.toast("등록된 원본 도면이 없습니다 — '도면 등록'으로 먼저 올리세요"); return; }
       const rootCount = (this.decks || []).filter((d) => d && d.deployment_id && d.parent_id == null).length;
       this.currentDeck = latest.id ? latest : null;   // [WP3 · C3] 구역 없는 원본 = 프로젝트 단위(nodeck)
@@ -1036,11 +1057,21 @@
 
     /** [WO 20261001-projectinfo] 트리 "원본 미지정 — [지정]" 버튼의 유일한 진입점(SoT) —
      *  현재 열린 도면을 projects.original_deployment_id 로 서버에 기록한다. 권한은 서버가 최종
-     *  판정(canManageMembersOf — 소유자·super)하고, 클라는 can_manage_members 로 버튼을 가린다. */
+     *  판정(canManageMembersOf — 소유자·super)하고, 클라는 can_manage_members 로 버튼을 가린다.
+     *  [WO 20261106-originfallback] 🔴 재현(resume): 구역 0개 프로젝트에서 로컬 draft만 복원된
+     *  열린 도면(_restoreProjectDraft, 20_App.js)은 한 번도 서버에 저장된 적이 없어 depId가
+     *  없다 — "먼저 도면을 열어야" 가 아니라 "아직 저장 안 됨" 이 진짜 원인이므로, 여기서 먼저
+     *  저장(App._createInitialSave, 구역 없음=project 원본 후보라 서버가 first-wins로 자동 기록)
+     *  해 depId를 만든 뒤 지정한다. 새 저장 경로 0 — 기존 _createInitialSave 그대로. */
     async setOriginalToCurrent() {
       if (!this.currentProject) return;
       if (!this.currentProject.can_manage_members) { Prompt.toast && Prompt.toast("권한이 없습니다(소유자/관리자만)"); return; }
-      const depId = (this.currentDeck && this.currentDeck.deployment_id) || (typeof State !== "undefined" && State.currentDeploymentId);
+      let depId = (this.currentDeck && this.currentDeck.deployment_id) || (typeof State !== "undefined" && State.currentDeploymentId);
+      if (!depId && typeof State !== "undefined" && State.fileType && State.mode === "designer"
+          && typeof App !== "undefined" && App._createInitialSave) {
+        await App._createInitialSave();
+        depId = State.currentDeploymentId;
+      }
       if (!depId) { Prompt.toast && Prompt.toast("먼저 도면을 열어야 원본으로 지정할 수 있습니다"); return; }
       if (typeof Prompt !== "undefined" && Prompt.confirm && !(await Prompt.confirm("원본 지정", "현재 열린 도면을 이 프로젝트의 원본으로 지정할까요?"))) return;
       try {
