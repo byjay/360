@@ -1761,17 +1761,20 @@ button { font-weight: 600; }        /* 버튼 글자 또렷하게 */
   transition: transform .12s ease, background .12s ease;
   display: flex; align-items: center; justify-content: center;
 }
-/* [마스터 요청 2026-11-06] "번호는 작게 보여도 점은 더 넓게" — 점(8→10px, 현재점 10→12px)을 키우고
-   번호 글자(6→5px)는 더 줄여 점이 먼저 눈에 들어오게 한다. 색/대비 규칙은 그대로(아래 주석 수치는
-   글자색에만 영향, font-size 변경과 무관 — WCAG 대비는 색상비로만 결정돼 그대로 유지됨).
+/* [마스터 결정 2026-11-12] 번호 폰트는 5px로 더 줄이지 않고 "읽히는 값"(6px, 기존값)을 유지한다.
+   대신 실화면 크기가 가독 임계 미만으로 작아지는 상황에서는 07_Radar.js _updateNumberVisibility가
+   .pano-radar-no-hidden 클래스로 번호 텍스트만 숨긴다(점은 어떤 경우에도 생략 안 함 — 핀 수=점 수).
+   점(8→10px, 현재점 10→12px)은 그대로 키움 — "번호는 작게/숨겨져도 점은 더 넓게"(2026-11-06).
    기본 핀 bg는 rgba(107,100,87,.85)(불투명 근사 rgb(107,100,87), L=.1286) 위 흰색 → 5.88:1(PASS).
    현재 핀 bg는 var(--gold)인데 Brand.js가 런타임에 테넌트 accent로 덮어써 실측 #1b75bb(파랑,
-   L=.1655) → 흰색 4.87:1(PASS). 스테이지가 항상 핀 주변으로 확대 렌더(최소 ≈2.78배)되므로
-   5px 폰트도 시각적으로 ≈14px 이상으로 표시돼 판독 가능. */
+   L=.1655) → 흰색 4.87:1(PASS). */
 .pano-radar-pin-no {
-  font-family: var(--font-mono); font-size: 5px; font-weight: 700; line-height: 1;
+  font-family: var(--font-mono); font-size: 6px; font-weight: 700; line-height: 1;
   color: #fff; pointer-events: none; user-select: none;
 }
+/* [마스터 결정 2026-11-12] 가독 임계 미만일 때 번호만 숨김(점은 항상 유지) — SoT: 07_Radar.js
+   RADAR_PIN_NO_MIN_PX. 번호가 있어야 하는 요소는 지우지 않고 display:none만 — DOM/개수는 불변. */
+.pano-radar.pano-radar-no-hidden .pano-radar-pin-no { display: none; }
 .pano-radar-pin:hover { transform: scale(1.4); background: #fff; }
 .pano-radar-pin:hover .pano-radar-pin-no { color: #1a1a1a; } /* 흰 배경 위 흰 글자 방지(대비 17.4:1) */
 .pano-radar-pin.current { background: var(--gold); width: 12px; height: 12px; margin: -6px 0 0 -6px; box-shadow: 0 0 0 3px rgba(245,158,11,.25); }
@@ -6107,6 +6110,14 @@ body.tree-dnd-active .tree-node-deck,body.tree-dnd-active .tree-node-region{curs
 /* [WO 20261015-treemap] 트리 깊이 레벨 배지(L1/L2/L3…) — 마스터: "서브구역 … 트리맵 구조
    명확히 해". 새 색 0 — .tree-kind-tag 와 같은 var(--text2)(이미 감사된 4.5:1+ 다크 톤) +
    .tree-children 괘선과 같은 var(--border2) 테두리만 재사용한다. */
+/* [WO 20261106-outline] 트리 계층 번호 칩(1 / 1.1 / 1.1.1…) — 마스터: "상위 그룹 1 2 3 …
+   하위 1.1 1.2 …". 🔴 .tree-level-tag(바로 아래, WO 20261015-treemap "L1/L2" 배지)와 별도
+   클래스 — p166 이 .tree-level-tag 렌더 0건을 그 폐기 기능의 회귀 가드로 쓰고 있어(이미 검증된
+   회귀 테스트, 테스트 약화 금지) 이름을 공유하면 혼동·오탐이 생긴다. 색·테두리·크기는
+   .tree-level-tag 와 동일(이미 대비 ≥4.5:1 감사됨, var(--text2)/var(--border2) — 새 색 0). */
+.tree-outline-no{font-size:8.5px;font-weight:700;color:var(--text2);border:1px solid var(--border2);
+  border-radius:4px;padding:0 3px;line-height:1.5;flex:0 0 auto;margin-right:2px;}
+.tree-node.active .tree-outline-no{color:#a0a5ae;}
 .tree-level-tag{font-size:8.5px;font-weight:700;color:var(--text2);border:1px solid var(--border2);
   border-radius:4px;padding:0 3px;line-height:1.5;flex:0 0 auto;margin-right:2px;}
 .tree-node.active .tree-level-tag{color:#a0a5ae;}

@@ -15,7 +15,7 @@ const CHROME = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Ap
 const REPO_PUBLIC = path.join(__dirname, "..", "public");
 const MODULES_DIR = path.join(REPO_PUBLIC, "js", "modules");
 const TMP_ROOT = path.join(__dirname, "..", ".tmp"); // 🔴 CLAUDE.md §G-5 — 프로젝트 안 .tmp 고정
-const SHOT_DIR = path.join(TMP_ROOT, "p193-minimapsize");
+const SHOT_DIR = path.join(TMP_ROOT, "p193"); // 🔴 지휘자 지시(2026-11-12) — 증거 스크린샷 경로 고정
 
 if (!fs.existsSync(CHROME)) {
   console.log("[SKIP] Chrome 실행파일을 찾지 못함(" + CHROME + ") — CDP 실측 생략(p116 과 동일 관례)");
@@ -23,7 +23,8 @@ if (!fs.existsSync(CHROME)) {
 }
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-/** mutateKind: null(정상) | "clamp"(뷰포트 클램프 제거) | "dots"(점 절반 생략 복원) */
+/** mutateKind: null(정상) | "clamp"(뷰포트 클램프 제거) | "dots"(점 절반 생략 복원) |
+ *  "nothreshold"(가독 임계 제거 — 작아져도 번호 항상 표시) */
 function buildBundle(mutateKind) {
   const manifest = fs.readFileSync(path.join(MODULES_DIR, "_manifest.txt"), "utf8").trim().split(/\r?\n/);
   return manifest.map((f) => {
@@ -39,6 +40,11 @@ function buildBundle(mutateKind) {
       src = src.replace(needle,
         "(State.pins || []).filter(p => (p.page || 1) === page).forEach((p, __i) => {\n" +
         "          if (__i % 2 === 1) return; // [P193_MUTATE dots] 절반 생략(옛 결함 재현)");
+    }
+    if (f === "07_Radar.js" && mutateKind === "nothreshold") {
+      const needle = "const RADAR_PIN_NO_MIN_PX = 8;";
+      if (!src.includes(needle)) throw new Error("뮤테이션(nothreshold) 대상 문자열을 찾지 못함");
+      src = src.replace(needle, "const RADAR_PIN_NO_MIN_PX = 0; // [P193_MUTATE nothreshold] 가독 임계 제거(항상 표시)");
     }
     return src;
   }).join("\n");
@@ -154,9 +160,43 @@ const READ_JS = `JSON.stringify({
   dotCount: document.querySelectorAll('.pano-radar-pin').length,
   dotWidth: (function(){ var d = document.querySelector('.pano-radar-pin:not(.current)'); return d ? parseFloat(getComputedStyle(d).width) : null; })(),
   noFontSize: (function(){ var n = document.querySelector('.pano-radar-pin-no'); return n ? parseFloat(getComputedStyle(n).fontSize) : null; })(),
+  noHiddenClass: document.getElementById('pano-radar').classList.contains('pano-radar-no-hidden'),
+  noActuallyHidden: (function(){ var n = document.querySelector('.pano-radar-pin-no'); return n ? (getComputedStyle(n).display === 'none') : null; })(),
   innerWidth: window.innerWidth, innerHeight: window.innerHeight,
   step: localStorage.getItem('wm-radar-size-step')
 })`;
+
+/** [마스터 결정 2026-11-12] 구역(zone)이 페이지 대부분을 덮어 자동 프레이밍 배율이 1에 가까워지는
+ *  "줌아웃" 픽스처 — 10핀, 번호 가독 임계(8px) 경계를 창 크기(+/−)·콘텐츠 줌(+/−) 조합으로 넘나든다. */
+const ZOOMOUT_SETUP_JS = `
+  (function(){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById('screen-app').classList.add('active');
+    document.body.classList.remove('role-viewer');
+    document.body.classList.add('role-designer');
+    var gate = document.getElementById('login-gate');
+    if (gate) { gate.classList.remove('on'); gate.classList.add('hidden'); }
+    window.__T_State.mode = 'designer';
+    window.__T_Auth.isDesigner = true;
+    var map = document.getElementById('map-image');
+    map.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    map.classList.remove('hidden');
+    var pins = [];
+    for (var i = 0; i < 10; i++) {
+      pins.push({ id: 'z' + i, page: 1, x: 5 + i * 9, y: 5 + i * 8, label: 'Z' + i });
+    }
+    window.__T_State.pins = pins;
+    window.__T_State.pdfPage = 1;
+    window.__T_State.zones = [{ id: 'zn', page: 1, x: 2, y: 2, w: 92, h: 92, pinIds: ['z0'] }];
+    var ov = document.getElementById('pano-overlay');
+    ov.classList.remove('hidden');
+    window.__T_Radar.update(pins[0]);
+    return 'ok';
+  })();
+`;
+function clickContentZoomIn(ws) {
+  return send(ws, "Runtime.evaluate", { expression: "document.getElementById('pano-radar-zoom-in').click(); 'ok'" });
+}
 
 async function withChrome(bundle, width, height, fn) {
   const overlayDir = makeServeDir(exposeForTest(bundle));
@@ -215,7 +255,11 @@ async function run() {
     ok(r0.transform === "" || r0.transform === "none", "A1 기본 step=1 → transform 미적용(회귀 0)", r0.transform);
     ok(r0.dotCount === 5, "A2 점(.pano-radar-pin) 5개 = 전체 핀 수", String(r0.dotCount));
     ok(r0.dotWidth >= 9.5, "A3 점 지름 ≥9.5px(기존 8px보다 넓음)", String(r0.dotWidth));
-    ok(r0.noFontSize <= 5.5, "A4 번호 글자 ≤5.5px(기존 6px보다 작음)", String(r0.noFontSize));
+    // [마스터 결정 2026-11-12] 번호 폰트는 5px로 내리지 않고 6px(기존값) 유지 — 대신 실화면이
+    // 작아지면 가독임계(§F)로 "숨김" 처리한다. 이 기본 픽스처(핀이 근접, 자동확대 ≈2.78x)는
+    // 실화면 6*2.78≈16.7px로 임계(8px) 상회 → 번호가 보여야 정상.
+    ok(r0.noFontSize === 6, "A4 번호 저작 글자크기 = 6px(5px로 축소하지 않음)", String(r0.noFontSize));
+    ok(r0.noHiddenClass === false && r0.noActuallyHidden === false, "A4b 기본(근접 핀, 고배율) 상태 → 번호 표시(숨김 아님)", JSON.stringify({ hiddenClass: r0.noHiddenClass, actuallyHidden: r0.noActuallyHidden }));
 
     await clickSizeIn(ws); await wait(80);
     const r1 = await evalJSON(ws, READ_JS);
@@ -296,6 +340,43 @@ async function run() {
     await wait(80);
     const r = await evalJSON(ws, READ_JS);
     ok(r.dotCount < 5, "E1 뮤테이션(점 절반 생략) → dotCount < 5(결함 재현, 정상코드에선 A2가 막음)", String(r.dotCount));
+  });
+
+  // ── F. 마스터 결정(2026-11-12) — 번호 가독 임계(8px): 작으면 번호만 숨김, 점은 항상 유지 ──
+  await withChrome(bundle, 1280, 900, async (ws) => {
+    await send(ws, "Runtime.evaluate", { expression: ZOOMOUT_SETUP_JS, returnByValue: true });
+    await wait(150);
+    const f0 = await evalJSON(ws, READ_JS);
+    ok(f0.noHiddenClass === true && f0.noActuallyHidden === true, "F1 줌아웃(구역 bbox 기준 ≈1배)+기본 창크기 → 번호 숨김(임계 미만)", JSON.stringify(f0.noHiddenClass));
+    ok(f0.dotCount === 10, "F2 번호 숨김 상태에서도 점(.pano-radar-pin) 10개 = 전체 핀 수(생략 0)", String(f0.dotCount));
+    const shotHidden = await send(ws, "Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(SHOT_DIR, "desktop-1280-number-hidden.png"), Buffer.from(shotHidden.data, "base64"));
+
+    await clickSizeOut(ws); await clickSizeOut(ws); await clickSizeOut(ws); await wait(100);
+    const f1 = await evalJSON(ws, READ_JS);
+    ok(f1.noHiddenClass === true, "F3 최소 창크기(0.8x)로 더 줄여도 여전히 숨김(더 작아짐, 안 보임 유지)", JSON.stringify(f1.noHiddenClass));
+    ok(f1.dotCount === 10, "F4 최소 창크기에서도 점 10개 유지", String(f1.dotCount));
+
+    await clickSizeIn(ws); await clickSizeIn(ws); await clickSizeIn(ws); await wait(100); // 최대 창크기
+    const f2 = await evalJSON(ws, READ_JS);
+    ok(f2.noHiddenClass === true, "F5 최대 창크기(클램프 ≈1.23x)만으로는 아직 임계 미달 → 숨김 유지", JSON.stringify(f2.noHiddenClass));
+
+    await clickContentZoomIn(ws); await clickContentZoomIn(ws); await wait(100); // 콘텐츠 줌 추가
+    const f3 = await evalJSON(ws, READ_JS);
+    ok(f3.noHiddenClass === false && f3.noActuallyHidden === false, "F6 창크기+콘텐츠줌 조합으로 임계 초과 → 번호 다시 표시(히스테리시스 상단 통과)", JSON.stringify(f3.noHiddenClass));
+    ok(f3.dotCount === 10, "F7 번호 재표시 후에도 점 10개 그대로", String(f3.dotCount));
+    const shotShown = await send(ws, "Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(SHOT_DIR, "desktop-1280-number-shown.png"), Buffer.from(shotShown.data, "base64"));
+  });
+
+  // ── G. 뮤테이션 3: 가독 임계 제거(RADAR_PIN_NO_MIN_PX=0) → 줌아웃 상태에서도 번호가 표시됨(결함 재현) ──
+  const mutNoThresholdBundle = buildBundle("nothreshold");
+  await withChrome(mutNoThresholdBundle, 1280, 900, async (ws) => {
+    await send(ws, "Runtime.evaluate", { expression: ZOOMOUT_SETUP_JS, returnByValue: true });
+    await wait(150);
+    const r = await evalJSON(ws, READ_JS);
+    ok(r.noActuallyHidden === false, "G1 뮤테이션(임계 제거) → 작은 상태에서도 번호가 표시됨(결함 재현, 정상코드에선 F1이 막음)", JSON.stringify(r.noActuallyHidden));
+    ok(r.dotCount === 10, "G2 (참고) 이 뮤테이션은 점 개수에는 영향 없음", String(r.dotCount));
   });
 
   console.log("\n" + (failed === 0 ? "ALL PASS" : failed + " FAILED") + " — 스크린샷/산출물: " + SHOT_DIR);

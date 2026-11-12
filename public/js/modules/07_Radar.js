@@ -1,3 +1,11 @@
+  // [마스터 결정 2026-11-12] 미니맵 번호 가독 임계(SoT) — 실화면 글자 크기(font-size × 창
+  // scale × 도면 줌)가 이 아래면 번호 텍스트만 숨기고 점은 항상 유지한다(핀 수==점 수 불변).
+  const RADAR_PIN_NO_MIN_PX = 8;
+  // 히스테리시스 15% — 핀치 줌(연속 입력)이 경계값 근처에서 호출마다 흔들리면 번호가 깜빡일 수
+  // 있어 ON/OFF 턴오버를 다르게 둔다. 창 크기(+/−)·내용 줌(+/−) 버튼은 이산 단계라 원래 영향이
+  // 없고, 연속 입력(핀치)에서만 의미 있는 안전장치.
+  const RADAR_PIN_NO_HYST = 0.15;
+
   const Radar = {
     _pin: null,
 
@@ -105,6 +113,7 @@
           box.style.transform = (Math.abs(safe - 1) < 0.001) ? "" : ("scale(" + safe.toFixed(3) + ")");
           if (sin) sin.disabled = step >= SMAX;
           if (sout) sout.disabled = step <= SMIN;
+          this._updateNumberVisibility();  // 창 크기도 "실화면" 번호 크기에 곱해지는 축이라 재판정
         };
         const setStep = (n) => {
           step = Math.max(SMIN, Math.min(SMAX, n));
@@ -288,6 +297,47 @@
       }
       stage.style.transformOrigin = "0 0";
       stage.style.transform = "scale(" + s.toFixed(3) + ") translate(" + (-vx).toFixed(2) + "%, " + (-vy).toFixed(2) + "%)";
+      this._updateNumberVisibility();
+    },
+
+    /** style.transform 문자열에서 scale(N) 배율만 뽑는다(translate 등 나머지는 무시 — 크기 판정에
+     *  필요한 건 배율뿐). 없으면 1(미적용). */
+    _readScale(el) {
+      const m = /scale\(([-0-9.]+)\)/.exec((el && el.style.transform) || "");
+      return m ? parseFloat(m[1]) : 1;
+    },
+
+    /** [마스터 결정 2026-11-12] 번호의 "실화면" 글자 크기(px) = 저작 font-size × 창(box) scale ×
+     *  도면(stage) scale. 실제 렌더된 번호 엘리먼트의 computed font-size를 읽어 CSS 값과
+     *  분리되지 않게(SoT) 한다 — 샘플이 없으면(핀 0개·동선모드) null. */
+    _numberVisualPx() {
+      // 🔴 p2/p4/p9/p54/p101 등 vm 기반 회귀테스트는 최소 DOM 목(querySelector/getComputedStyle
+      // 없음)을 쓴다 — 실브라우저가 아니면 조용히 생략(그 테스트들은 번호 가시성과 무관한 다른
+      // 불변식을 검증 중이므로 여기서 숨김판정을 건너뛰어도 그 목적엔 영향 없음).
+      if (typeof document.querySelector !== "function" || typeof getComputedStyle !== "function") return null;
+      const box = document.getElementById("pano-radar");
+      const stage = document.getElementById("pano-radar-stage");
+      const sample = document.querySelector("#pano-radar-pins .pano-radar-pin-no");
+      if (!box || !stage || !sample) return null;
+      const fontPx = parseFloat(getComputedStyle(sample).fontSize) || 0;
+      return fontPx * this._readScale(box) * this._readScale(stage);
+    },
+
+    /** 가독 임계(RADAR_PIN_NO_MIN_PX) 아래로 작아지면 번호 텍스트만 숨긴다(점은 절대 생략 안 함
+     *  — CSS만 토글, DOM 개수 불변). 히스테리시스로 경계 깜빡임 방지(§RADAR_PIN_NO_HYST 주석). */
+    _updateNumberVisibility() {
+      const box = document.getElementById("pano-radar");
+      if (!box) return;
+      const px = this._numberVisualPx();
+      if (px == null) return;
+      // 🔴 안전쪽(표시→숨김)은 임계에서 바로 — "번호 표시 ⇒ 실화면 ≥ 임계"가 예외 없이 항상
+      // 성립해야 한다(마스터 결정). 여유(복귀쪽, 숨김→표시)에만 히스테리시스를 둬 핀치 연속입력이
+      // 임계 바로 위에서 흔들려도 "숨김 상태가 안정적으로 유지"되게 한다(=깜빡임 방지).
+      // 표시 상태에서 임계 아래로 머무는 구간은 전혀 없다 — 즉시 숨김.
+      const hiddenNow = box.classList.contains("pano-radar-no-hidden");
+      const showAbove = RADAR_PIN_NO_MIN_PX * (1 + RADAR_PIN_NO_HYST);
+      if (hiddenNow && px >= showAbove) box.classList.remove("pano-radar-no-hidden");
+      else if (!hiddenNow && px < RADAR_PIN_NO_MIN_PX) box.classList.add("pano-radar-no-hidden");
     },
 
     /** [마스터 요청 2026-11-06] 창 크기 단계(scale)가 실제 뷰포트를 넘지 않도록 동적으로 재클램프.
