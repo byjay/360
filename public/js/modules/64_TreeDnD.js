@@ -52,17 +52,26 @@
       return this.selfAndDescendants(decks, movingId).has(String(targetParentId));
     },
 
+    /** [WO 20261106-outline] 🔴 공유 지점(SoT) — 형제 정렬 공식(sort_order→level_no→created_at)을
+     *  한 곳에만 둔다. siblingsOf(아래)와 11_UI.js outlineNumbers(트리 계층 번호 1/1.1/1.1.1…)가
+     *  함께 쓴다 — 각자 계산하면 번호와 실제 트리 순서가 갈라진다(§SoT). 순수 비교자(decks 2개 → 숫자). */
+    compareSiblings(a, b) {
+      const ord = (d) => { const so = d.sort_order; if (so != null) return so; const ln = d.level_no; return ln != null ? ln : 999999; };
+      const diff = ord(a) - ord(b);
+      if (diff) return diff;
+      return (a.created_at || 0) - (b.created_at || 0);
+    },
+
     /** 같은 부모(parentId)를 둔, excludeId 를 뺀 형제 id 목록 — 서버 GET 정렬과 같은 기준
      *  (COALESCE(sort_order, level_no, 999999), created_at). 미리보기 전용. */
     siblingsOf(decks, parentId, excludeId) {
       const norm = (v) => (v != null ? String(v) : null);
       const pid = norm(parentId);
       const exId = excludeId != null ? String(excludeId) : null;
-      const ord = (d) => { const so = d.sort_order; if (so != null) return so; const ln = d.level_no; return ln != null ? ln : 999999; };
       return (decks || [])
         .filter((d) => d && norm(d.parent_id) === pid && (exId == null || String(d.id) !== exId))
         .slice()
-        .sort((a, b) => { const diff = ord(a) - ord(b); if (diff) return diff; return (a.created_at || 0) - (b.created_at || 0); })
+        .sort((a, b) => this.compareSiblings(a, b))
         .map((d) => String(d.id));
     },
 

@@ -4847,14 +4847,22 @@
       const plan = this._drawingPlan(deck, null);
       if (plan.blocked) { toast(plan.blocked, 5200); return false; }
       const nm = deck.name || "(이름 없음)";
-      const msg = plan.mode === "separate"
-        ? "‘" + nm + "’ 에 이 구역만의 도면(PDF·이미지)을 따로 올립니다.\n· 메인 PDF 는 바뀌지 않습니다.\n· 이 구역은 더 이상 메인 도면을 잘라 쓰지 않습니다(메인 위 윤곽도 사라집니다).\n· 이 구역에서 보이던 기존 포인트는 메인 도면에 그대로 남습니다.\n계속할까요?"
-        : plan.mode === "replace"
-          ? "‘" + nm + "’ 구역의 도면을 새 파일로 바꿉니다.\n· 메인 PDF 는 바뀌지 않습니다.\n· 기존 포인트는 좌표(%) 그대로 유지됩니다.\n계속할까요?"
-          : null;
-      if (msg && !(await Prompt.confirm(plan.mode === "separate" ? "구역 도면 별도 등록" : "구역 도면 교체", msg))) return false;
-      const file = await this._pickDrawingFile();
-      if (!file) return false;
+      // [WO 20261106-outline] 🔴 일괄 넣기(UI.openBulkDeckFill)가 파일을 이미 고른 채 호출한다 —
+      //   이 경우 네이티브 파일창과 확인창을 또 띄우면 파일마다 수동 대응이 필요해져 "일괄"의
+      //   의미가 없어진다. 그 호출부의 미리보기 표 + [실행] 버튼이 동의와 같은 역할을 한다
+      //   (65_Sheets.createSheets 가 파일당 confirm 없이 한 번에 등록하는 것과 같은 패턴).
+      //   단일 등록(파일 없이 호출)은 기존 확인창·파일창 그대로 — 동작 변경 0.
+      let file = target.file || null;
+      if (!file) {
+        const msg = plan.mode === "separate"
+          ? "‘" + nm + "’ 에 이 구역만의 도면(PDF·이미지)을 따로 올립니다.\n· 메인 PDF 는 바뀌지 않습니다.\n· 이 구역은 더 이상 메인 도면을 잘라 쓰지 않습니다(메인 위 윤곽도 사라집니다).\n· 이 구역에서 보이던 기존 포인트는 메인 도면에 그대로 남습니다.\n계속할까요?"
+          : plan.mode === "replace"
+            ? "‘" + nm + "’ 구역의 도면을 새 파일로 바꿉니다.\n· 메인 PDF 는 바뀌지 않습니다.\n· 기존 포인트는 좌표(%) 그대로 유지됩니다.\n계속할까요?"
+            : null;
+        if (msg && !(await Prompt.confirm(plan.mode === "separate" ? "구역 도면 별도 등록" : "구역 도면 교체", msg))) return false;
+        file = await this._pickDrawingFile();
+        if (!file) return false;
+      }
       if (!Projects.currentDeck || String(Projects.currentDeck.id) !== String(deck.id)) { if (Projects.selectDeck) await Projects.selectDeck(deck); }
       await this._loadDrawing(file);
       return true;

@@ -651,6 +651,50 @@
       return { roots, childrenOf };
     },
 
+    /** [WO 20261106-outline] 🔴 공유 지점(SoT) — 트리 계층 번호(최상위 1,2,3… / 하위 1.1,1.2… /
+     *  1.1.1…) 표시용(순수 계산, 저장 컬럼·서버 변경 0 — 매 renderTree() 마다 다시 계산돼 항상 최신).
+     *  그룹핑 = groupDecksByParent(위, 고아 부모 승격 포함 — 새 그룹핑 금지), 형제 순서 =
+     *  TreeDnD.compareSiblings(SoT, 64_TreeDnD.js — 새 정렬 금지, 트리가 실제로 그리는 순서와
+     *  항상 같다). 🔴 순환 방어 — parent_id 는 단일 필드라 루트에서 도달 가능한 순환은 수학적으로
+     *  발생할 수 없다(정상 데이터: groupDecksByParent 가 순환 구성원 전체를 roots 에서도
+     *  childrenOf 에서도 빠뜨려 고립시킨다). 아래 visited 가드는 중복 id·오염 데이터 등 비정상
+     *  입력에서도 무한 재귀 없이 "순환" 으로 표시(숨기지 않음)하는 방어 코드다.
+     *  @returns {Map<string, {no:string, cycle:boolean}>} deck.id(string) → 표시 번호 */
+    outlineNumbers(decks) {
+      const map = new Map();
+      const { roots, childrenOf } = this.groupDecksByParent(decks || []);
+      const cmp = (typeof TreeDnD !== "undefined" && TreeDnD.compareSiblings)
+        ? (a, b) => TreeDnD.compareSiblings(a, b) : () => 0;
+      const visited = new Set();
+      const walk = (list, prefix) => {
+        (list || []).slice().sort(cmp).forEach((d, i) => {
+          const id = String(d.id);
+          const no = prefix ? prefix + "." + (i + 1) : String(i + 1);
+          if (visited.has(id)) { map.set(id, { no: "순환", cycle: true }); return; } // 방어 — 정상 데이터에서는 도달 불가
+          visited.add(id);
+          map.set(id, { no, cycle: false });
+          walk(childrenOf.get(id), no);
+        });
+      };
+      walk(roots, "");
+      return map;
+    },
+
+    /** [WO 20261106-outline] 파일명 앞의 계층 번호(1.1, 01.02, 1.1.2 …) 파싱 — 하위 영역 도면
+     *  일괄 넣기(openBulkDeckFill)가 outlineNumbers()의 번호와 1:1 대응시키는 데 쓴다.
+     *  확장자(pdf/png/jpg/jpeg/gif/webp/bmp/tiff, 대소문자 무관)만 제거하고 그 뒤 숫자.숫자…를
+     *  읽는다 — 구분자는 공백·_·- 또는 문자열 끝. 앞자리 0 은 무시(01→1). 매칭 안 되면 null
+     *  (지어내지 않음 — CLAUDE.md §5).
+     *  @param {string} name 파일명
+     *  @returns {string|null} 정규화된 번호("1.2") 또는 null */
+    parseLeadingOutlineNo(name) {
+      if (!name) return null;
+      const base = String(name).replace(/\.(pdf|png|jpe?g|gif|webp|bmp|tiff?)$/i, "");
+      const m = base.match(/^\s*(\d+(?:\.\d+)*)(?=[\s_-]|$)/);
+      if (!m) return null;
+      return m[1].split(".").map((seg) => String(parseInt(seg, 10))).join(".");
+    },
+
     /** [WO 20260929-tree-label] 🔴 공유 지점(SoT) — 트리 라벨은 항상 deck.name(파일명이 아니다).
      *  마스터 지적: "이 트리가 제대로 제목이 안나오잖아" — 사이드바 트리(renderTree)와 허브 카드
      *  트리(12_ProjectHub.js)가 각자 이름 폴백을 따로 구현하면 반드시 갈라진다(§5) — 이 함수 하나만 쓴다.
@@ -748,6 +792,16 @@
       // [WO 20261012-treeexplorer] 탐색기처럼 — 이 구역 아래 다단 하위 구역(이름만, 폴더처럼 상위 도면을 그대로 봄).
       items.push({ label: "+ 하위 구역", desc: "이 구역 아래 새 하위 구역을 만듭니다(이름만)",
         reason: why, run: () => { if (typeof Projects !== "undefined" && Projects.createDeck) Projects.createDeck({ askDrawing: false, parent_id: deck.id }); } });
+      // [WO 20261106-outline] 🔴 마스터: "그게 어렵니?!" — 하위 영역이 있는 그룹에서만 보임(숨김 금지
+      //   원칙과 모순되지 않는다 — 하위가 0개면 대응시킬 대상 자체가 없다). 등록은 App.registerDrawingFor
+      //   (SoT, 20_App.js) 파일마다 호출 — 새 업로드 경로 0.
+      {
+        const bulkChildCount = (typeof Projects !== "undefined" && Projects.childDeckCount) ? Projects.childDeckCount(deck.id) : 0;
+        if (bulkChildCount > 0) {
+          items.push({ label: "하위 영역 도면 일괄 넣기", desc: "파일명 앞 번호(1.1, 1.2…)로 하위 영역에 자동 대응해 등록",
+            reason: why, run: () => this.openBulkDeckFill(deck) });
+        }
+      }
       // [20261018-p164] 🔴 설계 .tmp/design-multisheet.md §2-5/Phase4 — 시트 묶음(도면 간 번호 연결)
       //   구역과 그 하위에서는 영역 잘라오기(벡터복사·창)를 비활성화한다: crop 상자가 다른 시트의
       //   연결된 핀을 걸러내 "반쪽 그룹"을 만들 수 있다(resolvePinHome/projectPins 전제 붕괴).
@@ -827,6 +881,112 @@
       }
       return items;
     },
+
+    /** [WO 20261106-outline] 구역 ⋯ 메뉴 [하위 영역 도면 일괄 넣기] 유일 진입점.
+     *  파일명 앞 번호(parseLeadingOutlineNo)를 groupDeck 의 바로 아래 하위 영역 계층 번호
+     *  (outlineNumbers)와 1:1 대응시켜 미리보기(_confirmBulkDeckFill)를 보여주고, 사용자가
+     *  [실행]해야 등록한다(자동 실행 금지 — 마스터 지시). 등록 자체는 App.registerDrawingFor
+     *  (SoT, 20_App.js) 파일마다 1회 호출 — 새 업로드 경로 0, 권한 게이트도 그 함수가 그대로 맡는다. */
+    async openBulkDeckFill(groupDeck) {
+      if (typeof Projects === "undefined" || !Projects.currentProject || !groupDeck) return;
+      if (typeof Auth !== "undefined" && (!Auth.isDesigner || Auth.readonly)) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("디자이너(편집) 전용 — 편집 화면에서 사용하세요"); return; }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("오프라인이라 지금은 등록할 수 없습니다 — 연결 후 다시 시도하세요"); return; }
+      if (typeof Sheets === "undefined" || !Sheets._pickMultipleFiles) return;
+      const files = await Sheets._pickMultipleFiles();
+      if (!files || !files.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("일괄 넣기를 취소했습니다"); return; }
+      const decks = Projects.decks || [];
+      const outlineMap = this.outlineNumbers(decks);
+      const { childrenOf } = this.groupDecksByParent(decks);
+      const kids = (childrenOf.get(String(groupDeck.id)) || []).slice();
+      const byNo = new Map();
+      kids.forEach((d) => { const e = outlineMap.get(String(d.id)); if (e && !e.cycle) byNo.set(e.no, d); });
+      const usedDeckIds = new Set();
+      const matched = [];
+      const unmatchedFiles = [];
+      files.forEach((file) => {
+        const no = this.parseLeadingOutlineNo(file.name);
+        const deck = no ? byNo.get(no) : null;
+        if (deck) { matched.push({ file, no, deck, replace: !deck.deployment_id }); usedDeckIds.add(String(deck.id)); }
+        else unmatchedFiles.push({ file, no });
+      });
+      const unmatchedAreas = kids.filter((d) => !usedDeckIds.has(String(d.id)));
+      if (!matched.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("파일명 번호와 대응하는 하위 영역이 없습니다 — 파일명을 '1.1_이름.pdf' 형식으로 맞춰 보세요", 5400); return; }
+      const confirmed = await this._confirmBulkDeckFill(groupDeck, matched, unmatchedFiles, unmatchedAreas, outlineMap);
+      if (!confirmed || !confirmed.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("일괄 넣기를 취소했습니다"); return; }
+      let okN = 0, failN = 0;
+      for (const row of confirmed) {
+        try {
+          const done = await App.registerDrawingFor({ kind: "deck", deck: row.deck, file: row.file });
+          if (done) okN++; else failN++;
+        } catch (e) { failN++; }
+      }
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast(okN + "개 등록" + (failN ? ", " + failN + "개 실패" : ""), 4200);
+      if (typeof Projects !== "undefined" && Projects.loadDecks) await Projects.loadDecks();
+    },
+
+    /** 하위 영역 도면 일괄 넣기 미리보기 바텀시트 — 65_Sheets.js _confirmSheetChecklist 와 같은
+     *  패턴(.admin-gate 재사용, 새 CSS 0). 확인 시 [{file,deck,no,replace}](실행할 행만), 취소 시 null. */
+    _confirmBulkDeckFill(groupDeck, matched, unmatchedFiles, unmatchedAreas, outlineMap) {
+      return new Promise((resolve) => {
+        const esc = (s) => this.escapeHtml(s);
+        const overlay = document.createElement("div");
+        overlay.className = "admin-gate on";
+        overlay.setAttribute("role", "dialog"); overlay.setAttribute("aria-modal", "true");
+        const backdrop = document.createElement("div"); backdrop.className = "admin-gate-backdrop";
+        const card = document.createElement("div"); card.className = "admin-gate-card";
+        card.style.cssText = "max-height:80vh;overflow-y:auto;text-align:left";
+        const h = document.createElement("h2"); h.className = "admin-gate-title"; h.textContent = "하위 영역 도면 일괄 넣기";
+        const sub = document.createElement("p"); sub.className = "admin-gate-sub"; sub.textContent = "'" + (groupDeck.name || "") + "' 하위 영역에 파일명 번호로 자동 대응했습니다 — 확인 후 실행하세요";
+        card.append(h, sub);
+        const state = matched.map((m) => Object.assign({}, m));
+        const actions = document.createElement("div");
+        const okBtn = document.createElement("button"); okBtn.type = "button"; okBtn.className = "admin-gate-btn primary full";
+        const refresh = () => { const n = state.filter((r) => !r.deck.deployment_id || r.replace).length; okBtn.textContent = (n > 0 ? n : 0) + "개 실행"; okBtn.disabled = n <= 0; };
+        state.forEach((row) => {
+          const rowEl = document.createElement("div");
+          rowEl.style.cssText = "display:flex;align-items:center;gap:8px;margin:6px 0;padding:6px;border:1px solid #d9cfb8;border-radius:6px";
+          const info = document.createElement("div");
+          info.style.cssText = "flex:1;min-width:0;font-size:12.5px;color:#0B1F33";
+          info.innerHTML = "<b>" + esc(row.no) + "</b> " + esc(row.deck.name || "(이름 없음)") + "<br><span style=\"color:#6b6457;font-size:11px\">" + esc(row.file.name) + "</span>";
+          rowEl.appendChild(info);
+          if (row.deck.deployment_id) {
+            const tag = document.createElement("span");
+            tag.style.cssText = "font-size:10px;color:#7c2d12;background:#fbe3cd;border:1px solid #c2410c;border-radius:6px;padding:0 5px;flex:0 0 auto";
+            tag.textContent = "기존 도면 있음";
+            const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = false;
+            cb.addEventListener("change", () => { row.replace = cb.checked; refresh(); });
+            rowEl.append(tag, cb);
+          } else {
+            const tag = document.createElement("span");
+            tag.style.cssText = "font-size:10px;color:#166534;background:#dcfce7;border:1px solid #16a34a;border-radius:6px;padding:0 5px;flex:0 0 auto";
+            tag.textContent = "새로 등록";
+            rowEl.appendChild(tag);
+          }
+          card.appendChild(rowEl);
+        });
+        if (unmatchedFiles.length || unmatchedAreas.length) {
+          const warn = document.createElement("div");
+          warn.style.cssText = "margin-top:10px;padding:8px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:11.5px;color:#7c2d12";
+          let t = "";
+          if (unmatchedFiles.length) t += "대응 영역 없음: " + unmatchedFiles.map((f) => esc(f.file.name)).join(", ") + "<br>";
+          if (unmatchedAreas.length) t += "대응 파일 없음: " + unmatchedAreas.map((d) => esc(((outlineMap.get(String(d.id)) || {}).no || "?") + " " + (d.name || "(이름 없음)"))).join(", ");
+          warn.innerHTML = t;
+          card.appendChild(warn);
+        }
+        refresh();
+        actions.className = "admin-gate-actions"; actions.style.cssText = "flex-direction:column;gap:10px;margin-top:14px";
+        const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "admin-gate-btn ghost full"; cancelBtn.textContent = "취소";
+        actions.append(okBtn, cancelBtn);
+        card.appendChild(actions);
+        overlay.append(backdrop, card);
+        document.body.appendChild(overlay);
+        const close = (val) => { try { overlay.remove(); } catch (e) {} resolve(val); };
+        okBtn.addEventListener("click", () => close(state.filter((r) => !r.deck.deployment_id || r.replace)));
+        cancelBtn.addEventListener("click", () => close(null));
+        backdrop.addEventListener("click", () => close(null));
+      });
+    },
+
     /** [WO 20261008-pinstyle] 팝업 위치 SoT — 트리 ⋯ 메뉴 · 우클릭 앱 메뉴 공용.
      *  🔴 375 실측(0b4d262): 트리 ⋯ 메뉴(z 520)의 첫 항목을 고정 ?·✉ 버튼(z 9550, 좌하단)이 덮었다.
      *  버튼을 숨기지 않고 메뉴 위치만 옮긴다 — 아래 → 위 → (둘 다 겹치면) 버튼 윗선까지로 줄여 스크롤.
@@ -1512,6 +1672,9 @@
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
       const { roots: rootDecks, childrenOf: allChildrenOf } = this.groupDecksByParent(decks);
       // [WO 20261001-projectinfo] docLabel 은 이 함수 위쪽(decks 선언 직후)으로 이동했다 — 중복 정의 제거.
+      // [WO 20261106-outline] 🔴 마스터: "상위 그룹 1 2 3… 하위 1.1 1.2…" — 계층 번호는 매 렌더
+      //   한 번만 계산(outlineNumbers, SoT 위) 해 deckNode 클로저가 참조한다(노드마다 재계산 금지).
+      const outlineMap = this.outlineNumbers(decks);
 
       /* 같은 도면을 여러 deck(구역/영역)이 가리키므로 State(영역JSON·핀)를 붙일 deck 을 하나로 정한다.
          선택된 deck 이 그 도면 안에 있으면 그 deck 에만, 없으면 종전대로 로드된 deck 에 붙인다.
@@ -1583,7 +1746,15 @@
           ? '<span class="tree-src-tag tree-src-' + _src.kind + '" title="구역 도면 출처: ' + esc(_src.label) + '">' + esc(_src.label) + '</span>' : "";
         // [WO 20261012-treemenu-viewer] 열람자에겐 ⋯ 메뉴 자체를 렌더하지 않는다(CSS 숨김이 아니라 렌더 생략) — ⑴ 참조.
         const moreTag = isReadonlyTree ? "" : '<span class="tree-more" role="button" tabindex="0" aria-label="' + (isRegion ? "영역" : "구역") + ' 메뉴" title="' + (isRegion ? "영역" : "구역") + ' 메뉴 — 도면 등록/교체">⋯</span>';
-        head.innerHTML = (expandable ? C : "") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
+        // [WO 20261106-outline] 🔴 .tree-outline-no — .tree-level-tag(WO 20261015-treemap, 이미
+        //   폐기돼 p166 이 렌더 0건을 회귀 가드로 지키는 옛 L1/L2 배지)와 이름을 공유하지 않는다
+        //   (같은 색·테두리 스타일만 재사용, 새 색 0 — style.css 참조). 이름 바로 앞에 둬
+        //   "트리 노드 이름 앞 작은 칩"(마스터 지시)을 만든다.
+        const _outlineEntry = outlineMap.get(String(deck.id));
+        const outlineTag = _outlineEntry
+          ? '<span class="tree-outline-no" title="' + (_outlineEntry.cycle ? "순환 참조 — 번호를 매길 수 없습니다" : "계층 번호 " + esc(_outlineEntry.no)) + '">' + esc(_outlineEntry.no) + '</span>'
+          : "";
+        head.innerHTML = (expandable ? C : "") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + outlineTag + '<span class="tree-label">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag + moreTag;
         if (reqTag) head.insertAdjacentHTML("beforeend", reqTag);
         // [WO 20261007-qrcov] 촬영 현황 배지(미촬영·오래됨) — 켜졌고 이 구역 도면이 로드됐을 때만(SoT: Coverage.deckSummary → Projects.pinsForDeck)
         const covTag = (typeof Coverage !== "undefined" && Coverage.treeBadgeHtml) ? Coverage.treeBadgeHtml(deck) : "";
