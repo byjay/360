@@ -144,6 +144,143 @@
         by: (typeof Auth !== "undefined" && Auth.user && Auth.user.email) || null,
         at: Date.now()
       });
+    },
+
+    /** [WO 20261106-photomatch 결정④c] pin.timeline 에 적립된 항목 1개를 "현재"로 복원 —
+     *  14_TimeLapse.js revertCurrent()(이력 splice → 필드 복원)와 **같은 효과**를 내도록 맞췄다
+     *  (뷰어 상태(TimeLapse._pin/_shots) 없이도 프로그램적으로 호출 가능하게 이 작은 버전을 분리
+     *  — 14_TimeLapse.js 자체는 건드리지 않는다, 영향범위 최소화 §10). 🔴 이미지 데이터를 지우지
+     *  않는다 — pin 필드(링크)만 되돌린다(pano_images·R2 호출 0).
+     *  @param {string} entryId pushHistory()가 돌려준 timeline 항목 id. @returns {boolean} 복원 성공 여부. */
+    restoreLast(pin, entryId) {
+      if (!pin || !Array.isArray(pin.timeline) || !entryId) return false;
+      const idx = pin.timeline.findIndex((t) => t && t.id === entryId);
+      if (idx < 0) return false;
+      const shot = pin.timeline[idx];
+      pin.timeline.splice(idx, 1);           // 되돌린 항목은 이력에서 제거 → 현재로 승격(revertCurrent 와 동일)
+      pin.imageId = shot.imageId || null;
+      pin.imageUrl = shot.imageUrl || null;
+      pin.pendingOpId = shot.pendingOpId || null;
+      pin.origKey = shot.origKey || null;
+      pin.isVideo = !!shot.isVideo;
+      pin.origName = shot.origName || null;
+      pin.imageName = shot.imageName || null;  // [해제 전용 보강필드] pushHistory 기본엔 없음 — _unlinkPin 이 적립 직후 덧붙인다
+      pin.is360 = !!shot.is360;                // 위와 동일
+      if (shot.shotAt != null) { pin.shotAt = shot.shotAt; pin.shotSrc = shot.shotSrc || "되돌림"; } else { pin.shotAt = null; pin.shotSrc = null; }
+      return true;
+    }
+  };
+
+  /* ══ [WO 20261106-photomatch] 번호 대응 매칭 — 순수 함수(DOM 무의존, 창고 적재 가능) ══
+     마스터: "사진 일괄 등록시 번호를 전혀 매칭을 못하네, 매칭되게 해" — 재현: 핀 401~460(55장,
+     408.JPG 없음)을 기존 _buildMatches()(위치기반 1:1, 시간순 정렬 i번째 ↔ 핀 i번째)로 돌리면
+     408 이후 전부 한 칸씩 밀린다("408←409.JPG" 등). 이 블록은 "파일명 번호 == 핀 번호"로만
+     짝짓는 번호 대응 매칭을 추가한다 — 밀림 자체가 구조적으로 없다(한 파일의 매칭은 그 파일
+     자신의 번호에만 의존, 다른 파일의 존재/부재와 무관). 형식 검증 formal/photo_match.tla
+     (TLC: 수정 전 규칙은 반례로 위반, 번호 대응은 N≤6 전수에서 위반 0 — 가정 범위는 그 파일
+     헤더 주석 참조).
+     번호·접두 추출 규칙은 60_PhotoFolder.js _fileFullNo/_fileFallbackNo/_filePrefix 와
+     **의도적으로 동일한 알고리즘**이다(§10 SoT 요구 — "2차 폴백은 기존 규칙과 일치"). 다만 그
+     모듈을 직접 호출하지 않고 이 안에 같은 규칙을 복제해 두는 이유: 35(이 파일)가 60보다
+     매니페스트 순서상 앞이라 로드 시점엔 PhotoFolder 가 없고, 두 기능(폴더 지정 단건 vs
+     일괄 매칭 표)의 호출 경로가 달라 런타임 교차참조를 강제하면 오히려 결합이 늘어난다 —
+     대신 tests/p197 가 두 구현의 출력이 모든 샘플에서 같음을 교차검증해 드리프트를 막는다. */
+  const PhotoMatch = {
+    /** 파일명(확장자 제외) → {full, fallback, prefix, hasDigits}. 순수 함수.
+     *  규칙(60_PhotoFolder.js:107-165 와 동일 — 표):
+     *    "401.JPG"      → {full:401,  fallback:null, prefix:"",   hasDigits:true}
+     *    "OD001.jpg"    → {full:1,    fallback:null, prefix:"OD", hasDigits:true}
+     *    "ER_1001.JPG"  → {full:1001, fallback:1,    prefix:"ER", hasDigits:true}  (fallback=마지막 3자리, 4자리 이상일 때만)
+     *    "402.1.JPG"    → {full:1,    fallback:null, prefix:"",   hasDigits:true}  (확장자는 마지막 점만 제거 — 그 앞 "402."는 숫자가 아닌 접두부로 취급)
+     *    "4th.01.JPG"   → {full:1,    fallback:null, prefix:"",   hasDigits:true}
+     *    "0f.070.JPG"   → {full:70,   fallback:null, prefix:"",   hasDigits:true}
+     *    "@preview.jpg" → {full:null, fallback:null, prefix:"",   hasDigits:false} */
+    parseName(name) {
+      const base = String(name == null ? "" : name).replace(/\.[^.]+$/, "");
+      const m = /(\d+)$/.exec(base);
+      if (!m) return { full: null, fallback: null, prefix: "", hasDigits: false };
+      const digits = m[1];
+      const full = parseInt(digits, 10);
+      const fallback = digits.length > 3 ? parseInt(digits.slice(-3), 10) : null;
+      const before = base.slice(0, m.index).replace(/[-_]+$/, "");
+      const pm = /([A-Za-z][A-Za-z0-9]{0,5})$/.exec(before);
+      return { full: Number.isFinite(full) ? full : null, fallback: Number.isFinite(fallback) ? fallback : null, prefix: pm ? pm[1] : "", hasDigits: true };
+    },
+
+    /** 핀 번호(정수) ↔ 파일명 매칭 1건(두 단계, 60_PhotoFolder.isMatch 와 동일 의미).
+     *  @param {Set<number>} existingNumbers 페이지에 실제 존재하는 핀 번호(2차 폴백 억제 판정용). */
+    isMatch(pinNo, filename, existingNumbers) {
+      const pn = parseInt(pinNo, 10);
+      if (!Number.isFinite(pn)) return false;
+      const parsed = this.parseName(filename);
+      if (!parsed.hasDigits) return false;
+      if (parsed.full !== null && parsed.full === pn) return true;
+      if (pn > 999) return false;
+      if (parsed.fallback === null) return false;
+      if (parsed.full !== null && existingNumbers && existingNumbers.has(parsed.full)) return false; // 그 번호의 진짜 주인 핀이 있으면 폴백 금지
+      return parsed.fallback === pn;
+    },
+
+    /** 번호 대응 1:1 매칭. @param pinEntries [{pin,no,prefix}] 이 페이지의 **전체** 핀(범위 제한 전 —
+     *  existingNumbers·범위밖 판정에 전체가 필요). @param range {start,end}. @param rows PhotoBatch._rows.
+     *  🔴 각 파일의 매칭은 그 파일 자신의 (번호,접두)에만 좌우된다 — 다른 파일의 유무가 이 파일의
+     *  매칭을 바꾸지 않는다(밀림 없음, formal/photo_match.tla InvNewNeverShifts). 같은 핀에 파일이
+     *  둘 이상이면 duplicates 로 분리하고 자동 선택하지 않는다(사용자 선택, 결정①).
+     *  @returns {{matched:Array<{pin,no,row}>, duplicates:Array<{pin,no,rows}>, pinsWithoutFile:Array<{pin,no,prefix}>,
+     *    filesNoPin:Array, filesOutOfRange:Array}} */
+    matchByNumber(pinEntries, range, rows) {
+      const entries = (pinEntries || []).filter((e) => e && e.pin);
+      const inRange = entries.filter((e) => e.no >= range.start && e.no <= range.end);
+      const existingNumbers = new Set(entries.map((e) => e.no));
+      const pk = (s) => (typeof PinSeries !== "undefined" && PinSeries.prefixKey) ? PinSeries.prefixKey(s) : String(s == null ? "" : s).replace(/[-_]$/, "").toUpperCase();
+      const byNo = new Map();
+      entries.forEach((e) => { if (!byNo.has(e.no)) byNo.set(e.no, []); byNo.get(e.no).push(e); });
+
+      const activeRows = (rows || []).filter((r) => r && !r.excluded);
+      const pinRows = new Map();   // pinId -> row[]
+      const filesNoPin = [];
+      const filesOutOfRange = [];
+
+      activeRows.forEach((row) => {
+        const parsed = this.parseName(row.name);
+        if (!parsed.hasDigits) { filesNoPin.push(row); return; }
+        const cands = entries.filter((e) => {
+          if (!this.isMatch(e.no, row.name, existingNumbers)) return false;
+          const peers = byNo.get(e.no) || [];
+          return peers.length < 2 || pk(parsed.prefix) === pk(e.prefix);  // 번호가 두 접두 계열에 걸치면 접두 일치만
+        });
+        if (!cands.length) { filesNoPin.push(row); return; }
+        const inRangeCands = cands.filter((e) => e.no >= range.start && e.no <= range.end);
+        if (!inRangeCands.length) { filesOutOfRange.push(row); return; }
+        inRangeCands.forEach((e) => { const k = e.pin.id; if (!pinRows.has(k)) pinRows.set(k, []); pinRows.get(k).push(row); });
+      });
+
+      const matched = [], duplicates = [], pinsWithoutFile = [];
+      inRange.forEach((e) => {
+        const rs = pinRows.get(e.pin.id) || [];
+        if (rs.length === 1) matched.push({ pin: e.pin, no: e.no, row: rs[0] });
+        else if (rs.length === 0) pinsWithoutFile.push(e);
+        else duplicates.push({ pin: e.pin, no: e.no, rows: rs });
+      });
+      return { matched, duplicates, pinsWithoutFile, filesNoPin, filesOutOfRange };
+    },
+
+    /** 모드 자동 선택(결정③) — 파일명에 숫자가 없는 파일이 절반 이상이면 "time", 아니면 "number". */
+    pickDefaultMode(rows) {
+      const list = (rows || []).filter((r) => r && !r.excluded);
+      if (!list.length) return "number";
+      const noDigits = list.filter((r) => !this.parseName(r.name).hasDigits).length;
+      return (noDigits / list.length) >= 0.5 ? "time" : "number";
+    },
+
+    /** 경고 문구(결정②) — "파일 없는 핀 N개(목록)" / "핀 없는 파일 N개(목록)" / "범위 밖 파일 N개" / "중복 핀 N개". */
+    warnText(result) {
+      const parts = [];
+      if (result.pinsWithoutFile.length) parts.push("파일 없는 핀 " + result.pinsWithoutFile.length + "개(" + result.pinsWithoutFile.map((e) => e.no).join(",") + ")");
+      if (result.filesNoPin.length) parts.push("핀 없는 파일 " + result.filesNoPin.length + "개(" + result.filesNoPin.map((r) => r.name).join(", ") + ")");
+      if (result.filesOutOfRange.length) parts.push("범위 밖 파일 " + result.filesOutOfRange.length + "개(" + result.filesOutOfRange.map((r) => r.name).join(", ") + ")");
+      if (result.duplicates.length) parts.push("중복 핀 " + result.duplicates.length + "개 — 선택 필요(" + result.duplicates.map((d) => d.no).join(",") + ")");
+      return parts.join(" · ");
     }
   };
 
@@ -331,7 +468,7 @@
         if (typeof PinLink !== "undefined" && PinLink.isMember && PinLink.isMember(p)) return;   // [WO 20261016-multisheet P4] 사진은 대표에만 — 연결 멤버는 일괄 대상 아님
         const info = map.get(p.id);
         if (!info || (ser !== "all" && info.series !== ser)) return;
-        list.push({ pin: p, no: info.no });
+        list.push({ pin: p, no: info.no, prefix: info.prefix || "" });  // [WO 20261106-photomatch] prefix 추가 — PhotoMatch.matchByNumber 가 접두 키로 쓴다(표시용 formatNo 아님)
       });
       list.sort((a, b) => a.no - b.no);
       return list;
@@ -493,11 +630,17 @@
           else if (b.dataset.act === "down") this._moveRow(idx, 1);
         });
         tbody.addEventListener("change", (e) => {
-          const b = e.target.closest && e.target.closest('[data-act="excl"]');
-          if (!b) return;
-          this._toggleExclude(parseInt(b.dataset.idx, 10));
+          const excl = e.target.closest && e.target.closest('[data-act="excl"]');
+          if (excl) { this._toggleExclude(parseInt(excl.dataset.idx, 10)); return; }
+          // [WO 20261106-photomatch 결정④a] 행별 "교체" 체크 — 기존 사진 있는 행만 노출(렌더 쪽에서 보장).
+          const rep = e.target.closest && e.target.closest('[data-act="replace"]');
+          if (rep) { const r = this._rows[parseInt(rep.dataset.idx, 10)]; if (r) r.replace = !!rep.checked; return; }
+          // [WO 20261106-photomatch 결정①] 중복 핀의 후보 파일 중 하나를 사용자가 직접 선택.
+          const dup = e.target.closest && e.target.closest('[data-act="dup"]');
+          if (dup) { const r = this._rows[parseInt(dup.dataset.idx, 10)]; if (r) this._chooseDup(dup.dataset.pin, r); }
         });
       }
+      this._ensureBatchExtras();
     },
 
     /* [WO 20260918] 🔴 series 하드코딩 제거 — 단독 진입(#btn-photobatch)이 "콘텐츠 계열"로
@@ -523,6 +666,8 @@
       this._range = (range && Number.isFinite(range.start) && Number.isFinite(range.end))
         ? { start: range.start, end: range.end, series: range.series || "all" }
         : this._defaultRange();
+      this._dupChoice = new Map();       // [WO 20261106-photomatch] 중복 핀 사용자 선택 — 열 때마다 초기화
+      this._modeUserSet = false;         // 사용자가 모드 토글을 직접 누르기 전까지는 자동결정(결정③) 유지
       const modal = document.getElementById("photobatch-modal");
       if (!modal) return;
       modal.classList.remove("hidden");
@@ -566,6 +711,9 @@
         rows.push({ file: f, name: f.name, lastModified: f.lastModified, exif, excluded: false, is360: null, w: 0, h: 0, thetaSignal: (exif ? this._isThetaSignal(exif.make, exif.model) : false) || this._isThetaFilename(f.name) });
       }
       this._rows = this._sortRows(rows);
+      // [WO 20261106-photomatch 결정③] 사용자가 토글을 직접 누르지 않았으면, 파일명 숫자 비율로
+      // 모드를 자동 결정한다(번호 없는 파일 ≥50% → 촬영시각 순, 그 외 → 번호 대응).
+      if (!this._modeUserSet) this._range.mode = PhotoMatch.pickDefaultMode(this._rows);
       if (status) status.textContent = imgFiles.length + "장 · 시간순 정렬 완료";
       this._renderTable();
       // 360 판별(비동기, App._detect360 재사용) — 완료되는 대로 표를 다시 그려 채운다
@@ -589,31 +737,293 @@
       this._renderTable();
     },
 
+    /** 현재 모드("number"="번호 대응" / "time"="촬영시각 순", 결정③) — 미지정 시 기존 동작(time) 불변. */
+    _mode() { return this._range.mode || "time"; },
+
+    /** [WO 20261106-photomatch] 현재 모드의 매칭 결과를 한 형태로 통일({mode,pinList,matched,…}).
+     *  number 모드는 duplicates 중 사용자가 선택한 것(this._dupChoice: pinId→row)만 matched 로 승격한다
+     *  (결정①: 자동 선택 금지). time 모드는 종전 _buildMatches 그대로(회귀 0). */
+    _currentMatch() {
+      const page = State.pdfPage || 1;
+      const pinList = this._pinList(State.pins, page, this._range.series);
+      if (this._mode() === "number") {
+        const raw = PhotoMatch.matchByNumber(pinList, this._range, this._rows);
+        if (!this._dupChoice) this._dupChoice = new Map();
+        const matched = raw.matched.slice();
+        const duplicates = [];
+        raw.duplicates.forEach((d) => {
+          const chosen = this._dupChoice.get(d.pin.id);
+          if (chosen && d.rows.indexOf(chosen) !== -1) matched.push({ pin: d.pin, no: d.no, row: chosen });
+          else duplicates.push(d);
+        });
+        return { mode: "number", pinList, matched, duplicates, pinsWithoutFile: raw.pinsWithoutFile, filesNoPin: raw.filesNoPin, filesOutOfRange: raw.filesOutOfRange };
+      }
+      const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
+      return { mode: "time", pinList, matched: matches, leftoverPins, leftoverRows };
+    },
+
+    _chooseDup(pinId, row) {
+      if (!this._dupChoice) this._dupChoice = new Map();
+      this._dupChoice.set(pinId, row);
+      this._renderTable();
+    },
+
+    /** "모두 교체"/"모두 건너뜀"(결정④a) — 현재 매칭된 행 중 기존 사진 있는 것만 일괄 설정. */
+    _setAllReplace(flag) {
+      const cm = this._currentMatch();
+      cm.matched.forEach((m) => { if (PinSeries.mediaOf(m.pin)) m.row.replace = !!flag; });
+      this._renderTable();
+    },
+
+    _setMode(val) {
+      this._modeUserSet = true;
+      this._range.mode = val;
+      this._renderTable();
+    },
+
+    /** [WO 20261106-photomatch] 모드 토글 + 교체 일괄버튼 + 해제 버튼 — index.html 비점유(다른 팀
+     *  점유 파일) 원칙 유지(기존 _ensureTimeMatchModal·_ensureConfirmModal 관례와 동일, DOM 은
+     *  JS 가 생성). 기존 정적 마크업(photobatch-modal)의 .pb-range-row 바로 뒤에 1회만 끼워 넣는다. */
+    _ensureBatchExtras() {
+      if (document.getElementById("photobatch-mode-row")) return;
+      const rangeRow = document.querySelector("#photobatch-modal .pb-range-row");
+      if (!rangeRow || !rangeRow.parentNode) return;
+      const modeRow = document.createElement("div");
+      modeRow.id = "photobatch-mode-row";
+      modeRow.setAttribute("style", "display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:6px 0;font-size:13px;");
+      const mkRadio = (id, label, val) => {
+        const lab = document.createElement("label"); lab.setAttribute("style", "display:flex;align-items:center;gap:4px;cursor:pointer;");
+        const inp = document.createElement("input"); inp.type = "radio"; inp.name = "pb-match-mode"; inp.id = id; inp.value = val;
+        inp.addEventListener("change", () => { if (inp.checked) this._setMode(val); });
+        lab.appendChild(inp); lab.appendChild(document.createTextNode(label));
+        return lab;
+      };
+      modeRow.appendChild(mkRadio("photobatch-mode-number", "번호 대응", "number"));
+      modeRow.appendChild(mkRadio("photobatch-mode-time", "촬영시각 순", "time"));
+
+      const bulkBtns = document.createElement("div");
+      bulkBtns.setAttribute("style", "display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;");
+      const mkBtn = (id, text, fn) => {
+        const b = document.createElement("button"); b.type = "button"; b.id = id; b.textContent = text; b.className = "admin-gate-btn ghost";
+        b.addEventListener("click", fn);
+        bulkBtns.appendChild(b);
+        return b;
+      };
+      mkBtn("btn-photobatch-replace-all", "기존 있는 행 모두 교체", () => this._setAllReplace(true));
+      mkBtn("btn-photobatch-replace-none", "모두 건너뜀", () => this._setAllReplace(false));
+      modeRow.appendChild(bulkBtns);
+      rangeRow.parentNode.insertBefore(modeRow, rangeRow.nextSibling);
+
+      const unlinkRow = document.createElement("div");
+      unlinkRow.setAttribute("style", "margin:2px 0 8px;");
+      const unlinkBtn = document.createElement("button");
+      unlinkBtn.type = "button"; unlinkBtn.id = "btn-photobatch-unlink"; unlinkBtn.textContent = "선택한 핀의 기존 사진 일괄 해제";
+      unlinkBtn.className = "admin-gate-btn ghost";
+      unlinkBtn.addEventListener("click", () => this.openUnlink());
+      unlinkRow.appendChild(unlinkBtn);
+      modeRow.parentNode.insertBefore(unlinkRow, modeRow.nextSibling);
+    },
+
+    _syncModeUI() {
+      const mode = this._mode();
+      const numEl = document.getElementById("photobatch-mode-number");
+      const timeEl = document.getElementById("photobatch-mode-time");
+      if (numEl) numEl.checked = mode === "number";
+      if (timeEl) timeEl.checked = mode === "time";
+    },
+
+    /* ══ [WO 20261106-photomatch 결정④b④c] 기존 사진 일괄 해제 — 링크만 끊는다(pano_images·R2 호출 0) ══
+       마스터: "기존 등록된 사진 일괄 삭제나 교체가 쉽게" → 파괴적 "삭제" 대신 "해제"(pin.imageId 등
+       링크만 null)만 제공한다. 해제 직전 상태는 PhotoNaming.pushHistory(기존 SoT — §10, 새 저장소
+       0개)로 pin.timeline 에 적립하고, [되돌리기]는 PhotoNaming.restoreLast(위에서 추가한 작은 복원
+       함수, 14_TimeLapse.revertCurrent 와 동일 효과)로 그 항목을 꺼내 되돌린다. 🔴 서버 변경 불필요
+       — 이 작업은 클라이언트 필드만 바꾸고 기존 "저장"(자동저장 OFF 정책, App._markDirty) 플로우로
+       서버에 반영된다. PinPurge(서버 tombstone·batch·undo_until)와는 다른, 더 가벼운 패턴이다 —
+       해제는 삭제가 아니라 "핀에서 떼어냄"이라 서버 삭제 API 가 필요 없다(§10 사다리: 기존 것으로 충분). */
+
+    /** 핀 1개 해제 — 사진이 없으면 아무것도 하지 않는다(조용한 실패 아님: 호출부가 mediaOf()로
+     *  걸러 보내므로 정상 경로에선 항상 미디어가 있다). @returns {string|null} 복원용 timeline entry id. */
+    _unlinkPin(pin, source) {
+      if (!pin) return null;
+      const hadMedia = pin.imageId || pin.imageUrl || pin.pendingOpId;
+      if (!hadMedia) return null;
+      if (typeof PhotoNaming === "undefined" || !PhotoNaming.pushHistory) return null;
+      PhotoNaming.pushHistory(pin, source || "일괄해제");
+      const entry = pin.timeline && pin.timeline[pin.timeline.length - 1];
+      const entryId = entry ? entry.id : null;
+      // pushHistory 기본 필드엔 imageName/is360 이 없다(TimeLapse 용도만 고려돼 설계됨) — 해제→복원이
+      // pin.imageName/pin.is360 까지 완전히 되돌리려면 이 항목에만 보강해 둔다(다른 pushHistory 호출부는
+      // 영향 없음 — 이 항목에 필드를 더 얹는 것뿐).
+      if (entry) { entry.imageName = pin.imageName || null; entry.is360 = !!pin.is360; }
+      pin.imageId = null; pin.imageUrl = null; pin.pendingOpId = null; pin.pendingSync = false;
+      pin.imageName = null; pin.origName = null; pin.shotAt = null; pin.shotSrc = null; pin.is360 = false; pin.origKey = null;
+      return entryId;
+    },
+
+    /** 진입점(모달 버튼 [선택한 핀의 기존 사진 일괄 해제]) — 현재 범위·계열의 "사진 있는 핀"만 후보. */
+    openUnlink() {
+      if (typeof Auth !== "undefined" && Auth.requireDesigner && !Auth.isDesigner) { Auth.requireDesigner(() => {}); return; }
+      const page = State.pdfPage || 1;
+      const pinList = this._pinList(State.pins, page, this._range.series)
+        .filter((e) => e.no >= this._range.start && e.no <= this._range.end)
+        .filter((e) => PinSeries.mediaOf(e.pin));
+      this._unlinkCandidates = pinList;
+      if (!pinList.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("이 범위에는 기존 사진이 있는 핀이 없습니다"); return; }
+      this._ensureUnlinkModal();
+      this._renderUnlinkPreview();
+      const modal = document.getElementById("photobatch-unlink-modal");
+      if (modal) modal.classList.remove("hidden");
+    },
+
+    /** [설계메모] index.html 비점유 원칙 — _ensureTimeMatchModal·_ensureConfirmModal(60_PhotoFolder)과
+     *  동일 관례로 JS가 모달을 생성한다. */
+    _ensureUnlinkModal() {
+      if (document.getElementById("photobatch-unlink-modal")) return;
+      const modal = document.createElement("div");
+      modal.id = "photobatch-unlink-modal";
+      modal.className = "admin-gate-backdrop hidden";
+      modal.setAttribute("style", "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;");
+      modal.addEventListener("click", (e) => { if (e.target === modal) this._closeUnlinkModal(); });
+      const panel = document.createElement("div");
+      panel.setAttribute("style", "background:#fff;color:#111;max-width:560px;width:92vw;max-height:80vh;overflow:auto;border-radius:12px;padding:16px;");
+      panel.innerHTML = '<h3 style="margin:0 0 8px;font-size:16px;">기존 사진 일괄 해제</h3>'
+        + '<div style="font-size:12px;color:#555;margin-bottom:6px;">사진 데이터는 지우지 않습니다 — 핀에서 링크만 끊고, 바로 되돌릴 수 있습니다.</div>';
+      const list = document.createElement("div");
+      list.id = "photobatch-unlink-list";
+      list.setAttribute("style", "font-size:13px;margin:8px 0;");
+      const btnBar = document.createElement("div");
+      btnBar.setAttribute("style", "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;");
+      const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.id = "photobatch-unlink-cancel"; cancelBtn.textContent = "취소";
+      const confirmBtn = document.createElement("button"); confirmBtn.type = "button"; confirmBtn.id = "photobatch-unlink-confirm"; confirmBtn.textContent = "선택한 핀 해제";
+      btnBar.appendChild(cancelBtn); btnBar.appendChild(confirmBtn);
+      panel.appendChild(list); panel.appendChild(btnBar);
+      modal.appendChild(panel);
+      document.body.appendChild(modal);
+      cancelBtn.addEventListener("click", () => this._closeUnlinkModal());
+      confirmBtn.addEventListener("click", () => this._confirmUnlink());
+    },
+
+    /** 미리보기 표(결정④b) — 핀 번호·현재 사진 이름·해제 후 상태. 기본 전체 체크(사용자가 해제). */
+    _renderUnlinkPreview() {
+      const host = document.getElementById("photobatch-unlink-list");
+      if (!host) return;
+      const esc = (s) => this._esc(s);
+      let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+        + '<th></th><th style="text-align:left;">핀</th><th style="text-align:left;">현재 사진</th><th style="text-align:left;">해제 후</th>'
+        + '</tr></thead><tbody>';
+      (this._unlinkCandidates || []).forEach((e, i) => {
+        const cur = e.pin.origName || e.pin.imageName || "(사진)";
+        html += '<tr><td><input type="checkbox" data-unlink-idx="' + i + '" checked /></td>'
+          + '<td>#' + esc(e.no) + '</td><td>' + esc(cur) + '</td><td>사진 없음</td></tr>';
+      });
+      html += '</tbody></table>';
+      host.innerHTML = html || "해제할 핀이 없습니다";
+    },
+
+    /** 확인 → 실제 해제(결정⑤ 실행은 명시 확인 후에만). */
+    async _confirmUnlink() {
+      const host = document.getElementById("photobatch-unlink-list");
+      const checked = host ? Array.from(host.querySelectorAll("[data-unlink-idx]")).filter((c) => c.checked).map((c) => parseInt(c.dataset.unlinkIdx, 10)) : [];
+      const targets = checked.map((i) => (this._unlinkCandidates || [])[i]).filter(Boolean);
+      if (!targets.length) { this._closeUnlinkModal(); return; }
+      if (typeof Prompt !== "undefined" && Prompt.confirm) {
+        if (!await Prompt.confirm("기존 사진 일괄 해제", "핀 " + targets.length + "개의 사진 링크를 해제합니다(사진 데이터는 보존 — 바로 되돌릴 수 있습니다).")) return;
+      }
+      const batch = [];
+      targets.forEach((e) => {
+        const entryId = this._unlinkPin(e.pin, "일괄해제");
+        if (entryId) batch.push({ pinId: e.pin.id, entryId });
+      });
+      this._lastUnlinkBatch = batch;
+      this._closeUnlinkModal();
+      try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+      if (batch.length) this._markUnsaved();
+      this._renderTable();
+      this._showUnlinkResultBar(batch.length);
+    },
+
+    _closeUnlinkModal() {
+      const modal = document.getElementById("photobatch-unlink-modal");
+      if (modal) modal.classList.add("hidden");
+    },
+
+    /** 결과 바 + [되돌리기](결정④c "해제 직후 되돌리기") — PinPurge._showBar 와 같은 인라인 색(이미
+     *  재측정된 쌍 재사용, §G-4⑤): #111827 위 #ffffff 17.7:1 · [되돌리기] #fde68a 위 #111827 14.2:1. */
+    _showUnlinkResultBar(n) {
+      this._hideUnlinkBar();
+      const bar = document.createElement("div");
+      bar.id = "photobatch-unlink-bar";
+      bar.setAttribute("style", "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:10050;background:#111827;color:#ffffff;border-radius:10px;padding:10px 12px;font-size:14px;display:flex;gap:8px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.35);");
+      const msg = document.createElement("span"); msg.textContent = "핀 " + n + "개 사진 링크 해제됨(미저장)"; msg.style.color = "#ffffff";
+      const undoBtn = document.createElement("button");
+      undoBtn.type = "button"; undoBtn.textContent = "되돌리기";
+      undoBtn.setAttribute("style", "background:#fde68a;color:#111827;border:0;border-radius:8px;padding:6px 12px;font-size:14px;font-weight:700;cursor:pointer;");
+      undoBtn.addEventListener("click", () => this._undoLastUnlink());
+      bar.appendChild(msg); bar.appendChild(undoBtn);
+      document.body.appendChild(bar);
+      this._unlinkBar = bar;
+    },
+    _hideUnlinkBar() { if (this._unlinkBar && this._unlinkBar.parentNode) this._unlinkBar.parentNode.removeChild(this._unlinkBar); this._unlinkBar = null; },
+
+    /** [결정④c] 되돌리기 — PhotoNaming.restoreLast 로 이 배치가 적립한 timeline 항목을 그대로 복원.
+     *  🔴 이미지 데이터 삭제 호출이 전혀 없다(복원 성공 여부만 pin.timeline 에서 판정). */
+    _undoLastUnlink() {
+      const batch = this._lastUnlinkBatch || [];
+      let restored = 0;
+      batch.forEach((b) => {
+        const pin = (State.pins || []).find((p) => p && String(p.id) === String(b.pinId));
+        if (pin && PhotoNaming.restoreLast(pin, b.entryId)) restored++;
+      });
+      this._lastUnlinkBatch = [];
+      this._hideUnlinkBar();
+      try { UI.renderPinList(); UI.renderPinsOnMap(); if (typeof PinGrid !== "undefined") PinGrid.render(); } catch (e) {}
+      if (restored) this._markUnsaved();
+      this._renderTable();
+      if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("핀 " + restored + "개 사진을 복원했습니다");
+    },
+
     _renderTable() {
       const host = document.getElementById("photobatch-table-body");
       if (!host) return;
-      const page = State.pdfPage || 1;
-      const pinList = this._pinList(State.pins, page, this._range.series);
-      const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
+      this._syncModeUI();
+      const cm = this._currentMatch();
       const matchByRow = new Map();
-      matches.forEach((m) => matchByRow.set(m.row, m));
+      cm.matched.forEach((m) => matchByRow.set(m.row, m));
+      const dupByRow = new Map();     // row -> {pinId, no}
+      (cm.duplicates || []).forEach((d) => d.rows.forEach((row) => dupByRow.set(row, { pinId: d.pin.id, no: d.no })));
+      const noPinSet = new Set(cm.filesNoPin || []);
+      const outRangeSet = new Set(cm.filesOutOfRange || []);
 
       let html = "";
       this._rows.forEach((r, idx) => {
         const m = matchByRow.get(r);
-        const pinNo = m ? m.no : (r.excluded ? "제외" : "범위 밖");
+        const dup = dupByRow.get(r);
+        let pinNo;
+        if (m) pinNo = m.no;
+        else if (r.excluded) pinNo = "제외";
+        else if (dup) pinNo = "중복#" + dup.no;
+        else if (outRangeSet.has(r)) pinNo = "범위 밖";
+        else if (noPinSet.has(r)) pinNo = "핀 없음";
+        else pinNo = "범위 밖";
         const hasExisting = m ? PinSeries.mediaOf(m.pin) : false;   // [WO 20261010-offmatrix] 덮어쓸 "사진"이 있는가 — _uploadOneRow 와 같은 판정
         if (r.bigGapBefore) {
           html += '<tr class="pb-gap-row"><td colspan="7">⏱ 간격 ' + Math.round(r.gapMs / 60000) + '분 — 구역 경계 추정</td></tr>';
         }
-        html += '<tr class="pb-row' + (r.excluded ? " pb-excluded" : "") + '" data-idx="' + idx + '">'
+        const existCell = hasExisting
+          ? '<label class="pb-replace"><input type="checkbox" data-act="replace" data-idx="' + idx + '"' + (r.replace ? " checked" : "") + ' /> 교체</label>'
+          : "-";
+        const dupCell = dup
+          ? '<label class="pb-dup-pick"><input type="radio" name="pb-dup-' + this._esc(dup.pinId) + '" data-act="dup" data-pin="' + this._esc(dup.pinId) + '" data-idx="' + idx + '" /> 이 파일로 선택</label>'
+          : "";
+        html += '<tr class="pb-row' + (r.excluded ? " pb-excluded" : "") + (dup ? " pb-dup" : "") + '" data-idx="' + idx + '">'
           + '<td class="pb-c-no">' + this._esc(pinNo) + '</td>'
           + '<td class="pb-c-file" title="' + this._esc(r.name) + '">' + this._esc(r.name) + '</td>'
           + '<td class="pb-c-time">' + this._esc(r.timeLabel || "-") + '</td>'
           + '<td class="pb-c-src">' + this._esc(r.timeSource || "-") + '</td>'
           + '<td class="pb-c-360">' + (r.is360 === true ? "360°" : (r.is360 === false ? "일반" : "…")) + '</td>'
-          + '<td class="pb-c-exist">' + (hasExisting ? "기존있음" : "-") + '</td>'
+          + '<td class="pb-c-exist">' + existCell + '</td>'
           + '<td class="pb-c-act">'
+            + dupCell
             + '<button type="button" class="pb-mini" data-act="up" data-idx="' + idx + '" title="위로" aria-label="위로">↑</button>'
             + '<button type="button" class="pb-mini" data-act="down" data-idx="' + idx + '" title="아래로" aria-label="아래로">↓</button>'
             + '<label class="pb-excl"><input type="checkbox" data-act="excl" data-idx="' + idx + '"' + (r.excluded ? " checked" : "") + ' /> 제외</label>'
@@ -625,14 +1035,19 @@
 
       const warnEl = document.getElementById("photobatch-warn");
       if (warnEl) {
-        if (leftoverPins.length || leftoverRows.length) {
-          warnEl.classList.remove("hidden");
-          warnEl.textContent = "⚠ 개수 불일치 — " + (leftoverPins.length ? "핀 " + leftoverPins.length + "개 남음 " : "") + (leftoverRows.length ? "사진 " + leftoverRows.length + "장 남음" : "");
-        } else { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
+        let txt = "";
+        if (cm.mode === "number") {
+          txt = PhotoMatch.warnText(cm);
+        } else if (cm.leftoverPins.length || cm.leftoverRows.length) {
+          txt = "개수 불일치 — " + (cm.leftoverPins.length ? "핀 " + cm.leftoverPins.length + "개 남음 " : "") + (cm.leftoverRows.length ? "사진 " + cm.leftoverRows.length + "장 남음" : "");
+        }
+        if (txt) { warnEl.classList.remove("hidden"); warnEl.textContent = "⚠ " + txt; }
+        else { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
       }
       const cntEl = document.getElementById("photobatch-count");
       if (cntEl) {
-        cntEl.textContent = matches.length + "건 매칭 예정 · [" + this._seriesText(this._range.series) + "] 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + pinList.length + "개)";
+        const modeTxt = cm.mode === "number" ? "번호 대응" : "촬영시각 순";
+        cntEl.textContent = cm.matched.length + "건 매칭 예정 · [" + modeTxt + "·" + this._seriesText(this._range.series) + "] 핀 범위 " + this._range.start + "~" + this._range.end + " (전체 " + cm.pinList.length + "개)";
       }
     },
 
@@ -699,19 +1114,22 @@
      *  🔴 자동저장 OFF 정책 — 완료 후 App._markDirty() 로 "미저장" 표시만 한다. */
     async run() {
       if (this._busy) return;
-      const page = State.pdfPage || 1;
-      const pinList = this._pinList(State.pins, page, this._range.series);
-      const { matches, leftoverPins, leftoverRows } = this._buildMatches(pinList, this._rows, this._range);
+      const cm = this._currentMatch();
+      const matches = cm.matched;
       if (!matches.length) { if (typeof Prompt !== "undefined" && Prompt.toast) Prompt.toast("매칭할 핀·사진이 없습니다"); return; }
-      if (leftoverPins.length || leftoverRows.length) {
-        const msg = (leftoverPins.length ? leftoverPins.length + "개 핀 남음 " : "") + (leftoverRows.length ? leftoverRows.length + "장 사진 남음" : "");
-        if (!await Prompt.confirm("사진 일괄 매칭", "개수가 일치하지 않습니다 — " + msg + ". " + matches.length + "건만 매칭해 진행할까요?")) return;
+      // [WO 20261106-photomatch 결정⑤] 자동 실행 금지 — 사용자가 [일괄 등록 실행]을 눌러야만 여기 도달한다(불변).
+      //   불일치·보류 건은 숨기지 않고 실행 직전 확인창에 사실만 보여준다(조용한 실패 금지).
+      let warnMsg = "";
+      if (cm.mode === "number") warnMsg = PhotoMatch.warnText(cm);
+      else if (cm.leftoverPins.length || cm.leftoverRows.length) warnMsg = "개수 불일치 — " + (cm.leftoverPins.length ? "핀 " + cm.leftoverPins.length + "개 남음 " : "") + (cm.leftoverRows.length ? "사진 " + cm.leftoverRows.length + "장 남음" : "");
+      if (warnMsg) {
+        if (!await Prompt.confirm("사진 일괄 매칭", warnMsg + ". " + matches.length + "건만 매칭해 진행할까요?")) return;
       }
       this._busy = true;
       const runBtn = document.getElementById("btn-photobatch-run");
       if (runBtn) runBtn.disabled = true;
       const overwriteEl = document.getElementById("photobatch-overwrite");
-      const overwrite = !!(overwriteEl && overwriteEl.checked);
+      const globalOverwrite = !!(overwriteEl && overwriteEl.checked);   // [하위호환] 기존 전역 체크박스 — 여전히 전체 교체로 동작
 
       let done = 0, fail = 0, skip = 0;
       const queue = matches.slice();
@@ -720,8 +1138,10 @@
         while (queue.length) {
           const m = queue.shift();
           const { pin, row } = m;
+          // [WO 20261106-photomatch 결정④a] 전역 체크박스 OR 그 행의 "교체" 체크(기본 해제=건너뜀).
+          const rowOverwrite = globalOverwrite || !!row.replace;
           this._setRowStatus(row, "업로드 중...");
-          const r = await this._uploadOneRow(pin, row, overwrite, usedNames, "일괄등록");
+          const r = await this._uploadOneRow(pin, row, rowOverwrite, usedNames, "일괄등록");
           if (r.status === "skip") { skip++; this._setRowStatus(row, "건너뜀(기존사진)"); }
           else if (r.status === "fail") { fail++; this._setRowStatus(row, "실패: " + r.reason); }
           else { done++; this._setRowStatus(row, r.offline ? "오프라인 저장됨" : "완료"); }
