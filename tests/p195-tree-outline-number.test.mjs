@@ -76,8 +76,10 @@ function randomDecks(rng, n) {
       created_at: Math.floor(rng() * 1000)
     };
   });
-  // 2-사이클 1쌍 강제 주입(n>=4) — groupDecksByParent 가 양쪽 다 roots/childrenOf 에서 빠뜨려
-  // 고립시키는지(=렌더되지 않음, 번호도 없음) 확인하는 음성 케이스.
+  // [WO 20261113-treefolder] 2-사이클 1쌍 강제 주입(n>=4) — 전에는 groupDecksByParent 가 양쪽 다
+  // roots/childrenOf 에서 빠뜨려 고립시켰다(=렌더되지 않음). 이제는 마스터 I 지시로 둘 다 cycles
+  // 에 담겨 강제 root 로 승격된다(숨김 0) — checkOutlineInvariants 의 isValidChild 가 cycles 를
+  // 봐서 "더는 자식이 아님"을 반영하므로 이 주입은 여전히 그 분기를 건드리는 유효한 케이스다.
   if (n >= 4 && rng() < 0.4) {
     decks[2].parent_id = decks[3].id;
     decks[3].parent_id = decks[2].id;
@@ -86,7 +88,10 @@ function randomDecks(rng, n) {
 }
 
 function checkOutlineInvariants(decks, map, label) {
-  const { roots, childrenOf } = UI.groupDecksByParent(decks);
+  // [WO 20261113-treefolder] cycles 도 함께 받는다 — groupDecksByParent 가 이제 순환 구성원을
+  // 강제로 roots 로 승격한다(마스터 I: 숨기지 않고 표시). 아래 isValidChild 가 이 Set 으로
+  // "원래 parent_id 는 유효해 보이지만 실제로는 더 이상 그 부모의 자식이 아님"을 구분한다.
+  const { roots, childrenOf, cycles } = UI.groupDecksByParent(decks);
   // (i) 형제 번호 유일·1..n 연속 — 루트 그룹 + 각 부모 그룹.
   const checkGroup = (list, where) => {
     const nos = list.map((d) => { const e = map.get(String(d.id)); return e && !e.cycle ? e.no.split(".").pop() : null; }).filter((x) => x != null).map(Number);
@@ -123,10 +128,12 @@ function checkOutlineInvariants(decks, map, label) {
 
   // (ii) 자식 번호 = 부모 번호 + "." + 순번 — groupDecksByParent 와 같은 유효성 규칙으로만 "자식"
   //   판정(자기참조·없는 부모는 최상위로 승격되므로 부모-자식 관계가 아니다, 11_UI.js:639-642 그대로).
+  //   [WO 20261113-treefolder] 🔴 순환 구성원(cycles)도 raw parent_id 는 유효해 보이지만
+  //   groupDecksByParent 가 그 부모-자식 edge 를 끊어 강제 root 로 승격했다 — 더는 "자식"이 아니다.
   const byId = new Map(decks.map((d) => [String(d.id), d]));
   const isValidChild = (d) => {
     const pid = d.parent_id != null ? String(d.parent_id) : "";
-    return !!(pid && pid !== String(d.id) && byId.has(pid));
+    return !!(pid && pid !== String(d.id) && byId.has(pid)) && !cycles.has(String(d.id));
   };
   let prefixOk = true;
   decks.forEach((d) => {
@@ -162,7 +169,10 @@ function checkOutlineInvariants(decks, map, label) {
   ok(crashed === 0, "무작위 트리 300개(순환·고아 포함) 중 예외(=무한 재귀/크래시) 0건");
 }
 
-// 고립된 2-사이클 자체는 번호가 없다(렌더되지 않음 — groupDecksByParent 규약, 서버 수정은 범위 밖).
+// [WO 20261113-treefolder] 🔴 규약 변경(전·후 대조) — 전: "고립 2-사이클(a↔b)은 어느 루트에서도
+// 도달 불가라 번호 미할당(화면에서 사라짐)". 마스터 I 지시("순환 노드는 숨기지 말고 최상위에 배지와
+// 함께 표시")로 groupDecksByParent 가 이제 a·b 를 cycles 에 담아 강제로 roots 로 승격한다 — 둘 다
+// 번호를 받고(숨김 0), cycles 집합으로 "원래 서로를 가리키던 순환 구성원"임이 구분된다.
 {
   const decks = [
     { id: "r", parent_id: null, sort_order: 1 },
@@ -170,8 +180,11 @@ function checkOutlineInvariants(decks, map, label) {
     { id: "b", parent_id: "a", sort_order: 1 }
   ];
   const map = UI.outlineNumbers(decks);
-  ok(map.get("r") && map.get("r").no === "1", "고립 2-사이클과 무관한 루트는 정상 번호(1)");
-  ok(!map.has("a") && !map.has("b"), "고립 2-사이클(a↔b) 자체는 어느 루트에서도 도달 불가 — 번호 미할당(숨김이 아니라 애초에 트리에 안 나타남, groupDecksByParent 기존 규약)");
+  const G = UI.groupDecksByParent(decks);
+  ok(map.get("r") && map.get("r").no === "1", "2-사이클과 무관한 루트는 정상 번호(1), 실제 " + JSON.stringify(map.get("r")));
+  ok(G.cycles.has("a") && G.cycles.has("b"), "A↔B 순환 구성원 둘 다 groupDecksByParent().cycles 에 표시된다(숨김 0, 마스터 I)");
+  ok(map.has("a") && map.has("b"), "순환 구성원도 강제 root 승격으로 번호를 받는다(화면에서 사라지지 않음) — 실제 " + JSON.stringify({ a: map.get("a"), b: map.get("b") }));
+  ok(G.roots.some((d) => d.id === "a") && G.roots.some((d) => d.id === "b"), "순환 구성원이 실제로 roots 배열에 포함된다(렌더 시 원본으로 전달되는 배열)");
 }
 
 // 빈 트리.

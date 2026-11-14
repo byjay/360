@@ -627,11 +627,18 @@
       return true;
     },
 
-    /** [WO 20260928-hub-tree] 🔴 공유 지점(SoT) — 구역/영역 분류 규칙은 여기 한 곳에만 둔다.
-     *  사이드바 트리(renderTree, 아래)와 허브 카드(12_ProjectHub.js)가 이 함수를 함께 쓴다.
-     *  parent_id 가 가리키는 부모가 없거나(삭제됨) 자기참조면 최상위로 승격(숨김 금지).
+    /** [WO 20260928-hub-tree→20261113-treefolder] 🔴 공유 지점(SoT) — 구역/영역 분류 규칙은 여기
+     *  한 곳에만 둔다. 사이드바 트리(renderTree, 아래)와 허브 카드(12_ProjectHub.js)가 이 함수를
+     *  함께 쓴다. parent_id 가 가리키는 부모가 없거나(삭제됨) 자기참조면 최상위로 승격(숨김 금지).
+     *  🔴 [WO 20261113-treefolder] 마스터 재지시("순환 노드는 숨기지 말고 최상위에 배지와 함께
+     *  표시") — 종전엔 A→B→A 같은 순환(둘 다 parentKey 가 유효해 보임)이 roots 에서도
+     *  childrenOf 에서도 빠져 화면에서 완전히 사라졌다(실사고, I 항목). 각 노드에서 parent 체인을
+     *  걸어 이미 그 체인 안에서 만난 노드를 다시 만나면, 그 반복 구간(순환 구성원)만 cycles 에
+     *  표시하고 그 구성원들은 서로의 자식 관계를 끊어 강제로 roots 로 승격한다(사라짐 대신 노출).
+     *  순환에 "들어가는" 꼬리 노드(예: C→A, A↔B 순환)는 순환 구성원이 아니라 그대로 A(승격된
+     *  root)의 자식으로 남는다 — 실제 데이터 유실·이동 없음, 표시 위치만 보정.
      *  @param {Array} decks
-     *  @returns {{roots: Array, childrenOf: Map<string, Array>}} */
+     *  @returns {{roots: Array, childrenOf: Map<string, Array>, cycles: Set<string>}} */
     groupDecksByParent(decks) {
       decks = decks || [];
       const byId = new Map();
@@ -640,25 +647,49 @@
         const pid = d.parent_id != null ? String(d.parent_id) : "";
         return (pid && pid !== String(d.id) && byId.has(pid)) ? pid : "";
       };
+      const cycles = new Set();
+      const resolved = new Set(); // 이미 체인을 끝까지 걸어 cycles 여부를 확정한 노드(재방문 생략)
+      decks.forEach((d0) => {
+        const id0 = String(d0.id);
+        if (resolved.has(id0)) return;
+        const chain = [];          // 이번 걷기에서 순서대로 지난 노드 id
+        const indexInChain = new Map();
+        let cur = d0;
+        while (cur) {
+          const id = String(cur.id);
+          if (resolved.has(id)) break;          // 이전 걷기에서 이미 확정됨(순환/비순환 모두)
+          if (indexInChain.has(id)) {            // 이번 체인 안에서 재방문 = 순환 발견
+            for (let i = indexInChain.get(id); i < chain.length; i++) cycles.add(chain[i]);
+            break;
+          }
+          indexInChain.set(id, chain.length);
+          chain.push(id);
+          const pid = parentKey(cur);
+          cur = pid ? byId.get(pid) : null;
+        }
+        chain.forEach((id) => resolved.add(id));
+      });
       const childrenOf = new Map();
       decks.forEach((d) => {
+        const id = String(d.id);
+        if (cycles.has(id)) return; // 순환 구성원은 누구의 자식으로도 등록하지 않는다(강제 root)
         const pid = parentKey(d);
         if (!pid) return;
         if (!childrenOf.has(pid)) childrenOf.set(pid, []);
         childrenOf.get(pid).push(d);
       });
-      const roots = decks.filter((d) => !parentKey(d));
-      return { roots, childrenOf };
+      const roots = decks.filter((d) => cycles.has(String(d.id)) || !parentKey(d));
+      return { roots, childrenOf, cycles };
     },
 
     /** [WO 20261106-outline] 🔴 공유 지점(SoT) — 트리 계층 번호(최상위 1,2,3… / 하위 1.1,1.2… /
      *  1.1.1…) 표시용(순수 계산, 저장 컬럼·서버 변경 0 — 매 renderTree() 마다 다시 계산돼 항상 최신).
      *  그룹핑 = groupDecksByParent(위, 고아 부모 승격 포함 — 새 그룹핑 금지), 형제 순서 =
      *  TreeDnD.compareSiblings(SoT, 64_TreeDnD.js — 새 정렬 금지, 트리가 실제로 그리는 순서와
-     *  항상 같다). 🔴 순환 방어 — parent_id 는 단일 필드라 루트에서 도달 가능한 순환은 수학적으로
-     *  발생할 수 없다(정상 데이터: groupDecksByParent 가 순환 구성원 전체를 roots 에서도
-     *  childrenOf 에서도 빠뜨려 고립시킨다). 아래 visited 가드는 중복 id·오염 데이터 등 비정상
-     *  입력에서도 무한 재귀 없이 "순환" 으로 표시(숨기지 않음)하는 방어 코드다.
+     *  항상 같다). 🔴 [WO 20261113-treefolder] groupDecksByParent 가 A↔B 순환 구성원을 이제 roots로
+     *  강제 승격하므로(더는 사라지지 않음) 번호가 정상적으로 매겨진다. 아래 visited 가드는 중복
+     *  id 등 비정상 입력에서도 무한 재귀 없이 "순환" 문자열로 표시(숨기지 않음)하는 2차 방어다
+     *  (groupDecksByParent.cycles 와는 별개 — 실제 순환 배지는 그 Set 을 쓴다, renderTree 참조).
      *  @returns {Map<string, {no:string, cycle:boolean}>} deck.id(string) → 표시 번호 */
     outlineNumbers(decks) {
       const map = new Map();
@@ -678,6 +709,32 @@
       };
       walk(roots, "");
       return map;
+    },
+
+    /** [WO 20261113-treefolder] 🔴 순수 함수(DOM 0) — renderTree()의 계층 조립만 뽑아 중첩 모델로
+     *  반환한다. formal/tree_render_complete.tla 의 상태(노드 집합·parent 관계·cycle 플래그)와
+     *  1:1 대응시켜 property test(p200)가 "모든 deck 이 정확히 한 번 나타난다"·"순환 노드는
+     *  cycle:true" 불변식을 이 모델로 검증한다. 그룹핑·번호·정렬은 모두 기존 SoT 재사용(새 로직 0).
+     *  @param {Array} decks
+     *  @returns {Array<{id:string,name:string,cycle:boolean,outlineNo:string|null,children:Array}>} */
+    buildTreeModel(decks) {
+      decks = decks || [];
+      const { roots, childrenOf, cycles } = this.groupDecksByParent(decks);
+      const outlineMap = this.outlineNumbers(decks);
+      const cmp = (typeof TreeDnD !== "undefined" && TreeDnD.compareSiblings)
+        ? (a, b) => TreeDnD.compareSiblings(a, b) : () => 0;
+      const build = (list) => (list || []).slice().sort(cmp).map((d) => {
+        const id = String(d.id);
+        const entry = outlineMap.get(id);
+        return {
+          id,
+          name: d.name || "(이름 없음)",
+          cycle: cycles.has(id),
+          outlineNo: entry ? entry.no : null,
+          children: build(childrenOf.get(id) || [])
+        };
+      });
+      return build(roots);
     },
 
     /** [WO 20261106-outline] 파일명 앞의 계층 번호(1.1, 01.02, 1.1.2 …) 파싱 — 하위 영역 도면
@@ -1670,7 +1727,7 @@
 
       /* ── 계층 인덱스 ── [WO 20260928-hub-tree] 공유 함수(groupDecksByParent, SoT)로 이관 ── */
       const curDeck = (typeof Projects !== "undefined" && Projects.currentDeck) || null;
-      const { roots: rootDecks, childrenOf: allChildrenOf } = this.groupDecksByParent(decks);
+      const { roots: rootDecks, childrenOf: allChildrenOf, cycles: cycleIds } = this.groupDecksByParent(decks);
       // [WO 20261001-projectinfo] docLabel 은 이 함수 위쪽(decks 선언 직후)으로 이동했다 — 중복 정의 제거.
       // [WO 20261106-outline] 🔴 마스터: "상위 그룹 1 2 3… 하위 1.1 1.2…" — 계층 번호는 매 렌더
       //   한 번만 계산(outlineNumbers, SoT 위) 해 deckNode 클로저가 참조한다(노드마다 재계산 금지).
@@ -1759,6 +1816,13 @@
         // [WO 20261007-qrcov] 촬영 현황 배지(미촬영·오래됨) — 켜졌고 이 구역 도면이 로드됐을 때만(SoT: Coverage.deckSummary → Projects.pinsForDeck)
         const covTag = (typeof Coverage !== "undefined" && Coverage.treeBadgeHtml) ? Coverage.treeBadgeHtml(deck) : "";
         if (covTag) head.insertAdjacentHTML("beforeend", covTag);
+        // [WO 20261113-treefolder] 🔴 마스터: "순환 노드는 숨기지 말고 최상위에 배지와 함께 표시"
+        //   (I 항목) — groupDecksByParent 가 이제 순환 구성원을 강제로 roots 로 승격해 사라지지
+        //   않는다(위 renderTree 상단 cycleIds, SoT). 데이터 수정은 서버 담당 몫(별도 에이전트) —
+        //   여기선 표시만 한다.
+        if (cycleIds && cycleIds.has(String(deck.id))) {
+          head.insertAdjacentHTML("beforeend", '<span class="tree-cycle-badge" title="이 구역은 부모·자식 관계가 서로를 가리키는 순환 참조에 걸려 있습니다 — 정상 위치가 아닐 수 있습니다. 이름변경/이동으로 상위 구역을 다시 지정하세요">⚠ 순환 복구 필요</span>');
+        }
         // [WO 20260929-tree-label→20260928-tree-title] 🔴 잘림 금지 — CSS 는 2줄까지만 보여주고 그
         // 이상은 줄임표라 전체 이름이 필요하면 title(네이티브 툴팁)로 항상 확인할 수 있게 한다.
         // title 엔 이름 + 원본 도면 파일명(있으면)을 함께 담아 도면 출처 정보를 유지한다.

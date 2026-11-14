@@ -533,10 +533,15 @@ await withBrowser(async (browser) => {
   //   "영역")·levelTag(L1/L2…) 텍스트 배지는 "폴더구조와 같은 방식으로"(마스터 재지시) 행에서 빠졌고
   //   아이콘이 종류별(ICO.deck/ICO.region)에서 열림/닫힘(ICO.folderOpen/folderClosed) + 캐럿 조건부
   //   (expandable) 로 바뀌었다 — needle 을 그 줄에 맞춰 갱신(이 뮤테이션 자체의 의도=①은 그대로 유효).
-  const needle = "head.innerHTML = (expandable ? C : \"\") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
+  // [WO 20261113-treefolder] 🔴 재갱신(전·후 대조) — 4c1339d(계층 번호 칩) 이후 needle 이
+  //   outlineTag(folderClosed 뒤)를 포함하지 않아 또 깨졌다(r45 F1, 2026-11-12 Fable 중간점검).
+  //   전: "...folderClosed) + '<span class=\"tree-label\">'..." / 후: "...folderClosed) + outlineTag +
+  //   '<span class=\"tree-label\">'..." — outlineTag 추가분만 반영, 삽입 지점(라벨 앞)은 그대로라
+  //   이 뮤테이션의 의도(①을 깨뜨림)는 바뀌지 않는다.
+  const needle = "head.innerHTML = (expandable ? C : \"\") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + outlineTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + _tag + srcTag + zoneCntTag";
   const docSrc = "(docName ? '<span class=\"tree-label-sub tree-doc-src\">' + esc(docName) + '</span>' : '')";
   const mutated = uiSrc.replace(needle,
-    "head.innerHTML = (expandable ? C : \"\") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
+    "head.innerHTML = (expandable ? C : \"\") + (isOpenNow ? ICO.folderOpen : ICO.folderClosed) + outlineTag + '<span class=\"tree-label\">' + _nameLabel + '</span>' + " + docSrc + " + _tag + srcTag + zoneCntTag");
   if (mutated === uiSrc) { console.log("  FAIL 뮤테이션 대상 문자열을 찾지 못함(소스 변경?)"); failed++; }
   else {
     const { m } = await measureSidebarTree(browser, mutated);

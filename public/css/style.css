@@ -6097,6 +6097,11 @@ body.tree-dnd-active .tree-node-deck,body.tree-dnd-active .tree-node-region{curs
    기존 값(#938a78 on #efe9dc = 2.53:1)은 UI 최소 3:1 미달이었다. */
 .tree-tag{font-size:9px;font-weight:700;line-height:1.6;color:#7c2d12;background:#fbe3cd;
   border:1px solid #c2410c;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
+/* [WO 20261113-treefolder] 🔴 순환 참조(A↔B) 구역 배지 — "숨기지 말고 최상위에 표시"(마스터 I 항목).
+   색은 .tree-tag 와 동일 고정색쌍 재사용(새 색 0) — #7c2d12 on #fbe3cd = 7.57:1(AAA), 테두리만
+   더 굵게(2px) 해 일반 .tree-tag 보다 눈에 띄게 한다(같은 배경에서 추가 색 대비 계산 불필요). */
+.tree-cycle-badge{font-size:9px;font-weight:700;line-height:1.6;color:#7c2d12;background:#fbe3cd;
+  border:2px solid #c2410c;padding:0 5px;border-radius:6px;flex:0 0 auto;margin-left:4px;}
 /* [WO 20261001-projectinfo·tree-hierarchy] 프로젝트-구역-영역-원본 단계 꼬리표 — 아이콘만으론
    약한 구분을 텍스트로 보강(마스터 지시). var(--text2) 는 이 사이드바 다크 배경(#1d2025)에서
    이미 감사된 토큰(seastar-3d-skin.css:196 "실측 4.5:1+로 검증된 다크 톤" 재사용, 새 색 없음). */
