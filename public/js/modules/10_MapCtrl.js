@@ -469,13 +469,21 @@
       const scaleRef = this._cropBoundary ? 1 : (this._pinScaleRef || 1);
       return (zoom / fitZoom) * scaleRef;
     },
-    /** 핀 머리의 "실제 화면 px"(상위 transform 포함) — 맞춤 30px(터치 32) · 비례 · 하한 8/10 · 상한 56. */
-    pinScreenPx() {
+    /** [WO 20261114-pinzoomdots] pinScreenPx()의 하한(PIN_MIN_PX_MOUSE/TOUCH=8/10) 적용 "전" 원시
+     *  비례값 — 줌아웃 페이드 판정(§PIN_DOT_MAX_SCREEN_PX)은 이 값을 써야 한다. pinScreenPx() 는
+     *  하한이 있어 그 값 자체로는 "더 줌아웃했다"를 구분 못 한다(바닥에서 멈춤) — 클램프 전 값만
+     *  계속 작아지므로 "저작 크기×도면줌×사용자 설정"이 실제로 얼마나 작은지 반영한다. */
+    _pinRawScreenPx() {
       const touch = this._coarsePointer();
       const prefBase = (typeof PinSizePrefs !== "undefined" && PinSizePrefs.scale) ? PinSizePrefs.scale() : this.PIN_SCALE;
       // 터치는 사용자 설정값 대비 PIN_SCALE_TOUCH/PIN_SCALE(기본 32/30)배 — 설정을 올리거나 내려도 비율 유지.
       const base = touch ? prefBase * (this.PIN_SCALE_TOUCH / this.PIN_SCALE) : prefBase;
-      const raw = base * this.PIN_NATIVE_PX * this._fitRelZoom();
+      return base * this.PIN_NATIVE_PX * this._fitRelZoom();
+    },
+    /** 핀 머리의 "실제 화면 px"(상위 transform 포함) — 맞춤 30px(터치 32) · 비례 · 하한 8/10 · 상한 56. */
+    pinScreenPx() {
+      const touch = this._coarsePointer();
+      const raw = this._pinRawScreenPx();
       const minPx = touch ? this.PIN_MIN_PX_TOUCH : this.PIN_MIN_PX_MOUSE;
       const px = Math.max(raw, minPx);        // 하한(점)
       return Math.min(px, this.PIN_MAX_PX);   // 상한
@@ -504,6 +512,20 @@
     PIN_DOT_MAX_PX: 28,
     PIN_DOT_NUM_MIN_PX: 16,   // 점 지름이 이 이상이어야 원 안에 번호(마커에 dot-show-num 클래스)
     PIN_DOT_HIT_MIN_PX: 24,   // 탭 히트영역(::after 패드) 최소 — 시각 크기와 분리
+    /** [WO 20261114-pinzoomdots, 마스터 "줌아웃시에 포인트 너무 커서 보기 안 좋아... 작아지면
+     *  연한 점만"] 자동 모드 전용 — "전역 줌아웃" 또는 "로컬 혼잡" 상황에서 밀도 알고리즘(위
+     *  PIN_DOT_RATIO 겹침방지)이 계산한 점을 번호·그림자 없는 고정 소형 연한 점(.pin-dot-faded,
+     *  style.css)으로 덮어쓴다. 강제 핀/점 모드(PinShapePrefs)·선택/호버/드롭 핀은 영향 없음
+     *  (§_applyPinDotSizesNow 가드, formal/pin_zoom_dots.tla InvForcedModeIndependent·
+     *  InvSelectedAlwaysFull 로 검증).
+     *  임계 8px = 미니맵 가독 임계(07_Radar.js RADAR_PIN_NO_MIN_PX)와 통일 — "화면에서 읽기 어려운
+     *  크기"의 SoT를 한 곳 기준으로 둔다(발주 §2). 히스테리시스(9.2px=8×1.15)도 07_Radar.js
+     *  _updateNumberVisibility 와 동일 설계(안전쪽은 즉시, 복귀쪽만 여유 — 경계 깜빡임 방지). */
+    PIN_DOT_MAX_SCREEN_PX: 8,
+    PIN_DOT_FADE_HYST_PX: 9.2,
+    PIN_DOT_FADED_PX: 7,      // 고정 "화면" px(발주 §1 "6~8px 고정") — 중간값. --dot-local-px 변환을 거쳐야
+                               // 실제 화면에서도 7px(마커 scale(var(--pin-scale)) 보정, 아래 루프).
+    _dotFadeZoomOut: false,
     /** 현재 #pins-layer 의 핀 마커들을 화면(screen) 좌표 px 로 — 밀도 계산 입력.
      *  좌표계: 콘텐츠(도면) CSS 크기 × zoom(= 화면 px, parentScale() 과 동일 스케일). 아직 레이아웃을
      *  모르면(로드 전) null(호출부가 건너뜀 → 기존 기본값 유지, 회귀 0). */
@@ -662,10 +684,33 @@
       const labelMode = (typeof PinLabelPrefs !== "undefined" && PinLabelPrefs.get) ? PinLabelPrefs.get() : "auto";
       const numMinPx = this.PIN_DOT_NUM_MIN_PX * this._pinSizeFactor();
       const canSetProp = (st) => st && typeof st.setProperty === "function";
+      // [WO 20261114-pinzoomdots] 강제 핀/점 모드는 페이드 로직 영향 밖(발주 §4, formal
+      // InvForcedModeIndependent) — "auto"일 때만 이 턴의 전역 줌아웃 페이드를 판정·갱신한다.
+      const shapeMode = (typeof PinShapePrefs !== "undefined" && PinShapePrefs.get) ? PinShapePrefs.get() : "auto";
+      const isAutoMode = shapeMode !== "pin" && shapeMode !== "dot";
+      // 하한(PIN_MIN_PX_MOUSE/TOUCH=8/10) 적용 "전" 원시값 — pinScreenPx()(clamp 됨)는 바닥에서
+      // 멈춰 더 줌아웃해도 8 미만으로 못 내려가 이 게이트가 죽은 코드가 된다(실측 — 반드시 raw 사용).
+      const rawPx = this._pinRawScreenPx();
+      if (isAutoMode) {
+        if (!this._dotFadeZoomOut) {
+          if (rawPx < this.PIN_DOT_MAX_SCREEN_PX) this._dotFadeZoomOut = true;
+        } else if (rawPx >= this.PIN_DOT_FADE_HYST_PX) {
+          this._dotFadeZoomOut = false;
+        }
+      }
+      const zoomFaded = isAutoMode && this._dotFadeZoomOut;
       for (const p of points) {
         const diam = diamMap.get(p.id) || this.PIN_DOT_MIN_PX;
-        const padDiam = Math.max(diam, this.PIN_DOT_HIT_MIN_PX);
-        const localPx = (diam * factor).toFixed(2) + "px";
+        // [WO 20261114-pinzoomdots] 로컬 혼잡 — 밀도 알고리즘이 바닥(겹침방지 비율로도 더 못 줄이는
+        // 최솟값)에 닿은 점은 "이웃 간격 < 핀 지름"(발주 §1)의 보수적 부분집합으로 근사(§주석 위).
+        const crowded = isAutoMode && diam <= this.PIN_DOT_MIN_PX + 0.5;
+        const faded = zoomFaded || crowded;
+        // 페이드 시엔 밀도가 계산한 diam 대신 고정 "화면" px(PIN_DOT_FADED_PX)를 쓴다 — 그래도 같은
+        // factor 변환을 거쳐야 실제 화면에 7px로 보인다(마커 scale(var(--pin-scale)) 보정, style.css
+        // .pin-marker.pin-dot-faded 주석 참조 — CSS 고정 px 를 쓰면 줌에 따라 커진다, 실측으로 발견).
+        const renderDiam = faded ? this.PIN_DOT_FADED_PX : diam;
+        const padDiam = Math.max(renderDiam, this.PIN_DOT_HIT_MIN_PX);
+        const localPx = (renderDiam * factor).toFixed(2) + "px";
         const localPadPx = (padDiam * factor).toFixed(2) + "px";
         // [테스트 셸] style 이 plain object(setProperty 無)인 경량 DOM 모의(p133 등) 대비 — 값은
         // 그대로 보존(후속 읽기 가능), 실제 CSS 반영은 없음(해당 하니스는 시각 렌더 자체를 안 봄).
@@ -676,7 +721,9 @@
           p.el.style["--dot-local-px"] = localPx;
           p.el.style["--dot-pad-local-px"] = localPadPx;
         }
-        const showNum = labelMode === "hidden" ? false : labelMode === "always" ? true : (diam >= numMinPx);
+        if (p.el.classList) p.el.classList.toggle("pin-dot-faded", faded);
+        const showNum = faded ? false
+          : labelMode === "hidden" ? false : labelMode === "always" ? true : (diam >= numMinPx);
         if (p.el.classList) p.el.classList.toggle("dot-show-num", showNum);
       }
     },

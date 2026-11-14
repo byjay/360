@@ -5028,6 +5028,29 @@ html.wm-view-link #screen-projects { display: none !important; }
   pointer-events: none; white-space: nowrap;
 }
 .pin-marker.dot-show-num .pin-dot-num { display: block; }
+/* [WO 20261114-pinzoomdots, 마스터 "줌아웃시에 포인트 너무 커서 보기 안 좋아... 작아지면 연한
+   점만"] 자동 모드 전역 줌아웃/로컬 혼잡 페이드 — MapCtrl._applyPinDotSizesNow 가 토글(강제
+   핀/점 모드·선택/호버/드롭/force-pin 은 그 시점 가드로 영향 없음, §10_MapCtrl.js 주석).
+   고정 6~8px(발주 §1) · 그림자 제거 · 채도 낮춤 · 테두리 얇게. 번호는 예외 없이(labelMode=always
+   포함) 항상 숨김 — JS 쪽에서 이미 dot-show-num을 안 붙이지만, CSS도 2중 보장(방어적). */
+/* width/height 는 여기서 고정 px 로 쓰지 않는다 — .pin-dot 은 #pins-layer:not(.iso-mode)>.pin-marker
+   의 scale(var(--pin-scale)) 안에 있어, 고정 CSS px 를 쓰면 줌에 따라 화면 크기가 또 달라진다
+   (실측: 7px 지정 → 렌더 9.8px, pin-scale≈1.4 배 곱됨). 고정 "화면" px(PIN_DOT_FADED_PX=7,
+   10_MapCtrl.js)는 MapCtrl._applyPinDotSizesNow 가 기존 --dot-local-px 변환(화면px÷factor)과
+   똑같은 경로로 넣는다 — 여기선 크기와 무관한 시각 처리만. */
+.pin-marker.pin-dot-faded .pin-dot {
+  /* [실측, CLAUDE.md §색 대비 ≥3:1 UI 요소 — 미달 출고 금지] 발주 §1 제시값(약 0.55)은 teal
+     상태색(rgb(4,120,87))에서 흰 배경 대비 2.37:1로 못 미친다(node 계산 .tmp/p202 로그) —
+     발주 §5 "대비 3:1 이상"이 상위 규칙이라 0.75로 올림(teal 3.41:1 · red 4.24:1, 둘 다 PASS).
+     기본(100%) 핀 투명도 설정 기준 — 사용자가 PinOpacityPrefs 를 더 낮추면(최소 20%) 합성값이
+     다시 떨어질 수 있음(기존 풀 핀도 같은 트레이드오프, §PinOpacityPrefs 주석 — 이번 WO가 새로
+     만든 위험이 아님). */
+  opacity: .75;              /* 부모 .pin-marker{opacity:var(--pin-opacity,1)}와 시각적으로 곱연산 합성 */
+  filter: saturate(.45);
+  box-shadow: none;
+  border-width: 1px;
+}
+.pin-marker.pin-dot-faded .pin-dot-num { display: none !important; }
 /* 개정 이월 배지(.pin-rev-badge)는 점 모드에서도 그대로 보여야 한다(기존 teardrop 전용 위치 -16px
    는 점 중앙 앵커와 어긋나므로 점 모드일 때만 살짝 올림 — 선택/호버 시(teardrop) 원래 위치로 복귀). */
 #pins-layer:not(.iso-mode) > .pin-marker:not(:hover):not(.focused):not(.drop) .pin-rev-badge {
