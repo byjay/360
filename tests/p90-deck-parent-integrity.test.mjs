@@ -249,13 +249,17 @@ async function apiRun(transform) {
 /* ── 뮤테이션ⓒ: POST 의 parent_id 검증 제거 → ③이 실패해야 한다 ── */
 {
   console.log("\n[뮤테이션ⓒ] POST /decks 의 parent_id 신뢰경계 검증 제거 → ③이 실패해야 함");
+  // [WO 20261112-deckcycle 영향] 🔴 needle을 isLiveDeckInProject 검사 3줄만으로 좁힌다(G-4⑧) —
+  //   같은 POST 핸들러에 cycle-guard(deckSelfAndDescendantIds, pid 로 범위 한정)가 이 검사 뒤에
+  //   추가됐지만, dck_foreign_root 는 다른 프로젝트(prj_p90b) 소속이라 pid(prj_p90a) 스코프의
+  //   cycle-guard 가 애초에 찾지 못한다 — 이 뮤테이션(격리된 isLiveDeckInProject 검사만 제거)이
+  //   여전히 r.foreignStatus 를 200 으로 되돌려야 "신뢰경계 제거"를 검사한다(불변식 변경 없음).
   const needle = `  if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, pid))) {
     return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
   }
-  await c.env.DB.prepare(
-    \`INSERT INTO decks`;
+`;
   const r = await apiRun((s) => {
-    const mut = s.replace(needle, `  await c.env.DB.prepare(\n    \`INSERT INTO decks`);
+    const mut = s.replace(needle, "");
     if (mut === s) throw new Error("뮤테이션 대상 문자열을 찾지 못함(소스 변경?)");
     return mut;
   }).catch((e) => ({ error: String(e && e.message || e) }));

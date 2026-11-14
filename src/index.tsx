@@ -5490,6 +5490,12 @@ app.post('/api/projects/:id/decks', async (c) => {
   if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, pid))) {
     return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
   }
+  // [WO 20261112-deckcycle] 🔴 PUT·PATCH/move 와 같은 공유 가드(deckSelfAndDescendantIds) 재사용(새 id
+  //   는 아직 다른 deck 의 부모로 참조될 수 없어 통상 no-op 이지만, 단일 지점(SoT) 원칙으로 여기도 통일).
+  if (parentId) {
+    const selfAndDesc = await deckSelfAndDescendantIds(c.env.DB, pid, id)
+    if (selfAndDesc.has(parentId)) return c.json({ error: '순환 구조가 됩니다 — cannot set parent to self or own descendant' }, 400)
+  }
   await c.env.DB.prepare(
     `INSERT INTO decks (id, project_id, name, level_no, deployment_id, page, crop, parent_id, mode, src_dep_id, src_page, src_crop, created_at, updated_at, deleted)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
@@ -5523,6 +5529,13 @@ app.put('/api/decks/:id', async (c) => {
   // [WO 20260929-parent-guard] 🔴 같은 신뢰 경계 — PUT 도 같은 프로젝트의 살아있는 deck 만 부모로 허용.
   if (parentId && !(await isLiveDeckInProject(c.env.DB, parentId, row.project_id))) {
     return c.json({ error: 'parent_id must reference a live deck in the same project' }, 400)
+  }
+  // [WO 20261112-deckcycle] 🔴 순환 금지 — PATCH /move(deckSelfAndDescendantIds, 5574 부근)와
+  //   같은 공유 지점(SoT)을 재사용. PUT 은 지금까지 자기참조만 막아 A.parent=B → B.parent=A
+  //   2회 PUT 으로 순환이 만들어졌다(TLA+ formal/deck_parent_acyclic.tla 반례로 확인).
+  if (parentId) {
+    const selfAndDesc = await deckSelfAndDescendantIds(c.env.DB, row.project_id, id)
+    if (selfAndDesc.has(parentId)) return c.json({ error: '순환 구조가 됩니다 — cannot set parent to self or own descendant' }, 400)
   }
   // [WO 20260930-fixmode] mode 부분 수정 — 미전송이면 기존값 유지. 'checker'|'360' 외 400. 부모 태그와 불일치 400.
   const pm = parseDeckMode(body.mode)
