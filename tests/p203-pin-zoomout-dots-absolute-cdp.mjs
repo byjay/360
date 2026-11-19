@@ -21,6 +21,7 @@
  *  (I) 숨김 0 (markers.length == PINS.length, 항상)
  *
  * 실행: CHROME_PATH=... TEMP=<repo>\.tmp TMP=<repo>\.tmp node tests/p203-pin-zoomout-dots-absolute-cdp.mjs
+ *   P203_SHOT=1 → .tmp/p203/{before-zoom78,after-zoom50}.png(데스크톱만)
  * 뮤테이션(반드시 EXIT=1):
  *  P203_MUT=oldmetric      → 전역 게이트 지표를 fit-상대(_pinRawScreenPx)로 되돌림 → (D) zoom=50%에서
  *    고립 핀이 페이드되지 않아야(마스터가 본 결함 재현) — FAIL.
@@ -99,6 +100,11 @@ async function runScenario(label, viewport, checkShrink) {
     iso = await ev(`__P203.one('iso1')`);
     const w78 = iso.w;
     ok(iso && !iso.faded, label + " (B) zoom=78% 고립 핀 비페이드", iso);
+    if (checkShrink && process.env.P203_SHOT) {
+      const dir = path.join(ROOT, ".tmp", "p203"); fs.mkdirSync(dir, { recursive: true });
+      const s = await page.send("Page.captureScreenshot", { format: "png" });
+      fs.writeFileSync(path.join(dir, "before-zoom78.png"), Buffer.from(s.data, "base64"));
+    }
 
     await ev(`__M.zoom(0.60)`);
     await new Promise((r) => setTimeout(r, 350));
@@ -123,6 +129,11 @@ async function runScenario(label, viewport, checkShrink) {
     ok(mk.every((m) => m.faded), label + " (D) zoom=50%(경계 포함) 전체 핀 pin-dot-faded", { faded: mk.filter((m) => m.faded).length, total: mk.length });
     const isoD = mk.find((m) => m.id === "iso1");
     ok(isoD && isoD.faded && isoD.w <= 8.5, label + " (D) 고립 핀도 50%에서 페이드(결함 재현 포인트)", isoD);
+    if (checkShrink && process.env.P203_SHOT) {
+      const dir = path.join(ROOT, ".tmp", "p203");
+      const s = await page.send("Page.captureScreenshot", { format: "png" });
+      fs.writeFileSync(path.join(dir, "after-zoom50.png"), Buffer.from(s.data, "base64"));
+    }
 
     // (E) zoom=36% — 여전히 페이드
     await ev(`__M.zoom(0.36)`);
