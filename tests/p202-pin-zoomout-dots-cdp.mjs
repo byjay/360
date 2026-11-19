@@ -43,8 +43,11 @@ const MUT = process.env.P202_MUT || "";
 
 const MUTS = {
   nothreshold: {
+    // [WO 20261119-pinzoomdots2] rawPx(fit 상대) → fadeMetricPx(절대 zoom 기반)로 지표 자체가
+    // 바뀌어 변수명도 바뀌었다(§10_MapCtrl.js _zoomFadeMetricPx 주석) — needle 갱신, 의미는 동일
+    // (전역 줌아웃 게이트 진입조건을 끈다).
     file: "10_MapCtrl.js",
-    needle: "if (rawPx < this.PIN_DOT_MAX_SCREEN_PX) this._dotFadeZoomOut = true;",
+    needle: "if (fadeMetricPx <= this.PIN_DOT_MAX_SCREEN_PX) this._dotFadeZoomOut = true;",
     to: "if (false) this._dotFadeZoomOut = true;",
   },
   nofade: {

@@ -37,9 +37,14 @@ NoMinPx == 8          (* PIN_DOT_MAX_SCREEN_PX — 미니맵 RADAR_PIN_NO_MIN_PX
 HystUpperPx == 9      (* NoMinPx*115\div100=9.2 → 정수모델 절삭 9, 실구현은 부동소수 9.2(minimap과 동일 패턴) *)
 
 (* §_updateNumberVisibility/minimap_size.tla 와 동일 설계: 안전쪽(진입)은 임계에서 즉시,
-   복귀쪽(해제)만 여유(HystUpperPx)를 둬 경계 깜빡임 방지. *)
+   복귀쪽(해제)만 여유(HystUpperPx)를 둬 경계 깜빡임 방지.
+   [WO 20261119-pinzoomdots2] 진입 비교를 "<" 에서 "<=" 로 바꾼다 — 10_MapCtrl.js _zoomFadeMetricPx()
+   가 "zoom=0.5(마스터 리터럴 경계)에서 정확히 NoMinPx(8)" 가 되도록 역산한 지표라, 경계값 자체
+   (zoomPx=NoMinPx, zoom 정확히 50%)도 "줌≤50%"(포함)에 들어야 한다 — RADAR(§미니맵, strict <)는
+   "대략 이 근처에서 안 읽힌다"는 느슨한 가독 임계라 경계가 중요치 않았지만, 여기는 마스터가 준
+   리터럴 숫자라 경계를 정확히 지킨다(재현 R47, InvZoomBelowThresholdAllFaded 가 이 경계를 검증). *)
 NextFadedGlobal(old, px) ==
-  IF ~old /\ px < NoMinPx THEN TRUE
+  IF ~old /\ px <= NoMinPx THEN TRUE
   ELSE IF old /\ px >= HystUpperPx THEN FALSE
   ELSE old
 
@@ -65,7 +70,7 @@ Init ==
   /\ selected = 0
   /\ zoomPx \in ZoomPxSet
   /\ crowded = [p \in Pins |-> FALSE]
-  /\ fadedGlobal = (zoomPx < NoMinPx)   (* 초기상태는 안전쪽(진입) 기준 보수적 판정 *)
+  /\ fadedGlobal = (zoomPx <= NoMinPx)  (* 초기상태는 안전쪽(진입) 기준 보수적 판정 — 경계 포함(위 주석) *)
 
 ZoomChange ==
   /\ zoomPx' \in ZoomPxSet
@@ -116,5 +121,14 @@ InvSelectedAlwaysFull == (selected # 0 /\ mode = "auto") => (Shape(selected) = "
 InvForcedModeIndependent ==
   /\ (mode = "pin" => \A p \in Pins: Shape(p) = "ForcedPin")
   /\ (mode = "dot" => \A p \in Pins: Shape(p) = "ForcedDot")
+
+(* [WO 20261119-pinzoomdots2, 재현 R47] (v) 마스터 리터럴 경계 "zoom ≤ 50%" — 10_MapCtrl.js
+   _zoomFadeMetricPx() 는 "zoom=ZOOM_FADE_ENTER_ZOOM(0.5) 에서 정확히 NoMinPx(8)" 가 되도록
+   역산한 지표라, zoomPx=NoMinPx(경계값 자체, zoom 정확히 50%)는 이미 "줌≤50%" 조건을 만족하는
+   쪽으로 분류돼야 한다(포함 경계 — RADAR 의 strict < 와 다르게 ZoomChange/Init 양쪽 다 <= 로
+   판정, 아래 NextFadedGlobal 참조). 이 불변식은 그 경계가 실제로 지켜지는지 검사한다. *)
+InvZoomBelowThresholdAllFaded ==
+  \A p \in Pins:
+    (mode = "auto" /\ zoomPx <= NoMinPx /\ p # selected) => (Shape(p) = "FadedDot")
 
 ====

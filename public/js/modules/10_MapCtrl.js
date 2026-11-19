@@ -480,6 +480,21 @@
       const base = touch ? prefBase * (this.PIN_SCALE_TOUCH / this.PIN_SCALE) : prefBase;
       return base * this.PIN_NATIVE_PX * this._fitRelZoom();
     },
+    /** [WO 20261119-pinzoomdots2, 재현 R47 — EGO 실측 scan.seastar.work SB_ARCTIC VOYAGER(fitZoom≈0.78)]
+     *  근본원인: 전역 줌아웃 페이드 게이트가 _pinRawScreenPx()(fit **상대** 비율, zoom/fitZoom)를 썼다
+     *  — fitZoom=0.78 문서에서 rawPx<8 조건은 zoom/fitZoom<8/30≈0.267 즉 절대 zoom<20.8% 에서만
+     *  발동해, 마스터가 요구한 "zoom≤50%"(36%·50% 줌에서도 고립 핀이 번호 풍선으로 남는 결함,
+     *  tests/p203)과 괴리가 컸다. fitZoom 은 문서·뷰포트마다 다르므로 fit-상대 지표로는 "동일 기준"
+     *  (발주 §4)을 모든 문서에서 보장할 수 없다 — 대신 **절대 zoom**(State.zoom, 화면표시 % 그대로)
+     *  기준으로 바꾼다. PIN_DOT_MAX_SCREEN_PX(8, 미니맵 RADAR_PIN_NO_MIN_PX 와 일관, 발주 §4)는 값을
+     *  그대로 두고, "zoom=ZOOM_FADE_ENTER_ZOOM(0.5) 에서 정확히 8" 이 되도록 환산 비율만 역산
+     *  (8/0.5=16)한다 — fitZoom·문서 크기와 무관, 모든 뷰포트에서 "zoom=50%"가 항상 같은 경계.
+     *  _pinRawScreenPx()(fit 상대, 테드롭 전용)는 그대로 둔다(회귀 0, tests/p159 등 — 이 함수는
+     *  전역 페이드 게이트만을 위한 별도 지표). */
+    ZOOM_FADE_ENTER_ZOOM: 0.5,  // 마스터 승인 리터럴 경계("zoom ≤ 50%", 재현 R47)
+    _zoomFadeMetricPx() {
+      return (State.zoom || 0) * (this.PIN_DOT_MAX_SCREEN_PX / this.ZOOM_FADE_ENTER_ZOOM);
+    },
     /** 핀 머리의 "실제 화면 px"(상위 transform 포함) — 맞춤 30px(터치 32) · 비례 · 하한 8/10 · 상한 56. */
     pinScreenPx() {
       const touch = this._coarsePointer();
@@ -656,7 +671,13 @@
         const diam = (best === Infinity)
           ? this.PIN_DOT_MAX_PX
           : Math.min(this.PIN_DOT_MAX_PX, Math.max(this.PIN_DOT_MIN_PX, best * this.PIN_DOT_RATIO));
-        diamMap.set(p.id, this._applyLabelAlwaysBump(diam, labelMode, numMinPx));
+        // [WO 20261119-pinzoomdots2, 발주 §1 "연속적으로 작아진다(바닥에 눌리지 않게)"] 고립 핀
+        // (best=Infinity, 이웃이 8링 밖)은 밀도 산식이 전혀 못 봐서 전역 페이드 전까지 항상 28px
+        // 고정이었다(줌아웃해도 안 작아짐) — 전역 줌(_pinRawScreenPx, fit 상대·zoom 과 함께 연속
+        // 감소)으로 상한을 추가 제한해 고립 핀도 줌아웃에 비례해 연속적으로 작아지게 한다. 비고립
+        // (이웃 있음) 핀은 best 자체가 이미 화면 zoom 에 비례해 줄어들어 영향 없음(회귀 0).
+        const diamScaled = (best === Infinity) ? Math.min(diam, Math.max(this.PIN_DOT_MIN_PX, this._pinRawScreenPx())) : diam;
+        diamMap.set(p.id, this._applyLabelAlwaysBump(diamScaled, labelMode, numMinPx));
       });
       return diamMap;
     },
@@ -688,13 +709,14 @@
       // InvForcedModeIndependent) — "auto"일 때만 이 턴의 전역 줌아웃 페이드를 판정·갱신한다.
       const shapeMode = (typeof PinShapePrefs !== "undefined" && PinShapePrefs.get) ? PinShapePrefs.get() : "auto";
       const isAutoMode = shapeMode !== "pin" && shapeMode !== "dot";
-      // 하한(PIN_MIN_PX_MOUSE/TOUCH=8/10) 적용 "전" 원시값 — pinScreenPx()(clamp 됨)는 바닥에서
-      // 멈춰 더 줌아웃해도 8 미만으로 못 내려가 이 게이트가 죽은 코드가 된다(실측 — 반드시 raw 사용).
-      const rawPx = this._pinRawScreenPx();
+      // [WO 20261119-pinzoomdots2] 절대 zoom 기반 지표(§_zoomFadeMetricPx 주석) — fitZoom(문서별로
+      // 다름)과 무관하게 "zoom≤50%"가 항상 같은 경계. "≤"(포함) 이므로 비교는 <=/>= (RADAR 의 strict
+      // < 와 다름 — 마스터가 리터럴로 준 경계를 정확히 포함해야 함, 재현 R47).
+      const fadeMetricPx = this._zoomFadeMetricPx();
       if (isAutoMode) {
         if (!this._dotFadeZoomOut) {
-          if (rawPx < this.PIN_DOT_MAX_SCREEN_PX) this._dotFadeZoomOut = true;
-        } else if (rawPx >= this.PIN_DOT_FADE_HYST_PX) {
+          if (fadeMetricPx <= this.PIN_DOT_MAX_SCREEN_PX) this._dotFadeZoomOut = true;
+        } else if (fadeMetricPx >= this.PIN_DOT_FADE_HYST_PX) {
           this._dotFadeZoomOut = false;
         }
       }
